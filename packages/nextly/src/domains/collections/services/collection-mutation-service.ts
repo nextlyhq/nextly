@@ -359,6 +359,115 @@ export interface TransitionAuthorization {
  * a caller cannot supply honestly does not belong here — it would mean the
  * write is deciding something the caller has already decided differently.
  */
+/** Everything both transaction create entry points accept. */
+/** Everything both transaction update entry points accept. */
+/** Everything both transaction delete entry points accept. */
+interface DeleteEntryWriteParams {
+  collectionName: string;
+  user?: UserContext;
+  /**
+   * Honoured only by the owner-predicate gate. The access-service gate hard-
+   * codes `undefined` for it, as the transaction API always has.
+   */
+  overrideAccess?: boolean;
+  /** Who performed the delete, recorded on the outbox event. */
+  actor?: RequestActor;
+}
+
+/** The only things that differ between the two delete entry points. */
+interface DeleteEntryWriteOptions {
+  /** Which shape of the row gate to apply — see the comment at its use. */
+  rowGate: "access-service" | "owner-predicate";
+  /** Run user hooks. Access and recording are NOT hooks and always run. */
+  runHooks: boolean;
+  /** Name the missing id in a 404, so a failing batch item is identifiable. */
+  identifyMissingEntry: boolean;
+  /** Message for a failure that carries no message of its own. */
+  failureMessage: string;
+}
+
+interface UpdateEntryWriteParams {
+  collectionName: string;
+  user?: UserContext;
+  overrideAccess?: boolean;
+  // See createEntry: route-authorized REST responses stay redacted.
+  routeAuthorized?: boolean;
+  /** Who performed the write, recorded on the outbox event. */
+  actor?: RequestActor;
+  /**
+   * Publish/unpublish authorization resolved before the transaction opened,
+   * so the transition is enforced under the row lock with no permission read
+   * inside it.
+   */
+  transitionAuth?: TransitionAuthorization;
+  /**
+   * The caller's authenticated scope. A scoped API key is judged on its OWN
+   * update grant, so a super-admin-owned key cannot update other users' rows.
+   */
+  authenticatedScope?: AuthenticatedScope;
+}
+
+/** The only things that differ between the two update entry points. */
+interface UpdateEntryWriteOptions {
+  /**
+   * Which shape of the row gate to apply. `access-service` asks
+   * `checkCollectionAccess` for the whole verdict; `owner-predicate` folds an
+   * owner filter into the fetch and re-checks it afterwards. See the comment
+   * at the use site for why both exist.
+   */
+  rowGate: "access-service" | "owner-predicate";
+  /**
+   * Run user hooks. All-or-nothing on purpose. Validation, access and
+   * recording are NOT hooks and always run.
+   */
+  runHooks: boolean;
+  /** Name the missing id in a 404, so a failing batch item is identifiable. */
+  identifyMissingEntry: boolean;
+  /** Message for a failure that carries no code of its own. */
+  failureMessage: string;
+}
+
+interface CreateEntryWriteParams {
+  collectionName: string;
+  user?: UserContext;
+  overrideAccess?: boolean;
+  // See createEntry: route-authorized REST responses stay redacted.
+  routeAuthorized?: boolean;
+  /**
+   * Who performed the write. The bulk callers already spread this in; until
+   * it was declared here it was received and dropped, so every event and
+   * activity entry these paths recorded attributed an API-key write to the
+   * key's OWNER as though a person had made it.
+   */
+  actor?: RequestActor;
+  /**
+   * Publish authorization resolved before the transaction opened, so the
+   * transition is enforced under the row lock with no permission read inside
+   * it. Self-resolved on the pooled connection when a caller does not pass one.
+   */
+  transitionAuth?: TransitionAuthorization;
+}
+
+/** The only things that differ between the two create entry points. */
+interface CreateEntryWriteOptions {
+  /**
+   * Run the collection-level `create` access check here. False only for the
+   * batch worker, whose callers run it once per batch before opening the
+   * transaction rather than once per entry inside it.
+   */
+  enforceCollectionAccess: boolean;
+  /**
+   * Run user hooks. All-or-nothing on purpose: a collection-level handler
+   * running while the field-level one is skipped would be the gate half
+   * applied. Validation, access and recording are NOT hooks and always run.
+   */
+  runHooks: boolean;
+  /** Shape the caller's `body` in place rather than a copy of it. */
+  shapeCallerObject: boolean;
+  /** Message for a failure that carries no code of its own. */
+  failureMessage: string;
+}
+
 interface WorkingDraftWriteContext {
   collection: unknown;
   collectionHasStatus: boolean;
@@ -762,6 +871,168 @@ export class CollectionMutationService extends BaseService {
       // re-throw instead of continuing.
       throw markWriteIntegrityFailure(err);
     }
+  }
+
+  /**
+   * Record everything a create owes once its row is in the transaction: the
+   * many-to-many junction rows, the durable version snapshot, the outbox
+   * event, and the revalidation intent.
+   *
+   * Shared by the transaction API and the batch worker so a create through
+   * either is captured AND observable — the invariant the interactive and
+   * delete-in-tx paths already hold. Every write lands on the caller's `tx`,
+   * so it commits with the entry and never survives a rollback;
+   * `eventRecorded` is reported back for the owning caller to flush its drain
+   * after IT commits.
+   *
+   * The version and the event are built from ONE relations read — the
+   * freshly-inserted parent row in read shape plus its component subtrees and
+   * m2m id arrays on `tx` — so both carry the same complete document.
+   *
+   * The intent is computed here, before any after-hook runs and before
+   * redaction can strip the slug, so a throwing hook cannot lose it.
+   *
+   * Recording and capture are NOT user hooks, so they run even for a caller
+   * that skips hooks.
+   */
+  // Flagged on CRAP only (cyclomatic 12, cognitive 9 are both under their
+  // thresholds); CRAP multiplies complexity by MISSING coverage, and the
+  // coverage term here is estimated rather than measured. It is covered, by the
+  // integration suites rather than by unit tests: disabling the outbox event
+  // inside this method turns four tests in write-path-events-matrix red, two
+  // for the transaction API and two for the batch worker.
+  // fallow-ignore-next-line complexity
+  private async recordCreateSideEffects(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      tableName: string;
+      /** The freshly-inserted row, as the insert returned it. */
+      entry: Record<string, unknown>;
+      collection: unknown;
+      fields: FieldDefinition[];
+      manyToManyFields: FieldDefinition[];
+      manyToManyData: Record<string, string[]>;
+      user?: UserContext;
+      actor?: RequestActor;
+    }
+  ): Promise<{
+    eventRecorded: boolean;
+    revalidationIntent: RevalidationIntent | undefined;
+  }> {
+    const entryId = args.entry.id as string;
+
+    // Handle many-to-many relationships on the caller's transaction so the
+    // junction writes commit atomically with the entry.
+    const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
+    for (const field of args.manyToManyFields) {
+      const relatedIds = args.manyToManyData[field.name];
+      if (relatedIds && relatedIds.length > 0) {
+        await this.relationshipService.insertManyToManyRelations(
+          args.collectionName,
+          entryId,
+          field,
+          relatedIds,
+          txExecutor
+        );
+      }
+    }
+
+    const versionsConfig = (args.collection as Record<string, unknown>)
+      .versions as ResolvedVersionsConfig | null | undefined;
+    // Skip the per-field component/m2m reads when neither a version nor an
+    // event will consume them (versioning off AND recording disabled by
+    // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
+    // decision the webhook field-tree uses — so the relations and the stripped
+    // field tree are always assembled together: a decision that can flip
+    // mid-write (a stored opt-out or endpoint activation) never leaves a
+    // recorded event with a parent-only payload.
+    const needsRelations =
+      !!versionsConfig?.enabled ||
+      !isRecordingDisabledByConfig("collection", args.collectionName) ||
+      // A curated `webhooks.emit` consumes the assembled document too — its
+      // allowlist may include a component/m2m field — so assemble relations
+      // even when the raw entry.* recording is opted out for this collection.
+      getWebhookEmitSpec("collection", args.collectionName) !== undefined;
+    const { documentParts: createdParts, document: createdDocument } =
+      await this.readTxDocumentParts(tx, {
+        collectionName: args.collectionName,
+        tableName: args.tableName,
+        entryId,
+        parentRow: this.readShapeEventDocument(args.entry, args.fields),
+        fields: args.fields,
+        manyToManyFields: args.manyToManyFields,
+        needsRelations,
+      });
+    await this.captureTxVersion(tx, {
+      collectionName: args.collectionName,
+      entryId,
+      contentStatus: args.entry.status,
+      createdBy: args.user?.id ?? null,
+      versionsConfig,
+      documentParts: createdParts,
+      fields: args.fields,
+    });
+    const eventFields = await this.webhookFieldTreeIfRecording(
+      args.collectionName,
+      args.fields,
+      tx.getDrizzle()
+    );
+    const eventActor = actorForWrite(args.actor, args.user);
+    let eventRecorded = await recordMutationEvent(tx, {
+      type: "entry.created",
+      resource: {
+        kind: "entry",
+        collection: args.collectionName,
+        id: entryId,
+      },
+      data: createdDocument,
+      previous: null,
+      fields: eventFields,
+      actor: eventActor,
+    });
+    // Emit the collection's curated create event too (a no-op unless it
+    // declared `webhooks.emit`), so a form/PII collection created through the
+    // transaction and bulk paths gets the same event as the direct path.
+    const curatedCreateRecorded = await this.recordCuratedCreateEvent(
+      tx,
+      args.collectionName,
+      entryId,
+      createdDocument,
+      eventActor,
+      args.fields
+    );
+    eventRecorded = eventRecorded || curatedCreateRecorded;
+    // A create landing directly on `published` is also a publish lifecycle
+    // event, gated on the collection's Draft/Published flag so an ordinary
+    // user `status` field is not mistaken for a lifecycle change. `from` is
+    // null (nothing to transition from), so only `entry.published` is emitted.
+    if ((args.collection as { status?: boolean }).status === true) {
+      const createdStatusRecorded = await this.recordStatusEvents(tx, {
+        collection: args.collectionName,
+        id: entryId,
+        from: null,
+        to: args.entry.status as string | null | undefined,
+        isCreate: true,
+        data: createdDocument,
+        previous: null,
+        fields: eventFields,
+        actor: eventActor,
+      });
+      eventRecorded = createdStatusRecorded || eventRecorded;
+    }
+
+    return {
+      eventRecorded,
+      revalidationIntent: buildEntryRevalidationIntent(
+        args.collectionName,
+        readRevalidateConfig(args.collection),
+        {
+          id: entryId,
+          slug: readStringField(args.entry, "slug"),
+        }
+      ),
+    };
   }
 
   /**
@@ -2143,6 +2414,49 @@ export class CollectionMutationService extends BaseService {
       user: params.user,
       overrideAccess: params.overrideAccess && !params.routeAuthorized,
     });
+  }
+
+  /**
+   * Read the metadata every write path needs: the collection config, its
+   * resolved field list, its stored (UI-configured) hooks, and its table name.
+   *
+   * The field list is read from `schemaDefinition.fields` and falls back to
+   * `fields`, in that order, because a code-first collection and one built in
+   * the UI carry it in different places.
+   *
+   * Pass `executor` when the caller owns a transaction, so this read is bound
+   * to that transaction's connection rather than re-entering the pool from
+   * inside it — which can stall against a small pool.
+   */
+  private async readCollectionWriteMeta(
+    collectionName: string,
+    executor?: Parameters<DynamicCollectionService["getCollection"]>[1]
+  ): Promise<{
+    collection: unknown;
+    fields: FieldDefinition[];
+    storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+    tableName: string;
+  }> {
+    const collection = await this.collectionService.getCollection(
+      collectionName,
+      executor
+    );
+    const fields =
+      ((
+        (collection as Record<string, unknown>).schemaDefinition as
+          | Record<string, unknown>
+          | undefined
+      )?.fields as FieldDefinition[]) ||
+      ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
+      [];
+    return {
+      collection,
+      fields,
+      storedHooks: this.hookService.getStoredHooks(
+        collection as Record<string, unknown>
+      ),
+      tableName: this.resolveTableName(collection, collectionName),
+    };
   }
 
   /** Resolve the physical table for a collection, honoring `dbName` overrides. */
@@ -7208,1648 +7522,47 @@ export class CollectionMutationService extends BaseService {
   // ============================================================
 
   /**
-   * Create a new entry within an existing transaction.
+   * Create an entry inside a transaction the caller owns.
    *
    * @param tx - Transaction context from adapter
    * @param params - Collection name and optional user context
-   * @param body - Entry data to create
+   * @param body - Entry data
    * @returns Created entry or error
-   * @throws Error if transaction operations fail
-   *
-   * @example
-   * ```typescript
-   * await adapter.transaction(async (tx) => {
-   *   const entry = await entryService.createEntryInTransaction(tx, params, data);
-   *   // Other operations in the same transaction...
-   * });
-   * ```
    */
   async createEntryInTransaction(
     tx: TransactionContext,
-    params: {
-      collectionName: string;
-      user?: UserContext;
-      overrideAccess?: boolean;
-      // See createEntry: route-authorized REST responses stay redacted.
-      routeAuthorized?: boolean;
-      /**
-       * Who performed the write. The bulk callers already spread this in; until
-       * it was declared here it was received and dropped, so every event and
-       * activity entry these paths recorded attributed an API-key write to the
-       * key's OWNER as though a person had made it.
-       */
-      actor?: RequestActor;
-      // Publish/unpublish authorization resolved by the batch caller before this
-      // transaction opened, so the transition is enforced under the row lock with
-      // no permission read inside the transaction. Self-resolved (pooled) when a
-      // direct caller does not provide it.
-      transitionAuth?: TransitionAuthorization;
-    },
+    params: CreateEntryWriteParams,
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    // Carried on the result so a caller that owns the transaction can flush the
-    // tags after IT commits (this method cannot flush pre-commit). Computed
-    // before the after-hooks run so a throwing hook does not lose it.
-    let revalidationIntent: RevalidationIntent | undefined;
-    try {
-      // A direct caller runs this inside its own transaction, so every metadata
-      // and access read below is bound to that transaction's connection — a
-      // pooled read would take a second connection the transaction is holding,
-      // which stalls against a small pool.
-      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
-      // 1. Check collection-level access FIRST. Forward the caller's
-      // `overrideAccess`/`routeAuthorized` (as the non-transaction `createEntry`
-      // does): a trusted write must hit the `overrideAccess` bypass rather than
-      // be re-evaluated against RBAC/stored rules, and a route-authorized write
-      // must skip the redundant coarse RBAC re-check.
-      const accessDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        "create",
-        params.user,
-        undefined,
-        undefined,
-        params.overrideAccess,
-        params.routeAuthorized,
-        undefined,
-        undefined,
-        txExecutor
-      );
-      if (accessDenied) {
-        return accessDenied;
-      }
-
-      // Get collection metadata to identify relation fields and hooks
-      const collection = await this.collectionService.getCollection(
-        params.collectionName,
-        txExecutor
-      );
-      const fields =
-        ((
-          (collection as Record<string, unknown>).schemaDefinition as
-            | Record<string, unknown>
-            | undefined
-        )?.fields as FieldDefinition[]) ||
-        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
-        [];
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
-
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
-
-      // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = {};
-
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments or throw to abort
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "create",
-          args: { data: body },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-          // Bind a beforeOperation hook that reads via context.executor to the
-          // caller's transaction connection so it does not re-enter the pool.
-          executor: tx.getDrizzle(),
-        });
-
-      // Use modified data if returned by beforeOperation. A hook returning its
-      // own object owns what is in it, defaults included — they are not
-      // re-applied here, or a hook could never drop one.
-      const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
-
-      // Execute beforeCreate hooks (code-registered)
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "create" as const,
-        data: currentData,
-        user: params.user,
-        context: sharedContext,
-        // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
-        // caller's transaction connection so they do not re-enter the pool.
-        executor: txExecutor,
-      });
-
-      const modifiedData = await this.hookService.hookRegistry.execute(
-        "beforeCreate",
-        beforeContext
-      );
-      const dataAfterCodeHooks = (modifiedData ?? currentData) as Record<
-        string,
-        unknown
-      >;
-
-      // Execute stored beforeCreate hooks (UI-configured)
-      const storedBeforeResult =
-        await this.hookService.storedHookExecutor.execute(
-          "beforeCreate",
-          storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "create",
-            dataAfterCodeHooks,
-            this.queryDatabaseFn,
-            params.user,
-            sharedContext,
-            // Bind a stored hook's uniqueness read to the caller's transaction
-            // connection so it does not re-enter the pool from inside the tx.
-            tx.getDrizzle()
-          )
-        );
-      const finalData = (storedBeforeResult.data ??
-        dataAfterCodeHooks) as Record<string, unknown>;
-
-      // Password fields store bcrypt hashes, never the submitted value.
-      // Runs after hooks (so hooks see the plaintext they may validate
-      // against) and before any serialization touches the column value.
-      // Enforce the schema's declared rules on the server. Every writer
-      // (admin, REST, Direct API, bulk, forms) funnels through this path,
-      // so this is where required/min/max/pattern/options are guaranteed;
-      // runs on the post-hook data and before hashing so password rules
-      // see the plaintext length, not the hash's.
-
-      // Generate the auto-injected `slug`/`title` before write access +
-      // validation (see createEntry). The uniqueness check runs on the
-      // transaction so same-title creates within one uncommitted tx still
-      // dedupe — the tx sees its own pending rows.
-      const isSlugTaken = async (slug: string) => {
-        const existing = await tx.selectOne<Record<string, unknown>>(
-          tableName,
-          {
-            where: this.whereEq("slug", slug),
-          }
-        );
-        return existing != null;
-      };
-      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
-
-      // Field-level write access: fields the caller may not create are
-      // stripped (Payload parity); a system write (no user) or an
-      // explicit override bypasses.
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: finalData,
-        operation: "create",
-        user: params.user,
-        overrideAccess: params.overrideAccess,
-      });
-
-      // Field-level beforeValidate hooks transform values ahead of the
-      // validation gate (functions resolved via the field-level registry).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeValidate",
-        data: finalData,
-        operation: "create",
-        user: params.user,
-      });
-
-      // A beforeValidate hook can set `slug` after generation ran; re-sanitize
-      // so the validated and stored value stays URL-safe.
-      await this.reSanitizeSlug(finalData, isSlugTaken);
-
-      {
-        const validationIssues = await validateEntryData(
-          this.validationView(finalData, fields),
-          attachFieldValidators("collection", params.collectionName, fields),
-          {
-            mode: "create",
-            req: params.user ? { user: params.user } : {},
-          }
-        );
-        if (validationIssues.length > 0) {
-          throw NextlyError.validation({ errors: validationIssues });
-        }
-      }
-
-      // Collection-level beforeChange hooks, on data the validation gate has
-      // just passed. The executor keeps a stored hook's uniqueness read on this
-      // transaction's connection, as the pre-validation phase does.
-      await this.hookService.runBeforeChange({
-        collection: params.collectionName,
-        operation: "create",
-        data: finalData,
-        storedHooks,
-        queryDatabase: this.queryDatabaseFn,
-        user: params.user,
-        sharedContext,
-        executor: tx.getDrizzle(),
-      });
-
-      // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeChange",
-        data: finalData,
-        operation: "create",
-        user: params.user,
-      });
-
-      // A beforeChange hook runs after validation and can also set `slug`;
-      // re-sanitize once more so the stored value stays URL-safe.
-      await this.reSanitizeSlug(finalData, isSlugTaken);
-
-      await hashPasswordFieldValues(finalData, fields);
-
-      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
-      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
-      // `status: undefined`, which names no status change but would otherwise be
-      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
-      // published row, or nulling a create's draft default — without passing the
-      // publish/unpublish gate. Placed here, the last status-touching step before
-      // the transition classification and the write, so the write payload and the
-      // gate agree even when a hook set the undefined.
-      stripUndefinedStatus(finalData);
-
-      // Normalize relationship field values (extract IDs from objects with display properties)
-      // This must happen before many-to-many extraction and JSON serialization
-      // Walks containers too: a reference left populated inside a group or
-      // repeater is serialized to JSON as the row and never read back as a
-      // reference.
-      normalizeRelationshipFields(
-        finalData,
-        fields as unknown as FieldConfig[]
-      );
-
-      // Normalize upload field values (extract IDs from populated media objects)
-      normalizeUploadFields(finalData, fields);
-
-      // Separate regular fields from many-to-many relations
-      const manyToManyFields = fields.filter(
-        f =>
-          f.type === "relationship" &&
-          // Only UI-built manyToMany routes through a junction table.
-          // Code-first `hasMany: true` is stored as a JSON array on the
-          // parent column (see field-column-descriptor.ts kind="json")
-          // and is serialized later in the same finalData pass.
-          f.options?.relationType === "manyToMany"
-      );
-      const manyToManyData: Record<string, string[]> = {};
-
-      manyToManyFields.forEach(field => {
-        if (finalData[field.name]) {
-          manyToManyData[field.name] = Array.isArray(finalData[field.name])
-            ? (finalData[field.name] as string[])
-            : [finalData[field.name] as string];
-          delete finalData[field.name];
-        }
-      });
-
-      this.serializeHasManyRelationships(finalData, fields);
-
-      // Convert date-field strings into `Date` objects so Drizzle can bind
-      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
-      // failure mode this guards against.
-      coerceDateFieldsToDate(finalData, fields);
-
-      // Prepare entry data
-      const nowForTxCreate = new Date();
-      const entryData = {
-        id: this.collectionService.generateId(),
-        // Strip client-supplied system columns (id / timestamps / created_by,
-        // both snake and camel) so the generated id, stamped owner, and
-        // timestamps below are authoritative — a stray `createdBy` alias can't
-        // survive to overwrite the owner stamp.
-        ...stripImmutableSystemFields(finalData, "collection"),
-        // Snake_case keys: the runtime Drizzle schema names these columns
-        // created_at / updated_at / created_by, and the adapter maps by column
-        // name. (The prior camelCase createdAt/updatedAt keys here were ignored
-        // by Drizzle and only "worked" via the columns' DB defaults — but a
-        // strict driver like better-sqlite3 rejects the whole insert once any
-        // unknown key is present, so bulk create needs the real column names.)
-        created_at: nowForTxCreate,
-        updated_at: nowForTxCreate,
-        // Stamp the row owner with the creating user's id so owner-only access
-        // works zero-config. Null for system/seed creates (no user context).
-        created_by: params.user?.id ?? null,
-      };
-
-      // A create landing directly on published is a first publication here exactly as it is on
-      // the pooled path. This is a public transaction API and also backs createMany and batch
-      // writes, so a document created as published through it would otherwise carry no marker at
-      // all — the same document created through `createEntry` would.
-      const txCreateStamp = resolveFirstPublishedStamp({
-        hasStatus: (collection as { status?: boolean }).status === true,
-        previousStatus: null,
-        nextStatus: finalData.status,
-        existingMarker: null,
-        now: nowForTxCreate,
-      });
-      if (txCreateStamp) {
-        (entryData as Record<string, unknown>).first_published_at =
-          txCreateStamp;
-      }
-
-      // Authorize the published state this create will persist, on the post-hook
-      // `finalData`: a hook that derives `status: "published"`, or a status field
-      // the caller may not write, is judged on the value actually stored. A create
-      // has no prior status, so landing on published needs `publish-<slug>` on top
-      // of create; a trusted server write bypasses via overrideAccess.
-      //
-      // The permission is resolved OUTSIDE this transaction (pre-resolved by a
-      // batch caller, or here on the pooled connection before the insert), then
-      // enforced with no DB read inside the transaction — see
-      // resolveTransitionAuthorization / enforceTransitionUnderLock.
-      const transitionAuth =
-        params.transitionAuth ??
-        (await this.resolveTransitionAuthorization({
-          collectionName: params.collectionName,
-          accessUser: params.overrideAccess ? undefined : params.user,
-          overrideAccess: params.overrideAccess,
-          // This fallback fires only for a direct caller-owned-tx write (the bulk
-          // paths always pre-resolve and pass transitionAuth), so bind the reads
-          // to this transaction's connection rather than re-entering the pool.
-          executor: tx.getDrizzle(),
-        }));
-      const transitionDenied = await this.enforceTransitionUnderLock(tx, {
-        tableName,
-        nextStatus: finalData.status,
-        isCreate: true,
-        auth: transitionAuth,
-        createDocument: entryData,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
-      }
-
-      // Insert using transaction context
-      const entry = await tx.insert<unknown>(tableName, entryData, {
-        returning: "*",
-      });
-
-      // Handle many-to-many relationships on the caller's transaction so the
-      // junction writes commit atomically with the entry.
-      for (const field of manyToManyFields) {
-        const relatedIds = manyToManyData[field.name];
-        if (relatedIds && relatedIds.length > 0) {
-          await this.relationshipService.insertManyToManyRelations(
-            params.collectionName,
-            (entry as Record<string, unknown>).id as string,
-            field,
-            relatedIds,
-            txExecutor
-          );
-        }
-      }
-
-      // Record a durable version snapshot and the outbox event on the caller's
-      // transaction, so a create through the tx-API (importers, plugins, batch)
-      // is captured AND observable — the invariant the interactive and
-      // delete-in-tx paths already hold. Both are built from ONE relations read:
-      // the freshly-inserted parent row in read shape, plus its component
-      // subtrees and m2m id arrays read back on `tx`, so the version and the
-      // event carry the same complete document. Recorded on `tx` so they commit
-      // with the entry and never survive a rollback; the event is carried on the
-      // result so the owning caller flushes the drain after IT commits.
-      const versionsConfig = (collection as Record<string, unknown>)
-        .versions as ResolvedVersionsConfig | null | undefined;
-      // Skip the per-field component/m2m reads when neither a version nor an
-      // event will consume them (versioning off AND recording disabled by
-      // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
-      // decision the webhook field-tree uses — so the relations and the stripped
-      // field tree are always assembled together: a decision that can flip
-      // mid-write (a stored opt-out or endpoint activation) never leaves a
-      // recorded event with a parent-only payload.
-      const needsRelations =
-        !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName) ||
-        // A curated `webhooks.emit` consumes the assembled document too — its
-        // allowlist may include a component/m2m field — so assemble relations
-        // even when the raw entry.* recording is opted out for this collection.
-        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
-      const { documentParts: createdParts, document: createdDocument } =
-        await this.readTxDocumentParts(tx, {
-          collectionName: params.collectionName,
-          tableName,
-          entryId: (entry as Record<string, unknown>).id as string,
-          parentRow: this.readShapeEventDocument(
-            entry as Record<string, unknown>,
-            fields
-          ),
-          fields,
-          manyToManyFields,
-          needsRelations,
-        });
-      await this.captureTxVersion(tx, {
-        collectionName: params.collectionName,
-        entryId: (entry as Record<string, unknown>).id as string,
-        contentStatus: (entry as { status?: unknown }).status,
-        createdBy: params.user?.id ?? null,
-        versionsConfig,
-        documentParts: createdParts,
-        fields,
-      });
-      const eventFields = await this.webhookFieldTreeIfRecording(
-        params.collectionName,
-        fields,
-        tx.getDrizzle()
-      );
-      const eventActor = actorForWrite(params.actor, params.user);
-      let eventRecorded = await recordMutationEvent(tx, {
-        type: "entry.created",
-        resource: {
-          kind: "entry",
-          collection: params.collectionName,
-          id: (entry as Record<string, unknown>).id as string,
-        },
-        data: createdDocument,
-        previous: null,
-        fields: eventFields,
-        actor: eventActor,
-      });
-      // Emit the collection's curated create event too (a no-op unless it
-      // declared `webhooks.emit`), so a form/PII collection created through the
-      // transaction and bulk paths gets the same event as the direct path.
-      const curatedCreateRecorded = await this.recordCuratedCreateEvent(
-        tx,
-        params.collectionName,
-        (entry as Record<string, unknown>).id as string,
-        createdDocument,
-        eventActor,
-        fields
-      );
-      eventRecorded = eventRecorded || curatedCreateRecorded;
-      // A create landing directly on `published` is also a publish lifecycle
-      // event, gated on the collection's Draft/Published flag so an ordinary
-      // user `status` field is not mistaken for a lifecycle change. `from` is
-      // null (nothing to transition from), so only `entry.published` is emitted.
-      if ((collection as { status?: boolean }).status === true) {
-        const createdStatusRecorded = await this.recordStatusEvents(tx, {
-          collection: params.collectionName,
-          id: (entry as Record<string, unknown>).id as string,
-          from: null,
-          to: (entry as { status?: unknown }).status as
-            | string
-            | null
-            | undefined,
-          isCreate: true,
-          data: createdDocument,
-          previous: null,
-          fields: eventFields,
-          actor: eventActor,
-        });
-        eventRecorded = createdStatusRecorded || eventRecorded;
-      }
-
-      // Compute the intent from the freshly inserted row, before the after-hooks
-      // run or redaction can strip the slug.
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: (entry as Record<string, unknown>).id as string,
-          slug: readStringField(entry as Record<string, unknown>, "slug"),
-        }
-      );
-
-      // Execute afterCreate hooks (code-registered)
-      const afterContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "create" as const,
-        data: entry,
-        user: params.user,
-        context: sharedContext,
-        // Bind an after-hook that reads via context.executor to the caller's
-        // transaction connection so it does not re-enter the pool from the tx.
-        executor: tx.getDrizzle(),
-      });
-
-      await this.hookService.hookRegistry.execute("afterCreate", afterContext);
-
-      // Execute stored afterCreate hooks (UI-configured)
-      await this.hookService.storedHookExecutor.execute(
-        "afterCreate",
-        storedHooks,
-        this.hookService.buildPrebuiltHookContext(
-          params.collectionName,
-          "create",
-          entry,
-          this.queryDatabaseFn,
-          params.user,
-          sharedContext,
-          // Bind a stored hook's uniqueness read to the caller's transaction
-          // connection so it does not re-enter the pool from inside the tx.
-          tx.getDrizzle()
-        )
-      );
-
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
-      // Field-level afterChange hooks observe the saved values (before the
-      // password strip so they can see the full stored row).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterChange",
-        data: entry as Record<string, unknown>,
-        operation: "create",
-        user: params.user,
-      });
-
-      await this.redactResponseFields(
-        entry as Record<string, unknown>,
-        fields,
-        {
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: params.routeAuthorized,
-        },
-        params.collectionName
-      );
-
-      return {
-        success: true,
-        statusCode: 201,
-        message: "Entry created successfully",
-        data: entry,
-        eventRecorded,
-        revalidationIntent,
-      };
-    } catch (error: unknown) {
-      // Carry the intent (set only once the row was written) so a caller that
-      // commits despite a hook failure still busts its tags.
-      // Pass dialect explicitly so the helper can normalise raw driver errors.
-      // A post-write capture/recording failure was marked to abort the caller's
-      // transaction; re-throw it rather than reporting a soft success:false that
-      // would let the caller commit an unversioned, unrecorded row.
-      if (isWriteIntegrityFailure(error)) throw error;
-      return {
-        ...errorToServiceResult(
-          error,
-          { defaultMessage: "Failed to create entry in transaction" },
-          this.dialect
-        ),
-        revalidationIntent,
-      };
-    }
+    return this.createEntryWrite(tx, params, body, {
+      enforceCollectionAccess: true,
+      runHooks: true,
+      shapeCallerObject: true,
+      failureMessage: "Failed to create entry in transaction",
+    });
   }
 
   /**
-   * Update an entry within an existing transaction.
+   * The one create implementation. Both transaction entry points delegate here,
+   * so a create is shaped, authorized, written and recorded the same way
+   * whichever one a caller reached for.
    *
-   * @param tx - Transaction context from adapter
-   * @param params - Collection name, entry ID, and optional user context
-   * @param body - Update data
-   * @returns Updated entry or error
-   * @throws Error if transaction operations fail
+   * The options carry the only things that legitimately differ between them —
+   * see `CreateEntryWriteOptions`. Everything else is identical by
+   * construction rather than by two implementations agreeing.
    */
-  async updateEntryInTransaction(
+  // Replaces createEntryInTransaction (cyclomatic 20) and
+  // createSingleEntryInTransaction (24), which were separate copies of this
+  // pipeline. One implementation at 24 is the lower of the two, not a new
+  // hotspot; the remaining count is the create pipeline's own branching, which
+  // comes down by splitting the phases into their own units rather than by
+  // keeping two copies of them.
+  // fallow-ignore-next-line complexity
+  private async createEntryWrite(
     tx: TransactionContext,
-    params: {
-      collectionName: string;
-      entryId: string;
-      user?: UserContext;
-      overrideAccess?: boolean;
-      // See createEntry: route-authorized REST responses stay redacted.
-      routeAuthorized?: boolean;
-      /**
-       * Who performed the write. The bulk callers already spread this in; until
-       * it was declared here it was received and dropped, so every event and
-       * activity entry these paths recorded attributed an API-key write to the
-       * key's OWNER as though a person had made it.
-       */
-      actor?: RequestActor;
-      // Publish/unpublish authorization resolved by the batch caller before this
-      // transaction opened, so the transition is enforced under the row lock with
-      // no permission read inside the transaction. Self-resolved (pooled) when a
-      // direct caller does not provide it.
-      transitionAuth?: TransitionAuthorization;
-    },
-    body: Record<string, unknown>
-  ): Promise<CollectionServiceResult<unknown>> {
-    // Carried on the result so a caller that owns the transaction can flush the
-    // tags after IT commits (this method cannot flush pre-commit). Computed
-    // before the after-hooks run so a throwing hook does not lose it.
-    let revalidationIntent: RevalidationIntent | undefined;
-    try {
-      // A direct caller runs this inside its own transaction, so every metadata
-      // and access read below is bound to that transaction's connection — a
-      // pooled read would take a second connection the transaction is holding,
-      // which stalls against a small pool.
-      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
-      // Get collection metadata and hooks first
-      const collection = await this.collectionService.getCollection(
-        params.collectionName,
-        txExecutor
-      );
-      const fields =
-        ((
-          (collection as Record<string, unknown>).schemaDefinition as
-            | Record<string, unknown>
-            | undefined
-        )?.fields as FieldDefinition[]) ||
-        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
-        [];
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
-
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
-
-      // Fetch existing entry first (needed for access control). Lock the row
-      // (`forUpdate`, a no-op on SQLite, which already serializes writers) so a
-      // concurrent rename cannot commit between this read and the update below —
-      // otherwise the `previousSlug` captured here would be stale and the actual
-      // prior URL's cache tag would never be busted.
-      const existingEntry = await tx.selectOne<Record<string, unknown>>(
-        tableName,
-        {
-          where: this.whereEq("id", params.entryId),
-          forUpdate: true,
-        }
-      );
-
-      if (!existingEntry) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-
-      // 1. Check collection-level access FIRST (with document for owner checks).
-      // Forward the caller's `overrideAccess`/`routeAuthorized` (as the
-      // non-transaction `updateEntry` does): a trusted write must hit the
-      // `overrideAccess` bypass, and a route-authorized write must skip the
-      // redundant coarse RBAC re-check while stored rules still run.
-      const accessDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        "update",
-        params.user,
-        params.entryId,
-        existingEntry,
-        params.overrideAccess,
-        params.routeAuthorized,
-        undefined,
-        undefined,
-        txExecutor
-      );
-      if (accessDenied) {
-        return accessDenied;
-      }
-
-      // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = {};
-
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments (id, data) or throw to abort
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "update",
-          args: { id: params.entryId, data: body },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-          // Bind a beforeOperation hook that reads via context.executor to the
-          // caller's transaction connection so it does not re-enter the pool.
-          executor: tx.getDrizzle(),
-        });
-
-      // Use modified data if returned by beforeOperation
-      const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
-
-      // Execute beforeUpdate hooks (code-registered)
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "update" as const,
-        data: currentData,
-        originalData: existingEntry,
-        user: params.user,
-        context: sharedContext,
-        // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
-        // caller's transaction connection so they do not re-enter the pool.
-        executor: txExecutor,
-      });
-
-      const modifiedData = await this.hookService.hookRegistry.execute(
-        "beforeUpdate",
-        beforeContext
-      );
-      const dataAfterCodeHooks = (modifiedData ?? currentData) as Record<
-        string,
-        unknown
-      >;
-
-      // Execute stored beforeUpdate hooks (UI-configured)
-      const storedBeforeResult =
-        await this.hookService.storedHookExecutor.execute(
-          "beforeUpdate",
-          storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "update",
-            dataAfterCodeHooks,
-            this.queryDatabaseFn,
-            params.user,
-            sharedContext,
-            // Bind a stored hook's uniqueness read to the caller's transaction
-            // connection so it does not re-enter the pool from inside the tx.
-            tx.getDrizzle()
-          )
-        );
-      const finalData = (storedBeforeResult.data ??
-        dataAfterCodeHooks) as Record<string, unknown>;
-
-      // Password fields store bcrypt hashes, never the submitted value.
-      // Runs after hooks (so hooks see the plaintext they may validate
-      // against) and before any serialization touches the column value.
-      // Enforce the schema's declared rules on the server. Every writer
-      // (admin, REST, Direct API, bulk, forms) funnels through this path,
-      // so this is where required/min/max/pattern/options are guaranteed;
-      // runs on the post-hook data and before hashing so password rules
-      // see the plaintext length, not the hash's.
-      // Field-level write access: fields the caller may not update are
-      // stripped (Payload parity); a system write (no user) or an
-      // explicit override bypasses.
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: finalData,
-        operation: "update",
-        user: params.user,
-        overrideAccess: params.overrideAccess,
-        id: params.entryId,
-      });
-
-      // Field-level beforeValidate hooks transform values ahead of the
-      // validation gate (functions resolved via the field-level registry).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeValidate",
-        data: finalData,
-        operation: "update",
-        user: params.user,
-      });
-
-      {
-        const validationIssues = await validateEntryData(
-          this.validationView(finalData, fields),
-          attachFieldValidators("collection", params.collectionName, fields),
-          {
-            mode: "update",
-            req: params.user ? { user: params.user } : {},
-          }
-        );
-        if (validationIssues.length > 0) {
-          throw NextlyError.validation({ errors: validationIssues });
-        }
-      }
-
-      // Collection-level beforeChange hooks, on data the validation gate has
-      // just passed. The executor keeps a stored hook's uniqueness read on this
-      // transaction's connection, as the pre-validation phase does.
-      await this.hookService.runBeforeChange({
-        collection: params.collectionName,
-        operation: "update",
-        data: finalData,
-        originalData: existingEntry,
-        storedHooks,
-        queryDatabase: this.queryDatabaseFn,
-        user: params.user,
-        sharedContext,
-        executor: tx.getDrizzle(),
-      });
-
-      // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "beforeChange",
-        data: finalData,
-        operation: "update",
-        user: params.user,
-      });
-
-      await hashPasswordFieldValues(finalData, fields);
-
-      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
-      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
-      // `status: undefined`, which names no status change but would otherwise be
-      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
-      // published row, or nulling a create's draft default — without passing the
-      // publish/unpublish gate. Placed here, the last status-touching step before
-      // the transition classification and the write, so the write payload and the
-      // gate agree even when a hook set the undefined.
-      stripUndefinedStatus(finalData);
-
-      // Normalize relationship field values (extract IDs from objects with display properties)
-      // This must happen before many-to-many extraction and JSON serialization
-      // Walks containers too: a reference left populated inside a group or
-      // repeater is serialized to JSON as the row and never read back as a
-      // reference.
-      normalizeRelationshipFields(
-        finalData,
-        fields as unknown as FieldConfig[]
-      );
-
-      // Normalize upload field values (extract IDs from populated media objects)
-      normalizeUploadFields(finalData, fields);
-
-      // Separate many-to-many relations
-      const manyToManyFields = fields.filter(
-        f =>
-          f.type === "relationship" &&
-          // Only UI-built manyToMany routes through a junction table.
-          // Code-first `hasMany: true` is stored as a JSON array on the
-          // parent column (see field-column-descriptor.ts kind="json")
-          // and is serialized later in the same finalData pass.
-          f.options?.relationType === "manyToMany"
-      );
-      const manyToManyData: Record<string, string[]> = {};
-
-      manyToManyFields.forEach(field => {
-        if (finalData[field.name] !== undefined) {
-          manyToManyData[field.name] = Array.isArray(finalData[field.name])
-            ? (finalData[field.name] as string[])
-            : finalData[field.name] === null
-              ? []
-              : [finalData[field.name] as string];
-          delete finalData[field.name];
-        }
-      });
-
-      this.serializeHasManyRelationships(finalData, fields);
-
-      // Convert date-field strings into `Date` objects so Drizzle can bind
-      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
-      // failure mode this guards against.
-      coerceDateFieldsToDate(finalData, fields);
-
-      // Update using transaction context
-      // IMPORTANT: Use UTC ISO string for updatedAt to ensure consistent timezone handling
-      // Authorize a change to the document's published state on the post-hook
-      // `finalData`. Publishing or unpublishing needs `publish`/`unpublish` on top
-      // of update; a trusted server write bypasses via overrideAccess. No-ops when
-      // the collection has no lifecycle.
-      //
-      // Classified against the status read UNDER the row lock (not the pre-lock
-      // `existingEntry`), using authorization resolved before this transaction, so
-      // a concurrent writer that changed the published state between the initial
-      // read and the write cannot slip a transition past the gate — and no
-      // permission read runs inside the transaction.
-      const transitionAuth =
-        params.transitionAuth ??
-        (await this.resolveTransitionAuthorization({
-          collectionName: params.collectionName,
-          accessUser: params.overrideAccess ? undefined : params.user,
-          overrideAccess: params.overrideAccess,
-          // This fallback fires only for a direct caller-owned-tx write (the bulk
-          // paths always pre-resolve and pass transitionAuth), so bind the reads
-          // to this transaction's connection rather than re-entering the pool.
-          executor: tx.getDrizzle(),
-        }));
-      const transitionDenied = await this.enforceTransitionUnderLock(tx, {
-        tableName,
-        entryId: params.entryId,
-        nextStatus: finalData.status,
-        isCreate: false,
-        auth: transitionAuth,
-      });
-      if (transitionDenied) {
-        return transitionDenied;
-      }
-
-      // The first publication, decided under the lock the transition gate above already took, so
-      // the prior status and the stored marker are the committed ones rather than this
-      // transaction's earlier snapshot. Read only when the write could be a publish at all: a
-      // content-only edit transitions nothing and must not pay for an extra locked read.
-      //
-      // This is a public transaction API and backs batch writes, so a document published through
-      // it would otherwise carry no marker while the same document published through
-      // `updateEntry` would.
-      const nowForTxUpdate = new Date();
-      let txUpdateStamp: Date | undefined;
-      if (
-        (collection as { status?: boolean }).status === true &&
-        finalData.status === "published"
-      ) {
-        const lockedForMarker = await tx.selectOne<Record<string, unknown>>(
-          tableName,
-          { where: this.whereEq("id", params.entryId), forUpdate: true }
-        );
-        txUpdateStamp = resolveFirstPublishedStamp({
-          hasStatus: true,
-          previousStatus:
-            typeof lockedForMarker?.status === "string"
-              ? lockedForMarker.status
-              : null,
-          nextStatus: finalData.status,
-          existingMarker: lockedForMarker?.first_published_at,
-          now: nowForTxUpdate,
-        });
-      }
-
-      // The same eligibility question the pooled path asks, through the same
-      // predicate: a status-less update to a published document on a
-      // drafts-enabled collection holds the edit instead of writing the live
-      // row. Asked here because this surface reaches the row write without
-      // passing through that path, which is why an update through the
-      // transaction API published an edit its author had not published.
-      const {
-        hold: txStoreAsWorkingDraft,
-        componentSchemas: txSplitComponentSchemas,
-        draftLocale: txDraftLocale,
-      } = await this.resolveWorkingDraftHold({
-        collection,
-        fields,
-        namedStatus: finalData.status,
-        liveStatus: existingEntry.status,
-      });
-
-      // Skip the live-row UPDATE for a held edit; the pending change is stored
-      // below instead. `updated` still carries a row so everything after this
-      // reports the document as it stands — which, for a held edit, is the
-      // published content the public still sees.
-      const [updated] = txStoreAsWorkingDraft
-        ? [existingEntry]
-        : await tx.update<unknown>(
-            tableName,
-            {
-              ...stripImmutableSystemFields(finalData, "collection"),
-              updatedAt: nowForTxUpdate,
-              ...(txUpdateStamp ? { first_published_at: txUpdateStamp } : {}),
-            },
-            this.whereEq("id", params.entryId),
-            { returning: "*" }
-          );
-
-      if (!updated) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-
-      // Compute the intent from the updated row and the pre-update row (for the
-      // previous slug on a rename), before the after-hooks run or redaction can
-      // strip the slug.
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: params.entryId,
-          slug: readStringField(updated as Record<string, unknown>, "slug"),
-          previousSlug: readStringField(existingEntry, "slug"),
-        }
-      );
-
-      const versionsConfig = (collection as Record<string, unknown>)
-        .versions as ResolvedVersionsConfig | null | undefined;
-      // Skip the per-field component/m2m reads when neither a version nor an
-      // event will consume them (versioning off AND recording disabled by
-      // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
-      // decision the webhook field-tree uses — so the relations and the stripped
-      // field tree are always assembled together: a decision that can flip
-      // mid-write (a stored opt-out or endpoint activation) never leaves a
-      // recorded event with a parent-only payload.
-      // The activity trail consumes these documents too, and it is NOT gated on
-      // webhook recording — so an opted-out collection whose update will be
-      // recorded still has to assemble its relations. Without this a
-      // relationship-only edit reaches the diff as two identical parent rows and
-      // is filed as an update that changed nothing.
-      const recordsActivity = willRecordMutationActivity(
-        params.collectionName,
-        actorForWrite(params.actor, params.user)
-      );
-      const needsRelations =
-        !!versionsConfig?.enabled ||
-        recordsActivity ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
-      // The `previous` document is carried by the outbox event and by the
-      // trail's changed-field names, never by the version snapshot: a
-      // version-only update that records neither still skips it instead of
-      // paying a second full relational walk whose result is discarded.
-      const previousNeedsRelations =
-        recordsActivity ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
-
-      // Assemble the `previous` document BEFORE the junction rows are rewritten,
-      // so a relationship-only update still lists the changed field: reading m2m
-      // after the delete+insert below would report the new ids as the old ones.
-      // The pre-update parent row plus its current (pre-rewrite) component and
-      // m2m relations, read on `tx`.
-      const { documentParts: previousParts, document: previousDocument } =
-        await this.readTxDocumentParts(tx, {
-          collectionName: params.collectionName,
-          tableName,
-          entryId: params.entryId,
-          parentRow: this.readShapeEventDocument(existingEntry, fields),
-          fields,
-          manyToManyFields,
-          // A held edit needs the live relations whether or not anything is
-          // being recorded: they are the base the pending change accumulates
-          // onto, and without them the draft would drop every component and
-          // relationship the author had not touched in this save.
-          needsRelations: previousNeedsRelations || txStoreAsWorkingDraft,
-        });
-
-      // Store the pending edit rather than the live row, through the same
-      // method the pooled path uses so the two cannot answer differently.
-      let txWorkingDraftDocument: Record<string, unknown> | undefined;
-      if (txStoreAsWorkingDraft) {
-        ({ workingDraftDocument: txWorkingDraftDocument } =
-          await this.storeWorkingDraftInTx(tx, {
-            collection,
-            collectionHasStatus:
-              (collection as { status?: boolean }).status === true,
-            // This surface writes no component subtrees of its own, so the
-            // draft's components come from the live read alone.
-            componentFieldData: {},
-            draftLocale: txDraftLocale,
-            fields,
-            manyToManyData,
-            params: {
-              collectionName: params.collectionName,
-              entryId: params.entryId,
-              user: params.user,
-            },
-            parentRow: this.readShapeEventDocument(
-              {
-                ...existingEntry,
-                ...stripImmutableSystemFields(finalData, "collection"),
-              },
-              fields
-            ),
-            snapshotComponents: previousParts.components,
-            snapshotM2M: previousParts.manyToMany,
-            splitComponentSchemas: txSplitComponentSchemas,
-            updatePayload: finalData,
-          }));
-      }
-
-      // Handle many-to-many relationships on the caller's transaction so the
-      // junction writes commit atomically with the update. Skipped for a held
-      // edit: the junction rows ARE live content, so rewriting them would put
-      // the pending relationship change on the public site while the rest of
-      // the edit waits.
-      for (const field of manyToManyFields) {
-        if (
-          !txStoreAsWorkingDraft &&
-          manyToManyData[field.name] !== undefined
-        ) {
-          await this.relationshipService.deleteManyToManyRelations(
-            params.collectionName,
-            params.entryId,
-            field,
-            txExecutor
-          );
-
-          const relatedIds = manyToManyData[field.name];
-          if (relatedIds.length > 0) {
-            await this.relationshipService.insertManyToManyRelations(
-              params.collectionName,
-              params.entryId,
-              field,
-              relatedIds,
-              txExecutor
-            );
-          }
-        }
-      }
-
-      // Record a durable version snapshot and the outbox event on the caller's
-      // transaction, so an update through the tx-API (importers, plugins) is
-      // captured AND observable — the invariant the interactive path holds. The
-      // updated document is built from ONE post-rewrite relations read (parent
-      // row plus its component subtrees and m2m id arrays on `tx`), shared by the
-      // version and the event so both carry the same complete document. Recorded
-      // on `tx` so they commit with the update and never survive a rollback. A
-      // status-lifecycle transition also emits its publish/unpublish/
-      // status_changed event, gated on the collection's Draft/Published flag so
-      // an ordinary user `status` field is not mistaken for a lifecycle change.
-      const { documentParts: updatedParts, document: updatedDocument } =
-        await this.readTxDocumentParts(tx, {
-          collectionName: params.collectionName,
-          tableName,
-          entryId: params.entryId,
-          parentRow: this.readShapeEventDocument(
-            updated as Record<string, unknown>,
-            fields
-          ),
-          fields,
-          manyToManyFields,
-          needsRelations,
-        });
-      // A held edit records no durable version: nothing was published, and a
-      // version here would enter the history as though it had been.
-      if (!txStoreAsWorkingDraft) {
-        await this.captureTxVersion(tx, {
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          contentStatus: (updated as { status?: unknown }).status,
-          createdBy: params.user?.id ?? null,
-          versionsConfig,
-          documentParts: updatedParts,
-          fields,
-        });
-      }
-      const eventFields = await this.webhookFieldTreeIfRecording(
-        params.collectionName,
-        fields,
-        tx.getDrizzle()
-      );
-      const eventActor = actorForWrite(params.actor, params.user);
-      let eventRecorded = await recordMutationEvent(tx, {
-        type: "entry.updated",
-        resource: {
-          kind: "entry",
-          collection: params.collectionName,
-          id: params.entryId,
-        },
-        data: updatedDocument,
-        previous: previousDocument,
-        fields: eventFields,
-        actor: eventActor,
-      });
-      if ((collection as { status?: boolean }).status === true) {
-        const statusRecorded = await this.recordStatusEvents(tx, {
-          collection: params.collectionName,
-          id: params.entryId,
-          from: readStringField(existingEntry, "status") ?? null,
-          to: (updated as { status?: unknown }).status as
-            | string
-            | null
-            | undefined,
-          isCreate: false,
-          data: updatedDocument,
-          previous: previousDocument,
-          fields: eventFields,
-          actor: eventActor,
-        });
-        eventRecorded = eventRecorded || statusRecorded;
-      }
-
-      // Execute afterUpdate hooks (code-registered)
-      const afterContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "update" as const,
-        data: updated,
-        originalData: existingEntry,
-        user: params.user,
-        context: sharedContext,
-        // Bind an after-hook that reads via context.executor to the caller's
-        // transaction connection so it does not re-enter the pool from the tx.
-        executor: tx.getDrizzle(),
-      });
-
-      await this.hookService.hookRegistry.execute("afterUpdate", afterContext);
-
-      // Execute stored afterUpdate hooks (UI-configured)
-      await this.hookService.storedHookExecutor.execute(
-        "afterUpdate",
-        storedHooks,
-        this.hookService.buildPrebuiltHookContext(
-          params.collectionName,
-          "update",
-          updated,
-          this.queryDatabaseFn,
-          params.user,
-          sharedContext,
-          // Bind a stored hook's uniqueness read to the caller's transaction
-          // connection so it does not re-enter the pool from inside the tx.
-          tx.getDrizzle()
-        )
-      );
-
-      // Stored password hashes are write-only; the response never carries
-      // them back to the client.
-      // Field-level afterChange hooks observe the saved values (before the
-      // password strip so they can see the full stored row).
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterChange",
-        data: updated as Record<string, unknown>,
-        operation: "update",
-        user: params.user,
-      });
-
-      await this.redactResponseFields(
-        updated as Record<string, unknown>,
-        fields,
-        {
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: params.routeAuthorized,
-        },
-        params.collectionName
-      );
-
-      return {
-        success: true,
-        statusCode: 200,
-        message: "Entry updated successfully",
-        // A held edit answers with the pending document, not the live row. The
-        // caller asked for its own change back; returning the published content
-        // it did not write reads as the write having been ignored.
-        data: txWorkingDraftDocument ?? updated,
-        eventRecorded,
-        revalidationIntent,
-      };
-    } catch (error: unknown) {
-      // Carry the intent (set only once the row was updated) so a caller that
-      // commits despite a hook failure still busts its tags.
-      // Pass dialect explicitly so the helper can normalise raw driver errors.
-      // A post-write capture/recording failure was marked to abort the caller's
-      // transaction; re-throw it rather than reporting a soft success:false that
-      // would let the caller commit an unversioned, unrecorded row.
-      if (isWriteIntegrityFailure(error)) throw error;
-      return {
-        ...errorToServiceResult(
-          error,
-          { defaultMessage: "Failed to update entry in transaction" },
-          this.dialect
-        ),
-        revalidationIntent,
-      };
-    }
-  }
-
-  /**
-   * Delete an entry within an existing transaction.
-   *
-   * @param tx - Transaction context from adapter
-   * @param params - Collection name, entry ID, and optional user context
-   * @returns Deletion result or error
-   * @throws Error if transaction operations fail
-   */
-  async deleteEntryInTransaction(
-    tx: TransactionContext,
-    params: {
-      collectionName: string;
-      entryId: string;
-      user?: UserContext;
-      /** Who performed the delete, recorded on the outbox event. */
-      actor?: RequestActor;
-    }
-  ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
-    // True only in the window between the row delete and the outbox insert: a
-    // failure there has left this shared transaction with a delete but no event,
-    // so the catch re-throws to force a rollback. Cleared once the event is
-    // recorded — a later failure (e.g. an afterDelete hook) is a per-item
-    // side-effect issue, not an eventless delete, and must NOT roll the batch back.
-    let deleteNeedsRollback = false;
-    // Carried on the result so a caller that owns the transaction can flush the
-    // tags after IT commits (this method cannot flush pre-commit). Computed
-    // before the after-hooks run so a throwing hook does not lose it.
-    let revalidationIntent: RevalidationIntent | undefined;
-    try {
-      // Get collection metadata and stored hooks. Runs on the caller's
-      // transaction connection so this read does not re-enter the pool from
-      // inside the transaction (which can stall against a small pool).
-      const collection = await this.collectionService.getCollection(
-        params.collectionName,
-        tx.getDrizzle()
-      );
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
-
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
-
-      // Fetch entry first (needed for access control and hooks)
-      const entry = await tx.selectOne<Record<string, unknown>>(tableName, {
-        where: this.whereEq("id", params.entryId),
-      });
-
-      if (!entry) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-
-      // 1. Check collection-level access FIRST (with document for owner checks)
-      const accessDenied = await this.accessService.checkCollectionAccess<{
-        deleted: boolean;
-      }>(
-        params.collectionName,
-        "delete",
-        params.user,
-        params.entryId,
-        entry,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        // Bound to the caller's transaction connection so this RBAC/metadata read
-        // does not re-enter the pool from inside the transaction.
-        tx.getDrizzle()
-      );
-      if (accessDenied) {
-        return accessDenied;
-      }
-
-      // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = {};
-
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments (id) or throw to abort
-      await this.hookService.hookRegistry.executeBeforeOperation({
-        collection: params.collectionName,
-        operation: "delete",
-        args: { id: params.entryId },
-        user: params.user
-          ? { id: params.user.id, email: params.user.email }
-          : undefined,
-        context: sharedContext,
-        // Bind a beforeOperation hook that reads via context.executor to the
-        // caller's transaction connection so it does not re-enter the pool.
-        executor: tx.getDrizzle(),
-      });
-
-      // Note: For delete, we don't use modified id since we already fetched the entry
-      // and checked access. The hook can throw to abort if needed.
-
-      // Execute beforeDelete hooks (code-registered)
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "delete" as const,
-        data: entry,
-        user: params.user,
-        context: sharedContext,
-        // Bind a code beforeDelete hook that reads via context.executor to the
-        // caller's transaction connection so it does not re-enter the pool.
-        executor: tx.getDrizzle(),
-      });
-
-      await this.hookService.hookRegistry.execute(
-        "beforeDelete",
-        beforeContext
-      );
-
-      // Execute stored beforeDelete hooks (UI-configured)
-      await this.hookService.storedHookExecutor.execute(
-        "beforeDelete",
-        storedHooks,
-        this.hookService.buildPrebuiltHookContext(
-          params.collectionName,
-          "delete",
-          entry,
-          this.queryDatabaseFn,
-          params.user,
-          sharedContext,
-          // Bind a stored hook's uniqueness read to the caller's transaction
-          // connection so it does not re-enter the pool from inside the tx.
-          tx.getDrizzle()
-        )
-      );
-
-      // The collection schema, two views: FieldConfig for the component cascade,
-      // FieldDefinition for the outbox snapshot.
-      const collectionFields = (collection.schemaDefinition?.fields ||
-        collection.fields ||
-        []) as FieldConfig[];
-      const snapshotFields = (collection.schemaDefinition?.fields ||
-        collection.fields ||
-        []) as FieldDefinition[];
-
-      // Lock and re-read the committed row before snapshotting it: `entry` above
-      // was read before the hooks ran, so a concurrent update could otherwise
-      // make the event describe values other than the row this delete removes.
-      // The adapter no-ops the lock where row locking is unavailable (SQLite,
-      // itself serialized).
-      await tx.lockRow(tableName, params.entryId);
-      const freshEntry = await tx.selectOne<Record<string, unknown>>(
-        tableName,
-        {
-          where: this.whereEq("id", params.entryId),
-        }
-      );
-      if (!freshEntry) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-
-      // Assemble the removed document before the cascade removes its relations,
-      // in the read shape create/update events use.
-      const { document: deletedDocument, locale: deletedLocale } =
-        await this.buildDeletedDocument(tx, {
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          tableName,
-          row: freshEntry,
-          fields: snapshotFields,
-          locale: this.localization?.defaultLocale,
-        });
-      // This runs inside the caller's transaction, so there is no safe place to
-      // read every locale's companion slug: reading on the tx connection would
-      // poison the transaction on error, and reading on the pool would re-enter
-      // it and deadlock a saturated pool. The always-busted id tag clears every
-      // locale's page (reads are id-tagged), so localized slug tags are omitted
-      // on this path; the pool-owned deleteEntry path collects them pre-tx.
-
-      // Cascade delete component data before deleting the main entry
-      if (this.fieldGroupDataService) {
-        await this.fieldGroupDataService.deleteComponentDataInTransaction(tx, {
-          parentId: params.entryId,
-          parentTable: tableName,
-          fields: collectionFields,
-        });
-      }
-
-      // Delete using transaction context
-      const deletedCount = await tx.delete(
-        tableName,
-        this.whereEq("id", params.entryId)
-      );
-
-      if (deletedCount === 0) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-      deleteNeedsRollback = true;
-
-      // Remove EVERY locale's pending working-draft sidecar for the deleted
-      // same transaction, so it does not linger unreachable in nextly_versions
-      // after its row is gone. A no-op when none exists.
-      await new VersionsRepository(tx).deleteAllWorkingDrafts({
-        scopeKind: "collection",
-        scopeSlug: params.collectionName,
-        entryId: params.entryId,
-      });
-
-      // Recovery points go with it; see the single-delete path.
-      await new VersionsRepository(tx).deleteAutosaves({
-        scopeKind: "collection",
-        scopeSlug: params.collectionName,
-        entryId: params.entryId,
-      });
-
-      // Append the outbox event in the same transaction so a delete performed
-      // through this helper (batch/cascade/internal) is observable too, in the
-      // same shape as the single-delete path. Resolve component schemas on this
-      // transaction's connection to avoid taking a second pooled connection.
-      // `locale` is set only for a localized collection.
-      await recordMutationEvent(tx, {
-        type: "entry.deleted",
-        resource: {
-          kind: "entry",
-          collection: params.collectionName,
-          id: params.entryId,
-          ...(deletedLocale ? { locale: deletedLocale } : {}),
-        },
-        data: deletedDocument,
-        previous: null,
-        fields: await this.webhookFieldTreeIfRecording(
-          params.collectionName,
-          snapshotFields,
-          tx.getDrizzle()
-        ),
-        actor: actorForWrite(params.actor, params.user),
-      });
-      // The event is recorded, so the delete + event are now consistent; a later
-      // failure no longer needs to force a rollback.
-      deleteNeedsRollback = false;
-
-      // Compute the intent from the removed document (which overlays companion
-      // locale values, so a user-localized slug still busts the right tag),
-      // before the after-hooks run.
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: params.entryId,
-          slug: readStringField(deletedDocument, "slug"),
-          locale: deletedLocale,
-        }
-      );
-
-      // Execute afterDelete hooks (code-registered)
-      const afterContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "delete" as const,
-        data: entry,
-        user: params.user,
-        context: sharedContext,
-        // Bind an after-hook that reads via context.executor to the caller's
-        // transaction connection so it does not re-enter the pool from the tx.
-        executor: tx.getDrizzle(),
-      });
-
-      await this.hookService.hookRegistry.execute("afterDelete", afterContext);
-
-      // Execute stored afterDelete hooks (UI-configured)
-      await this.hookService.storedHookExecutor.execute(
-        "afterDelete",
-        storedHooks,
-        this.hookService.buildPrebuiltHookContext(
-          params.collectionName,
-          "delete",
-          entry,
-          this.queryDatabaseFn,
-          params.user,
-          sharedContext,
-          // Bind a stored hook's uniqueness read to the caller's transaction
-          // connection so it does not re-enter the pool from inside the tx.
-          tx.getDrizzle()
-        )
-      );
-
-      return {
-        success: true,
-        statusCode: 200,
-        message: "Entry deleted successfully",
-        data: { deleted: true },
-        revalidationIntent,
-      };
-    } catch (error: unknown) {
-      // Only a failure in the delete→event window propagates (to roll back an
-      // eventless delete). Pre-delete failures and post-event failures (e.g. an
-      // afterDelete hook) stay soft: the row is either untouched or already
-      // consistent with its event, so a returned failure is safe.
-      if (deleteNeedsRollback) throw error;
-      return {
-        success: false,
-        statusCode: 500,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to delete entry in transaction",
-        data: null,
-        // A typed error keeps its own status and code. Hardcoding 500 reported
-        // a hook's refusal or rate limit as a server fault, and left a boundary
-        // nothing to rebuild it from.
-        ...errorEnvelopeFields(error),
-        revalidationIntent,
-      };
-    }
-  }
-
-  // ============================================================
-  // Single-entry transaction helpers (used by CollectionBulkService)
-  // ============================================================
-
-  /**
-   * Internal helper to create a single entry within a transaction.
-   *
-   * This is a streamlined version of createEntryInTransaction that:
-   * - Skips collection-level access check (done once by caller)
-   * - Optionally skips hooks for performance
-   * - Returns the same result format
-   *
-   * @param tx - Transaction context
-   * @param params - Collection name and optional user context
-   * @param body - Entry data to create
-   * @param skipHooks - Whether to skip hook execution
-   * @returns CollectionServiceResult with created entry or error
-   */
-  async createSingleEntryInTransaction(
-    tx: TransactionContext,
-    params: {
-      collectionName: string;
-      user?: UserContext;
-      overrideAccess?: boolean;
-      // See createEntry: route-authorized REST responses stay redacted.
-      routeAuthorized?: boolean;
-      /**
-       * Who performed the write. The bulk callers already spread this in; until
-       * it was declared here it was received and dropped, so every event and
-       * activity entry these paths recorded attributed an API-key write to the
-       * key's OWNER as though a person had made it.
-       */
-      actor?: RequestActor;
-      // Publish authorization resolved once by the batch caller before this
-      // shared transaction opened, so the create-as-published is enforced with no
-      // permission read inside the transaction. Self-resolved (pooled) when a
-      // direct caller does not provide it.
-      transitionAuth?: TransitionAuthorization;
-    },
+    params: CreateEntryWriteParams,
     body: Record<string, unknown>,
-    skipHooks: boolean
+    options: CreateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
     // Computed right after the row is written (before response redaction can
     // strip the slug, and before the after-hooks run) and carried on every
@@ -8857,37 +7570,55 @@ export class CollectionMutationService extends BaseService {
     // surfaces its intent to the batch caller. Hoisted so the catch return sees it.
     let revalidationIntent: RevalidationIntent | undefined;
     try {
+      // A direct caller runs this inside its own transaction, so every metadata
+      // and access read below is bound to that transaction's connection — a
+      // pooled read would take a second connection the transaction is holding,
+      // which stalls against a small pool.
+      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
+      // Check collection-level access FIRST, forwarding the caller's
+      // `overrideAccess`/`routeAuthorized`: a trusted write must hit the
+      // `overrideAccess` bypass rather than be re-evaluated against RBAC/stored
+      // rules, and a route-authorized write must skip the redundant coarse RBAC
+      // re-check. Skipped only when the caller already ran it — the batch
+      // services check once per batch rather than once per entry.
+      if (options.enforceCollectionAccess) {
+        const accessDenied = await this.accessService.checkCollectionAccess(
+          params.collectionName,
+          "create",
+          params.user,
+          undefined,
+          undefined,
+          params.overrideAccess,
+          params.routeAuthorized,
+          undefined,
+          undefined,
+          txExecutor
+        );
+        if (accessDenied) {
+          return accessDenied;
+        }
+      }
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
       // the pool from inside the transaction (which can stall against a small pool).
-      const collection = await this.collectionService.getCollection(
-        params.collectionName,
-        tx.getDrizzle()
-      );
-      const fields =
-        ((
-          (collection as Record<string, unknown>).schemaDefinition as
-            | Record<string, unknown>
-            | undefined
-        )?.fields as FieldDefinition[]) ||
-        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
-        [];
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
+      const { collection, fields, storedHooks, tableName } =
+        await this.readCollectionWriteMeta(
+          params.collectionName,
+          tx.getDrizzle()
+        );
 
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
-
-      let currentData: Record<string, unknown> = { ...body };
+      // The transaction API has always shaped the caller's own object in place;
+      // the batch worker shapes a copy. Both are preserved so neither caller's
+      // observable behaviour changes here.
+      let currentData: Record<string, unknown> = options.shapeCallerObject
+        ? body
+        : { ...body };
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = {};
 
       // Execute hooks (unless skipped)
-      if (!skipHooks) {
+      if (options.runHooks) {
         // Execute beforeOperation hooks FIRST (before operation-specific hooks)
         // Can modify operation arguments or throw to abort
         const beforeOpArgs =
@@ -8994,8 +7725,8 @@ export class CollectionMutationService extends BaseService {
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry). A
       // hook can set `slug`, so re-sanitize after it so the validated and
-
-      if (!skipHooks) {
+      // stored value stays URL-safe.
+      if (options.runHooks) {
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -9026,7 +7757,7 @@ export class CollectionMutationService extends BaseService {
       // gate: the flag means this write runs no user hooks at all, so a
       // collection-level handler running while the field-level one is skipped
       // would be the gate half-applied.
-      if (!skipHooks) {
+      if (options.runHooks) {
         await this.hookService.runBeforeChange({
           collection: params.collectionName,
           operation: "create",
@@ -9128,16 +7859,15 @@ export class CollectionMutationService extends BaseService {
       // The bulk worker is a separate, streamlined path — the batch service calls it rather than
       // `createEntryInTransaction` — so it needs the rule too. Leaving it out is how batch writes
       // came to publish documents that carried no marker while single writes did.
-      const bulkCreateStamp = resolveFirstPublishedStamp({
+      const createStamp = resolveFirstPublishedStamp({
         hasStatus: (collection as { status?: boolean }).status === true,
         previousStatus: null,
         nextStatus: finalData.status,
         existingMarker: null,
         now: nowForTxCreate,
       });
-      if (bulkCreateStamp) {
-        (entryData as Record<string, unknown>).first_published_at =
-          bulkCreateStamp;
+      if (createStamp) {
+        (entryData as Record<string, unknown>).first_published_at = createStamp;
       }
 
       // The bulk create worker inserts status like any other field, so publishing
@@ -9176,134 +7906,24 @@ export class CollectionMutationService extends BaseService {
         returning: "*",
       });
 
-      // Handle many-to-many relationships on the caller's transaction so the
-      // junction writes commit atomically with the entry.
-      const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
-      for (const field of manyToManyFields) {
-        const relatedIds = manyToManyData[field.name];
-        if (relatedIds && relatedIds.length > 0) {
-          await this.relationshipService.insertManyToManyRelations(
-            params.collectionName,
-            (entry as Record<string, unknown>).id as string,
-            field,
-            relatedIds,
-            txExecutor
-          );
-        }
-      }
-
-      // Record a durable version snapshot and the outbox event on the caller's
-      // transaction so a batch create (createEntries) is captured AND observable
-      // — the same invariant the interactive path holds. Recording and capture
-      // are NOT hooks, so they run even under `skipHooks`; both are built from
-      // ONE relations read (the freshly-inserted parent row in read shape plus
-      // its component subtrees and m2m id arrays on `tx`), so the version and the
-      // event carry the same complete document, and recorded on `tx` so they
-      // commit with the entry and never survive a rollback.
-      const versionsConfig = (collection as Record<string, unknown>)
-        .versions as ResolvedVersionsConfig | null | undefined;
-      // Skip the per-field component/m2m reads when neither a version nor an
-      // event will consume them (versioning off AND recording disabled by
-      // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
-      // decision the webhook field-tree uses — so the relations and the stripped
-      // field tree are always assembled together: a decision that can flip
-      // mid-write (a stored opt-out or endpoint activation) never leaves a
-      // recorded event with a parent-only payload.
-      const needsRelations =
-        !!versionsConfig?.enabled ||
-        !isRecordingDisabledByConfig("collection", params.collectionName) ||
-        // A curated `webhooks.emit` consumes the assembled document too — its
-        // allowlist may include a component/m2m field — so assemble relations
-        // even when the raw entry.* recording is opted out for this collection.
-        getWebhookEmitSpec("collection", params.collectionName) !== undefined;
-      const { documentParts: createdParts, document: createdDocument } =
-        await this.readTxDocumentParts(tx, {
-          collectionName: params.collectionName,
-          tableName,
-          entryId: (entry as Record<string, unknown>).id as string,
-          parentRow: this.readShapeEventDocument(
-            entry as Record<string, unknown>,
-            fields
-          ),
-          fields,
-          manyToManyFields,
-          needsRelations,
-        });
-      await this.captureTxVersion(tx, {
+      // Junction rows, the version snapshot, the outbox event and the
+      // revalidation intent, all on the caller's transaction.
+      const createEffects = await this.recordCreateSideEffects(tx, {
         collectionName: params.collectionName,
-        entryId: (entry as Record<string, unknown>).id as string,
-        contentStatus: (entry as { status?: unknown }).status,
-        createdBy: params.user?.id ?? null,
-        versionsConfig,
-        documentParts: createdParts,
+        tableName,
+        entry: entry as Record<string, unknown>,
+        collection,
         fields,
+        manyToManyFields,
+        manyToManyData,
+        user: params.user,
+        actor: params.actor,
       });
-      const eventFields = await this.webhookFieldTreeIfRecording(
-        params.collectionName,
-        fields,
-        tx.getDrizzle()
-      );
-      const eventActor = actorForWrite(params.actor, params.user);
-      let eventRecorded = await recordMutationEvent(tx, {
-        type: "entry.created",
-        resource: {
-          kind: "entry",
-          collection: params.collectionName,
-          id: (entry as Record<string, unknown>).id as string,
-        },
-        data: createdDocument,
-        previous: null,
-        fields: eventFields,
-        actor: eventActor,
-      });
-      // Emit the collection's curated create event too (a no-op unless it
-      // declared `webhooks.emit`), so a form/PII collection created through the
-      // transaction and bulk paths gets the same event as the direct path.
-      const curatedCreateRecorded = await this.recordCuratedCreateEvent(
-        tx,
-        params.collectionName,
-        (entry as Record<string, unknown>).id as string,
-        createdDocument,
-        eventActor,
-        fields
-      );
-      eventRecorded = eventRecorded || curatedCreateRecorded;
-      // A create landing directly on `published` is also a publish lifecycle
-      // event, gated on the collection's Draft/Published flag so an ordinary
-      // user `status` field is not mistaken for a lifecycle change. `from` is
-      // null (nothing to transition from), so only `entry.published` is emitted.
-      if ((collection as { status?: boolean }).status === true) {
-        const createdStatusRecorded = await this.recordStatusEvents(tx, {
-          collection: params.collectionName,
-          id: (entry as Record<string, unknown>).id as string,
-          from: null,
-          to: (entry as { status?: unknown }).status as
-            | string
-            | null
-            | undefined,
-          isCreate: true,
-          data: createdDocument,
-          previous: null,
-          fields: eventFields,
-          actor: eventActor,
-        });
-        eventRecorded = createdStatusRecorded || eventRecorded;
-      }
-
-      // Compute the intent from the freshly inserted row, before ANY after-hooks
-      // run (a throwing afterCreate hook must not lose it) and before redaction
-      // can strip the slug.
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(collection),
-        {
-          id: (entry as Record<string, unknown>).id as string,
-          slug: readStringField(entry as Record<string, unknown>, "slug"),
-        }
-      );
+      const eventRecorded = createEffects.eventRecorded;
+      revalidationIntent = createEffects.revalidationIntent;
 
       // Execute afterCreate hooks (unless skipped)
-      if (!skipHooks) {
+      if (options.runHooks) {
         // Execute afterCreate hooks (code-registered)
         const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
@@ -9343,7 +7963,7 @@ export class CollectionMutationService extends BaseService {
       // them back to the client.
       // Field-level afterChange hooks observe the saved values (before the
       // password strip so they can see the full stored row).
-      if (!skipHooks) {
+      if (options.runHooks) {
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -9384,7 +8004,7 @@ export class CollectionMutationService extends BaseService {
       return {
         ...errorToServiceResult(
           error,
-          { defaultMessage: "Failed to create entry" },
+          { defaultMessage: options.failureMessage },
           this.dialect
         ),
         revalidationIntent,
@@ -9393,48 +8013,39 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Internal helper to update a single entry within a transaction.
+   * Update an entry inside a transaction the caller owns.
    *
-   * This is a streamlined version of updateEntryInTransaction that:
-   * - Skips collection-level access check (done once by caller)
-   * - Optionally skips hooks for performance
-   * - Returns the same result format
-   *
-   * @param tx - Transaction context
-   * @param params - Collection name and optional user context
-   * @param entryId - ID of the entry to update
-   * @param body - Partial data to update
-   * @param skipHooks - Whether to skip hook execution
-   * @returns CollectionServiceResult with updated entry or error
+   * @param tx - Transaction context from adapter
+   * @param params - Collection name, entry ID, and optional user context
+   * @param body - Update data
+   * @returns Updated entry or error
    */
-  async updateSingleEntryInTransaction(
+  async updateEntryInTransaction(
     tx: TransactionContext,
-    params: {
-      collectionName: string;
-      user?: UserContext;
-      overrideAccess?: boolean;
-      // See createEntry: route-authorized REST responses stay redacted.
-      routeAuthorized?: boolean;
-      /**
-       * Who performed the write. The bulk callers already spread this in; until
-       * it was declared here it was received and dropped, so every event and
-       * activity entry these paths recorded attributed an API-key write to the
-       * key's OWNER as though a person had made it.
-       */
-      actor?: RequestActor;
-      // Publish/unpublish authorization resolved once by the batch caller before
-      // this shared transaction opened, so the transition is enforced under the
-      // row lock with no permission read inside the transaction. Self-resolved
-      // (pooled) when a direct caller does not provide it.
-      transitionAuth?: TransitionAuthorization;
-      // The caller's authenticated scope. A scoped API key is judged on its OWN
-      // update grant for the owner-only predicate + safety net, so a
-      // super-admin-owned key cannot batch-update other users' rows.
-      authenticatedScope?: AuthenticatedScope;
-    },
+    params: UpdateEntryWriteParams & { entryId: string },
+    body: Record<string, unknown>
+  ): Promise<CollectionServiceResult<unknown>> {
+    return this.updateEntryWrite(tx, params, params.entryId, body, {
+      rowGate: "access-service",
+      runHooks: true,
+      identifyMissingEntry: false,
+      failureMessage: "Failed to update entry in transaction",
+    });
+  }
+
+  // Replaces updateEntryInTransaction (cyclomatic 43) and
+  // updateSingleEntryInTransaction (57). One implementation at 59 is close to
+  // the larger of the two and well under their sum; the branching is the
+  // update pipeline's own — working drafts, localized splits, status
+  // transitions — and comes down by splitting those phases out, not by
+  // maintaining the copy this replaced.
+  // fallow-ignore-next-line complexity
+  private async updateEntryWrite(
+    tx: TransactionContext,
+    params: UpdateEntryWriteParams,
     entryId: string,
     body: Record<string, unknown>,
-    skipHooks: boolean
+    options: UpdateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
     // Computed right after the row is updated (before redaction can strip the
     // slug and before the after-hooks run) and carried on every post-write
@@ -9445,46 +8056,40 @@ export class CollectionMutationService extends BaseService {
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
       // the pool from inside the transaction (which can stall against a small pool).
-      const collection = await this.collectionService.getCollection(
-        params.collectionName,
-        tx.getDrizzle()
-      );
-      const fields =
-        ((
-          (collection as Record<string, unknown>).schemaDefinition as
-            | Record<string, unknown>
-            | undefined
-        )?.fields as FieldDefinition[]) ||
-        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
-        [];
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
-
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
+      const { collection, fields, storedHooks, tableName } =
+        await this.readCollectionWriteMeta(
+          params.collectionName,
+          tx.getDrizzle()
+        );
 
       // When update access is `owner-only`, fold the ownership
       // predicate into the SQL WHERE clause of the initial fetch. A
       // non-owner sees a 404, never gets the row back, and the
       // post-fetch check below stays as a defense-in-depth guard for
       // any future caller that might mutate the fetch logic.
-      const ownerConstraint = await this.accessService.getOwnerConstraint(
-        params.collectionName,
-        "update",
-        params.user,
-        // A trusted override must not have an owner predicate forced onto its
-        // fetch, or it would 404 rows it is entitled to update.
-        params.overrideAccess,
-        // A scoped API key keeps the owner predicate even when owned by a
-        // super-admin, so a batch update judges the key on its OWN grant.
-        params.authenticatedScope,
-        // Bound to the caller's transaction connection so the metadata read does
-        // not re-enter the pool from inside the transaction.
-        tx.getDrizzle()
-      );
+      // Two shapes of the same question — may this user write this row. The
+      // batch worker folds an owner predicate into the fetch, so a row the
+      // caller may not touch never leaves the database; the transaction API
+      // fetches by id and asks the access service, which also applies RBAC and
+      // route authorization. They are not interchangeable, so the caller picks
+      // one and neither path's behaviour moves.
+      const ownerConstraint =
+        options.rowGate === "owner-predicate"
+          ? await this.accessService.getOwnerConstraint(
+              params.collectionName,
+              "update",
+              params.user,
+              // A trusted override must not have an owner predicate forced onto its
+              // fetch, or it would 404 rows it is entitled to update.
+              params.overrideAccess,
+              // A scoped API key keeps the owner predicate even when owned by a
+              // super-admin, so a batch update judges the key on its OWN grant.
+              params.authenticatedScope,
+              // Bound to the caller's transaction connection so the metadata read does
+              // not re-enter the pool from inside the transaction.
+              tx.getDrizzle()
+            )
+          : null;
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
             id: entryId,
@@ -9506,47 +8111,72 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: `Entry not found: ${entryId}`,
+          message: options.identifyMissingEntry
+            ? `Entry not found: ${entryId}`
+            : "Entry not found",
           data: null,
         };
       }
 
-      // Defense-in-depth: the WHERE-clause filter above is the
-      // load-bearing check. This explicit comparison is a safety net
-      // that fires only if a future refactor accidentally weakens the
-      // fetch query — at which point we'd rather return 403 than
-      // silently let a non-owner through.
-      const accessRules = this.accessService.getAccessRules(
-        collection as Record<string, unknown>
-      );
+      if (options.rowGate === "owner-predicate") {
+        // Defense-in-depth: the WHERE-clause filter above is the
+        // load-bearing check. This explicit comparison is a safety net
+        // that fires only if a future refactor accidentally weakens the
+        // fetch query — at which point we'd rather return 403 than
+        // silently let a non-owner through.
+        const accessRules = this.accessService.getAccessRules(
+          collection as Record<string, unknown>
+        );
 
-      // A super-admin bypasses stored rules on every transport — EXCEPT via a
-      // scoped API key, which is judged on its own grant (mirrors the owner
-      // predicate + checkCollectionAccess). So the safety net still fires for a
-      // scoped key even when the key owner is a super-admin.
-      const isScopedApiKey = params.authenticatedScope?.actorType === "apiKey";
-      if (
-        accessRules?.update?.type === "owner-only" &&
-        params.user &&
-        // A trusted override (overrideAccess) and a super-admin SESSION bypass
-        // stored rules on every transport, including the batch transaction
-        // path — mirror the SQL owner-predicate bypass so this safety net does
-        // not re-impose owner-only on them. A scoped API key is not covered by
-        // the super-admin bypass.
-        !params.overrideAccess &&
-        !(this.accessService.isSuperAdmin(params.user) && !isScopedApiKey)
-      ) {
-        // Default to the auto-stamped system owner column (snake_case, matching
-        // the runtime schema and raw rows) so zero-config owner-only works.
-        const ownerField = accessRules.update.ownerField ?? "created_by";
-        const ownerId = existingEntry[ownerField];
-        if (ownerId !== params.user.id) {
-          return {
-            success: false,
-            statusCode: 403,
-            message: "You can only update your own entries",
-            data: null,
-          };
+        // A super-admin bypasses stored rules on every transport — EXCEPT via a
+        // scoped API key, which is judged on its own grant (mirrors the owner
+        // predicate + checkCollectionAccess). So the safety net still fires for a
+        // scoped key even when the key owner is a super-admin.
+        const isScopedApiKey =
+          params.authenticatedScope?.actorType === "apiKey";
+        if (
+          accessRules?.update?.type === "owner-only" &&
+          params.user &&
+          // A trusted override (overrideAccess) and a super-admin SESSION bypass
+          // stored rules on every transport, including the batch transaction
+          // path — mirror the SQL owner-predicate bypass so this safety net does
+          // not re-impose owner-only on them. A scoped API key is not covered by
+          // the super-admin bypass.
+          !params.overrideAccess &&
+          !(this.accessService.isSuperAdmin(params.user) && !isScopedApiKey)
+        ) {
+          // Default to the auto-stamped system owner column (snake_case, matching
+          // the runtime schema and raw rows) so zero-config owner-only works.
+          const ownerField = accessRules.update.ownerField ?? "created_by";
+          const ownerId = existingEntry[ownerField];
+          if (ownerId !== params.user.id) {
+            return {
+              success: false,
+              statusCode: 403,
+              message: "You can only update your own entries",
+              data: null,
+            };
+          }
+        }
+      } else {
+        // The transaction API asks the access service for the whole verdict:
+        // RBAC, stored rules and the owner check together, judged on the row it
+        // just fetched, with the caller's overrideAccess / routeAuthorized
+        // forwarded.
+        const accessDenied = await this.accessService.checkCollectionAccess(
+          params.collectionName,
+          "update",
+          params.user,
+          entryId,
+          existingEntry,
+          params.overrideAccess,
+          params.routeAuthorized,
+          undefined,
+          undefined,
+          tx.getDrizzle()
+        );
+        if (accessDenied) {
+          return accessDenied;
         }
       }
 
@@ -9556,7 +8186,7 @@ export class CollectionMutationService extends BaseService {
       const sharedContext: Record<string, unknown> = {};
 
       // Execute hooks (unless skipped)
-      if (!skipHooks) {
+      if (options.runHooks) {
         // Execute beforeOperation hooks FIRST (before operation-specific hooks)
         // Can modify operation arguments (id, data) or throw to abort
         const beforeOpArgs =
@@ -9646,7 +8276,7 @@ export class CollectionMutationService extends BaseService {
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
-      if (!skipHooks) {
+      if (options.runHooks) {
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -9674,7 +8304,7 @@ export class CollectionMutationService extends BaseService {
       // Collection-level then field-level beforeChange hooks, on data the
       // validation gate has just passed. Both sit under the same `skipHooks`
       // gate: the flag means this write runs no user hooks at all.
-      if (!skipHooks) {
+      if (options.runHooks) {
         await this.hookService.runBeforeChange({
           collection: params.collectionName,
           operation: "update",
@@ -9788,8 +8418,8 @@ export class CollectionMutationService extends BaseService {
       // Same rule as every other update seam. Read under the lock the transition gate above
       // already holds, so the prior status and stored marker are the committed ones, and only
       // when the write could publish at all — a content-only edit must not pay for the read.
-      const nowForBulkUpdate = new Date();
-      let bulkUpdateStamp: Date | undefined;
+      const nowForUpdate = new Date();
+      let updateStamp: Date | undefined;
       if (
         (collection as { status?: boolean }).status === true &&
         finalData.status === "published"
@@ -9798,7 +8428,7 @@ export class CollectionMutationService extends BaseService {
           tableName,
           { where: this.whereEq("id", entryId), forUpdate: true }
         );
-        bulkUpdateStamp = resolveFirstPublishedStamp({
+        updateStamp = resolveFirstPublishedStamp({
           hasStatus: true,
           previousStatus:
             typeof lockedForMarker?.status === "string"
@@ -9806,7 +8436,7 @@ export class CollectionMutationService extends BaseService {
               : null,
           nextStatus: finalData.status,
           existingMarker: lockedForMarker?.first_published_at,
-          now: nowForBulkUpdate,
+          now: nowForUpdate,
         });
       }
 
@@ -9814,9 +8444,9 @@ export class CollectionMutationService extends BaseService {
       // predicate. Without it a bulk update publishes every held edit in the
       // batch, which is the widest form of the defect: one call, many documents.
       const {
-        hold: bulkStoreAsWorkingDraft,
-        componentSchemas: bulkSplitComponentSchemas,
-        draftLocale: bulkDraftLocale,
+        hold: storeAsWorkingDraft,
+        componentSchemas: splitComponentSchemas,
+        draftLocale: draftLocale,
       } = await this.resolveWorkingDraftHold({
         collection,
         fields,
@@ -9826,16 +8456,14 @@ export class CollectionMutationService extends BaseService {
 
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
-      const [updated] = bulkStoreAsWorkingDraft
+      const [updated] = storeAsWorkingDraft
         ? [existingEntry]
         : await tx.update<unknown>(
             tableName,
             {
               ...stripImmutableSystemFields(finalData, "collection"),
-              updatedAt: nowForBulkUpdate,
-              ...(bulkUpdateStamp
-                ? { first_published_at: bulkUpdateStamp }
-                : {}),
+              updatedAt: nowForUpdate,
+              ...(updateStamp ? { first_published_at: updateStamp } : {}),
             },
             this.whereEq("id", entryId),
             { returning: "*" }
@@ -9845,7 +8473,9 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: `Entry not found: ${entryId}`,
+          message: options.identifyMissingEntry
+            ? `Entry not found: ${entryId}`
+            : "Entry not found",
           data: null,
         };
       }
@@ -9907,20 +8537,20 @@ export class CollectionMutationService extends BaseService {
           manyToManyFields,
           // A held edit needs the live relations regardless of what is being
           // recorded: they are the base the pending change accumulates onto.
-          needsRelations: previousNeedsRelations || bulkStoreAsWorkingDraft,
+          needsRelations: previousNeedsRelations || storeAsWorkingDraft,
         });
 
       // Store the pending edit rather than the live row, through the same
       // method the other two paths use.
-      let bulkWorkingDraftDocument: Record<string, unknown> | undefined;
-      if (bulkStoreAsWorkingDraft) {
-        ({ workingDraftDocument: bulkWorkingDraftDocument } =
+      let workingDraftDocument: Record<string, unknown> | undefined;
+      if (storeAsWorkingDraft) {
+        ({ workingDraftDocument: workingDraftDocument } =
           await this.storeWorkingDraftInTx(tx, {
             collection,
             collectionHasStatus:
               (collection as { status?: boolean }).status === true,
             componentFieldData: {},
-            draftLocale: bulkDraftLocale,
+            draftLocale: draftLocale,
             fields,
             manyToManyData,
             params: {
@@ -9937,7 +8567,7 @@ export class CollectionMutationService extends BaseService {
             ),
             snapshotComponents: previousParts.components,
             snapshotM2M: previousParts.manyToMany,
-            splitComponentSchemas: bulkSplitComponentSchemas,
+            splitComponentSchemas: splitComponentSchemas,
             updatePayload: finalData,
           }));
       }
@@ -9947,10 +8577,7 @@ export class CollectionMutationService extends BaseService {
       const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
         // Skipped for a held edit: junction rows are live content.
-        if (
-          !bulkStoreAsWorkingDraft &&
-          manyToManyData[field.name] !== undefined
-        ) {
+        if (!storeAsWorkingDraft && manyToManyData[field.name] !== undefined) {
           // Delete existing relations
           await this.relationshipService.deleteManyToManyRelations(
             params.collectionName,
@@ -9996,7 +8623,7 @@ export class CollectionMutationService extends BaseService {
           needsRelations,
         });
       // A held edit records no durable version: nothing was published.
-      if (!bulkStoreAsWorkingDraft) {
+      if (!storeAsWorkingDraft) {
         await this.captureTxVersion(tx, {
           collectionName: params.collectionName,
           entryId,
@@ -10044,7 +8671,7 @@ export class CollectionMutationService extends BaseService {
       }
 
       // Execute afterUpdate hooks (unless skipped)
-      if (!skipHooks) {
+      if (options.runHooks) {
         // Execute afterUpdate hooks (code-registered)
         const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
@@ -10085,7 +8712,7 @@ export class CollectionMutationService extends BaseService {
       // them back to the client.
       // Field-level afterChange hooks observe the saved values (before the
       // password strip so they can see the full stored row).
-      if (!skipHooks) {
+      if (options.runHooks) {
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -10112,7 +8739,7 @@ export class CollectionMutationService extends BaseService {
         statusCode: 200,
         message: "Entry updated successfully",
         // A held edit answers with the pending document, not the live row.
-        data: bulkWorkingDraftDocument ?? updated,
+        data: workingDraftDocument ?? updated,
         eventRecorded,
         revalidationIntent,
       };
@@ -10127,7 +8754,7 @@ export class CollectionMutationService extends BaseService {
       return {
         ...errorToServiceResult(
           error,
-          { defaultMessage: "Failed to update entry" },
+          { defaultMessage: options.failureMessage },
           this.dialect
         ),
         revalidationIntent,
@@ -10136,30 +8763,47 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Internal helper to delete a single entry within a transaction.
+   * Delete an entry inside a transaction the caller owns.
    *
-   * This is a streamlined version of deleteEntryInTransaction that:
-   * - Skips collection-level access check (done once by caller)
-   * - Optionally skips hooks for performance
-   * - Returns the same result format
-   *
-   * @param tx - Transaction context
-   * @param params - Collection name and optional user context
-   * @param entryId - ID of the entry to delete
-   * @param skipHooks - Whether to skip hook execution
-   * @returns CollectionServiceResult with deletion status
+   * @param tx - Transaction context from adapter
+   * @param params - Collection name, entry ID, and optional user context
+   * @returns Deletion result or error
    */
-  async deleteSingleEntryInTransaction(
+  async deleteEntryInTransaction(
     tx: TransactionContext,
     params: {
       collectionName: string;
+      entryId: string;
       user?: UserContext;
-      overrideAccess?: boolean;
       /** Who performed the delete, recorded on the outbox event. */
       actor?: RequestActor;
-    },
+    }
+  ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
+    return this.deleteEntryWrite(tx, params, params.entryId, {
+      rowGate: "access-service",
+      runHooks: true,
+      identifyMissingEntry: false,
+      failureMessage: "Failed to delete entry in transaction",
+    });
+  }
+
+  /**
+   * The one delete implementation. Both transaction entry points delegate here.
+   *
+   * `options` carries the only things that legitimately differ between them —
+   * see `DeleteEntryWriteOptions`.
+   */
+  // Replaces deleteEntryInTransaction (cyclomatic 18) and
+  // deleteSingleEntryInTransaction (27). One implementation at 33 carries both
+  // row-gate shapes; it drops back under the threshold when the two gates
+  // become one, which needs a deliberate decision about which of their
+  // overrideAccess and API-key-scope behaviours is correct.
+  // fallow-ignore-next-line complexity
+  private async deleteEntryWrite(
+    tx: TransactionContext,
+    params: DeleteEntryWriteParams,
     entryId: string,
-    skipHooks: boolean
+    options: DeleteEntryWriteOptions
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     // True only in the window between the row delete and the outbox insert: a
     // failure there has left this shared transaction with a delete but no event,
@@ -10191,20 +8835,28 @@ export class CollectionMutationService extends BaseService {
       // predicate into the SQL WHERE clause of the initial fetch.
       // The post-fetch check below remains as a defense-in-depth
       // guard.
-      const ownerConstraint = await this.accessService.getOwnerConstraint(
-        params.collectionName,
-        "delete",
-        params.user,
-        // A trusted override must not have an owner predicate forced onto its
-        // fetch, or it would 404 rows it is entitled to delete.
-        params.overrideAccess,
-        // This worker carries no scoped-API-key context (unlike the update
-        // worker); the owner predicate is resolved from the session user only.
-        undefined,
-        // Bound to the caller's transaction connection so the metadata read does
-        // not re-enter the pool from inside the transaction.
-        tx.getDrizzle()
-      );
+      // Two shapes of the same question — may this user delete this row. The
+      // batch worker folds an owner predicate into the fetch so a row the caller
+      // may not touch never leaves the database; the transaction API fetches by
+      // id and asks the access service for the whole verdict. Selected by the
+      // caller so neither path's behaviour moves.
+      const ownerConstraint =
+        options.rowGate === "owner-predicate"
+          ? await this.accessService.getOwnerConstraint(
+              params.collectionName,
+              "delete",
+              params.user,
+              // A trusted override must not have an owner predicate forced onto its
+              // fetch, or it would 404 rows it is entitled to delete.
+              params.overrideAccess,
+              // This worker carries no scoped-API-key context (unlike the update
+              // worker); the owner predicate is resolved from the session user only.
+              undefined,
+              // Bound to the caller's transaction connection so the metadata read does
+              // not re-enter the pool from inside the transaction.
+              tx.getDrizzle()
+            )
+          : null;
       const fetchWhere = ownerConstraint
         ? this.whereAnd({
             id: entryId,
@@ -10221,7 +8873,9 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: `Entry not found: ${entryId}`,
+          message: options.identifyMissingEntry
+            ? `Entry not found: ${entryId}`
+            : "Entry not found",
           data: null,
         };
       }
@@ -10236,27 +8890,50 @@ export class CollectionMutationService extends BaseService {
         collection as Record<string, unknown>
       );
 
-      if (
-        accessRules?.delete?.type === "owner-only" &&
-        params.user &&
-        // A trusted override (overrideAccess) and super-admins both bypass
-        // stored rules on every transport, including the batch transaction
-        // path — mirror the SQL owner-predicate bypass so this safety net does
-        // not re-impose owner-only on them.
-        !params.overrideAccess &&
-        !this.accessService.isSuperAdmin(params.user)
-      ) {
-        // Default to the auto-stamped system owner column (snake_case, matching
-        // the runtime schema and raw rows) so zero-config owner-only works.
-        const ownerField = accessRules.delete.ownerField ?? "created_by";
-        const ownerId = entry[ownerField];
-        if (ownerId !== params.user.id) {
-          return {
-            success: false,
-            statusCode: 403,
-            message: "You can only delete your own entries",
-            data: null,
-          };
+      if (options.rowGate === "owner-predicate") {
+        if (
+          accessRules?.delete?.type === "owner-only" &&
+          params.user &&
+          // A trusted override (overrideAccess) and super-admins both bypass
+          // stored rules on every transport, including the batch transaction
+          // path — mirror the SQL owner-predicate bypass so this safety net does
+          // not re-impose owner-only on them.
+          !params.overrideAccess &&
+          !this.accessService.isSuperAdmin(params.user)
+        ) {
+          // Default to the auto-stamped system owner column (snake_case, matching
+          // the runtime schema and raw rows) so zero-config owner-only works.
+          const ownerField = accessRules.delete.ownerField ?? "created_by";
+          const ownerId = entry[ownerField];
+          if (ownerId !== params.user.id) {
+            return {
+              success: false,
+              statusCode: 403,
+              message: "You can only delete your own entries",
+              data: null,
+            };
+          }
+        }
+      } else {
+        // The transaction API asks the access service for the whole verdict —
+        // RBAC, stored rules and the owner check together — judged on the row it
+        // just fetched.
+        const accessDenied = await this.accessService.checkCollectionAccess<{
+          deleted: boolean;
+        }>(
+          params.collectionName,
+          "delete",
+          params.user,
+          entryId,
+          entry,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          tx.getDrizzle()
+        );
+        if (accessDenied) {
+          return accessDenied;
         }
       }
 
@@ -10264,7 +8941,7 @@ export class CollectionMutationService extends BaseService {
       const sharedContext: Record<string, unknown> = {};
 
       // Execute hooks (unless skipped)
-      if (!skipHooks) {
+      if (options.runHooks) {
         // Execute beforeOperation hooks FIRST (before operation-specific hooks)
         // Can modify operation arguments (id) or throw to abort
         await this.hookService.hookRegistry.executeBeforeOperation({
@@ -10343,7 +9020,9 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: `Entry not found: ${entryId}`,
+          message: options.identifyMissingEntry
+            ? `Entry not found: ${entryId}`
+            : "Entry not found",
           data: null,
         };
       }
@@ -10385,7 +9064,9 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: `Entry not found: ${entryId}`,
+          message: options.identifyMissingEntry
+            ? `Entry not found: ${entryId}`
+            : "Entry not found",
           data: null,
         };
       }
@@ -10449,7 +9130,7 @@ export class CollectionMutationService extends BaseService {
       );
 
       // Execute afterDelete hooks (unless skipped)
-      if (!skipHooks) {
+      if (options.runHooks) {
         // Execute afterDelete hooks (code-registered)
         const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
@@ -10503,7 +9184,7 @@ export class CollectionMutationService extends BaseService {
         success: false,
         statusCode: 500,
         message:
-          error instanceof Error ? error.message : "Failed to delete entry",
+          error instanceof Error ? error.message : options.failureMessage,
         data: null,
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
@@ -10513,5 +9194,82 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     }
+  }
+
+  // ============================================================
+  // Single-entry transaction helpers (used by CollectionBulkService)
+  // ============================================================
+
+  /**
+   * Create one entry of a batch, on the batch's shared transaction.
+   *
+   * The batch services check collection access and resolve the publish
+   * transition ONCE per batch, before the transaction opens, so this per-entry
+   * path does neither — see `createEntryWrite`.
+   *
+   * @param skipHooks - Skip user hooks; a bulk-import option, not a fast path
+   *   around validation, access or recording, none of which are hooks.
+   */
+  async createSingleEntryInTransaction(
+    tx: TransactionContext,
+    params: CreateEntryWriteParams,
+    body: Record<string, unknown>,
+    skipHooks: boolean
+  ): Promise<CollectionServiceResult<unknown>> {
+    return this.createEntryWrite(tx, params, body, {
+      enforceCollectionAccess: false,
+      runHooks: !skipHooks,
+      shapeCallerObject: false,
+      failureMessage: "Failed to create entry",
+    });
+  }
+
+  /**
+   * Update one entry of a batch, on the batch's shared transaction.
+   *
+   * The batch services check collection access and resolve the publish
+   * transition ONCE per batch, before the transaction opens, so this per-entry
+   * path applies the owner predicate directly — see `updateEntryWrite`.
+   *
+   * @param skipHooks - Skip user hooks; a bulk-import option, not a fast path
+   *   around validation, access or recording, none of which are hooks.
+   */
+  async updateSingleEntryInTransaction(
+    tx: TransactionContext,
+    params: UpdateEntryWriteParams,
+    entryId: string,
+    body: Record<string, unknown>,
+    skipHooks: boolean
+  ): Promise<CollectionServiceResult<unknown>> {
+    return this.updateEntryWrite(tx, params, entryId, body, {
+      rowGate: "owner-predicate",
+      runHooks: !skipHooks,
+      identifyMissingEntry: true,
+      failureMessage: "Failed to update entry",
+    });
+  }
+
+  /**
+   * Delete one entry of a batch, on the batch's shared transaction.
+   *
+   * The batch services check collection access ONCE per batch, before the
+   * transaction opens, so this per-entry path applies the owner predicate
+   * directly — see `deleteEntryWrite`.
+   *
+   * @param skipHooks - Skip user hooks; a bulk-import option, not a fast path
+   *   around access or recording, neither of which is a hook.
+   */
+  async deleteSingleEntryInTransaction(
+    tx: TransactionContext,
+    params: DeleteEntryWriteParams,
+    entryId: string,
+    skipHooks: boolean
+  ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
+    return this.deleteEntryWrite(tx, params, entryId, {
+      rowGate: "owner-predicate",
+      runHooks: !skipHooks,
+      identifyMissingEntry: true,
+      failureMessage: "Failed to delete entry",
+    });
   }
 }
