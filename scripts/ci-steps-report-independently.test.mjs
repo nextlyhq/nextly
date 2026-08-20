@@ -173,16 +173,39 @@ function where(declared) {
 }
 
 /**
- * Every `steps.<id>.outcome` this condition names, sorted and de-duplicated.
+ * Every step this condition names, sorted and de-duplicated.
+ *
+ * Matches the reference rather than one SPELLING of it. `steps.<id>.outcome`
+ * is the form written here, but `steps.<id>.conclusion` chains a step just as
+ * effectively, and `steps['<id>']` is the same expression in bracket syntax —
+ * so reading only the first would let the identical silencing through under a
+ * different name.
  *
  * Sorted so the comparison is over a SET rather than over the order somebody
  * happened to write the conjuncts in.
  */
-function referencedOutcomeIds(condition) {
-  const ids = [...condition.matchAll(/steps\.([A-Za-z0-9_-]+)\.outcome/g)].map(
-    m => m[1]
-  );
+function referencedStepIds(condition) {
+  const dotted = [...condition.matchAll(/steps\.([A-Za-z0-9_-]+)\b/g)];
+  const bracketed = [...condition.matchAll(/steps\[\s*['"]([^'"]+)['"]\s*\]/g)];
+  const ids = [...dotted, ...bracketed].map(m => m[1]);
   return [...new Set(ids)].sort();
+}
+
+/**
+ * Every status function this condition calls, sorted and de-duplicated.
+ *
+ * `!cancelled()` is the only one a verification step may name. An EXPLICIT
+ * `success()` is the trap: it reproduces the implicit one GitHub applies when
+ * no status function is present, so a condition carrying both `!cancelled()`
+ * and `success()` keeps every required conjunct and is still skipped by any
+ * earlier failure — the behaviour this whole job was changed to stop, restored
+ * by an addition rather than a removal.
+ */
+function calledStatusFunctions(condition) {
+  const calls = [
+    ...condition.matchAll(/\b(success|always|cancelled|failure)\s*\(\s*\)/g),
+  ].map(m => m[1]);
+  return [...new Set(calls)].sort();
 }
 
 /** The first capture group, trimmed, or "" when the pattern does not match. */
@@ -222,13 +245,21 @@ describe("the ci job reports every gate, not only the first to fail", () => {
   it("requires !cancelled() on every verification step", async () => {
     const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
 
-    const missing = verificationSteps(steps)
-      .filter(s => !s.ifCondition.includes(NOT_CANCELLED))
+    // An exact set, not a presence check. Missing `!cancelled()` restores the
+    // skipping by omission; ADDING `success()` beside it restores the same
+    // skipping while every required conjunct is still there, which no
+    // presence check can see and no reader spots by eye.
+    const wrong = verificationSteps(steps)
+      .filter(
+        s =>
+          !s.ifCondition.includes(NOT_CANCELLED) ||
+          calledStatusFunctions(s.ifCondition).join() !== "cancelled"
+      )
       .map(s => `${s.name || "(unnamed step)"}: ${s.ifCondition || "(no if:)"}`);
 
     expect(
-      missing,
-      "GitHub applies an implicit success() to an if: naming no status function, so a condition without !cancelled() is skipped after ANY earlier failure — the behaviour this job was changed to stop"
+      wrong,
+      "a verification step may call !cancelled() and no other status function: GitHub applies an implicit success() when none is named, and an explicit one reproduces it, so either way the step is skipped after ANY earlier failure"
     ).toEqual([]);
   });
 
@@ -246,7 +277,7 @@ describe("the ci job reports every gate, not only the first to fail", () => {
     const wrong = verificationSteps(steps)
       .map(s => ({
         step: s,
-        actual: referencedOutcomeIds(s.ifCondition),
+        actual: referencedStepIds(s.ifCondition),
         expected: BUILD_DEPENDENT.has(s.name)
           ? ["build", "install"]
           : ["install"],
@@ -281,7 +312,7 @@ describe("the ci job reports every gate, not only the first to fail", () => {
     );
 
     const tooEarly = steps.flatMap((s, index) =>
-      referencedOutcomeIds(s.ifCondition)
+      referencedStepIds(s.ifCondition)
         .filter(id => !resolvesBefore(declaredAt.get(id), index))
         .map(id => `${label(s, index)} references ${id}, declared at ${where(declaredAt.get(id))}`)
     );
