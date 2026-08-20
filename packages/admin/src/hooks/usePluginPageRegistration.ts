@@ -16,6 +16,65 @@ function routeSignature(routes: string[]): string {
 }
 
 /**
+ * Every component path a plugin's admin-meta entry can resolve by string:
+ * pages, settings, the header slot (both spellings), the schema-builder and
+ * form-toolbar slots, and custom field-type editors. All of them render
+ * through the component registry, so their modules must be imported even for
+ * a plugin that contributes no collections — the field-type and slot kinds
+ * are delivered via branding rather than collection admin.components, and
+ * nothing else would trigger their import. The import-map codegen in
+ * `nextly` collects the same kinds; the parity test there fails when the two
+ * disagree.
+ */
+function pluginComponentPaths(plugin: PluginMetadata): string[] {
+  const headerSlot = plugin.header?.slot ?? plugin.headerSlot;
+  return [
+    ...(plugin.pages ?? []).map(page => page.component),
+    plugin.settings?.component,
+    headerSlot,
+    plugin.schemaBuilderSlot,
+    // The toolbar slot renders inside the entry form's provider, so it is
+    // resolved on the same pages the schema-builder slot is.
+    plugin.entryFormToolbarSlot,
+    ...(plugin.fieldTypes ?? []).map(fieldType => fieldType.component),
+    // Falsy rather than only `undefined`, matching the codegen collector
+    // exactly: an empty component path names no module, and the two halves
+    // disagreeing about that is the drift this shared shape exists to stop.
+  ].filter((path): path is string => Boolean(path));
+}
+
+/**
+ * Registers one plugin's pages into the client route registry and returns
+ * the signature entries describing what was registered.
+ */
+function registerPluginRoutes(plugin: PluginMetadata, slug: string): string[] {
+  if (!plugin.pages || plugin.pages.length === 0) return [];
+
+  registerPluginPages(
+    slug,
+    plugin.pages.map(page => ({
+      path: page.path,
+      component: page.component,
+      requiredPermission: page.requiredPermission,
+      section: pluginSurfaceSection(page.section, plugin.placement, slug),
+    }))
+  );
+
+  // Key on the resolved route (the registry strips leading slashes, so
+  // "/reports" and "reports" are one route) and encode the tuple as JSON,
+  // since component and permission values can themselves contain the
+  // delimiter — `posts:read` style permissions being the common case — which
+  // a flat join would render ambiguous.
+  return plugin.pages.map(page =>
+    JSON.stringify([
+      pluginPagePath(slug, page.path),
+      page.component,
+      page.requiredPermission ?? "",
+    ])
+  );
+}
+
+/**
  * Registers plugin-contributed admin pages into the client route registry
  * whenever the admin-meta plugin list changes, and triggers auto-registration
  * of their component modules (so `PluginSlot` can resolve them).
@@ -43,48 +102,8 @@ export function usePluginPageRegistration(
     // below so a removed route stops resolving.
     for (const plugin of plugins ?? []) {
       const slug = pluginSlug(plugin.name);
-      if (plugin.pages && plugin.pages.length > 0) {
-        registerPluginPages(
-          slug,
-          plugin.pages.map(page => ({
-            path: page.path,
-            component: page.component,
-            requiredPermission: page.requiredPermission,
-            section: pluginSurfaceSection(page.section, plugin.placement, slug),
-          }))
-        );
-        for (const page of plugin.pages) {
-          componentPaths.push(page.component);
-          // Key on the resolved route (the registry strips leading slashes, so
-          // "/reports" and "reports" are one route) and encode the tuple as
-          // JSON, since component and permission values can themselves contain
-          // the delimiter — `posts:read` style permissions being the common
-          // case — which a flat join would render ambiguous.
-          registeredRoutes.push(
-            JSON.stringify([
-              pluginPagePath(slug, page.path),
-              page.component,
-              page.requiredPermission ?? "",
-            ])
-          );
-        }
-      }
-      if (plugin.settings?.component) {
-        componentPaths.push(plugin.settings.component);
-      }
-      // Header-slot module must be imported so its components register, even
-      // for plugins with no collections/pages/settings.
-      const slotPath = plugin.header?.slot ?? plugin.headerSlot;
-      if (slotPath) componentPaths.push(slotPath);
-      // Schema-builder slot + custom field-type editors are delivered via
-      // branding (not collection admin.components), so import their modules here
-      // too — otherwise `PluginSlot` can't resolve them on the builder/entry
-      // pages until some collection happens to reference the same module.
-      if (plugin.schemaBuilderSlot)
-        componentPaths.push(plugin.schemaBuilderSlot);
-      for (const ft of plugin.fieldTypes ?? []) {
-        componentPaths.push(ft.component);
-      }
+      registeredRoutes.push(...registerPluginRoutes(plugin, slug));
+      componentPaths.push(...pluginComponentPaths(plugin));
     }
 
     if (componentPaths.length > 0) {
