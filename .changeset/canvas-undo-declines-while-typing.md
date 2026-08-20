@@ -1,5 +1,4 @@
 ---
-
 "nextly": patch
 "create-nextly-app": patch
 "@nextlyhq/admin": patch
@@ -24,6 +23,7 @@
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
 "@nextlyhq/module-specifiers": patch
+---
 
 Pressing undo while typing a block's text on the canvas rewound the document instead of the words.
 The author lost a block move they had finished with, kept the sentence they wanted back, and got no
