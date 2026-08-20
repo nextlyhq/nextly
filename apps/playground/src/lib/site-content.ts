@@ -15,9 +15,11 @@
  * @module lib/site-content
  */
 import { getNextly } from "nextly";
-import type { NextlyContentReader } from "nextly/runtime";
+import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
 
 import nextlyConfig from "../../nextly.config";
+
+import { SITE_STYLE_DEFAULTS } from "./site-style-defaults";
 
 type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 
@@ -55,9 +57,15 @@ type MediaLookup = Pick<NextlyInstance["media"], "findByID">;
  * lookup, so every `core/image` storing a media id — rather than a literal
  * `src` — resolves to null and draws nothing.
  */
-export const siteReader: NextlyContentReader & { media: MediaLookup } = {
+export const siteReader: NextlyContentReader &
+  NextlySingleReader & { media: MediaLookup } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // A Single page reads the document itself through `findSingle` and its BLOCKS
+  // through `find`/`findByID`. One reader carrying both is what keeps a page and
+  // everything embedded in it coming from a single instance — which on a
+  // per-tenant setup is a single database.
+  findSingle: async args => (await instance()).findSingle(args),
   media: {
     findByID: async args => (await instance()).media.findByID(args),
   },
@@ -73,10 +81,10 @@ export const siteReader: NextlyContentReader & { media: MediaLookup } = {
  * class that no rule ever defines, and the page would render structurally
  * correct and visually bare.
  *
- * Declared by the host because breakpoints are a site decision: the engine never
- * reads storage and ships no default set. Ids must be unique across both axes,
- * and the base breakpoint carries no `maxWidth` — it is the fallback the others
- * narrow.
+ * DERIVED from `SITE_STYLE_DEFAULTS` rather than declared beside it, because a
+ * second statement of the breakpoints is how the page sheet and the shared
+ * site sheet come to emit the same tier under different at-rules — each side
+ * internally consistent, so nothing errors.
  *
  * Left unannotated deliberately. `StyleCompileContext` is what the route helpers
  * accept, and `@nextlyhq/blocks-react` does not re-export it — naming the type
@@ -84,12 +92,5 @@ export const siteReader: NextlyContentReader & { media: MediaLookup } = {
  * to label a config object. The shape is still fully checked where it is passed.
  */
 export const SITE_STYLE_CONTEXT = {
-  breakpoints: {
-    viewport: [
-      { id: "base", label: "Base" },
-      { id: "tablet", label: "Tablet", maxWidth: 1024 },
-      { id: "mobile", label: "Mobile", maxWidth: 640 },
-    ],
-    container: [],
-  },
+  breakpoints: SITE_STYLE_DEFAULTS.breakpoints,
 };

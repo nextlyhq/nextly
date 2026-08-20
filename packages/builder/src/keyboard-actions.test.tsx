@@ -1113,3 +1113,108 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     expect(hostCancel).toHaveBeenCalled();
   });
 });
+
+describe("the document's history while the author is typing", () => {
+  /**
+   * A block's text is edited in an uncontrolled `contentEditable`, and the
+   * shortcut manager reads "is the user typing" from the event's TARGET. So the
+   * keystroke has to be dispatched there — dispatching on the document exercises
+   * neither setting, which the `press` docblock above records as a mistake
+   * already made once here.
+   */
+  // `ctrlKey`, matching every other case in this file: `mod` resolves to ctrl
+  // in this environment, and a `metaKey` press matches NO binding here — so it
+  // asserts nothing while looking like it asserts everything. The controls
+  // below are what exposed that; the first version of these tests passed
+  // against both settings of `whenTyping` for exactly that reason.
+  function typingIn(): HTMLElement {
+    const el = window.document.createElement("div");
+    // jsdom implements NEITHER half of `contentEditable`: assigning the
+    // property sets no attribute, and `isContentEditable` reads `undefined`.
+    // Measured — a probe asserting both returned `{ attr: null, isCE: undefined }`.
+    // So the element has to be told what it is, or it is not a typing target
+    // and every assertion below passes against a canvas that never declines.
+    el.setAttribute("contenteditable", "true");
+    Object.defineProperty(el, "isContentEditable", {
+      value: true,
+      configurable: true,
+    });
+    window.document.body.appendChild(el);
+    return el;
+  }
+
+  /**
+   * The same rule, on an element jsdom DOES implement.
+   *
+   * A faked property proves the binding reads what it claims to; a real
+   * `<textarea>` proves the manager agrees about what typing is. Neither alone
+   * is convincing — the fake could be testing the fake.
+   */
+  function realTypingIn(): HTMLTextAreaElement {
+    const el = window.document.createElement("textarea");
+    window.document.body.appendChild(el);
+    return el;
+  }
+
+  it("leaves mod+z to the element the caret is in", () => {
+    const editor = editorSpy(pair(), "a");
+    editor.canUndo = true;
+    mount(editor);
+
+    const event = press("z", { ctrlKey: true }, typingIn());
+
+    // The DOCUMENT's history must not move: the author meant the words they
+    // just typed, and rewinding a block move they had finished with takes away
+    // something they were not asking about.
+    expect(editor.undo).not.toHaveBeenCalled();
+    // And the keystroke must reach the element, or the browser's own history
+    // cannot serve the caret either — leaving the author with no undo at all,
+    // which is worse than the wrong one.
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves mod+z to a real textarea too", () => {
+    const editor = editorSpy(pair(), "a");
+    editor.canUndo = true;
+    mount(editor);
+
+    press("z", { ctrlKey: true }, realTypingIn());
+
+    expect(editor.undo).not.toHaveBeenCalled();
+  });
+
+  it("still owns mod+z when the caret is not in text", () => {
+    // The CONTROL. Without it, a canvas whose undo never fires at all passes
+    // the case above — and that is a different bug wearing the same green.
+    const editor = editorSpy(pair(), "a");
+    editor.canUndo = true;
+    mount(editor);
+
+    press("z", { ctrlKey: true });
+
+    expect(editor.undo).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves both redo spellings to the element too", () => {
+    const editor = editorSpy(pair(), "a");
+    editor.canRedo = true;
+    mount(editor);
+    const field = typingIn();
+
+    press("z", { ctrlKey: true, shiftKey: true }, field);
+    press("y", { ctrlKey: true }, field);
+
+    expect(editor.redo).not.toHaveBeenCalled();
+  });
+
+  it("still owns both redo spellings outside text", () => {
+    const editor = editorSpy(pair(), "a");
+    editor.canRedo = true;
+    mount(editor);
+
+    press("z", { ctrlKey: true, shiftKey: true });
+    press("y", { ctrlKey: true });
+
+    expect(editor.redo).toHaveBeenCalledTimes(2);
+  });
+});

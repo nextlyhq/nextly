@@ -175,6 +175,21 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
+   * Remove a Single's pending working-draft sidecar for one language.
+   *
+   * Deliberately without the post-write plumbing `update` and
+   * `publishAllLocales` carry. Those flush cache tags and offer a retention pass
+   * because they changed the LIVE document; a discard removes an unpublished
+   * sidecar and leaves the live row byte-identical, so there is nothing for a
+   * reader's cache to be stale about and no new version to prune.
+   */
+  async discardWorkingDraft(
+    params: Parameters<SingleMutationService["discardWorkingDraft"]>[0]
+  ): Promise<void> {
+    return this.mutationService.discardWorkingDraft(params);
+  }
+
+  /**
    * Publish every language of a Single at once.
    *
    * The main row's status and every companion `_status` move in one

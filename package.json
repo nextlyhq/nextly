@@ -77,7 +77,8 @@
     "release:notes": "node scripts/release/release-notes.mjs",
     "release:publish": "pnpm release:preflight && turbo build --filter='./packages/*' && changeset publish",
     "release:status": "changeset status",
-    "release:dry-run": "changeset publish --dry-run"
+    "release:dry-run": "changeset publish --dry-run",
+    "measure-facts": "node scripts/measure-facts.mjs"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",

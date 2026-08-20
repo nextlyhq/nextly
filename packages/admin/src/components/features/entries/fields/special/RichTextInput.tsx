@@ -14,9 +14,6 @@
  * @since 1.0.0
  */
 
-import { CodeNode, CodeHighlightNode } from "@lexical/code-core";
-import { LinkNode, AutoLinkNode } from "@lexical/link";
-import { ListNode, ListItemNode } from "@lexical/list";
 import { TRANSFORMERS } from "@lexical/markdown";
 import { CheckListPlugin } from "@lexical/react/LexicalCheckListPlugin";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
@@ -25,7 +22,6 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
-import { HorizontalRuleNode } from "@lexical/react/LexicalHorizontalRuleNode";
 import { HorizontalRulePlugin } from "@lexical/react/LexicalHorizontalRulePlugin";
 import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
 import { ListPlugin } from "@lexical/react/LexicalListPlugin";
@@ -34,8 +30,6 @@ import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 // Lexical nodes
-import { HeadingNode, QuoteNode } from "@lexical/rich-text";
-import { TableCellNode, TableNode, TableRowNode } from "@lexical/table";
 // Types
 import type { EditorState, SerializedEditorState } from "lexical";
 import { $createParagraphNode, $getRoot, CLEAR_HISTORY_COMMAND } from "lexical";
@@ -52,17 +46,12 @@ import {
 import { cn } from "@admin/lib/utils";
 
 // Custom nodes
-import { ButtonGroupNode } from "./ButtonGroupNode";
-import { ButtonLinkNode } from "./ButtonLinkNode";
 import { CodeHighlightPlugin } from "./CodeHighlightPlugin";
-import {
-  CollapsibleContainerNode,
-  CollapsibleTitleNode,
-  CollapsibleContentNode,
-} from "./CollapsibleNode";
 import { DraggableBlockMenuPlugin } from "./DraggableBlockMenuPlugin";
-import { GalleryNode } from "./GalleryNode";
-import { ImageNode } from "./ImageNode";
+import {
+  RICH_TEXT_NODES,
+  RICH_TEXT_THEME as editorTheme,
+} from "./rich-text-kit";
 // Local plugins
 import { RichTextButtonGroupPlugin } from "./RichTextButtonGroupPlugin";
 import { RichTextButtonLinkPlugin } from "./RichTextButtonLinkPlugin";
@@ -75,7 +64,6 @@ import { RichTextToolbar } from "./RichTextToolbar";
 import { RichTextVideoPlugin } from "./RichTextVideoPlugin";
 import { SlashCommandPlugin } from "./SlashCommandPlugin";
 import { TableActionMenuPlugin } from "./TableActionMenuPlugin";
-import { VideoNode } from "./VideoNode";
 
 // ============================================================
 // Types
@@ -95,104 +83,6 @@ export interface RichTextInputProps<
 // ============================================================
 // Theme Configuration
 // ============================================================
-
-const editorTheme = {
-  // Root element
-  root: "focus:outline-none",
-
-  // Text formatting
-  text: {
-    bold: "font-bold",
-    italic: "italic",
-    underline: "underline",
-    strikethrough: "line-through",
-    code: "bg-primary/5 px-1.5 py-0.5 rounded-md font-mono text-sm",
-    // Its own token rather than a status one: a marker drawn over text is not
-    // a warning, and it carries its own foreground so the text stays readable
-    // when the page's own flips to white.
-    highlight: "bg-highlight text-highlight-foreground",
-    subscript: "align-sub text-xs",
-    superscript: "align-super text-xs",
-  },
-
-  // Headings
-  heading: {
-    h1: "text-3xl font-bold mt-6 mb-4 first:mt-0",
-    h2: "text-2xl font-bold mt-5 mb-3 first:mt-0",
-    h3: "text-xl font-bold mt-4 mb-2 first:mt-0",
-    h4: "text-lg font-semibold mt-4 mb-2 first:mt-0",
-    h5: "text-base font-semibold mt-3 mb-1 first:mt-0",
-    h6: "text-sm font-semibold mt-3 mb-1 first:mt-0",
-  },
-
-  // Paragraphs
-  paragraph: "mb-2 last:mb-0",
-
-  // Lists
-  list: {
-    ul: "list-disc ml-6 mb-2",
-    ol: "list-decimal ml-6 mb-2",
-    listitem: "mb-1",
-    listitemChecked:
-      "line-through text-muted-foreground list-none relative pl-6 before:content-['✓'] before:absolute before:left-0 before:text-success-500",
-    listitemUnchecked:
-      "list-none relative pl-6 before:content-['○'] before:absolute before:left-0",
-    nested: {
-      listitem: "list-none",
-    },
-  },
-
-  // Blockquote
-  quote: "border-l-4 border-border pl-4 italic text-muted-foreground mb-2",
-
-  // Links
-  link: "text-primary underline hover-unified cursor-pointer",
-
-  // Code blocks. The tokenizer names what each token is; these classes decide
-  // how it looks, so the palette lives in the design tokens and both modes are
-  // settled by CSS rather than stored with the content.
-  code: "block bg-code-bg text-code-fg p-4 rounded-md font-mono text-sm mb-2 overflow-x-auto",
-  codeHighlight: {
-    atrule: "text-code-keyword",
-    attr: "text-code-function",
-    boolean: "text-code-number",
-    builtin: "text-code-function",
-    cdata: "text-code-comment",
-    char: "text-code-string",
-    class: "text-code-variable",
-    "class-name": "text-code-variable",
-    comment: "text-code-comment italic",
-    constant: "text-code-number",
-    deleted: "text-code-deleted",
-    doctype: "text-code-comment",
-    entity: "text-code-tag",
-    function: "text-code-function",
-    important: "text-code-tag font-bold",
-    inserted: "text-code-inserted",
-    keyword: "text-code-keyword",
-    namespace: "text-code-comment",
-    number: "text-code-number",
-    operator: "text-code-operator",
-    prolog: "text-code-comment",
-    property: "text-code-function",
-    punctuation: "text-code-punctuation",
-    regex: "text-code-string",
-    selector: "text-code-tag",
-    string: "text-code-string",
-    symbol: "text-code-number",
-    tag: "text-code-tag",
-    url: "text-code-function underline",
-    variable: "text-code-variable",
-  },
-
-  // Tables
-  table: "border-collapse w-full my-4",
-  tableCell: "border border-border px-3 py-2 text-left align-top min-w-[75px]",
-  tableCellHeader:
-    "border border-border px-3 py-2 text-left font-bold bg-primary/5 align-top",
-  tableRow: "",
-  tableRowStriping: "even:bg-primary/5",
-};
 
 // ============================================================
 // External value sync
@@ -306,28 +196,10 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
     () => ({
       namespace: name,
       theme: editorTheme,
-      nodes: [
-        HeadingNode,
-        QuoteNode,
-        ListNode,
-        ListItemNode,
-        LinkNode,
-        AutoLinkNode,
-        CodeNode,
-        CodeHighlightNode,
-        HorizontalRuleNode,
-        TableNode,
-        TableCellNode,
-        TableRowNode,
-        ImageNode,
-        VideoNode,
-        ButtonLinkNode,
-        ButtonGroupNode,
-        GalleryNode,
-        CollapsibleContainerNode,
-        CollapsibleTitleNode,
-        CollapsibleContentNode,
-      ],
+      // The SHARED list, not a copy. Two lists agree the day they are written
+      // and diverge the day one gains a node, and neither side raises anything
+      // because an unregistered node is a rendering outcome, not an error.
+      nodes: [...RICH_TEXT_NODES],
       editable: !disabled && !readOnly,
       onError: (error: Error) => {
         console.error("[RichTextInput] Lexical error:", error);

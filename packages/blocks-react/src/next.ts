@@ -31,6 +31,8 @@ import type { Metadata } from "next";
 import {
   createContentRoute,
   createPublicContentRoute,
+  createPublicSingleRoute,
+  createSingleRoute,
   getNextly,
   nextlyTags,
   slugToStaticParam,
@@ -41,7 +43,12 @@ import type {
   StaticContentRoute,
   ContentRouteConfig,
   NextlyContentReader,
+  NextlySingleReader,
   RenderContext,
+  SingleContext,
+  SingleDocument,
+  SingleRoute,
+  SingleRouteConfig,
 } from "nextly/runtime";
 import type { ReactElement, ReactNode } from "react";
 import { createElement } from "react";
@@ -83,6 +90,13 @@ const WORKING_DRAFT_KEY = "_isWorkingDraft";
 
 /** What ordinary Nextly media is tagged under for cache invalidation. */
 const MEDIA_TAG_COLLECTION = "media";
+
+/**
+ * The site-wide style inputs a route accepts: a full `SiteSheetInput` less the
+ * breakpoint requirement, which may instead fall back to `styleContext`'s.
+ */
+export type SiteStylesInput = Omit<SiteSheetInput, "breakpoints"> &
+  Partial<Pick<SiteSheetInput, "breakpoints">>;
 
 /**
  * Config for {@link createBlocksPage}.
@@ -140,9 +154,20 @@ export interface BlocksPageConfig
    * breakpoints once should not have to state them twice — and two answers to
    * "what are this site's breakpoints" is how the shared sheet and the page
    * sheet come to disagree about which at-rules a tier is emitted under.
+   *
+   * **A function is called per render**, exactly as `styles` is, for a site
+   * whose style inputs live in storage: a route module's config is captured
+   * once per server process, so a plain value here freezes an admin's saved
+   * tokens at whatever they were when the module loaded — the edit would reach
+   * the next deploy instead of the next page view. Returning `undefined`
+   * means what omitting the value means.
    */
-  siteStyles?: Omit<SiteSheetInput, "breakpoints"> &
-    Partial<Pick<SiteSheetInput, "breakpoints">>;
+  siteStyles?:
+    | SiteStylesInput
+    | (() =>
+        | SiteStylesInput
+        | undefined
+        | Promise<SiteStylesInput | undefined>);
   /**
    * A dynamic collection to resolve media ids against, for a site storing its
    * images in one of its own.
@@ -1054,13 +1079,20 @@ function blocksRouteConfig(
         resolveEntryPath,
       });
 
+      // Resolved per render when the config states a provider, so style
+      // inputs living in storage reach the next page view rather than the
+      // next deploy; a plain value passes through unchanged.
+      const configuredSiteStyles =
+        typeof config.siteStyles === "function"
+          ? await config.siteStyles()
+          : config.siteStyles;
       // Derived ONCE, from the breakpoints the site already stated. A second
       // answer to "what are this site's breakpoints" is how the shared sheet
       // and the page sheet come to disagree about which at-rules a tier is
       // emitted under — and the disagreement is invisible, because each sheet
       // is internally consistent.
       const siteBreakpoints =
-        config.siteStyles?.breakpoints ?? styleContext?.breakpoints;
+        configuredSiteStyles?.breakpoints ?? styleContext?.breakpoints;
       // A route emits the site sheet by DEFAULT: without it every `{ $token }`
       // resolves to nothing, which is the defect this closes. It needs a
       // breakpoint set to compile the block-default tier under, so a route that
@@ -1069,7 +1101,7 @@ function blocksRouteConfig(
       const siteStyles =
         siteBreakpoints === undefined
           ? undefined
-          : { ...config.siteStyles, breakpoints: siteBreakpoints };
+          : { ...configuredSiteStyles, breakpoints: siteBreakpoints };
 
       return createElement(PageRenderer, {
         document,
@@ -1099,6 +1131,128 @@ function blocksRouteConfig(
  * {@link createContentRoute} for why offering one anyway is a defect rather
  * than an unused convenience.
  */
+/**
+ * Config for {@link createSinglePage} and {@link createPublicSinglePage}.
+ *
+ * The blocks options are the page route's, minus everything that only means
+ * something when a path is being RESOLVED. A Single is not looked up by slug, so
+ * `collections`, `slugField` and `staticParamsLimit` have nothing to act on;
+ * `status` and `draft` are the collection lifecycle's, which a Single route does
+ * not scope.
+ */
+export interface BlocksSinglePageConfig
+  extends Omit<
+    BlocksPageConfig,
+    | "collections"
+    | "nextly"
+    | "slugField"
+    | "staticParamsLimit"
+    | "status"
+    | "draft"
+    | "buildMetadata"
+  > {
+  /** Which Single to serve, by its slug. */
+  slug: string;
+  /*
+   * No `user`, deliberately, and for the same reason the page route has none:
+   * these helpers read anonymously or trusted, and offering an identity here
+   * would make the two sides of one pair disagree about what a route can be.
+   * A page scoped to a signed-in reader builds on `createSingleRoute` directly.
+   */
+  /**
+   * A booted Nextly instance.
+   *
+   * Wider than the page route's reader, and necessarily so: the Single itself is
+   * read with `findSingle`, while the blocks INSIDE it resolve media and loop
+   * over collections through `find`/`findByID`. A reader carrying only one of
+   * the two renders either a blank page or a page with no pictures, and neither
+   * says which half was missing.
+   */
+  nextly?: NextlyContentReader & NextlySingleReader;
+}
+
+/**
+ * Turn a Single config into the route config, reusing the PAGE route's render.
+ *
+ * The render is borrowed rather than rebuilt. It carries the query budget, the
+ * media and entry-path resolvers, the style compilation and the SEO derivation,
+ * and a second copy of that for Singles would agree on the day it was written
+ * and drift afterwards — silently, because both would still draw a page.
+ *
+ * The borrowed callbacks expect a resolved-path context. A Single has no
+ * resolved path, so one is synthesised from its slug: it reaches `readDocument`,
+ * whose error names where a missing field was looked for, and the SEO
+ * derivation, which uses it as the page's own identity.
+ */
+function blocksSingleConfig(
+  config: BlocksSinglePageConfig,
+  isPublic: boolean
+): SingleRouteConfig<ReactElement> {
+  const { slug, tags, revalidate, ...blocksOptions } = config;
+
+  const routeConfig = blocksRouteConfig(
+    { ...blocksOptions, collections: [slug] },
+    isPublic
+  );
+
+  const contextFor = (context: SingleContext) => ({
+    collection: slug,
+    slug,
+    ...(context.locale === undefined ? {} : { locale: context.locale }),
+  });
+
+  return {
+    slug,
+    ...(config.locale === undefined ? {} : { locale: config.locale }),
+    ...(config.depth === undefined ? {} : { depth: config.depth }),
+    ...(config.nextly === undefined ? {} : { nextly: config.nextly }),
+    ...(revalidate === undefined ? {} : { revalidate }),
+    // The media tag comes from the page route's own tag set, which is computed
+    // for a collection this route does not have. Taking it from there rather
+    // than recomputing keeps one answer to "what does a blocks page depend on".
+    tags: [...(routeConfig.tags ?? []), ...(tags ?? [])],
+    render: (document, context) =>
+      routeConfig.render(document, contextFor(context)),
+    ...(routeConfig.buildMetadata
+      ? {
+          buildMetadata: (document: SingleDocument, context: SingleContext) =>
+            // Non-null asserted by the branch: this arm exists only when the
+            // page route produced one.
+            routeConfig.buildMetadata?.(document, contextFor(context)) ?? {},
+        }
+      : {}),
+  };
+}
+
+/**
+ * A Single rendered as a blocks page, over ACCESS-ENFORCED content.
+ *
+ * The secure default, and the one to reach for unless the Single is wholly
+ * public: it reads as the visitor would and marks the render dynamic, so the
+ * build touches no database.
+ */
+export function createSinglePage(
+  config: BlocksSinglePageConfig
+): SingleRoute<ReactElement> {
+  return createSingleRoute<ReactElement>(blocksSingleConfig(config, false));
+}
+
+/**
+ * A Single rendered as a blocks page, over PUBLIC content: trusted, cached,
+ * pre-renderable.
+ *
+ * Busted by a write to the Single, so publishing updates the live page without
+ * a rebuild — but it is rendered during `next build`, so the build needs a
+ * reachable database.
+ */
+export function createPublicSinglePage(
+  config: BlocksSinglePageConfig
+): SingleRoute<ReactElement> {
+  return createPublicSingleRoute<ReactElement>(
+    blocksSingleConfig(config, true)
+  );
+}
+
 export function createBlocksPage(
   config: BlocksPageConfig
 ): ContentRoute<ReactElement> {

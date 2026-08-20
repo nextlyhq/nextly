@@ -113,6 +113,18 @@ export interface GetSingleOptions {
    */
   status?: StatusOption;
 
+  /**
+   * Opt in to the working-draft overlay: a trusted editor read returns this
+   * Single's pending change in place of the live document.
+   *
+   * Opt-in on purpose, matching the collection read. Internal reads (the public
+   * route, reference labels, expansion) issue status-less reads and must keep
+   * seeing the published document, so draft visibility follows an editor's
+   * intent rather than the absence of a status filter. Gated on an actual
+   * update-capability probe, so a read-only caller passing it still sees live.
+   */
+  includeWorkingDraft?: boolean;
+
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
 }

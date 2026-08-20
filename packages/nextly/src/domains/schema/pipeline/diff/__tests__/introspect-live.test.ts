@@ -242,6 +242,87 @@ describe("introspectLiveSnapshot - mysql", () => {
       "CURRENT_TIMESTAMP",
     ]);
   });
+
+  it("restores the parentheses information_schema strips from an expression default", async () => {
+    // MySQL reports a function-call expression default without the enclosing
+    // parentheses it REQUIRES, so the reported text is not valid DDL. Every
+    // row here carries DEFAULT_GENERATED; what separates them is the form the
+    // server reports, not the flag.
+    const columns = [
+      // What a required JSON, repeater, group or chips field emits. The
+      // reported text is the case a rebuild fails on.
+      ["payload", "json", "convert(0x7b7d using utf8mb4)"],
+      ["listing", "json", "json_array()"],
+      ["ident", "varchar", "uuid()"],
+      // Already parenthesised as a whole: anything but a single call is
+      // reported this way and is valid as it stands.
+      ["total", "int", "(1 + 2)"],
+      // The documented exception, bare and with a precision. Wrapping either
+      // would record it as the ordinary expression `now()` instead.
+      ["made_at", "datetime", "CURRENT_TIMESTAMP"],
+      ["seen_at", "datetime", "CURRENT_TIMESTAMP(3)"],
+    ] as const;
+
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([
+        columns.map(([name, dataType, columnDefault]) => ({
+          TABLE_NAME: "dc_posts",
+          COLUMN_NAME: name,
+          COLUMN_TYPE: dataType,
+          IS_NULLABLE: "NO",
+          COLUMN_DEFAULT: columnDefault,
+          DATA_TYPE: dataType,
+          EXTRA: "DEFAULT_GENERATED",
+        })),
+        [],
+      ])
+      .mockResolvedValueOnce([[], []])
+      .mockResolvedValueOnce([[], []]);
+
+    const snapshot = await introspectLiveSnapshot({ execute }, "mysql", [
+      "dc_posts",
+    ]);
+
+    expect(snapshot.tables[0].columns.map(c => c.default)).toEqual([
+      "(convert(0x7b7d using utf8mb4))",
+      "(json_array())",
+      "(uuid())",
+      "(1 + 2)",
+      "CURRENT_TIMESTAMP",
+      "CURRENT_TIMESTAMP(3)",
+    ]);
+  });
+
+  it("leaves a DEFAULT_GENERATED expression alone when EXTRA also carries ON UPDATE", async () => {
+    // `EXTRA` reads `DEFAULT_GENERATED on update CURRENT_TIMESTAMP` for an
+    // auto-updating timestamp. The substring match must still recognise the
+    // expression, and the bare keyword must still not be wrapped.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([
+        [
+          {
+            TABLE_NAME: "dc_posts",
+            COLUMN_NAME: "updated_at",
+            COLUMN_TYPE: "timestamp",
+            IS_NULLABLE: "NO",
+            COLUMN_DEFAULT: "CURRENT_TIMESTAMP",
+            DATA_TYPE: "timestamp",
+            EXTRA: "DEFAULT_GENERATED on update CURRENT_TIMESTAMP",
+          },
+        ],
+        [],
+      ])
+      .mockResolvedValueOnce([[], []])
+      .mockResolvedValueOnce([[], []]);
+
+    const snapshot = await introspectLiveSnapshot({ execute }, "mysql", [
+      "dc_posts",
+    ]);
+
+    expect(snapshot.tables[0].columns[0].default).toBe("CURRENT_TIMESTAMP");
+  });
 });
 
 describe("introspectLiveSnapshot - sqlite", () => {

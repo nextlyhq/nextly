@@ -77,6 +77,22 @@ const TYPE_ALIASES: Record<string, string> = {
 };
 
 /**
+ * Every canonical token an ALIASED spelling collapses to.
+ *
+ * Derived from `TYPE_ALIASES` rather than listed beside it, so a new alias cannot be added without
+ * its target appearing here.
+ *
+ * 🔴 This is the set on which two spellings of one type can disagree between implementations. A
+ * token that is not an alias target passes through `normalizeType` unchanged, so any table keyed by
+ * the spelling already matches it; an aliased one does not — the live side reports `float8` while a
+ * table listing `double precision` never sees that string. Consumers keyed by type spelling are
+ * therefore complete only if they cover these.
+ */
+export const CANONICAL_TYPE_TOKENS: readonly string[] = [
+  ...new Set(Object.values(TYPE_ALIASES)),
+];
+
+/**
  * Return the canonical form of a column-type string for diff comparison.
  * `undefined` is passed through unchanged. The diff still emits the original,
  * un-normalised type names in the op so downstream tooling sees what's stored.

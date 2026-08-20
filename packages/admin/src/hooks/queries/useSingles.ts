@@ -456,6 +456,14 @@ export function useSingleDocument(
     locale?: string;
     fallbackLocale?: string;
     translationStatus?: boolean;
+    /**
+     * Opt into the working-draft overlay. Part of the cache identity below for
+     * the same reason `locale` is: the editor learns `draftsEnabled` only after
+     * the schema loads, flipping this false -> true on a cold load, and without
+     * it in the key the stale-time would keep serving the published document and
+     * hide an existing pending change (and the Changed / Discard affordances).
+     */
+    draft?: boolean;
     queryOptions?: Omit<
       UseQueryOptions<SingleDocument, Error>,
       "queryKey" | "queryFn"
@@ -472,6 +480,7 @@ export function useSingleDocument(
             locale: options?.locale ?? null,
             fallbackLocale: options?.fallbackLocale ?? null,
             translationStatus: options?.translationStatus ?? false,
+            draft: options?.draft ?? false,
           },
         ]
       : singleDocumentKeys.details(),
@@ -482,6 +491,7 @@ export function useSingleDocument(
       return await singleApi.getDocument(slug, {
         depth: options?.depth,
         locale: options?.locale,
+        draft: options?.draft,
         fallbackLocale: options?.fallbackLocale,
         translationStatus: options?.translationStatus,
       });

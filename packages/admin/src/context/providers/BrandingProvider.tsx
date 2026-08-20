@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import type React from "react";
 import { createContext, useContext, useEffect, useMemo } from "react";
 
+import { useAuthSession } from "../../hooks/queries/useAuthSession";
 import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
 import {
@@ -65,6 +66,23 @@ export function useBranding(): AdminBranding {
 }
 
 /**
+ * What to call this product on screen.
+ *
+ * One implementation, because the answer is one decision: a screen that spells
+ * `branding.logoText ?? "Nextly"` for itself can disagree with the component
+ * beside it. The signed-out screens had that shape — the card supplied the
+ * logo's label while the screen supplied the sentence under it, so a change to
+ * either fallback made the two contradict each other on one page.
+ */
+export function useAppName(): string {
+  // `??` alone would let a configured-but-empty `logoText` through, and an
+  // empty name is worse than a default one: the sign-in line reads "Sign in to
+  // your  account" and the card passes `alt=""`, which strips the logo's
+  // accessible name rather than just looking odd.
+  return useBranding().logoText?.trim() || "Nextly";
+}
+
+/**
  * The admin-meta request's state, for readers that draw a conclusion from
  * something being MISSING from branding.
  *
@@ -112,9 +130,15 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 
     if (primaryHsl) {
       rules.push(`--nx-primary: ${primaryHsl};`);
-      rules.push(
-        `--nx-primary-foreground: ${colors.primaryForeground ?? "0 0% 100%"};`
-      );
+      // Only when the API resolved one. The fallback was the bare triplet
+      // "0 0% 100%", which lands in `color: var(--nx-primary-foreground)` as an
+      // invalid value: the declaration is dropped and the text inherits the
+      // ambient foreground, which on a branded surface is the page's dark text.
+      // Emitting nothing instead leaves the theme's own token in force, which is
+      // a real colour chosen for the mode rather than one invented here.
+      if (colors.primaryForeground) {
+        rules.push(`--nx-primary-foreground: ${colors.primaryForeground};`);
+      }
       // Derived tokens that reference --nx-primary HSL triplet
       rules.push(`--nx-ring: ${primaryHsl};`);
       rules.push(`--nx-focus-ring: ${primaryHsl};`);
@@ -124,9 +148,10 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 
     if (accentHsl) {
       rules.push(`--nx-accent: ${accentHsl};`);
-      rules.push(
-        `--nx-accent-foreground: ${colors.accentForeground ?? "0 0% 100%"};`
-      );
+      // Conditional for the same reason as the primary foreground above.
+      if (colors.accentForeground) {
+        rules.push(`--nx-accent-foreground: ${colors.accentForeground};`);
+      }
       rules.push(`--nx-chart-2: ${accentHsl};`);
     }
 
@@ -212,19 +237,40 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
     retry: false,
   });
 
-  // The half that describes the installation rather than its appearance. It
-  // comes from a session-gated route, so before sign-in this query fails and
-  // contributes nothing — which is correct, since no pre-session surface reads
-  // these fields.
+  /*
+   * The half that describes the installation rather than its appearance, from a
+   * SESSION-GATED route.
+   *
+   * Both the session state and the settled-ness of the session query are load
+   * bearing, and for different reasons.
+   *
+   * `signedIn` is in the KEY, not in a refetch effect. A request made before a
+   * session existed answers 401, and this query does not retry — so signing in
+   * has to produce a DIFFERENT cache entry rather than revive a dead one.
+   * Expressing that as an invalidation instead leaves a window: the 401 can land
+   * after the sign-in effect has already run, and the query then stays failed
+   * with nothing left to trigger it. A key cannot lose that race, because the
+   * new key has no result yet whenever it appears.
+   *
+   * `enabled` waits for the session query to SETTLE rather than to succeed. It
+   * stops the anonymous 401 being fired speculatively on every load, and a
+   * session query that itself failed still releases this one — reporting
+   * unavailable, which is true, instead of holding every reader on a skeleton
+   * for a fact that will never arrive.
+   */
+  const { data: session, isPending: sessionPending } = useAuthSession();
+  const signedIn = session?.isAuthenticated === true;
+
   const {
     data: workspaceData,
     isPending: workspacePending,
     isLoadingError: workspaceUnavailable,
   } = useQuery<AdminBranding>({
-    queryKey: ["admin-meta", "workspace"],
+    queryKey: ["admin-meta", "workspace", signedIn],
     queryFn: () => protectedApi.get<AdminBranding>("/admin-meta/workspace"),
     staleTime: 5 * 60 * 1000,
     retry: false,
+    enabled: !sessionPending,
   });
 
   useColorInjection(brandingData?.colors);
@@ -250,7 +296,10 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
       // reports "still loading" while the only relevant query has settled, so
       // a stalled public request would hold the reader on a loading state
       // indefinitely and hide a definitive workspace error behind it.
-      isPending: workspacePending,
+      // True while the session is still resolving as well. Until it settles this
+      // query has not been allowed to run, and reporting anything else would
+      // let a reader conclude something from a list that was never requested.
+      isPending: sessionPending || workspacePending,
       // Reported from the WORKSPACE query. The reader this exists for treats a
       // plugin's absence from the list as a fact about the project, and the
       // plugin list lives in that half — so branding having arrived says
@@ -261,6 +310,7 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
   }, [
     brandingData,
     workspaceData,
+    sessionPending,
     workspacePending,
     workspaceUnavailable,
     brandingUnavailable,

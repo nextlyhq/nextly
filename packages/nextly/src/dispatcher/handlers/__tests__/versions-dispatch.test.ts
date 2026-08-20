@@ -59,6 +59,8 @@ describe("version methods are registered", () => {
   it("exposes every single version method", () => {
     expect(Object.keys(SINGLE_VERSION_METHODS).sort()).toEqual([
       "autosaveSingle",
+      // The Single equivalent of the entry list's `discardWorkingDraft`.
+      "discardSingleWorkingDraft",
       "getSingleAutosave",
       "getSingleVersion",
       "getSingleVersionDiff",

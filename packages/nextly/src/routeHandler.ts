@@ -614,6 +614,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // definition mutation's manage-settings. The service checks `publish-{slug}`
   // on top, which no route-level gate can express.
   "publishAllSingleLocales",
+  // Discarding the working draft reverts the document to its live row. Left out
+  // of the read branch below so it resolves to `update-{slug}`: a caller who may
+  // not update the document may not throw away its pending edits either.
+  "discardSingleWorkingDraft",
 ]);
 
 /**

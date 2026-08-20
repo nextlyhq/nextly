@@ -61,6 +61,7 @@ import {
 import {
   useDocumentCheckpoint,
   usePluginClientConfig,
+  useEntryFieldsPanel,
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -74,7 +75,8 @@ import {
 } from "react-hook-form";
 
 import { emptyBlockDocument } from "../fields/blocks-document";
-import { siteSheet } from "../site-style";
+import { siteBreakpoints, siteSheet } from "../site-style";
+import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
@@ -119,6 +121,20 @@ export interface BlocksFieldProps<
  * declared ahead of the panels.
  */
 const AVAILABLE_PANELS = ["insert", "layers"] as const;
+
+/**
+ * With an entry-fields panel to fill, `settings` joins them.
+ *
+ * Derived rather than declared twice: the shell draws a panel outside
+ * `availablePanels` as disabled and "coming soon", and warns against OPENING
+ * one nothing renders into — reserving width to display nothing reads as a
+ * broken control rather than an absent feature. So the list and the renderer
+ * move together by construction, and the rail cannot disagree with the body.
+ */
+const AVAILABLE_PANELS_WITH_SETTINGS = [
+  ...AVAILABLE_PANELS,
+  "settings",
+] as const;
 
 /** Names the registry attributes these blocks to, for diagnostics. */
 const PLUGIN_SOURCE = "@nextlyhq/plugin-page-builder";
@@ -354,6 +370,12 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const inline = useInlineText(editor);
 
   /*
+   * The entry's other fields, or null when there is no surrounding form. Null
+   * is what withholds the panel rather than opening an empty one.
+   */
+  const renderEntryFields = useEntryFieldsPanel();
+
+  /*
    * The getting-started card, and the host's switch for it.
    *
    * `checklist === false` is the only value that turns it off: an absent
@@ -365,6 +387,25 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     document: editor.document,
     enabled: clientConfig?.checklist !== false,
   });
+
+  /*
+   * The site style the canvas draws with: the host's config DEFAULTS, already
+   * resolved by the plugin factory and delivered as plain data. Narrowed with
+   * the same checks the server writes by, so a malformed value degrades to
+   * the empty style (block defaults and the engine's guaranteed tokens)
+   * rather than crashing the editor.
+   *
+   * Defaults only, deliberately. The STORED tier reaches the published page
+   * through `loadSiteStyle` on the route; wiring it into the canvas needs a
+   * fetch this surface does not have yet, and belongs to the style studios.
+   * Until then the canvas previews the code-stated design — closer to the
+   * published page than the empty sheet it drew before, and honestly short of
+   * it exactly where an admin has stored an override.
+   */
+  const canvasSiteStyle = useMemo(
+    () => readSiteStyleRecord(clientConfig?.siteStyle),
+    [clientConfig]
+  );
 
   useCheckpoints({ name, control, document: editor.document });
 
@@ -420,7 +461,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     <div className="fixed inset-0 z-50 bg-background">
       <BuilderShell
         onExit={done}
-        availablePanels={AVAILABLE_PANELS}
+        availablePanels={
+          renderEntryFields === null
+            ? AVAILABLE_PANELS
+            : AVAILABLE_PANELS_WITH_SETTINGS
+        }
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
@@ -457,6 +502,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             );
           }
           if (panel === "layers") return <LayersPanel editor={editor} />;
+          /*
+           * The entry's own fields — SEO, relations, whatever this collection
+           * declares — which the takeover removed from the page behind this
+           * editor. Rendered by the ADMIN's closure, not reconstructed here: how
+           * a field is drawn is the entry form's contract, and a second
+           * renderer would drift from it.
+           */
+          if (panel === "settings") return renderEntryFields?.(name) ?? null;
           return null;
         }}
       >
@@ -480,10 +533,33 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           <EditorCommandPalette editor={editor} onExit={done} />
           <Canvas
             document={editor.document}
-            siteStyles={siteSheet()}
+            siteStyles={siteSheet(canvasSiteStyle)}
             selectedId={editor.selectedId}
             selectedIds={editor.selection.ids}
             onSelect={editor.select}
+            // The per-node style tier, which is a SEPARATE input from
+            // `siteStyles` and was reaching only the published page.
+            //
+            // `PageRenderer` compiles a document's own node styles only when it
+            // is given a style context; without one `resolvePageStyles`
+            // withholds the sheet and — in its own words — "Classes are kept
+            // either way, so blocks still carry the names the rest of the
+            // system expects". The symptom is therefore silent and specific:
+            // every block carries its `nx-pb-<hash>` class and nothing defines
+            // it, so an author's margins, spacing and dimensions render on the
+            // published page and vanish in the editor. Measured before this
+            // line existed: the same document rendered zero scoped rules and
+            // flush blocks here, six rules and 24px gaps through the public
+            // route.
+            //
+            // The breakpoints come from `siteBreakpoints()` rather than a set
+            // spelled here, because `site-style.ts` exists precisely so the
+            // field validator and the canvas cannot disagree about what this
+            // site's breakpoints are — and this is now the third consumer of
+            // that one answer.
+            render={{
+              styleContext: { breakpoints: siteBreakpoints(canvasSiteStyle) },
+            }}
             dragHandlers={drag.handlers}
             // The pointer route into typing a block's text. Its keyboard
             // counterpart is the Enter binding above, registered in the same

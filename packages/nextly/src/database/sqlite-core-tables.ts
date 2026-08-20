@@ -222,6 +222,47 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_versions" ("draft_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_versions_doc_recent_idx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "created_at")`,
+    // Content releases. Columns match schemas/releases/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_releases" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "title" TEXT NOT NULL,
+      "description" TEXT,
+      "scheduled_at" INTEGER,
+      "timezone" TEXT,
+      "state" TEXT NOT NULL,
+      "published_at" INTEGER,
+      "created_by" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL,
+      "revision" INTEGER NOT NULL DEFAULT 0
+    )`,
+    `CREATE TABLE IF NOT EXISTS "nextly_release_members" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "release_id" TEXT NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "locale" TEXT,
+      "action" TEXT NOT NULL,
+      "member_key" TEXT NOT NULL,
+      "created_by" TEXT,
+      "created_at" INTEGER NOT NULL
+    )`,
+    // Each index is its OWN statement, guarded with IF NOT EXISTS, for the
+    // reason the versions indexes above are: SQLite skips a CREATE TABLE
+    // wholesale once the table exists, so an index folded into it would never
+    // appear on a database built by an earlier boot.
+    `CREATE INDEX IF NOT EXISTS "nextly_releases_due_idx"
+      ON "nextly_releases" ("state", "scheduled_at")`,
+    // Over "member_key" alone: "locale" is nullable and SQLite treats NULL as
+    // distinct from NULL, so a composite index over the source columns would
+    // permit any number of unlocalized members for one document in one release.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_release_members_key_uidx"
+      ON "nextly_release_members" ("member_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_release_members_doc_idx"
+      ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "locale")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_release_members_release_idx"
+      ON "nextly_release_members" ("release_id")`,
     // No REFERENCES to "email_providers": that table is not bootstrapped here,
     // and SQLite resolves a foreign key at insert time rather than at CREATE,
     // so declaring one would turn every recorded delivery into a failure on a

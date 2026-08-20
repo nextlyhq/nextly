@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import {
+  evaluateDraftSplitEligibility,
   isDraftSplitEligible,
   type DraftSplitEligibilityInput,
 } from "../draft-split-eligibility";
@@ -131,5 +132,92 @@ describe("isDraftSplitEligible", () => {
         componentSchemas: null,
       })
     ).toBe(false);
+  });
+});
+
+/**
+ * The reason codes exist so a developer who configured the split and does not
+ * get it can find out why. They are deliberately silent when the configuration
+ * never asked for the split, so an ordinary collection carries no phantom
+ * "disabled because" on its schema response.
+ */
+describe("evaluateDraftSplitEligibility", () => {
+  it("reports no reason when the split runs", () => {
+    expect(evaluateDraftSplitEligibility(base)).toEqual({
+      eligible: true,
+      reason: null,
+      componentSlug: null,
+    });
+  });
+
+  it("stays silent when the configuration never asked for drafts", () => {
+    expect(
+      evaluateDraftSplitEligibility({
+        ...base,
+        draftsVersioningEnabled: false,
+      })
+    ).toEqual({ eligible: false, reason: null, componentSlug: null });
+  });
+
+  it("names the missing lifecycle when drafts were asked for without it", () => {
+    expect(
+      evaluateDraftSplitEligibility({ ...base, collectionHasStatus: false })
+    ).toEqual({
+      eligible: false,
+      reason: "lifecycle-disabled",
+      componentSlug: null,
+    });
+  });
+
+  it("names a password field in the collection's own fields", () => {
+    expect(
+      evaluateDraftSplitEligibility({ ...base, fields: passwordFields })
+    ).toEqual({
+      eligible: false,
+      reason: "password-field",
+      componentSlug: null,
+    });
+  });
+
+  it("names the component a password field sits in", () => {
+    expect(
+      evaluateDraftSplitEligibility({
+        ...base,
+        componentSchemas: components({ fields: passwordFields }),
+      })
+    ).toEqual({
+      eligible: false,
+      reason: "password-field",
+      componentSlug: "hero",
+    });
+  });
+
+  it("names the component that failed to resolve", () => {
+    expect(
+      evaluateDraftSplitEligibility({
+        ...base,
+        componentSchemas: components({ resolved: false }),
+      })
+    ).toEqual({
+      eligible: false,
+      reason: "unresolvable-component",
+      componentSlug: "hero",
+    });
+  });
+
+  it("agrees with the boolean predicate on every input above", () => {
+    const inputs: DraftSplitEligibilityInput[] = [
+      base,
+      { ...base, draftsVersioningEnabled: false },
+      { ...base, collectionHasStatus: false },
+      { ...base, fields: passwordFields },
+      { ...base, componentSchemas: components({ fields: passwordFields }) },
+      { ...base, componentSchemas: components({ resolved: false }) },
+    ];
+    for (const input of inputs) {
+      expect(evaluateDraftSplitEligibility(input).eligible).toBe(
+        isDraftSplitEligible(input)
+      );
+    }
   });
 });

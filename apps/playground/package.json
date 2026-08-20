@@ -26,6 +26,7 @@
     "@nextlyhq/adapter-postgres": "workspace:^",
     "@nextlyhq/adapter-sqlite": "workspace:^",
     "@nextlyhq/admin": "workspace:^",
+    "@nextlyhq/blocks-engine": "workspace:^",
     "@nextlyhq/blocks-react": "workspace:^",
     "@nextlyhq/builder": "workspace:*",
     "@nextlyhq/plugin-form-builder": "workspace:^",

@@ -66,7 +66,6 @@ export function resolveVersionsConfig(
   // an object that explicitly disables it.
   let autosaveEnabled = draftsEnabled;
   let autosaveIntervalMs = DEFAULT_AUTOSAVE_INTERVAL_MS;
-  let schedulePublish = false;
 
   // `typeof null === "object"`, so guard against null before dereferencing:
   // options may arrive from untyped JS config or a Schema-Builder payload where
@@ -82,7 +81,6 @@ export function resolveVersionsConfig(
         autosaveIntervalMs = autosaveRaw.intervalMs;
       }
     }
-    schedulePublish = draftsRaw.schedulePublish === true;
   }
 
   // `maxPerDoc: false` means unlimited; otherwise a positive number, defaulting
@@ -102,7 +100,6 @@ export function resolveVersionsConfig(
         enabled: draftsEnabled && autosaveEnabled,
         intervalMs: autosaveIntervalMs,
       },
-      schedulePublish,
     },
     maxPerDoc,
   };

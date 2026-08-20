@@ -16,8 +16,10 @@ import {
 } from "./blocks/registration-service";
 import { pagesCollection } from "./collections/pages";
 import type { RemotePattern } from "./core/url-policy";
-import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
-import { CUSTOM_CSS_ACTION, CUSTOM_CSS_RESOURCE } from "./permissions";
+import { blocksFieldType } from "./fields/blocksField";
+import { resolveSiteStyle, siteBreakpoints } from "./site-style";
+import type { SiteStyleData } from "./site-style";
+import { siteStyleSingle } from "./site-style-storage";
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
@@ -96,14 +98,38 @@ export interface PageBuilderOptions {
    * input.
    */
   remotePatterns?: readonly RemotePattern[];
+  /**
+   * The site's style DEFAULTS: tokens, fonts, named classes and breakpoints
+   * stated in code. The stored Site Style document layers over these —
+   * `resolveSiteStyle` in `site-style` is the one merge — so a site whose
+   * design lives in the repository states it here, and an admin's saved edit
+   * overrides exactly what it names and nothing else.
+   *
+   * Feeds two surfaces from one statement: the blocks field's server-side
+   * validator judges documents against these breakpoints, and the editor
+   * canvas compiles its preview sheet from the whole set (it travels through
+   * `clientConfig`, so it must hold nothing secret — it is emitted into the
+   * CSS of every public page anyway).
+   *
+   * A published route states the same value once more, on `loadSiteStyle`'s
+   * `defaults`, for the same reason `remotePatterns` appears on more than one
+   * surface: the route helper runs where this option cannot reach it. Define
+   * the object once and hand it to both.
+   */
+  siteStyle?: SiteStyleData;
 }
 
 /**
  * The Page Builder plugin factory. Call it in a host app's
  * `defineConfig({ plugins: [pageBuilder()] })`.
  */
-export const pageBuilder = (opts: PageBuilderOptions = {}) =>
-  definePlugin({
+export const pageBuilder = (opts: PageBuilderOptions = {}) => {
+  // Resolved once, with no stored tier: at config time there is no database to
+  // read, so what the factory can wire into the validator and the canvas is
+  // the defaults tier. The stored tier reaches the published route through
+  // `loadSiteStyle`, which reads per request.
+  const configStyle = resolveSiteStyle(opts.siteStyle);
+  return definePlugin({
     name: "@nextlyhq/plugin-page-builder",
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
@@ -162,13 +188,21 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
       collections: [pagesCollection()],
+      // The Site Style global: one versioned, access-controlled document the
+      // stored style tier lives in. Registered whether or not the host stated
+      // defaults, because the storage existing is what the style studios and
+      // the API write against.
+      singles: [siteStyleSingle()],
       // One field type, where there were two. The other named the previous
       // editor's document — a shape this package defined itself, stored under a
       // synthetic root, and validated with its own rules. A site that declared
       // it got a field the engine could not read and the current renderer could
       // not draw, so the two field types were not alternatives but rival
       // formats, and only this one is a format anything else understands.
-      fieldTypes: [BLOCKS_FIELD_TYPE],
+      // Built against the configured breakpoints, so a document write is
+      // validated against the same set the canvas draws with. With none
+      // configured this is the empty set, which the engine treats permissively.
+      fieldTypes: [blocksFieldType(siteBreakpoints(configStyle))],
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which
       // `update-pages` already covers, and no code path asked whether the user
@@ -178,23 +212,6 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
       // The permission below is read by the `customCss` field rule in
       // `pagesCollection()`, so granting and withholding it each change what a
       // user can do.
-      permissions: [
-        {
-          action: CUSTOM_CSS_ACTION,
-          resource: CUSTOM_CSS_RESOURCE,
-          label: "Write custom CSS",
-          description:
-            "Author per-page and per-block custom CSS in the page builder. Without it the CSS already on a page stays visible and applied, but cannot be changed.",
-          // No `group`: the admin files this under the plugin that declared it,
-          // and one permission does not need sorting into headings.
-          //
-          // `danger` because it is author-written CSS that reaches the
-          // published page. A site that declared `remotePatterns` for its
-          // images declared them for this too, and a selector can make such a
-          // request conditional on what a page contains.
-          danger: true,
-        },
-      ],
       admin: {
         // The canvas needs the allowlist and runs in the browser, so it
         // travels with the rest of the admin metadata. `remotePatterns` is
@@ -204,7 +221,9 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         // `clientConfig` would make every future reader distinguish "the host
         // set this" from "the default is showing", which is what the absent
         // key already says.
-        ...(opts.remotePatterns !== undefined || opts.checklist !== undefined
+        ...(opts.remotePatterns !== undefined ||
+        opts.checklist !== undefined ||
+        opts.siteStyle !== undefined
           ? {
               clientConfig: {
                 ...(opts.remotePatterns === undefined
@@ -213,6 +232,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
                 ...(opts.checklist === undefined
                   ? {}
                   : { checklist: opts.checklist }),
+                // The RESOLVED defaults tier rather than the raw option, so
+                // the canvas and the validator read one answer. Plain data:
+                // tokens, fonts, classes and breakpoints all serialize, and
+                // none of it is secret — a published page emits it as CSS.
+                ...(opts.siteStyle === undefined
+                  ? {}
+                  : { siteStyle: configStyle }),
               },
             }
           : {}),
@@ -236,3 +262,4 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
       },
     },
   });
+};

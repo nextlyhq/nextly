@@ -1,17 +1,19 @@
-import { defineCollection, text, code } from "nextly/config";
+import { defineCollection, text } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
-import { CUSTOM_CSS_GRANT } from "../permissions";
 /**
- * Sibling field for page-level custom CSS. When the host entity has a field
- * with this name, the builder's page settings edit it.
+ * There is no page-level custom CSS field.
  *
- * Declared here rather than imported because this collection is now its only
- * reader. It previously sat beside the removed editor's field constants, where
- * it was one of a set describing that editor's entry shape; the rest of that set
- * described a document format nothing reads any more.
+ * One existed, gated by its own permission, and nothing ever rendered what it
+ * stored: no renderer read the value and nothing sanitised it. A permission
+ * around a field implies its safety was considered, so the next change to add
+ * the missing render call would have had every reason to assume the text was
+ * already clean. Removing the field removes that implication along with it.
+ *
+ * Reinstating it means writing the sanitiser first — a stylesheet needs its
+ * selectors scoped and its properties allow-listed, which is a different job
+ * from the value-level checks the rich-text path performs.
  */
-export const PAGE_BUILDER_CUSTOM_CSS_FIELD = "customCss";
 
 /**
  * There is no builder Edit-view path any more.
@@ -56,23 +58,6 @@ export function pagesCollection() {
       // builder arm: a page already holding a block document keeps rendering
       // rather than reading as empty against a field with a new name.
       blocks({ name: "content", label: "Page Builder" }),
-      code({
-        name: PAGE_BUILDER_CUSTOM_CSS_FIELD,
-        admin: { language: "css" },
-        // Writing custom CSS is gated; reading it is not. A user who may edit
-        // the page still needs to SEE the CSS already on it — the editor shows
-        // it, and hiding it would make the field look empty and invite it being
-        // overwritten with nothing. Withholding the grant makes it read-only,
-        // which is the intended shape of the privilege.
-        //
-        // A denied field is stripped from the write silently rather than
-        // rejected, so a user without the grant saves the rest of the page
-        // normally and the stored CSS is left as it was.
-        access: {
-          create: ({ permissions }) => permissions.includes(CUSTOM_CSS_GRANT),
-          update: ({ permissions }) => permissions.includes(CUSTOM_CSS_GRANT),
-        },
-      }),
     ],
     status: true,
     admin: { useAsTitle: "title" },

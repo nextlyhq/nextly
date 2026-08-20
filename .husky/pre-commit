@@ -1,3 +1,20 @@
+# Git exports GIT_DIR into every hook, this one included, and in a linked
+# worktree it names that worktree's admin directory (<main>/.git/worktrees/
+# <name>) rather than a plain .git. Both commands below drive the git CLI,
+# which resolves that pointer correctly, so committing from a worktree works
+# with it set — but that is a property of these two commands, not of the hook,
+# and it lapses the moment either changes or a third is added. turbo, which
+# the pre-push hook runs, hangs forever on the same pointer. Clearing it here
+# makes "no hook inherits GIT_DIR" true of the hooks themselves rather than of
+# whatever they happen to call.
+#
+# It costs nothing anywhere else: with no GIT_DIR set, git discovers the
+# repository from the working directory, and hooks already run from the top of
+# the working tree — the same repository in a normal clone, the same worktree
+# in a linked one. GIT_WORK_TREE goes with it because git reads the two as a
+# pair, and unsetting something already unset is a no-op.
+unset GIT_DIR GIT_WORK_TREE
+
 # Scan staged changes for committed secrets before
 # lint-staged formats them. `gitleaks protect --staged` only inspects
 # the index, so it's fast and accurate enough to catch common cases

@@ -60,3 +60,24 @@ export function resolveSingleTableName(config: SingleNameInput): string {
     : normalizeIdentifier(config.slug);
   return ensurePrefixed(base);
 }
+
+/**
+ * Every physical table a Single's storage occupies: the main table and the `_locales` companion
+ * beside it (`reconcileSingleCompanion` provisions the companion as `<tableName>_locales`).
+ *
+ * Ownership questions must compare these FAMILIES, never the main names alone. `normalizeIdentifier`
+ * folds `-` to `_`, so a Single slugged `foo-locales` resolves to `single_foo_locales` — exactly
+ * the companion of the Single at `single_foo` — and two Singles whose main names differ would then
+ * be writing into one physical table. The companion belongs to the family whether or not its owner
+ * is localized today: the toggle can be enabled later, and a namespace that grows and shrinks with
+ * a flag is not a boundary anything can rely on.
+ */
+export function singleTableFamily(tableName: string): [string, string] {
+  return [tableName, `${tableName}_locales`];
+}
+
+/** Whether two Singles' table families overlap — the collision every create must refuse. */
+export function singleTableFamiliesCollide(a: string, b: string): boolean {
+  const other = singleTableFamily(b);
+  return singleTableFamily(a).some(name => other.includes(name));
+}
