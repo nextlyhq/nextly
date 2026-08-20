@@ -34,6 +34,21 @@ const E2E_DB_RELATIVE = "file:./data/e2e.db";
 
 export default defineConfig({
   testDir: "./tests",
+  /*
+   * `tests/production` belongs to the OTHER config and must not run here.
+   *
+   * Those specs drive a production build: they sign in through the real form
+   * and assert what a visitor is served. This config runs `pnpm dev:app`, where
+   * `admin.devAutoLogin` puts the browser on the dashboard already signed in —
+   * so the sign-in form never renders and the spec fails waiting for an input
+   * that a production build would have shown it.
+   *
+   * The default `testDir` walks subdirectories, so a spec placed under `tests/`
+   * is picked up by this config whether or not it was written for it. Excluding
+   * by path is what keeps "which server does this suite need" a property of the
+   * directory rather than something each spec has to survive.
+   */
+  testIgnore: "**/production/**",
   outputDir: "./.playwright/results",
 
   // A failing assertion in a shared admin is usually a real failure, so the

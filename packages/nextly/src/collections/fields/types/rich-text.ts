@@ -9,6 +9,8 @@
  * @since 1.0.0
  */
 
+import type { RichTextNode, RichTextValue } from "@nextlyhq/blocks-engine";
+
 import type {
   BaseFieldConfig,
   FieldAdminOptions,
@@ -138,49 +140,16 @@ export type RichTextFeature =
  * }
  * ```
  */
-export interface RichTextValue {
-  /**
-   * The root node of the Lexical editor state.
-   */
-  root: {
-    type: "root";
-    children: RichTextNode[];
-    [key: string]: unknown;
-  };
-}
-
 /**
- * A node in the rich text structure.
+ * The stored shape of rich text, re-exported from the engine.
  *
- * Nodes can be paragraphs, headings, lists, text, or other
- * content types. Each node has a type and may have children.
+ * Declared in `@nextlyhq/blocks-engine` and named here so the CMS's field types
+ * read as one surface. It is the SAME type, not a matching one: rich text
+ * authored in a field and rich text held in a block prop are the same stored
+ * value, and two structurally identical declarations would let that stop being
+ * true one edit at a time, in silence, because both would still compile.
  */
-export interface RichTextNode {
-  /**
-   * The node type (e.g., 'paragraph', 'text', 'heading').
-   */
-  type: string;
-
-  /**
-   * Child nodes (for container nodes like paragraphs).
-   */
-  children?: RichTextNode[];
-
-  /**
-   * Text content (for text nodes).
-   */
-  text?: string;
-
-  /**
-   * Text formatting flags (bold, italic, etc.).
-   */
-  format?: number;
-
-  /**
-   * Additional node-specific properties.
-   */
-  [key: string]: unknown;
-}
+export type { RichTextNode, RichTextValue };
 
 /**
  * Possible value types for a rich text field.

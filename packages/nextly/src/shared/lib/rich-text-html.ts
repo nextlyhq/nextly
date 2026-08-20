@@ -8,6 +8,12 @@
  * @since 1.0.0
  */
 
+import {
+  codeTokenClass,
+  isRichTextValue,
+  TEXT_FORMAT,
+} from "@nextlyhq/blocks-engine";
+
 import type { RichTextValue } from "../../collections/fields/types/rich-text";
 import {
   sanitizeCssColor,
@@ -24,15 +30,6 @@ export interface RichTextBothFormat {
   json: RichTextValue;
   html: string;
 }
-
-/**
- * Token types the tokenizer emits, as a class-name fragment.
- *
- * Checked rather than trusted: the value arrives from stored content and is
- * written into a class attribute, where a crafted string could otherwise
- * close the attribute and inject markup.
- */
-const SAFE_HIGHLIGHT_TYPE = /^[a-z][a-z0-9-]*$/;
 
 interface LexicalSerializedNode {
   type: string;
@@ -97,16 +94,11 @@ interface LexicalSerializedNode {
 // Text Format Flags (from Lexical)
 // ============================================================
 
-const TEXT_FORMAT = {
-  BOLD: 1,
-  ITALIC: 2,
-  STRIKETHROUGH: 4,
-  UNDERLINE: 8,
-  CODE: 16,
-  SUBSCRIPT: 32,
-  SUPERSCRIPT: 64,
-  HIGHLIGHT: 128,
-} as const;
+// Imported, never re-declared. These numbers are what a stored node MEANS, and
+// a second copy agrees on the day it is written and drifts the day Lexical adds
+// a format — silently, because both copies still compile and both still render
+// something. The engine's copy is the one both this serializer and the block
+// renderer read.
 
 // ============================================================
 // Element Format (Alignment) mapping
@@ -434,10 +426,13 @@ function serializeCodeNode(
  */
 function serializeCodeHighlightNode(node: LexicalSerializedNode): string {
   const text = escapeHtml(node.text || "");
-  const type = node.highlightType;
-  if (!type || !SAFE_HIGHLIGHT_TYPE.test(type)) return text;
+  // The class comes from the engine, so this and the React renderer cannot
+  // disagree about which class a token type gets — or about which types are
+  // safe to write into a class attribute at all.
+  const className = codeTokenClass(node.highlightType);
+  if (className === undefined) return text;
 
-  return `<span class="nextly-code-token nextly-code-token--${type}">${text}</span>`;
+  return `<span class="${className}">${text}</span>`;
 }
 
 function serializeHorizontalRuleNode(): string {
@@ -854,18 +849,9 @@ export function formatRichTextOutput(
   }
 }
 
-export function isRichTextValue(value: unknown): value is RichTextValue {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const obj = value as Record<string, unknown>;
-
-  return (
-    "root" in obj &&
-    typeof obj.root === "object" &&
-    obj.root !== null &&
-    "type" in (obj.root as Record<string, unknown>) &&
-    (obj.root as Record<string, unknown>).type === "root"
-  );
-}
+// Re-exported so this module's existing callers keep one import site, while the
+// answer itself comes from the engine. The local copy this replaces did not
+// require `root.children` to be an array, so it accepted a root this file's own
+// walker could only render as empty — the two disagreed about what rich text is,
+// which is the drift a shared definition exists to prevent.
+export { isRichTextValue };

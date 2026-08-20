@@ -406,6 +406,39 @@
    * scrolls instead of being clipped to it.
    */
   min-height: 100%;
+
+  /*
+   * A press on a block is a grab, not a text selection.
+   *
+   * Blocks are made of text, so a press that lands on a word and then moves is
+   * ambiguous: the drag engine reads it as the start of a gesture while the
+   * browser reads it as the start of a selection. The browser wins, because
+   * selection begins on the first move and the engine does not call itself
+   * dragging until the pointer has travelled its activation distance — so the
+   * author gets highlighted words and a block that never moves. Whether it
+   * happens at all depends on where the text falls, which is why it reproduced
+   * on CI's font metrics and not on the author's.
+   *
+   * Declared here rather than as a `preventDefault` on the press, which would
+   * also suppress focus and the click that selects a block, and would have to
+   * decide what a press means before the travel that answers it.
+   */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/*
+ * Text being EDITED is text again.
+ *
+ * The rule above is about pressing on a block to move it. Once a block's text
+ * is editable, selecting inside it is the whole point — a caret has to be
+ * placeable and a word has to be selectable — so the editable subtree opts back
+ * in rather than inheriting the canvas's answer.
+ */
+.nx-canvas [contenteditable="true"],
+.nx-canvas [contenteditable="true"] * {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /*
