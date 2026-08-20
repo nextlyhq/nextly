@@ -786,11 +786,19 @@ export function reviewsCoveringTip(reviews, tip, login) {
  * excluded drafts and the other filtered nothing, four lines apart, so the same
  * review was coverage for one reviewer and not the other.
  */
-const verdict = await import(
-  pathToFileURL(
-    join(dirname(realpathSync(fileURLToPath(import.meta.url))), "ci-verdict.mjs")
-  ).href
-);
+const sibling = name =>
+  import(
+    pathToFileURL(join(dirname(realpathSync(fileURLToPath(import.meta.url))), name))
+      .href
+  );
+
+const verdict = await sibling("ci-verdict.mjs");
+// EVERY sibling goes through `sibling`, the entry guard included. A static
+// import of it would reach the one case this exists for — a symlinked entry
+// under `--preserve-symlinks-main` — and fail with `ERR_MODULE_NOT_FOUND`
+// before any of this file runs, turning the gate's deliberate exit 2 into an
+// exit 1.
+const { isCliEntry } = await sibling("cli-entry.mjs");
 export const SUBMITTED_REVIEW_STATES = verdict.SUBMITTED_REVIEW_STATES;
 /**
  * The revision a reviewer's comment reports having read.
@@ -1371,36 +1379,6 @@ export function main(argv) {
  * `run` is injectable so this decision can be given a failure and asked what it
  * returns; that is the only reason it is a parameter.
  */
-/**
- * Every URL form `import.meta.url` might report for `process.argv[1]`.
- *
- * BOTH forms, because symlink resolution is a runtime option rather than a
- * fixed behaviour. By default `import.meta.url` is resolved through symlinks
- * while `argv[1]` is not — on macOS `/tmp` is `/private/tmp`, so comparing the
- * unresolved form there never matches. Under `--preserve-symlinks-main`, which
- * `NODE_OPTIONS` can set from outside the command line, it is the opposite: the
- * resolved form never matches.
- *
- * Committing to either one makes the guard depend on a flag this code cannot
- * see, and its failure is silent in the worst way — the module declines to run
- * and the process exits 0 having verified nothing, which is indistinguishable
- * from a clean pass.
- */
-function entryHrefs(argvPath) {
-  const forms = [];
-  try {
-    forms.push(pathToFileURL(argvPath).href);
-  } catch {
-    // An unconvertible path contributes nothing rather than failing the guard.
-  }
-  try {
-    forms.push(pathToFileURL(realpathSync(argvPath)).href);
-  } catch {
-    // Unresolvable is not fatal either: the plain form above may still match.
-  }
-  return forms;
-}
-
 export function runCli(argv, run = main) {
   try {
     return run(argv);
@@ -1413,10 +1391,11 @@ export function runCli(argv, run = main) {
   }
 }
 
-if (
-  process.argv[1] &&
-  entryHrefs(process.argv[1]).includes(import.meta.url)
-) {
+// The guard is `cli-entry.mjs`, shared so this gate cannot drift away from the
+// scripts that use it. That file documents why the comparison is made as a URL
+// and why both symlink forms count; getting it wrong leaves the module
+// declining to run with the process exiting 0, which reads as a clean pass.
+if (isCliEntry(import.meta.url)) {
   // `process.exitCode`, not `process.exit()`. Exiting terminates Node before a
   // redirected stdout finishes flushing, truncating exactly the blocker names a
   // caller needs — and the truncation is silent, so the output looks complete.

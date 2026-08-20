@@ -982,3 +982,85 @@ jobs:
             exit 1
           fi
           echo "Both commands produced their output, and an edit rebuilt each one."
+
+  # The CLI entry guard is wrong ONLY on Windows: `argv[1]` is a drive path, so
+  # an interpolated `file://${argv[1]}` builds `file://C:\repo\x.mjs` while the
+  # runtime reports `file:///C:/repo/x.mjs`. `Script tests` in the `ci` job runs
+  # on ubuntu-latest, where that form never arises.
+  #
+  # So a Linux-only run is necessary but NOT sufficient: it stays green against
+  # an implementation that percent-encodes spaces correctly and still constructs
+  # Windows file URLs wrong — which is the exact defect these suites exist to
+  # catch, passing while carrying the authority of having been checked. The
+  # separating property is the drive path, and only a Windows runner has one.
+  #
+  # ubuntu is the control. A check that fails on both platforms says nothing
+  # about Windows in particular, and a check that only ever ran on Windows could
+  # not tell a real regression from a runner quirk.
+  #
+  # No build step: the guard is a standalone module and its suites spawn `node`
+  # against fixtures they write themselves.
+  #
+  # ONE SUITE PER STEP, which is not a formatting choice. vitest exits non-zero
+  # only when NO file matches its filters; with both suites named in a single
+  # command a rename of either one leaves the other matching, so vitest runs
+  # that one and exits 0 with the missing suite silently dropped. Measured on
+  # 4.1.10: two named, one absent -> `Test Files 1 passed`, exit 0; one named
+  # and absent -> `No test files found, exiting with code 1`. Split, each name
+  # is the sole filter of its step, so losing it means zero matches and a red.
+  #
+  # The symlink cases probe for the privilege and skip where they cannot create
+  # a link. They are reported rather than hidden — `--reporter=verbose` prints
+  # each skip by name, so a leg that stopped covering symlink resolution says so
+  # in its own log instead of reading as full coverage.
+  #
+  # It depends on `changes`, NOT on `ci`. `needs: [ci]` carries an implicit
+  # `success()`, so any unrelated lint, typecheck or unit failure skips this
+  # whole matrix — and the Windows leg is the ONLY check that exercises the
+  # drive path, so it disappears precisely when the tree is in trouble. That is
+  # not hypothetical: an earlier revision of this branch had exactly one job
+  # red, and this matrix was skipped rather than reporting. The job is
+  # install-only and takes about a minute, so there are no minutes to save by
+  # gating it behind the build.
+  entry-guard-smoke:
+    name: CLI entry guard (${{ matrix.os }})
+    needs: [changes]
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Entry guard suite (the guard's answers)
+        run: >
+          pnpm exec vitest run --dir scripts --reporter=verbose
+          scripts/cli-entry.test.mjs
+
+      # `!cancelled()` so losing the suite above does not also hide this one.
+      # They cover different questions — what the guard answers, and whether a
+      # real command reaches it — and either can be the one that goes missing.
+      - name: Entry guard suite (real commands)
+        if: ${{ !cancelled() }}
+        run: >
+          pnpm exec vitest run --dir scripts --reporter=verbose
+          scripts/cli-entry.cli.test.mjs

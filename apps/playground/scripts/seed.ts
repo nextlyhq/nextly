@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { getNextly } from "nextly";
 import { seedPermissions, seedSuperAdmin } from "nextly/database/seeders";
 
+import { isCliEntry } from "../../../scripts/cli-entry.mjs";
 import config from "../nextly.config";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -275,13 +276,7 @@ export async function seedIfEmpty(): Promise<SeedResult> {
 
 // CLI entry: `pnpm db:seed` runs seedIfEmpty. Wrapped in an async IIFE
 // because tsx compiles this to CJS where top-level await isn't allowed.
-const isCliEntry =
-  typeof process !== "undefined" &&
-  Array.isArray(process.argv) &&
-  process.argv[1] != null &&
-  import.meta.url === `file://${process.argv[1]}`;
-
-if (isCliEntry) {
+if (isCliEntry(import.meta.url)) {
   void (async () => {
     try {
       const result = await seedIfEmpty();

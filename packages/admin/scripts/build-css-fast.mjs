@@ -24,19 +24,38 @@
  * Or run directly: `node scripts/build-css-fast.mjs`
  */
 
+import { realpathSync } from "fs";
 import fs from "fs/promises";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 import postcss from "postcss";
 import tailwindcss from "@tailwindcss/postcss";
+
+/**
+ * This file's directory, with symlinks resolved. ONE definition, shared by the
+ * guard import and by the CSS paths below, which have to agree about where
+ * this script lives.
+ *
+ * From `realpathSync`, because under `--preserve-symlinks-main`
+ * `import.meta.url` is the SYMLINK. Resolving only the import and leaving the
+ * paths on the preserved URL is the worse half-fix: the guard then runs the
+ * CLI block and the build reads `src/styles/globals.css` beside the link,
+ * failing with `ENOENT` for a reason that names the wrong file.
+ */
+const __dirname = path.dirname(realpathSync(fileURLToPath(import.meta.url)));
+
+const { isCliEntry } = await import(
+  pathToFileURL(
+    path.join(__dirname, "..", "..", "..", "scripts", "cli-entry.mjs")
+  ).href
+);
 
 // Scoping lives in @nextlyhq/admin-css so this build and the plugin-facing
 // CLI share one implementation and cannot drift. The release build
 // (build-css.mjs) resolves it the same way.
 import { findUnscopedRules, scopeCss } from "@nextlyhq/admin-css";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 
 const inputFile = path.join(rootDir, "src/styles/globals.css");
@@ -67,7 +86,7 @@ export async function buildCssFast() {
 }
 
 // Direct CLI invocation: `node scripts/build-css-fast.mjs`
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isCliEntry(import.meta.url)) {
   const { ms, sizeKB, outputFile: out } = await buildCssFast();
   console.log(`[admin:css] ${sizeKB} KB in ${ms}ms → ${out}`);
 }

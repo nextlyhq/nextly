@@ -21,6 +21,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isCliEntry } from "../../../scripts/cli-entry.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLAYGROUND_DIR = path.resolve(HERE, "..");
 
@@ -171,13 +173,7 @@ export async function runReset(): Promise<void> {
 
 // CLI entry. Wrapped in async IIFE because tsx compiles this file to
 // CJS where top-level await is not allowed.
-const isCliEntry =
-  typeof process !== "undefined" &&
-  Array.isArray(process.argv) &&
-  process.argv[1] != null &&
-  import.meta.url === `file://${process.argv[1]}`;
-
-if (isCliEntry) {
+if (isCliEntry(import.meta.url)) {
   void (async () => {
     try {
       await runReset();

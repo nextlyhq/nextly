@@ -3,9 +3,34 @@
 // Intentionally JS (.mjs) — kept dependency-free so it can run before
 // any TypeScript or Next.js machinery loads.
 
+import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+/**
+ * This file's directory, with symlinks resolved. ONE definition, because the
+ * guard import and the diagnostic paths below must agree about where this
+ * script lives.
+ *
+ * Taken from `realpathSync` rather than from `import.meta.url` directly: under
+ * `--preserve-symlinks-main` that URL is the SYMLINK. Two different things go
+ * wrong from it, and the second is the worse one:
+ *
+ * - the guard is looked for beside the link and the command dies with
+ *   `ERR_MODULE_NOT_FOUND` before printing anything;
+ * - `nextlyRoot` lands beside the link, so every check reads the wrong tree
+ *   and a healthy checkout is reported as missing its workspace links, its
+ *   env file and its build artifacts. That one is a FALSE NEGATIVE — the
+ *   command still prints a well-formed report, so nothing about the output
+ *   says the paths were wrong.
+ */
+const HERE = path.dirname(realpathSync(fileURLToPath(import.meta.url)));
+
+const { isCliEntry } = await import(
+  pathToFileURL(path.join(HERE, "cli-entry.mjs")).href
+);
 
 // Workspace integrity check. The two scopes get hoisted differently:
 //   - @nextlyhq/* — consumed by the root package.json (eslint, prettier
@@ -147,10 +172,10 @@ export async function runAllChecks({ nextlyRoot, envPath, port }) {
 }
 
 // CLI entry: when invoked directly (pnpm dev:doctor), print a report.
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
-  const here = path.dirname(new URL(import.meta.url).pathname);
-  const nextlyRoot = path.resolve(here, "..");
+if (isCliEntry(import.meta.url)) {
+  // `HERE`, so the report describes the checkout this file actually lives in
+  // rather than wherever it was invoked from.
+  const nextlyRoot = path.resolve(HERE, "..");
   const envPath = path.join(nextlyRoot, "apps", "playground", ".env");
   const port = Number(process.env.PORT) || 3000;
 
