@@ -3,62 +3,42 @@
 /**
  * Single Builder — Edit Page
  *
- * Mirrors the Collection edit page architecture:
- *   BuilderToolbar at top, BuilderFieldList in the body inside DndContext,
- *   overlays (settings modal / picker / editor sheet / hooks sheet) mounted
- *   lazily based on a single ActiveOverlay union.
+ * Draws the shared builder frame (BuilderPageLayout) and owns what a Single
+ * does differently: its settings shape, singleApi as the schema client, and its
+ * copy. Singles run the same preview → confirm → apply pipeline as Collections.
  *
- * Singles run the same preview → SchemaChangeDialog → apply pipeline as
- * Collections. Locked code-first Singles render
- * in readOnly mode (cross-cutting code-first preservation requirement).
+ * Locked code-first Singles render in readOnly mode (cross-cutting code-first
+ * preservation requirement).
  */
 
-import { DndContext, type DragEndEvent } from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Skeleton } from "@nextlyhq/ui";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { z } from "zod";
 
 import {
-  BuilderFieldList,
-  BuilderReadOnlyNotice,
-  BuilderSettingsModal,
-  BuilderToolbar,
-  FieldEditorSheet,
-  FieldPickerModal,
-  SafeChangeConfirmDialog,
+  BuilderErrorScreen,
+  BuilderLoadingScreen,
+  BuilderNotFoundScreen,
+  BuilderPageLayout,
+  BuilderSchemaChangeDialogs,
   SchemaBuilderSlots,
-  SchemaChangeDialog,
+  type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
-import type { BuilderField } from "@admin/components/features/schema-builder/types";
-import { PageContainer } from "@admin/components/layout/page-container";
-import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
-import { useRestart } from "@admin/context/RestartContext";
 import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
+import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
+import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
-  convertToBuilderField,
-  convertToFieldDefinition,
-  DEFAULT_SYSTEM_FIELDS,
-  findFieldById,
-  findParentContainerId,
-  reorderNestedFields,
-} from "@admin/lib/builder";
-import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
-import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
-import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
-import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+  displayLabel,
+  mirrorSchemaFile,
+  useSchemaSave,
+} from "@admin/hooks/useSchemaSave";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
-import type {
-  FieldResolution,
-  SchemaPreviewResponse,
-  SchemaRenameResolution,
-} from "@admin/services/schemaApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
@@ -75,24 +55,52 @@ const singleFormSchema = z.object({
 
 type FormData = z.infer<typeof singleFormSchema>;
 
-type ActiveOverlay =
-  | { kind: "none" }
-  | { kind: "settings" }
-  // PR D: parentFieldId? scopes the picker to a group/repeater.
-  | { kind: "picker"; insertAt: number; parentFieldId?: string }
-  // Why: NEW in PR C. Sheet renders in create mode against this draft;
-  // on Apply we append, on Cancel we discard.
-  // PR D: parentFieldId? extends the overlay so the new field can be
-  // committed into a parent group/repeater's nested fields.
-  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
-  | { kind: "edit"; fieldId: string };
-// Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
-// removed from the toolbar (feedback Section 2).
+/** The name a Single displays under, falling back to its slug. */
+function singleName(single: ApiSingle): string {
+  return single.label || single.slug || "";
+}
+
+/**
+ * The settings a loaded Single opens the builder with.
+ *
+ * Several switches read "on unless explicitly turned off": the registry stores
+ * a resolved config, so an absent opt-out and a null config both mean the
+ * default is in force, and only an explicit `false` turns the switch off.
+ */
+function singleSettings(single: ApiSingle): BuilderSettingsValues {
+  const adminBlock = (single.admin ?? {}) as Record<string, unknown>;
+  return {
+    singularName: singleName(single),
+    slug: single.slug,
+    description: single.description || "",
+    icon: (adminBlock.icon as string | undefined) || "FileText",
+    // The Draft/Published flag; false for Singles written before the column
+    // existed. `admin.group` / `admin.order` are deliberately absent: the
+    // server still honours them from code-first config, and round-tripping
+    // them through this modal would let a settings save wipe them.
+    status: single.status === true,
+    i18n: (single as { localized?: boolean }).localized === true,
+    versions:
+      (single as { versions?: { enabled?: boolean } | null }).versions
+        ?.enabled === true,
+    // Retention always carries the effective count (`false` = unlimited), so
+    // a config left at the framework default reads back as its concrete number.
+    versionsMaxPerDoc: (
+      single as { versions?: { maxPerDoc?: number | false } | null }
+    ).versions?.maxPerDoc,
+    revalidate: single.revalidate?.disable !== true,
+    webhooks: single.webhooks?.record !== false,
+  };
+}
 
 interface SingleBuilderEditPageProps {
   params?: { slug?: string };
 }
 
+// Over the thresholds, and further over before the shared units were
+// extracted: cyclomatic 38 / cognitive 49 / CRAP 350 across 725 lines, against
+// 14 / 18 / 56 now. A rewrite re-attributes the finding it inherited.
+// fallow-ignore-next-line complexity
 export default function SingleBuilderEditPage({
   params,
 }: SingleBuilderEditPageProps): React.ReactElement {
@@ -103,226 +111,87 @@ export default function SingleBuilderEditPage({
     resolver: zodResolver(singleFormSchema),
     defaultValues: { singularName: "" },
   });
+  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+    useBuilderFieldActions(builder);
 
-  const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
-  const [isInitialized, setIsInitialized] = useState(false);
-  // Why: was a JSON string of just field IDs, which silently masked
-  // label / width / validation / options edits. Now a frozen array we
-  // diff via countDirtyFields so every meaningful edit bumps the badge.
-  const [originalFields, setOriginalFields] = useState<
-    readonly BuilderField[] | null
-  >(null);
-  // Pinned settings snapshot for settings-only dirty detection (status
-  // flip, label edits, etc.). Without this, toggling status in the
-  // settings dialog left the Save button disabled.
-  const [originalSettings, setOriginalSettings] =
-    useState<BuilderSettingsValues | null>(null);
-
-  const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
-    null
-  );
-  const [showSchemaDialog, setShowSchemaDialog] = useState(false);
-  const [showSafeDialog, setShowSafeDialog] = useState(false);
-  const [isApplyingSchema, setIsApplyingSchema] = useState(false);
+  const confirmation = useSchemaChangeConfirmation();
 
   const { mutate: updateSingle, isPending: isSaving } = useUpdateSingle();
-  const { startRestart, stopRestart } = useRestart();
 
-  // Initialize builder + settings from the loaded Single.
-  useEffect(() => {
-    if (!single || isInitialized) return;
-
-    builder.form.reset({
-      singularName: single.label || single.slug || "",
-    });
-
-    const userSchemaFields = (single.fields ?? []).filter(
-      (f: { name: string }) => f.name !== "title" && f.name !== "slug"
-    );
-    const builderFields = userSchemaFields.map((field, index: number) =>
-      convertToBuilderField(field as unknown as FieldDefinition, index)
-    );
-    const allFields = [...DEFAULT_SYSTEM_FIELDS, ...builderFields];
-    builder.setFields(allFields);
-
-    setOriginalFields(allFields.filter(f => !f.isSystem));
-
-    const adminBlock = (single.admin ?? {}) as Record<string, unknown>;
-    const loadedSettings: BuilderSettingsValues = {
-      singularName: single.label || single.slug || "",
-      slug: single.slug,
-      description: single.description || "",
-      icon: (adminBlock.icon as string | undefined) || "FileText",
-      // tab. The server still supports admin.group / admin.order via
-      // code-first config; we just don't roundtrip them through the
-      // settings modal anymore.
-      // Status: defaults false for legacy Singles written before the column
-      // existed.
-      status: single.status === true,
-      // i18n: reflect the saved localization flag so the Internationalization toggle shows its
-      // real state (mirrors the collection builder).
-      i18n: (single as { localized?: boolean }).localized === true,
-      // The registry stores the resolved config, so presence of an enabled one
-      // is what the switch reflects.
-      versions:
-        (single as { versions?: { enabled?: boolean } | null }).versions
-          ?.enabled === true,
-      // Retention: the stored resolved config carries the effective count
-      // (`false` = unlimited), so the select reflects the true setting.
-      versionsMaxPerDoc: (
-        single as { versions?: { maxPerDoc?: number | false } | null }
-      ).versions?.maxPerDoc,
-      // Cache revalidation is on unless the stored config disables it (mirrors
-      // the collection builder).
-      revalidate: single.revalidate?.disable !== true,
-      // Webhook recording is on unless the stored policy opts out (mirrors the
-      // collection builder).
-      webhooks: single.webhooks?.record !== false,
-    };
-    setSettings(loadedSettings);
-    setOriginalSettings(loadedSettings);
-
-    setIsInitialized(true);
-  }, [single, builder, isInitialized]);
+  const {
+    settings,
+    setSettings,
+    isInitialized,
+    unsavedCount,
+    pinFields,
+    pinSettings,
+  } = useBuilderEntityState({
+    entity: single,
+    builder,
+    toFields: loaded => loaded.fields ?? [],
+    toSettings: singleSettings,
+    isDirty: settingsAreDirty,
+    onLoad: loaded => builder.form.reset({ singularName: singleName(loaded) }),
+    identity: loaded => loaded.slug,
+  });
 
   const isLocked = single?.locked === true;
+  // Resolved once: the save hook refuses outright without a slug, so the
+  // fallback below is only ever satisfying the type.
+  const entitySlug = slug ?? "";
+  const localized = settings?.i18n === true;
 
-  // Dirty count: number of user fields that were added, removed, or had
-  // any of their editable shape change since load.
-  const fieldsDirtyCount = useMemo(() => {
-    if (!originalFields) return 0;
-    return countDirtyFields(
-      originalFields,
-      builder.fields.filter(f => !f.isSystem)
-    );
-  }, [builder.fields, originalFields]);
-
-  // Settings-only dirty signal — same fix as the collection builder. A
-  // status flip / label edit on its own would otherwise leave Save
-  // disabled because the field array hadn't changed.
-  const settingsDirty = useMemo(
-    () => settingsAreDirty(originalSettings, settings),
-    [originalSettings, settings]
-  );
-
-  const unsavedCount = fieldsDirtyCount + (settingsDirty ? 1 : 0);
-
-  const getValidatedFields = useCallback((): FieldDefinition[] | null => {
-    const userFields = builder.fields.filter(
-      f => !f.isSystem && f.name !== "title" && f.name !== "slug"
-    );
-    const validation = builder.validateFields(userFields);
-    if (!validation.valid) {
-      toast.error(validation.errorMessage);
-      return null;
-    }
-    return userFields.map(convertToFieldDefinition);
-  }, [builder]);
-
-  const applySchemaChanges = useCallback(
-    async (
-      fieldDefinitions: FieldDefinition[],
-      schemaVersion: number,
-      resolutions: Record<string, FieldResolution>,
-      renameResolutions: SchemaRenameResolution[]
-    ) => {
+  // The schema landed. The apply carries fields only, so a save that also
+  // changed the settings would otherwise clear the dirty badge while the
+  // registry still held the old values — they are persisted here, WITHOUT
+  // `fields`, so no second migration is generated for a schema already applied.
+  const onSchemaApplied = useCallback(
+    async (fieldDefinitions: FieldDefinition[]) => {
       if (!slug) return;
-      setIsApplyingSchema(true);
-      if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
-      startRestart();
-      try {
-        const result = await singleApi.applySchemaChanges(
+      pinFields();
+      if (!settings) return;
+
+      updateSingle(
+        {
           slug,
-          fieldDefinitions,
-          schemaVersion,
-          resolutions,
-          renameResolutions,
-          // i18n: carry the current toggle so a simultaneous i18n flip + field change provisions
-          // the companion in the same apply.
-          settings?.i18n === true
-        );
-        if (result.success) {
-          const label = settings?.singularName?.trim() || slug;
-          const summarySuffix =
-            result.toastSummary && result.toastSummary !== "no changes"
-              ? `. ${result.toastSummary}`
-              : "";
-          stopRestart(true, `${label} schema updated${summarySuffix}`);
-          setShowSchemaDialog(false);
-          setPreviewData(null);
-          setOriginalFields(builder.fields.filter(f => !f.isSystem));
-
-          // The schema apply carries fields only, so a save that changed the
-          // settings as well would clear the dirty badge while the registry
-          // kept the old values. Persist them here, without `fields` so no
-          // second migration is generated for a schema already applied.
-          if (settings) {
-            updateSingle(
-              {
-                slug,
-                updates: {
-                  label: settings.singularName,
-                  description: settings.description,
-                  status: settings.status === true,
-                  localized: settings.i18n === true,
-                  versions: settings.versions === true,
-                  // Retention forwarded with the switch; the server resolves it.
-                  versionsMaxPerDoc: settings.versionsMaxPerDoc,
-                  // Cache revalidation: on unless explicitly turned off.
-                  revalidate: settings.revalidate !== false,
-                  // Webhook recording: on unless explicitly turned off.
-                  webhooks: settings.webhooks !== false,
-                },
-              },
-              {
-                // The baseline moves only once the write lands. Clearing it
-                // first would show a clean form over a registry that still
-                // holds the old settings, with no way to retry.
-                onSuccess: () => setOriginalSettings(settings),
-                onError: err => {
-                  const m = (err as { message?: string })?.message;
-                  toast.error(
-                    `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
-                  );
-                },
-              }
-            );
-          }
-
-          // D-series: database mode also writes the committable ui-schema.json
-          // so the single has a migration record. Non-fatal if it fails.
-          try {
-            if (settings) {
-              await schemaFileApi.writeSingle(
-                singleEntityFromSettings(slug, settings, fieldDefinitions)
-              );
-            }
-          } catch (err) {
+          updates: {
+            label: settings.singularName,
+            description: settings.description,
+            status: settings.status === true,
+            localized: settings.i18n === true,
+            versions: settings.versions === true,
+            // Retention forwarded with the switch; the server resolves it.
+            versionsMaxPerDoc: settings.versionsMaxPerDoc,
+            // Cache revalidation and webhook recording: on unless explicitly
+            // turned off; the server normalizes each boolean into what it stores.
+            revalidate: settings.revalidate !== false,
+            webhooks: settings.webhooks !== false,
+          },
+        },
+        {
+          // The baseline moves only once the write lands. Clearing it first
+          // would show a clean form over a registry that still holds the old
+          // settings, with no way to retry.
+          onSuccess: () => pinSettings(settings),
+          onError: err => {
             const m = (err as { message?: string })?.message;
-            toast.warning(
-              `Single applied to the database, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+            toast.error(
+              `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
             );
-          }
-        } else {
-          stopRestart(
-            false,
-            result.message || "Failed to apply schema changes"
-          );
+          },
         }
-      } catch (err) {
-        const errorObj = err as { message?: string };
-        stopRestart(
-          false,
-          errorObj?.message || "An error occurred while applying changes"
-        );
-      } finally {
-        setIsApplyingSchema(false);
-        if (typeof window !== "undefined")
-          window.__nextlySchemaApplying = false;
-      }
+      );
+
+      await mirrorSchemaFile(
+        () =>
+          schemaFileApi.writeSingle(
+            singleEntityFromSettings(slug, settings, fieldDefinitions)
+          ),
+        "Single applied to the database"
+      );
     },
-    [slug, startRestart, stopRestart, settings, builder.fields, updateSingle]
+    [slug, settings, updateSingle, pinFields, pinSettings]
   );
 
   // No-schema-change path: persist labels/settings only.
@@ -335,7 +204,7 @@ export default function SingleBuilderEditPage({
           updates: {
             label: settings.singularName,
             description: settings.description,
-            fields: fieldDefinitions as unknown as ApiSingle["fields"],
+            fields: fieldDefinitions,
             admin: {
               icon: settings.icon,
               // Advanced tab. We deliberately don't write group/order
@@ -365,23 +234,19 @@ export default function SingleBuilderEditPage({
         {
           onSuccess: () => {
             toast.success("Single updated");
-            setOriginalFields(builder.fields.filter(f => !f.isSystem));
+            pinFields();
             // Re-pin settings baseline so the Save button disables again.
-            setOriginalSettings(settings);
+            pinSettings(settings);
             // Mirror the settings change (notably Draft/Published) into the
-            // committable ui-schema.json. Best-effort; DB write already done.
-            void (async () => {
-              try {
-                await schemaFileApi.writeSingle(
+            // committable ui-schema.json. Not awaited: the mutation callback
+            // stays synchronous, and the mirror is best-effort anyway.
+            void mirrorSchemaFile(
+              () =>
+                schemaFileApi.writeSingle(
                   singleEntityFromSettings(slug, settings, fieldDefinitions)
-                );
-              } catch (err) {
-                const m = (err as { message?: string })?.message;
-                toast.warning(
-                  `Single updated, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
-                );
-              }
-            })();
+                ),
+              "Single updated"
+            );
           },
           onError: err => {
             const errorObj = err as { message?: string };
@@ -393,428 +258,84 @@ export default function SingleBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateSingle, builder.fields]
+    [slug, settings, updateSingle, pinFields, pinSettings]
   );
 
-  const handleSave = useCallback(async () => {
-    if (!slug || !settings) {
-      toast.error("Single slug is missing");
-      return;
-    }
-
-    const fieldDefinitions = getValidatedFields();
-    if (!fieldDefinitions) return;
-
-    try {
-      // i18n: preview with the toggle the apply will use, so the resolutions
-      // collected here match the DDL that actually runs.
-      const preview = await singleApi.previewSchemaChanges(
-        slug,
-        fieldDefinitions,
-        settings?.i18n === true
-      );
-
-      if (!preview.hasChanges) {
-        saveSettingsOnly(fieldDefinitions);
-        return;
-      }
-
-      if (
-        preview.classification === "safe" &&
-        !(preview.renamed && preview.renamed.length > 0)
-      ) {
-        setPreviewData(preview);
-        setShowSafeDialog(true);
-        return;
-      }
-
-      setPreviewData(preview);
-      setShowSchemaDialog(true);
-    } catch (err) {
-      const errorObj = err as { message?: string };
-      toast.error(errorObj?.message || "Failed to preview schema changes");
-    }
-  }, [slug, settings, getValidatedFields, saveSettingsOnly]);
-
-  // Why: PR D feedback -- duplicate icon on each field card. Same shape
-  // as the collections page handler.
-  const handleDuplicateField = useCallback(
-    (fieldId: string) => {
-      // Why: PR I -- duplicate is now reachable from nested rows in the
-      // field list, not only top-level. Walk the tree to locate source
-      // and its parent (if any), then append the duplicate either to
-      // the parent's children or to top-level. takenNames scopes to
-      // siblings so nested + top-level can share names.
-      const source = findFieldById(builder.fields, fieldId);
-      if (!source) return;
-      const parent = findParentContainerId(builder.fields, fieldId);
-      const siblings = parent
-        ? (findFieldById(builder.fields, parent.containerId)?.fields ?? [])
-        : builder.fields;
-      const takenNames = siblings.map(f => f.name);
-      const duplicate: BuilderField = {
-        ...source,
-        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-        name: nextDuplicateName(source.name, takenNames),
-      };
-      if (parent) {
-        builder.handleNestedFieldAdd(parent.containerId, duplicate);
-      } else {
-        builder.setFields([...builder.fields, duplicate]);
-      }
-    },
-    [builder]
-  );
-
-  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
-  // by width). We compute the OLD row layout, apply the row swap, and
-  // flatten back to a fields array for handleFieldsReorder. The legacy
-  // builder.handleDragEnd is built for the old palette+field-list model
-  // and ignores row IDs.
-  const handleRowDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const activeIdStr = String(active.id);
-      const overIdStr = String(over.id);
-
-      // Why: PR I -- nested fields use field ids in their per-parent
-      // SortableContext. Within-parent reorder via reorderNestedFields.
-      // Cross-parent moves intentionally a no-op (Q2).
-      if (activeIdStr.startsWith("field_") && overIdStr.startsWith("field_")) {
-        const activeParent = findParentContainerId(builder.fields, activeIdStr);
-        const overParent = findParentContainerId(builder.fields, overIdStr);
-        if (
-          activeParent &&
-          overParent &&
-          activeParent.containerId === overParent.containerId
-        ) {
-          builder.setFields(prev =>
-            reorderNestedFields(prev, activeIdStr, overIdStr)
-          );
-        }
-        return;
-      }
-
-      if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
-        return;
-      }
-      const userFields = builder.fields.filter(f => !f.isSystem);
-      const systemFields = builder.fields.filter(f => f.isSystem);
-      const rows = packIntoRows(
-        userFields.map(f => ({
-          id: f.id,
-          width: parseWidth(f.admin?.width),
-          _field: f,
-        }))
-      );
-      const oldIdx = Number(activeIdStr.slice("row-".length));
-      const newIdx = Number(overIdStr.slice("row-".length));
-      if (Number.isNaN(oldIdx) || Number.isNaN(newIdx)) return;
-      const reorderedRows = arrayMove(rows, oldIdx, newIdx);
-      const reorderedUserFields = reorderedRows.flatMap(row =>
-        row.map(r => (r as { _field: BuilderField })._field)
-      );
-      builder.handleFieldsReorder([...systemFields, ...reorderedUserFields]);
-    },
-    [builder]
-  );
+  // i18n: preview and apply carry the same toggle, so the resolutions the user
+  // is asked for match the DDL that actually runs.
+  const { handleSave, confirmApply } = useSchemaSave({
+    slug,
+    missingSlugMessage: "Single slug is missing",
+    label: displayLabel(settings, entitySlug),
+    confirmation,
+    getValidatedFields,
+    preview: fields =>
+      singleApi.previewSchemaChanges(entitySlug, fields, localized),
+    apply: (fields, version, resolutions, renames) =>
+      singleApi.applySchemaChanges(
+        entitySlug,
+        fields,
+        version,
+        resolutions,
+        renames,
+        localized
+      ),
+    onNoChanges: saveSettingsOnly,
+    onApplied: onSchemaApplied,
+  });
 
   // ---------------------------- Loading / error guards ----------------------
 
   if (!slug) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <h2 className="text-lg font-semibold text-foreground mb-2">
-            Single Not Found
-          </h2>
-          <p className="text-muted-foreground">No Single slug was provided.</p>
-        </div>
-      </div>
+      <BuilderNotFoundScreen
+        title="Single Not Found"
+        description="No Single slug was provided."
+      />
     );
   }
 
   if (isLoading || !isInitialized) {
-    return (
-      <div className="h-screen flex flex-col bg-background">
-        <div className="p-6  border-b border-border">
-          <Skeleton className="h-8 w-48 mb-2" />
-          <Skeleton className="h-4 w-64" />
-        </div>
-        <div className="flex-1 p-4">
-          <Skeleton className="h-12 w-full mb-2" />
-          <Skeleton className="h-12 w-full mb-2" />
-          <Skeleton className="h-12 w-full" />
-        </div>
-      </div>
-    );
+    return <BuilderLoadingScreen />;
   }
 
   if (error || !single || !settings) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <PageErrorFallback />
-      </div>
-    );
+    return <BuilderErrorScreen />;
   }
 
   // ---------------------------- Render --------------------------------------
 
-  // Why: PR I -- nested children live in parent.fields[]; the shallow
-  // .find() only sees top-level fields. findFieldById walks the tree
-  // so clicking a nested row resolves to the right field.
-  const editingField =
-    active.kind === "edit"
-      ? (findFieldById(builder.fields, active.fieldId) ?? null)
-      : null;
-
   return (
-    <div className="flex flex-col min-h-screen bg-background">
-      <BuilderToolbar
-        config={SINGLE_BUILDER_CONFIG}
-        name={settings.singularName || slug}
-        locked={isLocked}
-        unsavedCount={unsavedCount}
-        onOpenSettings={() => setActive({ kind: "settings" })}
-        onSave={() => void handleSave()}
-      />
-      <PageContainer className="flex-1 pb-0">
-        {isLocked && (
-          <BuilderReadOnlyNotice
-            kind="single"
-            configPath={single?.configPath}
-          />
-        )}
+    <BuilderPageLayout
+      config={SINGLE_BUILDER_CONFIG}
+      builder={builder}
+      name={settings.singularName || slug}
+      locked={isLocked}
+      configPath={single?.configPath}
+      unsavedCount={unsavedCount}
+      onSave={handleSave}
+      settings={settings}
+      onSettingsChange={setSettings}
+      active={active}
+      onActiveChange={setActive}
+      onDuplicateField={handleDuplicateField}
+      onRowDragEnd={handleRowDragEnd}
+      beforeFieldList={
         <SchemaBuilderSlots
           fields={builder.fields}
           setFields={builder.setFields}
           disabled={isLocked}
           context="single"
         />
-        <DndContext
-          sensors={builder.sensors}
-          onDragStart={builder.handleDragStart}
-          onDragEnd={handleRowDragEnd}
-        >
-          <BuilderFieldList
-            fields={builder.fields}
-            readOnly={isLocked}
-            onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
-            onEditField={fieldId => setActive({ kind: "edit", fieldId })}
-            onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
-            onDuplicateField={handleDuplicateField}
-            // Why: PR I -- nested +Add opens picker scoped to parent.
-            onAddInsideParent={parentId =>
-              setActive({
-                kind: "picker",
-                insertAt: 0,
-                parentFieldId: parentId,
-              })
-            }
-            onReorder={() => {
-              // Reorder is driven by handleDragEnd above; useFieldBuilder
-              // owns the sortable wiring.
-            }}
-          />
-        </DndContext>
-      </PageContainer>
-
-      {active.kind === "settings" && (
-        <BuilderSettingsModal
-          open
-          mode="edit"
-          config={SINGLE_BUILDER_CONFIG}
-          initialValues={settings}
-          readOnly={isLocked}
-          onCancel={() => setActive({ kind: "none" })}
-          onSubmit={next => {
-            setSettings(next);
-            setActive({ kind: "none" });
-          }}
-        />
-      )}
-
-      {active.kind === "picker" && (
-        <FieldPickerModal
-          open
-          // PR D: title scopes the picker to the parent for nested adds.
-          title={
-            active.parentFieldId
-              ? // Why: PR I -- parentFieldId can point to a nested parent;
-                // findFieldById walks the tree.
-                `Add field to ${
-                  findFieldById(builder.fields, active.parentFieldId)?.name ??
-                  "parent"
-                }`
-              : undefined
-          }
-          excludedTypes={SINGLE_BUILDER_CONFIG.picker.excludedTypes ?? []}
-          onCancel={() => setActive({ kind: "none" })}
-          // Why: PR C flow change -- pick opens sheet in create mode.
-          // Field commits on Apply, discards on Cancel.
-          // PR D: thread parentFieldId through.
-          onSelect={type =>
-            setActive({
-              kind: "create",
-              parentFieldId: active.parentFieldId,
-              draft: {
-                id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-                name: "",
-                label: "",
-                type,
-                validation: {},
-              },
-            })
-          }
-        />
-      )}
-
-      {active.kind === "create" && (
-        <FieldEditorSheet
-          open
-          mode="create"
-          field={active.draft}
-          siblingFields={
-            active.parentFieldId
-              ? // Why: PR I -- parentFieldId can be nested.
-                (findFieldById(builder.fields, active.parentFieldId)?.fields ??
-                [])
-              : builder.fields
-          }
-          readOnly={isLocked}
-          isInsideRepeatingAncestor={
-            active.parentFieldId
-              ? // Why: same logic as collections page -- the new field
-                // counts as nested if its parent is a repeating
-                // container OR is itself nested in one. PR I:
-                // findFieldById replaces shallow .find().
-                (() => {
-                  const parent = findFieldById(
-                    builder.fields,
-                    active.parentFieldId
-                  );
-                  if (!parent) return false;
-                  const parentIsRepeating =
-                    parent.type === "repeater" ||
-                    (parent.type === "component" && parent.repeatable === true);
-                  return (
-                    parentIsRepeating ||
-                    isInsideRepeatingAncestor(parent.id, builder.fields)
-                  );
-                })()
-              : false
-          }
-          onCancel={() => setActive({ kind: "none" })}
-          onApply={next => {
-            if (active.parentFieldId) {
-              builder.handleNestedFieldAdd(active.parentFieldId, next);
-            } else {
-              builder.setFields([...builder.fields, next]);
-            }
-            setActive({ kind: "none" });
-          }}
-          onDelete={() => setActive({ kind: "none" })}
-        />
-      )}
-
-      {active.kind === "edit" && editingField && (
-        <FieldEditorSheet
-          open
-          mode="edit"
-          field={editingField}
-          siblingFields={(() => {
-            // Why: PR I -- when editing a nested field, siblings are the
-            // parent's children (minus self), not all top-level fields.
-            const parent = findParentContainerId(
-              builder.fields,
-              editingField.id
-            );
-            if (!parent) {
-              return builder.fields.filter(f => f.id !== editingField.id);
-            }
-            const container = findFieldById(builder.fields, parent.containerId);
-            return (container?.fields ?? []).filter(
-              f => f.id !== editingField.id
-            );
-          })()}
-          readOnly={isLocked}
-          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
-            editingField.id,
-            builder.fields
-          )}
-          onCancel={() => setActive({ kind: "none" })}
-          onApply={next => {
-            builder.handleFieldUpdate(next);
-            setActive({ kind: "none" });
-          }}
-          onDelete={() => {
-            builder.handleFieldDelete(editingField.id);
-            setActive({ kind: "none" });
-          }}
-          // Why: PR I dropped onAddNestedField -- the +Add affordance for
-          // nested children moved into BuilderFieldList.
-        />
-      )}
-
-      {/* Hooks UI removed in PR D (feedback Section 2). */}
-
-      {previewData &&
-        previewData.classification === "safe" &&
-        !(previewData.renamed && previewData.renamed.length > 0) && (
-          <SafeChangeConfirmDialog
-            open={showSafeDialog}
-            onOpenChange={setShowSafeDialog}
-            collectionName={slug}
-            changes={previewData.changes}
-            onConfirm={() => {
-              const fieldDefs = getValidatedFields();
-              if (fieldDefs) {
-                void applySchemaChanges(
-                  fieldDefs,
-                  previewData.schemaVersion,
-                  {},
-                  []
-                );
-              }
-            }}
-            isApplying={isApplyingSchema}
-          />
-        )}
-
-      {previewData &&
-        (previewData.classification !== "safe" ||
-          (previewData.renamed && previewData.renamed.length > 0)) && (
-          <SchemaChangeDialog
-            open={showSchemaDialog}
-            onOpenChange={setShowSchemaDialog}
-            collectionName={slug}
-            hasDestructiveChanges={previewData.hasDestructiveChanges}
-            classification={previewData.classification}
-            changes={previewData.changes}
-            renamed={previewData.renamed}
-            warnings={previewData.warnings}
-            interactiveFields={previewData.interactiveFields}
-            onConfirm={(resolutions, renameResolutions) => {
-              const fieldDefs = getValidatedFields();
-              if (fieldDefs) {
-                void applySchemaChanges(
-                  fieldDefs,
-                  previewData.schemaVersion,
-                  resolutions,
-                  renameResolutions
-                );
-              }
-            }}
-            isApplying={isApplyingSchema}
-          />
-        )}
-
-      {(isSaving || isApplyingSchema) && (
-        <div aria-live="polite" className="sr-only">
-          Saving Single changes…
-        </div>
-      )}
-    </div>
+      }
+      isSaving={isSaving || confirmation.isApplying}
+      savingLabel="Saving Single changes…"
+    >
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmation}
+        entityName={slug}
+        onConfirm={confirmApply}
+      />
+    </BuilderPageLayout>
   );
 }

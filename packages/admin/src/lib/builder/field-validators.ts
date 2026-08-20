@@ -1,4 +1,4 @@
-import type { BuilderField } from "@admin/components/features/schema-builder";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
 export interface FieldBuilderValidationResult {
   valid: boolean;

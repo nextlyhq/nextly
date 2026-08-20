@@ -13,6 +13,7 @@ import type {
   ReconcileFieldGroupResult,
 } from "nextly/field-group-reconcile";
 
+import type { FieldDefinition } from "@admin/types/collection";
 import type { ApiFieldGroup } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
@@ -37,7 +38,8 @@ export interface CreateComponentPayload {
   slug: string;
   label: string;
   description?: string;
-  fields: Record<string, unknown>[];
+  /** The field definitions to persist, in the shape the builder produces. */
+  fields: FieldDefinition[];
   admin?: {
     category?: string;
     icon?: string;
@@ -55,7 +57,8 @@ export interface CreateComponentPayload {
 export interface UpdateComponentPayload {
   label?: string;
   description?: string;
-  fields?: Record<string, unknown>[];
+  /** The field definitions to persist, in the shape the builder produces. */
+  fields?: FieldDefinition[];
   admin?: {
     category?: string;
     icon?: string;

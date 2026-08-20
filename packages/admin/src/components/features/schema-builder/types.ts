@@ -4,6 +4,11 @@
  * Type definitions for the Visual Collection Builder components.
  */
 
+import type { DragStartEvent, useSensors } from "@dnd-kit/core";
+import type { Dispatch, SetStateAction } from "react";
+
+import type { FieldBuilderValidationResult } from "@admin/lib/builder/field-validators";
+import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import type { FieldConfig } from "@admin/types/ui/collection";
 
 // ============================================================
@@ -446,6 +451,62 @@ export interface BuilderField extends FieldConfig {
    * @default false
    */
   repeatable?: boolean;
+}
+
+/**
+ * The slice of `useFieldBuilder`'s return value that the shared builder-page
+ * units consume.
+ *
+ * `UseFieldBuilderReturn<T>` is generic over the metadata form's values, but
+ * none of the members below mentions `T` — so a narrow structural interface
+ * lets one layout serve every builder page without a generic parameter, a cast
+ * or an `any`. It also states, in one place, what a builder page owes the
+ * components it hands its builder to.
+ *
+ * Declared here rather than beside the hook because `useFieldBuilder` already
+ * imports from this module; keeping the type on this side leaves that
+ * dependency pointing one way.
+ */
+export interface BuilderFieldsApi {
+  fields: BuilderField[];
+  setFields: Dispatch<SetStateAction<BuilderField[]>>;
+  sensors: ReturnType<typeof useSensors>;
+  handleDragStart: (event: DragStartEvent) => void;
+  handleFieldsReorder: (reorderedFields: BuilderField[]) => void;
+  handleFieldDelete: (fieldId: string) => void;
+  handleFieldUpdate: (updatedField: BuilderField) => void;
+  handleNestedFieldAdd: (parentFieldId: string, newField: BuilderField) => void;
+  validateFields: (userFields: BuilderField[]) => FieldBuilderValidationResult;
+}
+
+/**
+ * A schema change that has been previewed and is waiting on the user.
+ *
+ * The pages used to hold this as four separate pieces of state, and to decide
+ * separately — once per page, in the same shape — which of the two
+ * confirmation dialogs a preview belonged in. That is the same classification
+ * the dialogs make, so it is stated once and the state that describes a preview
+ * cannot disagree with the preview itself.
+ *
+ * Implemented by `useSchemaChangeConfirmation`.
+ */
+export interface SchemaChangeConfirmation {
+  /** The previewed change awaiting confirmation, or null when none is. */
+  preview: SchemaPreviewResponse | null;
+  /** Whether that confirmation is on screen. */
+  isOpen: boolean;
+  /** True from the moment the user confirms until the apply settles. */
+  isApplying: boolean;
+  /** Put a previewed change in front of the user. */
+  request: (preview: SchemaPreviewResponse) => void;
+  /** Dismiss without applying. The preview is kept, so a retry re-opens it. */
+  setOpen: (open: boolean) => void;
+  /** The apply succeeded: close, and forget the preview it was describing. */
+  settle: () => void;
+  /** Bracket the apply itself; also raises the flag that tells the fetcher
+   *  this tab is the one changing the schema. */
+  beginApply: () => void;
+  endApply: () => void;
 }
 
 /**

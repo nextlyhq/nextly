@@ -24,7 +24,7 @@ export { nestedFieldPriorityCollision } from "./dnd-collision";
 
 export { convertHooksToStoredFormat } from "./hook-converters";
 
-export { DEFAULT_SYSTEM_FIELDS } from "./constants";
+export { DEFAULT_SYSTEM_FIELDS, SYSTEM_FIELD_NAMES } from "./constants";
 
 // Projects plugin-contributed field types into catalog rows the admin field
 // pickers render; consumed by the surface pickers via usePluginFieldTypeEntries.

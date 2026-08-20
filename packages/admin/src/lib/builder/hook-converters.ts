@@ -1,5 +1,5 @@
-import type { EnabledHook } from "@admin/components/features/schema-builder";
-import { getPrebuiltHook } from "@admin/components/features/schema-builder";
+import { getPrebuiltHook } from "@admin/components/features/schema-builder/HooksEditor";
+import type { EnabledHook } from "@admin/components/features/schema-builder/types";
 import type { StoredHookConfig } from "@admin/types/collection";
 
 /**
