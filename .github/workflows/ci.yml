@@ -447,15 +447,16 @@ jobs:
 
       # Enforce the design-token theming contract in the admin + plugin packages
       # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
-      # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.
+      # See packages/ui/docs/plugin-ui-authoring.md. Cheap, and no longer stops
+      # the job - see the note above `install`.
       - name: Design tokens lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:design
 
       # Workspace manifest consistency across all 19 packages (sherif):
       # unordered keys, unsynced sibling versions, cross-package version
-      # drift, malformed manifests. All rules gate. Runs in milliseconds,
-      # fails fast.
+      # drift, malformed manifests. All rules gate. Runs in milliseconds, and
+      # no longer stops the job - see the note above `install`.
       - name: Workspace consistency
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
@@ -471,9 +472,10 @@ jobs:
       # obvious remedy is a real regression. `publint` and `arethetypeswrong`
       # read `dist` directly and have nothing to say without one.
       #
-      # So a failed Build legitimately skips those five, exactly as a failed
-      # install skips everything: reporting one defect five ways, four of them
+      # So a failed Build legitimately skips those FOUR, exactly as a failed
+      # install skips everything: reporting one defect four ways, all of them
       # misleadingly, is the opposite of what this job was just changed to do.
+      # `Test` is deliberately not among them - see the note on that step.
       - name: Build
         id: build
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -505,8 +507,15 @@ jobs:
       #
       # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
       # they gate automatically the moment they gain one.
+      # NOT gated on Build, unlike the four steps around it: turbo.jsonc gives
+      # `test` `dependsOn: ["^build"]`, so `turbo test` rebuilds the dependency
+      # subgraph of whatever it is filtered to. A Build failure in a package
+      # none of these seventeen depends on - an app, which is a leaf - would
+      # otherwise silence all seventeen suites for no reason, and a failure in
+      # one they DO depend on is reported as an attributed `#build` failure
+      # here rather than as the type-aware noise the others would produce.
       - name: Test
-        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: >-
           pnpm turbo test
           --filter=@nextlyhq/blocks-engine

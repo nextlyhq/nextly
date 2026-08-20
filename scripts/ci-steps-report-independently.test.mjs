@@ -20,7 +20,8 @@
  * rather than inheriting "everything before me passed":
  *
  *   `!cancelled() && steps.install.outcome == 'success'`
- *   plus `&& steps.build.outcome == 'success'` for the five that read `dist`.
+ *   plus `&& steps.build.outcome == 'success'` for the four that read `dist`
+ *   without rebuilding it.
  *
  * Both conjuncts are load-bearing and they fail differently. Without
  * `!cancelled()` GitHub applies an implicit `success()` to any `if:` that names
@@ -93,23 +94,37 @@ const SETUP_STEPS = new Set([
   "Install dependencies",
 ]);
 
-/** The five steps that cannot say anything without `dist`. */
+/**
+ * The four steps that cannot say anything without `dist`.
+ *
+ * `Test` is NOT one of them, though it reads built output too: `turbo.jsonc`
+ * gives `test` `dependsOn: ["^build"]`, so it rebuilds the dependency subgraph
+ * of whatever it is filtered to. Gating it on Build would silence seventeen
+ * suites for a failure in a package none of them depends on.
+ */
 const BUILD_DEPENDENT = new Set([
   "Lint",
   "Typecheck",
-  "Test",
   "publint",
   "arethetypeswrong",
 ]);
 
 /**
- * The steps of the `ci` job as `{ name, ifCondition }`.
+ * The steps of the `ci` job as `{ name, ifCondition, id }`.
  *
- * `ifCondition` is read from the step's own `if:` key — the eight-space one
- * that belongs to this step — never by searching its text. A step chunk runs to
- * the next `- name:` and therefore CONTAINS the comment block introducing the
- * following step, and this file's comments quote the conditions verbatim, so
- * any substring search over a chunk answers about its neighbour.
+ * Split on the LIST-ITEM marker (`      - `), never on `- name:`. `name:` is
+ * optional in GitHub Actions and this repository already writes bare
+ * `- uses:` steps in four other workflows, and keying on the name defeats this
+ * file twice over: such a step is not in the population at all, AND its own
+ * eight-space `if:` falls inside the PRECEDING chunk, so an unguarded step is
+ * scored by its neighbour's condition. Both were break-verified against this
+ * job.
+ *
+ * A step's keys therefore sit either on the dash line itself or at eight
+ * spaces beneath it, and both positions are read. Nothing is matched by
+ * searching a chunk's free text: a chunk still runs to the next step and so
+ * contains the comment block introducing it, and this file's own comments
+ * quote the conditions verbatim.
  */
 function ciJobSteps(source) {
   const jobStart = source.indexOf("    name: Lint / Typecheck / Test / Build");
@@ -120,15 +135,26 @@ function ciJobSteps(source) {
   const jobBody = nextJob === -1 ? rest : rest.slice(0, nextJob + 1);
 
   return jobBody
-    .split(/\n(?=      - name: )/)
+    .split(/\n(?= {6}- \S)/)
     .slice(1)
     .map(chunk => ({
-      name: firstMatch(chunk, /^ {6}- name: (.+)$/m),
-      // Anchored to the step's OWN keys, at exactly eight spaces, so a later
-      // step's key inside the same chunk cannot be read instead.
-      ifCondition: firstMatch(chunk, /^ {8}if: (.+)$/m),
-      id: firstMatch(chunk, /^ {8}id: (.+)$/m),
+      name: stepKey(chunk, "name"),
+      ifCondition: stepKey(chunk, "if"),
+      id: stepKey(chunk, "id"),
     }));
+}
+
+/**
+ * One of a step's own keys, from the dash line or the eight-space block.
+ *
+ * Returns "" when the step does not declare it — which for `name` is a real
+ * answer rather than a parse failure, since an unnamed step is still a step
+ * and still has to carry a condition.
+ */
+function stepKey(chunk, key) {
+  const onDashLine = firstMatch(chunk, new RegExp(`^ {6}- ${key}: (.+)$`, "m"));
+  if (onDashLine !== "") return onDashLine;
+  return firstMatch(chunk, new RegExp(`^ {8}${key}: (.+)$`, "m"));
 }
 
 /** The first capture group, trimmed, or "" when the pattern does not match. */
@@ -137,9 +163,15 @@ function firstMatch(text, pattern) {
   return match === null ? "" : match[1].trim();
 }
 
-/** The steps that must carry a condition: everything that is not setup. */
-const verificationSteps = steps =>
-  steps.filter(s => !SETUP_STEPS.has(s.name) && s.name !== "");
+/**
+ * The steps that must carry a condition: everything that is not setup.
+ *
+ * An unnamed step stays IN, deliberately. It cannot appear in a name-keyed
+ * allowlist, so dropping it would exempt exactly the shape that is hardest to
+ * notice; keeping it means the population fails closed and such a step is
+ * reported by position.
+ */
+const verificationSteps = steps => steps.filter(s => !SETUP_STEPS.has(s.name));
 
 describe("the ci job reports every gate, not only the first to fail", () => {
   /**
@@ -164,7 +196,7 @@ describe("the ci job reports every gate, not only the first to fail", () => {
 
     const missing = verificationSteps(steps)
       .filter(s => !s.ifCondition.includes(NOT_CANCELLED))
-      .map(s => `${s.name}: ${s.ifCondition || "(no if:)"}`);
+      .map(s => `${s.name || "(unnamed step)"}: ${s.ifCondition || "(no if:)"}`);
 
     expect(
       missing,
@@ -177,7 +209,7 @@ describe("the ci job reports every gate, not only the first to fail", () => {
 
     const missing = verificationSteps(steps)
       .filter(s => !s.ifCondition.includes(INSTALL_OK))
-      .map(s => `${s.name}: ${s.ifCondition || "(no if:)"}`);
+      .map(s => `${s.name || "(unnamed step)"}: ${s.ifCondition || "(no if:)"}`);
 
     expect(
       missing,
@@ -191,7 +223,7 @@ describe("the ci job reports every gate, not only the first to fail", () => {
     const missing = verificationSteps(steps)
       .filter(s => BUILD_DEPENDENT.has(s.name))
       .filter(s => !s.ifCondition.includes(BUILD_OK))
-      .map(s => `${s.name}: ${s.ifCondition || "(no if:)"}`);
+      .map(s => `${s.name || "(unnamed step)"}: ${s.ifCondition || "(no if:)"}`);
 
     expect(
       missing,
@@ -201,6 +233,25 @@ describe("the ci job reports every gate, not only the first to fail", () => {
     // The population itself, so a rename cannot empty the check silently.
     const present = steps.map(s => s.name).filter(n => BUILD_DEPENDENT.has(n));
     expect(present.sort()).toEqual([...BUILD_DEPENDENT].sort());
+  });
+
+  it("does NOT gate Test on Build, which would silence seventeen suites", async () => {
+    const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
+    const test = steps.find(s => s.name === "Test");
+
+    // Asserted as a negative because the mistake is an attractive one: the four
+    // steps around it carry the build conjunct, so adding it here reads as
+    // tidying up an inconsistency. It is not one — `turbo.jsonc` gives `test`
+    // `dependsOn: ["^build"]`, so it rebuilds what it needs, and gating it
+    // means a Build failure in a package none of the seventeen filters depends
+    // on contributes nothing instead of seventeen suites' worth of verdict.
+    expect(test).toBeDefined();
+    expect(test.ifCondition).toContain(NOT_CANCELLED);
+    expect(test.ifCondition).toContain(INSTALL_OK);
+    expect(
+      test.ifCondition,
+      "turbo rebuilds test's dependency subgraph, so gating it on Build only costs coverage"
+    ).not.toContain(BUILD_OK);
   });
 
   it("keeps install and build identified INSIDE this job", async () => {
