@@ -222,8 +222,10 @@ describe("code-first collection hooks (integration)", () => {
       { skipHooks: false }
     );
     expect(withHooks.failed, JSON.stringify(withHooks)).toBe(0);
-    expect(fired).toContain("beforeChange");
-    expect(fired).toContain("afterChange");
+    // Exact, not `toContain`: one entry must fire each hook once, in order. A
+    // shared write path that ran a phase twice would satisfy a containment
+    // check while double-firing every user hook.
+    expect(fired).toEqual(["beforeChange", "afterChange"]);
 
     // The flag itself.
     fired.length = 0;
