@@ -443,4 +443,69 @@ test.describe("the canvas acceptance suite", () => {
     const max = await host.evaluate(el => el.scrollHeight - el.clientHeight);
     expect(scrolled).toBeLessThanOrEqual(max);
   });
+
+  test(`${titleFor(COVERED.find(p => p.n === 9)!)}`, async ({ page }) => {
+    await openCanvas(page);
+
+    // Spy on the DOM API from the test rather than instrumenting the engine.
+    // This watches what the canvas does without changing it, which is the only
+    // honest way to assert "measured once" — an engine that reported its own
+    // read count could report anything.
+    await page.evaluate(() => {
+      const w = window as unknown as { __rectReads: number };
+      w.__rectReads = 0;
+      const original = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function patched(
+        this: Element
+      ): DOMRect {
+        w.__rectReads += 1;
+        return original.call(this);
+      };
+    });
+    const reads = async () =>
+      page.evaluate(
+        () => (window as unknown as { __rectReads: number }).__rectReads
+      );
+
+    const from = await boxOf(page, "hx-text-short");
+    const centre = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+    const before = await reads();
+
+    await page.mouse.move(centre.x, centre.y);
+    await page.mouse.down();
+    await page.mouse.move(centre.x, centre.y - 40, { steps: 8 });
+    const afterStart = await reads();
+
+    // The POPULATION: a snapshot actually happened. Without this, "no reads
+    // during moves" is satisfied by an engine that never measured anything —
+    // which is indistinguishable from one that measured once, on this metric.
+    expect(
+      afterStart - before,
+      "the drag must snapshot the tree's geometry when it starts"
+    ).toBeGreaterThanOrEqual(11);
+
+    // Now move a lot. If rects were re-read per move, this scales with the
+    // number of blocks times the number of moves.
+    for (let i = 0; i < 20; i += 1) {
+      await page.mouse.move(centre.x, centre.y - 40 - i, { steps: 2 });
+    }
+    const afterMoves = await reads();
+    await page.mouse.up();
+
+    const perMove = (afterMoves - afterStart) / 20;
+    // The property is that reads do NOT SCALE WITH THE TREE — a read per block
+    // per move is the reflow-per-frame the snapshot exists to avoid. A small
+    // constant is legitimate: the indicator has to be placed somewhere.
+    //
+    // Bounded at six rather than at the block count. Measured here: FOUR per
+    // move against eleven blocks. A bound of "fewer than the blocks" would
+    // express the property but loosen every time the fixture grows, and would
+    // still pass if the engine quietly went from four to ten. Six holds the
+    // measured behaviour with a little room, and a change past it is a real
+    // change somebody should look at rather than a threshold nobody noticed.
+    expect(
+      perMove,
+      `geometry reads per pointer move: ${perMove} (11 blocks in the fixture)`
+    ).toBeLessThanOrEqual(6);
+  });
 });
