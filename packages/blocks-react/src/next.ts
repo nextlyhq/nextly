@@ -92,6 +92,13 @@ const WORKING_DRAFT_KEY = "_isWorkingDraft";
 const MEDIA_TAG_COLLECTION = "media";
 
 /**
+ * The site-wide style inputs a route accepts: a full `SiteSheetInput` less the
+ * breakpoint requirement, which may instead fall back to `styleContext`'s.
+ */
+export type SiteStylesInput = Omit<SiteSheetInput, "breakpoints"> &
+  Partial<Pick<SiteSheetInput, "breakpoints">>;
+
+/**
  * Config for {@link createBlocksPage}.
  *
  * Everything {@link ContentRouteConfig} accepts, minus `render` — supplying
@@ -147,9 +154,20 @@ export interface BlocksPageConfig
    * breakpoints once should not have to state them twice — and two answers to
    * "what are this site's breakpoints" is how the shared sheet and the page
    * sheet come to disagree about which at-rules a tier is emitted under.
+   *
+   * **A function is called per render**, exactly as `styles` is, for a site
+   * whose style inputs live in storage: a route module's config is captured
+   * once per server process, so a plain value here freezes an admin's saved
+   * tokens at whatever they were when the module loaded — the edit would reach
+   * the next deploy instead of the next page view. Returning `undefined`
+   * means what omitting the value means.
    */
-  siteStyles?: Omit<SiteSheetInput, "breakpoints"> &
-    Partial<Pick<SiteSheetInput, "breakpoints">>;
+  siteStyles?:
+    | SiteStylesInput
+    | (() =>
+        | SiteStylesInput
+        | undefined
+        | Promise<SiteStylesInput | undefined>);
   /**
    * A dynamic collection to resolve media ids against, for a site storing its
    * images in one of its own.
@@ -1061,13 +1079,20 @@ function blocksRouteConfig(
         resolveEntryPath,
       });
 
+      // Resolved per render when the config states a provider, so style
+      // inputs living in storage reach the next page view rather than the
+      // next deploy; a plain value passes through unchanged.
+      const configuredSiteStyles =
+        typeof config.siteStyles === "function"
+          ? await config.siteStyles()
+          : config.siteStyles;
       // Derived ONCE, from the breakpoints the site already stated. A second
       // answer to "what are this site's breakpoints" is how the shared sheet
       // and the page sheet come to disagree about which at-rules a tier is
       // emitted under — and the disagreement is invisible, because each sheet
       // is internally consistent.
       const siteBreakpoints =
-        config.siteStyles?.breakpoints ?? styleContext?.breakpoints;
+        configuredSiteStyles?.breakpoints ?? styleContext?.breakpoints;
       // A route emits the site sheet by DEFAULT: without it every `{ $token }`
       // resolves to nothing, which is the defect this closes. It needs a
       // breakpoint set to compile the block-default tier under, so a route that
@@ -1076,7 +1101,7 @@ function blocksRouteConfig(
       const siteStyles =
         siteBreakpoints === undefined
           ? undefined
-          : { ...config.siteStyles, breakpoints: siteBreakpoints };
+          : { ...configuredSiteStyles, breakpoints: siteBreakpoints };
 
       return createElement(PageRenderer, {
         document,

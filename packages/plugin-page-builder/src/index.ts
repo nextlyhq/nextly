@@ -56,6 +56,20 @@ export type {
 } from "./fields/blocks-options";
 export { blocks, isBlocksField } from "./fields/blocksHelper";
 export { pagesCollection } from "./collections/pages";
+
+/**
+ * Site style: the layered answer to "what does this site define".
+ *
+ * `resolveSiteStyle` is the one merge of config defaults and stored edits;
+ * `siteBreakpoints`/`siteSheet` read the merged result; `loadSiteStyle` is
+ * what a published route calls per request to serve the stored tier, passing
+ * the result as the route helper's `siteStyles`. The stored tier lives in the
+ * plugin-owned `site-style` single, named by `SITE_STYLE_SLUG`.
+ */
+export { resolveSiteStyle, siteBreakpoints, siteSheet } from "./site-style";
+export type { SiteStyleData } from "./site-style";
+export { SITE_STYLE_SLUG, loadSiteStyle } from "./site-style-storage";
+export type { SiteStyleReader } from "./site-style-storage";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
  *

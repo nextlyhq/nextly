@@ -388,8 +388,24 @@ export function PageRenderer({
   // the scope lives on the artifact, the caps come from this prop, and a
   // caller's own fetch predicate needs an identity before a stored sheet can be
   // judged against it.
+  // The site's class library reaches the PAGE compile from the same value the
+  // shared sheet reads. The sheet writes the `.nx-c-<slug>` rule from
+  // `siteStyles.classes`, but a node's stored class IDS resolve to class NAMES
+  // during the page's own compile, from the context's `namedClasses` — two
+  // inputs that must be one list, or a stored class emits a rule no element
+  // ever carries and each half looks internally consistent. A context that
+  // states its own `namedClasses` outranks this, exactly as a context carrying
+  // its own `blockBases` does.
+  const pageStyleContext =
+    styleContext !== undefined &&
+    styleContext.namedClasses === undefined &&
+    siteStyles !== false &&
+    siteStyles?.classes !== undefined
+      ? { ...styleContext, namedClasses: siteStyles.classes }
+      : styleContext;
+
   const { context: compileContext, fetchPolicyId } = effectiveCompile({
-    styleContext,
+    styleContext: pageStyleContext,
     styles,
     limits,
     remotePatterns: hostPolicy?.remotePatterns,
