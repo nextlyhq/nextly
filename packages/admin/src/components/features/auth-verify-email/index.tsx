@@ -6,6 +6,7 @@ import { ArrowLeft, ArrowRight, Loader2 } from "@admin/components/icons";
 import { AuthStatusCard } from "@admin/components/shared/auth/AuthStatusCard";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { verifyEmail } from "@admin/services/authApi";
 
 type VerifyState = "loading" | "success" | "error" | "no-token";
@@ -34,14 +35,12 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
         await verifyEmail(token);
         setState("success");
       } catch (error: unknown) {
-        const err = error as Record<string, unknown> | undefined;
-        const response = err?.response as Record<string, unknown> | undefined;
-        const data = response?.data as Record<string, unknown> | undefined;
-        const message =
-          (data?.error as string) ||
-          (err?.message as string) ||
-          "This verification link is invalid or has expired.";
-        setErrorMessage(message);
+        setErrorMessage(
+          apiErrorMessage(
+            error,
+            "This verification link is invalid or has expired."
+          )
+        );
         setState("error");
       }
     }
@@ -101,12 +100,7 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
 
   // Error state
   return (
-    <AuthStatusCard
-      title="Verification Failed"
-      description={
-        errorMessage || "This verification link is invalid or has expired."
-      }
-    >
+    <AuthStatusCard title="Verification Failed" description={errorMessage}>
       <Link
         href={ROUTES.LOGIN}
         className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
