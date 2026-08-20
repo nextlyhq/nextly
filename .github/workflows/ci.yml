@@ -999,9 +999,15 @@ jobs:
   # not tell a real regression from a runner quirk.
   #
   # No build step: the guard is a standalone module and its suites spawn `node`
-  # against fixtures they write themselves. vitest fails when a named file
-  # matches nothing, so a renamed suite reports as a failure rather than as an
-  # empty green run.
+  # against fixtures they write themselves.
+  #
+  # ONE SUITE PER STEP, which is not a formatting choice. vitest exits non-zero
+  # only when NO file matches its filters; with both suites named in a single
+  # command a rename of either one leaves the other matching, so vitest runs
+  # that one and exits 0 with the missing suite silently dropped. Measured on
+  # 4.1.10: two named, one absent -> `Test Files 1 passed`, exit 0; one named
+  # and absent -> `No test files found, exiting with code 1`. Split, each name
+  # is the sole filter of its step, so losing it means zero matches and a red.
   #
   # The symlink cases probe for the privilege and skip where they cannot create
   # a link. They are reported rather than hidden — `--reporter=verbose` prints
@@ -1045,7 +1051,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Entry guard suites
+      - name: Entry guard suite (the guard's answers)
         run: >
           pnpm exec vitest run --dir scripts --reporter=verbose
-          scripts/cli-entry.test.mjs scripts/cli-entry.cli.test.mjs
+          scripts/cli-entry.test.mjs
+
+      # `!cancelled()` so losing the suite above does not also hide this one.
+      # They cover different questions — what the guard answers, and whether a
+      # real command reaches it — and either can be the one that goes missing.
+      - name: Entry guard suite (real commands)
+        if: ${{ !cancelled() }}
+        run: >
+          pnpm exec vitest run --dir scripts --reporter=verbose
+          scripts/cli-entry.cli.test.mjs
