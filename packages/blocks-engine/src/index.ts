@@ -388,6 +388,7 @@ export {
  */
 export {
   hasFormat,
+  isRichTextNode,
   isRichTextValue,
   richTextToPlainText,
   TEXT_FORMAT,

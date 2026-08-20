@@ -1,10 +1,13 @@
 import {
   hasFormat,
+  isRichTextNode,
   isRichTextValue,
   TEXT_FORMAT,
   type RichTextNode,
 } from "@nextlyhq/blocks-engine";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+
+import { relFor, url } from "./blocks/props";
 
 /**
  * Drawing stored rich text as React.
@@ -27,6 +30,11 @@ import type { ReactNode } from "react";
  * make every stored document a place markup could execute from, which is a
  * surface this format does not otherwise have.
  *
+ * A stored URL is the one field where that is not enough. It reaches an `href`
+ * attribute, where a `javascript:` or `data:text/html` value executes without
+ * any markup being parsed at all, so it goes through the same `url()` boundary
+ * every other stored URL in this package crosses.
+ *
  * ## Unknown nodes render their children
  *
  * A site can register node types this renderer has never heard of. Dropping an
@@ -35,23 +43,68 @@ import type { ReactNode } from "react";
  * children keeps the words and loses only the wrapper, which is the forgiving
  * behaviour the format asks for everywhere else.
  *
+ * That fallback carries content only for nodes that HAVE children. The editor
+ * also registers leaf nodes that hold their content in their own fields —
+ * `image`, `video`, `gallery` and the button nodes — and those render as nothing
+ * here. Each needs a URL and host policy of the kind the media blocks already
+ * carry, so they are drawn by that work rather than guessed at here.
+ *
  * @module rich-text
  */
+
+/**
+ * The element each format bit wraps text in, outermost LAST.
+ *
+ * A table rather than a run of `if`s: every entry says the same thing, and the
+ * order is data — `code` sits at the end so it wraps the rest, matching how the
+ * CMS's serializer nests them. Read as a list, a reordering is visible; read as
+ * eight branches, it is not.
+ */
+const FORMAT_ELEMENTS: readonly {
+  flag: (typeof TEXT_FORMAT)[keyof typeof TEXT_FORMAT];
+  wrap: (inner: ReactNode) => ReactNode;
+}[] = [
+  { flag: TEXT_FORMAT.SUBSCRIPT, wrap: inner => <sub>{inner}</sub> },
+  { flag: TEXT_FORMAT.SUPERSCRIPT, wrap: inner => <sup>{inner}</sup> },
+  { flag: TEXT_FORMAT.STRIKETHROUGH, wrap: inner => <s>{inner}</s> },
+  { flag: TEXT_FORMAT.UNDERLINE, wrap: inner => <u>{inner}</u> },
+  { flag: TEXT_FORMAT.ITALIC, wrap: inner => <em>{inner}</em> },
+  { flag: TEXT_FORMAT.BOLD, wrap: inner => <strong>{inner}</strong> },
+  { flag: TEXT_FORMAT.HIGHLIGHT, wrap: inner => <mark>{inner}</mark> },
+  { flag: TEXT_FORMAT.CODE, wrap: inner => <code>{inner}</code> },
+];
+
+/**
+ * How the three case formats are drawn.
+ *
+ * A transform rather than an element, because that is what they are: the stored
+ * text is unchanged and only its presentation differs, so wrapping it in a tag
+ * would assert a meaning the author did not choose. The values are constants
+ * from this table and never stored text, so no author input reaches a style.
+ */
+const CASE_TRANSFORM: readonly {
+  flag: (typeof TEXT_FORMAT)[keyof typeof TEXT_FORMAT];
+  value: "lowercase" | "uppercase" | "capitalize";
+}[] = [
+  { flag: TEXT_FORMAT.LOWERCASE, value: "lowercase" },
+  { flag: TEXT_FORMAT.UPPERCASE, value: "uppercase" },
+  { flag: TEXT_FORMAT.CAPITALIZE, value: "capitalize" },
+];
 
 /** Wraps text in the elements its format bits ask for, innermost first. */
 function formatted(text: string, format: number | undefined): ReactNode {
   let out: ReactNode = text;
-  // Order matters only in that it decides nesting, not meaning. Code last so it
-  // wraps the rest, matching how the CMS's serializer reads.
-  if (hasFormat(format, TEXT_FORMAT.SUBSCRIPT)) out = <sub>{out}</sub>;
-  if (hasFormat(format, TEXT_FORMAT.SUPERSCRIPT)) out = <sup>{out}</sup>;
-  if (hasFormat(format, TEXT_FORMAT.STRIKETHROUGH)) out = <s>{out}</s>;
-  if (hasFormat(format, TEXT_FORMAT.UNDERLINE)) out = <u>{out}</u>;
-  if (hasFormat(format, TEXT_FORMAT.ITALIC)) out = <em>{out}</em>;
-  if (hasFormat(format, TEXT_FORMAT.BOLD)) out = <strong>{out}</strong>;
-  if (hasFormat(format, TEXT_FORMAT.HIGHLIGHT)) out = <mark>{out}</mark>;
-  if (hasFormat(format, TEXT_FORMAT.CODE)) out = <code>{out}</code>;
-  return out;
+  for (const { flag, wrap } of FORMAT_ELEMENTS) {
+    if (hasFormat(format, flag)) out = wrap(out);
+  }
+
+  // Outermost, and only one can apply: `text-transform` is a single CSS
+  // property, so a value carrying two case bits would otherwise render whichever
+  // wrapper happened to be inner. Taking the first keeps that deterministic.
+  const transform = CASE_TRANSFORM.find(entry => hasFormat(format, entry.flag));
+  if (transform === undefined) return out;
+  const style: CSSProperties = { textTransform: transform.value };
+  return <span style={style}>{out}</span>;
 }
 
 function children(nodes: readonly RichTextNode[] | undefined): ReactNode {
@@ -72,10 +125,19 @@ function children(nodes: readonly RichTextNode[] | undefined): ReactNode {
  * a switch makes ten identical branches look like ten decisions. What is left
  * in {@link RichTextNodeView} is only the nodes that genuinely differ.
  */
-const SIMPLE_ELEMENTS: Readonly<Record<string, "p" | "blockquote" | "li">> = {
+const SIMPLE_ELEMENTS: Readonly<
+  Record<
+    string,
+    "p" | "blockquote" | "li" | "details" | "summary" | "div" | "tbody" | "tr"
+  >
+> = {
   paragraph: "p",
   quote: "blockquote",
   listitem: "li",
+  "collapsible-container": "details",
+  "collapsible-title": "summary",
+  "collapsible-content": "div",
+  tablerow: "tr",
 };
 
 /** Heading levels Lexical serializes; anything else is a document from a version this does not know. */
@@ -94,14 +156,75 @@ function HeadingView({ node }: { node: RichTextNode }): ReactNode {
 }
 
 function LinkView({ node }: { node: RichTextNode }): ReactNode {
-  const url = typeof node.url === "string" ? node.url : null;
-  // A link with no destination renders as text. An anchor to nowhere is
-  // announced as a link by a screen reader and goes nowhere when followed.
-  if (url === null) return <>{children(node.children)}</>;
-  return <a href={url}>{children(node.children)}</a>;
+  // Sanitized, not merely read: the destination is stored text that lands in an
+  // `href`. `url()` is the same boundary the URL props cross, so a scheme
+  // refused in a button cannot be reached through a link beside it.
+  const href = url(node.url);
+  // A link with no usable destination renders as text. An anchor to nowhere is
+  // announced as a link by a screen reader and goes nowhere when followed, and
+  // that is also the right answer for a destination this refuses: the author's
+  // words survive, the navigation does not.
+  if (href === undefined) return <>{children(node.children)}</>;
+
+  // Only `_blank` is honoured. It is the one target the editor writes, and it
+  // is the one that needs the `rel` below; passing an arbitrary stored string
+  // through would let a document name a frame elsewhere on the page.
+  const target = node.target === "_blank" ? "_blank" : undefined;
+  return (
+    <a href={href} target={target} rel={relFor(target, node.rel)}>
+      {children(node.children)}
+    </a>
+  );
 }
 
+function TableCellView({ node }: { node: RichTextNode }): ReactNode {
+  // Lexical marks a header cell with `headerState`, a bitfield where any set bit
+  // means the cell heads its row or its column.
+  const header = typeof node.headerState === "number" && node.headerState !== 0;
+  const Cell = header ? "th" : "td";
+  return <Cell>{children(node.children)}</Cell>;
+}
+
+/**
+ * The nodes that are more than an element around their children.
+ *
+ * Keyed rather than branched for the same reason as {@link SIMPLE_ELEMENTS}: a
+ * lookup makes "which types does this renderer know" answerable by reading one
+ * list, where a chain of `if`s hides it in control flow.
+ */
+const NODE_VIEWS: Readonly<Record<string, (node: RichTextNode) => ReactNode>> =
+  {
+    heading: node => <HeadingView node={node} />,
+    link: node => <LinkView node={node} />,
+    autolink: node => <LinkView node={node} />,
+    list: node => {
+      const List = node.listType === "number" ? "ol" : "ul";
+      return <List>{children(node.children)}</List>;
+    },
+    linebreak: () => <br />,
+    horizontalrule: () => <hr />,
+    code: node => (
+      <pre>
+        <code>{children(node.children)}</code>
+      </pre>
+    ),
+    // `tbody` rather than bare rows: a browser inserts one anyway, and a React
+    // tree that omits it does not match the DOM that results.
+    table: node => (
+      <table>
+        <tbody>{children(node.children)}</tbody>
+      </table>
+    ),
+    tablecell: node => <TableCellView node={node} />,
+  };
+
 function RichTextNodeView({ node }: { node: RichTextNode }): ReactNode {
+  // A stored document can hold anything JSON can express, including a null in a
+  // `children` array. Reading `.text` off that throws, and it would throw during
+  // render of a published page. The type says this cannot happen; the storage
+  // does not.
+  if (!isRichTextNode(node)) return null;
+
   if (typeof node.text === "string") return formatted(node.text, node.format);
 
   const simple = SIMPLE_ELEMENTS[node.type];
@@ -110,15 +233,8 @@ function RichTextNodeView({ node }: { node: RichTextNode }): ReactNode {
     return <Element>{children(node.children)}</Element>;
   }
 
-  if (node.type === "heading") return <HeadingView node={node} />;
-  if (node.type === "link" || node.type === "autolink") {
-    return <LinkView node={node} />;
-  }
-  if (node.type === "list") {
-    const List = node.listType === "number" ? "ol" : "ul";
-    return <List>{children(node.children)}</List>;
-  }
-  if (node.type === "linebreak") return <br />;
+  const view = NODE_VIEWS[node.type];
+  if (view !== undefined) return view(node);
 
   // Unknown node: keep the words, lose the wrapper. See the module docblock.
   return <>{children(node.children)}</>;

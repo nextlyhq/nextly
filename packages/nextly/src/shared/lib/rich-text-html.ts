@@ -8,6 +8,8 @@
  * @since 1.0.0
  */
 
+import { isRichTextValue, TEXT_FORMAT } from "@nextlyhq/blocks-engine";
+
 import type { RichTextValue } from "../../collections/fields/types/rich-text";
 import {
   sanitizeCssColor,
@@ -97,16 +99,11 @@ interface LexicalSerializedNode {
 // Text Format Flags (from Lexical)
 // ============================================================
 
-const TEXT_FORMAT = {
-  BOLD: 1,
-  ITALIC: 2,
-  STRIKETHROUGH: 4,
-  UNDERLINE: 8,
-  CODE: 16,
-  SUBSCRIPT: 32,
-  SUPERSCRIPT: 64,
-  HIGHLIGHT: 128,
-} as const;
+// Imported, never re-declared. These numbers are what a stored node MEANS, and
+// a second copy agrees on the day it is written and drifts the day Lexical adds
+// a format — silently, because both copies still compile and both still render
+// something. The engine's copy is the one both this serializer and the block
+// renderer read.
 
 // ============================================================
 // Element Format (Alignment) mapping
@@ -854,18 +851,9 @@ export function formatRichTextOutput(
   }
 }
 
-export function isRichTextValue(value: unknown): value is RichTextValue {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const obj = value as Record<string, unknown>;
-
-  return (
-    "root" in obj &&
-    typeof obj.root === "object" &&
-    obj.root !== null &&
-    "type" in (obj.root as Record<string, unknown>) &&
-    (obj.root as Record<string, unknown>).type === "root"
-  );
-}
+// Re-exported so this module's existing callers keep one import site, while the
+// answer itself comes from the engine. The local copy this replaces did not
+// require `root.children` to be an array, so it accepted a root this file's own
+// walker could only render as empty — the two disagreed about what rich text is,
+// which is the drift a shared definition exists to prevent.
+export { isRichTextValue };

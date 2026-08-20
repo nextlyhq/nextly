@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isRichTextNode,
   isRichTextValue,
   richTextToPlainText,
+  TEXT_FORMAT,
+  type RichTextNode,
   type RichTextValue,
 } from "./rich-text";
 
@@ -36,13 +39,16 @@ describe("isRichTextValue", () => {
 
 describe("richTextToPlainText", () => {
   it("reads text out of a nested tree", () => {
+    // The space belongs to the text node, because that is where the author
+    // typed it — Lexical stores the separator between a word and a following
+    // link inside the preceding leaf, and nothing downstream adds one.
     expect(
       richTextToPlainText(
         value([
           {
             type: "paragraph",
             children: [
-              { type: "text", text: "Hello" },
+              { type: "text", text: "Hello " },
               { type: "link", children: [{ type: "text", text: "world" }] },
             ],
           },
@@ -81,5 +87,114 @@ describe("richTextToPlainText", () => {
         ])
       )
     ).toBe("one");
+  });
+});
+
+describe("isRichTextNode", () => {
+  it("accepts any node with a string type, including one nothing here knows", () => {
+    // Permissive about WHICH node, because a site registers its own and this
+    // package has no list of them.
+    expect(isRichTextNode({ type: "paragraph" })).toBe(true);
+    expect(isRichTextNode({ type: "some-plugin-node", payload: 1 })).toBe(true);
+  });
+
+  it("rejects the values a malformed `children` array actually holds", () => {
+    // Each of these survives JSON round-tripping into a children array, and
+    // every one of them throws when a walker reads `.text` off it.
+    for (const other of [null, undefined, "text", 0, true, [], { text: "x" }]) {
+      expect(isRichTextNode(other), `${JSON.stringify(other)}`).toBe(false);
+    }
+  });
+});
+
+describe("richTextToPlainText", () => {
+  it("does not insert a space where formatting split one word", () => {
+    // Lexical ends a text node at every format change, so a part-bold word
+    // arrives as two adjacent leaves. Joining leaves with a space would put a
+    // space inside the word and index `pre fix` for what the author typed as
+    // `prefix`.
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "pre" },
+              { type: "text", text: "fix", format: TEXT_FORMAT.BOLD },
+            ],
+          },
+        ])
+      )
+    ).toBe("prefix");
+  });
+
+  it("does not push punctuation away from the word it follows", () => {
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Hello" },
+              { type: "text", text: ",", format: TEXT_FORMAT.BOLD },
+              { type: "text", text: " there" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Hello, there");
+  });
+
+  it("keeps a link's text against the words around it", () => {
+    // A link is inline: it interrupts formatting, not the sentence.
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "see " },
+              { type: "link", children: [{ type: "text", text: "docs" }] },
+              { type: "text", text: " now" },
+            ],
+          },
+        ])
+      )
+    ).toBe("see docs now");
+  });
+
+  it("separates at a line break", () => {
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "one" },
+              { type: "linebreak" },
+              { type: "text", text: "two" },
+            ],
+          },
+        ])
+      )
+    ).toBe("one two");
+  });
+
+  it("survives a tree deep enough to overflow a recursive walk", () => {
+    // The document limits count block nodes, not the objects inside one prop,
+    // so nesting like this is reachable well under the size cap. A recursive
+    // implementation throws RangeError here and takes the request with it.
+    let node: RichTextNode = { type: "text", text: "bottom" };
+    for (let i = 0; i < 20_000; i++) {
+      node = { type: "paragraph", children: [node] };
+    }
+    expect(richTextToPlainText(value([node]))).toBe("bottom");
+  });
+
+  it("skips a malformed child instead of throwing", () => {
+    const malformed = {
+      root: { type: "root", children: [null, { type: "text", text: "kept" }] },
+    } as unknown as RichTextValue;
+    expect(richTextToPlainText(malformed)).toBe("kept");
   });
 });
