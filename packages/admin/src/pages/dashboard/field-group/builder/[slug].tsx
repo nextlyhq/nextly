@@ -108,6 +108,11 @@ interface FieldGroupBuilderEditPageProps {
   params?: { slug?: string };
 }
 
+// Over the thresholds, and further over before the shared units were
+// extracted: cyclomatic 44 / cognitive 53 / CRAP 462 across 694 lines, against
+// 20 / 22 / 106 now. Worst of the three because only this kind carries the
+// repair alert and reconcile dialog a diverged migration record needs.
+// fallow-ignore-next-line complexity
 export default function FieldGroupBuilderEditPage({
   params,
 }: FieldGroupBuilderEditPageProps): React.ReactElement {

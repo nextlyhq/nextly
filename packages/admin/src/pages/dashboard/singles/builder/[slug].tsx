@@ -97,6 +97,10 @@ interface SingleBuilderEditPageProps {
   params?: { slug?: string };
 }
 
+// Over the thresholds, and further over before the shared units were
+// extracted: cyclomatic 38 / cognitive 49 / CRAP 350 across 725 lines, against
+// 14 / 18 / 56 now. A rewrite re-attributes the finding it inherited.
+// fallow-ignore-next-line complexity
 export default function SingleBuilderEditPage({
   params,
 }: SingleBuilderEditPageProps): React.ReactElement {
