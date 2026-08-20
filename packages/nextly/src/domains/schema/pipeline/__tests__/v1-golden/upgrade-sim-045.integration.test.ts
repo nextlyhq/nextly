@@ -112,6 +112,13 @@ const POST_045_TABLES = [
   // waiver — the pass-2 assertion below is what proves the declaration then
   // round-trips to silence instead of being re-proposed on every reconcile.
   "nextly_field_group_lock",
+  // The release tables, post-0.45 like the others: an existing install gains
+  // them on upgrade, so their CREATE TABLE and indexes are legitimate rather
+  // than phantom. Both are named because the members table is a separate
+  // object, and a list carrying only the parent would leave every statement
+  // touching the child reading as a phantom diff.
+  "nextly_releases",
+  "nextly_release_members",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the

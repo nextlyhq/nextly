@@ -6,7 +6,7 @@
  *
  * @module schemas/releases/__tests__/parity.test
  */
-import { getTableColumns } from "drizzle-orm";
+import { Column, is, type Table } from "drizzle-orm";
 import { describe, it, expect } from "vitest";
 
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
@@ -14,19 +14,28 @@ import { my, pg, sl } from "../index";
 import { RELEASE_MEMBER_ACTIONS, RELEASE_STATES } from "../types";
 
 /**
- * Read the columns through Drizzle rather than `Object.keys`.
+ * Read the columns by asking Drizzle what each property IS, rather than by
+ * enumerating the object.
  *
  * A table object also carries dialect-specific METHODS as own enumerable
  * properties — `enableRLS` exists on the pg builder and on neither of the
- * others — so enumerating the object reports a difference that is not a column
- * and never could be. `getTableColumns` returns exactly the columns.
+ * others — so a bare `Object.keys` reports a difference that is not a column
+ * and never could be. `is(value, Column)` keeps exactly the columns, and it is
+ * not the deprecated whole-table column helper the drizzle-legacy gate
+ * rejects: that helper still compiles on v1, so the compiler cannot catch its
+ * use and the gate is what does. Naming it here is not possible either — the
+ * gate greps source text, so a comment mentioning it fails the same check.
  *
  * Both the property name and the database column name are compared: a mirror
  * that keeps the property and mistypes the snake_case name would otherwise
- * pass while producing a table the others cannot be read alongside.
+ * pass while producing a table the others cannot be read alongside — and a
+ * mirror that keeps the column name while renaming the property would pass a
+ * comparison of database names alone, while breaking every caller that reads
+ * the column through the table object.
  */
-const columnNames = (table: Parameters<typeof getTableColumns>[0]): string[] =>
-  Object.entries(getTableColumns(table))
+const columnNames = (table: Table): string[] =>
+  Object.entries(table)
+    .filter((entry): entry is [string, Column] => is(entry[1], Column))
     .map(([property, column]) => `${property}:${column.name}`)
     .sort();
 
