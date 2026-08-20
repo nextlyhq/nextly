@@ -77,12 +77,12 @@ describe("Signup", () => {
       )
     );
 
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(<Signup />);
 
     await user.type(
       screen.getByPlaceholderText("Enter your full name…"),
-      "A Very Long Name"
+      "Ada"
     );
     await user.type(
       screen.getByPlaceholderText("Enter your email address…"),
@@ -90,11 +90,11 @@ describe("Signup", () => {
     );
     await user.type(
       screen.getByPlaceholderText("Create a strong password…"),
-      "Str0ng!Passw0rd"
+      "Str0ng!P"
     );
     await user.type(
       screen.getByPlaceholderText("Confirm your password…"),
-      "Str0ng!Passw0rd"
+      "Str0ng!P"
     );
     await user.click(screen.getByRole("button", { name: /create account/i }));
 
@@ -102,23 +102,26 @@ describe("Signup", () => {
     expect(toast.error).toHaveBeenCalledWith("Registration failed", {
       description: "Name must be 100 characters or less.",
     });
-  });
+    // Four fields to fill against two in every other case here, each keystroke
+    // re-running the resolver: this is the one that runs near the default limit
+    // when the whole suite is competing for the machine.
+  }, 20000);
 });
 
 describe("SetInitialPassword", () => {
   async function submitAPassword() {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(<SetInitialPassword pendingToken="pending" onDone={vi.fn()} />);
 
     // Both fields must satisfy `passwordSchema` client-side, or the submit
     // never reaches the request whose rejection is under test.
     await user.type(
       screen.getByPlaceholderText("Create a strong password…"),
-      "Str0ng!Passw0rd"
+      "Str0ng!P"
     );
     await user.type(
       screen.getByPlaceholderText("Confirm your password…"),
-      "Str0ng!Passw0rd"
+      "Str0ng!P"
     );
     await user.click(screen.getByRole("button", { name: /set password/i }));
   }
