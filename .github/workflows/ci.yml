@@ -460,7 +460,22 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
 
+      # Identified for the same reason `install` is, and the reason is in
+      # AGENTS.md rather than here: `turbo.jsonc` gives `lint` no dependency at
+      # all and `check-types` only `^check-types`, so neither rebuilds — they
+      # read whatever `dist` survived. On an unbuilt tree `check-types` fails
+      # workspace-wide on TS2307 through the siblings' export maps and `lint`
+      # fails on `import-x/no-unresolved`, and the dangerous half is that every
+      # TYPE-AWARE lint rule then reports on types the checker cannot see: the
+      # message names YOUR EXPRESSION and reads as a correctness defect whose
+      # obvious remedy is a real regression. `publint` and `arethetypeswrong`
+      # read `dist` directly and have nothing to say without one.
+      #
+      # So a failed Build legitimately skips those five, exactly as a failed
+      # install skips everything: reporting one defect five ways, four of them
+      # misleadingly, is the opposite of what this job was just changed to do.
       - name: Build
+        id: build
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm turbo build --filter='./packages/*' --filter='./apps/*'
         env:
@@ -469,13 +484,13 @@ jobs:
       # `./e2e` is named explicitly: it is a workspace member but sits under
       # neither glob, being neither something we publish nor something we run.
       - name: Lint
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*' --filter='./e2e'
         env:
           TURBO_CACHE_DIR: .turbo
 
       - name: Typecheck
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm turbo check-types --continue
         env:
           TURBO_CACHE_DIR: .turbo
@@ -491,7 +506,7 @@ jobs:
       # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
       # they gate automatically the moment they gain one.
       - name: Test
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: >-
           pnpm turbo test
           --filter=@nextlyhq/blocks-engine
@@ -518,7 +533,7 @@ jobs:
       # packages (nextly + create-nextly-app + 11 @nextlyhq/*). Failures here
       # block the release pipeline.
       - name: publint
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: >-
           pnpm -r
           --filter '@nextlyhq/*'
@@ -536,7 +551,7 @@ jobs:
       #                          dynamic import())
       # All other attw rules remain active and would catch real regressions.
       - name: arethetypeswrong
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: >-
           pnpm -r
           --filter '@nextlyhq/*'

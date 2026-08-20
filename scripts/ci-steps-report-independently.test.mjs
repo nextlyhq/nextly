@@ -16,15 +16,45 @@
  * test file (Typecheck). Neither surfaced until the grep gate was repaired,
  * days of merges later.
  *
- * So every verification step carries
- * `if: !cancelled() && steps.install.outcome == 'success'`. The job still
- * fails; what changes is that it reports everything wrong rather than the
- * first thing wrong.
+ * So every verification step carries a condition naming its PREREQUISITES
+ * rather than inheriting "everything before me passed":
  *
- * 🔴 The guard is what makes this true, and nothing else in the repository
- * reads it. A step added later without the condition silently restores the old
- * behaviour for every step behind it, and the only symptom is a rollup that
- * looks the same as it does today. Hence a test rather than a comment.
+ *   `!cancelled() && steps.install.outcome == 'success'`
+ *   plus `&& steps.build.outcome == 'success'` for the five that read `dist`.
+ *
+ * Both conjuncts are load-bearing and they fail differently. Without
+ * `!cancelled()` GitHub applies an implicit `success()` to any `if:` that names
+ * no status function, so the step is skipped after ANY earlier failure — the
+ * exact behaviour being removed, restored by an expression that still mentions
+ * `steps.install`. Without the prerequisite the guard is too weak in the other
+ * direction: a step runs on a tree that cannot support it.
+ *
+ * 🔴 Nothing else in the repository reads these conditions. A step added later
+ * without one silently restores the old behaviour for every step behind it,
+ * and the only symptom is a rollup that looks exactly like today's.
+ *
+ * ## What this file learned about testing itself
+ *
+ * The first version asked four questions that were each satisfied by something
+ * other than the property, and all four were found by mutating the real
+ * workflow rather than by reading:
+ *
+ * - it matched `steps.install.outcome == 'success'` alone, so dropping
+ *   `!cancelled()` — the half that does the work — left it green;
+ * - it decided membership with a substring search over a chunk that runs to the
+ *   NEXT step, so a comment introducing step N+1 certified step N. This file's
+ *   own comments quote the condition verbatim, so that was live, not theoretical;
+ * - it asserted `id: install` over the WHOLE file, and four jobs have a step by
+ *   that name, so the ci job could lose its id while `e2e` supplied the match;
+ * - it required the guard only of steps spelling `run:`, exempting any gate
+ *   added as an action — and this repository already gates through
+ *   `fallow-rs/fallow` and `gitleaks` elsewhere.
+ *
+ * Hence: conditions are read from the step's OWN `if:` key, the population is
+ * an allowlist of setup steps rather than a filter on `run:`, and every
+ * assertion is scoped to the ci job. The break controls that matter are the
+ * subtle ones — weaken a condition, move the id to another job, add an
+ * action-shaped gate — not deleting an `if:` outright.
  *
  * Parsed as TEXT rather than through a YAML library on purpose: `yaml` appears
  * in this repository only as a pnpm override, so it is reachable here by
@@ -42,30 +72,74 @@ import { describe, expect, it } from "vitest";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CI_WORKFLOW = path.join(HERE, "..", ".github", "workflows", "ci.yml");
 
-const GUARD = "steps.install.outcome == 'success'";
+const NOT_CANCELLED = "!cancelled()";
+const INSTALL_OK = "steps.install.outcome == 'success'";
+const BUILD_OK = "steps.build.outcome == 'success'";
 
 /**
- * The steps of the `ci` job, as `{ name, body }`.
+ * Steps that prepare the runner rather than verify anything.
  *
- * The job is found by its `name:` line and read to the next job at the same
- * indentation, so a step belonging to `e2e` or `scaffold-smoke` cannot be
- * mistaken for one of these.
+ * An ALLOWLIST rather than a filter on `run:`, because the two fail in opposite
+ * directions: a name nobody added here is REQUIRED to carry a condition, so a
+ * gate arriving in any shape — `run:`, `uses:`, whatever comes next — is caught
+ * rather than waved through.
+ */
+const SETUP_STEPS = new Set([
+  "Checkout",
+  "Setup pnpm",
+  "Setup Node.js",
+  "Restore Turbo cache",
+  "Save Turbo cache",
+  "Install dependencies",
+]);
+
+/** The five steps that cannot say anything without `dist`. */
+const BUILD_DEPENDENT = new Set([
+  "Lint",
+  "Typecheck",
+  "Test",
+  "publint",
+  "arethetypeswrong",
+]);
+
+/**
+ * The steps of the `ci` job as `{ name, ifCondition }`.
+ *
+ * `ifCondition` is read from the step's own `if:` key — the eight-space one
+ * that belongs to this step — never by searching its text. A step chunk runs to
+ * the next `- name:` and therefore CONTAINS the comment block introducing the
+ * following step, and this file's comments quote the conditions verbatim, so
+ * any substring search over a chunk answers about its neighbour.
  */
 function ciJobSteps(source) {
   const jobStart = source.indexOf("    name: Lint / Typecheck / Test / Build");
   if (jobStart === -1) throw new Error("ci job not found by name");
 
-  // The next line at four-space indentation that starts a new job key.
   const rest = source.slice(jobStart);
   const nextJob = rest.slice(1).search(/\n {2}[a-z][a-z0-9-]*:\n/);
   const jobBody = nextJob === -1 ? rest : rest.slice(0, nextJob + 1);
 
-  const chunks = jobBody.split(/\n(?=      - name: )/).slice(1);
-  return chunks.map(chunk => {
-    const name = /^ {6}- name: (.+)$/m.exec(chunk)?.[1] ?? "";
-    return { name: name.trim(), body: chunk };
-  });
+  return jobBody
+    .split(/\n(?=      - name: )/)
+    .slice(1)
+    .map(chunk => ({
+      name: firstMatch(chunk, /^ {6}- name: (.+)$/m),
+      // Anchored to the step's OWN keys, at exactly eight spaces, so a later
+      // step's key inside the same chunk cannot be read instead.
+      ifCondition: firstMatch(chunk, /^ {8}if: (.+)$/m),
+      id: firstMatch(chunk, /^ {8}id: (.+)$/m),
+    }));
 }
+
+/** The first capture group, trimmed, or "" when the pattern does not match. */
+function firstMatch(text, pattern) {
+  const match = pattern.exec(text);
+  return match === null ? "" : match[1].trim();
+}
+
+/** The steps that must carry a condition: everything that is not setup. */
+const verificationSteps = steps =>
+  steps.filter(s => !SETUP_STEPS.has(s.name) && s.name !== "");
 
 describe("the ci job reports every gate, not only the first to fail", () => {
   /**
@@ -76,36 +150,69 @@ describe("the ci job reports every gate, not only the first to fail", () => {
    */
   it("finds the job's steps at all", async () => {
     const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
+    const names = steps.map(s => s.name);
 
     expect(steps.length).toBeGreaterThan(10);
-    expect(steps.map(s => s.name)).toContain("Typecheck");
+    expect(names).toContain("Typecheck");
+    expect(names).toContain("Build");
+    // The allowlist is only meaningful if it actually matches something here.
+    expect(names).toContain("Install dependencies");
   });
 
-  it("guards every step that runs a command", async () => {
+  it("requires !cancelled() on every verification step", async () => {
     const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
 
-    // `install` is the deliberate exception: without node_modules no step
-    // below can say anything, so its failure legitimately skips them all.
-    // Steps that only set up the runner (checkout, node, cache) are not
-    // verification and are not required to carry the guard.
-    const unguarded = steps
-      .filter(s => /^\s+run:/m.test(s.body))
-      .filter(s => s.name !== "Install dependencies")
-      .filter(s => !s.body.includes(GUARD))
-      .map(s => s.name);
+    const missing = verificationSteps(steps)
+      .filter(s => !s.ifCondition.includes(NOT_CANCELLED))
+      .map(s => `${s.name}: ${s.ifCondition || "(no if:)"}`);
 
     expect(
-      unguarded,
-      "a verification step without the install guard stops every step behind it, which is how a red job comes to mean 'one problem' when it means 'nothing after this ran'"
+      missing,
+      "GitHub applies an implicit success() to an if: naming no status function, so a condition without !cancelled() is skipped after ANY earlier failure — the behaviour this job was changed to stop"
     ).toEqual([]);
   });
 
-  it("keeps install identified, because the guard names it", async () => {
-    const source = await readFile(CI_WORKFLOW, "utf-8");
+  it("requires the install prerequisite on every verification step", async () => {
+    const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
 
-    // The guard reads `steps.install.outcome`; an unidentified step publishes
-    // no outcome, and GitHub evaluates the reference to empty rather than
-    // failing — so every guarded step would silently stop running.
-    expect(source).toMatch(/- name: Install dependencies\n\s+id: install\n/);
+    const missing = verificationSteps(steps)
+      .filter(s => !s.ifCondition.includes(INSTALL_OK))
+      .map(s => `${s.name}: ${s.ifCondition || "(no if:)"}`);
+
+    expect(
+      missing,
+      "a verification step without the install prerequisite either stops every step behind it or runs without node_modules"
+    ).toEqual([]);
+  });
+
+  it("requires the build prerequisite on the steps that read dist", async () => {
+    const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
+
+    const missing = verificationSteps(steps)
+      .filter(s => BUILD_DEPENDENT.has(s.name))
+      .filter(s => !s.ifCondition.includes(BUILD_OK))
+      .map(s => `${s.name}: ${s.ifCondition || "(no if:)"}`);
+
+    expect(
+      missing,
+      "turbo gives lint no dependency and check-types only ^check-types, so on a failed Build these read a stale dist — and a type-aware lint rule then names YOUR expression rather than the missing build"
+    ).toEqual([]);
+
+    // The population itself, so a rename cannot empty the check silently.
+    const present = steps.map(s => s.name).filter(n => BUILD_DEPENDENT.has(n));
+    expect(present.sort()).toEqual([...BUILD_DEPENDENT].sort());
+  });
+
+  it("keeps install and build identified INSIDE this job", async () => {
+    const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
+
+    // Scoped to the ci job, because four jobs in this file have a step named
+    // "Install dependencies" — a whole-file search is discharged by any one of
+    // them. An unidentified step publishes no outcome, GitHub evaluates the
+    // reference to empty, and every guarded step silently stops running.
+    const ids = Object.fromEntries(steps.map(s => [s.name, s.id]));
+
+    expect(ids["Install dependencies"]).toBe("install");
+    expect(ids.Build).toBe("build");
   });
 });
