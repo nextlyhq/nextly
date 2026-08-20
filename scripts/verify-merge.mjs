@@ -853,6 +853,8 @@ import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { isCliEntry } from "./cli-entry.mjs";
+
 const REPO = "nextlyhq/nextly";
 
 /** Set by `main` once the head repository is known; a fork keeps its own. */
@@ -1371,36 +1373,6 @@ export function main(argv) {
  * `run` is injectable so this decision can be given a failure and asked what it
  * returns; that is the only reason it is a parameter.
  */
-/**
- * Every URL form `import.meta.url` might report for `process.argv[1]`.
- *
- * BOTH forms, because symlink resolution is a runtime option rather than a
- * fixed behaviour. By default `import.meta.url` is resolved through symlinks
- * while `argv[1]` is not — on macOS `/tmp` is `/private/tmp`, so comparing the
- * unresolved form there never matches. Under `--preserve-symlinks-main`, which
- * `NODE_OPTIONS` can set from outside the command line, it is the opposite: the
- * resolved form never matches.
- *
- * Committing to either one makes the guard depend on a flag this code cannot
- * see, and its failure is silent in the worst way — the module declines to run
- * and the process exits 0 having verified nothing, which is indistinguishable
- * from a clean pass.
- */
-function entryHrefs(argvPath) {
-  const forms = [];
-  try {
-    forms.push(pathToFileURL(argvPath).href);
-  } catch {
-    // An unconvertible path contributes nothing rather than failing the guard.
-  }
-  try {
-    forms.push(pathToFileURL(realpathSync(argvPath)).href);
-  } catch {
-    // Unresolvable is not fatal either: the plain form above may still match.
-  }
-  return forms;
-}
-
 export function runCli(argv, run = main) {
   try {
     return run(argv);
@@ -1413,10 +1385,11 @@ export function runCli(argv, run = main) {
   }
 }
 
-if (
-  process.argv[1] &&
-  entryHrefs(process.argv[1]).includes(import.meta.url)
-) {
+// The guard is `cli-entry.mjs`, shared so this gate cannot drift away from the
+// scripts that use it. That file documents why the comparison is made as a URL
+// and why both symlink forms count; getting it wrong leaves the module
+// declining to run with the process exiting 0, which reads as a clean pass.
+if (isCliEntry(import.meta.url)) {
   // `process.exitCode`, not `process.exit()`. Exiting terminates Node before a
   // redirected stdout finishes flushing, truncating exactly the blocker names a
   // caller needs — and the truncation is silent, so the output looks complete.

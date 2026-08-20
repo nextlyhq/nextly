@@ -46,6 +46,8 @@ import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { isCliEntry } from "./cli-entry.mjs";
+
 /**
  * The request layer, resolved through this file's REAL path.
  *
@@ -1330,40 +1332,12 @@ async function main(argv) {
   return accepted.exitCode;
 }
 
-// `import.meta.url` is percent-encoded AND realpath-resolved, so the comparison
-// value has to be both. Interpolating the path leaves a `#` in a directory name
-// unencoded, and skipping `realpathSync` leaves a symlinked prefix — `/tmp` is
-// `/private/tmp` on macOS — unresolved. Either mismatch makes the gate exit 0
-// having run nothing, which is the worst way for a gate to fail.
-// BOTH forms are compared, because which one `import.meta.url` carries depends
-// on a runtime flag rather than on this file. `--preserve-symlinks-main` (which
-// `NODE_OPTIONS` can supply from outside the command line) keeps the symlink in
-// `import.meta.url`, while `realpathSync` resolves it away — so a resolve-only
-// comparison fails to match when the gate is invoked through a symlink under
-// that flag, and the process exits 0 having executed nothing.
-const invokedDirectly = () => {
-  if (!process.argv[1]) return false;
-  const entries = new Set();
-  for (const path of [process.argv[1], resolvedEntry(process.argv[1])]) {
-    if (path === undefined) continue;
-    try {
-      entries.add(pathToFileURL(path).href);
-    } catch {
-      // A path that cannot be expressed as a file URL is not this module.
-    }
-  }
-  return entries.has(import.meta.url);
-};
-
-/** The symlink-resolved form of `path`, or `undefined` when it cannot be read. */
-const resolvedEntry = path => {
-  try {
-    return realpathSync(path);
-  } catch {
-    return undefined;
-  }
-};
-if (invokedDirectly()) {
+// The guard is `cli-entry.mjs`, which documents why the comparison is made as a
+// URL and why both the raw and the symlink-resolved form have to count. It is
+// imported rather than restated so this gate cannot drift away from the scripts
+// that share it, and the drift would be silent: a guard that answers wrongly
+// leaves this file exiting 0 having run nothing.
+if (isCliEntry(import.meta.url)) {
   main(process.argv.slice(2)).then(
     // `process.exitCode` rather than `process.exit`: the latter can terminate
     // before a piped or redirected stdout has drained, truncating the report
