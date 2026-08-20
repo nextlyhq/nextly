@@ -1,5 +1,4 @@
 ---
-
 "nextly": patch
 "create-nextly-app": patch
 "@nextlyhq/admin": patch
@@ -24,6 +23,7 @@
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
 "@nextlyhq/module-specifiers": patch
+---
 
 A surface that needs to edit this site's rich text outside the admin's own field — the page builder's
 canvas is the first — can now load the same node classes and theme the field editor registers, through
