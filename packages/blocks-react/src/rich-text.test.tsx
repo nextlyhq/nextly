@@ -359,3 +359,167 @@ describe("RichText structural nodes", () => {
     );
   });
 });
+
+describe("RichText hostile stored node types", () => {
+  // `node.type` is a string from storage and the renderer's dispatch tables are
+  // object literals, so an inherited member is reachable by name unless the
+  // lookup asks for own keys only.
+  it.each([
+    "constructor",
+    "toString",
+    "valueOf",
+    "hasOwnProperty",
+    "__proto__",
+  ])("treats %j as an unknown node rather than an inherited member", type => {
+    const { container } = render(
+      <RichText
+        value={doc([{ type, children: [{ type: "text", text: "kept" }] }])}
+      />
+    );
+    expect(container.textContent).toBe("kept");
+  });
+});
+
+describe("RichText malformed nested children", () => {
+  it.each([
+    ["an object", {}],
+    ["a string", "oops"],
+    ["a number", 7],
+    ["null", null],
+  ])("renders nothing for children that are %s", (_label, badChildren) => {
+    const value = doc([
+      { type: "paragraph", children: badChildren },
+      { type: "paragraph", children: [{ type: "text", text: "kept" }] },
+    ] as unknown as RichTextValue["root"]["children"]);
+    const { container } = render(<RichText value={value} />);
+    expect(container.textContent).toBe("kept");
+  });
+});
+
+describe("RichText preserved node attributes", () => {
+  it("keeps a heading at the level the author chose", () => {
+    // Paired with the fallback case: without this, a HeadingView that ignored
+    // `tag` entirely and always returned h2 would still pass.
+    for (const tag of ["h1", "h3", "h6"]) {
+      const { container } = render(
+        <RichText
+          value={doc([
+            { type: "heading", tag, children: [{ type: "text", text: "T" }] },
+          ])}
+        />
+      );
+      expect(container.querySelector(tag), tag).not.toBeNull();
+      cleanup();
+    }
+  });
+
+  it("keeps an ordered list's starting number", () => {
+    const { container } = render(
+      <RichText
+        value={doc([
+          {
+            type: "list",
+            listType: "number",
+            start: 5,
+            children: [
+              { type: "listitem", children: [{ type: "text", text: "five" }] },
+            ],
+          },
+        ])}
+      />
+    );
+    expect(container.querySelector("ol")?.getAttribute("start")).toBe("5");
+  });
+
+  it("omits start for a value the attribute could not carry", () => {
+    for (const start of [0, -3, 1.5, "5", null]) {
+      const { container } = render(
+        <RichText
+          value={doc([
+            {
+              type: "list",
+              listType: "number",
+              start,
+              children: [
+                { type: "listitem", children: [{ type: "text", text: "x" }] },
+              ],
+            },
+          ] as unknown as RichTextValue["root"]["children"])}
+        />
+      );
+      expect(
+        container.querySelector("ol")?.getAttribute("start"),
+        `${JSON.stringify(start)}`
+      ).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("keeps a collapsible open when the author left it open", () => {
+    const open = render(
+      <RichText
+        value={doc([
+          {
+            type: "collapsible-container",
+            open: true,
+            children: [
+              {
+                type: "collapsible-title",
+                children: [{ type: "text", text: "T" }],
+              },
+            ],
+          },
+        ])}
+      />
+    );
+    expect(open.container.querySelector("details")?.hasAttribute("open")).toBe(
+      true
+    );
+    cleanup();
+
+    const shut = render(
+      <RichText
+        value={doc([
+          {
+            type: "collapsible-container",
+            open: false,
+            children: [
+              {
+                type: "collapsible-title",
+                children: [{ type: "text", text: "T" }],
+              },
+            ],
+          },
+        ])}
+      />
+    );
+    expect(shut.container.querySelector("details")?.hasAttribute("open")).toBe(
+      false
+    );
+  });
+
+  it("gives a syntax token the class the CMS gives it", () => {
+    const { container } = render(
+      <RichText
+        value={doc([
+          {
+            type: "code",
+            children: [
+              {
+                type: "code-highlight",
+                text: "const",
+                highlightType: "keyword",
+              },
+              { type: "code-highlight", text: " x", highlightType: "!bad!" },
+            ],
+          },
+        ])}
+      />
+    );
+    const token = container.querySelector("span.nextly-code-token--keyword");
+    expect(token?.textContent).toBe("const");
+    // A type the engine refuses renders as text, not as an empty-class span.
+    expect(container.querySelectorAll("span").length).toBe(1);
+    expect(container.querySelector("pre > code")?.textContent).toBe("const x");
+  });
+});

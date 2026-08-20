@@ -387,6 +387,7 @@ export {
  * form of that, and two readers is not.
  */
 export {
+  codeTokenClass,
   hasFormat,
   isRichTextNode,
   isRichTextValue,

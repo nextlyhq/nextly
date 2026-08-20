@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  codeTokenClass,
   isRichTextNode,
   isRichTextValue,
   richTextToPlainText,
@@ -196,5 +197,67 @@ describe("richTextToPlainText", () => {
       root: { type: "root", children: [null, { type: "text", text: "kept" }] },
     } as unknown as RichTextValue;
     expect(richTextToPlainText(malformed)).toBe("kept");
+  });
+});
+
+describe("richTextToPlainText malformed children", () => {
+  it("skips a string child instead of emitting it as text", () => {
+    // The walk marks block boundaries with a sentinel of its own. A string
+    // sentinel would be forgeable from storage: this `"injected"` would be read
+    // back as the marker and pushed into the output as if an author had typed
+    // it.
+    const malformed = {
+      root: {
+        type: "root",
+        children: [
+          {
+            type: "paragraph",
+            children: ["injected", { type: "text", text: "real" }],
+          },
+        ],
+      },
+    } as unknown as RichTextValue;
+    expect(richTextToPlainText(malformed)).toBe("real");
+  });
+
+  it("skips a node whose children are not an array", () => {
+    const malformed = {
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: "oops" },
+          { type: "paragraph", children: [{ type: "text", text: "kept" }] },
+        ],
+      },
+    } as unknown as RichTextValue;
+    expect(richTextToPlainText(malformed)).toBe("kept");
+  });
+});
+
+describe("codeTokenClass", () => {
+  it("names the class a token type gets", () => {
+    expect(codeTokenClass("keyword")).toBe(
+      "nextly-code-token nextly-code-token--keyword"
+    );
+    expect(codeTokenClass("attr-name")).toBe(
+      "nextly-code-token nextly-code-token--attr-name"
+    );
+  });
+
+  it("refuses a type that could break out of a class attribute", () => {
+    // The CMS writes this into an HTML string by hand, so a type carrying a
+    // quote would close the attribute and inject markup.
+    for (const bad of [
+      '"><script>alert(1)</script>',
+      "Keyword",
+      "1keyword",
+      "key word",
+      "",
+      undefined,
+      null,
+      42,
+    ]) {
+      expect(codeTokenClass(bad), `${JSON.stringify(bad)}`).toBeUndefined();
+    }
   });
 });

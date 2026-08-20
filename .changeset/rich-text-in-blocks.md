@@ -52,3 +52,11 @@ And plain-text extraction no longer inserts a space between every text leaf,
 which turned a part-bold `prefix` into `pre fix` for anything reading it for
 search or SEO; separators now fall at block boundaries, and the walk is
 iterative so a deeply nested value cannot exhaust the call stack.
+
+Dragging a block on the canvas no longer selects its text instead of moving it.
+Blocks are made of text, so a press that lands on a word and then moves is
+ambiguous, and the browser resolved it first: selection begins on the first
+move, while the drag engine waits for the pointer to travel far enough to mean
+a drag. Whether a given press hit a word depended on where the glyphs fell, so
+the same gesture worked or failed depending on the font. The canvas now treats a
+press as a grab, and text being edited opts back in to being selectable.

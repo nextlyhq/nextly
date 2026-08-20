@@ -8,7 +8,11 @@
  * @since 1.0.0
  */
 
-import { isRichTextValue, TEXT_FORMAT } from "@nextlyhq/blocks-engine";
+import {
+  codeTokenClass,
+  isRichTextValue,
+  TEXT_FORMAT,
+} from "@nextlyhq/blocks-engine";
 
 import type { RichTextValue } from "../../collections/fields/types/rich-text";
 import {
@@ -26,15 +30,6 @@ export interface RichTextBothFormat {
   json: RichTextValue;
   html: string;
 }
-
-/**
- * Token types the tokenizer emits, as a class-name fragment.
- *
- * Checked rather than trusted: the value arrives from stored content and is
- * written into a class attribute, where a crafted string could otherwise
- * close the attribute and inject markup.
- */
-const SAFE_HIGHLIGHT_TYPE = /^[a-z][a-z0-9-]*$/;
 
 interface LexicalSerializedNode {
   type: string;
@@ -431,10 +426,13 @@ function serializeCodeNode(
  */
 function serializeCodeHighlightNode(node: LexicalSerializedNode): string {
   const text = escapeHtml(node.text || "");
-  const type = node.highlightType;
-  if (!type || !SAFE_HIGHLIGHT_TYPE.test(type)) return text;
+  // The class comes from the engine, so this and the React renderer cannot
+  // disagree about which class a token type gets — or about which types are
+  // safe to write into a class attribute at all.
+  const className = codeTokenClass(node.highlightType);
+  if (className === undefined) return text;
 
-  return `<span class="nextly-code-token nextly-code-token--${type}">${text}</span>`;
+  return `<span class="${className}">${text}</span>`;
 }
 
 function serializeHorizontalRuleNode(): string {

@@ -1,4 +1,5 @@
 import {
+  codeTokenClass,
   hasFormat,
   isRichTextNode,
   isRichTextValue,
@@ -108,7 +109,11 @@ function formatted(text: string, format: number | undefined): ReactNode {
 }
 
 function children(nodes: readonly RichTextNode[] | undefined): ReactNode {
-  if (nodes === undefined) return null;
+  // Array-checked, not undefined-checked. `children` is stored JSON like
+  // everything else here, so it can arrive as `{}` or `"oops"`, and calling
+  // `.map` on either throws while rendering a published page. The type cannot
+  // prevent it; only reading the value can.
+  if (!Array.isArray(nodes)) return null;
   return nodes.map((node, i) => (
     // Index keys, and the reason is that nothing better exists: a serialized
     // node carries no identity, and a rich-text tree is replaced wholesale on
@@ -134,7 +139,6 @@ const SIMPLE_ELEMENTS: Readonly<
   paragraph: "p",
   quote: "blockquote",
   listitem: "li",
-  "collapsible-container": "details",
   "collapsible-title": "summary",
   "collapsible-content": "div",
   tablerow: "tr",
@@ -195,11 +199,26 @@ function TableCellView({ node }: { node: RichTextNode }): ReactNode {
 const NODE_VIEWS: Readonly<Record<string, (node: RichTextNode) => ReactNode>> =
   {
     heading: node => <HeadingView node={node} />,
+    // `open` is serialized by the editor, default included, so a section the
+    // author left expanded publishes expanded.
+    "collapsible-container": node => (
+      <details open={node.open === true}>{children(node.children)}</details>
+    ),
     link: node => <LinkView node={node} />,
     autolink: node => <LinkView node={node} />,
     list: node => {
-      const List = node.listType === "number" ? "ol" : "ul";
-      return <List>{children(node.children)}</List>;
+      if (node.listType !== "number") return <ul>{children(node.children)}</ul>;
+      // A list imported from `<ol start="5">` keeps its first number. Dropped,
+      // the published list silently restarts at 1 and the prose around it —
+      // "step 5" — stops matching. Only a positive integer is forwarded;
+      // anything else is a value the attribute could not carry.
+      const start =
+        typeof node.start === "number" &&
+        Number.isInteger(node.start) &&
+        node.start > 0
+          ? node.start
+          : undefined;
+      return <ol start={start}>{children(node.children)}</ol>;
     },
     linebreak: () => <br />,
     horizontalrule: () => <hr />,
@@ -216,7 +235,22 @@ const NODE_VIEWS: Readonly<Record<string, (node: RichTextNode) => ReactNode>> =
       </table>
     ),
     tablecell: node => <TableCellView node={node} />,
+    "code-highlight": node => <CodeTokenView node={node} />,
   };
+
+/**
+ * One syntax-highlighted token inside a code block.
+ *
+ * The class comes from the engine so this and the CMS's HTML agree about which
+ * class a token type gets; a token whose type the engine rejects renders as
+ * bare text rather than in an element that would carry no styling anyway.
+ */
+function CodeTokenView({ node }: { node: RichTextNode }): ReactNode {
+  const text = typeof node.text === "string" ? node.text : "";
+  const className = codeTokenClass(node.highlightType);
+  if (className === undefined) return <>{text}</>;
+  return <span className={className}>{text}</span>;
+}
 
 function RichTextNodeView({ node }: { node: RichTextNode }): ReactNode {
   // A stored document can hold anything JSON can express, including a null in a
@@ -225,16 +259,26 @@ function RichTextNodeView({ node }: { node: RichTextNode }): ReactNode {
   // does not.
   if (!isRichTextNode(node)) return null;
 
+  // Before the generic text branch: a code token carries `text` too, and would
+  // otherwise return here having lost the type that decides its class.
+  if (node.type === "code-highlight") return <CodeTokenView node={node} />;
+
   if (typeof node.text === "string") return formatted(node.text, node.format);
 
-  const simple = SIMPLE_ELEMENTS[node.type];
-  if (simple !== undefined) {
-    const Element = simple;
+  // `Object.hasOwn` before either lookup, because `node.type` is a stored string
+  // and these tables inherit from `Object.prototype`. A node typed
+  // `"constructor"` or `"toString"` would otherwise resolve to an inherited
+  // function — used as a JSX element type, or called as a view — and throw,
+  // instead of taking the unknown-node fallback that exists for exactly this.
+  if (Object.hasOwn(SIMPLE_ELEMENTS, node.type)) {
+    const Element = SIMPLE_ELEMENTS[node.type] as "p";
     return <Element>{children(node.children)}</Element>;
   }
 
-  const view = NODE_VIEWS[node.type];
-  if (view !== undefined) return view(node);
+  if (Object.hasOwn(NODE_VIEWS, node.type)) {
+    const view = NODE_VIEWS[node.type];
+    if (view !== undefined) return view(node);
+  }
 
   // Unknown node: keep the words, lose the wrapper. See the module docblock.
   return <>{children(node.children)}</>;

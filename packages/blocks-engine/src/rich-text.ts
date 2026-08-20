@@ -127,6 +127,17 @@ export function isRichTextValue(value: unknown): value is RichTextValue {
 const INLINE_CONTAINERS: ReadonlySet<string> = new Set(["link", "autolink"]);
 
 /**
+ * Marks where a block ended, while the walk is still in progress.
+ *
+ * A unique symbol rather than a string, because the stack also holds values
+ * that came out of storage. A string sentinel is forgeable: a `children` array
+ * holding `" "` — or any other string — would be read back as this marker and
+ * emitted as text, so malformed stored data could put words into the output
+ * instead of being skipped. Nothing in parsed JSON can equal a symbol.
+ */
+const BLOCK_BOUNDARY: unique symbol = Symbol("rich-text block boundary");
+
+/**
  * The plain text inside a rich-text value, for anything that needs words rather
  * than formatting.
  *
@@ -157,14 +168,14 @@ export function richTextToPlainText(value: RichTextValue): string {
   // A string on the stack is a separator to emit once the subtree that earned it
   // has been consumed; pushing it BEFORE that node's children is what places it
   // after them, since the stack pops in reverse.
-  const stack: (RichTextNode | string)[] = [];
+  const stack: (RichTextNode | typeof BLOCK_BOUNDARY)[] = [];
   pushChildren(stack, value.root.children);
 
   while (stack.length > 0) {
     const item = stack.pop();
     if (item === undefined) continue;
-    if (typeof item === "string") {
-      parts.push(item);
+    if (item === BLOCK_BOUNDARY) {
+      parts.push(" ");
       continue;
     }
     if (!isRichTextNode(item)) continue;
@@ -175,7 +186,7 @@ export function richTextToPlainText(value: RichTextValue): string {
       continue;
     }
 
-    if (!INLINE_CONTAINERS.has(item.type)) stack.push(" ");
+    if (!INLINE_CONTAINERS.has(item.type)) stack.push(BLOCK_BOUNDARY);
     if (Array.isArray(item.children)) pushChildren(stack, item.children);
   }
 
@@ -190,7 +201,7 @@ export function richTextToPlainText(value: RichTextValue): string {
  * value by hand can.
  */
 function pushChildren(
-  stack: (RichTextNode | string)[],
+  stack: (RichTextNode | typeof BLOCK_BOUNDARY)[],
   nodes: readonly RichTextNode[]
 ): void {
   for (let i = nodes.length - 1; i >= 0; i--) {
@@ -250,4 +261,29 @@ export function hasFormat(
   flag: (typeof TEXT_FORMAT)[keyof typeof TEXT_FORMAT]
 ): boolean {
   return ((format ?? 0) & flag) !== 0;
+}
+
+/**
+ * Token types the code tokenizer emits, as a class-name fragment.
+ *
+ * Checked rather than trusted: the value arrives from stored content and is
+ * written into a class attribute, where a crafted string could otherwise close
+ * the attribute and inject markup in a serializer that builds HTML by hand.
+ */
+const SAFE_HIGHLIGHT_TYPE = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * The class a syntax-highlighted code token carries, or `undefined` for a token
+ * whose type is missing or unusable.
+ *
+ * Shared for the same reason the format bits are: the CMS builds an HTML string
+ * and the renderer builds a React element, but WHICH class a token gets is one
+ * question, and two answers to it means code highlighted on one surface and
+ * bare on the other with nothing raised on either. A token with no usable type
+ * is emitted unwrapped rather than given an element that would say nothing.
+ */
+export function codeTokenClass(highlightType: unknown): string | undefined {
+  if (typeof highlightType !== "string") return undefined;
+  if (!SAFE_HIGHLIGHT_TYPE.test(highlightType)) return undefined;
+  return `nextly-code-token nextly-code-token--${highlightType}`;
 }
