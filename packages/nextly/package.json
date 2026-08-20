@@ -224,7 +224,7 @@
     "@vitest/ui": "^4.1.0",
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
-    "better-sqlite3": "^12.5.0",
+    "better-sqlite3": "^12.10.0",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.1",
     "mysql2": "^3.15.0",

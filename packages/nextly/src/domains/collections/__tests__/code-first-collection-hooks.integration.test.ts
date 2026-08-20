@@ -24,6 +24,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -177,5 +178,63 @@ describe("code-first collection hooks (integration)", () => {
     );
 
     expect(fired).toEqual(["cfhkept"]);
+  });
+
+  it("skips hooks on a batch create only when asked, and runs them otherwise", async () => {
+    // `skipHooks` is a documented bulk option and nothing asserted it did
+    // anything. The one test that passes it asserts field defaults are absent
+    // on a bulk create, which is true whether or not hooks ran — so the flag
+    // could have been inverted, or ignored, with every suite still green.
+    //
+    // The positive control is the load-bearing half: without it, an empty
+    // `fired` proves only that nothing ran, which a hook that was never
+    // registered satisfies just as well as a flag that works.
+    const fired: string[] = [];
+    const record =
+      (name: string) =>
+      async (ctx: { data?: unknown }): Promise<unknown> => {
+        fired.push(name);
+        return ctx.data;
+      };
+
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "cfhbulk",
+          access: { create: () => true, read: () => true },
+          hooks: {
+            beforeChange: [record("beforeChange")],
+            afterChange: [record("afterChange")],
+          },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    // Control: the hooks are registered and the batch path reaches them.
+    const withHooks = await entries.createEntries(
+      { collectionName: "cfhbulk", overrideAccess: true },
+      [{ title: "A" }],
+      { skipHooks: false }
+    );
+    expect(withHooks.failed, JSON.stringify(withHooks)).toBe(0);
+    // Exact, not `toContain`: one entry must fire each hook once, in order. A
+    // shared write path that ran a phase twice would satisfy a containment
+    // check while double-firing every user hook.
+    expect(fired).toEqual(["beforeChange", "afterChange"]);
+
+    // The flag itself.
+    fired.length = 0;
+    const skipped = await entries.createEntries(
+      { collectionName: "cfhbulk", overrideAccess: true },
+      [{ title: "B" }],
+      { skipHooks: true }
+    );
+    expect(skipped.failed, JSON.stringify(skipped)).toBe(0);
+    expect(fired).toEqual([]);
   });
 });

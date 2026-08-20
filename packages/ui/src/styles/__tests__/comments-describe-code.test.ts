@@ -532,6 +532,11 @@ describe("comments describe the code, not the process", () => {
     ).toEqual(["x.ts:2 a task number"]);
   });
 
+  // Timed out against vitest's 5s default on a loaded CI runner while taking
+  // ~200ms locally — a 25x margin, so the threshold was measuring the machine
+  // rather than the code. This walk reads every source file under three trees
+  // and grows with the repository, and there is nothing here whose SPEED is
+  // the property under test, so the budget is stated generously on purpose.
   it("has no comment pointing outside the codebase", () => {
     const violations = sources.flatMap(violationsIn);
 
@@ -542,5 +547,5 @@ describe("comments describe the code, not the process", () => {
         `the reason is genuinely a decision record, it belongs in a document, ` +
         `not in a reference the code cannot resolve.`
     ).toEqual([]);
-  });
+  }, 60_000);
 });
