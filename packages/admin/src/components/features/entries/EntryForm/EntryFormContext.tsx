@@ -13,9 +13,29 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 
+import { useOptionalEntryLocale } from "../EntryLocaleContext";
+
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Which language a field's surrounding document is being edited in.
+ *
+ * FACTS about the active language, not a rendering decision. `code` is `null`
+ * for the app's default language, which is how the rest of the admin addresses
+ * it — an absent `?locale=` means the default.
+ */
+export interface DocumentLocale {
+  /** The active content locale, or `null` for the app default. */
+  code: string | null;
+  /** Whether the document itself is localized at all. */
+  documentLocalized: boolean;
+  /** Whether the active language IS the app default. */
+  isDefaultLocale: boolean;
+  /** Whether the active language is written right-to-left. */
+  rtl: boolean;
+}
 
 export interface EntryFormContextValue {
   /**
@@ -55,6 +75,28 @@ export interface EntryFormContextValue {
    * a published page was unpublished.
    */
   documentStatus?: DocumentStatus;
+
+  /**
+   * Renders the fields an active TAKEOVER field removed from the form body.
+   *
+   * Absent when nothing takes the body over, which is the honest answer rather
+   * than an empty renderer: with no takeover nothing is hidden, and a surface
+   * offering a panel for it would reserve space to display nothing.
+   *
+   * A closure rather than a field list, because the caller must not have to
+   * know how this admin renders a field — that is `EntryFormContent`'s
+   * contract, and a plugin reconstructing it would be a second renderer that
+   * drifts. It is built from the form's OWN `control`, so what a takeover
+   * surface draws and what the form submits are one thing; constructing a
+   * second `EntryForm` would fork the form state and lose an edit made in
+   * whichever copy did not save.
+   *
+   * Read through {@link useEntryFieldsPanel}. Handed down as context rather
+   * than as a prop because a takeover field is rendered by the generic field
+   * renderer, which passes four shared props to all fifteen input types and is
+   * deliberately not where per-plugin wiring goes.
+   */
+  renderEntryFields?: (excludePath: string) => ReactNode;
 }
 
 /**
@@ -165,6 +207,12 @@ export interface EntryFormContextProviderProps {
   documentStatus?: DocumentStatus;
 
   /**
+   * Renders the entry's other fields for a surface that covers the form,
+   * excluding the field at the path it is given.
+   */
+  renderEntryFields?: (excludePath: string) => ReactNode;
+
+  /**
    * Child components.
    */
   children: ReactNode;
@@ -203,6 +251,7 @@ export function EntryFormContextProvider({
   isCreateMode = false,
   kind = "collection",
   documentStatus,
+  renderEntryFields,
   children,
 }: EntryFormContextProviderProps) {
   /*
@@ -226,8 +275,22 @@ export function EntryFormContextProvider({
               hasWorkingDraft: hasWorkingDraft === true,
             },
           }),
+      /*
+       * Spread rather than always present, matching `documentStatus` above:
+       * absent means nothing takes the body over, and a consumer must be able
+       * to tell that from a renderer that draws nothing.
+       */
+      ...(renderEntryFields === undefined ? {} : { renderEntryFields }),
     }),
-    [entryId, collectionSlug, isCreateMode, kind, status, hasWorkingDraft]
+    [
+      entryId,
+      collectionSlug,
+      isCreateMode,
+      kind,
+      status,
+      hasWorkingDraft,
+      renderEntryFields,
+    ]
   );
 
   return (
@@ -350,6 +413,59 @@ export function useDocumentIdentity(): DocumentIdentity | null {
  *   : null;
  * ```
  */
+/**
+ * A renderer for the entry's other fields, or null outside an entry form.
+ *
+ * Pass the asking field's path; it is excluded from what comes back. Null means
+ * there is no surrounding form to draw from — a preview or a standalone
+ * harness — and a caller should offer no panel at all rather than an empty one,
+ * because reserving width to show nothing reads as a broken control.
+ *
+ * Optional-context by construction, like {@link useDocumentIdentity}: a field
+ * rendered outside an entry form is a legitimate arrangement (a preview, a
+ * standalone harness) and gets null rather than a thrown error.
+ */
+export function useEntryFieldsPanel():
+  | ((excludePath: string) => ReactNode)
+  | null {
+  const context = useOptionalEntryFormContext();
+  return context?.renderEntryFields ?? null;
+}
+
 export function useDocumentStatus(): DocumentStatus | null {
   return useContext(EntryFormContext)?.documentStatus ?? null;
+}
+
+/**
+ * Which language the surrounding form is editing, or `null` when nothing knows.
+ *
+ * Separate from {@link useDocumentIdentity} rather than folded into it, because
+ * they answer about different things: a document's identity is the same
+ * whichever language you read it in. Widening the identity would make every
+ * consumer of it re-render on a language switch that changed nothing they read.
+ *
+ * `null` has one meaning — the language is not knowable here. That covers a
+ * field outside any form, and a field inside one that carries no locale
+ * context: an embedded quick-edit renders fields without one, and answering
+ * "unlocalized" there would describe a localized collection wrongly.
+ *
+ * @example
+ * ```tsx
+ * const locale = useDocumentLocale();
+ * // A per-language surface has nothing to key on until the language is known.
+ * const key = locale ? `${locale.code ?? "default"}` : null;
+ * ```
+ */
+export function useDocumentLocale(): DocumentLocale | null {
+  const form = useContext(EntryFormContext);
+  const locale = useOptionalEntryLocale();
+  if (!form || !locale) return null;
+  return {
+    // `undefined` on the context means the app default is in use; `null` is the
+    // same fact spelled so a consumer can hold it in a key or a query param.
+    code: locale.locale ?? null,
+    documentLocalized: locale.collectionLocalized,
+    isDefaultLocale: !locale.isNonDefaultLocale,
+    rtl: locale.rtl,
+  };
 }

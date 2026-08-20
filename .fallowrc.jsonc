@@ -65,6 +65,16 @@
   //     bin shim and one page-builder spec. Present after `pnpm build` and
   //     absent on a clean checkout, so gating on them would make the verdict
   //     depend on build order.
+  //   @nextlyhq/ui/styles.css and @nextlyhq/builder/styles.css = declared
+  //     exports subpaths that resolve to build output — ./dist/styles.css and
+  //     ./dist/builder-chrome.css — and `dist` is gitignored. Same build-order
+  //     dependence as the two above, and measured as exactly that: a local
+  //     audit after `pnpm build` resolves both and reports no issue, while CI
+  //     audits after install and before build and reports both unresolved. The
+  //     harness routes that import them cannot drop the imports: the editor's
+  //     sheet ships neither the `--nx-*` tokens nor the base reset, because the
+  //     host owns both, so without them the shell renders with its colours
+  //     resolving to nothing — which is a bug the shell suite has a test for.
   //
   // Every entry is an exact specifier rather than a prefix. These match the
   // raw import string, so `../dist/**` would also swallow a typo like
@@ -75,6 +85,8 @@
     "nextly/field-catalog",
     "../dist/cli.mjs",
     "../dist/render/index.js",
+    "@nextlyhq/ui/styles.css",
+    "@nextlyhq/builder/styles.css",
   ],
 
   // Three pnpm `overrides` entries pin a version of a package nothing here

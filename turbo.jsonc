@@ -448,7 +448,7 @@
       // GITHUB_STEP_SUMMARY: the flaky reporter appends a table of tests that
       // passed only on retry. Read rather than written by the suite's logic, so
       // it changes no result — but it is still an input turbo must know about.
-      "env": ["CI", "E2E_PORT", "GITHUB_STEP_SUMMARY"]
+      "env": ["CI", "E2E_PORT", "E2E_PROD_PORT", "GITHUB_STEP_SUMMARY"]
     },
 
     // test:coverage - Generate and display code coverage report

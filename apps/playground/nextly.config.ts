@@ -33,6 +33,7 @@ import { Categories } from "./src/collections/categories";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { Seo } from "./src/field-groups/seo";
+import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
 import { Homepage } from "./src/singles/homepage";
@@ -99,7 +100,10 @@ export default defineConfig({
   // is a test double listed among real plugins, and it injects a showcase
   // section into the Posts collection list, both of which read as product.
   plugins: [
-    pageBuilder(),
+    // The style defaults tier: the same object the public block routes hand to
+    // `loadSiteStyle`, so the validator, the canvas and the published page all
+    // read one statement of this site's breakpoints.
+    pageBuilder({ siteStyle: SITE_STYLE_DEFAULTS }),
     formBuilderPlugin,
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]

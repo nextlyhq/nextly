@@ -28,6 +28,24 @@ export { useDocumentIdentity, type DocumentIdentity } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
 
 /**
+ * Which language the surrounding document is being edited in (@experimental).
+ *
+ * A field inside a localized document can say WHICH document it is in but not
+ * which language its value belongs to, so anything keyed per language — a
+ * per-language draft, a translation memory, a language-scoped preview — had no
+ * way to ask.
+ *
+ * Separate from `useDocumentIdentity` rather than folded into it: a document's
+ * identity is the same whichever language you read it in, and widening the
+ * identity would re-render every consumer of it on a language switch.
+ *
+ * `null` means the language is not knowable here — outside a form, and inside
+ * one that carries no locale context, such as an embedded quick-edit. It is an
+ * ordinary answer to handle, not an error.
+ */
+export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
+
+/**
  * How the surrounding document stands (@experimental).
  *
  * For a field that covers the editor's own chrome — the page builder takes the
@@ -64,6 +82,52 @@ export {
  * when the surface unmounts.
  */
 export { useReportUnsavedWork } from "@nextlyhq/admin";
+
+/**
+ * Render the entry's remaining fields inside a takeover surface (@experimental).
+ *
+ * A field whose type is registered as a TAKEOVER collapses the form body to
+ * itself, so an entry edited through one has its SEO, its relations and its
+ * custom fields removed from the page — not merely covered. This returns a
+ * renderer for exactly those, so the surface that took the body over can offer
+ * them back without the author leaving it.
+ *
+ * Null when nothing is hidden, which is a different answer from a renderer that
+ * draws nothing: the first means offer no panel, the second means offer an
+ * empty one. A shell that reserves width to display nothing reads as a broken
+ * control rather than an absent feature.
+ *
+ * The renderer is built from the FORM'S OWN control, so what the surface draws
+ * and what the form submits are one thing. Constructing a second form would
+ * fork the state and lose the edit made in whichever copy did not save.
+ */
+export { useEntryFieldsPanel } from "@nextlyhq/admin";
+
+/**
+ * Edit this site's rich text from your own surface (@experimental).
+ *
+ * Returns the node classes and theme the admin's own rich-text field uses, so a
+ * surface that renders rich text outside that field — the page builder's canvas
+ * is the first — registers the SAME nodes. Sharing the registry is not a nicety:
+ * Lexical recognises content by the identity of the classes that wrote it, and
+ * an editor built on a different set reads existing content as PLAIN TEXT,
+ * silently, at read time, on documents that already saved.
+ *
+ * ASYNC because the classes bring Lexical and PrismJS with them — a 630KB chunk
+ * that `@nextlyhq/admin` deliberately keeps behind a dynamic import. Awaiting it
+ * is what stops that weight reaching consumers who never open an editor.
+ *
+ * You still build the editor: this hands over the registry and the theme, not a
+ * mounted component, because where an editor mounts and how it is toolbarred is
+ * the surface's own business.
+ *
+ * @example
+ * ```ts
+ * const { nodes, theme } = await loadRichTextEditorKit();
+ * const editor = createEditor({ namespace: "canvas", nodes: [...nodes], theme });
+ * ```
+ */
+export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
 
 /**
  * Record a recovery point for the surrounding document (@experimental).

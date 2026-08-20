@@ -1,51 +1,209 @@
 /**
  * The site's style inputs, in one place.
  *
- * Breakpoints are site-level data this plugin owns: the engine never reads
- * storage, so it validates against whatever set it is handed, and a document
- * naming a breakpoint id warns rather than errors until the real set arrives.
- * That arrangement is what keeps the engine storage-agnostic, and it puts the
- * answer here.
+ * Tokens, fonts, named classes and breakpoints are site-level data this plugin
+ * owns: the engine never reads storage, so it validates and compiles against
+ * whatever set it is handed, and the answer to "what does this site define"
+ * has to come from here.
  *
- * It lives in its own module because TWO surfaces need it and they must not
- * disagree. The field validator compiles a document against these breakpoints;
- * the editor canvas compiles the site sheet against them to draw the same
- * document. Two empty sets written separately look identical on the day they
- * are written, and the day one of them gains a real breakpoint is the day the
- * canvas draws a layout the validator does not accept — with each side
- * internally consistent, so nothing looks wrong.
+ * The inputs are LAYERED, and this module is the one merge point:
+ *
+ * 1. Config-supplied defaults — what the host's code states on the
+ *    `pageBuilder({ siteStyle })` factory. A site whose design lives in the
+ *    repository states it here and needs no database row.
+ * 2. The stored Site Style document — what admins write through the API or,
+ *    later, the style studios. Stored values override config defaults.
+ *
+ * `resolveSiteStyle` is the one implementation of that layering. The engine
+ * applies a third, lower tier on its own — `resolveSiteTokens` layers the
+ * merged token set over the engine's guaranteed defaults — so the full order
+ * on a published page is engine defaults, then config defaults, then stored
+ * edits: the theme.json arrangement of core, then the theme, then the user's
+ * saved styles.
+ *
+ * It lives in its own module because SEVERAL surfaces need it and they must
+ * not disagree. The field validator compiles a document against these
+ * breakpoints; the editor canvas compiles the site sheet against them to draw
+ * the same document; the published route compiles the sheet it serves. Two
+ * merges written separately look identical on the day they are written, and
+ * the day they diverge the canvas draws a layout the validator does not
+ * accept — with each side internally consistent, so nothing looks wrong.
  *
  * Node-safe: no React, no admin imports. The validator runs server-side.
  *
  * @module @nextlyhq/plugin-page-builder/site-style
  */
-import type { BreakpointSet, SiteSheetInput } from "@nextlyhq/blocks-engine";
+import type {
+  BreakpointSet,
+  FontFaceDef,
+  NamedClass,
+  SiteSheetInput,
+  SiteToken,
+  SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
+
+/**
+ * One tier of site style: what a host's config states, or what the stored
+ * Site Style document holds. Every shape is the engine's own — a parallel
+ * declaration here would be a second statement of the same contract, free to
+ * drift from the one the compiler reads.
+ *
+ * `tokens` carries modes already: a `SiteToken`'s `values` holds `light`
+ * (required) and `dark` (optional), so a stored token set never needs a
+ * format migration when the mode UI arrives.
+ */
+export interface SiteStyleData {
+  /** Design tokens, with per-mode values. Emitted as custom properties. */
+  tokens?: SiteTokenSet;
+  /** Self-hosted font faces. Remote sources are refused by the engine. */
+  fonts?: readonly FontFaceDef[];
+  /** The named-class library, in the order classes override one another. */
+  classes?: readonly NamedClass[];
+  /** The site's breakpoints, on both axes. */
+  breakpoints?: BreakpointSet;
+}
+
+/**
+ * The merged site style: config defaults with stored edits layered on top.
+ *
+ * The granularity of "layered" differs by section, and each choice follows
+ * from what a partial override would mean there:
+ *
+ * - **Tokens merge by NAME.** A site storing one brand colour must not lose
+ *   the config's `content.width` — an unresolved custom property invalidates
+ *   the declaration silently, so replacement fails invisibly. Same reasoning,
+ *   same shape, as the engine's `resolveSiteTokens`, which this result is
+ *   later handed to for the engine-defaults tier. `prefix` and `darkMode` are
+ *   site-wide decisions, not per-token values, so the stored ones win when
+ *   stated.
+ * - **Classes merge by ID.** A document references a class by its id, so the
+ *   id is the unit of override: a stored class replaces the config class with
+ *   the same id and keeps every other one. Each entry keeps its own
+ *   `orderIndex`; precedence stays the engine's question.
+ * - **Fonts merge by face identity** — family, weight and style together,
+ *   because one family legitimately ships several faces and replacing by
+ *   family alone would drop the italics when someone re-uploads the regular.
+ * - **Breakpoints REPLACE as a whole set.** A breakpoint set is one designed
+ *   cascade; splicing half of one set into half of another produces at-rules
+ *   nobody chose. A stored set that defines any breakpoint wins outright; an
+ *   empty stored set means "not configured" and leaves the defaults standing.
+ */
+export function resolveSiteStyle(
+  defaults?: SiteStyleData,
+  stored?: SiteStyleData
+): SiteStyleData {
+  return siteStyleOf({
+    tokens: mergeTokens(defaults?.tokens, stored?.tokens),
+    fonts: mergeByKey(defaults?.fonts, stored?.fonts, faceIdentity),
+    classes: mergeByKey(defaults?.classes, stored?.classes, c => c.id),
+    breakpoints: hasBreakpoints(stored?.breakpoints)
+      ? stored?.breakpoints
+      : defaults?.breakpoints,
+  });
+}
+
+/**
+ * A style whose keys are only the DEFINED sections.
+ *
+ * An `undefined` property and an absent one mean the same thing to a reader,
+ * but not to everything downstream: `{ tokens: undefined }` overrides a
+ * spread's earlier value and survives `Object.keys`, so "absent means the
+ * site defines none" only holds if absence is real. One place builds the
+ * object so every producer of a `SiteStyleData` says absence the same way.
+ */
+export function siteStyleOf(sections: SiteStyleData): SiteStyleData {
+  return {
+    ...(sections.tokens === undefined ? {} : { tokens: sections.tokens }),
+    ...(sections.fonts === undefined ? {} : { fonts: sections.fonts }),
+    ...(sections.classes === undefined ? {} : { classes: sections.classes }),
+    ...(sections.breakpoints === undefined
+      ? {}
+      : { breakpoints: sections.breakpoints }),
+  };
+}
+
+/** Whether a set defines any breakpoint at all, on either axis. */
+function hasBreakpoints(set: BreakpointSet | undefined): boolean {
+  return (
+    set !== undefined && (set.viewport.length > 0 || set.container.length > 0)
+  );
+}
+
+/** What makes two font faces the same face: family, weight and style. */
+function faceIdentity(face: FontFaceDef): string {
+  // Weight and style default at emission (`normal` both), so an absent value
+  // and the default spelled out are the same face and must collide here.
+  return `${face.family} ${face.weight ?? "normal"} ${face.style ?? "normal"}`;
+}
+
+/**
+ * Defaults first, then overrides, each entry keyed by its identity — so an
+ * override with a known key replaces the default and a new key appends.
+ */
+function mergeByKey<T>(
+  defaults: readonly T[] | undefined,
+  overrides: readonly T[] | undefined,
+  keyOf: (entry: T) => string
+): readonly T[] | undefined {
+  if (defaults === undefined && overrides === undefined) return undefined;
+  const byKey = new Map<string, T>();
+  // Iterated rather than spread, so a later duplicate WITHIN one tier also
+  // wins — the same rule the engine applies to duplicate token names.
+  for (const entry of defaults ?? []) byKey.set(keyOf(entry), entry);
+  for (const entry of overrides ?? []) byKey.set(keyOf(entry), entry);
+  return [...byKey.values()];
+}
+
+/** Token sets merged by token name; `prefix`/`darkMode` from the override. */
+function mergeTokens(
+  defaults: SiteTokenSet | undefined,
+  stored: SiteTokenSet | undefined
+): SiteTokenSet | undefined {
+  if (defaults === undefined && stored === undefined) return undefined;
+  const tokens = mergeByKey<SiteToken>(
+    defaults?.tokens,
+    stored?.tokens,
+    token => token.name
+  );
+  const prefix = stored?.prefix ?? defaults?.prefix;
+  const darkMode = stored?.darkMode ?? defaults?.darkMode;
+  return {
+    tokens: tokens === undefined ? [] : [...tokens],
+    ...(prefix === undefined ? {} : { prefix }),
+    ...(darkMode === undefined ? {} : { darkMode }),
+  };
+}
 
 /**
  * The site's breakpoints.
  *
- * Empty because this plugin has nowhere to store them yet. Stated as a value
- * rather than left implicit so the storage, when it lands, has exactly one
- * function to replace — and both consumers move together by construction.
+ * Read from the merged style rather than declared here, so the storage has
+ * exactly one function every consumer goes through — and the validator, the
+ * canvas and the published route move together by construction. Called with
+ * nothing it answers the empty set, which is what a consumer with no access
+ * to the merged style validates against; the engine treats an unknown
+ * breakpoint id as a warning in forgiving mode, so that consumer stays
+ * permissive rather than wrong.
  */
-export function siteBreakpoints(): BreakpointSet {
-  return { viewport: [], container: [] };
+export function siteBreakpoints(style?: SiteStyleData): BreakpointSet {
+  return style?.breakpoints ?? { viewport: [], container: [] };
 }
 
 /**
- * What the editor canvas compiles its stylesheet from.
+ * What a canvas or a published route compiles its site stylesheet from.
  *
- * Only `breakpoints` is populated today. `tokens`, `fonts`, `classes` and
- * `blockBases` are a site's own design inputs, supplied by the host route's
- * config on a published page, and this plugin does not store them — so they are
- * OMITTED rather than defaulted. An invented token set would render a canvas
- * that looks finished and matches no published page, which is worse than one
- * that plainly shows block defaults: a wrong preview is trusted, an unstyled
- * one is questioned.
- *
- * The gap is real and worth naming: until a site's tokens reach the admin, the
- * canvas is a structural preview rather than a visual proof.
+ * Sections the merged style does not define are OMITTED rather than
+ * defaulted. An invented token set would render a canvas that looks finished
+ * and matches no published page, which is worse than one that plainly shows
+ * block defaults: a wrong preview is trusted, an unstyled one is questioned.
+ * `blockBases` is never part of site style — a block type's default look
+ * belongs to the block's definition, not to a site's stored edits.
  */
-export function siteSheet(): SiteSheetInput {
-  return { breakpoints: siteBreakpoints() };
+export function siteSheet(style?: SiteStyleData): SiteSheetInput {
+  return {
+    ...(style?.tokens === undefined ? {} : { tokens: style.tokens }),
+    ...(style?.fonts === undefined ? {} : { fonts: style.fonts }),
+    ...(style?.classes === undefined ? {} : { classes: style.classes }),
+    breakpoints: siteBreakpoints(style),
+  };
 }

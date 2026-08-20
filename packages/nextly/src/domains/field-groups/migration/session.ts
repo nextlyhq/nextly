@@ -32,6 +32,11 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import { safeCode } from "../../../database/errors";
+import {
+  deriveLeaseTimings,
+  futureExpression,
+  nowExpression,
+} from "../../../database/lease-clock";
 import { NextlyError } from "../../../errors/nextly-error";
 import { fieldGroupLockColumnTypes } from "../../../schemas/field-group-lock";
 import type { Logger } from "../../../shared/types";
@@ -127,7 +132,16 @@ function toLockState(
  * update each and never pile up, because only one is ever in flight.
  */
 export const LOCK_TTL_SECONDS = 120;
-export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 8) * 1000;
+
+/**
+ * How many renewals fit in one TTL. The only number chosen here; every other timing below is
+ * derived from it, so no two of them can drift apart.
+ */
+const LOCK_RENEW_DIVISOR = 8;
+
+const LOCK_TIMINGS = deriveLeaseTimings(LOCK_TTL_SECONDS, LOCK_RENEW_DIVISOR);
+
+export const LOCK_RENEW_INTERVAL_MS = LOCK_TIMINGS.renewIntervalMs;
 
 /**
  * How long the session may go without CONFIRMING its lease before it declares the claim lost.
@@ -144,8 +158,7 @@ export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 8) * 1000;
  * threshold can sit wherever the margin needs to be. Here it leaves TWO renewal intervals of lease
  * still in hand, so the caller is told while it is still protected rather than after.
  */
-export const LOCK_LOSS_AFTER_MS =
-  LOCK_TTL_SECONDS * 1000 - 2 * LOCK_RENEW_INTERVAL_MS;
+export const LOCK_LOSS_AFTER_MS = LOCK_TIMINGS.lossAfterMs;
 
 /**
  * How long a shutdown waits for an in-flight legacy claim before giving up on releasing it.
@@ -176,50 +189,7 @@ export const LEGACY_SHUTDOWN_WAIT_MS = 5_000;
  * could be 16 seconds while the session went 90 without checking, leaving 74 seconds unprotected.
  * Tying the requirement to the window makes them agree by construction instead.
  */
-export const LOCK_RENEW_MARGIN_SECONDS = LOCK_LOSS_AFTER_MS / 1000;
-
-/**
- * The database's own clock, and an expiry computed from it, per dialect.
- *
- * 🔴 Never the application's clock. Two processes contending for this row can sit on machines whose
- * clocks disagree, and a claim written from one clock and judged against another is decided by that
- * skew rather than by who holds the lock. Asking the server for both values means every comparison
- * happens in one frame of reference.
- *
- * SQLite stores this column as unix SECONDS (the Drizzle declaration uses `mode: "timestamp"`), so
- * its expressions are integer arithmetic rather than interval arithmetic.
- */
-function nowExpression(dialect: MigrationDialect): SQL {
-  if (dialect === "sqlite") return sql`unixepoch()`;
-  // 🔴 PostgreSQL uses `clock_timestamp()`, NOT `now()`, and the difference decides correctness
-  // here rather than precision. `now()` is TRANSACTION start time and is frozen for the whole
-  // transaction, so a statement that waits on this row — which is exactly what contention means —
-  // reads the instant it began queueing rather than the instant it was admitted. A claim judged
-  // live by that stale reading can already have expired, and an expiry written from it can be in
-  // the past before the row is even updated.
-  //
-  // 🔴 MySQL uses `UTC_TIMESTAMP()`, NOT `NOW()`. `NOW()` returns the SESSION's local time, and
-  // `expires_at` is a `DATETIME`, which stores no zone — so a holder whose session is UTC writes an
-  // expiry a contender whose session is UTC+05 reads as five hours in the past, and takes a live
-  // claim instantly. Nothing about the row would look wrong afterwards: both runs believe they hold
-  // it. `UTC_TIMESTAMP()` is the same instant for every session whatever its `time_zone`.
-  //
-  // Both are statement-time rather than transaction-time, so neither needs Postgres's distinction.
-  return dialect === "mysql" ? sql`UTC_TIMESTAMP()` : sql`clock_timestamp()`;
-}
-
-function futureExpression(dialect: MigrationDialect, seconds: number): SQL {
-  if (dialect === "sqlite") {
-    return sql`unixepoch() + ${seconds}`;
-  }
-  if (dialect === "mysql") {
-    return sql`DATE_ADD(UTC_TIMESTAMP(), INTERVAL ${seconds} SECOND)`;
-  }
-  // The same clock as `nowExpression`, deliberately: an expiry written from transaction time and a
-  // liveness test taken at statement time would disagree about when the lease ends, and the pair
-  // has to share one frame of reference to mean anything.
-  return sql`clock_timestamp() + make_interval(secs => ${seconds})`;
-}
+export const LOCK_RENEW_MARGIN_SECONDS = LOCK_TIMINGS.renewMarginSeconds;
 
 function expiryExpression(dialect: MigrationDialect): SQL {
   return futureExpression(dialect, LOCK_TTL_SECONDS);

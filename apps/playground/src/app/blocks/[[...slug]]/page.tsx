@@ -24,8 +24,10 @@
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { loadSiteStyle } from "@nextlyhq/plugin-page-builder";
 
 import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
+import { SITE_STYLE_DEFAULTS } from "../../../lib/site-style-defaults";
 
 /**
  * Where this route is mounted, for canonical URLs.
@@ -83,6 +85,12 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // placeholder whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
   styleContext: SITE_STYLE_CONTEXT,
+  // Resolved per request: defaults with the stored Site Style layered on top.
+  // The same statement the page-builder route makes, because both routes serve
+  // documents of one engine and a site sheet that differed between them would
+  // style one page two ways depending on its URL.
+  siteStyles: () =>
+    loadSiteStyle({ nextly: siteReader, defaults: SITE_STYLE_DEFAULTS }),
   metadata: (entry, context, derived) => ({
     title: derived.title ?? (entry.title as string | undefined),
     description: derived.description,

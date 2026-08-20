@@ -28,7 +28,7 @@ import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
-import { keysToSnakeCase } from "../../../lib/case-conversion";
+import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
   resolvePublishTransition,
@@ -47,7 +47,10 @@ import {
 import { expansionAccess } from "../../../services/collections/trust-bound";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
-import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import {
+  SYSTEM_TIMESTAMP_KEYS,
+  convertTimestampsToCamelCase,
+} from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -1719,10 +1722,37 @@ export class SingleMutationService extends BaseService {
                 : convertTimestampsToCamelCase({
                     ...(existingDoc as Record<string, unknown>),
                   });
-              const pending: Record<string, unknown> = {
-                ...base,
-                ...convertTimestampsToCamelCase({ ...mainPayload }),
-              };
+              // The base is the READ shape (field names); `mainPayload` is the
+              // WRITE shape (columns). Spreading one onto the other put both
+              // spellings of every edited field in the snapshot — the live value
+              // under `siteName` and the pending one under `site_name` — so which
+              // value a consumer saw depended on which spelling it asked for.
+              // The promote read the column and shipped the edit; anything
+              // reading by field name got the stale live value.
+              //
+              // Mapped through the declared fields rather than camel-cased
+              // wholesale, for the reason the version capture below gives: a
+              // field genuinely named `site_title` must keep its own spelling.
+              const pending: Record<string, unknown> = { ...base };
+              for (const field of singleMeta.fields) {
+                if (field.name === undefined) continue;
+                const column = toSnakeCase(field.name);
+                if (Object.prototype.hasOwnProperty.call(mainPayload, column)) {
+                  pending[field.name] = (
+                    mainPayload as Record<string, unknown>
+                  )[column];
+                }
+              }
+              // The system columns the loop above does not declare — status and
+              // the timestamps — still ride along at the read shape.
+              const systemPatch = convertTimestampsToCamelCase({
+                ...(mainPayload as Record<string, unknown>),
+              });
+              for (const key of ["status", ...SYSTEM_TIMESTAMP_KEYS]) {
+                if (Object.prototype.hasOwnProperty.call(systemPatch, key)) {
+                  pending[key] = systemPatch[key];
+                }
+              }
               // A localized Single keeps its translatable values on the
               // companion row, so this write's translated values reach the
               // snapshot only by being overlaid here — keyed by field name to

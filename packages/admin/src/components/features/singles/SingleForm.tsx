@@ -59,6 +59,7 @@ import { useTranslationSource } from "@admin/components/features/entries/Transla
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -110,6 +111,13 @@ export interface SingleSchema {
    * `dynamic_singles.localized`.
    */
   localized?: boolean;
+  /**
+   * Whether a status-less save to this published Single is HELD as a pending
+   * change rather than written live (the draft/published split). Derived
+   * server-side from the same eligibility rule the write uses, so the editor
+   * cannot offer an affordance the engine will not honour.
+   */
+  draftsEnabled?: boolean;
 }
 
 /**
@@ -447,6 +455,15 @@ export function SingleForm({
     }
   )._translations;
 
+  // Throwing away this language's pending change. Scoped to the active locale:
+  // a localized Single holds one per language, so discarding without naming one
+  // would remove work in a language the author never opened.
+  const discardMutation = useDiscardSingleWorkingDraft({
+    slug: schema.slug,
+    documentId: document.id,
+    locale,
+  });
+
   // Adapt the SingleDocumentData shape into what EntrySystemHeader and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
   // entry.updated_at). The structural alignment is straightforward — singles
@@ -455,6 +472,11 @@ export function SingleForm({
   const entryLike = {
     id: document.id,
     status: documentStatus,
+    // The flag the header reads to show Changed and offer Discard. Forwarded
+    // rather than recomputed: the server sets it only when a pending change was
+    // actually overlaid, which is what makes it per-language.
+    _isWorkingDraft:
+      (document as { _isWorkingDraft?: boolean })._isWorkingDraft === true,
     createdAt: (document as { createdAt?: string }).createdAt,
     updatedAt: document.updatedAt,
     title: (document as { title?: string }).title,
@@ -625,8 +647,21 @@ export function SingleForm({
                         onSaveChanges={() => {
                           void handleSubmit(undefined, "save-changes");
                         }}
+                        /* The draft/published split. Without this the header
+                   takes its `draftsEnabled: false` branch, whose Save names the
+                   status — and a write that names one is never held, so the
+                   engine's pending-change support stayed dark for every Single.
+                   The label is the visible tell: "Save changes" rather than
+                   "Save". */
+                        draftsEnabled={schema.draftsEnabled === true}
+                        onSaveWorkingDraft={() => {
+                          void handleSubmit(undefined, "save-working-draft");
+                        }}
                         onUnpublish={() => {
                           void handleSubmit(undefined, "unpublish");
+                        }}
+                        onDiscardWorkingDraft={async () => {
+                          await discardMutation.mutateAsync();
                         }}
                         onCancel={handleCancel}
                         onViewApi={onViewApi}

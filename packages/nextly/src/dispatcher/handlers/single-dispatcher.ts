@@ -60,11 +60,18 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import {
+  resolveSingleTableName,
+  singleTableFamiliesCollide,
+} from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
+import {
+  draftSplitResponseFields,
+  schemaDraftSplit,
+} from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -102,6 +109,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
+  isTruthyParam,
   parseStatusParam,
   requireParam,
   toNumber,
@@ -573,13 +581,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
 
-      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. A slug is
+      // Refused before any DDL runs, and keyed on the TABLE FAMILY rather than the slug. A slug is
       // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
-      // while looking like two free slugs. The registry's own check runs after the DDL, by which
-      // point `CREATE TABLE IF NOT EXISTS` has reported success against the table that already
-      // exists and the runtime registration has rebound it to this request's fields.
-      const owner = (await svc.registry.getAllSingles()).find(
-        s => s.tableName === tableName
+      // while looking like two free slugs — and a Single's storage spans its main table AND the
+      // `_locales` companion beside it, so `foo-locales` collides with `foo` the same way. The
+      // registry's own check runs after the DDL, by which point the create has already acted
+      // against the table that exists and rebound the runtime to this request's fields.
+      const owner = (await svc.registry.getAllSingles()).find(s =>
+        singleTableFamiliesCollide(s.tableName, tableName)
       );
       if (owner) {
         throw NextlyError.duplicate({
@@ -725,6 +734,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
         translationStatus: p["translation-status"] === "1",
+        // `?draft=1` opts into the working-draft overlay, matching the entry
+        // read. Gated server-side on an actual update-capability probe, so a
+        // read-only caller passing it still sees the published document.
+        includeWorkingDraft: isTruthyParam(p.draft),
         status,
       });
 
@@ -893,12 +906,30 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
+      // Whether a status-less save on this Single holds the edit rather than
+      // writing the live row. Derived from the SAME predicate the write gates
+      // on, which its own module requires of every call site: an editor told
+      // drafts are off sends an explicit published save, and a write that names
+      // a status is never held — so the pending-change support stays dark and
+      // the live document is overwritten. Derived from the ORIGINAL fields, not
+      // the enriched ones, because enrichment drops the markers component
+      // eligibility reads.
+      const draftSplit = await schemaDraftSplit({
+        status: (single as { status?: boolean }).status,
+        versions: single.versions,
+        fields: single.fields,
+        slug: (single as { slug?: string }).slug,
+      });
+
       // The schema record IS the doc here, so the admin Schema Builder
       // reads slug/fields/admin off the response body directly without
       // an envelope wrapper.
-      return respondDoc(
-        injectSingleDefaultFields(enrichedData as unknown as SingleWithFields)
-      );
+      return respondDoc({
+        ...injectSingleDefaultFields(
+          enrichedData as unknown as SingleWithFields
+        ),
+        ...draftSplitResponseFields(draftSplit),
+      });
     },
   },
 

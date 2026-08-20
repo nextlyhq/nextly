@@ -42,6 +42,7 @@ import { usePreviewLink } from "@admin/hooks/usePreviewLink";
 import {
   computeMainFields,
   takeoverControllerNames,
+  computeFieldsBeside,
   takeoverTypesFromBranding,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
@@ -358,6 +359,36 @@ export function EntryForm({
   );
   const mainFields = computeMainFields(allFields, { takeoverTypes, values });
 
+  /*
+   * A renderer for the entry's OTHER fields, handed to whatever surface takes
+   * the body over.
+   *
+   * A full-screen field — the page builder is the one that ships — covers the
+   * form completely, so its author cannot reach the SEO fields, the relations
+   * or anything else this collection declares without closing the editor and
+   * losing its undo history. This is what lets that surface offer them back.
+   *
+   * Takes the asking field's path, so the surface is never offered ITSELF:
+   * rendering the page builder inside the page builder's own settings panel
+   * would nest an editor in its own chrome. Keyed on the path rather than on
+   * `layout: "takeover"` because no shipped plugin declares that flag, so a
+   * rule conditioned on it would never fire.
+   *
+   * Built from THIS form's `control`, so what the surface draws and what the
+   * form submits are one thing. A second `EntryForm` would fork the state and
+   * lose the edit made in whichever copy did not save.
+   */
+  const renderEntryFields = useCallback(
+    (excludePath: string) => (
+      <EntryFormContent
+        fields={computeFieldsBeside(allFields, excludePath)}
+        disabled={isSubmitting}
+        mode={mode}
+      />
+    ),
+    [allFields, isSubmitting, mode]
+  );
+
   // Get form errors and submit attempt count. submitCount gates the
   // top-level "Please fix the following errors" toast in FormErrorSummary
   // so it only appears after the user actually clicks Save / Publish, not
@@ -647,6 +678,10 @@ export function EntryForm({
                 entryId={entry?.id}
                 collectionSlug={collection.name}
                 isCreateMode={mode === "create"}
+                // Only where a takeover can happen. The embedded branch renders
+                // the whole body in a modal and hides nothing, so a panel there
+                // would offer a second copy of fields already on screen.
+                renderEntryFields={renderEntryFields}
               >
                 <div className={cn("space-y-0", className)}>
                   <EntryFormProvider form={form} onSubmit={handleSubmit}>

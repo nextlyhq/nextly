@@ -29,8 +29,8 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useSingleEditorDocument } from "@admin/hooks/queries/useSingleEditorDocument";
 import {
-  useSingleDocument,
   useSingleSchema,
   useUpdateSingleDocument,
 } from "@admin/hooks/queries/useSingles";
@@ -172,43 +172,29 @@ export default function SingleEditPage({
     error: schemaError,
   } = useSingleSchema(slug);
 
-  // Fetch Single document data
-  const {
-    data: document,
-    isLoading: isLoadingDocument,
-    error: documentError,
-  } = useSingleDocument(slug, {
-    locale,
-    // i18n: edit the ACTUAL per-locale values — disable fallback so an untranslated field shows
-    // empty (not the default-language value, which would bleed the source text into the field and
-    // risk saving it into the target locale). The inline source hint is shown from `sourceDoc`.
-    fallbackLocale: localizationEnabled ? "none" : undefined,
-    translationStatus: localizationEnabled,
-  });
-
-  // i18n: while translating another language, also load the SOURCE document so
-  // the editor can show its text — inline on each translatable field, and in
-  // translation mode's source pane.
-  const isNonDefaultLocale =
-    !!locale && !!defaultLocale && locale !== defaultLocale;
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({
       activeLocale: locale,
       defaultLocale,
     });
-  // The language the source is read AT. Translation mode names it explicitly;
-  // otherwise the inline hint's source has always been the app default.
-  const sourceLocale = translateFrom ?? defaultLocale;
-  const { data: sourceDoc } = useSingleDocument(slug, {
-    locale: sourceLocale,
-    // No fallback, matching `entry-locale-source.ts`'s SOURCE_READ. With
-    // fallback on, an untranslated SOURCE field resolves to yet another
-    // language's text — which would be presented as this language's source and
-    // copied into the target as if it were a translation.
-    fallbackLocale: "none",
-    queryOptions: {
-      enabled: (isNonDefaultLocale || !!translateFrom) && !!slug,
-    },
+
+  // What this editor reads: the document it edits, and — while translating — the
+  // source-language document shown alongside it.
+  const {
+    document,
+    isLoading: isLoadingDocument,
+    error: documentError,
+    sourceDoc,
+    isNonDefaultLocale,
+  } = useSingleEditorDocument({
+    slug,
+    locale,
+    defaultLocale,
+    localizationEnabled,
+    // Ask for the pending change only where the split applies. The server gates
+    // it on an actual update-capability probe regardless.
+    draftsEnabled: schema?.draftsEnabled === true,
+    translateFrom,
   });
 
   // Update mutation — routes the save to the active language's companion row.

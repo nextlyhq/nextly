@@ -92,6 +92,16 @@ export {
   type DocumentIdentity,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * Which language the surrounding document is being edited in. Separate from the
+ * identity for the same reason the status is: a document is the same document
+ * in every language, so a consumer reading only the identity should not
+ * re-render when the language changes.
+ */
+export {
+  useDocumentLocale,
+  type DocumentLocale,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
  * How the surrounding document stands, for a field that covers the editor's own
  * chrome. Separate from the identity deliberately: which document this is does
  * not change with the language, and how it stands does.
@@ -101,6 +111,25 @@ export {
   hasPendingWorkingDraft,
   type DocumentStatus,
 } from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * The fields an active takeover hid, for the surface that took the body over.
+ *
+ * A takeover collapses the form body to the takeover field alone, so the rest
+ * of the entry is removed from the page rather than merely covered. Whatever
+ * took the body over is the only surface left that can still show them.
+ */
+export { useEntryFieldsPanel } from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * The rich-text editor's nodes and theme, for a surface that must edit this
+ * site's rich text with the SAME node registry the field editor uses.
+ *
+ * A loader rather than the classes themselves: they carry Lexical and PrismJS,
+ * which belong behind a dynamic import — see the module for the measurement.
+ */
+export {
+  loadRichTextEditorKit,
+  type RichTextEditorKit,
+} from "./lib/rich-text/load-editor-kit";
 /**
  * A field telling the form it holds work the form's values do not contain.
  *

@@ -19,7 +19,6 @@ describe("resolveVersionsConfig", () => {
       drafts: {
         enabled: true,
         autosave: { enabled: true, intervalMs: DEFAULT_AUTOSAVE_INTERVAL_MS },
-        schedulePublish: false,
       },
       maxPerDoc: DEFAULT_MAX_PER_DOC,
     });
@@ -42,15 +41,14 @@ describe("resolveVersionsConfig", () => {
     expect(resolved?.drafts.autosave.enabled).toBe(false);
   });
 
-  it("honors a custom autosave interval and schedulePublish", () => {
+  it("honors a custom autosave interval", () => {
     const resolved = resolveVersionsConfig({
-      drafts: { autosave: { intervalMs: 3000 }, schedulePublish: true },
+      drafts: { autosave: { intervalMs: 3000 } },
     });
     expect(resolved?.drafts.autosave).toEqual({
       enabled: true,
       intervalMs: 3000,
     });
-    expect(resolved?.drafts.schedulePublish).toBe(true);
   });
 
   it("honors maxPerDoc (number and unlimited)", () => {
