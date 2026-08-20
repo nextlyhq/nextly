@@ -23,16 +23,11 @@ import {
   findFieldById,
   findParentContainerId,
   reorderNestedFields,
+  SYSTEM_FIELD_NAMES,
 } from "@admin/lib/builder";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { FieldDefinition } from "@admin/types/collection";
-
-/**
- * Fields every builder kind provides itself. They are filtered out of the
- * definitions a save sends, so the server keeps owning them.
- */
-const SYSTEM_FIELD_NAMES = ["title", "slug"];
 
 /**
  * Whether a drag between two fields stays inside one container.

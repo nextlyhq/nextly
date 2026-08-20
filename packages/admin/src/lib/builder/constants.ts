@@ -25,6 +25,14 @@ export const DEFAULT_SYSTEM_FIELDS: BuilderField[] = [
 ];
 
 /**
+ * The names the system fields above occupy. Derived rather than restated so a
+ * change to that list cannot leave a loader filtering one set and a save
+ * filtering another. Narrower than RESERVED_NAMES, which also covers columns
+ * the builder never renders.
+ */
+export const SYSTEM_FIELD_NAMES = DEFAULT_SYSTEM_FIELDS.map(f => f.name);
+
+/**
  * Single source of truth for reserved field names.
  * New user-defined fields cannot use these names because they collide with
  * built-in or framework-managed columns. Replaces ad-hoc per-call filtering

@@ -24,15 +24,10 @@ import type {
 import {
   convertToBuilderField,
   DEFAULT_SYSTEM_FIELDS,
+  SYSTEM_FIELD_NAMES,
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import type { FieldDefinition } from "@admin/types/collection";
-
-/**
- * Fields the server owns. They are filtered out of what the builder loads, so
- * the user's field list holds only the user's fields.
- */
-const SERVER_OWNED_FIELDS = ["title", "slug"];
 
 export interface UseBuilderEntityStateOptions<TEntity> {
   /** The loaded entity, or undefined while the query is in flight. */
@@ -97,7 +92,7 @@ export function useBuilderEntityState<TEntity>({
     onLoad(entity);
 
     const userFields = toFields(entity).filter(
-      f => !SERVER_OWNED_FIELDS.includes(f.name)
+      f => !SYSTEM_FIELD_NAMES.includes(f.name)
     );
     const allFields = [
       ...DEFAULT_SYSTEM_FIELDS,
