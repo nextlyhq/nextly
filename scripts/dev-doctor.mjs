@@ -3,12 +3,25 @@
 // Intentionally JS (.mjs) — kept dependency-free so it can run before
 // any TypeScript or Next.js machinery loads.
 
+import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { isCliEntry } from "./cli-entry.mjs";
+// Resolved through this file's REAL path rather than as a bare
+// `./cli-entry.mjs`. A relative specifier is resolved against the URL the
+// runtime holds for this module, and under `--preserve-symlinks-main` that is
+// the SYMLINK — so the neighbour is looked for beside the link, is not there,
+// and the command dies with `ERR_MODULE_NOT_FOUND` before printing a check.
+const { isCliEntry } = await import(
+  pathToFileURL(
+    path.join(
+      path.dirname(realpathSync(fileURLToPath(import.meta.url))),
+      "cli-entry.mjs"
+    )
+  ).href
+);
 
 // Workspace integrity check. The two scopes get hoisted differently:
 //   - @nextlyhq/* — consumed by the root package.json (eslint, prettier

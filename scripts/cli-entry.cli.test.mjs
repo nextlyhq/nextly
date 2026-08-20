@@ -236,4 +236,28 @@ describe.skipIf(!SYMLINKS)("a module that reaches the guard as a neighbour", () 
     expect(out, "it died before running").not.toContain("LOADED");
     expect(out).toContain("ERR_MODULE_NOT_FOUND");
   });
+
+  // The fixtures above prove the PATTERN survives. They say nothing about
+  // whether any shipped script actually uses it — a fixture written correctly
+  // stays green while every real command keeps the bare specifier. So the real
+  // migrated scripts are run here, through the same preserved symlink.
+  //
+  // Each is asserted on OUTPUT rather than status. All three exit non-zero for
+  // ordinary reasons in this setup (the doctor's checks resolve against the
+  // link's directory; the gates want a PR number), and a status assertion
+  // could not tell that apart from dying at import.
+  for (const [name, script, marker] of [
+    ["the doctor", "dev-doctor.mjs", "[nextly]"],
+    ["the verdict gate", "ci-verdict.mjs", "usage:"],
+    ["the merge gate", "verify-merge.mjs", "usage:"],
+  ]) {
+    it(`${name} still runs through a preserved symlink`, () => {
+      const link = linkFromElsewhere(path.join(HERE, script), `real-${script}`);
+
+      const out = run(link, "--preserve-symlinks-main");
+
+      expect(out, "it reached its own code").not.toContain("ERR_MODULE_NOT_FOUND");
+      expect(out).toContain(marker);
+    });
+  }
 });

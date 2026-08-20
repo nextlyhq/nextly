@@ -24,14 +24,31 @@
  * Or run directly: `node scripts/build-css-fast.mjs`
  */
 
+import { realpathSync } from "fs";
 import fs from "fs/promises";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 import postcss from "postcss";
 import tailwindcss from "@tailwindcss/postcss";
 
-import { isCliEntry } from "../../../scripts/cli-entry.mjs";
+// Resolved through this file's REAL path rather than as a bare relative
+// specifier, which is resolved against the URL the runtime holds for this
+// module — the SYMLINK under `--preserve-symlinks-main`. The helper would then
+// be looked for beside the link and the build would die with
+// `ERR_MODULE_NOT_FOUND` before producing any CSS.
+const { isCliEntry } = await import(
+  pathToFileURL(
+    path.join(
+      path.dirname(realpathSync(fileURLToPath(import.meta.url))),
+      "..",
+      "..",
+      "..",
+      "scripts",
+      "cli-entry.mjs"
+    )
+  ).href
+);
 
 // Scoping lives in @nextlyhq/admin-css so this build and the plugin-facing
 // CLI share one implementation and cannot drift. The release build
