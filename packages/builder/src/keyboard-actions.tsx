@@ -506,6 +506,21 @@ export function useBlockKeyboardActions({
       {
         keys: "mod+z",
         description: "Undo the last change",
+        // Not while the caret is in a block's text.
+        //
+        // `whenTyping` defaults to TRUE for any binding opening on a modifier,
+        // and `preventDefault` to true with it — so without this the canvas
+        // SWALLOWS the author's undo mid-sentence and rewinds the DOCUMENT
+        // instead. They lose a block move they had finished with and keep the
+        // words they wanted back: both halves wrong at once.
+        //
+        // Declining leaves the keystroke to the element, which is what an
+        // uncontrolled `contentEditable` wants — inline editing hands the DOM
+        // over for the duration precisely so the browser's own history serves
+        // the caret. The document's history resumes owning `mod+z` the moment
+        // the edit commits, which is also when there is a document change worth
+        // undoing.
+        whenTyping: false,
         // No selection required: undo acts on the document's history, not on
         // whatever happens to be selected — and the commonest thing to undo is
         // a deletion, which leaves a different block selected than the one the
@@ -522,6 +537,10 @@ export function useBlockKeyboardActions({
         // arrive with whichever they learned.
         keys: "mod+shift+z",
         description: "Redo the last undone change",
+        // Same reason as `mod+z` above: a redo taken from the caret rewinds the
+        // wrong history. `mod+shift+z` opens on a modifier too, so it inherits
+        // the same firing default and needs the same refusal.
+        whenTyping: false,
         when: () => latest.current.canRedo,
         run: () => {
           latest.current.redo();
@@ -531,6 +550,7 @@ export function useBlockKeyboardActions({
       {
         keys: "mod+y",
         description: "Redo the last undone change",
+        whenTyping: false,
         when: () => latest.current.canRedo,
         run: () => {
           latest.current.redo();
