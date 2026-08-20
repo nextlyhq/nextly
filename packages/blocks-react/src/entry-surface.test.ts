@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 import * as boundaryModule from "./block-boundary";
 import * as blocksEntry from "./blocks/index";
 import * as contextModule from "./context";
+import * as richTextModule from "./rich-text";
 import * as pageRendererModule from "./page-renderer";
 import * as placeholderModule from "./placeholder";
 import * as prepareModule from "./prepare-document";
@@ -83,6 +84,15 @@ const SOURCE_MODULES: ReadonlyArray<{
   internal: readonly string[];
 }> = [
   { name: "context", module: contextModule, internal: [] },
+  {
+    name: "rich-text",
+    module: richTextModule,
+    // Everything this module holds is public: the component and its props. The
+    // node-walking helpers are deliberately NOT exported — a caller wanting
+    // words out of rich text uses `richTextToPlainText` from the engine, which
+    // is the same walk the CMS uses, rather than a second one here.
+    internal: [],
+  },
   { name: "resolver", module: resolverModule, internal: [] },
   {
     name: "styles",
@@ -215,6 +225,7 @@ describe("the root entry", () => {
       "NODE_ID_ATTRIBUTE",
       "PROP_ATTRIBUTE",
       "PageRenderer",
+      "RichText",
       "createBlockResolver",
       "createStandaloneContext",
       "defineBlock",

@@ -1,7 +1,9 @@
 import { arrayMove } from "@dnd-kit/sortable";
 
-import type { BuilderField } from "@admin/components/features/schema-builder";
-import type { FieldCondition } from "@admin/components/features/schema-builder/types";
+import type {
+  BuilderField,
+  FieldCondition,
+} from "@admin/components/features/schema-builder/types";
 import type { FieldDefinition } from "@admin/types/collection";
 
 /**

@@ -29,9 +29,18 @@ type Props = {
   kind: BuilderKind;
   values: BuilderSettingsValues;
   onChange: (next: BuilderSettingsValues) => void;
+  /** False once the entity exists: its slug addresses rows that already
+   *  live under it, so no save can move it. */
+  slugEditable?: boolean;
 };
 
-export function BasicsTab({ fields, kind, values, onChange }: Props) {
+export function BasicsTab({
+  fields,
+  kind,
+  values,
+  onChange,
+  slugEditable = true,
+}: Props) {
   // Singles' entry-form slug field validates as kebab-case only, so the
   // auto-derived default in the create popup must also be kebab. Collections
   // and components keep snake_case to match their respective backend rules.
@@ -40,6 +49,27 @@ export function BasicsTab({ fields, kind, values, onChange }: Props) {
     key: K,
     value: BuilderSettingsValues[K]
   ) => onChange({ ...values, [key]: value });
+
+  // Both layout branches below render this identical pair; only the grid
+  // around them differs per kind, so the fields themselves are built once.
+  const slugField = fields.includes("slug") && (
+    <div className="space-y-1">
+      <Label>Slug</Label>
+      <SlugInput
+        singular={values.singularName}
+        value={values.slug}
+        onChange={next => set("slug", next)}
+        readOnly={!slugEditable}
+      />
+    </div>
+  );
+
+  const iconField = fields.includes("icon") && (
+    <div className="space-y-1">
+      <Label>Icon</Label>
+      <IconPicker value={values.icon} onChange={next => set("icon", next)} />
+    </div>
+  );
 
   // Auto-derive slug AND plural from singular name UNLESS the user has
   // overridden either. Override signal: current value differs from what an
@@ -84,25 +114,8 @@ export function BasicsTab({ fields, kind, values, onChange }: Props) {
                 />
               </div>
             )}
-            {fields.includes("slug") && (
-              <div className="space-y-1">
-                <Label>Slug</Label>
-                <SlugInput
-                  singular={values.singularName}
-                  value={values.slug}
-                  onChange={next => set("slug", next)}
-                />
-              </div>
-            )}
-            {fields.includes("icon") && (
-              <div className="space-y-1">
-                <Label>Icon</Label>
-                <IconPicker
-                  value={values.icon}
-                  onChange={next => set("icon", next)}
-                />
-              </div>
-            )}
+            {slugField}
+            {iconField}
           </div>
         )}
 
@@ -140,26 +153,8 @@ export function BasicsTab({ fields, kind, values, onChange }: Props) {
         // Why: collections -- slug + icon paired in their own 50/50
         // row. Description (full-width) renders below.
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {fields.includes("slug") && (
-            <div className="space-y-1">
-              <Label>Slug</Label>
-              <SlugInput
-                singular={values.singularName}
-                value={values.slug}
-                onChange={next => set("slug", next)}
-              />
-            </div>
-          )}
-
-          {fields.includes("icon") && (
-            <div className="space-y-1">
-              <Label>Icon</Label>
-              <IconPicker
-                value={values.icon}
-                onChange={next => set("icon", next)}
-              />
-            </div>
-          )}
+          {slugField}
+          {iconField}
         </div>
       )}
 

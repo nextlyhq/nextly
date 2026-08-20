@@ -186,4 +186,47 @@ describe("BuilderSettingsModal — shell", () => {
     const submitted = onSubmit.mock.lastCall?.[0];
     expect(submitted.status).toBe(false);
   });
+
+  // The slug addresses the entity's route, its table and every record stored
+  // under it, and no update call sends a changed one — they all take the slug
+  // from the route. An editable field here accepts a value that is dropped by
+  // the next load, and on the kinds whose dirty check compares `slug` it also
+  // enables Save and re-pins the baseline as though the change had landed.
+  it("offers the slug for editing while creating", () => {
+    render(
+      <BuilderSettingsModal
+        open
+        mode="create"
+        config={collectionConfig}
+        initialValues={null}
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText("Slug")).not.toHaveAttribute("readonly");
+  });
+
+  it("shows the slug read-only once the entity exists", () => {
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={{
+          singularName: "Post",
+          pluralName: "Posts",
+          slug: "posts",
+          description: "",
+          icon: "FileText",
+        }}
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    const slug = screen.getByLabelText("Slug");
+    // Still shown and still readable: the slug is what a developer needs in
+    // order to reference the entity, so it is presented rather than hidden.
+    expect(slug).toHaveValue("posts");
+    expect(slug).toHaveAttribute("readonly");
+  });
 });

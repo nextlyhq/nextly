@@ -378,3 +378,21 @@ export {
   isReservedOperationName,
   type ReservedOperationName,
 } from "./operations";
+
+/**
+ * The stored shape of rich text.
+ *
+ * Shared here because the CMS and the renderer both read it and may not import
+ * each other — see the module for why a shared DEFINITION is the containable
+ * form of that, and two readers is not.
+ */
+export {
+  codeTokenClass,
+  hasFormat,
+  isRichTextNode,
+  isRichTextValue,
+  richTextToPlainText,
+  TEXT_FORMAT,
+  type RichTextNode,
+  type RichTextValue,
+} from "./rich-text";

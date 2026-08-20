@@ -121,3 +121,13 @@ export type {
   UseFieldBuilderReturn,
   FieldBuilderValidationResult,
 } from "./useFieldBuilder";
+
+// Builder field operations — duplicate, drag, and which fields are the user's.
+// Companion to useFieldBuilder: that hook holds the state, this one holds the
+// decisions the builder pages make about it.
+export { useBuilderFieldActions } from "./useBuilderFieldActions";
+export type { UseBuilderFieldActionsReturn } from "./useBuilderFieldActions";
+
+// The step between previewing a schema change and applying it: which
+// confirmation the user sees, and whether an apply is in flight.
+export { useSchemaChangeConfirmation } from "./useSchemaChangeConfirmation";
