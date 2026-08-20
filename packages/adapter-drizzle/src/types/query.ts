@@ -7,15 +7,22 @@
 import type { SqlParam } from "./core";
 
 /**
- * Every supported WHERE clause operator, as a value.
+ * Every WHERE clause operator this package DECLARES, as a value.
  *
  * @remarks
+ * Declared, not guaranteed executable. Membership here means a `WhereCondition`
+ * carrying the operator type-checks — it does NOT mean the adapter can run it.
+ * `OVERLAPS` is declared and unimplemented, and throws at build time, so a
+ * validator written against this list will admit input the query layer then
+ * rejects. Validate against it to catch a misspelled operator; do not read
+ * acceptance here as a capability.
+ *
  * - Standard comparison: =, !=, <, >, <=, >=
  * - Set operations: IN, NOT IN
  * - Pattern matching: LIKE, ILIKE (case-insensitive, PostgreSQL/emulated)
  * - NULL checks: IS NULL, IS NOT NULL
  * - Range: BETWEEN, NOT BETWEEN
- * - Substring: CONTAINS — a LITERAL match, not JSON containment; see below
+ * - Substring: CONTAINS — a LITERAL match on a TEXT column; see below
  * - Declared but NOT implemented: OVERLAPS, which throws
  *
  * This list is the source of truth and {@link WhereOperator} is derived from it,
@@ -42,9 +49,12 @@ export const WHERE_OPERATORS = [
   "IS NOT NULL",
   "BETWEEN",
   "NOT BETWEEN",
-  // Substring match on the column's TEXT, with the value taken literally. Despite the name it
-  // is not JSON containment: against a JSON column it matches the stored text, so it can hit a
-  // key name or a value in a different field. Use it as a search, not as a containment check.
+  // Substring match on a TEXT column, with the value taken literally. Despite the name it is
+  // not JSON containment, and it is not safe to point at a JSON column: the builder emits a
+  // bare `LIKE` with no cast, so on PostgreSQL a `json`/`jsonb` column has no matching operator
+  // and the statement ERRORS (`operator does not exist: jsonb ~~ text`). MySQL and SQLite
+  // coerce, and there it searches the serialized text — which hits a key name as readily as a
+  // value. Text columns only, and a search rather than a containment check.
   "CONTAINS",
   // Declared, never implemented — the builder throws `Unsupported operator: OVERLAPS`. Kept in
   // the union because removing it would be a breaking change to a published type; the refusal
@@ -53,7 +63,9 @@ export const WHERE_OPERATORS = [
 ] as const;
 
 /**
- * Supported WHERE clause operators. Derived from {@link WHERE_OPERATORS}.
+ * Every WHERE clause operator this package declares. Derived from
+ * {@link WHERE_OPERATORS}, and carrying the same caveat: a value of this type
+ * type-checks, which is not the same as the adapter being able to execute it.
  *
  * @public
  */
