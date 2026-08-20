@@ -93,7 +93,7 @@ function processWhereClause(
     // that asked to delete a subset would delete the table. Refusing is consistent with the two
     // refusals below: this builder already rejects input it cannot express rather than
     // approximating it.
-    if (where.and?.length || where.or?.length || where.not) {
+    if (namesABranch(where)) {
       throw new Error(
         `Where clause produced no condition: ${JSON.stringify(where)}. ` +
           `Every branch resolved to nothing, which would match every row. ` +
@@ -110,6 +110,21 @@ function isWhereCondition(
   item: WhereCondition | WhereClause
 ): item is WhereCondition {
   return "column" in item && "op" in item;
+}
+
+/**
+ * Whether the clause asked for a constraint at all — as opposed to being the empty clause a
+ * caller passes to mean "no filter".
+ *
+ * An empty `and`/`or` array does NOT count: nothing was named, so nothing could be dropped.
+ * What counts is a branch with members in it, or a `not`, because those are the shapes that can
+ * resolve to nothing and leave the caller believing a filter was applied.
+ */
+function namesABranch(where: WhereClause): boolean {
+  // `||` and not `??`: an empty array's `length` is 0, which is defined, so `??` would stop at
+  // the first branch that exists and never look at the others — `{ and: [], or: [{}] }` would
+  // read as "named nothing" on the strength of the empty `and`.
+  return Boolean(where.and?.length || where.or?.length || where.not);
 }
 
 /**

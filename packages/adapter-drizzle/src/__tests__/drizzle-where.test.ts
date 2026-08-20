@@ -189,6 +189,10 @@ describe("buildDrizzleWhere", () => {
       ["an or whose only member is empty", { or: [{}] }],
       ["a nested branch that resolves to nothing", { and: [{ or: [] }] }],
       ["a nested not that resolves to nothing", { and: [{ not: {} }] }],
+      // An EMPTY branch beside a named one. The empty `and` is the interesting part: its
+      // `length` is 0, which is a defined value, so a check written with `??` rather than `||`
+      // would stop there and never notice that `or` named a member and lost it.
+      ["an empty branch beside one that evaporated", { and: [], or: [{}] }],
     ])("refuses %s rather than matching every row", (_label, where) => {
       expect(() => buildDrizzleWhere(testTable, where)).toThrow(
         /produced no condition/
