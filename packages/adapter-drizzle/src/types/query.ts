@@ -7,35 +7,69 @@
 import type { SqlParam } from "./core";
 
 /**
- * Supported WHERE clause operators.
+ * Every WHERE clause operator this package DECLARES, as a value.
  *
  * @remarks
+ * Declared, not guaranteed executable. Membership here means a `WhereCondition`
+ * carrying the operator type-checks — it does NOT mean the adapter can run it.
+ * `OVERLAPS` is declared and unimplemented, and throws at build time, so a
+ * validator written against this list will admit input the query layer then
+ * rejects. Validate against it to catch a misspelled operator; do not read
+ * acceptance here as a capability.
+ *
  * - Standard comparison: =, !=, <, >, <=, >=
  * - Set operations: IN, NOT IN
  * - Pattern matching: LIKE, ILIKE (case-insensitive, PostgreSQL/emulated)
  * - NULL checks: IS NULL, IS NOT NULL
  * - Range: BETWEEN, NOT BETWEEN
- * - JSON/Array: CONTAINS, OVERLAPS
+ * - Substring: CONTAINS — a LITERAL match on a TEXT column; see below
+ * - Declared but NOT implemented: OVERLAPS, which throws
+ *
+ * This list is the source of truth and {@link WhereOperator} is derived from it,
+ * rather than the two being written out separately. A guard that has to enumerate
+ * the operators — a validator over caller input, or a test asserting the builder
+ * handles or refuses each one — can only do that from a runtime value, and a
+ * hand-kept copy of the union would agree with it on the day it was written and
+ * silently stop agreeing the next time a member is added.
  *
  * @public
  */
-export type WhereOperator =
-  | "="
-  | "!="
-  | "<"
-  | ">"
-  | "<="
-  | ">="
-  | "IN"
-  | "NOT IN"
-  | "LIKE"
-  | "ILIKE"
-  | "IS NULL"
-  | "IS NOT NULL"
-  | "BETWEEN"
-  | "NOT BETWEEN"
-  | "CONTAINS" // JSON contains
-  | "OVERLAPS"; // Array overlaps
+export const WHERE_OPERATORS = [
+  "=",
+  "!=",
+  "<",
+  ">",
+  "<=",
+  ">=",
+  "IN",
+  "NOT IN",
+  "LIKE",
+  "ILIKE",
+  "IS NULL",
+  "IS NOT NULL",
+  "BETWEEN",
+  "NOT BETWEEN",
+  // Substring match on a TEXT column, with the value taken literally. Despite the name it is
+  // not JSON containment, and it is not safe to point at a JSON column: the builder emits a
+  // bare `LIKE` with no cast, so on PostgreSQL a `json`/`jsonb` column has no matching operator
+  // and the statement ERRORS (`operator does not exist: jsonb ~~ text`). MySQL and SQLite
+  // coerce, and there it searches the serialized text — which hits a key name as readily as a
+  // value. Text columns only, and a search rather than a containment check.
+  "CONTAINS",
+  // Declared, never implemented — the builder throws `Unsupported operator: OVERLAPS`. Kept in
+  // the union because removing it would be a breaking change to a published type; the refusal
+  // is pinned by a test so implementing it has to come through here.
+  "OVERLAPS",
+] as const;
+
+/**
+ * Every WHERE clause operator this package declares. Derived from
+ * {@link WHERE_OPERATORS}, and carrying the same caveat: a value of this type
+ * type-checks, which is not the same as the adapter being able to execute it.
+ *
+ * @public
+ */
+export type WhereOperator = (typeof WHERE_OPERATORS)[number];
 
 /**
  * Individual WHERE condition.
