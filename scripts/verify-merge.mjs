@@ -786,11 +786,19 @@ export function reviewsCoveringTip(reviews, tip, login) {
  * excluded drafts and the other filtered nothing, four lines apart, so the same
  * review was coverage for one reviewer and not the other.
  */
-const verdict = await import(
-  pathToFileURL(
-    join(dirname(realpathSync(fileURLToPath(import.meta.url))), "ci-verdict.mjs")
-  ).href
-);
+const sibling = name =>
+  import(
+    pathToFileURL(join(dirname(realpathSync(fileURLToPath(import.meta.url))), name))
+      .href
+  );
+
+const verdict = await sibling("ci-verdict.mjs");
+// EVERY sibling goes through `sibling`, the entry guard included. A static
+// import of it would reach the one case this exists for — a symlinked entry
+// under `--preserve-symlinks-main` — and fail with `ERR_MODULE_NOT_FOUND`
+// before any of this file runs, turning the gate's deliberate exit 2 into an
+// exit 1.
+const { isCliEntry } = await sibling("cli-entry.mjs");
 export const SUBMITTED_REVIEW_STATES = verdict.SUBMITTED_REVIEW_STATES;
 /**
  * The revision a reviewer's comment reports having read.
@@ -852,8 +860,6 @@ import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
-import { isCliEntry } from "./cli-entry.mjs";
 
 const REPO = "nextlyhq/nextly";
 

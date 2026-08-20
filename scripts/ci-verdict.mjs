@@ -46,26 +46,31 @@ import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { isCliEntry } from "./cli-entry.mjs";
-
 /**
- * The request layer, resolved through this file's REAL path.
+ * A sibling module, resolved through this file's REAL path.
  *
- * A bare `./ci-verdict-evidence.mjs` would be resolved relative to the
- * specifier the runtime holds for this module — and under
- * `--preserve-symlinks-main` that is the SYMLINK, so the sibling is looked
- * for beside the link rather than beside this file and the process dies
- * before running. The same flag is why the entry check below accepts two
- * forms; this is its import-time half.
+ * A bare `./name.mjs` would be resolved relative to the specifier the runtime
+ * holds for this module — and under `--preserve-symlinks-main` that is the
+ * SYMLINK, so the sibling is looked for beside the link rather than beside
+ * this file and the process dies before running. The same flag is why the
+ * entry check below accepts two forms; this is its import-time half.
+ *
+ * EVERY sibling goes through here. A static import added later would reach the
+ * one case this exists for — a symlinked entry under that flag — and fail with
+ * `ERR_MODULE_NOT_FOUND` before any of this file runs, which turns the gate's
+ * deliberate exit 2 into an exit 1.
+ *
+ * @param {string} name
+ * @returns {Promise<Record<string, unknown>>}
  */
-const evidence = await import(
-  pathToFileURL(
-    join(
-      dirname(realpathSync(fileURLToPath(import.meta.url))),
-      "ci-verdict-evidence.mjs"
-    )
-  ).href
-);
+const sibling = name =>
+  import(
+    pathToFileURL(join(dirname(realpathSync(fileURLToPath(import.meta.url))), name))
+      .href
+  );
+
+const { isCliEntry } = await sibling("cli-entry.mjs");
+const evidence = await sibling("ci-verdict-evidence.mjs");
 const {
   countStranded,
   createGh,
