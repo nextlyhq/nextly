@@ -34,7 +34,19 @@ jobs:
   integration:
     name: Integration (${{ matrix.dialect }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 25 minutes until the suite outgrew it. The MySQL leg's last GREEN run
+    # finished in 24m52s — eight seconds inside the limit — and every run after
+    # that hit the ceiling. A timeout-minutes kill is reported as
+    # conclusion=cancelled rather than failure, so the leg stopped contributing
+    # a verdict while looking like somebody had cancelled the run: six
+    # consecutive PRs merged with MySQL coverage that never reported.
+    #
+    # `packages/nextly` runs its integration files sequentially on purpose
+    # (fileParallelism: false, single fork — the system-table suites share
+    # fixed table names), so this number only ever needs to grow. Raised with
+    # real headroom rather than to just past the last measurement, because a
+    # ceiling set at the current duration is a ceiling that fails on variance.
+    timeout-minutes: 45
 
     strategy:
       # One dialect failing must not cancel the others: seeing that a change
@@ -181,7 +193,9 @@ jobs:
   integration-sqlite:
     name: Integration (sqlite)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Raised with the matrix legs above: this one passed at 22m18s, which is
+    # inside 25 but not by enough to leave alone while its siblings move.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
