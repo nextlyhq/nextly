@@ -44,6 +44,10 @@ export type {
   JoinSpec,
 } from "./query";
 
+// The operator list is a VALUE, so that callers validating input against it and the type that
+// narrows that input cannot disagree — the type is derived from this array.
+export { WHERE_OPERATORS } from "./query";
+
 // ============================================================
 // CRUD Operation Types
 // ============================================================

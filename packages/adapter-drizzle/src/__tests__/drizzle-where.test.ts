@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { buildDrizzleWhere } from "../drizzle-where";
+import { WHERE_OPERATORS } from "../types";
 
 import type { WhereClause, WhereCondition, WhereOperator } from "../types";
 
@@ -149,11 +150,11 @@ const OPERATOR_CASES: ReadonlyArray<{
   },
   {
     // CONTAINS is deliberately not JSON containment: the builder degrades it to a substring
-    // LIKE, and the wrapping in `%` is the whole of that translation. Asserting the parameter
-    // is what distinguishes the fallback from an equality match.
+    // LIKE. The `escape` clause is part of that translation, not decoration — see the literal
+    // matching cases below.
     operator: "CONTAINS",
     condition: { column: "name", op: "CONTAINS", value: "test" },
-    sql: `"test_table"."name" like $1`,
+    sql: `"test_table"."name" like $1 escape '!'`,
     params: ["%test%"],
   },
 ];
@@ -164,38 +165,46 @@ const OPERATOR_CASES: ReadonlyArray<{
  */
 const REFUSED_OPERATORS: readonly WhereOperator[] = ["OVERLAPS"];
 
-/**
- * Every member of `WhereOperator`, transcribed from the union in `types/query.ts`. The two lists
- * above have to partition this one exactly: an operator in neither is one no test describes, and
- * a caller can pass it today.
- */
-const ALL_OPERATORS: readonly WhereOperator[] = [
-  "=",
-  "!=",
-  "<",
-  ">",
-  "<=",
-  ">=",
-  "IN",
-  "NOT IN",
-  "LIKE",
-  "ILIKE",
-  "IS NULL",
-  "IS NOT NULL",
-  "BETWEEN",
-  "NOT BETWEEN",
-  "CONTAINS",
-  "OVERLAPS",
-];
-
 describe("buildDrizzleWhere", () => {
-  describe("an empty clause filters nothing", () => {
+  describe("a clause that asks for nothing, and one that asks and gets nothing", () => {
+    // `undefined` is not a neutral return value here. `update` and `delete` take the where
+    // clause as a REQUIRED argument and omit the WHERE entirely when none comes back, so
+    // whatever produces `undefined` produces a whole-table statement. That makes the line
+    // between the two groups below a data-safety boundary rather than a style question: a
+    // caller who asked for no filter gets one, and a caller whose filter evaporated is refused.
+
     it("returns undefined for an empty where clause", () => {
       expect(buildDrizzleWhere(testTable, {})).toBeUndefined();
     });
 
     it("returns undefined when every branch is present but empty", () => {
+      // No member was named, so nothing was dropped. This is still "no filter".
       expect(buildDrizzleWhere(testTable, { and: [], or: [] })).toBeUndefined();
+    });
+
+    it.each<[string, WhereClause]>([
+      ["a not over an empty clause", { not: {} }],
+      ["a not over an empty branch", { not: { and: [] } }],
+      ["an and whose only member is empty", { and: [{}] }],
+      ["an or whose only member is empty", { or: [{}] }],
+      ["a nested branch that resolves to nothing", { and: [{ or: [] }] }],
+      ["a nested not that resolves to nothing", { and: [{ not: {} }] }],
+    ])("refuses %s rather than matching every row", (_label, where) => {
+      expect(() => buildDrizzleWhere(testTable, where)).toThrow(
+        /produced no condition/
+      );
+    });
+
+    it("still drops a no-op member that sits beside a real one", () => {
+      // The refusal is about a clause producing NOTHING, not about every member producing
+      // something: an empty conjunct alongside a real condition contributes no constraint and
+      // narrows nothing, so it stays a silent no-op rather than becoming an error.
+      expect(
+        compile({ and: [{}, { column: "age", op: ">", value: 1 }] })
+      ).toEqual({
+        sql: `"test_table"."age" > $1`,
+        params: [1],
+      });
     });
   });
 
@@ -207,16 +216,42 @@ describe("buildDrizzleWhere", () => {
       }
     );
 
-    it("describes every operator the public type declares, as supported or as refused", () => {
-      // The table above is only a guarantee if nothing falls outside it. Comparing the two lists
-      // against the union rather than against a count catches all three ways that happens: an
-      // operator with no row, a row written twice, and a new union member nobody classified.
+    it("describes every operator the package declares, as supported or as refused", () => {
+      // Compared against `WHERE_OPERATORS` — the runtime array `WhereOperator` is derived from —
+      // rather than against a count or a list retyped here. That is what makes this a guard
+      // instead of a restatement: a hand-kept copy would have to be edited to fail, so it could
+      // only ever agree with itself, whereas adding a member to the declared operators and
+      // nowhere else fails this immediately.
       const described = [
         ...OPERATOR_CASES.map(entry => entry.operator),
         ...REFUSED_OPERATORS,
       ].sort();
-      expect(described).toEqual([...ALL_OPERATORS].sort());
+      expect(described).toEqual([...WHERE_OPERATORS].sort());
     });
+
+    // The metacharacter-free case is the operator table's `CONTAINS` row above, not repeated
+    // here; the partition assertion keeps that row from being deleted, so it holds the control
+    // for these.
+    it.each([
+      ["a percent", "a%b", "%a!%b%"],
+      ["an underscore", "a_b", "%a!_b%"],
+      ["the escape character itself", "a!b", "%a!!b%"],
+      ["all of them at once", "100%_!", "%100!%!_!!%"],
+    ])(
+      "CONTAINS matches %s literally, escaping the LIKE metacharacters",
+      (_label, value, pattern) => {
+        // Without the escaping, `CONTAINS "a%b"` is the pattern `%a%b%`, which matches anything
+        // with an a before a b. Verified against live engines rather than reasoned about: on
+        // PostgreSQL 17, MySQL 8.4 and SQLite the escaped pattern matches 1 row of a 6-row
+        // fixture and the unescaped one matches 5.
+        expect(
+          compile({ and: [{ column: "name", op: "CONTAINS", value }] })
+        ).toEqual({
+          sql: `"test_table"."name" like $1 escape '!'`,
+          params: [pattern],
+        });
+      }
+    );
 
     it("binds a value rather than inlining it", () => {
       // A Date reaching the statement text instead of the parameter list would be both a

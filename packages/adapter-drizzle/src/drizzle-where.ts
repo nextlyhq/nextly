@@ -19,6 +19,7 @@ import {
   and,
   or,
   not,
+  sql,
   type SQL,
 } from "drizzle-orm";
 import { getColumns } from "drizzle-orm";
@@ -82,7 +83,25 @@ function processWhereClause(
     }
   }
 
-  if (parts.length === 0) return undefined;
+  if (parts.length === 0) {
+    // A clause that named no branch at all is the caller saying "no filter", and `undefined` is
+    // how that reaches the adapter. A clause that named one and produced nothing is a different
+    // thing entirely: every branch it asked for evaporated — an `and`/`or` whose every member
+    // resolved to nothing, or a `not` over such a member. Returning `undefined` for that is what
+    // makes it dangerous rather than merely wrong, because `update` and `delete` take the where
+    // clause as a REQUIRED argument and simply omit the WHERE when none comes back. A caller
+    // that asked to delete a subset would delete the table. Refusing is consistent with the two
+    // refusals below: this builder already rejects input it cannot express rather than
+    // approximating it.
+    if (where.and?.length || where.or?.length || where.not) {
+      throw new Error(
+        `Where clause produced no condition: ${JSON.stringify(where)}. ` +
+          `Every branch resolved to nothing, which would match every row. ` +
+          `Pass {} to mean "no filter".`
+      );
+    }
+    return undefined;
+  }
   if (parts.length === 1) return parts[0];
   return and(...parts);
 }
@@ -91,6 +110,24 @@ function isWhereCondition(
   item: WhereCondition | WhereClause
 ): item is WhereCondition {
   return "column" in item && "op" in item;
+}
+
+/**
+ * Wraps a value in `%…%` for a substring match, escaping the LIKE metacharacters inside it so
+ * the value matches literally.
+ *
+ * `!` is the escape character rather than the more usual backslash, and it has to be, because
+ * this builder emits one statement for every dialect. SQLite gives LIKE no default escape
+ * character at all, so a backslash there is just a backslash; declaring `ESCAPE '\'` instead
+ * runs into MySQL, where the backslash also escapes inside the string literal and the clause
+ * would have to be spelled differently per dialect. `ESCAPE '!'` parses identically on
+ * PostgreSQL, MySQL and SQLite, and needs no per-dialect branch to stay correct.
+ *
+ * The escape character is escaped FIRST by including it in the character class, so a literal
+ * `!` in the value cannot be produced by escaping something else afterwards.
+ */
+function containsPattern(value: string): string {
+  return `%${value.replace(/[!%_]/g, character => `!${character}`)}%`;
 }
 
 function buildCondition(
@@ -136,8 +173,12 @@ function buildCondition(
     case "NOT BETWEEN":
       return notBetween(col, cond.value, cond.valueTo);
     case "CONTAINS":
-      // JSON contains - fall back to LIKE for basic support
-      return like(col, `%${String(cond.value)}%`);
+      // JSON contains - fall back to a substring LIKE for basic support. The value is matched
+      // LITERALLY: a `%` or `_` the caller passed is a character to find, not a wildcard, so
+      // both are escaped and the escape character is declared. Without that, `CONTAINS "a%b"`
+      // silently widens to "a, anything, b" — and through `delete`, which takes its where clause
+      // as a required argument, a widened match is a widened deletion.
+      return sql`${col} like ${containsPattern(String(cond.value))} escape '!'`;
     default:
       throw new Error(`Unsupported operator: ${cond.op}`);
   }

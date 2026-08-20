@@ -7,7 +7,7 @@
 import type { SqlParam } from "./core";
 
 /**
- * Supported WHERE clause operators.
+ * Every supported WHERE clause operator, as a value.
  *
  * @remarks
  * - Standard comparison: =, !=, <, >, <=, >=
@@ -17,25 +17,40 @@ import type { SqlParam } from "./core";
  * - Range: BETWEEN, NOT BETWEEN
  * - JSON/Array: CONTAINS, OVERLAPS
  *
+ * This list is the source of truth and {@link WhereOperator} is derived from it,
+ * rather than the two being written out separately. A guard that has to enumerate
+ * the operators — a validator over caller input, or a test asserting the builder
+ * handles or refuses each one — can only do that from a runtime value, and a
+ * hand-kept copy of the union would agree with it on the day it was written and
+ * silently stop agreeing the next time a member is added.
+ *
  * @public
  */
-export type WhereOperator =
-  | "="
-  | "!="
-  | "<"
-  | ">"
-  | "<="
-  | ">="
-  | "IN"
-  | "NOT IN"
-  | "LIKE"
-  | "ILIKE"
-  | "IS NULL"
-  | "IS NOT NULL"
-  | "BETWEEN"
-  | "NOT BETWEEN"
-  | "CONTAINS" // JSON contains
-  | "OVERLAPS"; // Array overlaps
+export const WHERE_OPERATORS = [
+  "=",
+  "!=",
+  "<",
+  ">",
+  "<=",
+  ">=",
+  "IN",
+  "NOT IN",
+  "LIKE",
+  "ILIKE",
+  "IS NULL",
+  "IS NOT NULL",
+  "BETWEEN",
+  "NOT BETWEEN",
+  "CONTAINS", // JSON contains
+  "OVERLAPS", // Array overlaps
+] as const;
+
+/**
+ * Supported WHERE clause operators. Derived from {@link WHERE_OPERATORS}.
+ *
+ * @public
+ */
+export type WhereOperator = (typeof WHERE_OPERATORS)[number];
 
 /**
  * Individual WHERE condition.
