@@ -10,6 +10,7 @@
  *
  * @module cli-entry.test
  */
+import { realpathSync } from "node:fs";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -33,7 +34,11 @@ const ARGV1 = process.argv[1];
 async function workspace() {
   const dir = await mkdtemp(path.join(tmpdir(), "cli-entry-"));
   made.push(dir);
-  return dir;
+  // Canonical, because the resolved-link case builds its expected URL out of
+  // these paths while the guard answers with `realpathSync`'s form. A temp
+  // root reached through a link — macOS resolves `/var` to `/private/var` —
+  // otherwise fails that case against a guard that is behaving correctly.
+  return realpathSync(dir);
 }
 
 /**
