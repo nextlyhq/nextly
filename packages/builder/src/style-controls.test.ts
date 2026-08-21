@@ -1,5 +1,6 @@
 import {
   getStyleProperty,
+  shapeLeaves,
   STYLE_CATALOG,
   type StyleLeaf,
   type StyleProperty,
@@ -13,9 +14,18 @@ import {
   type StyleControlKind,
 } from "./style-controls";
 
-/** A leaf of one kind, with the fields every leaf carries. */
+/**
+ * A VALID leaf of one kind.
+ *
+ * Built per kind rather than by spreading one shape and casting, because the
+ * kinds do not carry the same fields: a keyword leaf without `values` is not a
+ * catalog entry the engine could ever produce, and a helper that emitted one
+ * would hand later tests a fixture that throws the moment anything reads it.
+ */
 function leaf(kind: StyleLeaf["kind"], cssProperty: string): StyleLeaf {
-  return { kind, cssProperty, tokenKinds: [] } as StyleLeaf;
+  const base = { cssProperty, tokenKinds: [] } as const;
+  if (kind === "keyword") return { ...base, kind, values: ["normal"] };
+  return { ...base, kind };
 }
 
 /** A catalog row, spelled the way `catalog.ts` spells one. */
@@ -336,5 +346,34 @@ describe("choosing between union arms that both accept tokens", () => {
       $token: "type.weight",
     });
     expect(set.controls[0].kind).toBe("number");
+  });
+});
+
+describe("the fixtures this file builds are ones the engine could produce", () => {
+  it("gives every synthetic leaf the fields its kind requires", () => {
+    // A fixture that is not a real catalog entry lets a test agree with a
+    // belief the engine does not share, which is how a broken comparison
+    // passes. `shapeLeaves` is the engine's own reader, so anything it can
+    // walk is a shape the engine accepts.
+    for (const kind of SUPPORTED_LEAF_KINDS) {
+      const built = leaf(kind, "p");
+      expect(shapeLeaves(built)).toEqual([built]);
+      if (built.kind === "keyword") {
+        expect(Array.isArray(built.values)).toBe(true);
+      }
+    }
+  });
+
+  it("resolves a keyword arm by its OWN values, which needs a real keyword leaf", () => {
+    // The case the old helper would have thrown on: a union whose keyword arm
+    // is consulted for a stored string.
+    const union = property("p", {
+      kind: "union",
+      of: [leaf("keyword", "p"), leaf("cssValue", "p")],
+    });
+    expect(styleControlsFor(union, "normal").controls[0].kind).toBe("select");
+    expect(styleControlsFor(union, "anything-else").controls[0].kind).toBe(
+      "css"
+    );
   });
 });

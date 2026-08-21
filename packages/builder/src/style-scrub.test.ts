@@ -1,7 +1,9 @@
 import {
+  compilePageCss,
   escapeIdentifier,
   nodeClassName,
   PAGE_ROOT_SELECTOR,
+  type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
@@ -218,5 +220,71 @@ describe("preview and commit judge the same thing", () => {
     // The negative half: scoping validation to one property must not stop it
     // judging that property.
     expect(scrubCommitOp(TARGET, undefined, "notalength").ok).toBe(false);
+  });
+});
+
+describe("against the selector the compiler actually emits", () => {
+  // The assertions above build the expected selector the same way the code
+  // does, so they agree with it whatever it spells. These compile a real
+  // document and compare against the rule that comes out, which is the only
+  // thing that can tell a correct construction from a plausible wrong one.
+
+  /** The selector `compilePageCss` writes for one styled node. */
+  function compiledSelector(scope?: string): string {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: { base: { margin: { blockEnd: "24px" } } } },
+        },
+      ],
+    };
+    const compiled = compilePageCss(document, {
+      breakpoints: {
+        viewport: [{ id: "base", label: "Desktop" }],
+        container: [],
+      },
+      ...(scope === undefined ? {} : { scope }),
+    });
+    expect(compiled.warnings).toEqual([]);
+    return compiled.css.split("{")[0].trim();
+  }
+
+  /** The selector the preview writes for the same node. */
+  function previewSelector(scope?: string): string {
+    const target: ScrubTarget = {
+      nodeId: "n1",
+      nodeClass: nodeClassName("n1"),
+      ...(scope === undefined ? {} : { scope }),
+      address: {
+        state: "base",
+        breakpoint: "base",
+        property: "margin",
+        path: ["blockEnd"],
+      },
+    };
+    const preview = scrubPreviewCss(target, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error("expected a preview");
+    return preview.css.split("{")[0].trim();
+  }
+
+  it("matches on an unscoped document", () => {
+    expect(previewSelector()).toBe(compiledSelector());
+  });
+
+  it("matches on a scoped document", () => {
+    expect(previewSelector("region-one")).toBe(compiledSelector("region-one"));
+  });
+
+  it("matches on a scope that needs escaping", () => {
+    // `a.b` would otherwise read as two classes. The preview and the compiler
+    // must escape it identically or they address different elements.
+    expect(previewSelector("a.b")).toBe(compiledSelector("a.b"));
   });
 });
