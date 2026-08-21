@@ -38,9 +38,22 @@ the site sheet.
 
 The classes field now runs each entry's values through the engine's own
 `validateStyleValues` with the site's `remotePatterns` predicate, derived through
-the same `isFetchableUrl` the published page and the canvas use. Forgiving mode,
-errors only: a property a newer engine wrote stays a warning, and a warning is a
-value the engine accepts and emits.
+the same `isFetchableUrl` the published page and the canvas use. Only errors
+refuse a write: a warning is a value the engine accepts and emits.
 
-A site that configured no `remotePatterns` is unchanged — the engine treats an
-absent policy as unasked, not as an empty allowlist.
+How strictly an unrecognised property is judged now depends on whether the site
+configured a host policy, because the validator does not look INSIDE one.
+
+- **No `remotePatterns`: forgiving, and nothing changes.** A property written by
+  a newer engine stays a warning, and an absent policy is treated as unasked
+  rather than as an empty allowlist.
+- **`remotePatterns` configured: strict.** An unrecognised property is an error
+  and the write is refused, because a value the gate cannot judge could carry a
+  `url()` it will never see. Such a site can no longer store a property this
+  engine does not know, and is told which one.
+
+Validation is also bounded now. One issue budget covers the whole classes
+section rather than each property map, and the walk stops once it is spent —
+between maps inside a class and between classes. A payload spreading invalid
+properties across many maps could otherwise ask for work proportional to the
+map count, which the document byte cap alone does not limit.

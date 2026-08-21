@@ -193,7 +193,10 @@ describe("checkStoredClasses", () => {
       tracker({ base: { base: { notAProperty: "x" } } }),
       REFUSING
     );
-    expect(result.issues).not.toEqual([]);
+    // The property NAME, not merely a non-empty array: a fixture typo trips the
+    // shape check and produces an issue too, which would keep this green while
+    // the rule it names stopped working.
+    expect(result.issues.join(" ")).toContain("notAProperty");
   });
 
   it("refuses a url() hidden under a property this engine has not learned", () => {
@@ -206,7 +209,7 @@ describe("checkStoredClasses", () => {
       tracker({ base: { base: { futureBackground: { url: TRACKER } } } }),
       REFUSING
     );
-    expect(result.issues).not.toEqual([]);
+    expect(result.issues.join(" ")).toContain("futureBackground");
   });
 
   it("bounds the whole section, not each map inside it", () => {
@@ -306,7 +309,11 @@ describe("checkStoredClasses", () => {
     // The module's two postures: the write refuses the section on any issue,
     // the read keeps what the compiler can narrow for itself.
     const result = checkStoredClasses(tracker(AT_BASE), REFUSING);
-    expect(result.issues).not.toEqual([]);
+    // The host refusal specifically. Any issue at all would satisfy a
+    // non-empty check, including one from the shape gate, which reports AND
+    // excludes the entry — so the two assertions would then contradict each
+    // other while both passed.
+    expect(result.issues.join(" ")).toContain("does not allow");
     expect(result.value).toHaveLength(1);
   });
 });
