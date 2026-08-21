@@ -177,3 +177,46 @@ describe("the site's URL policy", () => {
     );
   });
 });
+
+describe("the site's token prefix", () => {
+  const TOKENED: ScrubTarget = { ...TARGET, tokenPrefix: "--acme-" };
+
+  it("emits tokens under the prefix the site publishes with", () => {
+    // A preview compiled with the default reads `var(--site-…)` while the
+    // published sheet reads `var(--acme-…)`, so the token resolves to nothing —
+    // or to something else — for exactly as long as the drag lasts.
+    const preview = scrubPreviewCss(TOKENED, { $token: "space.large" });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css).toContain("var(--acme-space-large)");
+    expect(preview.css).not.toContain("--site-");
+  });
+
+  it("uses the engine's default when the site configured none", () => {
+    const preview = scrubPreviewCss(TARGET, { $token: "space.large" });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css).toContain("var(--site-space-large)");
+  });
+});
+
+describe("preview and commit judge the same thing", () => {
+  it("is not blocked by an unrelated invalid value at the same breakpoint", () => {
+    // Validating the whole breakpoint map would let one bad value — a URL a
+    // changed site policy now refuses, say — block every other control on that
+    // breakpoint, with the preview still showing the drag as fine.
+    const withBadSibling = {
+      base: { desktop: { margin: { blockEnd: "24px" }, height: "notalength" } },
+    };
+    const preview = scrubPreviewCss(TARGET, "32px");
+    const commit = scrubCommitOp(TARGET, withBadSibling, "32px");
+    expect(preview.ok).toBe(true);
+    expect(commit.ok).toBe(true);
+  });
+
+  it("still refuses when the scrubbed value itself is invalid", () => {
+    // The negative half: scoping validation to one property must not stop it
+    // judging that property.
+    expect(scrubCommitOp(TARGET, undefined, "notalength").ok).toBe(false);
+  });
+});

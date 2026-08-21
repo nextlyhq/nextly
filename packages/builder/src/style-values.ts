@@ -234,10 +234,19 @@ function writeResult(
   before: NodeStyles | undefined,
   after: NodeStyles,
   values: StyleValues,
+  property: string,
   policy: StylePolicy | undefined
 ): StyleWrite {
+  // ONLY the property this edit writes, for two reasons that point the same
+  // way. A pre-existing invalid value elsewhere in the breakpoint is not this
+  // edit's fault, and validating the whole map would let one bad value block
+  // every other control on that breakpoint with no way to fix it. And the scrub
+  // preview compiles this one property, so validating anything wider here would
+  // make preview and commit disagree — a drag that previewed cleanly and then
+  // snapped back on release. The document validator still checks the whole map
+  // where completeness is the question.
   const issues = validateStyleValues(
-    values,
+    { ...(property in values ? { [property]: values[property] } : {}) },
     "",
     "strict",
     undefined,
@@ -287,6 +296,7 @@ export function styleWriteOp(
     styles,
     withValues(styles, address.state, address.breakpoint, values),
     values,
+    address.property,
     policy
   );
 }
@@ -316,6 +326,7 @@ export function styleClearOp(
     styles,
     withValues(styles, address.state, address.breakpoint, values),
     values,
+    address.property,
     policy
   );
 }

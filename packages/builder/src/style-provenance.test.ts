@@ -1,4 +1,10 @@
-import type { StyleTraceEntry } from "@nextlyhq/blocks-engine";
+import {
+  compilePageCss,
+  nodeClassName,
+  type BlockDocument,
+  type NodeStyles,
+  type StyleTraceEntry,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { styleProvenance, type StyleProvenanceQuery } from "./style-provenance";
@@ -123,55 +129,143 @@ describe("matching the property", () => {
   });
 });
 
-describe("controls that share a CSS property but style different things", () => {
-  // The catalog writes `color` from three properties: `color` on the block
-  // itself, `linkColor` on ` a`, and `linkColorHover` on ` a:hover`. The CSS
-  // property alone therefore does not identify a control.
+describe("against a trace the compiler actually produced", () => {
+  // The fixtures above are hand-written, and a hand-written descendant is
+  // whatever this file believes the compiler emits. It emits the selector as
+  // GROUPED — `" a"`, with the leading combinator — while the catalog declares
+  // `"a"`. Comparing those two spellings directly matches nothing, and a
+  // fixture that mirrors the wrong belief agrees with itself.
+  //
+  // So these compile a real document and query the trace it returns.
 
-  /** A link colour written by the node, which is the confounding entry. */
-  const linkEntry = entry({ property: "color", descendant: "a" });
-
-  it("does not report the plain text colour as authored from a link rule", () => {
-    const result = styleProvenance(
-      query([linkEntry], { cssProperty: "color" })
-    );
-    expect(result.kind).toBe("unset");
-  });
-
-  it("finds the link colour when the control asks for its own descendant", () => {
-    // The positive control for the absence above: without this, a query that
-    // matched nothing at all would satisfy the assertion just as well.
-    const result = styleProvenance(
-      query([linkEntry], { cssProperty: "color", descendant: "a" })
-    );
-    expect(result.kind).toBe("authored");
-  });
-
-  it("keeps hover links separate from ordinary links", () => {
-    const hoverEntry = entry({ property: "color", descendant: "a:hover" });
-    expect(
-      styleProvenance(
-        query([hoverEntry], { cssProperty: "color", descendant: "a" })
-      ).kind
-    ).toBe("unset");
-    expect(
-      styleProvenance(
-        query([hoverEntry], { cssProperty: "color", descendant: "a:hover" })
-      ).kind
-    ).toBe("authored");
-  });
-
-  it("still ranks the tiers within one control's own declarations", () => {
-    // Narrowing removes other controls' entries; it must not disturb how the
-    // remaining ones are ranked.
-    const fromClass = entry({
-      property: "color",
-      descendant: "a",
-      origin: { kind: "class", id: "c1", slug: "card" },
+  /** The trace `compilePageCss` records for one node's styles. */
+  function traceFor(styles: NodeStyles): readonly StyleTraceEntry[] {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/box", version: 1, props: {}, styles }],
+    };
+    const compiled = compilePageCss(document, {
+      breakpoints: {
+        viewport: [{ id: "base", label: "Desktop" }],
+        container: [],
+      },
+      trace: true,
     });
-    const result = styleProvenance(
-      query([fromClass, linkEntry], { cssProperty: "color", descendant: "a" })
+    expect(compiled.warnings).toEqual([]);
+    return compiled.trace ?? [];
+  }
+
+  /** Asking about `n1` at the base state and breakpoint. */
+  function ask(
+    trace: readonly StyleTraceEntry[],
+    cssProperty: string,
+    descendant?: string
+  ) {
+    return styleProvenance({
+      trace,
+      subject: { nodeId: "n1" },
+      cssProperty,
+      ...(descendant === undefined ? {} : { descendant }),
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+  }
+
+  it("records the descendant WITH its combinator, which is why comparison normalizes", () => {
+    // The measurement this whole block exists for, pinned so a change to the
+    // compiler's spelling fails here rather than silently in every dot.
+    const trace = traceFor({ base: { base: { linkColor: "#ff0000" } } });
+    expect(trace.map(entry => entry.descendant)).toEqual([" a"]);
+    expect(nodeClassName("n1")).toBeTypeOf("string");
+  });
+
+  it("finds a link colour asked for by the catalog's own spelling", () => {
+    const trace = traceFor({ base: { base: { linkColor: "#ff0000" } } });
+    expect(ask(trace, "color", "a").kind).toBe("authored");
+  });
+
+  it("keeps the three colour controls apart on a real trace", () => {
+    const trace = traceFor({
+      base: {
+        base: {
+          color: "#0000ff",
+          linkColor: "#ff0000",
+          linkColorHover: "#00ff00",
+        },
+      },
+    });
+    expect(ask(trace, "color").kind).toBe("authored");
+    expect(ask(trace, "color", "a").kind).toBe("authored");
+    expect(ask(trace, "color", "a:hover").kind).toBe("authored");
+    // Each control reads its OWN declaration rather than a shared winner.
+    const plain = ask(trace, "color");
+    const link = ask(trace, "color", "a");
+    expect(plain.kind === "authored" && plain.entry.value).toBe("#0000ff");
+    expect(link.kind === "authored" && link.entry.value).toBe("#ff0000");
+  });
+
+  it("reports a text colour as unset when only the link colour is stored", () => {
+    // The defect the descendant filter exists for, on a real trace: without it
+    // the link rule wins the plain control and reports an unset one as authored.
+    const trace = traceFor({ base: { base: { linkColor: "#ff0000" } } });
+    expect(ask(trace, "color").kind).toBe("unset");
+  });
+
+  it("reports a hover link as unset when only the plain link is stored", () => {
+    const trace = traceFor({ base: { base: { linkColor: "#ff0000" } } });
+    expect(ask(trace, "color", "a:hover").kind).toBe("unset");
+  });
+});
+
+describe("two catalog properties writing one declaration", () => {
+  // `background.url` and `backgroundGradient` both emit `background-image` on
+  // the node itself, and the trace records neither's catalog identity. Which
+  // control wrote the winning declaration therefore cannot be told from it.
+
+  it("says so rather than attributing the value to one of them", () => {
+    const trace: readonly StyleTraceEntry[] = [
+      {
+        origin: { kind: "node", id: "n1" },
+        property: "background-image",
+        value: "linear-gradient(red, blue)",
+        state: "base",
+        breakpoint: "base",
+      },
+    ];
+    const result = styleProvenance({
+      trace,
+      subject: { nodeId: "n1" },
+      cssProperty: "background-image",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+    expect(result.kind).toBe("ambiguous");
+    if (result.kind !== "ambiguous") return;
+    expect(result.sharedWith).toEqual(
+      expect.arrayContaining(["background", "backgroundGradient"])
     );
-    expect(result.kind).toBe("authored");
+  });
+
+  it("does not call an ordinary property ambiguous", () => {
+    // The negative control: a check that answered "ambiguous" for everything
+    // would satisfy the assertion above while telling a caller nothing.
+    expect(styleProvenance(query([entry()])).kind).toBe("authored");
+  });
+
+  it("is unset rather than ambiguous when nothing wrote the declaration", () => {
+    // Ambiguity is about attributing a WINNER. With no winner there is nothing
+    // to attribute, and "unset" is the honest answer.
+    const result = styleProvenance({
+      trace: [],
+      subject: { nodeId: "n1" },
+      cssProperty: "background-image",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+    expect(result.kind).toBe("unset");
   });
 });

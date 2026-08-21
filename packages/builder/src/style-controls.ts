@@ -30,6 +30,7 @@ import {
   type StyleProperty,
   type StyleShape,
   type StyleValue,
+  type TokenLookup,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -129,18 +130,38 @@ export interface StyleControl {
  * catalog's own list instead of re-deriving which forms exist.
  */
 export interface StyleControlVariants {
+  /**
+   * Where in the property's value the choice sits, empty at the root.
+   *
+   * Carried because a union is not only a top-level shape: `position.zIndex` is
+   * a number OR the `auto` keyword, nested a level down. Reporting choices only
+   * at the root would leave a renderer no way to offer `auto` at all.
+   */
+  readonly path: readonly string[];
   /** Which variant the returned controls describe, as an index into the union. */
   readonly active: number;
   /** How many variants the catalog declares at this position. */
   readonly count: number;
 }
 
-/** A property's controls, and the variant they describe when it is a union. */
+/** What a caller can tell the resolver about the site. */
+export interface StyleControlOptions {
+  /**
+   * The site's token table, for choosing between union arms that both accept
+   * tokens.
+   *
+   * Optional: without it the catalog's arm order decides, which is the engine's
+   * own fallback for a name it cannot resolve.
+   */
+  readonly tokens?: TokenLookup;
+}
+
+/** A property's controls, and every choice of form its shape offers. */
 export interface StyleControlSet {
   readonly property: string;
   readonly controls: readonly StyleControl[];
-  /** Absent when the property's shape is not a union. */
-  readonly variants?: StyleControlVariants;
+  /** Empty when the property's shape holds no union at any depth. */
+  readonly variants: readonly StyleControlVariants[];
 }
 
 /**
@@ -157,10 +178,13 @@ export interface StyleControlSet {
  */
 function variantForValue(
   variants: readonly StyleShape[],
-  value: StyleValue | undefined
+  value: StyleValue | undefined,
+  tokens: TokenLookup | undefined
 ): number {
   if (value === undefined) return 0;
-  const found = variants.findIndex(variant => variantHolds(variant, value));
+  const found = variants.findIndex(variant =>
+    variantHolds(variant, value, tokens)
+  );
   return found === -1 ? 0 : found;
 }
 
@@ -174,39 +198,77 @@ function variantForValue(
  * first one every time — a numeric weight would draw the keyword select, and a
  * `1.5rem` line height the unitless number field.
  */
-function variantHolds(variant: StyleShape, value: StyleValue): boolean {
+function variantHolds(
+  variant: StyleShape,
+  value: StyleValue,
+  tokens: TokenLookup | undefined
+): boolean {
   if (!isStyleLeaf(variant)) return isCompositeValue(value);
-  return !isCompositeValue(value) && leafHolds(variant, value);
+  return !isCompositeValue(value) && leafHolds(variant, value, tokens);
+}
+
+/**
+ * Whether a leaf admits this token reference.
+ *
+ * Which arm a token belongs to is a fact about the TOKEN, and the stored
+ * reference carries only its name. `lineHeight` accepts tokens on both its arms
+ * — numbers on one, dimensions on the other — so without the site's table the
+ * name alone cannot separate them, and the catalog's arm order decides exactly
+ * as the engine's own union check falls back to it.
+ */
+function tokenLeafHolds(
+  leaf: StyleLeaf,
+  name: string,
+  tokens: TokenLookup | undefined
+): boolean {
+  if (leaf.tokenKinds.length === 0) return false;
+  const kind = tokens?.kindOf(name);
+  return kind === undefined || leaf.tokenKinds.includes(kind);
+}
+
+/**
+ * Whether a leaf stores this number.
+ *
+ * `0` is the one measurement that needs no unit, which is why a dimension
+ * accepts it without `allowNumber`.
+ */
+function numberLeafHolds(leaf: StyleLeaf, value: number): boolean {
+  if (leaf.kind === "number") return true;
+  if (leaf.kind !== "dimension") return false;
+  return leaf.allowNumber === true || value === 0;
+}
+
+/**
+ * Whether a leaf stores this string.
+ *
+ * A keyword leaf claims one only when the string is one of ITS keywords. Every
+ * other scalar leaf stores its value as a string, so the catalog's arm order
+ * decides between those exactly as the engine's own order does.
+ */
+function stringLeafHolds(leaf: StyleLeaf, value: string): boolean {
+  if (leaf.kind === "keyword") return leaf.values.includes(value);
+  return leaf.kind !== "number";
 }
 
 /**
  * Whether a leaf is the one a scalar is stored under.
  *
  * Reads the catalog's own declarations — a keyword leaf's `values`, a
- * dimension's `allowNumber` — rather than restating any grammar. It stays a
- * PRESENTATION choice: `validateStyleValues` remains the only thing deciding
- * whether a value may be written, and it owes this no agreement. Drawing the
- * wrong control is a legibility bug the next keystroke corrects; the write is
- * gated either way.
+ * dimension's `allowNumber`, an arm's `tokenKinds` — rather than restating any
+ * grammar. It stays a PRESENTATION choice: `validateStyleValues` remains the
+ * only thing deciding whether a value may be written, and it owes this no
+ * agreement. Drawing the wrong control is a legibility bug the next keystroke
+ * corrects; the write is gated either way.
  */
-function leafHolds(leaf: StyleLeaf, value: StyleValue): boolean {
-  // A token is a scalar whichever arm holds it, so the arm admitting tokens at
-  // all is the one it belongs to.
-  if (isTokenRef(value)) return leaf.tokenKinds.length > 0;
-  if (typeof value === "number") {
-    if (leaf.kind === "number") return true;
-    // `0` is the one measurement that needs no unit, which is why a dimension
-    // accepts it without `allowNumber`.
-    return (
-      leaf.kind === "dimension" && (leaf.allowNumber === true || value === 0)
-    );
-  }
-  if (typeof value !== "string") return false;
-  // A keyword leaf claims a string only when the string is one of ITS keywords.
-  // Every other scalar leaf stores its value as a string, so the catalog's arm
-  // order decides between those exactly as the engine's own order does.
-  if (leaf.kind === "keyword") return leaf.values.includes(value);
-  return leaf.kind !== "number";
+function leafHolds(
+  leaf: StyleLeaf,
+  value: StyleValue,
+  tokens: TokenLookup | undefined
+): boolean {
+  if (isTokenRef(value)) return tokenLeafHolds(leaf, value.$token, tokens);
+  if (typeof value === "number") return numberLeafHolds(leaf, value);
+  if (typeof value === "string") return stringLeafHolds(leaf, value);
+  return false;
 }
 
 /** A stored value holding named sub-values, as a composite shape addresses. */
@@ -258,29 +320,38 @@ function walk(
   property: string,
   path: readonly string[],
   shape: StyleShape,
-  value: StyleValue | undefined
+  value: StyleValue | undefined,
+  tokens: TokenLookup | undefined,
+  // Collected as the walk descends rather than returned alongside, so a union
+  // at ANY depth is recorded by the same line that resolves it.
+  variants: StyleControlVariants[]
 ): StyleControl[] {
+  const down = (step: string, child: StyleShape): StyleControl[] =>
+    walk(
+      property,
+      [...path, step],
+      child,
+      childValue(value, step),
+      tokens,
+      variants
+    );
   if (isStyleLeaf(shape)) return [controlForLeaf(property, path, shape)];
   switch (shape.kind) {
     case "logicalSides":
-      return entriesOf(shape.sides).flatMap(([side, leaf]) =>
-        walk(property, [...path, side], leaf, childValue(value, side))
-      );
+      return entriesOf(shape.sides).flatMap(([side, leaf]) => down(side, leaf));
     case "logicalCorners":
       return entriesOf(shape.corners).flatMap(([corner, leaf]) =>
-        walk(property, [...path, corner], leaf, childValue(value, corner))
+        down(corner, leaf)
       );
     case "object":
       return entriesOf(shape.fields).flatMap(([field, child]) =>
-        walk(property, [...path, field], child, childValue(value, field))
+        down(field, child)
       );
-    case "union":
-      return walk(
-        property,
-        path,
-        shape.of[variantForValue(shape.of, value)],
-        value
-      );
+    case "union": {
+      const active = variantForValue(shape.of, value, tokens);
+      variants.push({ path, active, count: shape.of.length });
+      return walk(property, path, shape.of[active], value, tokens, variants);
+    }
   }
 }
 
@@ -313,19 +384,17 @@ function childValue(
  */
 export function styleControlsFor(
   property: StyleProperty,
-  value?: StyleValue
+  value?: StyleValue,
+  options?: StyleControlOptions
 ): StyleControlSet {
-  const { shape } = property;
-  const controls = walk(property.property, [], shape, value);
-  if (shape.kind !== "union") {
-    return { property: property.property, controls };
-  }
-  return {
-    property: property.property,
-    controls,
-    variants: {
-      active: variantForValue(shape.of, value),
-      count: shape.of.length,
-    },
-  };
+  const variants: StyleControlVariants[] = [];
+  const controls = walk(
+    property.property,
+    [],
+    property.shape,
+    value,
+    options?.tokens,
+    variants
+  );
+  return { property: property.property, controls, variants };
 }

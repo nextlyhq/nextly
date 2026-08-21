@@ -379,6 +379,7 @@ export {
   SUPPORTED_LEAF_KINDS,
   type StyleControl,
   type StyleControlKind,
+  type StyleControlOptions,
   type StyleControlSet,
   type StyleControlVariants,
 } from "./style-controls";

@@ -134,7 +134,7 @@ describe("a union, which stores one value in more than one form", () => {
   it("shows the FIRST variant when nothing is stored, which is the form the engine tries first", () => {
     const set = styleControlsFor(radius);
     expect(paths(set.controls)).toEqual([[]]);
-    expect(set.variants).toEqual({ active: 0, count: 2 });
+    expect(set.variants).toEqual([{ path: [], active: 0, count: 2 }]);
   });
 
   it("shows the composite variant when a record is stored", () => {
@@ -145,7 +145,7 @@ describe("a union, which stores one value in more than one form", () => {
       ["endStart"],
       ["endEnd"],
     ]);
-    expect(set.variants?.active).toBe(1);
+    expect(set.variants[0].active).toBe(1);
   });
 
   it("treats a token reference as a scalar, not as a composite", () => {
@@ -154,17 +154,17 @@ describe("a union, which stores one value in more than one form", () => {
     // token in none of them.
     const set = styleControlsFor(radius, { $token: "Radius.Card" });
     expect(paths(set.controls)).toEqual([[]]);
-    expect(set.variants?.active).toBe(0);
+    expect(set.variants[0].active).toBe(0);
   });
 
   it("records how many variants exist, so an editor can offer the other one", () => {
-    expect(styleControlsFor(radius).variants?.count).toBe(2);
+    expect(styleControlsFor(radius).variants[0].count).toBe(2);
   });
 
   it("reports no variants for a property that is not a union", () => {
     expect(
       styleControlsFor(property("p", leaf("color", "p"))).variants
-    ).toBeUndefined();
+    ).toEqual([]);
   });
 });
 
@@ -268,5 +268,73 @@ describe("the unions the catalog actually ships", () => {
   it("still separates borderRadius's scalar and composite arms", () => {
     expect(kindsFor("borderRadius", "4px")).toEqual(["length"]);
     expect(kindsFor("borderRadius", { startStart: "4px" })).toHaveLength(4);
+  });
+});
+
+describe("a union nested below the property root", () => {
+  // `position.zIndex` is a number OR the `auto` keyword. Reporting choices only
+  // at the root would leave a renderer no way to offer `auto`.
+
+  function positionSet(value?: Parameters<typeof styleControlsFor>[1]) {
+    const entry = getStyleProperty("position");
+    expect(entry).toBeDefined();
+    return styleControlsFor(entry as StyleProperty, value);
+  }
+
+  it("records the choice at the path it sits on", () => {
+    const set = positionSet();
+    const zIndex = set.variants.find(v => v.path.join(".") === "zIndex");
+    expect(zIndex).toBeDefined();
+    expect(zIndex?.count).toBe(2);
+  });
+
+  it("selects the arm the stored value is written in", () => {
+    const numeric = positionSet({ zIndex: 3 });
+    const keyword = positionSet({ zIndex: "auto" });
+    const kindAt = (set: ReturnType<typeof positionSet>) =>
+      set.controls.find(c => c.path.join(".") === "zIndex")?.kind;
+    expect(kindAt(numeric)).toBe("number");
+    expect(kindAt(keyword)).toBe("select");
+  });
+});
+
+describe("choosing between union arms that both accept tokens", () => {
+  // `lineHeight` takes a number token on one arm and a dimension token on the
+  // other, and a stored reference carries only its name.
+
+  function lineHeightKind(
+    token: string,
+    tokens?: { kindOf: (n: string) => never }
+  ) {
+    const entry = getStyleProperty("lineHeight");
+    return styleControlsFor(
+      entry as StyleProperty,
+      { $token: token },
+      tokens === undefined ? undefined : { tokens }
+    ).controls[0].kind;
+  }
+
+  it("uses the site's token table when it has one", () => {
+    const table = {
+      kindOf: (name: string) => (name === "space.gap" ? "dimension" : "number"),
+    } as never;
+    expect(lineHeightKind("space.gap", table)).toBe("length");
+    expect(lineHeightKind("type.ratio", table)).toBe("number");
+  });
+
+  it("falls back to the catalog's arm order without a table", () => {
+    // Stated rather than left implicit: the name alone cannot separate the arms,
+    // and arm order is the engine's own fallback for a name it cannot resolve.
+    expect(lineHeightKind("space.gap")).toBe("number");
+  });
+
+  it("skips an arm that accepts no tokens at all", () => {
+    // `fontWeight`'s keyword arm declares no token kinds, so a token belongs to
+    // the number arm whatever the table says.
+    const entry = getStyleProperty("fontWeight");
+    const set = styleControlsFor(entry as StyleProperty, {
+      $token: "type.weight",
+    });
+    expect(set.controls[0].kind).toBe("number");
   });
 });

@@ -70,6 +70,17 @@ export interface ScrubTarget {
    */
   readonly scope?: string;
   readonly address: StyleAddress;
+  /**
+   * The custom-property prefix this site emits tokens under.
+   *
+   * `compilePageCss` takes it from `StyleCompileContext.tokenPrefix`, so a site
+   * that configured `--acme-` would have its published sheet read
+   * `var(--acme-brand)` while a preview compiled with the default read
+   * `var(--site-brand)` — a token that resolves to nothing, or to a different
+   * value, for exactly as long as the drag lasts. Omitted means the engine's
+   * own default, which is what the compiler falls back to.
+   */
+  readonly tokenPrefix?: string;
   /** The site policy, forwarded to the compile so a refused URL never previews. */
   readonly policy?: StylePolicy;
 }
@@ -129,7 +140,7 @@ export function scrubPreviewCss(
   const compiled = compileStyleValues(
     { [property]: valueAtPath(path, value) },
     "",
-    undefined,
+    target.tokenPrefix,
     undefined,
     undefined,
     { mayFetchUrl: target.policy?.mayFetchUrl }
