@@ -258,6 +258,33 @@ describe("checkStoredClasses", () => {
     expect(statesRead).toBeLessThan(5);
   });
 
+  it("enumerates state keys lazily, so stopping stops the enumeration too", () => {
+    // The accessor test above counts VALUE reads, and key enumeration reads no
+    // values — so it cannot see a walk that materialises every key before the
+    // budget has a chance to stop it. A proxy counting descriptor lookups can:
+    // measured, breaking after the first entry costs one lookup in total with
+    // `for...in` and one PER KEY with `Object.keys`.
+    let descriptorLookups = 0;
+    const target: Record<string, unknown> = {};
+    const exhausting: Record<string, unknown> = {};
+    for (let k = 0; k < 300; k += 1) exhausting[`bad${k}`] = "x";
+    target.state0 = { base: exhausting };
+    for (let m = 1; m < 2000; m += 1) {
+      target[`state${m}`] = { base: { color: "#111111" } };
+    }
+    const styles = new Proxy(target, {
+      getOwnPropertyDescriptor(t, key) {
+        descriptorLookups += 1;
+        return Reflect.getOwnPropertyDescriptor(t, key);
+      },
+    });
+
+    const result = checkStoredClasses(tracker(styles), REFUSING);
+
+    expect(result.issues.join(" ")).toContain("not checked");
+    expect(descriptorLookups).toBeLessThan(10);
+  });
+
   it("stops judging later classes once the section budget is spent", () => {
     // The stop inside one class does not imply the stop between classes, and
     // neither is visible in the issue count. `MAX_NAMED_CLASSES` is 2000 and

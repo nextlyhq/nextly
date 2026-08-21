@@ -1,3 +1,4 @@
+import { isFetchableUrl, type RemotePattern } from "@nextlyhq/blocks-engine";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 // Imported rather than read at runtime so it can never drift from the published
@@ -15,7 +16,6 @@ import {
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { pagesCollection } from "./collections/pages";
-import { isFetchableUrl, type RemotePattern } from "./core/url-policy";
 import { blocksFieldType } from "./fields/blocksField";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";

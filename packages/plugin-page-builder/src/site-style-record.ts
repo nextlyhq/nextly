@@ -255,10 +255,20 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
 function* styleMapsIn(
   styles: Readonly<Record<string, unknown>>
 ): Generator<{ at: string; values: Readonly<Record<string, unknown>> }> {
-  for (const state of Object.keys(styles)) {
+  // `for...in` with an own-key guard rather than `Object.keys`, which is the
+  // idiom `validateStyleValues` iterates its own property map by, for the
+  // reason its comment gives: a map with a hundred thousand keys would
+  // otherwise be materialised in full before anything downstream can stop.
+  // Measured through a proxy counting descriptor lookups, breaking after the
+  // first entry: `Object.keys` costs one per key up front, `for...in` one in
+  // total. The guard is what keeps this to OWN keys, which the engine reads
+  // style maps by.
+  for (const state in styles) {
+    if (!Object.hasOwn(styles, state)) continue;
     const byBreakpoint = styles[state];
     if (!isPlainRecord(byBreakpoint)) continue;
-    for (const breakpoint of Object.keys(byBreakpoint)) {
+    for (const breakpoint in byBreakpoint) {
+      if (!Object.hasOwn(byBreakpoint, breakpoint)) continue;
       const values = byBreakpoint[breakpoint];
       if (isPlainRecord(values)) yield { at: `${state}.${breakpoint}`, values };
     }
