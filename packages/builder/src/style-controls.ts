@@ -24,6 +24,8 @@
  */
 
 import {
+  asciiLower,
+  decodeIdentifier,
   isStyleLeaf,
   isTokenRef,
   type StyleLeaf,
@@ -239,15 +241,39 @@ function numberLeafHolds(leaf: StyleLeaf, value: number): boolean {
 }
 
 /**
+ * A keyword in the spelling the engine compares keywords in.
+ *
+ * CSS keywords are ASCII case-insensitive and surrounding whitespace is
+ * discarded by parsing, so the validator accepts `"Italic"` and `" italic "`
+ * exactly as it accepts `"italic"` — and it decodes escapes before comparing,
+ * because an escape can spell an ordinary letter. An exact `includes` therefore
+ * misses valid stored values and sends them to the free-form arm, which draws a
+ * text box where a select belongs.
+ *
+ * Normalized with the engine's OWN primitives rather than a lowercase-and-trim
+ * written here, so the two cannot disagree about what an escape means.
+ */
+function keywordKey(value: string): string {
+  return asciiLower(decodeIdentifier(value.trim()));
+}
+
+/**
  * Whether a leaf stores this string.
  *
  * A keyword leaf claims one only when the string is one of ITS keywords. Every
  * other scalar leaf stores its value as a string, so the catalog's arm order
  * decides between those exactly as the engine's own order does.
+ *
+ * Compares the value WHOLE rather than splitting it, so a multi-part keyword
+ * shorthand — `overflow: hidden auto` — is not recognised as its own vocabulary.
+ * No union the catalog ships declares a multi-part keyword arm, so nothing
+ * reaches that case today; if one appears, the arm order decides, which is the
+ * engine's own fallback and not a wrong answer.
  */
 function stringLeafHolds(leaf: StyleLeaf, value: string): boolean {
-  if (leaf.kind === "keyword") return leaf.values.includes(value);
-  return leaf.kind !== "number";
+  if (leaf.kind !== "keyword") return leaf.kind !== "number";
+  const key = keywordKey(value);
+  return leaf.values.some(keyword => keywordKey(keyword) === key);
 }
 
 /**

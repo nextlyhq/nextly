@@ -33,16 +33,21 @@
  */
 
 import {
+  compilePageCss,
   compileStyleValues,
   escapeIdentifier,
+  nodeClassName,
   PAGE_ROOT_SELECTOR,
+  STYLE_STATES,
+  type BlockDocument,
   type Declaration,
+  type StyleState,
   type StyleValue,
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
 import type { StyleAddress, StylePolicy, StyleWrite } from "./style-values";
-import { styleWriteOp } from "./style-values";
+import { styleValueAtPath, styleWriteOp } from "./style-values";
 
 /** The node a scrub is previewing against. */
 export interface ScrubTarget {
@@ -83,6 +88,80 @@ export interface ScrubTarget {
   readonly tokenPrefix?: string;
   /** The site policy, forwarded to the compile so a refused URL never previews. */
   readonly policy?: StylePolicy;
+}
+
+/**
+ * The fragment the compiler constrains one state's rules with, per state.
+ *
+ * READ from the compiler rather than restated here. `compilePageCss` appends
+ * `:where(:hover)` and its siblings from a table it does not export, so a copy
+ * would be a second statement of which pseudo-class each state means — and the
+ * two would agree until the engine moved, at which point a hover preview would
+ * land somewhere the committed rule does not. Compiling one probe per state and
+ * taking the fragment out of the selector it produced cannot drift.
+ *
+ * Without it a preview matches the node in EVERY state: dragging a hover value
+ * would repaint the resting appearance too, and releasing would reveal
+ * behaviour the drag never showed.
+ *
+ * Four states, computed once.
+ */
+const STATE_FRAGMENTS = new Map<StyleState, string>();
+
+/** The probe node's id, used only to derive the fragments above. */
+const PROBE_ID = "scrub-state-probe";
+
+/** Compile one probe document and return the selector it wrote. */
+function probeSelector(state: StyleState): string {
+  const document: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: PROBE_ID,
+        type: "core/box",
+        version: 1,
+        props: {},
+        // A property with no descendant, so the selector carries the state
+        // fragment and nothing else after the node class.
+        styles: { [state]: { base: { height: "1px" } } },
+      },
+    ],
+  };
+  const compiled = compilePageCss(document, {
+    breakpoints: { viewport: [{ id: "base", label: "Base" }], container: [] },
+  });
+  return compiled.css.split("{")[0].trim();
+}
+
+/**
+ * What a state adds to a node's selector.
+ *
+ * Falls back to constraining nothing only for `base`, which genuinely adds
+ * nothing. For any other state a fragment that could not be derived would mean
+ * previewing in the wrong place, so this throws rather than emitting a rule
+ * that silently repaints the resting appearance.
+ */
+function stateFragment(state: StyleState): string {
+  const cached = STATE_FRAGMENTS.get(state);
+  if (cached !== undefined) return cached;
+  const prefix = `${PAGE_ROOT_SELECTOR} .${nodeClassName(PROBE_ID)}`;
+  const selector = probeSelector(state);
+  if (!selector.startsWith(prefix)) {
+    throw new Error(
+      `the compiler's selector for the ${state} state no longer starts with ` +
+        `the node's own selector, so a preview cannot be placed beside it`
+    );
+  }
+  const fragment = selector.slice(prefix.length);
+  STATE_FRAGMENTS.set(state, fragment);
+  return fragment;
+}
+
+/** Every state's fragment, for a caller that wants them warmed or asserted. */
+export function scrubStateFragments(): ReadonlyMap<StyleState, string> {
+  for (const state of STYLE_STATES) stateFragment(state);
+  return STATE_FRAGMENTS;
 }
 
 /** The root every rule for this document is anchored to. */
@@ -126,6 +205,7 @@ function ruleText(
   declarations: readonly Declaration[]
 ): string {
   const root = rootSelector(target.scope);
+  const state = stateFragment(target.address.state);
   return declarations
     .map(declaration => {
       const descendant =
@@ -133,7 +213,7 @@ function ruleText(
           ? ""
           : ` ${declaration.descendant}`;
       return (
-        `${root} .${target.nodeClass}${descendant} ` +
+        `${root} .${target.nodeClass}${state}${descendant} ` +
         `{ ${declaration.property}: ${declaration.value} }`
       );
     })
@@ -153,7 +233,7 @@ export function scrubPreviewCss(
 ): ScrubPreview {
   const { property, path } = target.address;
   const compiled = compileStyleValues(
-    { [property]: valueAtPath(path, value) },
+    { [property]: styleValueAtPath(path, value) },
     "",
     target.tokenPrefix,
     undefined,
@@ -177,21 +257,6 @@ export function scrubPreviewCss(
     css: ruleText(target, compiled.declarations),
     warnings: compiled.warnings,
   };
-}
-
-/**
- * A value wrapped in the containers its path names.
- *
- * A control scrubbing one side of a margin holds a length and an address; the
- * compiler takes the property's whole value. Building the containers here keeps
- * the preview compiling the same shape the commit will store.
- */
-function valueAtPath(path: readonly string[], value: StyleValue): StyleValue {
-  let wrapped = value;
-  for (let index = path.length - 1; index >= 0; index -= 1) {
-    wrapped = { [path[index]]: wrapped };
-  }
-  return wrapped;
 }
 
 /**

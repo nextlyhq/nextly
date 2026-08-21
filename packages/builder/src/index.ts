@@ -395,6 +395,7 @@ export {
 export {
   readStyleValue,
   styleClearOp,
+  styleValueAtPath,
   styleWriteOp,
   type StyleAddress,
   type StylePolicy,
@@ -427,6 +428,7 @@ export {
 export {
   scrubCommitOp,
   scrubPreviewCss,
+  scrubStateFragments,
   type ScrubPreview,
   type ScrubTarget,
 } from "./style-scrub";

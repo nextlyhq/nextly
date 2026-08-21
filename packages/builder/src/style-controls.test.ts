@@ -377,3 +377,32 @@ describe("the fixtures this file builds are ones the engine could produce", () =
     );
   });
 });
+
+describe("keywords as the engine compares them", () => {
+  // CSS keywords are ASCII case-insensitive and parsing discards surrounding
+  // whitespace, so the validator accepts "Italic" and " italic " exactly as it
+  // accepts "italic". An exact match sends those to the free-form arm, which
+  // draws a text box where a select belongs.
+
+  function fontStyleKind(value: string) {
+    const entry = getStyleProperty("fontStyle");
+    return styleControlsFor(entry as StyleProperty, value).controls[0].kind;
+  }
+
+  it("matches a keyword whatever case it was stored in", () => {
+    expect(fontStyleKind("italic")).toBe("select");
+    expect(fontStyleKind("Italic")).toBe("select");
+    expect(fontStyleKind("ITALIC")).toBe("select");
+  });
+
+  it("matches a keyword carrying surrounding whitespace", () => {
+    expect(fontStyleKind(" italic ")).toBe("select");
+  });
+
+  it("still sends a value the vocabulary does not hold to the free-form arm", () => {
+    // The other half of the pair: normalizing must not make every string a
+    // keyword, or the select would be drawn for values it cannot represent.
+    expect(fontStyleKind("oblique 40deg")).toBe("css");
+    expect(fontStyleKind("italicish")).toBe("css");
+  });
+});

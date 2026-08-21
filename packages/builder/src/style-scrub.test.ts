@@ -3,13 +3,16 @@ import {
   escapeIdentifier,
   nodeClassName,
   PAGE_ROOT_SELECTOR,
+  STYLE_STATES,
   type BlockDocument,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
   scrubCommitOp,
   scrubPreviewCss,
+  scrubStateFragments,
   type ScrubTarget,
 } from "./style-scrub";
 
@@ -339,5 +342,77 @@ describe("a compiler setting the engine recovered from", () => {
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
     expect(preview.warnings).toEqual([]);
+  });
+});
+
+describe("the selector at each state the catalog supports", () => {
+  // A preview that ignored the state would match the node in ALL of them:
+  // dragging a hover value would repaint the resting appearance, and releasing
+  // would reveal behaviour the drag never showed.
+
+  /** The selector `compilePageCss` writes for one node styled at `state`. */
+  function compiledAt(state: StyleState): string {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { [state]: { base: { margin: { blockEnd: "24px" } } } },
+        },
+      ],
+    };
+    const compiled = compilePageCss(document, {
+      breakpoints: {
+        viewport: [{ id: "base", label: "Desktop" }],
+        container: [],
+      },
+    });
+    expect(compiled.warnings).toEqual([]);
+    return compiled.css.split("{")[0].trim();
+  }
+
+  /** The selector the preview writes for the same node at the same state. */
+  function previewAt(state: StyleState): string {
+    const preview = scrubPreviewCss(
+      {
+        nodeId: "n1",
+        nodeClass: nodeClassName("n1"),
+        address: {
+          state,
+          breakpoint: "base",
+          property: "margin",
+          path: ["blockEnd"],
+        },
+      },
+      "32px"
+    );
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error("expected a preview");
+    return preview.css.split("{")[0].trim();
+  }
+
+  it("matches the compiler on every state, not just base", () => {
+    // Swept over the engine's own list, so a state added there is covered here
+    // without an edit.
+    expect(STYLE_STATES.length).toBeGreaterThan(1);
+    for (const state of STYLE_STATES) {
+      expect(previewAt(state)).toBe(compiledAt(state));
+    }
+  });
+
+  it("constrains a non-base state and leaves base unconstrained", () => {
+    // The control that keeps the sweep meaningful: if every fragment were
+    // empty, matching the compiler would be trivially true and the preview
+    // would still repaint the resting appearance.
+    const fragments = scrubStateFragments();
+    expect(fragments.get("base")).toBe("");
+    for (const state of STYLE_STATES.filter(s => s !== "base")) {
+      expect(fragments.get(state)).not.toBe("");
+      expect(fragments.get(state)).toContain(":where(");
+    }
   });
 });

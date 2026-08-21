@@ -29,6 +29,7 @@ import {
   type StyleState,
   type StyleValue,
   type StyleValues,
+  type TokenLookup,
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
@@ -46,6 +47,16 @@ import { sameStoredValue, type BuilderOp } from "./ops";
  */
 export interface StylePolicy {
   readonly mayFetchUrl?: MayFetchUrl;
+  /**
+   * The site's token table.
+   *
+   * Without it the validator cannot report `unknown-token` or
+   * `token-kind-mismatch`, so a control silently accepts a reference that
+   * renders as nothing. `styleControlsFor` already takes one for choosing a
+   * union arm; carrying it here is what gives a caller one route to supply it
+   * to both.
+   */
+  readonly tokens?: TokenLookup;
 }
 
 /** Where a control reads and writes. */
@@ -169,6 +180,25 @@ function clearAtPath(
   return Object.keys(remaining).length === 0 ? undefined : remaining;
 }
 
+/**
+ * A value wrapped in the containers its path names.
+ *
+ * A control holds a scalar and an address; both the validator and the compiler
+ * take the property's WHOLE value. Building the containers in one place is what
+ * lets the commit judge exactly the shape the preview compiled — two copies
+ * would agree until either moved.
+ */
+export function styleValueAtPath(
+  path: readonly string[],
+  value: StyleValue
+): StyleValue {
+  let wrapped = value;
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    wrapped = { [path[index]]: wrapped };
+  }
+  return wrapped;
+}
+
 /** The value a control is currently showing, or `undefined` when nothing set it. */
 export function readStyleValue(
   styles: NodeStyles | undefined,
@@ -234,24 +264,24 @@ function writeResult(
   before: NodeStyles | undefined,
   after: NodeStyles,
   values: StyleValues,
-  property: string,
+  subject: StyleValues,
   policy: StylePolicy | undefined
 ): StyleWrite {
-  // ONLY the property this edit writes, for two reasons that point the same
-  // way. A pre-existing invalid value elsewhere in the breakpoint is not this
-  // edit's fault, and validating the whole map would let one bad value block
-  // every other control on that breakpoint with no way to fix it. And the scrub
-  // preview compiles this one property, so validating anything wider here would
-  // make preview and commit disagree — a drag that previewed cleanly and then
-  // snapped back on release. The document validator still checks the whole map
-  // where completeness is the question.
+  // ONLY the leaf this edit writes. A sibling that is already invalid is not
+  // this edit's fault, and judging anything wider lets one bad value block the
+  // controls around it with no way to fix them: a breakpoint-wide check blocks
+  // every control on the breakpoint, and a property-wide one blocks every side
+  // of a margin whose top is malformed. It is also what keeps the commit
+  // judging exactly what the preview compiled, so a clean drag cannot snap
+  // back on release. The document validator still reads the whole map where
+  // completeness is the question.
   const issues = validateStyleValues(
-    { ...(property in values ? { [property]: values[property] } : {}) },
+    subject,
     "",
     "strict",
     undefined,
     false,
-    undefined,
+    policy?.tokens,
     { mayFetchUrl: policy?.mayFetchUrl }
   );
   const errors = errorsIn(issues);
@@ -296,7 +326,7 @@ export function styleWriteOp(
     styles,
     withValues(styles, address.state, address.breakpoint, values),
     values,
-    address.property,
+    { [address.property]: styleValueAtPath(address.path, value) },
     policy
   );
 }
@@ -321,12 +351,15 @@ export function styleClearOp(
   const remaining = clearAtPath(values[address.property], address.path);
   if (remaining === undefined) delete values[address.property];
   else values[address.property] = remaining;
+  // Nothing is being written, so there is nothing to judge: removing a value
+  // cannot make a document invalid, and validating what REMAINS would refuse a
+  // reset because of a sibling the author is not touching.
   return writeResult(
     nodeId,
     styles,
     withValues(styles, address.state, address.breakpoint, values),
     values,
-    address.property,
+    {},
     policy
   );
 }

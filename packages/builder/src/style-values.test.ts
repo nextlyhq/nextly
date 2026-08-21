@@ -248,3 +248,65 @@ describe("every op this SDK hands back can actually be applied", () => {
     );
   });
 });
+
+describe("what a write is judged against", () => {
+  it("is not blocked by an invalid SIBLING of the same composite", () => {
+    // Narrowing to the catalog property is not enough: a malformed top margin
+    // would block every other side, and the control could not be edited until
+    // a sibling nobody is touching is repaired.
+    const badSibling: NodeStyles = {
+      base: {
+        desktop: { margin: { blockStart: "notalength", blockEnd: "24px" } },
+      },
+    };
+    const result = styleWriteOp("n1", badSibling, BOTTOM, "32px");
+    expect(result.ok).toBe(true);
+  });
+
+  it("still judges the leaf being written", () => {
+    // The other half: scoping to the leaf must not stop that leaf being checked.
+    expect(styleWriteOp("n1", undefined, BOTTOM, "notalength").ok).toBe(false);
+  });
+
+  it("lets a reset through even when a sibling is invalid", () => {
+    const badSibling: NodeStyles = {
+      base: {
+        desktop: { margin: { blockStart: "notalength", blockEnd: "24px" } },
+      },
+    };
+    const result = styleClearOp("n1", badSibling, BOTTOM);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.op).not.toBeNull();
+  });
+
+  it("reports a token the site does not define, when given the table", () => {
+    // Without a lookup the validator cannot report `unknown-token`, so a
+    // control silently accepts a reference that renders as nothing.
+    const unknown = styleWriteOp(
+      "n1",
+      undefined,
+      BOTTOM,
+      { $token: "space.nosuch" },
+      { tokens: { kindOf: () => undefined } }
+    );
+    expect(unknown.ok).toBe(true);
+    if (!unknown.ok) return;
+    expect(unknown.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("reports nothing for a token the site DOES define", () => {
+    // The control that makes the warning above evidence: if every token warned,
+    // the assertion would say nothing about the lookup being consulted.
+    const known = styleWriteOp(
+      "n1",
+      undefined,
+      BOTTOM,
+      { $token: "space.large" },
+      { tokens: { kindOf: () => "dimension" } }
+    );
+    expect(known.ok).toBe(true);
+    if (!known.ok) return;
+    expect(known.warnings).toEqual([]);
+  });
+});
