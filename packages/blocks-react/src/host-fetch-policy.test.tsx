@@ -26,7 +26,7 @@ import { renderImage } from "./blocks/image";
 import type { BlockHostPolicy, BlockRenderArgs, PageContext } from "./context";
 import type { PageStyles } from "./styles";
 import { PageRenderer } from "./page-renderer";
-import { fetchPolicyLabel } from "./styles";
+import { effectiveCompile, fetchPolicyLabel } from "./styles";
 import { createBlockResolver } from "./resolver";
 import { coreBlocks } from "./blocks";
 
@@ -129,6 +129,52 @@ function siteSheetMarkup(
     />
   );
 }
+
+describe("the one derived fetch predicate", () => {
+  // Identity, not equivalence. Two closures over the same pattern list behave
+  // alike today and are two implementations of one policy — the shape this
+  // module exists to prevent — so the property worth asserting is that the site
+  // sheet and the page context receive the SAME function object.
+  it("hands the page context the same function it hands the site sheet", () => {
+    const result = effectiveCompile({
+      styleContext: { breakpoints: { viewport: [], container: [] } },
+      styles: undefined,
+      limits: undefined,
+      remotePatterns: ALLOWED,
+    });
+
+    expect(result.mayFetchUrl).toBeTypeOf("function");
+    expect(result.context?.mayFetchUrl).toBe(result.mayFetchUrl);
+  });
+
+  it("keeps a caller's own predicate as that one function", () => {
+    const own = (): boolean => true;
+    const result = effectiveCompile({
+      styleContext: {
+        breakpoints: { viewport: [], container: [] },
+        mayFetchUrl: own,
+      },
+      styles: undefined,
+      limits: undefined,
+      remotePatterns: ALLOWED,
+    });
+
+    expect(result.mayFetchUrl).toBe(own);
+    expect(result.context?.mayFetchUrl).toBe(own);
+  });
+
+  it("derives nothing when the host configured no list", () => {
+    const result = effectiveCompile({
+      styleContext: { breakpoints: { viewport: [], container: [] } },
+      styles: undefined,
+      limits: undefined,
+      remotePatterns: undefined,
+    });
+
+    expect(result.mayFetchUrl).toBeUndefined();
+    expect(result.context?.mayFetchUrl).toBeUndefined();
+  });
+});
 
 describe("the site sheet's share of the host fetch list", () => {
   it("emits an allowed host, which is the control for every absence below", () => {

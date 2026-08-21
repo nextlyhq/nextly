@@ -724,9 +724,13 @@ export function effectiveCompile(args: {
     context: {
       ...args.styleContext,
       limits: args.limits ?? args.styleContext.limits ?? DEFAULT_LIMITS,
-      ...(patterns === undefined || args.styleContext.mayFetchUrl !== undefined
-        ? {}
-        : { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) }),
+      // `derived` itself, not a second closure over the same list. It already
+      // encodes both rules: a caller's own predicate is what it resolved to,
+      // and no list with no caller predicate leaves it undefined. Rebuilding
+      // one here would hand the two sheets different functions while this
+      // module promised them one, which is the divergence the promise exists
+      // to prevent.
+      ...(derived === undefined ? {} : { mayFetchUrl: derived }),
       ...(args.styleContext.scope === undefined &&
       typeof args.styles?.scope === "string"
         ? { scope: args.styles.scope }
