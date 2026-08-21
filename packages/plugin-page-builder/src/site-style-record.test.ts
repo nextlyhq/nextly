@@ -474,6 +474,20 @@ describe("judging the write against the tier it will be merged with", () => {
     expect(replacing.issues).toEqual([]);
   });
 
+  it("still caps the library when there is no config tier at all", () => {
+    // The merge of nothing and the stored array is the stored array, so the cap
+    // applies either way. A site on the plain `pageBuilder()` configuration
+    // states no defaults, which is the common case — skipping the merged checks
+    // for it would let the compiler silently drop everything past the cap.
+    const tooMany = Array.from({ length: MAX_NAMED_CLASSES + 1 }, (_, i) => ({
+      ...stored,
+      id: `c-${i}`,
+      slug: `c-${i}`,
+    }));
+
+    expect(checkStoredClasses(tooMany).issues.join(" ")).toContain("at most");
+  });
+
   it("refuses a stored token colliding with a config one on a custom property", () => {
     const result = checkStoredTokens(
       { tokens: [token("color.primary", "#111111")] },

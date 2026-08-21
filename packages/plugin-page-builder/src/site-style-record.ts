@@ -394,10 +394,14 @@ function classValueIssues(
 /**
  * What the stored classes do once merged with the tier they will be merged with.
  *
- * Asked of `resolveSiteStyle` rather than modelled here. The merge is keyed by
- * class ID, so a stored class sharing an id with a config one REPLACES it —
- * concatenating the two tiers instead would refuse a deliberate override as a
- * duplicate, and would count a replacement twice against the cap.
+ * Asked of `resolveSiteStyle` rather than modelled here, and asked even when
+ * there is no config tier: the merge of nothing and the stored array is the
+ * stored array, so one path covers both and the cap cannot be lost with it.
+ *
+ * The merge is keyed by class ID, so a stored class sharing an id with a config
+ * one REPLACES it — concatenating the two tiers instead would refuse a
+ * deliberate override as a duplicate, and would count a replacement twice
+ * against the cap.
  *
  * What survives the merge and still breaks is a SLUG held by two different
  * ids: the compiler drops the later one, so a node referencing it gets no rule.
@@ -408,7 +412,10 @@ function mergedLibraryIssues(
   classes: readonly NamedClass[],
   policy: SectionPolicy
 ): string[] {
-  if (policy.defaults === undefined) return [];
+  // Run whether or not a config tier was stated. With none, the merge is the
+  // stored array itself and the cap below is the only check that applies — but
+  // it applies, and skipping it here would let a site with no config defaults
+  // store more classes than the compiler reads.
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
   const issues: string[] = [];
   if (merged.length > MAX_NAMED_CLASSES) {

@@ -155,9 +155,6 @@ function pruneRenderedPlaceholders(
   return pruneNodes(document, node => rendersOwnMarkup(node, resolver));
 }
 
-/** Where a site-level input is reconciled, if it is reconciled at all. */
-type SiteInputRole = "reconciled-here" | "reconciled-elsewhere" | "sheet-only";
-
 /**
  * Which side of the render each site-level input belongs to.
  *
@@ -165,58 +162,53 @@ type SiteInputRole = "reconciled-here" | "reconciled-elsewhere" | "sheet-only";
  * both read it, one render must resolve it once or the two disagree invisibly,
  * each internally consistent and neither reporting anything.
  *
- * `satisfies` rather than a type annotation, so the literal values survive:
- * `ReconciledHere` below reads them back, and an annotation would widen every
- * entry to the whole union and derive nothing. The mapped key set is what makes
- * a field added to `SiteSheetInput` a compile error here until it is
- * classified, and `ReconciledHere` is what makes classifying it "reconciled
- * here" an obligation on the resolver rather than a comment.
+ * - `breakpoints` decides which at-rules every tier is emitted under, and is
+ *   required on the compile context. A set that reached only the sheet puts the
+ *   block-default and class tiers under at-rules the page's own values never
+ *   use, and drops any value stored under an id the other set omits.
+ * - `classes` is reconciled onto the PAGE context only. The sheet always writes
+ *   the site's library; the page compile attributes from the context's list
+ *   when it states one, because a context stating its own defers ATTRIBUTION
+ *   while the rules stay in the sheet. Resolving it back onto the sheet drops
+ *   the library whenever a context defers.
+ * - `blockBases` is the same shape one level along: the sheet emits the
+ *   `.nx-bt-*` rules and the page compile decides which of them a node
+ *   inherits, and the page sheet is appended after the shared one.
+ * - `tokenPrefix` separates declaration from reference. The sheet DECLARES the
+ *   custom properties and the page compile REFERENCES them, so a prefix that
+ *   reaches only one leaves every reference pointing at a property nothing
+ *   declared — and an unresolved custom property invalidates the declaration
+ *   rather than reporting.
+ * - `mayFetchUrl` is reconciled a level up, in `effectiveCompile`, which
+ *   derives one predicate and hands the same object to both. It has its own
+ *   role rather than sharing one, so nothing here promises a reconciliation
+ *   that happens elsewhere.
+ * - `fonts` and `tokens` are the sheet's alone: it emits `@font-face` and the
+ *   token blocks, and the page compile emits neither and reads neither.
  */
-// Only ever read as a type, by `ReconciledHere` below. It has to be a VALUE
-// anyway: `satisfies` checks a value against a type, and it is what preserves
-// the literal roles that a plain annotation would widen to the whole union —
-// which is the difference between a table that derives an obligation and a
-// table that documents an intention.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const SITE_INPUT_ROLE = {
-  // Decides which at-rules every tier is emitted under. Required on the compile
-  // context, so a stored set that reached only the sheet would put the
-  // block-default and class tiers under at-rules the page's own values never
-  // use, and drop any value stored under an id the route's set does not define.
-  breakpoints: "reconciled-here",
-  // Reconciled onto the PAGE context only. The sheet always writes the site's
-  // library, and the page compile attributes from the context's list when it
-  // states one — a context stating its own defers ATTRIBUTION while the rules
-  // stay in the sheet. Feeding the resolved list back to the sheet as well
-  // drops the library whenever a context defers.
-  classes: "reconciled-here",
-  // The sheet emits the `.nx-bt-*` rules and the page compile decides which of
-  // them a node inherits; the page sheet is appended after the shared one, so
-  // two sets means one default silently overwriting the other.
-  blockBases: "reconciled-here",
-  // The sheet DECLARES the custom properties; the page compile REFERENCES
-  // them. A prefix that reached only the sheet leaves every `{ $token }` on
-  // every page pointing at a property nothing declared, and an unresolved
-  // custom property invalidates the declaration rather than reporting.
-  tokenPrefix: "reconciled-here",
-  // Reconciled a level up, by `effectiveCompile`, which derives one predicate
-  // and hands the same object to both. Classified rather than omitted so it is
-  // not mistaken for an oversight — and it is the reason this table has three
-  // roles instead of two, since calling it "shared" would promise a
-  // reconciliation here that does not happen here.
-  mayFetchUrl: "reconciled-elsewhere",
-  // The sheet emits `@font-face` and the token blocks; the page compile emits
-  // neither and reads neither.
-  fonts: "sheet-only",
-  tokens: "sheet-only",
-} as const satisfies { [K in keyof Required<SiteSheetInput>]: SiteInputRole };
+interface SiteInputRoles {
+  breakpoints: "reconciled-here";
+  classes: "reconciled-here";
+  blockBases: "reconciled-here";
+  tokenPrefix: "reconciled-here";
+  mayFetchUrl: "reconciled-elsewhere";
+  fonts: "sheet-only";
+  tokens: "sheet-only";
+}
 
-/** The inputs the resolver below must produce, taken from the table itself. */
+/**
+ * The inputs the resolver below must produce, taken from the table itself.
+ *
+ * Indexed by every `SiteSheetInput` key rather than by the table's own keys,
+ * which is what makes the table exhaustive: a field added there and not
+ * classified here cannot index `SiteInputRoles` and the type fails to compile.
+ * Purely a type, so nothing exists at runtime to be unused.
+ */
 type ReconciledHere = {
-  [K in keyof typeof SITE_INPUT_ROLE]: (typeof SITE_INPUT_ROLE)[K] extends "reconciled-here"
+  [K in keyof Required<SiteSheetInput>]: SiteInputRoles[K] extends "reconciled-here"
     ? K
     : never;
-}[keyof typeof SITE_INPUT_ROLE];
+}[keyof Required<SiteSheetInput>];
 
 /** The name an input takes on the compile context, where it differs. */
 type ContextKey<K> = K extends "classes" ? "namedClasses" : K;
@@ -225,7 +217,7 @@ type ContextKey<K> = K extends "classes" ? "namedClasses" : K;
  * What `sharedStyleInputs` must return: every reconciled-here key, present.
  *
  * Required rather than optional on purpose. An optional key can be left out
- * silently, which is exactly the gap this table is supposed to close — a field
+ * silently, which is exactly the gap this table is meant to close — a field
  * classified as reconciled here and then never reconciled.
  */
 type ResolvedShared = {

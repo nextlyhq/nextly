@@ -134,11 +134,10 @@ describe("token prefix", () => {
 
 describe("block bases", () => {
   it("gives both compiles the same block-default set", () => {
-    // The same shape as the two above, and the one no finding named. BOTH
-    // compiles emit a block-type tier from their own `blockBases`, and the page
-    // sheet is appended after the shared one — so two different sets means the
-    // shared sheet writes one default and the page sheet overwrites it with
-    // another, each internally consistent.
+    // BOTH compiles emit a block-type tier from their own `blockBases`, and
+    // the page sheet is appended after the shared one — so two different sets
+    // means the shared sheet writes one default and the page sheet overwrites
+    // it with another, each internally consistent.
     //
     // The route's colour is what must NOT survive: asserting only that the
     // site's appears passes either way, because the shared sheet emitted it
