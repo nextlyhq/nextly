@@ -178,33 +178,42 @@ export function checkStoredTokens(
     ...(typeof raw.prefix === "string" ? { prefix: raw.prefix } : {}),
     ...(darkMode === "attribute" || darkMode === "media" ? { darkMode } : {}),
   };
-  // The emitter is the validator: it is what will read this set on every
-  // page render, so its report is the one that counts. The selector is
-  // irrelevant to validation; the CSS is discarded.
+  // The emitter is the validator: it is what will read this set on every page
+  // render, so its report is the one that counts. The selector is irrelevant to
+  // validation; the CSS is discarded.
   //
-  // Emitted over the MERGE, because that is what every consumer compiles. A
-  // stored token colliding with a config one on a single custom property is
-  // refused by the emitter, and config is inserted first, so without this the
-  // write is accepted and the token silently never applies.
+  // Three runs, because "did this write cause it" and "is this new" are
+  // different questions and only one of them can be answered by comparing
+  // merged against config.
   //
-  // Reported as a DIFFERENCE against the config tier alone. A site whose own
-  // config already emits an issue has a problem, but it is not one this write
-  // introduced and not one the writer can fix from here — refusing their save
-  // for it would be telling them about somebody else's mistake.
+  // The stored set's OWN issues are always reported. A message names the token
+  // and not the offending value, so a config token that already emits one and a
+  // stored override that emits a different one produce the same string — and
+  // suppressing on that accepts a value the compiler drops. What the writer
+  // wrote is theirs whatever the config tier says.
   //
-  // `resolveSiteStyle` does the merging rather than a local one: it is the one
-  // answer to what the merged style is, and a second one here would drift from
-  // the render it is meant to predict.
-  const merged = resolveSiteStyle(policy.defaults, { tokens: set }).tokens;
-  const already = new Set(
+  // Only issues the MERGE creates are compared against the config tier, and
+  // suppressed when it already had them. A collision between the two tiers that
+  // predates this write is not something the writer can fix from the admin.
+  //
+  // `resolveSiteStyle` does the merging rather than a second implementation
+  // here: it is the one answer to what the merged style is, and a local copy
+  // would drift from the render it exists to predict.
+  const own = emitTokenBlocks(set, ":root").issues.map(issue => issue.message);
+  const inherited = new Set(
     policy.defaults?.tokens === undefined
       ? []
       : emitTokenBlocks(policy.defaults.tokens, ":root").issues.map(
           issue => issue.message
         )
   );
+  const merged = resolveSiteStyle(policy.defaults, { tokens: set }).tokens;
+  const reported = new Set(own);
+  issues.push(...own);
   for (const issue of emitTokenBlocks(merged ?? set, ":root").issues) {
-    if (!already.has(issue.message)) issues.push(issue.message);
+    if (inherited.has(issue.message) || reported.has(issue.message)) continue;
+    reported.add(issue.message);
+    issues.push(issue.message);
   }
   return { value: set, issues };
 }

@@ -578,6 +578,32 @@ describe("judging the write against the tier it will be merged with", () => {
     expect(result.issues).not.toEqual([]);
   });
 
+  it("reports the stored set's OWN issue even when config emits the same message", () => {
+    // A token issue names the token and not the offending value, so a config
+    // token that already emits one and a stored override that emits a
+    // different one produce identical strings. Comparing merged against config
+    // then accepts a value the compiler drops. What the writer wrote is theirs
+    // whatever the config tier says.
+    const fetching = (name: string, url: string) => ({
+      name,
+      kind: "color" as const,
+      values: { light: `url(${url})` },
+    });
+
+    const result = checkStoredTokens(
+      { tokens: [fetching("brand.image", "https://b.example/2.png")] },
+      {
+        defaults: {
+          tokens: {
+            tokens: [fetching("brand.image", "https://a.example/1.png")],
+          },
+        },
+      }
+    );
+
+    expect(result.issues).not.toEqual([]);
+  });
+
   it("does not report a problem the CONFIG tier already had on its own", () => {
     // Reported as a difference. A site whose own config emits an issue has a
     // problem, but it is not one this write introduced and not one the writer
