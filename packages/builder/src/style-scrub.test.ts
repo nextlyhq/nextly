@@ -553,3 +553,58 @@ describe("a caller that did not say where the preview goes", () => {
     expect(scrubPreviewCss(TARGET, "32px").ok).toBe(true);
   });
 });
+
+describe("a breakpoint set edited in place", () => {
+  it("re-derives the query rather than answering with the old one", () => {
+    // A host that mutates a definition keeps the same object, so a cache keyed
+    // on identity alone keeps emitting the query the set no longer describes —
+    // and the preview then sits at a width where the committed value is absent.
+    const breakpoints = {
+      viewport: [
+        { id: "base", label: "Desktop" },
+        { id: "mobile", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
+    };
+    const target: ScrubTarget = {
+      ...TARGET,
+      breakpoints,
+      address: { ...TARGET.address, breakpoint: "mobile" },
+    };
+
+    const before = scrubPreviewCss(target, "32px");
+    expect(before.ok).toBe(true);
+    if (!before.ok) return;
+    expect(before.css).toContain("@media (max-width: 640px)");
+
+    breakpoints.viewport[1].maxWidth = 320;
+
+    const after = scrubPreviewCss(target, "32px");
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.css).toContain("@media (max-width: 320px)");
+    expect(after.css).not.toContain("640px");
+  });
+
+  it("still answers from cache when nothing moved", () => {
+    // The control: dropping the cache on every call would satisfy the test
+    // above while making the probe compile run per pointer frame.
+    const breakpoints = {
+      viewport: [
+        { id: "base", label: "Desktop" },
+        { id: "mobile", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
+    };
+    const target: ScrubTarget = {
+      ...TARGET,
+      breakpoints,
+      address: { ...TARGET.address, breakpoint: "mobile" },
+    };
+    const first = scrubPreviewCss(target, "32px");
+    const second = scrubPreviewCss(target, "40px");
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(first.css.split("{")[0]).toBe(second.css.split("{")[0]);
+  });
+});

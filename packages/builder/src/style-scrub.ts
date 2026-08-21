@@ -189,8 +189,27 @@ export function scrubStateFragments(): ReadonlyMap<StyleState, string> {
   return STATE_FRAGMENTS;
 }
 
-/** At-rules already derived, per breakpoint set and id. */
-const AT_RULES = new WeakMap<BreakpointSet, Map<string, string | null>>();
+/**
+ * At-rules already derived, per breakpoint set and id.
+ *
+ * Held against the set OBJECT, and checked against its CONTENT. Identity alone
+ * is not enough: a host that edits a definition in place keeps the same object,
+ * so a cache keyed on identity keeps answering with the old query — measured, a
+ * `mobile` breakpoint previewed at 640px still emitted `@media (max-width:
+ * 640px)` after its `maxWidth` became 320, while the next compile used 320.
+ * The preview would then sit at a width where the committed value is absent.
+ *
+ * The content key is recomputed per lookup and the entries dropped when it
+ * moves, which keeps this bounded by the number of live sets rather than by how
+ * often one is edited. Serializing a handful of definitions costs far less than
+ * the probe compile it saves.
+ */
+interface AtRuleCache {
+  content: string;
+  perId: Map<string, string | null>;
+}
+
+const AT_RULES = new WeakMap<BreakpointSet, AtRuleCache>();
 
 /**
  * The at-rule the compiler wraps one breakpoint's declarations in.
@@ -208,12 +227,13 @@ function breakpointAtRule(
   breakpoints: BreakpointSet,
   id: string
 ): string | null {
-  let perId = AT_RULES.get(breakpoints);
-  if (perId === undefined) {
-    perId = new Map();
-    AT_RULES.set(breakpoints, perId);
+  const content = JSON.stringify(breakpoints);
+  let entry = AT_RULES.get(breakpoints);
+  if (entry === undefined || entry.content !== content) {
+    entry = { content, perId: new Map() };
+    AT_RULES.set(breakpoints, entry);
   }
-  const cached = perId.get(id);
+  const cached = entry.perId.get(id);
   if (cached !== undefined) return cached;
   const document: BlockDocument = {
     formatVersion: 1,
@@ -231,7 +251,7 @@ function breakpointAtRule(
   const css = compilePageCss(document, { breakpoints }).css.trim();
   const wrapper = /^@[a-z-]+[^{]*/.exec(css);
   const derived = css === "" ? null : wrapper === null ? "" : wrapper[0].trim();
-  perId.set(id, derived);
+  entry.perId.set(id, derived);
   return derived;
 }
 
