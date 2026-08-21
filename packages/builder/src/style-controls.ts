@@ -289,7 +289,13 @@ function fieldsHold(
 ): boolean {
   const fields = fieldsOf(variant);
   if (fields.length === 0) return true;
-  const named = Object.keys(value).filter(key => fields.includes(key));
+  const keys = Object.keys(value);
+  // An EMPTY record names nothing and is still this form: the validator accepts
+  // `{}` against a composite with no issues, so rejecting it here sent a stored
+  // `borderRadius: {}` to the scalar arm and drew one length control for a
+  // value the document holds in the four-corner form.
+  if (keys.length === 0) return true;
+  const named = keys.filter(key => fields.includes(key));
   if (named.length === 0) return false;
   return named.every(name => {
     const shape = shapeAt(variant, name);
@@ -581,7 +587,12 @@ function childValue(
   name: string
 ): StyleValue | undefined {
   if (value === undefined || !isCompositeValue(value)) return undefined;
-  return value[name];
+  // OWN keys only, as `validateStyleValues` and the declaration walk both read
+  // them. A nested field reached through a prototype is one the compiler will
+  // not emit, so deriving a control from it shows an active variant the stored
+  // document does not have — and an inherited accessor would RUN during a read
+  // taken only to draw a panel.
+  return Object.hasOwn(value, name) ? value[name] : undefined;
 }
 
 /**
