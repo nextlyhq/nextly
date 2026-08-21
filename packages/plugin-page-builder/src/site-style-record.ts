@@ -31,9 +31,11 @@ import {
   isPlainRecord,
   isUsableNamedClass,
   validateFontFace,
+  validateStyleValues,
   type BreakpointDef,
   type BreakpointSet,
   type FontFaceDef,
+  type MayFetchUrl,
   type NamedClass,
   type SiteToken,
   type SiteTokenSet,
@@ -60,6 +62,22 @@ export interface SectionCheck<T> {
 
 /** An absent section: nothing stored, nothing wrong. */
 const EMPTY: SectionCheck<never> = { issues: [] };
+
+/**
+ * What a checker needs from the SITE, beyond the value being checked.
+ *
+ * A predicate rather than the host list it is derived from, so this module
+ * keeps importing only the engine and one implementation of host matching
+ * answers for every channel — the published sheet, the canvas and this gate.
+ */
+export interface SectionPolicy {
+  /**
+   * Which hosts this site will fetch from. Absent means unasked rather than
+   * allowed, exactly as the engine treats it: with no policy the scheme
+   * allowlist is the only limit on a `url()`.
+   */
+  mayFetchUrl?: MayFetchUrl;
+}
 
 /** Shared shape guard: a string, when the slot allows one. */
 const optionalString = (value: unknown): value is string | undefined =>
@@ -214,6 +232,75 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
 }
 
 /**
+ * Every property map inside a class envelope, with the address it sits at.
+ *
+ * `NodeStyles` is state × breakpoint × property, and the engine's value
+ * validator judges ONE state × breakpoint's properties — so the two levels
+ * above it are flattened here, by OWN key as the engine reads style maps.
+ *
+ * Every key is descended rather than only the states and breakpoints this
+ * package knows. A breakpoint the site has not defined compiles to no rule
+ * today and to a real rule the moment someone defines it, so a walk that
+ * visited only what compiles now would gate less than the sheet eventually
+ * serves. A level that is not a record is skipped rather than reported: the
+ * envelope's SHAPE is `isUsableNamedClass`'s question, already asked.
+ */
+function styleMapsIn(
+  styles: Readonly<Record<string, unknown>>
+): { at: string; values: Readonly<Record<string, unknown>> }[] {
+  const maps: { at: string; values: Readonly<Record<string, unknown>> }[] = [];
+  for (const state of Object.keys(styles)) {
+    const byBreakpoint = styles[state];
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const breakpoint of Object.keys(byBreakpoint)) {
+      const values = byBreakpoint[breakpoint];
+      if (isPlainRecord(values))
+        maps.push({ at: `${state}.${breakpoint}`, values });
+    }
+  }
+  return maps;
+}
+
+/**
+ * The values inside one class, judged by the engine's own validator.
+ *
+ * `isUsableNamedClass` types the envelope and stops at it: it never reads
+ * inside `styles`. So the section's only value-level limit used to be whatever
+ * the compiler drops at render, which is too late for a `url()` — the sheet is
+ * already serving it to every visitor of every page. The token section has
+ * never had that gap, because its gate IS its emitter.
+ *
+ * FORGIVING, reporting errors only, and both halves are deliberate. Under
+ * strict a property this engine has not learned is an error, and a document
+ * written by a newer engine is not something the author can fix here. A
+ * warning is a value the engine ACCEPTS and emits, so refusing on one would
+ * refuse writes whose result the sheet would render happily.
+ */
+function classValueIssues(
+  entry: NamedClass,
+  index: number,
+  policy: SectionPolicy
+): string[] {
+  const options =
+    policy.mayFetchUrl === undefined
+      ? undefined
+      : { mayFetchUrl: policy.mayFetchUrl };
+  return styleMapsIn(entry.styles).flatMap(({ at, values }) =>
+    validateStyleValues(
+      values,
+      `classes[${index}].styles.${at}`,
+      "forgiving",
+      undefined,
+      false,
+      undefined,
+      options
+    )
+      .filter(issue => issue.severity === "error")
+      .map(issue => issue.message)
+  );
+}
+
+/**
  * The stored class library.
  *
  * Usability per entry is the engine's `isUsableNamedClass` — the same
@@ -227,9 +314,16 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
  * makes a node's reference ambiguous. Both are cheaper to reject while the
  * writer is present than to explain after a page styles itself with the
  * wrong preset.
+ *
+ * The VALUES inside each entry are judged too, under the site's host policy —
+ * see `classValueIssues`. A class is emitted into the sheet of every public
+ * page, so a `url()` here reaches every visitor, and it is emitted verbatim
+ * rather than through the `var()` substitution that makes a token's own gate
+ * the last chance to stop one.
  */
 export function checkStoredClasses(
-  raw: unknown
+  raw: unknown,
+  policy: SectionPolicy = {}
 ): SectionCheck<readonly NamedClass[]> {
   if (raw === undefined || raw === null) return EMPTY;
   if (!Array.isArray(raw)) {
@@ -261,6 +355,10 @@ export function checkStoredClasses(
     }
     ids.add(entry.id);
     slugs.add(entry.slug);
+    // Reported but still returned, as this module's two postures require: a
+    // write refuses the section on any issue, while a read keeps the entry the
+    // compiler will narrow for itself.
+    issues.push(...classValueIssues(entry, index, policy));
     classes.push(entry);
   });
   return { value: classes, issues };

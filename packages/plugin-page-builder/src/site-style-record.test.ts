@@ -17,6 +17,9 @@ function token(name: string, light: string, dark?: string) {
   };
 }
 
+/** A host no site in these tests allows. */
+const TRACKER = "https://tracker.example/p.png";
+
 describe("checkStoredTokens", () => {
   it("reports nothing for an absent section", () => {
     expect(checkStoredTokens(undefined)).toEqual({ issues: [] });
@@ -128,6 +131,70 @@ describe("checkStoredClasses", () => {
   it("refuses a class with no numeric orderIndex", () => {
     const result = checkStoredClasses([{ ...usable, orderIndex: "first" }]);
     expect(result.issues).toHaveLength(1);
+  });
+
+  // A named class is emitted VERBATIM into the sheet of every public page, so
+  // a url() stored in one is a request every visitor makes. Unlike a token,
+  // which reaches the page as a var() substitution, there is no later
+  // substitution step where a policy could still see it.
+  const REFUSING = { mayFetchUrl: () => false };
+  const ALLOWING = { mayFetchUrl: () => true };
+  const tracker = (styles: unknown) => [{ ...usable, styles }];
+  const AT_BASE = { base: { base: { background: { url: TRACKER } } } };
+
+  it("refuses a url() the site's host policy does not allow", () => {
+    const result = checkStoredClasses(tracker(AT_BASE), REFUSING);
+    expect(result.issues.join(" ")).toContain("does not allow");
+  });
+
+  it("accepts the same url() when the policy allows the host", () => {
+    // The control that separates "the policy refused it" from "the walk
+    // refuses every url()". Without this the test above passes on a gate that
+    // rejects the shape and never consults the predicate at all.
+    expect(checkStoredClasses(tracker(AT_BASE), ALLOWING).issues).toEqual([]);
+  });
+
+  it("accepts it when NO policy is configured, which the engine calls unasked", () => {
+    // Deliberate and worth pinning: absent is not the same as an empty
+    // allowlist. A site that configured no remotePatterns keeps exactly the
+    // behaviour it has, and the engine's scheme allowlist stays the only
+    // limit. Closing that is the renderer's half, not this gate's.
+    expect(checkStoredClasses(tracker(AT_BASE)).issues).toEqual([]);
+  });
+
+  it("reaches a state and a breakpoint the compiler would emit nothing for", () => {
+    // The property a compiler-as-validator gate could not have. A breakpoint
+    // this site has not defined compiles to no rule TODAY and to a real rule
+    // the moment someone defines it, so a gate that only judged what compiles
+    // now would let the value through and serve it later.
+    const result = checkStoredClasses(
+      tracker({
+        hover: { "not-a-defined-breakpoint": { background: { url: TRACKER } } },
+      }),
+      REFUSING
+    );
+    expect(result.issues.join(" ")).toContain("does not allow");
+  });
+
+  it("does not refuse a value the engine only WARNS about", () => {
+    // Forgiving, errors only. A property this engine has not learned is a
+    // warning rather than an error, because a document written by a newer
+    // engine is not something the author can fix here — and a warning is a
+    // value the engine accepts and emits, so refusing on one would refuse a
+    // write whose result the sheet would render.
+    const result = checkStoredClasses(
+      tracker({ base: { base: { notAProperty: "x" } } }),
+      REFUSING
+    );
+    expect(result.issues).toEqual([]);
+  });
+
+  it("still returns the entry it reported on, so a READ narrows rather than drops", () => {
+    // The module's two postures: the write refuses the section on any issue,
+    // the read keeps what the compiler can narrow for itself.
+    const result = checkStoredClasses(tracker(AT_BASE), REFUSING);
+    expect(result.issues).not.toEqual([]);
+    expect(result.value).toHaveLength(1);
   });
 });
 

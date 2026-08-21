@@ -28,6 +28,7 @@ import {
   checkStoredTokens,
   readSiteStyleRecord,
   type SectionCheck,
+  type SectionPolicy,
 } from "./site-style-record";
 
 /** The single the stored tier lives in. One document per site, by design. */
@@ -65,7 +66,7 @@ const refusing =
  *   whole sections at a time; a field-per-property schema here would be a
  *   third statement of shapes two packages already agree on.
  */
-export function siteStyleSingle() {
+export function siteStyleSingle(policy: SectionPolicy = {}) {
   return defineSingle({
     slug: SITE_STYLE_SLUG,
     label: { singular: "Site Style" },
@@ -112,7 +113,12 @@ export function siteStyleSingle() {
       json({
         name: "classes",
         label: "Named classes",
-        validate: refusing(checkStoredClasses),
+        // The one section whose gate is given the site's host policy: a class
+        // is emitted verbatim into every public page's sheet, so a `url()`
+        // stored here is fetched by every visitor. Tokens reach the page as a
+        // `var()` substitution, which is why their own gate is the last place
+        // a URL can be stopped and this one is the last place a class's can.
+        validate: refusing(raw => checkStoredClasses(raw, policy)),
         admin: {
           description:
             "Reusable style presets: [{ id, slug, orderIndex, styles }]. Documents reference a class by id; a later orderIndex overrides an earlier one.",
