@@ -56,10 +56,10 @@ const refusing =
  * - `versions: true`, because a site's whole look changes in one write and a
  *   restorable history is the difference between an experiment and an
  *   accident.
- * - Public read, because every anonymous page render is styled by this
- *   document — its contents are emitted into the CSS of every public page,
- *   so there is nothing to protect on the read side. Updates stay with the
- *   role/permission checks every single falls back to.
+ * - NO code-defined access block, so read and update alike fall through to the
+ *   `read-site-style` / `update-site-style` permissions seeded with the single.
+ *   A published render is unaffected: it reads through the Direct API, whose
+ *   `overrideAccess` default returns before any rule is consulted.
  * - Plain `json` fields rather than structured ones, because the shapes are
  *   the ENGINE's contracts and the style studios that will edit them write
  *   whole sections at a time; a field-per-property schema here would be a
@@ -70,13 +70,21 @@ export function siteStyleSingle() {
     slug: SITE_STYLE_SLUG,
     label: { singular: "Site Style" },
     versions: true,
-    // A function rather than a boolean: the single config validator accepts
-    // only functions for access rules. Public read is the intent — every
-    // anonymous page render is styled by this document, and its contents are
-    // emitted into the CSS of every public page, so there is nothing to
-    // protect on the read side. Updates stay with the role/permission checks
-    // every single falls back to.
-    access: { read: () => true },
+    // No `access` block, deliberately: read and update both fall through to
+    // the `read-site-style` / `update-site-style` permissions seeded with the
+    // single and granted to super_admin, so a role reaches this document only
+    // by being given one.
+    //
+    // A code-defined read rule cannot serve the anonymous render it would be
+    // written for. `checkAccess` refuses an absent user before consulting any
+    // rule, singles are not public endpoints, and the published page does not
+    // use the route at all — `loadSiteStyle` reads through the Direct API,
+    // whose `overrideAccess` default returns from `checkSingleAccess` before
+    // the rule is reached. What such a rule DOES reach is every authenticated
+    // principal, returning ahead of the permission lookup, and the `read`
+    // action spans more than the published document: the version list, a
+    // version, a version diff and the autosave recovery point all resolve to
+    // `read` on this slug. None of those is emitted into a public page.
     admin: {
       icon: "Palette",
       description:
