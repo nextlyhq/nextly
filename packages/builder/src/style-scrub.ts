@@ -164,9 +164,25 @@ export function scrubStateFragments(): ReadonlyMap<StyleState, string> {
   return STATE_FRAGMENTS;
 }
 
-/** The root every rule for this document is anchored to. */
+/**
+ * The root every rule for this document is anchored to.
+ *
+ * A scope the compiler REFUSES falls back to the unscoped root here too. It
+ * refuses an empty scope and one carrying ASCII whitespace, because `a b` in a
+ * class attribute is two classes and no escaping makes it the single class the
+ * renderer attached — so it warns and emits unscoped rules. Escaping the
+ * whitespace instead would produce a selector requiring a class the DOM cannot
+ * hold, and the preview would show nothing while the commit produced working
+ * CSS.
+ *
+ * The whitespace set is ASCII only, matching what HTML splits a class attribute
+ * on: `\s` in JavaScript also matches NBSP and the Unicode spaces, and those do
+ * NOT split a class, so rejecting them would drop a scope the compiler kept.
+ */
 function rootSelector(scope: string | undefined): string {
-  if (scope === undefined || scope === "") return PAGE_ROOT_SELECTOR;
+  if (scope === undefined || scope === "" || /[ \t\n\f\r]/.test(scope)) {
+    return PAGE_ROOT_SELECTOR;
+  }
   return `${PAGE_ROOT_SELECTOR}.${escapeIdentifier(scope)}`;
 }
 

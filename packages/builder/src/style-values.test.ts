@@ -310,3 +310,40 @@ describe("what a write is judged against", () => {
     expect(known.warnings).toEqual([]);
   });
 });
+
+describe("a breakpoint id JavaScript treats specially", () => {
+  // Nothing in `validateBreakpoints` restricts a breakpoint id's characters, so
+  // a site may define `__proto__`. Assigning it on an ordinary object reaches
+  // the legacy prototype setter instead of creating a key — measured: after
+  // `obj["__proto__"] = v`, `Object.keys(obj)` is empty.
+  const PROTO: StyleAddress = { ...BOTTOM, breakpoint: "__proto__" };
+
+  it("authors a first value there instead of reporting nothing to do", () => {
+    const result = styleWriteOp("n1", undefined, PROTO, "32px");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.op).not.toBeNull();
+  });
+
+  it("stores it as an own key the document can carry", () => {
+    const result = styleWriteOp("n1", undefined, PROTO, "32px");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.op === null) throw new Error("expected an op");
+    const styles = patchedStyles(result.op);
+    const breakpoints = styles?.base as Record<string, unknown> | undefined;
+    expect(breakpoints).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(breakpoints, "__proto__")).toBe(
+      true
+    );
+    expect(Object.keys(breakpoints ?? {})).toContain("__proto__");
+  });
+
+  it("applies, and reads back through the ordinary accessor", () => {
+    const result = styleWriteOp("n1", undefined, PROTO, "32px");
+    if (!result.ok || result.op === null) throw new Error("expected an op");
+    const applied = applyOp(documentWith(undefined), result.op);
+    expect(readStyleValue(applied.document.nodes[0].styles, PROTO)).toBe(
+      "32px"
+    );
+  });
+});

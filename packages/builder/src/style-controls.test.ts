@@ -178,7 +178,7 @@ describe("a union, which stores one value in more than one form", () => {
   });
 });
 
-describe("D-05.1 — the catalog drives the controls", () => {
+describe("the catalog drives the controls", () => {
   it("gives a property this module has never heard of a full set of controls", () => {
     // The point of the rule, stated as a test: a property invented here — no
     // entry in any list in `style-controls.ts`, no name it could match on —
@@ -404,5 +404,33 @@ describe("keywords as the engine compares them", () => {
     // keyword, or the select would be drawn for values it cannot represent.
     expect(fontStyleKind("oblique 40deg")).toBe("css");
     expect(fontStyleKind("italicish")).toBe("css");
+  });
+});
+
+describe("values that are legal wherever a value is", () => {
+  // `inherit`, `initial` and their siblings are accepted by every leaf, so the
+  // engine takes them through the EARLIEST arm — including a number arm that
+  // otherwise holds no strings at all.
+
+  function armKind(property: string, value: string) {
+    const entry = getStyleProperty(property);
+    return styleControlsFor(entry as StyleProperty, value).controls[0].kind;
+  }
+
+  it("takes a CSS-wide keyword through the first arm, not the free-form one", () => {
+    expect(armKind("fontStyle", "inherit")).toBe("select");
+    expect(armKind("fontStyle", "initial")).toBe("select");
+  });
+
+  it("takes one through a NUMBER arm, which holds no other string", () => {
+    expect(armKind("lineHeight", "inherit")).toBe("number");
+    expect(armKind("lineHeight", "unset")).toBe("number");
+  });
+
+  it("still sends an ordinary value to the arm that actually holds it", () => {
+    // The control: if every string were treated as universal, arm 0 would win
+    // always and the free-form and length arms would be unreachable.
+    expect(armKind("fontStyle", "oblique 40deg")).toBe("css");
+    expect(armKind("lineHeight", "1.5rem")).toBe("length");
   });
 });

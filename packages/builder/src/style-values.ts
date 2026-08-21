@@ -216,11 +216,26 @@ function withValues(
   values: StyleValues | undefined
 ): NodeStyles {
   const states: NodeStyles = { ...styles };
-  const breakpoints = { ...states[state] };
+  const breakpoints: Partial<Record<BreakpointId, StyleValues>> = {
+    ...states[state],
+  };
   if (values === undefined || Object.keys(values).length === 0) {
     delete breakpoints[breakpoint];
   } else {
-    breakpoints[breakpoint] = values;
+    // DEFINED rather than assigned. A breakpoint id is site-supplied free text
+    // — nothing in `validateBreakpoints` restricts its characters — and the id
+    // `__proto__` reaches JavaScript's legacy prototype setter through an
+    // ordinary assignment: the key never becomes an own property, the map reads
+    // as empty, the state is pruned, and the write reports success with nothing
+    // to do. Every control at that breakpoint would be unable to author its
+    // first value, silently. The spread above is safe on its own, because
+    // spreading DEFINES own properties rather than setting them.
+    Object.defineProperty(breakpoints, breakpoint, {
+      value: values,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   if (Object.keys(breakpoints).length === 0) delete states[state];
   else states[state] = breakpoints;

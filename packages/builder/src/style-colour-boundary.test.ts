@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,6 +51,57 @@ import { collectModules } from "./source-modules";
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = join(SRC_DIR, "..");
 const UI_MANIFEST = join(SRC_DIR, "..", "..", "ui", "package.json");
+
+/** The `ui` package's source root, whose barrel the editor is allowed to import. */
+const UI_SRC = join(SRC_DIR, "..", "..", "ui", "src");
+
+/**
+ * The file a relative specifier names, trying the extensions a bundler tries.
+ *
+ * Returns `undefined` for a specifier that resolves to nothing here, which is
+ * how a type-only or generated path drops out of the walk rather than failing
+ * it.
+ */
+function resolveModule(from: string, specifier: string): string | undefined {
+  const base = resolve(dirname(from), specifier);
+  const candidates = [
+    `${base}.ts`,
+    `${base}.tsx`,
+    join(base, "index.ts"),
+    join(base, "index.tsx"),
+    base,
+  ];
+  return candidates.find(path => /\.tsx?$/.test(path) && existsSync(path));
+}
+
+/**
+ * Every module reachable from an entry by following its relative specifiers.
+ *
+ * `importedSpecifiers` reports re-exports as well as imports — measured:
+ * `export * from`, `export {} from` and `export * as ns from` all come back —
+ * which is what makes this a reachability walk rather than an import scan.
+ */
+function reachableFrom(entry: string): Set<string> {
+  const seen = new Set<string>();
+  const pending = [entry];
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (file === undefined || seen.has(file)) continue;
+    seen.add(file);
+    const specifiers = importedSpecifiers(readFileSync(file, "utf8"), file);
+    for (const specifier of specifiers) {
+      if (!specifier.startsWith(".")) continue;
+      const next = resolveModule(file, specifier);
+      if (next !== undefined && !seen.has(next)) pending.push(next);
+    }
+  }
+  return seen;
+}
+
+/** Every module the `ui` root barrel can reach, re-exports included. */
+function reachableFromUiBarrel(): Set<string> {
+  return reachableFrom(join(UI_SRC, "index.ts"));
+}
 
 /** Every module specifier this package imports, with the file that imports it. */
 function everyImport(): { file: string; specifier: string }[] {
@@ -128,15 +179,32 @@ describe("the admin theme's contrast implementation is out of reach", () => {
     }
   });
 
-  it("is not re-exported from the root barrel the editor does import", () => {
+  it("is not reachable from the root barrel, however many re-exports deep", () => {
     // The route the export map leaves open: `@nextlyhq/ui` itself is allowed,
-    // so anything its root re-exports is reachable.
-    const barrel = readFileSync(
-      join(SRC_DIR, "..", "..", "ui", "src", "index.ts"),
-      "utf8"
+    // so anything its root re-exports is reachable — and a re-export chain is
+    // not one file. A literal search of `index.ts` stays green when the root
+    // does `export * from "./some-barrel"` and THAT barrel re-exports contrast,
+    // which is precisely the shape a boundary has to survive.
+    const reached = reachableFromUiBarrel();
+    // An absence search needs a positive control: the walk must demonstrably
+    // traverse the graph, or an empty result means only that it read nothing.
+    expect(reached.size).toBeGreaterThan(1);
+    const offenders = [...reached].filter(file =>
+      file.includes(join("styles", "contrast"))
     );
-    expect(barrel.length).toBeGreaterThan(0);
-    expect(barrel).not.toContain("styles/contrast");
+    expect(offenders).toEqual([]);
+  });
+
+  it("would SEE the contrast module if the barrel reached it", () => {
+    // The negative control for the walk itself: pointed at the module that DOES
+    // re-export contrast, it must find it. Without this, a walk that resolved
+    // nothing would satisfy the assertion above on any codebase.
+    const contrastIndex = join(UI_SRC, "styles", "contrast", "resolve.ts");
+    expect(existsSync(contrastIndex)).toBe(true);
+    const reached = reachableFrom(contrastIndex);
+    expect(
+      [...reached].some(file => file.includes(join("styles", "contrast")))
+    ).toBe(true);
   });
 
   it("is not reached by a relative path that climbs out of this package", () => {

@@ -9,9 +9,9 @@
  * **The catalog decides, and nothing here holds a second list.** A property's
  * `shape` names its value form; this walks that shape and answers with one
  * descriptor per editable leaf. Adding a property to `catalog.ts` gives it
- * controls with no edit here, which is the whole of D-05.1 — and the mapping
- * from leaf kind to control kind is a mapped type, so a leaf kind added to the
- * engine is a compile error in exactly one place rather than a silent
+ * controls with no edit here, which is the property worth protecting — and the
+ * mapping from leaf kind to control kind is a mapped type, so a leaf kind added
+ * to the engine is a compile error in exactly one place rather than a silent
  * fallthrough at runtime.
  *
  * **What this module does NOT do.** It does not decide which properties a block
@@ -25,7 +25,9 @@
 
 import {
   asciiLower,
+  compileStyleValues,
   decodeIdentifier,
+  getStyleProperty,
   isStyleLeaf,
   isTokenRef,
   type StyleLeaf,
@@ -258,6 +260,62 @@ function keywordKey(value: string): string {
 }
 
 /**
+ * A plain keyword property, used to ask the engine what any leaf would accept.
+ *
+ * `textAlign` is a single keyword leaf with a closed vocabulary. A value it
+ * accepts that is NOT in that vocabulary is accepted for a reason that has
+ * nothing to do with this property — it is legal wherever a value is — which is
+ * exactly the question below.
+ */
+const UNIVERSAL_PROBE_PROPERTY = "textAlign";
+
+/** Answers already derived, so a repeated value costs one lookup. */
+const UNIVERSALLY_ACCEPTED = new Map<string, boolean>();
+
+/**
+ * Whether every leaf accepts this string whatever its own vocabulary says.
+ *
+ * The CSS-wide keywords — `inherit`, `initial` and their siblings — are legal
+ * wherever a value is, so a keyword leaf accepts them alongside its own list and
+ * a number leaf accepts them despite taking numbers. Without this, a stored
+ * `fontStyle: "inherit"` misses the keyword arm and lands on the free-form one,
+ * and `lineHeight: "inherit"` misses the number arm — in both cases disagreeing
+ * with the arm the engine itself would accept the value through.
+ *
+ * ASKED of the engine rather than listed here. The engine holds that set and
+ * does not export it, so a copy would be a second statement of which keywords
+ * are universal, and the two would agree until either moved. Compiling one
+ * probe answers it, and a keyword this engine learns is picked up with no edit.
+ */
+function isUniversallyAccepted(value: string): boolean {
+  const cached = UNIVERSALLY_ACCEPTED.get(value);
+  if (cached !== undefined) return cached;
+  const probe = getStyleProperty(UNIVERSAL_PROBE_PROPERTY);
+  if (probe === undefined || probe.shape.kind !== "keyword") {
+    throw new Error(
+      `${UNIVERSAL_PROBE_PROPERTY} is no longer a plain keyword property, so ` +
+        `the engine cannot be asked which values are legal everywhere`
+    );
+  }
+  // A value inside the probe's OWN vocabulary would be accepted for the wrong
+  // reason, and would report every such word as universal.
+  const key = keywordKey(value);
+  if (probe.shape.values.some(keyword => keywordKey(keyword) === key)) {
+    UNIVERSALLY_ACCEPTED.set(value, false);
+    return false;
+  }
+  const compiled = compileStyleValues(
+    { [UNIVERSAL_PROBE_PROPERTY]: value },
+    ""
+  );
+  const accepted =
+    compiled.declarations.length > 0 &&
+    !compiled.warnings.some(issue => issue.severity === "error");
+  UNIVERSALLY_ACCEPTED.set(value, accepted);
+  return accepted;
+}
+
+/**
  * Whether a leaf stores this string.
  *
  * A keyword leaf claims one only when the string is one of ITS keywords. Every
@@ -271,6 +329,10 @@ function keywordKey(value: string): string {
  * engine's own fallback and not a wrong answer.
  */
 function stringLeafHolds(leaf: StyleLeaf, value: string): boolean {
+  // Checked FIRST and for every kind, because a value legal everywhere is one
+  // the engine accepts through the earliest arm — including a number arm that
+  // otherwise takes no strings at all.
+  if (isUniversallyAccepted(value)) return true;
   if (leaf.kind !== "keyword") return leaf.kind !== "number";
   const key = keywordKey(value);
   return leaf.values.some(keyword => keywordKey(keyword) === key);

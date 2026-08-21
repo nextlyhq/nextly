@@ -416,3 +416,56 @@ describe("the selector at each state the catalog supports", () => {
     }
   });
 });
+
+describe("a scope the compiler refuses", () => {
+  // `scopeSelector` refuses an empty scope and one carrying ASCII whitespace —
+  // `a b` in a class attribute is two classes, and no escaping makes it the one
+  // class the renderer attached — so it warns and emits unscoped rules.
+
+  function compiledWith(scope: string): string {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: { base: { margin: { blockEnd: "24px" } } } },
+        },
+      ],
+    };
+    return compilePageCss(document, {
+      breakpoints: {
+        viewport: [{ id: "base", label: "Desktop" }],
+        container: [],
+      },
+      scope,
+    })
+      .css.split("{")[0]
+      .trim();
+  }
+
+  it("falls back to the unscoped root exactly as the compiler does", () => {
+    // Escaping the whitespace instead would require a class the DOM cannot
+    // hold, so the preview would show nothing while the commit produced
+    // working CSS.
+    for (const scope of ["a b", " ", "one\ttwo"]) {
+      const preview = scrubPreviewCss({ ...TARGET, scope }, "32px");
+      expect(preview.ok).toBe(true);
+      if (!preview.ok) return;
+      expect(preview.css.split("{")[0].trim()).toBe(compiledWith(scope));
+    }
+  });
+
+  it("still scopes a scope the compiler accepts", () => {
+    // The control: falling back for everything would make the assertion above
+    // pass while the scoped case silently lost its class.
+    const preview = scrubPreviewCss({ ...TARGET, scope: "region-one" }, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css.split("{")[0].trim()).toBe(compiledWith("region-one"));
+    expect(preview.css).toContain(".region-one");
+  });
+});
