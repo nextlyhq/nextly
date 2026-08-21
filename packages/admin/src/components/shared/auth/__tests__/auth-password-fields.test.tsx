@@ -116,6 +116,38 @@ describe("AuthNewPasswordFields", () => {
   });
 });
 
+describe("signupFormSchema", () => {
+  // zod runs the chain in order, so a length check written before the trim
+  // measures the untrimmed string. Both of these passed until the trim moved
+  // to the front: the first arrived as an empty name, the second as one
+  // character under a two-character rule.
+  it.each([
+    ["whitespace only", "   "],
+    ["one character in padding", "   a   "],
+  ])("rejects a full name that is %s", (_label, input) => {
+    const result = signupFormSchema.safeParse({
+      fullName: input,
+      email: "someone@example.com",
+      password: "Str0ng!P",
+      confirmPassword: "Str0ng!P",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("keeps a padded real name, trimmed", () => {
+    const result = signupFormSchema.safeParse({
+      fullName: "  Ada Lovelace  ",
+      email: "someone@example.com",
+      password: "Str0ng!P",
+      confirmPassword: "Str0ng!P",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.fullName).toBe("Ada Lovelace");
+  });
+});
+
 describe("AuthSignupFields", () => {
   it("renders the name, email and password pair", () => {
     render(<SignupHarness />);

@@ -27,11 +27,15 @@ import { passwordSchema } from "@admin/lib/validation";
  */
 export const signupFormSchema = z
   .object({
+    // Trim FIRST: zod runs the chain in order, so length checks placed before
+    // the trim measure the untrimmed string. Two spaces satisfied both minimums
+    // and then trimmed away to nothing, and a padded single character passed
+    // the two-character rule.
     fullName: z
       .string()
+      .trim()
       .min(1, "Full name is required")
-      .min(2, "Full name must be at least 2 characters")
-      .trim(),
+      .min(2, "Full name must be at least 2 characters"),
     email: z
       .string()
       .min(1, "Email is required")

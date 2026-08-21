@@ -146,7 +146,11 @@ describe("SetInitialPassword", () => {
     });
   });
 
-  it("falls back to its own wording when the failure carries none", async () => {
+  // Not a test of WHICH reader runs -- the previous one produced this string
+  // too. What it pins is that the screen hands `apiErrorMessage` its own
+  // wording: drop that argument and the shared default "An error occurred"
+  // reaches the toast instead. `parseApiError.test` cannot see the call site.
+  it("shows its own wording, not the shared default, when the failure carries none", async () => {
     post.mockImplementation(() => Promise.reject(new Error("")));
 
     await submitAPassword();
@@ -155,6 +159,12 @@ describe("SetInitialPassword", () => {
     expect(toast.error).toHaveBeenCalledWith("Could not set your password", {
       description: "Something went wrong. Please try again.",
     });
+    expect(toast.error).not.toHaveBeenCalledWith(
+      "Could not set your password",
+      {
+        description: "An error occurred",
+      }
+    );
   });
 });
 
@@ -184,7 +194,7 @@ describe("VerifyEmail", () => {
   // The loading card carries different copy, so this string cannot be what is
   // already on screen while the request is in flight — it is only reachable
   // once the rejection has arrived and the catch has chosen the fallback.
-  it("falls back to its own wording when the failure carries none", async () => {
+  it("shows its own wording, not the shared default, when the failure carries none", async () => {
     verifyEmail.mockImplementation(() => Promise.reject(new Error("")));
 
     render(<VerifyEmail searchParams={{ token: "t" }} />);
@@ -194,5 +204,6 @@ describe("VerifyEmail", () => {
         "This verification link is invalid or has expired."
       )
     ).toBeInTheDocument();
+    expect(screen.queryByText("An error occurred")).not.toBeInTheDocument();
   });
 });
