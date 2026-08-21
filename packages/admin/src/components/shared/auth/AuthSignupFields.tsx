@@ -27,10 +27,10 @@ import { passwordSchema } from "@admin/lib/validation";
  */
 export const signupFormSchema = z
   .object({
-    // Trim FIRST: zod runs the chain in order, so length checks placed before
-    // the trim measure the untrimmed string. Two spaces satisfied both minimums
-    // and then trimmed away to nothing, and a padded single character passed
-    // the two-character rule.
+    // Trim FIRST: zod runs a chain in the order it is written, so a length
+    // check placed before the trim measures the untrimmed string — two spaces
+    // would clear both minimums and then trim away to an empty name, and a
+    // padded single character would clear the two-character rule on padding.
     fullName: z
       .string()
       .trim()

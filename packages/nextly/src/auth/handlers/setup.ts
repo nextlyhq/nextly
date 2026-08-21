@@ -156,10 +156,10 @@ export async function handleSetup(
   if (!strengthResult.ok) {
     // The rules a password failed are the only part of this a person can act
     // on, so they travel on `data.errors` -- the key the canonical envelope
-    // defines and the admin reads. They used to sit under `details`, which
-    // nothing reads, so a rejected password arrived as a bare "does not meet
-    // requirements" with the reasons dropped. The mapping is the one
-    // `registerUser` already applies to this same validator output.
+    // defines and the only one the admin reads. Reasons put on any other key,
+    // `details` included, reach the client and are dropped there in silence.
+    // The mapping is the one `registerUser` applies to this same validator
+    // output, so both paths describe a weak password identically.
     return buildAuthErrorResponse(
       NextlyError.validation({
         errors: strengthResult.errors.map(message => ({

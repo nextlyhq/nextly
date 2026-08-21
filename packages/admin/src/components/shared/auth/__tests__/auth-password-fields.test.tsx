@@ -117,10 +117,10 @@ describe("AuthNewPasswordFields", () => {
 });
 
 describe("signupFormSchema", () => {
-  // zod runs the chain in order, so a length check written before the trim
-  // measures the untrimmed string. Both of these passed until the trim moved
-  // to the front: the first arrived as an empty name, the second as one
-  // character under a two-character rule.
+  // zod runs a chain in the order it is written, so a length check placed
+  // before the trim measures the untrimmed string: whitespace clears both
+  // minimums and then trims to nothing, and a padded character clears the
+  // two-character rule on its padding.
   it.each([
     ["whitespace only", "   "],
     ["one character in padding", "   a   "],
