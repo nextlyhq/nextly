@@ -1,3 +1,4 @@
+import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { validateBlocksValue } from "./blocks-validator";
@@ -215,5 +216,69 @@ describe("validateBlocksValue", () => {
     expect(() =>
       validateBlocksValue(hostile, "content", "Content", {})
     ).not.toThrow();
+  });
+});
+
+describe("the breakpoint set a blocks field is validated against", () => {
+  /** A set that declares one breakpoint beyond the base one. */
+  const WIRED: BreakpointSet = {
+    viewport: [
+      { id: "base", label: "Base" },
+      { id: "wide", label: "Wide", maxWidth: 1200 },
+    ],
+    container: [],
+  };
+
+  /** A set that knows the base breakpoint and not `wide`. */
+  const BASE_ONLY: BreakpointSet = {
+    viewport: [{ id: "base", label: "Base" }],
+    container: [],
+  };
+
+  /** What an unwired caller falls back to: `siteBreakpoints()` with nothing. */
+  const UNWIRED: BreakpointSet = { viewport: [], container: [] };
+
+  function styledAt(breakpoint: string, value: unknown): unknown {
+    return page([
+      {
+        ...node("core/heading", "11111111-1111-4111-8111-111111111111"),
+        styles: { base: { [breakpoint]: value } },
+      },
+    ]);
+  }
+
+  const check = (doc: unknown, breakpoints: BreakpointSet) =>
+    validateBlocksValue(doc, "content", "Content", {}, breakpoints);
+
+  it("reaches the breakpoint level of the walk at all", () => {
+    // The positive control, and it comes first because every assertion below is
+    // about which issues survive a filter — and a fixture that never reached
+    // the breakpoint level would return an empty list for a reason that has
+    // nothing to do with the filter.
+    const issues = check(styledAt("wide", "not-an-object"), WIRED);
+
+    expect(issues.map(issue => issue.message).join(" ")).toContain("wide");
+  });
+
+  it("reports a breakpoint the site's set does not define", () => {
+    // A node styled at an id no set defines compiles to nothing, and a
+    // published render surfaces no warnings, so the write is the only place an
+    // author can be told.
+    const issues = check(styledAt("wide", { color: "#000000" }), BASE_ONLY);
+
+    expect(issues.map(issue => issue.message).join(" ")).toContain("wide");
+  });
+
+  it("accepts the same document once the set defines that breakpoint", () => {
+    // The separating control: without it the assertion above passes just as
+    // well on a validator that refuses every styled document.
+    expect(check(styledAt("wide", { color: "#000000" }), WIRED)).toEqual([]);
+  });
+
+  it("stays permissive when no set was wired in", () => {
+    // Every id is unknown to an empty set, so reporting there would refuse
+    // every document that styles anything at a breakpoint. Staying quiet is the
+    // fallback's whole purpose.
+    expect(check(styledAt("wide", { color: "#000000" }), UNWIRED)).toEqual([]);
   });
 });

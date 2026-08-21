@@ -95,7 +95,7 @@ export function siteStyleSingle(policy: SectionPolicy = {}) {
       json({
         name: "tokens",
         label: "Design tokens",
-        validate: refusing(checkStoredTokens),
+        validate: refusing(raw => checkStoredTokens(raw, policy)),
         admin: {
           description:
             'A token set: { tokens: [{ name, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves.',

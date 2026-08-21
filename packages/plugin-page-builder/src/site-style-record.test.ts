@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { MAX_NAMED_CLASSES } from "@nextlyhq/blocks-engine";
+
 import {
   checkStoredBreakpoints,
   checkStoredClasses,
@@ -400,5 +402,95 @@ describe("readSiteStyleRecord", () => {
     expect(style.tokens?.tokens.map(t => t.name)).toEqual(["color.primary"]);
     expect(style.classes).toBeUndefined();
     expect(style.breakpoints?.viewport).toHaveLength(1);
+  });
+});
+
+describe("judging the write against the tier it will be merged with", () => {
+  // A checker seeing only the stored array judges something no consumer ever
+  // compiles. Every consumer reads the merge, config inserted first, and both
+  // engine resolutions are first-wins — so a stored entry colliding with a
+  // config one is accepted here and dropped at render, and the node referencing
+  // it gets no rule at all.
+  const stored = {
+    id: "stored-1",
+    slug: "hero",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#111111" } } },
+  };
+
+  const CONFIG_CLASS = {
+    id: "config-1",
+    slug: "hero",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#222222" } } },
+  };
+
+  it("refuses a stored class whose slug the config tier already holds", () => {
+    const result = checkStoredClasses([stored], {
+      defaults: { classes: [CONFIG_CLASS] as never },
+    });
+
+    expect(result.issues.join(" ")).toContain("config");
+    expect(result.value).toEqual([]);
+  });
+
+  it("accepts the same class when the caller states no config tier", () => {
+    // The separating control. Without it the refusal above passes just as well
+    // on a checker that rejects the slug for some reason of its own.
+    expect(checkStoredClasses([stored]).issues).toEqual([]);
+  });
+
+  it("refuses a stored class whose id the config tier already holds", () => {
+    const result = checkStoredClasses([{ ...stored, slug: "unique" }], {
+      defaults: { classes: [{ ...CONFIG_CLASS, id: "stored-1" }] as never },
+    });
+
+    expect(result.issues.join(" ")).toContain("config");
+  });
+
+  it("counts the cap over the MERGED library, which is what the compiler truncates", () => {
+    // The compiler takes an array PREFIX, so config entries first means the
+    // stored entries past the cap are the ones that vanish. Counting the stored
+    // array alone accepts a write whose entries are already unreachable.
+    const many = Array.from({ length: MAX_NAMED_CLASSES }, (_, i) => ({
+      ...stored,
+      id: `config-${i}`,
+      slug: `config-${i}`,
+    }));
+
+    const result = checkStoredClasses([stored], {
+      defaults: { classes: many as never },
+    });
+
+    expect(result.issues.join(" ")).toContain("merged");
+  });
+
+  it("refuses a stored token colliding with a config one on a custom property", () => {
+    const result = checkStoredTokens(
+      { tokens: [token("color.primary", "#111111")] },
+      { defaults: { tokens: { tokens: [token("color-primary", "#222222")] } } }
+    );
+
+    expect(result.issues).not.toEqual([]);
+  });
+
+  it("does not report a problem the CONFIG tier already had on its own", () => {
+    // Reported as a difference. A site whose own config emits an issue has a
+    // problem, but it is not one this write introduced and not one the writer
+    // can fix from here — refusing their save for it tells them about somebody
+    // else's mistake.
+    const brokenConfig = {
+      tokens: [
+        token("color.primary", "#111111"),
+        token("color-primary", "#222222"),
+      ],
+    };
+
+    const result = checkStoredTokens(
+      { tokens: [token("color.accent", "#333333")] },
+      { defaults: { tokens: brokenConfig } }
+    );
+
+    expect(result.issues).toEqual([]);
   });
 });

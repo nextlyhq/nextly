@@ -53,3 +53,20 @@ per render: the whole render is cached and only a tag the page carries rebuilds
 it, and a Direct API read contributes none. Naming the single puts
 `nextly:single:<slug>` on the route, so an admin's save reaches the next page
 view as the documentation already promised.
+
+The Site Style write validators also judged the stored tier alone, while every
+consumer compiles the merge. Config entries are inserted first and both engine
+resolutions are first-wins, so a stored class whose slug a config class already
+holds was accepted, then dropped at render, leaving the node that referenced it
+with no rule — and `MAX_NAMED_CLASSES` was counted over the stored array while
+the compiler truncates the merged one. Both are judged against the merge now,
+when a caller states its config tier. Token collisions are reported as the
+DIFFERENCE the write introduces, so a site whose own config already emits an
+issue does not have someone else's mistake charged to the admin saving a token.
+
+The configured breakpoint set threaded into the blocks field validator was
+inert: an unknown breakpoint is a warning under forgiving validation and the
+error filter dropped it, so no document was judged differently by the set. It is
+reported once a set has actually been wired in, and stays silent against the
+empty fallback, where every id would be unknown and every styled document would
+be refused.

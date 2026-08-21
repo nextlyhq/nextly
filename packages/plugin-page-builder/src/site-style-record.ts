@@ -44,7 +44,11 @@ import {
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
-import { siteStyleOf, type SiteStyleData } from "./site-style";
+import {
+  resolveSiteStyle,
+  siteStyleOf,
+  type SiteStyleData,
+} from "./site-style";
 
 /**
  * One section's verdict: the narrowed value a reader may use, and the issues
@@ -79,6 +83,21 @@ export interface SectionPolicy {
    * allowlist is the only limit on a `url()`.
    */
   mayFetchUrl?: MayFetchUrl;
+  /**
+   * The CONFIG tier this write will be merged with, when the caller has one.
+   *
+   * A checker seeing only the stored array judges something no consumer ever
+   * compiles. Every consumer reads the merge, config first, and both engine
+   * resolutions are first-wins — so a stored class whose slug a config class
+   * already holds is accepted here and then dropped at render, and the node
+   * referencing it gets no rule at all. Judging the merge is what makes the
+   * refusal happen while the writer is present.
+   *
+   * Absent means the caller stated no defaults, not that there are none to
+   * consider; a checker with no config tier judges the stored one, which is
+   * exactly what it did before.
+   */
+  defaults?: SiteStyleData;
 }
 
 /** Shared shape guard: a string, when the slot allows one. */
@@ -97,7 +116,10 @@ const optionalString = (value: unknown): value is string | undefined =>
  * write time the author is present to fix it, and accepting a value the
  * browser will drop stores a defect for someone else to debug at render time.
  */
-export function checkStoredTokens(raw: unknown): SectionCheck<SiteTokenSet> {
+export function checkStoredTokens(
+  raw: unknown,
+  policy: SectionPolicy = {}
+): SectionCheck<SiteTokenSet> {
   if (raw === undefined || raw === null) return EMPTY;
   if (!isPlainRecord(raw) || !Array.isArray(raw.tokens)) {
     return {
@@ -158,8 +180,30 @@ export function checkStoredTokens(raw: unknown): SectionCheck<SiteTokenSet> {
   // The emitter is the validator: it is what will read this set on every
   // page render, so its report is the one that counts. The selector is
   // irrelevant to validation; the CSS is discarded.
-  for (const issue of emitTokenBlocks(set, ":root").issues) {
-    issues.push(issue.message);
+  //
+  // Emitted over the MERGE, because that is what every consumer compiles. A
+  // stored token colliding with a config one on a single custom property is
+  // refused by the emitter, and config is inserted first, so without this the
+  // write is accepted and the token silently never applies.
+  //
+  // Reported as a DIFFERENCE against the config tier alone. A site whose own
+  // config already emits an issue has a problem, but it is not one this write
+  // introduced and not one the writer can fix from here — refusing their save
+  // for it would be telling them about somebody else's mistake.
+  //
+  // `resolveSiteStyle` does the merging rather than a local one: it is the one
+  // answer to what the merged style is, and a second one here would drift from
+  // the render it is meant to predict.
+  const merged = resolveSiteStyle(policy.defaults, { tokens: set }).tokens;
+  const already = new Set(
+    policy.defaults?.tokens === undefined
+      ? []
+      : emitTokenBlocks(policy.defaults.tokens, ":root").issues.map(
+          issue => issue.message
+        )
+  );
+  for (const issue of emitTokenBlocks(merged ?? set, ":root").issues) {
+    if (!already.has(issue.message)) issues.push(issue.message);
   }
   return { value: set, issues };
 }
@@ -377,17 +421,29 @@ export function checkStoredClasses(
     return { issues: ["Classes must be an array of named classes."] };
   }
   const issues: string[] = [];
-  if (raw.length > MAX_NAMED_CLASSES) {
+  // Counted over the MERGE, because that is what the compiler truncates: it
+  // takes an array PREFIX, so config entries first means the stored entries
+  // past the cap are the ones that vanish.
+  const configCount = (policy.defaults?.classes ?? []).length;
+  if (raw.length + configCount > MAX_NAMED_CLASSES) {
     issues.push(
-      `The class library holds ${raw.length} entries; the compiler reads at most ${MAX_NAMED_CLASSES}.`
+      `The class library holds ${raw.length + configCount} entries once merged with this site's config; the compiler reads at most ${MAX_NAMED_CLASSES}.`
     );
   }
   // ONE for the whole section: see `classValueIssues` for why neither per map
   // nor per class bounds the work a single write can ask for.
   const budget = newStyleIssueBudget();
   const classes: NamedClass[] = [];
-  const ids = new Set<string>();
-  const slugs = new Set<string>();
+  // Seeded with the CONFIG tier, so a collision across tiers is reported by the
+  // same check that reports one within the stored array. Every consumer reads
+  // the merge and both engine resolutions are first-wins with config inserted
+  // first, so a stored entry colliding with a config one is dropped at render
+  // and the node referencing it gets no rule.
+  const configClasses = policy.defaults?.classes ?? [];
+  const configIds = new Set(configClasses.map(entry => entry.id));
+  const configSlugs = new Set(configClasses.map(entry => entry.slug));
+  const ids = new Set<string>(configIds);
+  const slugs = new Set<string>(configSlugs);
   raw.forEach((entry: unknown, index) => {
     if (!isUsableNamedClass(entry) || !Number.isFinite(entry.orderIndex)) {
       issues.push(
@@ -396,11 +452,19 @@ export function checkStoredClasses(
       return;
     }
     if (ids.has(entry.id)) {
-      issues.push(`classes[${index}] repeats the id "${entry.id}".`);
+      issues.push(
+        configIds.has(entry.id)
+          ? `classes[${index}] repeats the id "${entry.id}", which this site already states in its config. The config entry wins the merge, so this one would be dropped at render.`
+          : `classes[${index}] repeats the id "${entry.id}".`
+      );
       return;
     }
     if (slugs.has(entry.slug)) {
-      issues.push(`classes[${index}] repeats the slug "${entry.slug}".`);
+      issues.push(
+        configSlugs.has(entry.slug)
+          ? `classes[${index}] repeats the slug "${entry.slug}", which this site already states in its config. The config entry wins the merge, so this one would be dropped at render.`
+          : `classes[${index}] repeats the slug "${entry.slug}".`
+      );
       return;
     }
     ids.add(entry.id);

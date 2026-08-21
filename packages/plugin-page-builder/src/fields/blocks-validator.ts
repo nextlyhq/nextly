@@ -144,8 +144,24 @@ export function validateBlocksValue(
     // refused for a declaration nobody made.
     nesting: registryNestingSource(),
   });
+  // An unknown breakpoint is a WARNING under forgiving validation, so the
+  // severity filter alone drops it — and dropping it is what made the set
+  // threaded into this call change no document's verdict at all. It is real
+  // information the moment a site has actually declared its breakpoints: a node
+  // styled at an id no set defines compiles to nothing, silently, and the
+  // author is the only one who can fix it.
+  //
+  // Against an EMPTY set it is not information. An unwired caller falls back to
+  // `siteBreakpoints()` with nothing, and every id a document mentions is
+  // unknown to that — so reporting there would refuse every document that
+  // styles anything at a breakpoint, which is the hostility the fallback exists
+  // to avoid. Permissive when unwired, strict once wired.
+  const wired =
+    breakpoints.viewport.length > 0 || breakpoints.container.length > 0;
   const documentIssues = allDocumentIssues.filter(
-    issue => issue.severity === "error"
+    issue =>
+      issue.severity === "error" ||
+      (wired && issue.code === "unknown-breakpoint")
   );
   const structuralIssues = documentIssues.filter(
     issue => !NON_STRUCTURAL.has(issue.code)
