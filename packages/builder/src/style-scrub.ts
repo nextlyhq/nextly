@@ -402,6 +402,13 @@ export function scrubCommitOp(
   styles: Parameters<typeof styleWriteOp>[1],
   value: StyleValue
 ): StyleWrite {
+  // The SAME breakpoint decision the preview makes. A breakpoint removed while
+  // a drag was in flight makes `scrubPreviewCss` refuse, and a commit that
+  // ignored the set would persist a value `compilePageCss` never emits — the
+  // drag would end by storing something the page cannot show.
+  if (atRuleFor(target) === null) {
+    return { ok: false, issues: [] };
+  }
   return styleWriteOp(
     target.nodeId,
     styles,

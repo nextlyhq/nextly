@@ -586,9 +586,15 @@ describe("a breakpoint set edited in place", () => {
     expect(after.css).not.toContain("640px");
   });
 
-  it("still answers from cache when nothing moved", () => {
-    // The control: dropping the cache on every call would satisfy the test
-    // above while making the probe compile run per pointer frame.
+  it("derives the same query twice when nothing moved", () => {
+    // NOT a test of cache reuse. Removing the cache entirely recompiles and
+    // produces the same CSS, so this passes either way — and a spurious
+    // invalidation would also be invisible, because a re-derivation returns the
+    // same answer. What it covers is that the derivation is deterministic and
+    // the invalidation above does not change the ANSWER when nothing moved.
+    //
+    // That the second lookup avoids a compile is untested: it would need a seam
+    // through `compilePageCss` that exists only for the test.
     const breakpoints = {
       viewport: [
         { id: "base", label: "Desktop" },
@@ -606,5 +612,32 @@ describe("a breakpoint set edited in place", () => {
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
     expect(first.css.split("{")[0]).toBe(second.css.split("{")[0]);
+  });
+});
+
+describe("committing at a breakpoint the site no longer defines", () => {
+  const BREAKPOINTS = {
+    viewport: [{ id: "base", label: "Desktop" }],
+    container: [],
+  };
+
+  it("refuses the commit for exactly what the preview refuses", () => {
+    // A breakpoint removed while a drag was in flight: the preview refuses, and
+    // a commit that ignored the set would persist a value the compiler never
+    // emits — the drag would end by storing something the page cannot show.
+    const stale: ScrubTarget = {
+      ...TARGET,
+      breakpoints: BREAKPOINTS,
+      address: { ...TARGET.address, breakpoint: "mobile" },
+    };
+    expect(scrubPreviewCss(stale, "32px").ok).toBe(false);
+    expect(scrubCommitOp(stale, undefined, "32px").ok).toBe(false);
+  });
+
+  it("still commits at a breakpoint the site does define", () => {
+    // The control: refusing on the set's mere presence would block every write.
+    const live: ScrubTarget = { ...TARGET, breakpoints: BREAKPOINTS };
+    expect(scrubPreviewCss(live, "32px").ok).toBe(true);
+    expect(scrubCommitOp(live, undefined, "32px").ok).toBe(true);
   });
 });

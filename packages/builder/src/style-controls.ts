@@ -219,6 +219,14 @@ function variantHolds(
   value: StyleValue,
   tokens: TokenLookup | undefined
 ): boolean {
+  // A union can be an ARM of a union, and it is neither a leaf nor a record of
+  // named fields — `fieldsOf` answers with nothing for one whose arms are all
+  // scalars, and "no fields declared" is read below as "any record fits". So a
+  // nested scalar union would swallow every composite value beside it. Asking
+  // its own arms is the only reading that matches what the engine would accept.
+  if (!isStyleLeaf(variant) && variant.kind === "union") {
+    return variant.of.some(arm => variantHolds(arm, value, tokens));
+  }
   if (!isStyleLeaf(variant)) {
     return isCompositeValue(value) && addressesAnyField(variant, value);
   }

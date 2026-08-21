@@ -527,15 +527,51 @@ describe("a union with more than one composite arm", () => {
   });
 });
 
-describe("the universal-keyword cache", () => {
-  it("gives every spelling of one keyword the same answer", () => {
-    // Keyed by the canonical spelling, so case and ASCII-whitespace variants
-    // share an entry rather than each retaining one.
+describe("spellings of one universal keyword", () => {
+  // NOT a test of the cache. Canonical keying and raw keying return the same
+  // ANSWER — only the number of retained entries differs — so this passes
+  // either way, and break-verifying it confirms that. What it does cover is
+  // the normalization: every spelling resolves to the same arm.
+  //
+  // The cache's BOUND has no test. It is a memory property with no observable
+  // output, and asserting it would mean exporting the cache for a test to
+  // read — surface added for a test rather than for a caller. Said here so the
+  // green beside it is not read as coverage it does not have.
+
+  it("resolves every spelling to the same arm", () => {
     const entry = getStyleProperty("fontStyle");
     for (const spelling of ["inherit", "INHERIT", " Inherit ", "InHeRiT"]) {
       expect(
         styleControlsFor(entry as StyleProperty, spelling).controls[0].kind
       ).toBe("select");
     }
+  });
+});
+
+describe("a union used as another union's arm", () => {
+  // A union arm is neither a leaf nor a record of named fields, and a union of
+  // scalars declares no fields at all — which the composite matcher reads as
+  // "any record fits". Nothing in the catalog nests a union inside a union
+  // today, so this case would be silent if one arrived.
+
+  const nested = property("p", {
+    kind: "union",
+    of: [
+      { kind: "union", of: [leaf("number", "a"), leaf("dimension", "b")] },
+      { kind: "object", fields: { side: leaf("dimension", "c") } },
+    ],
+  });
+
+  it("does not let a nested scalar union swallow a composite value", () => {
+    const set = styleControlsFor(nested, { side: "1px" });
+    expect(paths(set.controls)).toEqual([["side"]]);
+    expect(set.variants[0].active).toBe(1);
+  });
+
+  it("still takes a scalar through the nested union", () => {
+    // The control: recursing must not push every value to the object arm.
+    const set = styleControlsFor(nested, 3);
+    expect(paths(set.controls)).toEqual([[]]);
+    expect(set.variants[0].active).toBe(0);
   });
 });
