@@ -102,4 +102,35 @@ describe("apiErrorMessage", () => {
     expect(apiErrorMessage("boom")).toBe("An error occurred");
     expect(apiErrorMessage(undefined)).toBe("An error occurred");
   });
+
+  // The fallback exists so a screen can keep its own wording for the case the
+  // server said nothing at all, instead of restating the generic default.
+  describe("the caller-supplied fallback", () => {
+    it("stands in when the error carries no message", () => {
+      expect(apiErrorMessage(new Error(""), "Try that again.")).toBe(
+        "Try that again."
+      );
+    });
+
+    it("stands in when the value is not an error at all", () => {
+      expect(apiErrorMessage(undefined, "Try that again.")).toBe(
+        "Try that again."
+      );
+    });
+
+    // It is a LAST resort, not an override: a server that explained itself
+    // must still be the thing a person reads.
+    it("never displaces a reason the server gave", () => {
+      const err = parseApiError(
+        validationBody([
+          { path: "name", code: "REQUIRED", message: "A role needs a name." },
+        ]),
+        400
+      );
+
+      expect(apiErrorMessage(err, "Try that again.")).toBe(
+        "A role needs a name."
+      );
+    });
+  });
 });

@@ -60,9 +60,16 @@ interface FieldError {
  * useless — the reasons are per-field, in `data.errors`. Reading the top-level
  * message alone tells someone their form was rejected without saying by what,
  * so the field messages come out in front where a reader will look.
+ *
+ * `fallback` is what a caller shows when the error carries no message at all;
+ * it defaults to the generic string, so the existing callers are unchanged.
+ * Screens pass their own copy rather than restating this default.
  */
-export function apiErrorMessage(err: unknown): string {
-  if (!(err instanceof Error)) return "An error occurred";
+export function apiErrorMessage(
+  err: unknown,
+  fallback = "An error occurred"
+): string {
+  if (!(err instanceof Error)) return fallback;
 
   const apiError = err as ApiError;
   const errors = apiError.data?.errors;
@@ -75,5 +82,5 @@ export function apiErrorMessage(err: unknown): string {
     if (reasons.length > 0) return reasons.join(" ");
   }
 
-  return err.message || "An error occurred";
+  return err.message || fallback;
 }

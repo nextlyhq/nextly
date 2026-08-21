@@ -1,39 +1,23 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
-import { Button, Input } from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/ui";
 import { useState } from "react";
-import { FormProvider, useForm } from "react-hook-form";
-import { z } from "zod";
+import { FormProvider } from "react-hook-form";
 
 import { ArrowLeft, ArrowRight, Loader2 } from "@admin/components/icons";
-import { PasswordStrengthIndicator } from "@admin/components/shared";
 import { AuthFormCard } from "@admin/components/shared/auth/AuthFormCard";
-import { AuthStatusCard } from "@admin/components/shared/auth/AuthStatusCard";
-import { PasswordVisibilityToggle } from "@admin/components/shared/auth/PasswordVisibilityToggle";
-import { toast } from "@admin/components/ui";
 import {
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@admin/components/ui/form";
+  AuthNewPasswordFields,
+  type NewPasswordFormValues,
+  useNewPasswordForm,
+} from "@admin/components/shared/auth/AuthNewPasswordFields";
+import { AuthStatusCard } from "@admin/components/shared/auth/AuthStatusCard";
+import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { getCsrfToken } from "@admin/lib/api/csrf";
-import { passwordSchema } from "@admin/lib/validation";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { resetPassword } from "@admin/services/authApi";
-
-const formSchema = z
-  .object({
-    newPassword: passwordSchema,
-    confirmPassword: z.string().min(1, "Please confirm your password"),
-  })
-  .refine(data => data.newPassword === data.confirmPassword, {
-    message: "Passwords don't match",
-    path: ["confirmPassword"],
-  });
 
 interface ResetPasswordProps {
   searchParams?: Record<string, string | string[] | undefined>;
@@ -43,23 +27,12 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
   const token =
     typeof searchParams?.token === "string" ? searchParams.token : null;
 
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const form = useForm<z.infer<typeof formSchema>>({
-    resolver: zodResolver(formSchema),
-    mode: "onBlur",
-    defaultValues: {
-      newPassword: "",
-      confirmPassword: "",
-    },
-  });
+  const form = useNewPasswordForm();
 
-  const newPasswordValue = form.watch("newPassword");
-
-  async function onSubmit(values: z.infer<typeof formSchema>) {
+  async function onSubmit(values: NewPasswordFormValues) {
     if (!token) return;
 
     setIsLoading(true);
@@ -69,16 +42,11 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
       await resetPassword(token, values.newPassword, csrfToken);
       setIsSuccess(true);
     } catch (error: unknown) {
-      const err = error as Record<string, unknown> | undefined;
-      const response = err?.response as Record<string, unknown> | undefined;
-      const data = response?.data as Record<string, unknown> | undefined;
-      const errorMessage =
-        (data?.error as string) ||
-        (err?.message as string) ||
-        "Something went wrong. Please try again.";
-
       toast.error("Password reset failed", {
-        description: errorMessage,
+        description: apiErrorMessage(
+          error,
+          "Something went wrong. Please try again."
+        ),
       });
     } finally {
       setIsLoading(false);
@@ -134,68 +102,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
           }}
           className="space-y-6"
         >
-          <FormField
-            control={form.control}
-            name="newPassword"
-            render={({ field }) => (
-              <FormItem className="space-y-1">
-                <FormLabel className="text-sm font-medium text-foreground">
-                  New Password
-                </FormLabel>
-                <div className="relative">
-                  <FormControl>
-                    <Input
-                      required
-                      type={showPassword ? "text" : "password"}
-                      autoComplete="new-password"
-                      placeholder="Create a strong password…"
-                      {...field}
-                      className="pr-10 h-11 rounded-md border-input"
-                    />
-                  </FormControl>
-                  <PasswordVisibilityToggle
-                    visible={showPassword}
-                    onToggle={() => setShowPassword(!showPassword)}
-                  />
-                </div>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name="confirmPassword"
-            render={({ field }) => (
-              <FormItem className="space-y-1">
-                <FormLabel className="text-sm font-medium text-foreground">
-                  Confirm Password
-                </FormLabel>
-                <div className="relative">
-                  <FormControl>
-                    <Input
-                      required
-                      type={showConfirmPassword ? "text" : "password"}
-                      autoComplete="new-password"
-                      placeholder="Confirm your password…"
-                      {...field}
-                      className="pr-10 h-11 rounded-md border-input"
-                    />
-                  </FormControl>
-                  <PasswordVisibilityToggle
-                    visible={showConfirmPassword}
-                    onToggle={() =>
-                      setShowConfirmPassword(!showConfirmPassword)
-                    }
-                  />
-                </div>
-
-                <PasswordStrengthIndicator password={newPasswordValue} />
-
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          <AuthNewPasswordFields />
 
           <Button
             size="md"
