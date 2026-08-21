@@ -123,6 +123,22 @@ export interface StyleProvenanceQuery {
    * derived from the other.
    */
   readonly liveBreakpoints: readonly BreakpointId[];
+  /**
+   * Every state whose rules are matching right now.
+   *
+   * A fact about the viewer, exactly as {@link liveBreakpoints} is: an element
+   * under a pressed pointer matches `:active` AND `:hover`, and a focused one
+   * being hovered matches two more. All of their rules apply at once, and
+   * because each is wrapped in `:where()` none outranks another — so emission
+   * order alone decides, and a winner can come from a state other than the one
+   * being edited.
+   *
+   * Omitted means the state being edited plus base, which is right when the
+   * canvas simulates exactly the state under the cursor. A canvas that
+   * simulates several should say so, or a control will report a value the
+   * browser is not showing.
+   */
+  readonly liveStates?: readonly StyleState[];
 }
 
 /**
@@ -168,20 +184,27 @@ function propertiesWriting(
 }
 
 /**
- * Whichever of two winning entries the browser is actually showing.
+ * Whichever of several winning entries the browser is actually showing.
  *
- * Both reach the node at the same specificity, so the one written later wins.
- * The trace records declarations in emission order, so its index IS that
+ * They all reach the node at the same specificity, so the one written last
+ * wins. The trace records declarations in emission order, so its index IS that
  * ordering and nothing here re-derives it.
  */
-function later(
+function lastWritten(
   trace: readonly StyleTraceEntry[],
-  a: StyleTraceEntry | undefined,
-  b: StyleTraceEntry | undefined
+  winners: readonly (StyleTraceEntry | undefined)[]
 ): StyleTraceEntry | undefined {
-  if (a === undefined) return b;
-  if (b === undefined) return a;
-  return trace.indexOf(b) > trace.indexOf(a) ? b : a;
+  let best: StyleTraceEntry | undefined;
+  let bestIndex = -1;
+  for (const winner of winners) {
+    if (winner === undefined) continue;
+    const index = trace.indexOf(winner);
+    if (best === undefined || index > bestIndex) {
+      best = winner;
+      bestIndex = index;
+    }
+  }
+  return best;
 }
 
 /** Whether an entry is this node's own value at the position being edited. */
@@ -230,10 +253,16 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   //
   // Ranked by position in the trace, which is emission order — the same thing
   // the cascade is settling — rather than by a second idea of tier order.
-  const winner = later(
+  // Every state matching right now, base included: base always matches, and the
+  // state being edited is the one the canvas is simulating.
+  const live = new Set<StyleState>([
+    ...(query.liveStates ?? []),
+    query.state,
+    "base",
+  ]);
+  const winner = lastWritten(
     candidates,
-    ask(query.state),
-    query.state === "base" ? undefined : ask("base")
+    [...live].map(state => ask(state))
   );
   if (winner === undefined) return { kind: "unset" };
   // Asked only once a declaration has won: nothing wrote this position is an

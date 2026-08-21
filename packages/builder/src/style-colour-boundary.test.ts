@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { importedSpecifiers } from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
-import { collectModules } from "./source-modules";
+import {
+  collectModules,
+  MODULE_EXTENSIONS,
+  TEST_GLOBS,
+} from "./source-modules";
 
 /**
  * Which colour implementation the editor is allowed to reach.
@@ -64,14 +68,16 @@ const UI_SRC = join(SRC_DIR, "..", "..", "ui", "src");
  */
 function resolveModule(from: string, specifier: string): string | undefined {
   const base = resolve(dirname(from), specifier);
+  // Every extension the bundler follows, from the package's OWN list rather
+  // than a shorter one written here. A resolver that tried only `.ts`/`.tsx`
+  // stops at a barrel written as `.mjs` or `.js` — and a walk that stops
+  // reports the boundary intact for the route it could not follow, which is the
+  // one failure this file exists to prevent.
   const candidates = [
-    `${base}.ts`,
-    `${base}.tsx`,
-    join(base, "index.ts"),
-    join(base, "index.tsx"),
-    base,
+    ...MODULE_EXTENSIONS.map(ext => `${base}.${ext}`),
+    ...MODULE_EXTENSIONS.map(ext => join(base, `index.${ext}`)),
   ];
-  return candidates.find(path => /\.tsx?$/.test(path) && existsSync(path));
+  return candidates.find(path => existsSync(path));
 }
 
 /**
@@ -258,5 +264,20 @@ describe("the admin theme's contrast implementation is out of reach", () => {
     );
     expect(escapesPackage(shallow, "./style-controls")).toBe(false);
     expect(escapesPackage(shallow, "@nextlyhq/ui")).toBe(false);
+  });
+});
+
+describe("the extensions the walk follows", () => {
+  it("tries every extension the bundler does, not just TypeScript's", () => {
+    // A barrel written as `.mjs` or `.js` is a module the bundler follows, and
+    // a resolver that skipped it would stop the walk there — reporting the
+    // boundary intact for the one route it could not see.
+    expect(MODULE_EXTENSIONS).toContain("mts");
+    expect(MODULE_EXTENSIONS).toContain("cjs");
+    expect(MODULE_EXTENSIONS).toContain("js");
+    // The resolver is built from that list, so growing it grows the walk.
+    for (const ext of MODULE_EXTENSIONS) {
+      expect(TEST_GLOBS.some(glob => glob.endsWith(`.${ext}`))).toBe(true);
+    }
   });
 });

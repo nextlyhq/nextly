@@ -328,3 +328,51 @@ describe("ranking a base rule against an interaction rule", () => {
     expect(result.entry.value).toBe("#ff0000");
   });
 });
+
+describe("several interaction states matching at once", () => {
+  // A pressed pointer matches `:active` AND `:hover`. Both are wrapped in
+  // `:where()`, so neither outranks the other and emission order decides — a
+  // winner can therefore come from a state other than the one being edited.
+
+  it("reports a later hover rule while the active state is being edited", () => {
+    const trace = [
+      entry({
+        state: "active",
+        origin: { kind: "class", id: "c1", slug: "card" },
+        value: "#00ff00",
+      }),
+      entry({ state: "hover", value: "#ff0000" }),
+    ];
+    const result = styleProvenance(
+      query(trace, { state: "active", liveStates: ["active", "hover"] })
+    );
+    expect(result.kind).toBe("inherited");
+    if (result.kind !== "inherited") return;
+    expect(result.entry.value).toBe("#ff0000");
+    expect(result.entry.state).toBe("hover");
+  });
+
+  it("keeps the active rule when IT is the later one", () => {
+    // The control: ranking must not simply prefer whichever state is listed
+    // last, or the answer would depend on the caller's array order.
+    const trace = [
+      entry({ state: "hover", value: "#ff0000" }),
+      entry({ state: "active", value: "#00ff00" }),
+    ];
+    const result = styleProvenance(
+      query(trace, { state: "active", liveStates: ["active", "hover"] })
+    );
+    expect(result.kind).toBe("authored");
+    if (result.kind !== "authored") return;
+    expect(result.entry.value).toBe("#00ff00");
+  });
+
+  it("ignores a state the caller did not say was matching", () => {
+    // Without `liveStates`, only the edited state and base match — a hover rule
+    // is not showing while nothing is hovered.
+    const trace = [entry({ state: "hover", value: "#ff0000" })];
+    expect(styleProvenance(query(trace, { state: "active" })).kind).toBe(
+      "unset"
+    );
+  });
+});
