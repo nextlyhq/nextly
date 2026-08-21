@@ -71,9 +71,19 @@ when a caller states its config tier. Token collisions are reported as the
 DIFFERENCE the write introduces, so a site whose own config already emits an
 issue does not have someone else's mistake charged to the admin saving a token.
 
-The configured breakpoint set threaded into the blocks field validator was
-inert: an unknown breakpoint is a warning under forgiving validation and the
-error filter dropped it, so no document was judged differently by the set. It is
-reported once a set has actually been wired in, and stays silent against the
-empty fallback, where every id would be unknown and every styled document would
-be refused.
+The configured breakpoint set threaded into the blocks field validator judges no
+document, and that is now recorded as the deliberate limit it is rather than
+left looking like an oversight. Making it strict was tried and is wrong while
+the set reaching that call is the config tier alone, resolved at config time
+where there is no database: a page styled at a breakpoint an admin STORED would
+be refused on save while the published renderer compiles it. The parameter keeps
+deciding the one property that is true of the set alone — ids colliding across
+axes — and becomes load-bearing for documents once something can reach the
+stored tier.
+
+Class writes are judged through `resolveSiteStyle` rather than against the two
+tiers concatenated. The merge is keyed by class ID, so a stored class sharing an
+id with a configured one REPLACES it — modelling that as a concatenation refuses
+a deliberate override as a duplicate and counts a replacement twice against the
+cap. What survives the merge and still breaks is one slug held by two different
+ids, and the cap is the merged length.

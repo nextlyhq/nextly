@@ -407,10 +407,9 @@ describe("readSiteStyleRecord", () => {
 
 describe("judging the write against the tier it will be merged with", () => {
   // A checker seeing only the stored array judges something no consumer ever
-  // compiles. Every consumer reads the merge, config inserted first, and both
-  // engine resolutions are first-wins — so a stored entry colliding with a
-  // config one is accepted here and dropped at render, and the node referencing
-  // it gets no rule at all.
+  // compiles. What it must NOT do is model the merge as a concatenation:
+  // `resolveSiteStyle` merges classes keyed by ID, so a stored class sharing an
+  // id with a config one REPLACES it.
   const stored = {
     id: "stored-1",
     slug: "hero",
@@ -425,13 +424,14 @@ describe("judging the write against the tier it will be merged with", () => {
     styles: { base: { base: { color: "#222222" } } },
   };
 
-  it("refuses a stored class whose slug the config tier already holds", () => {
+  it("refuses a slug two different classes would hold once merged", () => {
+    // Survives the merge and still breaks: two ids on one selector means the
+    // compiler keeps the first and the node referencing the other gets no rule.
     const result = checkStoredClasses([stored], {
       defaults: { classes: [CONFIG_CLASS] as never },
     });
 
-    expect(result.issues.join(" ")).toContain("config");
-    expect(result.value).toEqual([]);
+    expect(result.issues.join(" ")).toContain("merged");
   });
 
   it("accepts the same class when the caller states no config tier", () => {
@@ -440,29 +440,38 @@ describe("judging the write against the tier it will be merged with", () => {
     expect(checkStoredClasses([stored]).issues).toEqual([]);
   });
 
-  it("refuses a stored class whose id the config tier already holds", () => {
-    const result = checkStoredClasses([{ ...stored, slug: "unique" }], {
-      defaults: { classes: [{ ...CONFIG_CLASS, id: "stored-1" }] as never },
+  it("ACCEPTS a stored class that overrides a config one by id", () => {
+    // The case a concatenation model gets wrong. Sharing an id is how an
+    // override is expressed — `mergeByKey(defaults, stored, c => c.id)` — so
+    // refusing it as a duplicate refuses the feature.
+    const result = checkStoredClasses([{ ...stored, id: "config-1" }], {
+      defaults: { classes: [CONFIG_CLASS] as never },
     });
 
-    expect(result.issues.join(" ")).toContain("config");
+    expect(result.issues).toEqual([]);
   });
 
-  it("counts the cap over the MERGED library, which is what the compiler truncates", () => {
-    // The compiler takes an array PREFIX, so config entries first means the
-    // stored entries past the cap are the ones that vanish. Counting the stored
-    // array alone accepts a write whose entries are already unreachable.
+  it("counts the cap over the MERGED library, replacements included", () => {
+    // The compiler truncates the merged library by array PREFIX. Counting the
+    // two tiers added together would refuse a write that only replaces.
     const many = Array.from({ length: MAX_NAMED_CLASSES }, (_, i) => ({
       ...stored,
       id: `config-${i}`,
       slug: `config-${i}`,
     }));
 
-    const result = checkStoredClasses([stored], {
+    const overflowing = checkStoredClasses([stored], {
       defaults: { classes: many as never },
     });
+    expect(overflowing.issues.join(" ")).toContain("merged");
 
-    expect(result.issues.join(" ")).toContain("merged");
+    // And a pure replacement of one of them does not overflow, because the
+    // merge is the same length it was.
+    const replacing = checkStoredClasses(
+      [{ ...stored, id: "config-0", slug: "config-0" }],
+      { defaults: { classes: many as never } }
+    );
+    expect(replacing.issues).toEqual([]);
   });
 
   it("refuses a stored token colliding with a config one on a custom property", () => {

@@ -392,6 +392,49 @@ function classValueIssues(
 }
 
 /**
+ * What the stored classes do once merged with the tier they will be merged with.
+ *
+ * Asked of `resolveSiteStyle` rather than modelled here. The merge is keyed by
+ * class ID, so a stored class sharing an id with a config one REPLACES it —
+ * concatenating the two tiers instead would refuse a deliberate override as a
+ * duplicate, and would count a replacement twice against the cap.
+ *
+ * What survives the merge and still breaks is a SLUG held by two different
+ * ids: the compiler drops the later one, so a node referencing it gets no rule.
+ * The cap is the merged length for the same reason — the compiler truncates the
+ * merged library by array prefix.
+ */
+function mergedLibraryIssues(
+  classes: readonly NamedClass[],
+  policy: SectionPolicy
+): string[] {
+  if (policy.defaults === undefined) return [];
+  const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
+  const issues: string[] = [];
+  if (merged.length > MAX_NAMED_CLASSES) {
+    issues.push(
+      `The class library holds ${merged.length} entries once merged with this site's config; the compiler reads at most ${MAX_NAMED_CLASSES}.`
+    );
+  }
+  const owner = new Map<string, string>();
+  const reported = new Set<string>();
+  for (const entry of merged) {
+    const held = owner.get(entry.slug);
+    if (held === undefined) {
+      owner.set(entry.slug, entry.id);
+      continue;
+    }
+    if (held !== entry.id && !reported.has(entry.slug)) {
+      reported.add(entry.slug);
+      issues.push(
+        `The slug "${entry.slug}" is held by two different classes once merged with this site's config; the compiler keeps the first, so the other is dropped at render.`
+      );
+    }
+  }
+  return issues;
+}
+
+/**
  * The stored class library.
  *
  * Usability per entry is the engine's `isUsableNamedClass` — the same
@@ -421,29 +464,13 @@ export function checkStoredClasses(
     return { issues: ["Classes must be an array of named classes."] };
   }
   const issues: string[] = [];
-  // Counted over the MERGE, because that is what the compiler truncates: it
-  // takes an array PREFIX, so config entries first means the stored entries
-  // past the cap are the ones that vanish.
-  const configCount = (policy.defaults?.classes ?? []).length;
-  if (raw.length + configCount > MAX_NAMED_CLASSES) {
-    issues.push(
-      `The class library holds ${raw.length + configCount} entries once merged with this site's config; the compiler reads at most ${MAX_NAMED_CLASSES}.`
-    );
-  }
+
   // ONE for the whole section: see `classValueIssues` for why neither per map
   // nor per class bounds the work a single write can ask for.
   const budget = newStyleIssueBudget();
   const classes: NamedClass[] = [];
-  // Seeded with the CONFIG tier, so a collision across tiers is reported by the
-  // same check that reports one within the stored array. Every consumer reads
-  // the merge and both engine resolutions are first-wins with config inserted
-  // first, so a stored entry colliding with a config one is dropped at render
-  // and the node referencing it gets no rule.
-  const configClasses = policy.defaults?.classes ?? [];
-  const configIds = new Set(configClasses.map(entry => entry.id));
-  const configSlugs = new Set(configClasses.map(entry => entry.slug));
-  const ids = new Set<string>(configIds);
-  const slugs = new Set<string>(configSlugs);
+  const ids = new Set<string>();
+  const slugs = new Set<string>();
   raw.forEach((entry: unknown, index) => {
     if (!isUsableNamedClass(entry) || !Number.isFinite(entry.orderIndex)) {
       issues.push(
@@ -452,19 +479,11 @@ export function checkStoredClasses(
       return;
     }
     if (ids.has(entry.id)) {
-      issues.push(
-        configIds.has(entry.id)
-          ? `classes[${index}] repeats the id "${entry.id}", which this site already states in its config. The config entry wins the merge, so this one would be dropped at render.`
-          : `classes[${index}] repeats the id "${entry.id}".`
-      );
+      issues.push(`classes[${index}] repeats the id "${entry.id}".`);
       return;
     }
     if (slugs.has(entry.slug)) {
-      issues.push(
-        configSlugs.has(entry.slug)
-          ? `classes[${index}] repeats the slug "${entry.slug}", which this site already states in its config. The config entry wins the merge, so this one would be dropped at render.`
-          : `classes[${index}] repeats the slug "${entry.slug}".`
-      );
+      issues.push(`classes[${index}] repeats the slug "${entry.slug}".`);
       return;
     }
     ids.add(entry.id);
@@ -477,6 +496,7 @@ export function checkStoredClasses(
     }
     classes.push(entry);
   });
+  issues.push(...mergedLibraryIssues(classes, policy));
   return { value: classes, issues };
 }
 

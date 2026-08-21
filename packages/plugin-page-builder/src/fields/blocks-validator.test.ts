@@ -235,9 +235,6 @@ describe("the breakpoint set a blocks field is validated against", () => {
     container: [],
   };
 
-  /** What an unwired caller falls back to: `siteBreakpoints()` with nothing. */
-  const UNWIRED: BreakpointSet = { viewport: [], container: [] };
-
   function styledAt(breakpoint: string, value: unknown): unknown {
     return page([
       {
@@ -251,34 +248,37 @@ describe("the breakpoint set a blocks field is validated against", () => {
     validateBlocksValue(doc, "content", "Content", {}, breakpoints);
 
   it("reaches the breakpoint level of the walk at all", () => {
-    // The positive control, and it comes first because every assertion below is
-    // about which issues survive a filter — and a fixture that never reached
-    // the breakpoint level would return an empty list for a reason that has
-    // nothing to do with the filter.
+    // The positive control for the two absences below: a fixture that never
+    // reached the breakpoint level would return an empty list for a reason
+    // that has nothing to do with what is being asserted.
     const issues = check(styledAt("wide", "not-an-object"), WIRED);
 
     expect(issues.map(issue => issue.message).join(" ")).toContain("wide");
   });
 
-  it("reports a breakpoint the site's set does not define", () => {
-    // A node styled at an id no set defines compiles to nothing, and a
-    // published render surfaces no warnings, so the write is the only place an
-    // author can be told.
-    const issues = check(styledAt("wide", { color: "#000000" }), BASE_ONLY);
-
-    expect(issues.map(issue => issue.message).join(" ")).toContain("wide");
-  });
-
-  it("accepts the same document once the set defines that breakpoint", () => {
-    // The separating control: without it the assertion above passes just as
-    // well on a validator that refuses every styled document.
+  it("does NOT judge a document by the set it is given", () => {
+    // Pinned as the deliberate behaviour it is. The set reaching this call is
+    // the config tier alone, resolved once at config time where there is no
+    // database, so a page styled at a breakpoint an ADMIN stored would be
+    // refused on save while the published renderer compiles it. Rejecting
+    // valid pages is worse than judging none, so an unknown breakpoint stays a
+    // warning and the error filter drops it.
+    expect(check(styledAt("wide", { color: "#000000" }), BASE_ONLY)).toEqual(
+      []
+    );
     expect(check(styledAt("wide", { color: "#000000" }), WIRED)).toEqual([]);
   });
 
-  it("stays permissive when no set was wired in", () => {
-    // Every id is unknown to an empty set, so reporting there would refuse
-    // every document that styles anything at a breakpoint. Staying quiet is the
-    // fallback's whole purpose.
-    expect(check(styledAt("wide", { color: "#000000" }), UNWIRED)).toEqual([]);
+  it("does decide the one thing that is a property of the SET", () => {
+    // Not inert in every direction, and this is the direction that needs no
+    // stored tier to be correct: an id repeated across the two axes makes a
+    // node's style key ambiguous, which is true of the set alone.
+    const clashing: BreakpointSet = {
+      viewport: [{ id: "base", label: "Base" }],
+      container: [{ id: "base", label: "Base" }],
+    };
+
+    expect(check(page([]), clashing)).not.toEqual([]);
+    expect(check(page([]), WIRED)).toEqual([]);
   });
 });
