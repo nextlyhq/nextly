@@ -602,3 +602,27 @@ describe("composite arms sharing a field name", () => {
     );
   });
 });
+
+describe("reading a composite's fields", () => {
+  it("ignores a nested field reached only through a prototype", () => {
+    // The same own-key rule the engine reads style maps by. A field the
+    // compiler will not emit must not decide which control is drawn, and an
+    // inherited accessor must not run during a read taken to draw a panel.
+    const position = getStyleProperty("position");
+    const value = Object.create({ zIndex: "auto" }) as Record<string, unknown>;
+    value.inset = { blockStart: "0px" };
+    const set = styleControlsFor(position as StyleProperty, value as never);
+    const zIndex = set.variants.find(v => v.path.join(".") === "zIndex");
+    expect(zIndex?.active).toBe(0);
+  });
+
+  it("keeps an empty record on the composite arm", () => {
+    // `{}` names nothing and is still the four-corner form: the validator
+    // accepts it there, so sending it to the scalar arm drew one control for a
+    // value stored in the other.
+    const radius = getStyleProperty("borderRadius");
+    const set = styleControlsFor(radius as StyleProperty, {});
+    expect(set.variants[0].active).toBe(1);
+    expect(set.controls).toHaveLength(4);
+  });
+});
