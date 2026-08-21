@@ -178,44 +178,58 @@ export function checkStoredTokens(
     ...(typeof raw.prefix === "string" ? { prefix: raw.prefix } : {}),
     ...(darkMode === "attribute" || darkMode === "media" ? { darkMode } : {}),
   };
-  // The emitter is the validator: it is what will read this set on every page
-  // render, so its report is the one that counts. The selector is irrelevant to
-  // validation; the CSS is discarded.
-  //
-  // Three runs, because "did this write cause it" and "is this new" are
-  // different questions and only one of them can be answered by comparing
-  // merged against config.
-  //
-  // The stored set's OWN issues are always reported. A message names the token
-  // and not the offending value, so a config token that already emits one and a
-  // stored override that emits a different one produce the same string — and
-  // suppressing on that accepts a value the compiler drops. What the writer
-  // wrote is theirs whatever the config tier says.
-  //
-  // Only issues the MERGE creates are compared against the config tier, and
-  // suppressed when it already had them. A collision between the two tiers that
-  // predates this write is not something the writer can fix from the admin.
-  //
-  // `resolveSiteStyle` does the merging rather than a second implementation
-  // here: it is the one answer to what the merged style is, and a local copy
-  // would drift from the render it exists to predict.
-  const own = emitTokenBlocks(set, ":root").issues.map(issue => issue.message);
+  issues.push(...tokenEmissionIssues(set, policy));
+  return { value: set, issues };
+}
+
+/**
+ * What emitting this token set would report, minus what the config tier already
+ * reported on its own.
+ *
+ * The emitter is the validator: it is what will read the set on every page
+ * render, so its report is the one that counts. The selector is irrelevant to
+ * validation; the CSS is discarded.
+ *
+ * Three runs, because "did this write cause it" and "is this new" are different
+ * questions and only the second can be answered by comparing merged against
+ * config.
+ *
+ * The stored set's OWN issues are always reported. A message names the token
+ * and not the offending value, so a config token that already emits one and a
+ * stored override emitting a different one produce byte-identical strings — and
+ * suppressing on that accepts a value the compiler drops. What the writer wrote
+ * is theirs whatever the config tier says.
+ *
+ * Only issues the MERGE creates are compared and suppressed when the config
+ * tier already had them, because a collision that predates this write is not
+ * reachable from the admin. `resolveSiteStyle` does the merging rather than a
+ * second implementation here: it is the one answer to what the merged style is,
+ * and a local copy would drift from the render it exists to predict.
+ */
+function tokenEmissionIssues(
+  set: SiteTokenSet,
+  policy: SectionPolicy
+): string[] {
+  const own = emittedMessages(set);
   const inherited = new Set(
     policy.defaults?.tokens === undefined
       ? []
-      : emitTokenBlocks(policy.defaults.tokens, ":root").issues.map(
-          issue => issue.message
-        )
+      : emittedMessages(policy.defaults.tokens)
   );
   const merged = resolveSiteStyle(policy.defaults, { tokens: set }).tokens;
   const reported = new Set(own);
-  issues.push(...own);
-  for (const issue of emitTokenBlocks(merged ?? set, ":root").issues) {
-    if (inherited.has(issue.message) || reported.has(issue.message)) continue;
-    reported.add(issue.message);
-    issues.push(issue.message);
+  const issues = [...own];
+  for (const message of emittedMessages(merged ?? set)) {
+    if (inherited.has(message) || reported.has(message)) continue;
+    reported.add(message);
+    issues.push(message);
   }
-  return { value: set, issues };
+  return issues;
+}
+
+/** What emitting one token set reports, as plain messages. */
+function emittedMessages(tokens: SiteTokenSet): string[] {
+  return emitTokenBlocks(tokens, ":root").issues.map(issue => issue.message);
 }
 
 /** The stored font faces, each checked by the engine's own face validator. */
