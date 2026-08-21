@@ -360,3 +360,92 @@ export {
   type ToolbarPlacement,
   type ToolbarSize,
 } from "./toolbar-actions";
+
+/**
+ * @experimental The style controls SDK: what a property offers, and how a
+ * control reads, previews and writes it.
+ *
+ * From this entry because every piece is a plain function over a catalog entry
+ * or a style envelope. The controls a property offers are DERIVED from
+ * `catalog.ts` rather than listed, so a property added to the engine gains an
+ * editor with no code here — and an agent asked to "set the bottom margin"
+ * addresses the value through the same functions the panel does, rather than
+ * reaching into `node.styles` with its own idea of where a side lives.
+ *
+ * No control renders yet. This is the contract they will be built on.
+ */
+export {
+  styleControlsFor,
+  SUPPORTED_LEAF_KINDS,
+  type StyleControl,
+  type StyleControlKind,
+  type StyleControlOptions,
+  type StyleControlSet,
+  type StyleControlVariants,
+} from "./style-controls";
+
+/**
+ * @experimental Addressing one control's value inside a node's style envelope.
+ *
+ * From this entry because the envelope is `state × breakpoint × property` and
+ * a caller that spelled that path itself would be a second answer to where a
+ * value lives. Validation is the catalog's, so a refused value comes back with
+ * the catalog's own reasons rather than a control's guess at them.
+ */
+export {
+  readStyleValue,
+  styleClearOp,
+  styleValueAtPath,
+  styleWriteOp,
+  type StyleAddress,
+  type StylePolicy,
+  type StyleWrite,
+} from "./style-values";
+
+/**
+ * @experimental Whether a control's value was authored here, inherited, or
+ * never set.
+ *
+ * From this entry because it is a pure classification over the compiler's own
+ * provenance record. Anything showing where a value came from — a dot beside a
+ * control, an agent explaining why a page looks as it does — needs the answer
+ * the compiler already wrote, not a second walk of the cascade.
+ */
+export {
+  styleProvenance,
+  type StyleProvenance,
+  type StyleProvenanceQuery,
+} from "./style-provenance";
+
+/**
+ * @experimental Previewing a value mid-drag, and committing it once.
+ *
+ * From this entry because the preview is compiled through the same function
+ * that emits the published stylesheet, so what a drag shows is what a release
+ * would store. The rule sits at the compiler's own specificity and wins on
+ * document order, so the element carrying it belongs AFTER the compiled sheet.
+ */
+export {
+  scrubCommitOp,
+  scrubPreviewCss,
+  scrubStateFragments,
+  type ScrubPreview,
+  type ScrubTarget,
+} from "./style-scrub";
+
+/**
+ * @experimental Where a control's custom behaviour lives, referenced by name.
+ *
+ * From this entry because it is the seam a host configures. The catalog stays
+ * data — it is read by validation, the compiler, the inspector and the
+ * generated reference docs, and a function stored in it could not be
+ * serialized, reasoned about, or documented — so behaviour is registered under
+ * a key derived from the catalog's own identity instead. Ships empty.
+ */
+export {
+  NO_STYLE_CONTROL_BEHAVIOUR,
+  styleControlBehaviour,
+  styleControlBehaviourKey,
+  type StyleControlBehaviour,
+  type StyleControlBehaviours,
+} from "./style-control-behaviour";
