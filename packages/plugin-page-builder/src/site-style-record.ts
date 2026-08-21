@@ -30,13 +30,17 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isUsableNamedClass,
+  newStyleIssueBudget,
   validateFontFace,
+  validateStyleValues,
   type BreakpointDef,
   type BreakpointSet,
   type FontFaceDef,
+  type MayFetchUrl,
   type NamedClass,
   type SiteToken,
   type SiteTokenSet,
+  type StyleIssueBudget,
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
@@ -60,6 +64,22 @@ export interface SectionCheck<T> {
 
 /** An absent section: nothing stored, nothing wrong. */
 const EMPTY: SectionCheck<never> = { issues: [] };
+
+/**
+ * What a checker needs from the SITE, beyond the value being checked.
+ *
+ * A predicate rather than the host list it is derived from, so this module
+ * keeps importing only the engine and one implementation of host matching
+ * answers for every channel — the published sheet, the canvas and this gate.
+ */
+export interface SectionPolicy {
+  /**
+   * Which hosts this site will fetch from. Absent means unasked rather than
+   * allowed, exactly as the engine treats it: with no policy the scheme
+   * allowlist is the only limit on a `url()`.
+   */
+  mayFetchUrl?: MayFetchUrl;
+}
 
 /** Shared shape guard: a string, when the slot allows one. */
 const optionalString = (value: unknown): value is string | undefined =>
@@ -214,6 +234,120 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
 }
 
 /**
+ * Every property map inside a class envelope, with the address it sits at.
+ *
+ * `NodeStyles` is state × breakpoint × property, and the engine's value
+ * validator judges ONE state × breakpoint's properties, so the two levels above
+ * it are flattened here, by OWN key as the engine reads style maps.
+ *
+ * Every key is descended rather than only the states and breakpoints this
+ * package knows. A breakpoint the site has not defined compiles to no rule
+ * today and to a real rule the moment someone defines it, so a walk that
+ * visited only what compiles now would gate less than the sheet eventually
+ * serves. A level that is not a record is skipped rather than reported: the
+ * envelope's SHAPE is `isUsableNamedClass`'s question, already asked.
+ *
+ * A generator, so a caller that has seen enough stops the walk rather than
+ * receiving a list that was built in full first. The number of maps is bounded
+ * only by the document's byte cap, and a payload can spend that cap on maps as
+ * easily as on values.
+ */
+function* styleMapsIn(
+  styles: Readonly<Record<string, unknown>>
+): Generator<{ at: string; values: Readonly<Record<string, unknown>> }> {
+  // `for...in` with an own-key guard rather than `Object.keys`, which is the
+  // idiom `validateStyleValues` iterates its own property map by, for the
+  // reason its comment gives: a map with a hundred thousand keys would
+  // otherwise be materialised in full before anything downstream can stop.
+  // Measured through a proxy counting descriptor lookups, breaking after the
+  // first entry: `Object.keys` costs one per key up front, `for...in` one in
+  // total. The guard is what keeps this to OWN keys, which the engine reads
+  // style maps by.
+  for (const state in styles) {
+    if (!Object.hasOwn(styles, state)) continue;
+    const byBreakpoint = styles[state];
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const breakpoint in byBreakpoint) {
+      if (!Object.hasOwn(byBreakpoint, breakpoint)) continue;
+      const values = byBreakpoint[breakpoint];
+      if (isPlainRecord(values)) yield { at: `${state}.${breakpoint}`, values };
+    }
+  }
+}
+
+/**
+ * The values inside one class, judged by the engine's own validator.
+ *
+ * `isUsableNamedClass` types the envelope and stops at it: it never reads
+ * inside `styles`. So the section's only value-level limit used to be whatever
+ * the compiler drops at render, which is too late for a `url()` — the sheet is
+ * already serving it to every visitor of every page. The token section has
+ * never had that gap, because its gate IS its emitter.
+ *
+ * Errors only. A warning is a value the engine ACCEPTS and emits, so refusing
+ * on one would refuse writes whose result the sheet would render happily.
+ *
+ * The MODE follows the policy, and it decides exactly one thing: whether a
+ * property this engine has not learned is an error or a warning. Measured —
+ * `mode === "strict" ? "error" : "warning"` occurs once in the whole validator,
+ * in the unknown-property branch — so this switch cannot over-refuse anything
+ * else.
+ *
+ * With no policy the answer is FORGIVING: a document written by a newer engine
+ * is not something the author can fix here, and there is no host rule to
+ * enforce anyway.
+ *
+ * With a policy it is STRICT, because the validator does not look INSIDE an
+ * unknown property. `{ futureBackground: { url: "https://tracker.example" } }`
+ * yields `unknown-style-property` alone — no value check at all — so a
+ * forgiving read would store a URL that becomes live the moment an engine
+ * learns that property, with no further validating write. A gate that cannot
+ * judge a value must not pass it: this package's own url-policy module states
+ * the same rule for the same reason, that a security control should fail
+ * toward the annoyance. The cost is that a site WITH a host policy cannot store
+ * a property this engine does not know, and is told which one.
+ *
+ * The BUDGET is the caller's, spanning the whole section, and the walk stops
+ * when it is spent. One budget per MAP would bound each map and nothing else:
+ * measured, a class spreading bad properties over 200 maps produced 40,200
+ * diagnostics that way against 201 with one budget, and the map count is
+ * limited only by the document's byte cap. Per CLASS has the same shape one
+ * level up — `MAX_NAMED_CLASSES` is 2000, and the count check reports without
+ * stopping the walk, so the array is not bounded at all.
+ */
+function classValueIssues(
+  entry: NamedClass,
+  index: number,
+  policy: SectionPolicy,
+  budget: StyleIssueBudget
+): string[] {
+  const options =
+    policy.mayFetchUrl === undefined
+      ? undefined
+      : { mayFetchUrl: policy.mayFetchUrl };
+  const mode = policy.mayFetchUrl === undefined ? "forgiving" : "strict";
+  const issues: string[] = [];
+  for (const { at, values } of styleMapsIn(entry.styles)) {
+    for (const issue of validateStyleValues(
+      values,
+      `classes[${index}].styles.${at}`,
+      mode,
+      budget,
+      false,
+      undefined,
+      options
+    )) {
+      if (issue.severity === "error") issues.push(issue.message);
+    }
+    // Truncation is itself an error, so it is already among the messages above
+    // and the write is refused. What stopping adds is that the refusal costs a
+    // bounded amount of work rather than one batch per remaining map.
+    if (budget.truncated) break;
+  }
+  return issues;
+}
+
+/**
  * The stored class library.
  *
  * Usability per entry is the engine's `isUsableNamedClass` — the same
@@ -227,9 +361,16 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
  * makes a node's reference ambiguous. Both are cheaper to reject while the
  * writer is present than to explain after a page styles itself with the
  * wrong preset.
+ *
+ * The VALUES inside each entry are judged too, under the site's host policy —
+ * see `classValueIssues`. A class is emitted into the sheet of every public
+ * page, so a `url()` here reaches every visitor, and it is emitted verbatim
+ * rather than through the `var()` substitution that makes a token's own gate
+ * the last chance to stop one.
  */
 export function checkStoredClasses(
-  raw: unknown
+  raw: unknown,
+  policy: SectionPolicy = {}
 ): SectionCheck<readonly NamedClass[]> {
   if (raw === undefined || raw === null) return EMPTY;
   if (!Array.isArray(raw)) {
@@ -241,6 +382,9 @@ export function checkStoredClasses(
       `The class library holds ${raw.length} entries; the compiler reads at most ${MAX_NAMED_CLASSES}.`
     );
   }
+  // ONE for the whole section: see `classValueIssues` for why neither per map
+  // nor per class bounds the work a single write can ask for.
+  const budget = newStyleIssueBudget();
   const classes: NamedClass[] = [];
   const ids = new Set<string>();
   const slugs = new Set<string>();
@@ -261,6 +405,12 @@ export function checkStoredClasses(
     }
     ids.add(entry.id);
     slugs.add(entry.slug);
+    // Reported but still returned, as this module's two postures require: a
+    // write refuses the section on any issue, while a read keeps the entry the
+    // compiler will narrow for itself.
+    if (!budget.truncated) {
+      issues.push(...classValueIssues(entry, index, policy, budget));
+    }
     classes.push(entry);
   });
   return { value: classes, issues };

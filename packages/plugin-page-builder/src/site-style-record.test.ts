@@ -17,6 +17,9 @@ function token(name: string, light: string, dark?: string) {
   };
 }
 
+/** A host no site in these tests allows. */
+const TRACKER = "https://tracker.example/p.png";
+
 describe("checkStoredTokens", () => {
   it("reports nothing for an absent section", () => {
     expect(checkStoredTokens(undefined)).toEqual({ issues: [] });
@@ -128,6 +131,217 @@ describe("checkStoredClasses", () => {
   it("refuses a class with no numeric orderIndex", () => {
     const result = checkStoredClasses([{ ...usable, orderIndex: "first" }]);
     expect(result.issues).toHaveLength(1);
+  });
+
+  // A named class is emitted VERBATIM into the sheet of every public page, so
+  // a url() stored in one is a request every visitor makes. Unlike a token,
+  // which reaches the page as a var() substitution, there is no later
+  // substitution step where a policy could still see it.
+  const REFUSING = { mayFetchUrl: () => false };
+  const ALLOWING = { mayFetchUrl: () => true };
+  const tracker = (styles: unknown) => [{ ...usable, styles }];
+  const AT_BASE = { base: { base: { background: { url: TRACKER } } } };
+
+  it("refuses a url() the site's host policy does not allow", () => {
+    const result = checkStoredClasses(tracker(AT_BASE), REFUSING);
+    expect(result.issues.join(" ")).toContain("does not allow");
+  });
+
+  it("accepts the same url() when the policy allows the host", () => {
+    // The control that separates "the policy refused it" from "the walk
+    // refuses every url()". Without this the test above passes on a gate that
+    // rejects the shape and never consults the predicate at all.
+    expect(checkStoredClasses(tracker(AT_BASE), ALLOWING).issues).toEqual([]);
+  });
+
+  it("accepts it when NO policy is configured, which the engine calls unasked", () => {
+    // Deliberate and worth pinning: absent is not the same as an empty
+    // allowlist. A site that configured no remotePatterns keeps exactly the
+    // behaviour it has, and the engine's scheme allowlist stays the only
+    // limit. Closing that is the renderer's half, not this gate's.
+    expect(checkStoredClasses(tracker(AT_BASE)).issues).toEqual([]);
+  });
+
+  it("reaches a state and a breakpoint the compiler would emit nothing for", () => {
+    // The property a compiler-as-validator gate could not have. A breakpoint
+    // this site has not defined compiles to no rule TODAY and to a real rule
+    // the moment someone defines it, so a gate that only judged what compiles
+    // now would let the value through and serve it later.
+    const result = checkStoredClasses(
+      tracker({
+        hover: { "not-a-defined-breakpoint": { background: { url: TRACKER } } },
+      }),
+      REFUSING
+    );
+    expect(result.issues.join(" ")).toContain("does not allow");
+  });
+
+  it("does not refuse an unknown property when NO policy is configured", () => {
+    // Forgiving there, and errors only everywhere: a property this engine has
+    // not learned is a warning, a document written by a newer engine is not
+    // something the author can fix, and there is no host rule to enforce.
+    const result = checkStoredClasses(
+      tracker({ base: { base: { notAProperty: "x" } } })
+    );
+    expect(result.issues).toEqual([]);
+  });
+
+  it("refuses an unknown property once a policy IS configured", () => {
+    // Strict there, because the validator never looks INSIDE an unknown
+    // property. A gate that cannot judge a value must not pass it.
+    const result = checkStoredClasses(
+      tracker({ base: { base: { notAProperty: "x" } } }),
+      REFUSING
+    );
+    // The property NAME, not merely a non-empty array: a fixture typo trips the
+    // shape check and produces an issue too, which would keep this green while
+    // the rule it names stopped working.
+    expect(result.issues.join(" ")).toContain("notAProperty");
+  });
+
+  it("refuses a url() hidden under a property this engine has not learned", () => {
+    // Why the mode follows the policy rather than being fixed. Measured:
+    // `{ futureBackground: { url: ... } }` yields `unknown-style-property`
+    // ALONE — the value is never inspected — so a forgiving read would store
+    // the URL, and it becomes live the moment an engine learns that property,
+    // with no further validating write to stop it.
+    const result = checkStoredClasses(
+      tracker({ base: { base: { futureBackground: { url: TRACKER } } } }),
+      REFUSING
+    );
+    expect(result.issues.join(" ")).toContain("futureBackground");
+  });
+
+  it("bounds the whole section, not each map inside it", () => {
+    // The single-map test below cannot see this. A budget created per map
+    // bounds each map and nothing else, and the number of maps is limited only
+    // by the document's byte cap — measured, the same payload spread over 200
+    // maps produced 40,200 diagnostics that way against 201 with one budget for
+    // the section. The write is refused either way; what differs is how much
+    // work refusing it costs.
+    const byState: Record<string, unknown> = {};
+    for (let m = 0; m < 200; m += 1) {
+      const values: Record<string, unknown> = {};
+      for (let k = 0; k < 300; k += 1) values[`bad${k}`] = "x";
+      byState[`state${m}`] = { base: values };
+    }
+
+    const result = checkStoredClasses(tracker(byState), REFUSING);
+
+    expect(result.issues.join(" ")).toContain("not checked");
+    expect(result.issues.length).toBeLessThan(1000);
+  });
+
+  it("stops reading states once the section budget is spent", () => {
+    // The bound above is visible in the issue COUNT; stopping the walk is not,
+    // because the budget caps the issues either way. So the states are
+    // accessors and the test counts how many were read: what the early stop
+    // buys is work not done, and work not done is only observable if something
+    // records the doing.
+    let statesRead = 0;
+    const byState: Record<string, unknown> = {};
+    for (let m = 0; m < 200; m += 1) {
+      Object.defineProperty(byState, `state${m}`, {
+        enumerable: true,
+        get() {
+          statesRead += 1;
+          const values: Record<string, unknown> = {};
+          for (let k = 0; k < 300; k += 1) values[`bad${k}`] = "x";
+          return { base: values };
+        },
+      });
+    }
+
+    const result = checkStoredClasses(tracker(byState), REFUSING);
+
+    expect(result.issues.join(" ")).toContain("not checked");
+    expect(statesRead).toBeLessThan(5);
+  });
+
+  it("enumerates state keys lazily, so stopping stops the enumeration too", () => {
+    // The accessor test above counts VALUE reads, and key enumeration reads no
+    // values — so it cannot see a walk that materialises every key before the
+    // budget has a chance to stop it. A proxy counting descriptor lookups can:
+    // measured, breaking after the first entry costs one lookup in total with
+    // `for...in` and one PER KEY with `Object.keys`.
+    let descriptorLookups = 0;
+    const target: Record<string, unknown> = {};
+    const exhausting: Record<string, unknown> = {};
+    for (let k = 0; k < 300; k += 1) exhausting[`bad${k}`] = "x";
+    target.state0 = { base: exhausting };
+    for (let m = 1; m < 2000; m += 1) {
+      target[`state${m}`] = { base: { color: "#111111" } };
+    }
+    const styles = new Proxy(target, {
+      getOwnPropertyDescriptor(t, key) {
+        descriptorLookups += 1;
+        return Reflect.getOwnPropertyDescriptor(t, key);
+      },
+    });
+
+    const result = checkStoredClasses(tracker(styles), REFUSING);
+
+    expect(result.issues.join(" ")).toContain("not checked");
+    expect(descriptorLookups).toBeLessThan(10);
+  });
+
+  it("stops judging later classes once the section budget is spent", () => {
+    // The stop inside one class does not imply the stop between classes, and
+    // neither is visible in the issue count. `MAX_NAMED_CLASSES` is 2000 and
+    // the count check reports without stopping the walk, so without this the
+    // cost of refusing scales with the array a caller sends.
+    let laterRead = 0;
+    const exhausting: Record<string, unknown> = {};
+    for (let m = 0; m < 200; m += 1) {
+      const values: Record<string, unknown> = {};
+      for (let k = 0; k < 300; k += 1) values[`bad${k}`] = "x";
+      exhausting[`state${m}`] = { base: values };
+    }
+    const later: Record<string, unknown> = {};
+    Object.defineProperty(later, "base", {
+      enumerable: true,
+      get() {
+        laterRead += 1;
+        return { base: { color: "#111111" } };
+      },
+    });
+
+    const result = checkStoredClasses(
+      [
+        { id: "a", slug: "a", orderIndex: 0, styles: exhausting },
+        { id: "b", slug: "b", orderIndex: 1, styles: later },
+      ],
+      REFUSING
+    );
+
+    expect(result.issues.join(" ")).toContain("not checked");
+    expect(laterRead).toBe(0);
+  });
+
+  it("refuses a property map too large to check through", () => {
+    // A budget per entry. Given none, the validator walks an unbounded map and
+    // allocates a diagnostic per key. Truncation needs no handling of its own:
+    // `style-issues-truncated` is itself an error, so a map the gate could not
+    // read to the end refuses rather than passing on a partial read.
+    const huge: Record<string, unknown> = {};
+    for (let i = 0; i < 5000; i += 1) huge[`p${i}`] = "x";
+    const result = checkStoredClasses(
+      tracker({ base: { base: huge } }),
+      REFUSING
+    );
+    expect(result.issues.join(" ")).toContain("not checked");
+  });
+
+  it("still returns the entry it reported on, so a READ narrows rather than drops", () => {
+    // The module's two postures: the write refuses the section on any issue,
+    // the read keeps what the compiler can narrow for itself.
+    const result = checkStoredClasses(tracker(AT_BASE), REFUSING);
+    // The host refusal specifically. Any issue at all would satisfy a
+    // non-empty check, including one from the shape gate, which reports AND
+    // excludes the entry — so the two assertions would then contradict each
+    // other while both passed.
+    expect(result.issues.join(" ")).toContain("does not allow");
+    expect(result.value).toHaveLength(1);
   });
 });
 
