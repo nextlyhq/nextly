@@ -1,10 +1,16 @@
 /**
- * One host list, asked by both channels a page fetches through.
+ * One host list, asked by every channel a page fetches through.
  *
- * A block writes an `<iframe src>`; a compiled stylesheet writes `url(...)` into
- * a rule that fires wherever it applies. Both turn a stored value into a
- * request, so a policy answered by only one of them is not a policy — and the
- * failure would be invisible, because the channel still working looks correct.
+ * A block writes an `<iframe src>`; a page's compiled stylesheet writes
+ * `url(...)` into a rule that fires wherever it applies; and the SITE sheet
+ * writes the same thing for the named-class and block-default tiers, on every
+ * page of the site at once. All three turn a stored value into a request, so a
+ * policy answered by only some of them is not a policy — and the failure would
+ * be invisible, because the channels still working look correct.
+ *
+ * The site sheet is the one that was missing, and it is the widest: it is
+ * emitted on every page and it is emitted FIRST, so a page sheet that merely
+ * omits a declaration cannot retract one it already carried.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -13,7 +19,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import type { RemotePattern } from "@nextlyhq/blocks-engine";
+import type { NodeStyles, RemotePattern } from "@nextlyhq/blocks-engine";
 
 import { renderEmbed } from "./blocks/embed";
 import { renderImage } from "./blocks/image";
@@ -81,6 +87,84 @@ async function pageCss(
   );
   return markup;
 }
+
+/**
+ * The markup for a page whose SITE sheet carries a stored class with a `url()`.
+ *
+ * Deliberately renders with NO `styleContext`, which is the ordinary production
+ * path — a consumer showing a stored artifact supplies none — and is exactly
+ * where reading the predicate off the reconciled compile context would have
+ * found `undefined` and asked nothing.
+ */
+function siteSheetMarkup(
+  url: string,
+  hostPolicy?: BlockHostPolicy,
+  ownPredicate?: (candidate: string) => boolean
+): string {
+  return renderToStaticMarkup(
+    <PageRenderer
+      document={{
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          { id: "n1", type: "core/text", version: 1, props: { text: "body" } },
+        ],
+      }}
+      blocks={createBlockResolver(coreBlocks)}
+      siteStyles={{
+        breakpoints: { viewport: [], container: [] },
+        classes: [
+          {
+            id: "c1",
+            slug: "tracked",
+            orderIndex: 0,
+            styles: {
+              base: { base: { background: { url } } },
+            } as unknown as NodeStyles,
+          },
+        ],
+        ...(ownPredicate === undefined ? {} : { mayFetchUrl: ownPredicate }),
+      }}
+      {...(hostPolicy === undefined ? {} : { hostPolicy })}
+    />
+  );
+}
+
+describe("the site sheet's share of the host fetch list", () => {
+  it("emits an allowed host, which is the control for every absence below", () => {
+    expect(
+      siteSheetMarkup("https://player.allowed.test/a.png", {
+        remotePatterns: ALLOWED,
+      })
+    ).toContain("player.allowed.test");
+  });
+
+  it("refuses an unlisted host in the SITE sheet, with no style context at all", () => {
+    expect(
+      siteSheetMarkup("https://cdn.other.test/a.png", {
+        remotePatterns: ALLOWED,
+      })
+    ).not.toContain("cdn.other.test");
+  });
+
+  it("asks nothing when the host configured no list", () => {
+    expect(siteSheetMarkup("https://cdn.other.test/a.png")).toContain(
+      "cdn.other.test"
+    );
+  });
+
+  it("keeps a predicate set on siteStyles over one derived from the list", () => {
+    // The same precedence the style context gets: a caller who passed one meant
+    // it, and deriving one here would silently replace it.
+    expect(
+      siteSheetMarkup(
+        "https://cdn.other.test/a.png",
+        { remotePatterns: ALLOWED },
+        () => true
+      )
+    ).toContain("cdn.other.test");
+  });
+});
 
 describe("the host fetch list", () => {
   it("lets an allowed origin through both channels", async () => {

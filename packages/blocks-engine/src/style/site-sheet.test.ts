@@ -269,3 +269,59 @@ describe("what the sheet declines to write", () => {
     expect(warnings.length).toBeGreaterThan(0);
   });
 });
+
+describe("the site sheet's host-fetch policy", () => {
+  // The class and block-default tiers are emitted VERBATIM into every page of
+  // the site, so a stored `url()` here is a request every visitor of every page
+  // makes. A page's own sheet has been compiled under a host policy since that
+  // existed; this sheet had no way to be given one, and it is emitted FIRST —
+  // a page sheet that merely omits a declaration cannot retract one.
+  const TRACKER = "https://tracker.example/p.png";
+  const tracking: NamedClass = {
+    id: "c9",
+    slug: "tracked",
+    orderIndex: 1,
+    styles: styles({ background: { url: TRACKER } }),
+  };
+
+  it("emits the url when no policy is given, which is unasked rather than allowed", () => {
+    // Pinned deliberately. Absent is not an empty allowlist: an empty list
+    // refuses every remote URL, and a site that configured none keeps exactly
+    // what it has today.
+    expect(sheet({ classes: [tracking] }).css).toContain(TRACKER);
+  });
+
+  it("emits it when the policy allows the host", () => {
+    // The positive control. Without it the refusal below passes just as well on
+    // a compile that dropped the declaration for some unrelated reason.
+    const allowed = sheet({ classes: [tracking], mayFetchUrl: () => true });
+    expect(allowed.css).toContain(TRACKER);
+  });
+
+  it("withholds it when the policy refuses the host", () => {
+    const refused = sheet({ classes: [tracking], mayFetchUrl: () => false });
+    expect(refused.css).not.toContain(TRACKER);
+    expect(refused.warnings).not.toHaveLength(0);
+  });
+
+  it("still emits the tiers around the withheld declaration", () => {
+    // A policy narrows one declaration; it does not cost the site its sheet.
+    const refused = sheet({
+      classes: [card, tracking],
+      mayFetchUrl: () => false,
+    });
+    expect(refused.css).toContain("blue");
+    expect(refused.css).toContain("green");
+  });
+
+  it("changes the content hash, so a cached sheet cannot be mistaken for it", () => {
+    // Why this input needs no `fetchPolicyId` counterpart. A stored PAGE sheet
+    // carries a stamp because a predicate is opaque and a reader has to decide
+    // whether the artifact predates the current rules. This artifact is
+    // compiled per render and addressed by the hash of its own bytes, so a
+    // policy that changes what is emitted changes the name.
+    const open = sheet({ classes: [tracking] });
+    const closed = sheet({ classes: [tracking], mayFetchUrl: () => false });
+    expect(closed.contentHash).not.toBe(open.contentHash);
+  });
+});

@@ -404,7 +404,11 @@ export function PageRenderer({
       ? { ...styleContext, namedClasses: siteStyles.classes }
       : styleContext;
 
-  const { context: compileContext, fetchPolicyId } = effectiveCompile({
+  const {
+    context: compileContext,
+    fetchPolicyId,
+    mayFetchUrl,
+  } = effectiveCompile({
     styleContext: pageStyleContext,
     styles,
     limits,
@@ -456,6 +460,17 @@ export function PageRenderer({
           ...siteInput,
           breakpoints: siteBreakpoints,
           tokens: resolveSiteTokens(siteInput?.tokens),
+          // The SAME predicate the page sheet is compiled with, taken from the
+          // one place it is derived rather than derived again here. The class
+          // and block-default tiers are emitted verbatim into every page, so
+          // without this a stored class could name a host the node styles
+          // beside it are refused for — and this sheet is emitted first, where
+          // a later omission cannot retract it. A caller who put a predicate on
+          // `siteStyles` keeps it, matching how `effectiveCompile` treats one
+          // on the style context.
+          ...(mayFetchUrl === undefined || siteInput?.mayFetchUrl !== undefined
+            ? {}
+            : { mayFetchUrl }),
         });
 
   return (

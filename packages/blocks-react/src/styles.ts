@@ -10,6 +10,7 @@ import {
   type BlockNode,
   type CompiledPageCss,
   type DocumentLimits,
+  type MayFetchUrl,
   type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
@@ -651,6 +652,17 @@ export interface EffectiveCompile {
   context: StyleCompileContext | undefined;
   /** The policy label to compare a stored sheet's stamp against. */
   fetchPolicyId: string | undefined;
+  /**
+   * The host-fetch predicate in force for this render — the caller's own when
+   * they supplied one, otherwise the one derived from the pattern list.
+   *
+   * Returned in its own right because the SITE sheet needs it and cannot read
+   * it off `context`: that is `undefined` whenever the caller gave no style
+   * context, while the site sheet is compiled regardless. Deriving it a second
+   * time at the other call site is how one sheet comes to refuse a host the
+   * other serves.
+   */
+  mayFetchUrl: MayFetchUrl | undefined;
 }
 
 /**
@@ -697,9 +709,18 @@ export function effectiveCompile(args: {
     args.styleContext?.mayFetchUrl === undefined
       ? fetchPolicyLabel(patterns)
       : (args.styleContext.fetchPolicyId ?? UNIDENTIFIED_FETCH_POLICY);
+  // Derived ONCE, here, and handed back so both sheets are judged by the same
+  // function. The caller's own predicate wins for the same reason it does
+  // below; a pattern list with no caller predicate becomes one.
+  const derived =
+    args.styleContext?.mayFetchUrl ??
+    (patterns === undefined
+      ? undefined
+      : (url: string) => isFetchableUrl(url, patterns));
   if (args.styleContext === undefined)
-    return { context: undefined, fetchPolicyId };
+    return { context: undefined, fetchPolicyId, mayFetchUrl: derived };
   return {
+    mayFetchUrl: derived,
     context: {
       ...args.styleContext,
       limits: args.limits ?? args.styleContext.limits ?? DEFAULT_LIMITS,
