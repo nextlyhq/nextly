@@ -103,4 +103,21 @@ describe("createBlocksPage cache tags", () => {
 
     expect(tags.some(tag => tag.startsWith("nextly:single:"))).toBe(false);
   });
+
+  it("refuses a bare function rather than reading it as a style value", () => {
+    // TypeScript rejects it, so this is for the JavaScript caller following
+    // older documentation. Falling through to the style-value branch would
+    // treat the provider as configuration: never invoked, its singles never
+    // tagged, and the page quietly serving config defaults for ever. Throwing
+    // at boot is the one outcome that cannot be mistaken for working.
+    created.mockClear();
+
+    expect(() =>
+      createBlocksPage({
+        collections: ["pages"],
+        field: "content",
+        siteStyles: (() => undefined) as never,
+      })
+    ).toThrow(/singles/);
+  });
 });

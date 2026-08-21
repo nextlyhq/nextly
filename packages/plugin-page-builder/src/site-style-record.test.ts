@@ -488,6 +488,23 @@ describe("judging the write against the tier it will be merged with", () => {
     expect(checkStoredClasses(tooMany).issues.join(" ")).toContain("at most");
   });
 
+  it("does not charge the writer for a class problem the CONFIG tier already had", () => {
+    // The merge only ever adds to or replaces within the config tier, never
+    // removes from it — so a config tier that already exceeds the cap, or
+    // already holds one slug on two ids, is a problem the writer cannot reach
+    // from the admin. Charging it to their save leaves them unable to store
+    // anything at all, including an empty library.
+    const brokenConfig = [
+      { ...stored, id: "x", slug: "dup" },
+      { ...stored, id: "y", slug: "dup" },
+    ];
+
+    expect(
+      checkStoredClasses([], { defaults: { classes: brokenConfig as never } })
+        .issues
+    ).toEqual([]);
+  });
+
   it("refuses a stored token colliding with a config one on a custom property", () => {
     const result = checkStoredTokens(
       { tokens: [token("color.primary", "#111111")] },

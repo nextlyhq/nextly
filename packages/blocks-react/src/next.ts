@@ -103,6 +103,17 @@ export type SiteStylesInput = Omit<SiteSheetInput, "breakpoints"> &
 function isSiteStylesProvider(
   value: SiteStylesInput | SiteStylesProvider | undefined
 ): value is SiteStylesProvider {
+  // A function is refused rather than falling through to the style-value
+  // branch. TypeScript already rejects it, but a JavaScript caller following
+  // older documentation would otherwise have their provider treated as
+  // configuration: never invoked, its singles never tagged, and the page
+  // quietly serving config defaults for ever. Failing at boot is the one
+  // outcome that cannot be mistaken for working.
+  if (typeof value === "function") {
+    throw new TypeError(
+      "siteStyles must be a value or { read, singles }; a bare function no longer states the singles its read depends on, so a cached page could not be invalidated."
+    );
+  }
   return typeof value === "object" && value !== null && "read" in value;
 }
 
@@ -194,21 +205,33 @@ export interface BlocksPageConfig
    * "what are this site's breakpoints" is how the shared sheet and the page
    * sheet come to disagree about which at-rules a tier is emitted under.
    *
-   * **A function is called per render**, exactly as `styles` is, for a site
-   * whose style inputs live in storage: a route module's config is captured
-   * once per server process, so a plain value here freezes an admin's saved
-   * tokens at whatever they were when the module loaded — the edit would reach
-   * the next deploy instead of the next page view. Returning `undefined`
-   * means what omitting the value means.
+   * **A PROVIDER is read per render**, for a site whose style inputs live in
+   * storage: a route module's config is captured once per server process, so a
+   * plain value here freezes an admin's saved tokens at whatever they were when
+   * the module loaded, and the edit would reach the next deploy instead of the
+   * next page view.
    *
-   * **On a PRE-RENDERED route that promise needs `siteStyleSingles`.** Being
-   * called per render is not the same as being read per render: a public
-   * blocks page is cacheable, so the whole render is the thing cached, and it
-   * is only rebuilt when one of the page's TAGS is invalidated. A provider
-   * reading through the Direct API contributes no tag, so without naming the
-   * single it reads, an admin's save invalidates a tag no cache entry carries
-   * and the page keeps serving the old sheet — the same gap the media
-   * collection is in the tag list for.
+   * ```ts
+   * siteStyles: {
+   *   read: () => loadSiteStyle({ nextly, defaults }),
+   *   singles: [SITE_STYLE_SLUG],
+   * }
+   * ```
+   *
+   * `read` returning `undefined` means what omitting the value means. `singles`
+   * is required rather than optional, and that is the whole point: being called
+   * per render is not the same as being READ per render. A public blocks page
+   * is cacheable, so the whole render is what is cached and only a tag the page
+   * carries rebuilds it — and a Direct API read inside `read` contributes none.
+   * Without naming the single, an admin's save invalidates a tag no cache entry
+   * holds and the page keeps serving the old sheet, which is the same gap the
+   * media collection is in the tag list for. State `singles: []` for a provider
+   * that genuinely reads no singles.
+   *
+   * A bare function is NOT a provider and is refused at boot rather than read
+   * as a style value, because a JavaScript caller passing one would otherwise
+   * have it silently treated as configuration and lose both the stored styles
+   * and their invalidation.
    */
   siteStyles?: SiteStylesInput | SiteStylesProvider;
   /**

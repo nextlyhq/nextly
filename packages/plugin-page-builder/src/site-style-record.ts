@@ -412,20 +412,31 @@ function mergedLibraryIssues(
   classes: readonly NamedClass[],
   policy: SectionPolicy
 ): string[] {
-  // Run whether or not a config tier was stated. With none, the merge is the
-  // stored array itself and the cap below is the only check that applies — but
-  // it applies, and skipping it here would let a site with no config defaults
-  // store more classes than the compiler reads.
+  // Reported as a DIFFERENCE against the config tier alone, the same way token
+  // issues are. A site whose own config already exceeds the cap, or already
+  // holds one slug on two ids, has a problem the writer cannot fix from the
+  // admin and cannot even reach — the merge only ever adds to or replaces
+  // within the config tier, never removes from it — so charging it to their
+  // save would leave them unable to store anything at all.
+  const already = new Set(libraryIssues(policy.defaults?.classes ?? []));
+  // Run whether or not a config tier was stated: the merge of nothing and the
+  // stored array is the stored array, so one path covers both and the cap
+  // cannot be lost along with the tier.
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
+  return libraryIssues(merged).filter(issue => !already.has(issue));
+}
+
+/** What a class library, as a whole, would cost the compiler. */
+function libraryIssues(library: readonly NamedClass[]): string[] {
   const issues: string[] = [];
-  if (merged.length > MAX_NAMED_CLASSES) {
+  if (library.length > MAX_NAMED_CLASSES) {
     issues.push(
-      `The class library holds ${merged.length} entries once merged with this site's config; the compiler reads at most ${MAX_NAMED_CLASSES}.`
+      `The class library holds ${library.length} entries once merged with this site's config; the compiler reads at most ${MAX_NAMED_CLASSES}.`
     );
   }
   const owner = new Map<string, string>();
   const reported = new Set<string>();
-  for (const entry of merged) {
+  for (const entry of library) {
     const held = owner.get(entry.slug);
     if (held === undefined) {
       owner.set(entry.slug, entry.id);
