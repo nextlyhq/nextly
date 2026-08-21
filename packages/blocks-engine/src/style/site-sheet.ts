@@ -17,6 +17,7 @@ import type { BlockDocument, BreakpointSet, NodeStyles } from "../document";
 import type { ValidationIssue } from "../validation";
 
 import { compilePageCss } from "./compile-page";
+import type { MayFetchUrl } from "./css-value";
 import type { NamedClass } from "./named-class";
 import { hashId } from "./node-class";
 import type { FontFaceDef, SiteTokenSet } from "./site-tokens";
@@ -36,6 +37,28 @@ export interface SiteSheetInput {
   breakpoints: BreakpointSet;
   /** The custom-property prefix tokens are written under. */
   tokenPrefix?: string;
+  /**
+   * Which hosts this site will fetch from.
+   *
+   * The class and block-default tiers are emitted VERBATIM into every page of
+   * the site, and a declaration is a fetching surface: one stored
+   * `background-image: url(...)` is a request every visitor of every page
+   * makes. A page's own sheet is compiled with this policy already; without it
+   * here, the two sheets judged the same value differently, and the site sheet
+   * is emitted FIRST — a page sheet that merely omits a declaration cannot
+   * retract one.
+   *
+   * Left undefined, no host question is asked and the compile behaves as it
+   * did before this existed. That is unasked rather than allowed: an empty
+   * allowlist would be the opposite answer.
+   *
+   * No `fetchPolicyId` counterpart, unlike the page compile. That stamp exists
+   * so a reader can tell whether a STORED sheet was compiled under other
+   * rules; this artifact is compiled per render and addressed by the hash of
+   * its own bytes, so a policy that changes what is emitted changes the hash
+   * and cannot be mistaken for the old sheet.
+   */
+  mayFetchUrl?: MayFetchUrl;
 }
 
 /** The shared sheet and the name it is addressed by. */
@@ -134,6 +157,9 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     blockBases,
     namedClasses: input.classes ?? [],
     ...(tokenPrefix === undefined ? {} : { tokenPrefix }),
+    ...(input.mayFetchUrl === undefined
+      ? {}
+      : { mayFetchUrl: input.mayFetchUrl }),
   });
   warnings.push(...tiers.warnings);
   if (tiers.css !== "") blocks.push(tiers.css);
