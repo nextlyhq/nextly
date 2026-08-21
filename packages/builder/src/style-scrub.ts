@@ -93,7 +93,22 @@ function rootSelector(scope: string | undefined): string {
 
 /** CSS for the value under the pointer, or the reasons it was refused. */
 export type ScrubPreview =
-  | { readonly ok: true; readonly css: string }
+  | {
+      readonly ok: true;
+      readonly css: string;
+      /**
+       * What the compiler remarked on while writing this declaration.
+       *
+       * Emitting and objecting are not the same outcome. A site whose
+       * `tokenPrefix` is invalid gets its declarations written under the
+       * engine's default prefix WITH a warning saying so — measured: a plain
+       * `24px` compiles to one declaration and one `severity: "warning"`
+       * issue. Treating that as a refusal would blank every preview on that
+       * site, including values with no token in them, while the commit
+       * succeeded and the published page rendered normally.
+       */
+      readonly warnings: readonly ValidationIssue[];
+    }
   | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
 
 /**
@@ -145,17 +160,23 @@ export function scrubPreviewCss(
     undefined,
     { mayFetchUrl: target.policy?.mayFetchUrl }
   );
-  // The compiler reports only what it REFUSED, and refuses the whole map when
-  // it cannot check it. So anything reported means this value is not one the
-  // published page would carry, and previewing it would show the author a
-  // result they cannot keep.
-  if (compiled.warnings.length > 0) {
+  // Two different outcomes wear one field. An ERROR means the compiler refused
+  // the value, and nothing was written; a warning can accompany a declaration
+  // it wrote anyway. Reading the field's length alone conflates them, so a
+  // setting the compiler recovered from would blank the preview while the
+  // published page rendered fine.
+  const errors = compiled.warnings.filter(issue => issue.severity === "error");
+  if (errors.length > 0) return { ok: false, issues: errors };
+  // Nothing written is a refusal however it was reported: previewing a value
+  // the page will not carry shows the author a result they cannot keep.
+  if (compiled.declarations.length === 0) {
     return { ok: false, issues: compiled.warnings };
   }
-  if (compiled.declarations.length === 0) {
-    return { ok: false, issues: [] };
-  }
-  return { ok: true, css: ruleText(target, compiled.declarations) };
+  return {
+    ok: true,
+    css: ruleText(target, compiled.declarations),
+    warnings: compiled.warnings,
+  };
 }
 
 /**

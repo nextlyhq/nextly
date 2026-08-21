@@ -288,3 +288,56 @@ describe("against the selector the compiler actually emits", () => {
     expect(previewSelector("a.b")).toBe(compiledSelector("a.b"));
   });
 });
+
+describe("a compiler setting the engine recovered from", () => {
+  // An invalid `tokenPrefix` does not stop the compiler: it writes the
+  // declarations under the default prefix and says so. Measured — a plain
+  // `24px` compiles to one declaration and one `severity: "warning"` issue.
+  // Reading the issue list's LENGTH conflates that with a refusal.
+  const BAD_PREFIX: ScrubTarget = { ...TARGET, tokenPrefix: "notaprefix" };
+
+  it("still previews a literal value that has nothing to do with tokens", () => {
+    const preview = scrubPreviewCss(BAD_PREFIX, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css).toContain("margin-block-end: 32px");
+  });
+
+  it("carries the remark rather than dropping it", () => {
+    // A warning is the compiler explaining something about output it wrote. A
+    // preview that discarded it would present a recovered-from setting as an
+    // unremarkable one.
+    const preview = scrubPreviewCss(BAD_PREFIX, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.warnings.length).toBeGreaterThan(0);
+    expect(preview.warnings.every(issue => issue.severity !== "error")).toBe(
+      true
+    );
+  });
+
+  it("previews a token under the prefix the compiler fell back to", () => {
+    const preview = scrubPreviewCss(BAD_PREFIX, { $token: "space.large" });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css).toContain("var(--site-space-large)");
+  });
+
+  it("still refuses a value the compiler wrote nothing for", () => {
+    // The other half of the pair: separating warnings from errors must not
+    // stop a real refusal being a refusal.
+    const refused = scrubPreviewCss(BAD_PREFIX, "notalength");
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.issues.some(issue => issue.severity === "error")).toBe(true);
+  });
+
+  it("reports no warnings on a well-configured site", () => {
+    // The control that keeps the assertions above meaningful: if every preview
+    // carried warnings, "warnings.length > 0" would say nothing.
+    const preview = scrubPreviewCss(TARGET, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.warnings).toEqual([]);
+  });
+});
