@@ -266,9 +266,20 @@ function numberLeafHolds(leaf: StyleLeaf, value: number): boolean {
  *
  * Normalized with the engine's OWN primitives rather than a lowercase-and-trim
  * written here, so the two cannot disagree about what an escape means.
+ *
+ * The whitespace stripped is ASCII only, which is what CSS discards.
+ * JavaScript's `trim()` also removes NBSP and the Unicode spaces, and the engine
+ * does NOT — measured, a value carrying NBSP is refused where the same value
+ * with an ordinary space is accepted. Trimming it here would match a closed
+ * keyword control to a value that control cannot represent.
+ */
+const CSS_TRIM = /^[ \t\n\f\r]+|[ \t\n\f\r]+$/g;
+
+/**
+ * A keyword in the spelling the engine compares keywords in.
  */
 function keywordKey(value: string): string {
-  return asciiLower(decodeIdentifier(value.trim()));
+  return asciiLower(decodeIdentifier(value.replace(CSS_TRIM, "")));
 }
 
 /**
@@ -281,8 +292,20 @@ function keywordKey(value: string): string {
  */
 const UNIVERSAL_PROBE_PROPERTY = "textAlign";
 
-/** Answers already derived, so a repeated value costs one lookup. */
+/**
+ * Answers already derived, so a repeated value costs one lookup.
+ *
+ * The values that ARE universal are a closed, tiny set, so caching those costs
+ * nothing. A NEGATIVE answer is any author-supplied string that reached a
+ * scalar union — free-form `fontStyle` input, half-typed values, rejected ones —
+ * so caching every one of those in a long-lived editor grows without bound, and
+ * each key can be as long as the style-value limit allows. Negatives are
+ * therefore capped: past the cap they are recomputed rather than retained.
+ */
 const UNIVERSALLY_ACCEPTED = new Map<string, boolean>();
+
+/** How many refusals to remember before recomputing them instead. */
+const NEGATIVE_CACHE_LIMIT = 64;
 
 /**
  * Whether every leaf accepts this string whatever its own vocabulary says.
@@ -313,7 +336,7 @@ function isUniversallyAccepted(value: string): boolean {
   // reason, and would report every such word as universal.
   const key = keywordKey(value);
   if (probe.shape.values.some(keyword => keywordKey(keyword) === key)) {
-    UNIVERSALLY_ACCEPTED.set(value, false);
+    remember(value, false);
     return false;
   }
   const compiled = compileStyleValues(
@@ -323,8 +346,14 @@ function isUniversallyAccepted(value: string): boolean {
   const accepted =
     compiled.declarations.length > 0 &&
     !compiled.warnings.some(issue => issue.severity === "error");
-  UNIVERSALLY_ACCEPTED.set(value, accepted);
+  remember(value, accepted);
   return accepted;
+}
+
+/** Keep an answer, bounding what the refusals can grow to. */
+function remember(value: string, accepted: boolean): void {
+  if (!accepted && UNIVERSALLY_ACCEPTED.size >= NEGATIVE_CACHE_LIMIT) return;
+  UNIVERSALLY_ACCEPTED.set(value, accepted);
 }
 
 /**

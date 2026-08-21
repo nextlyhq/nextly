@@ -291,3 +291,40 @@ describe("two catalog properties writing one declaration", () => {
     expect(result.kind).toBe("unset");
   });
 });
+
+describe("ranking a base rule against an interaction rule", () => {
+  // A state selector is wrapped in `:where()`, which adds NO specificity — so a
+  // base rule emitted LATER beats an earlier interaction rule. Measured: a
+  // class's hover colour followed by the node's base colour leaves the node's
+  // base colour showing while hovered.
+
+  it("reports the value the browser is showing, not the earlier hover rule", () => {
+    const trace = [
+      entry({
+        state: "hover",
+        origin: { kind: "class", id: "c1", slug: "card" },
+        value: "#ff0000",
+      }),
+      entry({ state: "base", value: "#0000ff" }),
+    ];
+    const result = styleProvenance(query(trace, { state: "hover" }));
+    // Inherited rather than authored: the winner is the node's BASE entry, and
+    // the control being asked about is hover.
+    expect(result.kind).toBe("inherited");
+    if (result.kind !== "inherited") return;
+    expect(result.entry.value).toBe("#0000ff");
+    expect(result.entry.state).toBe("base");
+  });
+
+  it("keeps the hover rule when IT is the later one", () => {
+    // The control: always preferring base would be the same defect mirrored.
+    const trace = [
+      entry({ state: "base", value: "#0000ff" }),
+      entry({ state: "hover", value: "#ff0000" }),
+    ];
+    const result = styleProvenance(query(trace, { state: "hover" }));
+    expect(result.kind).toBe("authored");
+    if (result.kind !== "authored") return;
+    expect(result.entry.value).toBe("#ff0000");
+  });
+});

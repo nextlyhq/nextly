@@ -22,7 +22,7 @@ const TARGET: ScrubTarget = {
   nodeClass: nodeClassName("n1"),
   address: {
     state: "base",
-    breakpoint: "desktop",
+    breakpoint: "base",
     property: "margin",
     path: ["blockEnd"],
   },
@@ -95,7 +95,7 @@ describe("the commit that ends a drag", () => {
     if (!result.ok) return;
     const op = result.op as { patch: { styles?: unknown } };
     expect(op.patch.styles).toEqual({
-      base: { desktop: { margin: { blockEnd: "32px" } } },
+      base: { base: { margin: { blockEnd: "32px" } } },
     });
   });
 
@@ -150,7 +150,7 @@ describe("the site's URL policy", () => {
     nodeClass: nodeClassName("n1"),
     address: {
       state: "base",
-      breakpoint: "desktop",
+      breakpoint: "base",
       property: "background",
       path: ["url"],
     },
@@ -533,5 +533,23 @@ describe("a breakpoint the compiler wraps in a query", () => {
     // preview would show a value the published page will never carry.
     expect(compiledAt("tablet")).toBe("");
     expect(previewAt("tablet").ok).toBe(false);
+  });
+});
+
+describe("a caller that did not say where the preview goes", () => {
+  it("refuses a non-base breakpoint when no breakpoint set was supplied", () => {
+    // Without the set this cannot know which query the committed rule lands in,
+    // and an unconditional preview would show the value at every width.
+    const preview = scrubPreviewCss(
+      { ...TARGET, address: { ...TARGET.address, breakpoint: "mobile" } },
+      "32px"
+    );
+    expect(preview.ok).toBe(false);
+  });
+
+  it("still previews the base breakpoint, which is unconditional", () => {
+    // The control: refusing everything would pass the assertion above while
+    // making the SDK unusable for the ordinary case.
+    expect(scrubPreviewCss(TARGET, "32px").ok).toBe(true);
   });
 });

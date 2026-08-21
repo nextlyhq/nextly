@@ -195,16 +195,19 @@ describe("the admin theme's contrast implementation is out of reach", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("would SEE the contrast module if the barrel reached it", () => {
-    // The negative control for the walk itself: pointed at the module that DOES
-    // re-export contrast, it must find it. Without this, a walk that resolved
-    // nothing would satisfy the assertion above on any codebase.
-    const contrastIndex = join(UI_SRC, "styles", "contrast", "resolve.ts");
-    expect(existsSync(contrastIndex)).toBe(true);
-    const reached = reachableFrom(contrastIndex);
-    expect(
-      [...reached].some(file => file.includes(join("styles", "contrast")))
-    ).toBe(true);
+  it("follows a real edge, rather than reporting the entry it was handed", () => {
+    // The control for the walk itself, and it has to prove an EDGE. Starting at
+    // a file already under `styles/contrast` and then asserting something under
+    // `styles/contrast` was reached passes on the seed alone — traversal could
+    // return nothing and the assertion would still hold. So this requires a
+    // DISTINCT module: `resolve.ts` imports `./color`, and reaching that file
+    // is only possible by following the import.
+    const entry = join(UI_SRC, "styles", "contrast", "resolve.ts");
+    const neighbour = join(UI_SRC, "styles", "contrast", "color.ts");
+    expect(existsSync(entry)).toBe(true);
+    expect(existsSync(neighbour)).toBe(true);
+    const reached = reachableFrom(entry);
+    expect(reached.has(neighbour)).toBe(true);
   });
 
   it("is not reached by a relative path that climbs out of this package", () => {

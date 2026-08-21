@@ -47,6 +47,7 @@ import {
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
+import { BASE_BREAKPOINT } from "./breakpoints";
 import type { StyleAddress, StylePolicy, StyleWrite } from "./style-values";
 import { styleValueAtPath, styleWriteOp } from "./style-values";
 
@@ -226,6 +227,23 @@ function breakpointAtRule(
 }
 
 /**
+ * The at-rule this target's declarations belong inside, or `null` to refuse.
+ *
+ * Omitting the breakpoint set is only safe for the BASE breakpoint, which the
+ * compiler writes unconditionally. For any other id the committed value is
+ * wrapped in a query — or dropped entirely, when the site does not define it —
+ * and an unconditional preview would show the value at every width and lose it
+ * on release. Refusing says the preview cannot be placed, which is the honest
+ * answer when the caller has not said where it goes.
+ */
+function atRuleFor(target: ScrubTarget): string | null {
+  if (target.breakpoints !== undefined) {
+    return breakpointAtRule(target.breakpoints, target.address.breakpoint);
+  }
+  return target.address.breakpoint === BASE_BREAKPOINT ? "" : null;
+}
+
+/**
  * The root every rule for this document is anchored to.
  *
  * A scope the compiler REFUSES falls back to the unscoped root here too. It
@@ -313,10 +331,7 @@ export function scrubPreviewCss(
   // Resolved BEFORE compiling the value: a breakpoint the site does not define
   // is one the published sheet carries no rule for, so previewing it would show
   // an author a result the page will never have.
-  const atRule =
-    target.breakpoints === undefined
-      ? ""
-      : breakpointAtRule(target.breakpoints, target.address.breakpoint);
+  const atRule = atRuleFor(target);
   if (atRule === null) return { ok: false, issues: [] };
   const compiled = compileStyleValues(
     { [property]: styleValueAtPath(path, value) },

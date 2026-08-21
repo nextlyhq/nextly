@@ -157,6 +157,23 @@ function propertiesWriting(
   return names;
 }
 
+/**
+ * Whichever of two winning entries the browser is actually showing.
+ *
+ * Both reach the node at the same specificity, so the one written later wins.
+ * The trace records declarations in emission order, so its index IS that
+ * ordering and nothing here re-derives it.
+ */
+function later(
+  trace: readonly StyleTraceEntry[],
+  a: StyleTraceEntry | undefined,
+  b: StyleTraceEntry | undefined
+): StyleTraceEntry | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return trace.indexOf(b) > trace.indexOf(a) ? b : a;
+}
+
 /** Whether an entry is this node's own value at the position being edited. */
 function isAuthoredHere(
   entry: StyleTraceEntry,
@@ -192,15 +209,22 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
       state,
       breakpoints: query.liveBreakpoints,
     });
-  const entry = ask(query.state);
-  // An interaction state with nothing of its own still SHOWS the base rule —
-  // hovering a node whose colour is set only on base displays that colour. So
-  // reporting `unset` there would say the browser's own default applies, which
-  // is not what the author is looking at. The base entry is what they see, and
-  // it reaches this control the same way a wider breakpoint's value does.
-  const fallback =
-    entry === undefined && query.state !== "base" ? ask("base") : undefined;
-  const winner = entry ?? fallback;
+  // An interaction state and the base state are asked SEPARATELY, because
+  // `styleOrigin` ranks within one state — and then ranked against each other
+  // here, because the browser does not keep them apart. A state selector is
+  // wrapped in `:where()`, which adds NO specificity, so a base rule emitted
+  // later beats an earlier interaction rule: measured, a class's hover colour
+  // followed by the node's base colour leaves the node's base colour showing
+  // while hovered. Preferring any interaction winner would report a value the
+  // browser is not displaying.
+  //
+  // Ranked by position in the trace, which is emission order — the same thing
+  // the cascade is settling — rather than by a second idea of tier order.
+  const winner = later(
+    candidates,
+    ask(query.state),
+    query.state === "base" ? undefined : ask("base")
+  );
   if (winner === undefined) return { kind: "unset" };
   // Asked only once a declaration has won: nothing wrote this position is an
   // unambiguous answer whatever else could have written it.

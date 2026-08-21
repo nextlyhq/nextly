@@ -463,3 +463,24 @@ describe("a token whose kind no arm declares", () => {
     expect(set.controls[0].kind).toBe("length");
   });
 });
+
+describe("whitespace CSS does not discard", () => {
+  it("does not treat a non-breaking space as a separator", () => {
+    // The engine discards ASCII whitespace only — measured, a value carrying
+    // NBSP is refused where the same value with an ordinary space is accepted.
+    // `trim()` removes NBSP, which would match a closed keyword control to a
+    // value that control cannot represent.
+    const entry = getStyleProperty("fontStyle");
+    const nbsp = " italic ";
+    expect(
+      styleControlsFor(entry as StyleProperty, nbsp).controls[0].kind
+    ).toBe("css");
+  });
+
+  it("still discards the whitespace CSS does discard", () => {
+    const entry = getStyleProperty("fontStyle");
+    expect(
+      styleControlsFor(entry as StyleProperty, " italic\t").controls[0].kind
+    ).toBe("select");
+  });
+});
