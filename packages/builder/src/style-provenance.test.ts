@@ -122,3 +122,56 @@ describe("matching the property", () => {
     expect(styleProvenance(query([entry()])).kind).toBe("authored");
   });
 });
+
+describe("controls that share a CSS property but style different things", () => {
+  // The catalog writes `color` from three properties: `color` on the block
+  // itself, `linkColor` on ` a`, and `linkColorHover` on ` a:hover`. The CSS
+  // property alone therefore does not identify a control.
+
+  /** A link colour written by the node, which is the confounding entry. */
+  const linkEntry = entry({ property: "color", descendant: "a" });
+
+  it("does not report the plain text colour as authored from a link rule", () => {
+    const result = styleProvenance(
+      query([linkEntry], { cssProperty: "color" })
+    );
+    expect(result.kind).toBe("unset");
+  });
+
+  it("finds the link colour when the control asks for its own descendant", () => {
+    // The positive control for the absence above: without this, a query that
+    // matched nothing at all would satisfy the assertion just as well.
+    const result = styleProvenance(
+      query([linkEntry], { cssProperty: "color", descendant: "a" })
+    );
+    expect(result.kind).toBe("authored");
+  });
+
+  it("keeps hover links separate from ordinary links", () => {
+    const hoverEntry = entry({ property: "color", descendant: "a:hover" });
+    expect(
+      styleProvenance(
+        query([hoverEntry], { cssProperty: "color", descendant: "a" })
+      ).kind
+    ).toBe("unset");
+    expect(
+      styleProvenance(
+        query([hoverEntry], { cssProperty: "color", descendant: "a:hover" })
+      ).kind
+    ).toBe("authored");
+  });
+
+  it("still ranks the tiers within one control's own declarations", () => {
+    // Narrowing removes other controls' entries; it must not disturb how the
+    // remaining ones are ranked.
+    const fromClass = entry({
+      property: "color",
+      descendant: "a",
+      origin: { kind: "class", id: "c1", slug: "card" },
+    });
+    const result = styleProvenance(
+      query([fromClass, linkEntry], { cssProperty: "color", descendant: "a" })
+    );
+    expect(result.kind).toBe("authored");
+  });
+});

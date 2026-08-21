@@ -396,6 +396,7 @@ export {
   styleClearOp,
   styleWriteOp,
   type StyleAddress,
+  type StylePolicy,
   type StyleWrite,
 } from "./style-values";
 

@@ -19,25 +19,29 @@
  * construction rather than by both remembering to check.
  *
  * **The rule sits at the compiler's own specificity and wins on ORDER.** It is
- * anchored to `PAGE_ROOT_SELECTOR`, which is where the override contract lives;
- * spelling a stronger selector here would quietly raise that contract for the
- * duration of a drag, so the preview would land where the committed value will
- * not. The consequence for the host is that the element holding this text must
- * come AFTER the compiled sheet — later of two equals wins — and removing it on
- * commit reveals the real rule underneath with no visible change.
+ * anchored to the same root the compiled sheet uses — `PAGE_ROOT_SELECTOR`,
+ * plus the document's scope class when it has one — because that is where the
+ * override contract lives. Spelling a stronger selector would quietly raise
+ * that contract for the duration of a drag, so the preview would land where the
+ * committed value will not; spelling a weaker one loses to the rule being
+ * previewed over, and the drag shows nothing move. The consequence for the host
+ * is that the element holding this text must come AFTER the compiled sheet —
+ * later of two equals wins — and removing it on commit reveals the real rule
+ * underneath with no visible change.
  *
  * @module style-scrub
  */
 
 import {
   compileStyleValues,
+  escapeIdentifier,
   PAGE_ROOT_SELECTOR,
   type Declaration,
   type StyleValue,
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
-import type { StyleAddress, StyleWrite } from "./style-values";
+import type { StyleAddress, StylePolicy, StyleWrite } from "./style-values";
 import { styleWriteOp } from "./style-values";
 
 /** The node a scrub is previewing against. */
@@ -52,7 +56,28 @@ export interface ScrubTarget {
    * exactly the documents where the compiler had already disambiguated.
    */
   readonly nodeClass: string;
+  /**
+   * The document's compile scope, when it has one.
+   *
+   * `compilePageCss` anchors every rule to `${PAGE_ROOT_SELECTOR}.${scope}`, so
+   * a preview that spelled the unscoped root would sit one class BELOW the rule
+   * it is previewing over — the stored value would win and the drag would show
+   * nothing move. It would also reach a same-class node in another document
+   * rendered beside this one.
+   *
+   * Escaped through the engine's own `escapeIdentifier`, so the preview and the
+   * compiled sheet cannot disagree about a scope needing escapes.
+   */
+  readonly scope?: string;
   readonly address: StyleAddress;
+  /** The site policy, forwarded to the compile so a refused URL never previews. */
+  readonly policy?: StylePolicy;
+}
+
+/** The root every rule for this document is anchored to. */
+function rootSelector(scope: string | undefined): string {
+  if (scope === undefined || scope === "") return PAGE_ROOT_SELECTOR;
+  return `${PAGE_ROOT_SELECTOR}.${escapeIdentifier(scope)}`;
 }
 
 /** CSS for the value under the pointer, or the reasons it was refused. */
@@ -71,9 +96,10 @@ export type ScrubPreview =
  * the engine already has, kept in step by nothing.
  */
 function ruleText(
-  nodeClass: string,
+  target: ScrubTarget,
   declarations: readonly Declaration[]
 ): string {
+  const root = rootSelector(target.scope);
   return declarations
     .map(declaration => {
       const descendant =
@@ -81,7 +107,7 @@ function ruleText(
           ? ""
           : ` ${declaration.descendant}`;
       return (
-        `${PAGE_ROOT_SELECTOR} .${nodeClass}${descendant} ` +
+        `${root} .${target.nodeClass}${descendant} ` +
         `{ ${declaration.property}: ${declaration.value} }`
       );
     })
@@ -102,7 +128,11 @@ export function scrubPreviewCss(
   const { property, path } = target.address;
   const compiled = compileStyleValues(
     { [property]: valueAtPath(path, value) },
-    ""
+    "",
+    undefined,
+    undefined,
+    undefined,
+    { mayFetchUrl: target.policy?.mayFetchUrl }
   );
   // The compiler reports only what it REFUSED, and refuses the whole map when
   // it cannot check it. So anything reported means this value is not one the
@@ -114,7 +144,7 @@ export function scrubPreviewCss(
   if (compiled.declarations.length === 0) {
     return { ok: false, issues: [] };
   }
-  return { ok: true, css: ruleText(target.nodeClass, compiled.declarations) };
+  return { ok: true, css: ruleText(target, compiled.declarations) };
 }
 
 /**
@@ -145,5 +175,11 @@ export function scrubCommitOp(
   styles: Parameters<typeof styleWriteOp>[1],
   value: StyleValue
 ): StyleWrite {
-  return styleWriteOp(target.nodeId, styles, target.address, value);
+  return styleWriteOp(
+    target.nodeId,
+    styles,
+    target.address,
+    value,
+    target.policy
+  );
 }

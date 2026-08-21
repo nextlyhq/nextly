@@ -514,6 +514,26 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
 }
 
 /**
+ * Whether two stored values are the same one, by the comparison an `update` op
+ * uses to decide it changes nothing.
+ *
+ * Exported so a caller BUILDING an update can ask before `applyOp` answers by
+ * throwing. A surface that proposed an op which changes nothing would be
+ * advertising an operation that cannot be applied — and the natural cases are
+ * ordinary rather than exotic: resetting a control that was already unset, or
+ * retyping the value a node already holds.
+ *
+ * The same predicate rather than a second one, because the two would disagree
+ * about exactly the values that are hard — a token reference against an equal
+ * token reference, a composite whose keys were written in another order — and
+ * the disagreement surfaces as a thrown error from an op the caller was told
+ * was fine.
+ */
+export function sameStoredValue(a: unknown, b: unknown): boolean {
+  return equalWithin(a, b, COMPARISON_BUDGET);
+}
+
+/**
  * A detached copy of a value the caller still holds a reference to.
  *
  * An op is DATA describing an edit, and the document it produces has to be that

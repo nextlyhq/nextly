@@ -24,6 +24,7 @@ import {
   isTokenRef,
   validateStyleValues,
   type BreakpointId,
+  type MayFetchUrl,
   type NodeStyles,
   type StyleState,
   type StyleValue,
@@ -31,7 +32,21 @@ import {
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
-import type { BuilderOp } from "./ops";
+import { sameStoredValue, type BuilderOp } from "./ops";
+
+/**
+ * The site policy a value is judged against.
+ *
+ * Carried rather than defaulted, because the engine ships no host list of its
+ * own: which hosts a site will fetch from is the operator's decision. Omitting
+ * it from a validation run does not mean "allow" — it means the question was
+ * never asked — so a control that never forwarded it would accept a URL the
+ * published compiler refuses, show it in the preview, fetch it from the editor,
+ * and let the author save a value that then vanishes from the page.
+ */
+export interface StylePolicy {
+  readonly mayFetchUrl?: MayFetchUrl;
+}
 
 /** Where a control reads and writes. */
 export interface StyleAddress {
@@ -60,7 +75,16 @@ export interface StyleAddress {
 export type StyleWrite =
   | {
       readonly ok: true;
-      readonly op: BuilderOp;
+      /**
+       * The op to apply, or `null` when the document already holds this value.
+       *
+       * `applyOp` REFUSES an update that changes nothing — "a history entry for
+       * it would undo to no visible effect" — so an SDK that always handed back
+       * an op would advertise one that throws on the ordinary cases: resetting
+       * a control that was already unset, or retyping the value a node already
+       * holds. Null says the ask was valid and there is nothing to do.
+       */
+      readonly op: BuilderOp | null;
       /**
        * Findings the catalog reported that do not refuse the write.
        *
@@ -207,15 +231,36 @@ function errorsIn(
  */
 function writeResult(
   nodeId: string,
-  styles: NodeStyles,
-  values: StyleValues
+  before: NodeStyles | undefined,
+  after: NodeStyles,
+  values: StyleValues,
+  policy: StylePolicy | undefined
 ): StyleWrite {
-  const issues = validateStyleValues(values, "", "strict");
+  const issues = validateStyleValues(
+    values,
+    "",
+    "strict",
+    undefined,
+    false,
+    undefined,
+    { mayFetchUrl: policy?.mayFetchUrl }
+  );
   const errors = errorsIn(issues);
   if (errors.length > 0) return { ok: false, issues: errors };
+  // Asked with the op layer's OWN comparison rather than a second one, so the
+  // answer here and the answer `applyOp` would give cannot differ. An empty
+  // envelope stands in for an absent one: a node with no styles and a node
+  // whose styles cleared to nothing are the same document.
+  if (sameStoredValue(before ?? {}, after)) {
+    return {
+      ok: true,
+      op: null,
+      warnings: issues.filter(issue => issue.severity !== "error"),
+    };
+  }
   return {
     ok: true,
-    op: patchOp(nodeId, styles),
+    op: patchOp(nodeId, after),
     warnings: issues.filter(issue => issue.severity !== "error"),
   };
 }
@@ -225,7 +270,8 @@ export function styleWriteOp(
   nodeId: string,
   styles: NodeStyles | undefined,
   address: StyleAddress,
-  value: StyleValue
+  value: StyleValue,
+  policy?: StylePolicy
 ): StyleWrite {
   const current = styles?.[address.state]?.[address.breakpoint];
   const values: StyleValues = {
@@ -238,8 +284,10 @@ export function styleWriteOp(
   };
   return writeResult(
     nodeId,
+    styles,
     withValues(styles, address.state, address.breakpoint, values),
-    values
+    values,
+    policy
   );
 }
 
@@ -255,7 +303,8 @@ export function styleWriteOp(
 export function styleClearOp(
   nodeId: string,
   styles: NodeStyles | undefined,
-  address: StyleAddress
+  address: StyleAddress,
+  policy?: StylePolicy
 ): StyleWrite {
   const current = styles?.[address.state]?.[address.breakpoint];
   const values: StyleValues = { ...current };
@@ -264,7 +313,9 @@ export function styleClearOp(
   else values[address.property] = remaining;
   return writeResult(
     nodeId,
+    styles,
     withValues(styles, address.state, address.breakpoint, values),
-    values
+    values,
+    policy
   );
 }

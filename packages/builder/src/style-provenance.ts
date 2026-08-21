@@ -62,6 +62,20 @@ export interface StyleProvenanceQuery {
    * records what was written.
    */
   readonly cssProperty: string;
+  /**
+   * The selector inside the block this control's declaration attaches to, from
+   * the control's own leaf (`StyleLeaf.descendant`), and `undefined` for the
+   * ordinary case of styling the block itself.
+   *
+   * Load-bearing, because a CSS property does not identify a control on its
+   * own. The catalog writes `color` from THREE properties: `color` on the block,
+   * `linkColor` on ` a`, and `linkColorHover` on ` a:hover`. `styleOrigin` reads
+   * the descendant for SPECIFICITY and does not filter on it, so a query
+   * carrying only the property lets a link rule win the plain text-colour
+   * control — reporting an unset control as authored, and all three controls as
+   * showing the same value.
+   */
+  readonly descendant?: string;
   /** The state being edited. */
   readonly state: StyleState;
   /** The breakpoint being edited, which is what "authored here" is measured against. */
@@ -99,7 +113,14 @@ function isAuthoredHere(
  * control over it is genuinely empty.
  */
 export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
-  const entry = styleOrigin(query.trace, query.subject, {
+  // NARROWED before the question is asked, rather than re-ranked afterwards.
+  // `styleOrigin` still decides which of the candidates a node is showing —
+  // this only removes the declarations that belong to a different control, so
+  // nothing here re-implements tier order, breakpoint axes or specificity.
+  const candidates = query.trace.filter(
+    entry => entry.descendant === query.descendant
+  );
+  const entry = styleOrigin(candidates, query.subject, {
     property: query.cssProperty,
     state: query.state,
     breakpoints: query.liveBreakpoints,

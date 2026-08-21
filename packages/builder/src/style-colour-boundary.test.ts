@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { importedSpecifiers } from "@nextlyhq/module-specifiers";
@@ -49,6 +49,7 @@ import { collectModules } from "./source-modules";
  */
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = join(SRC_DIR, "..");
 const UI_MANIFEST = join(SRC_DIR, "..", "..", "ui", "package.json");
 
 /** Every module specifier this package imports, with the file that imports it. */
@@ -66,9 +67,35 @@ function everyImport(): { file: string; specifier: string }[] {
   );
 }
 
-/** A specifier that climbs out of this package rather than staying inside it. */
-function escapesPackage(specifier: string): boolean {
-  return specifier.startsWith("../../");
+/**
+ * A relative specifier that resolves OUTSIDE this package.
+ *
+ * Resolved rather than pattern-matched. Counting `../` segments answers a
+ * question about spelling, not about where the import lands: how many segments
+ * leave the package depends on how deep the importing file sits, so the same
+ * prefix escapes from `src/` and stays inside from `src/a/b/`. It also reports
+ * `../../builder/src/x` — which comes straight back in — as an escape, and
+ * misses a path whose `../` only appear after normalization.
+ */
+function escapesPackage(file: string, specifier: string): boolean {
+  if (!specifier.startsWith(".")) return false;
+  const target = resolve(dirname(file), specifier);
+  return relative(PACKAGE_ROOT, target).startsWith("..");
+}
+
+/**
+ * Every string an `exports` map can send an import to, however nested.
+ *
+ * The map's VALUES are what decide reachability; its keys are only what a
+ * caller types. A check reading keys alone passes a map whose key says nothing
+ * about contrast and whose target resolves straight into it.
+ */
+function exportTargets(node: unknown, found: string[] = []): string[] {
+  if (typeof node === "string") found.push(node);
+  else if (node !== null && typeof node === "object") {
+    for (const value of Object.values(node)) exportTargets(value, found);
+  }
+  return found;
 }
 
 describe("the admin theme's contrast implementation is out of reach", () => {
@@ -85,8 +112,19 @@ describe("the admin theme's contrast implementation is out of reach", () => {
     // hold vacuously.
     expect(Object.keys(exported).length).toBeGreaterThan(0);
     expect(Object.keys(exported)).toContain(".");
-    for (const subpath of Object.keys(exported)) {
-      expect(subpath).not.toContain("contrast");
+    const targets = exportTargets(exported);
+    // Targets as well as keys. A subpath named `./styles` pointing at the
+    // contrast build would pass a key-only check.
+    expect(targets.length).toBeGreaterThan(0);
+    for (const entry of [...Object.keys(exported), ...targets]) {
+      expect(entry).not.toContain("contrast");
+    }
+    // A WILDCARD would make the map unbounded and this check blind: `./x/*`
+    // admits every file under its target, and no string comparison here can
+    // enumerate them. Failing on one is the honest answer — it says the guard
+    // can no longer see what is reachable, rather than reporting clean.
+    for (const entry of [...Object.keys(exported), ...targets]) {
+      expect(entry).not.toContain("*");
     }
   });
 
@@ -106,8 +144,8 @@ describe("the admin theme's contrast implementation is out of reach", () => {
     // normally this package's own code. One that climbs past the package root
     // is not, and it bypasses the export map entirely — so it is the one route
     // an allowlist of package names cannot see.
-    const escaping = everyImport().filter(({ specifier }) =>
-      escapesPackage(specifier)
+    const escaping = everyImport().filter(({ file, specifier }) =>
+      escapesPackage(file, specifier)
     );
     expect(escaping).toEqual([]);
   });
@@ -123,11 +161,31 @@ describe("the admin theme's contrast implementation is out of reach", () => {
     ).toBe(true);
   });
 
-  it("recognises a climbing specifier when it sees one", () => {
-    // The negative control for `escapesPackage`: a predicate that answered
-    // false for everything would make the sweep above pass on any codebase.
-    expect(escapesPackage("../../ui/src/styles/contrast/color")).toBe(true);
-    expect(escapesPackage("./style-controls")).toBe(false);
-    expect(escapesPackage("../source-modules")).toBe(false);
+  it("recognises an escaping specifier from any depth, and only a real escape", () => {
+    // The controls for `escapesPackage`. A predicate answering false for
+    // everything would make the sweep above pass on any codebase; one answering
+    // by prefix would disagree with itself as files move between directories.
+    const shallow = join(SRC_DIR, "example.ts");
+    const deep = join(SRC_DIR, "nested", "deeper", "example.ts");
+
+    expect(escapesPackage(shallow, "../../ui/src/styles/contrast/color")).toBe(
+      true
+    );
+    // Same spelling, deeper file: it lands inside this package, so it is not an
+    // escape — which a prefix test cannot tell apart.
+    expect(escapesPackage(deep, "../../ui/src/styles/contrast/color")).toBe(
+      false
+    );
+    // A deeper file needs more segments to leave, and this one does.
+    expect(
+      escapesPackage(deep, "../../../../ui/src/styles/contrast/color")
+    ).toBe(true);
+    // Climbs out and comes straight back: not an escape, and a prefix test
+    // reports it as one.
+    expect(escapesPackage(shallow, "../../builder/src/style-controls")).toBe(
+      false
+    );
+    expect(escapesPackage(shallow, "./style-controls")).toBe(false);
+    expect(escapesPackage(shallow, "@nextlyhq/ui")).toBe(false);
   });
 });

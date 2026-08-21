@@ -10,6 +10,7 @@ import {
   styleControlsFor,
   SUPPORTED_LEAF_KINDS,
   type StyleControl,
+  type StyleControlKind,
 } from "./style-controls";
 
 /** A leaf of one kind, with the fields every leaf carries. */
@@ -28,15 +29,30 @@ function paths(controls: readonly StyleControl[]): string[][] {
 }
 
 describe("deriving controls from a leaf", () => {
-  it("maps every leaf kind the catalog can hold to a control", () => {
-    // The mapping is a mapped type, so an unmapped kind cannot compile. What
-    // this adds is that each kind resolves to a control at RUNTIME — a mapped
-    // type is satisfied by a key whose value is `undefined`.
+  it("maps every leaf kind to the control it is supposed to draw", () => {
+    // Stated here rather than read off the implementation, which is what gives
+    // the assertion content: deriving the expectation from the same mapping the
+    // code uses would agree with any mapping at all, including one that drew a
+    // dimension with the unitless number field.
+    const expected = {
+      keyword: "select",
+      dimension: "length",
+      number: "number",
+      color: "color",
+      cssValue: "css",
+      url: "url",
+    } satisfies Record<StyleLeaf["kind"], StyleControlKind>;
+
+    // The derived set must still cover every kind, or the sweep below runs on
+    // fewer kinds than the catalog can hold and passes by not looking.
+    expect([...SUPPORTED_LEAF_KINDS].sort()).toEqual(
+      Object.keys(expected).sort()
+    );
     for (const kind of SUPPORTED_LEAF_KINDS) {
       const { controls } = styleControlsFor(property("p", leaf(kind, "p")));
       expect(controls).toHaveLength(1);
       expect(controls[0].supported).toBe(true);
-      expect(controls[0].kind).toBeTypeOf("string");
+      expect(controls[0].kind).toBe(expected[kind]);
     }
   });
 
@@ -197,5 +213,60 @@ describe("D-05.1 — the catalog drives the controls", () => {
       }
     }
     expect(unsupported).toEqual([]);
+  });
+});
+
+describe("the unions the catalog actually ships", () => {
+  /** The control kinds a real catalog property resolves to for a stored value. */
+  function kindsFor(
+    name: string,
+    value: Parameters<typeof styleControlsFor>[1]
+  ) {
+    const entry = getStyleProperty(name);
+    expect(entry).toBeDefined();
+    return styleControlsFor(entry as StyleProperty, value).controls.map(
+      control => control.kind
+    );
+  }
+
+  // Three of the catalog's four unions have arms that are BOTH scalars, so a
+  // composite-versus-scalar test picks arm 0 for every value they can hold.
+  // These are the properties, and the values, that distinguish the arms.
+
+  it("draws a numeric fontWeight with the number control, not the keyword select", () => {
+    expect(kindsFor("fontWeight", 600)).toEqual(["number"]);
+  });
+
+  it("draws a keyword fontWeight with the select", () => {
+    expect(kindsFor("fontWeight", "bold")).toEqual(["select"]);
+  });
+
+  it("draws a unitless lineHeight with the number control", () => {
+    expect(kindsFor("lineHeight", 1.5)).toEqual(["number"]);
+  });
+
+  it("draws a measured lineHeight with the length control", () => {
+    expect(kindsFor("lineHeight", "1.5rem")).toEqual(["length"]);
+  });
+
+  it("draws a listed fontStyle with the select", () => {
+    expect(kindsFor("fontStyle", "italic")).toEqual(["select"]);
+  });
+
+  it("reaches fontStyle's free-form arm for a value the keywords do not list", () => {
+    expect(kindsFor("fontStyle", "oblique 40deg")).toEqual(["css"]);
+  });
+
+  it("sends a token to the arm that admits tokens", () => {
+    // `fontWeight`'s keyword arm declares no token kinds and its number arm
+    // declares two, so a token weight belongs to the number arm.
+    expect(kindsFor("fontWeight", { $token: "type.weight.bold" })).toEqual([
+      "number",
+    ]);
+  });
+
+  it("still separates borderRadius's scalar and composite arms", () => {
+    expect(kindsFor("borderRadius", "4px")).toEqual(["length"]);
+    expect(kindsFor("borderRadius", { startStart: "4px" })).toHaveLength(4);
   });
 });

@@ -25,6 +25,7 @@
 
 import {
   isStyleLeaf,
+  isTokenRef,
   type StyleLeaf,
   type StyleProperty,
   type StyleShape,
@@ -70,22 +71,24 @@ const CONTROL_KIND_BY_LEAF: {
 /**
  * The leaf kinds this build can draw.
  *
- * Named as a set rather than inferred from the mapping's keys, so the answer
- * survives a document written by a NEWER engine: a catalog carrying a leaf kind
- * this build has never heard of resolves to an unsupported descriptor rather
- * than to `undefined` flowing into a renderer. Same policy as `inspector.ts`'s
- * `SUPPORTED_PROP_TYPES`, and for the same reason — the author is told the
- * property exists and is not editable here, because omitting it entirely would
- * present an incomplete property as a complete one.
+ * DERIVED from the mapping rather than listed beside it. A second list agrees
+ * with the mapping on the day it is written: adding a leaf kind and its
+ * required map entry while forgetting the list still compiles, and
+ * `controlForLeaf` then reports a kind it can perfectly well draw as
+ * unsupported.
+ *
+ * Membership is still checked at runtime rather than trusted from the type,
+ * because a catalog written by a NEWER engine can carry a kind absent from
+ * both — and indexing a mapped type with it returns `undefined` while the type
+ * says otherwise. Such a kind resolves to an unsupported descriptor rather
+ * than to `undefined` flowing into a renderer, the same policy as
+ * `inspector.ts`'s `SUPPORTED_PROP_TYPES`: the author is told the property
+ * exists and is not editable here, because omitting it entirely would present
+ * an incomplete property as a complete one.
  */
-export const SUPPORTED_LEAF_KINDS: readonly StyleLeaf["kind"][] = [
-  "keyword",
-  "dimension",
-  "number",
-  "color",
-  "cssValue",
-  "url",
-];
+export const SUPPORTED_LEAF_KINDS = Object.keys(
+  CONTROL_KIND_BY_LEAF
+) as readonly StyleLeaf["kind"][];
 
 /**
  * One editable position inside a property's value, with everything a control
@@ -145,25 +148,65 @@ export interface StyleControlSet {
  *
  * A PRESENTATION choice and never a validity judgement: it decides which
  * control to draw, and `validateStyleValues` remains the only thing that
- * decides whether a value may be written. Drawing the wrong control is a
- * legibility bug that the next keystroke corrects; the write is gated
- * elsewhere either way, so this deliberately does not re-implement the
- * validator's arm-matching in order to agree with it.
+ * decides whether a value may be written.
  *
- * The test is structural and shallow because that is the distinction that
- * separates the variants in practice — a scalar is stored as a string, a number
- * or a token reference, and a composite is stored as a record. Absent a value,
- * the FIRST variant wins, which is the same order the engine tries them in and
- * therefore the canonical spelling of the property.
+ * Absent a value the FIRST variant wins, which is the order the engine tries
+ * them in and therefore the canonical spelling of the property. With a value,
+ * the arm that HOLDS it wins — see {@link variantHolds}, which reads the
+ * catalog's own declarations rather than restating any grammar.
  */
 function variantForValue(
   variants: readonly StyleShape[],
   value: StyleValue | undefined
 ): number {
   if (value === undefined) return 0;
-  const stored = isCompositeValue(value);
-  const found = variants.findIndex(variant => !isStyleLeaf(variant) === stored);
+  const found = variants.findIndex(variant => variantHolds(variant, value));
   return found === -1 ? 0 : found;
+}
+
+/**
+ * Whether a variant is the shape a stored value is written in.
+ *
+ * Composite against scalar is not enough on its own, and three of the four
+ * unions the catalog ships are the case it misses: `fontWeight` is a keyword OR
+ * a number, `lineHeight` a number OR a dimension, `fontStyle` a keyword OR a
+ * free-form value. Every arm of those is a leaf, so a composite test picks the
+ * first one every time — a numeric weight would draw the keyword select, and a
+ * `1.5rem` line height the unitless number field.
+ */
+function variantHolds(variant: StyleShape, value: StyleValue): boolean {
+  if (!isStyleLeaf(variant)) return isCompositeValue(value);
+  return !isCompositeValue(value) && leafHolds(variant, value);
+}
+
+/**
+ * Whether a leaf is the one a scalar is stored under.
+ *
+ * Reads the catalog's own declarations — a keyword leaf's `values`, a
+ * dimension's `allowNumber` — rather than restating any grammar. It stays a
+ * PRESENTATION choice: `validateStyleValues` remains the only thing deciding
+ * whether a value may be written, and it owes this no agreement. Drawing the
+ * wrong control is a legibility bug the next keystroke corrects; the write is
+ * gated either way.
+ */
+function leafHolds(leaf: StyleLeaf, value: StyleValue): boolean {
+  // A token is a scalar whichever arm holds it, so the arm admitting tokens at
+  // all is the one it belongs to.
+  if (isTokenRef(value)) return leaf.tokenKinds.length > 0;
+  if (typeof value === "number") {
+    if (leaf.kind === "number") return true;
+    // `0` is the one measurement that needs no unit, which is why a dimension
+    // accepts it without `allowNumber`.
+    return (
+      leaf.kind === "dimension" && (leaf.allowNumber === true || value === 0)
+    );
+  }
+  if (typeof value !== "string") return false;
+  // A keyword leaf claims a string only when the string is one of ITS keywords.
+  // Every other scalar leaf stores its value as a string, so the catalog's arm
+  // order decides between those exactly as the engine's own order does.
+  if (leaf.kind === "keyword") return leaf.values.includes(value);
+  return leaf.kind !== "number";
 }
 
 /** A stored value holding named sub-values, as a composite shape addresses. */
@@ -184,7 +227,9 @@ type CompositeValue = { readonly [key: string]: StyleValue };
  */
 function isCompositeValue(value: StyleValue): value is CompositeValue {
   if (typeof value !== "object" || value === null) return false;
-  return !("$token" in value);
+  // Asked of the engine rather than by looking for the marker key, so a change
+  // to what counts as a reference cannot leave this reading the old spelling.
+  return !isTokenRef(value);
 }
 
 /** One descriptor for a leaf, resolving the control it draws with. */

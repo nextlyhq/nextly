@@ -1,4 +1,8 @@
-import { nodeClassName, PAGE_ROOT_SELECTOR } from "@nextlyhq/blocks-engine";
+import {
+  escapeIdentifier,
+  nodeClassName,
+  PAGE_ROOT_SELECTOR,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -98,5 +102,78 @@ describe("the commit that ends a drag", () => {
         scrubPreviewCss(TARGET, value).ok
       );
     }
+  });
+});
+
+describe("a document with a compile scope", () => {
+  const SCOPED: ScrubTarget = { ...TARGET, scope: "region-one" };
+
+  it("anchors the preview to the SAME root the compiled sheet uses", () => {
+    // `compilePageCss` emits `${PAGE_ROOT_SELECTOR}.${scope}`. A preview at the
+    // unscoped root carries one class fewer, so the stored rule outranks it and
+    // the drag shows nothing move.
+    const preview = scrubPreviewCss(SCOPED, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css.startsWith(`${PAGE_ROOT_SELECTOR}.region-one `)).toBe(
+      true
+    );
+  });
+
+  it("escapes a scope through the engine's own escaper", () => {
+    // A scope needing escapes must be spelled here exactly as the compiler
+    // spells it, or the two selectors address different elements.
+    const preview = scrubPreviewCss({ ...TARGET, scope: "a.b" }, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css).toContain(escapeIdentifier("a.b"));
+    expect(preview.css).not.toContain(`${PAGE_ROOT_SELECTOR}.a.b `);
+  });
+
+  it("stays unscoped when the document has no scope", () => {
+    const preview = scrubPreviewCss(TARGET, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css.startsWith(`${PAGE_ROOT_SELECTOR} `)).toBe(true);
+  });
+});
+
+describe("the site's URL policy", () => {
+  /** Scrubbing `background.url`, which is the catalog's only URL leaf. */
+  const IMAGE: ScrubTarget = {
+    nodeId: "n1",
+    nodeClass: nodeClassName("n1"),
+    address: {
+      state: "base",
+      breakpoint: "desktop",
+      property: "background",
+      path: ["url"],
+    },
+  };
+
+  it("refuses a host the site does not allow, so it never previews or fetches", () => {
+    const preview = scrubPreviewCss(
+      { ...IMAGE, policy: { mayFetchUrl: () => false } },
+      "https://elsewhere.example/x.png"
+    );
+    expect(preview.ok).toBe(false);
+  });
+
+  it("accepts the same URL when the site allows the host", () => {
+    // The pair is what makes the refusal evidence: without this, a preview that
+    // refused every URL would satisfy the assertion above.
+    const preview = scrubPreviewCss(
+      { ...IMAGE, policy: { mayFetchUrl: () => true } },
+      "https://elsewhere.example/x.png"
+    );
+    expect(preview.ok).toBe(true);
+  });
+
+  it("forwards the same policy to the commit, so preview and write agree", () => {
+    const policy = { mayFetchUrl: () => false };
+    const url = "https://elsewhere.example/x.png";
+    expect(scrubCommitOp({ ...IMAGE, policy }, undefined, url).ok).toBe(
+      scrubPreviewCss({ ...IMAGE, policy }, url).ok
+    );
   });
 });
