@@ -176,17 +176,51 @@ describe("checkStoredClasses", () => {
     expect(result.issues.join(" ")).toContain("does not allow");
   });
 
-  it("does not refuse a value the engine only WARNS about", () => {
-    // Forgiving, errors only. A property this engine has not learned is a
-    // warning rather than an error, because a document written by a newer
-    // engine is not something the author can fix here — and a warning is a
-    // value the engine accepts and emits, so refusing on one would refuse a
-    // write whose result the sheet would render.
+  it("does not refuse an unknown property when NO policy is configured", () => {
+    // Forgiving there, and errors only everywhere: a property this engine has
+    // not learned is a warning, a document written by a newer engine is not
+    // something the author can fix, and there is no host rule to enforce.
+    const result = checkStoredClasses(
+      tracker({ base: { base: { notAProperty: "x" } } })
+    );
+    expect(result.issues).toEqual([]);
+  });
+
+  it("refuses an unknown property once a policy IS configured", () => {
+    // Strict there, because the validator never looks INSIDE an unknown
+    // property. A gate that cannot judge a value must not pass it.
     const result = checkStoredClasses(
       tracker({ base: { base: { notAProperty: "x" } } }),
       REFUSING
     );
-    expect(result.issues).toEqual([]);
+    expect(result.issues).not.toEqual([]);
+  });
+
+  it("refuses a url() hidden under a property this engine has not learned", () => {
+    // Why the mode follows the policy rather than being fixed. Measured:
+    // `{ futureBackground: { url: ... } }` yields `unknown-style-property`
+    // ALONE — the value is never inspected — so a forgiving read would store
+    // the URL, and it becomes live the moment an engine learns that property,
+    // with no further validating write to stop it.
+    const result = checkStoredClasses(
+      tracker({ base: { base: { futureBackground: { url: TRACKER } } } }),
+      REFUSING
+    );
+    expect(result.issues).not.toEqual([]);
+  });
+
+  it("refuses a property map too large to check through", () => {
+    // A budget per entry. Given none, the validator walks an unbounded map and
+    // allocates a diagnostic per key. Truncation needs no handling of its own:
+    // `style-issues-truncated` is itself an error, so a map the gate could not
+    // read to the end refuses rather than passing on a partial read.
+    const huge: Record<string, unknown> = {};
+    for (let i = 0; i < 5000; i += 1) huge[`p${i}`] = "x";
+    const result = checkStoredClasses(
+      tracker({ base: { base: huge } }),
+      REFUSING
+    );
+    expect(result.issues.join(" ")).toContain("not checked");
   });
 
   it("still returns the entry it reported on, so a READ narrows rather than drops", () => {

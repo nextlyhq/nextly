@@ -30,6 +30,7 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isUsableNamedClass,
+  newStyleIssueBudget,
   validateFontFace,
   validateStyleValues,
   type BreakpointDef,
@@ -270,11 +271,34 @@ function styleMapsIn(
  * already serving it to every visitor of every page. The token section has
  * never had that gap, because its gate IS its emitter.
  *
- * FORGIVING, reporting errors only, and both halves are deliberate. Under
- * strict a property this engine has not learned is an error, and a document
- * written by a newer engine is not something the author can fix here. A
- * warning is a value the engine ACCEPTS and emits, so refusing on one would
- * refuse writes whose result the sheet would render happily.
+ * Errors only. A warning is a value the engine ACCEPTS and emits, so refusing
+ * on one would refuse writes whose result the sheet would render happily.
+ *
+ * The MODE follows the policy, and it decides exactly one thing: whether a
+ * property this engine has not learned is an error or a warning. Measured —
+ * `mode === "strict" ? "error" : "warning"` occurs once in the whole validator,
+ * in the unknown-property branch — so this switch cannot over-refuse anything
+ * else.
+ *
+ * With no policy the answer is FORGIVING: a document written by a newer engine
+ * is not something the author can fix here, and there is no host rule to
+ * enforce anyway.
+ *
+ * With a policy it is STRICT, because the validator does not look INSIDE an
+ * unknown property. `{ futureBackground: { url: "https://tracker.example" } }`
+ * yields `unknown-style-property` alone — no value check at all — so a
+ * forgiving read would store a URL that becomes live the moment an engine
+ * learns that property, with no further validating write. A gate that cannot
+ * judge a value must not pass it: this package's own url-policy module states
+ * the same rule for the same reason, that a security control should fail
+ * toward the annoyance. The cost is that a site WITH a host policy cannot
+ * store a property this engine does not know, and is told which one.
+ *
+ * A BUDGET per entry, because `validateStyleValues` walks an unbounded map
+ * when given none and allocates a diagnostic per key — measured at 5000 issues
+ * for a 5000-key map, against 201 with a budget. Truncation needs no handling
+ * of its own: `style-issues-truncated` is itself an error, so a map too large
+ * to check through refuses the write rather than passing on a partial read.
  */
 function classValueIssues(
   entry: NamedClass,
@@ -285,12 +309,13 @@ function classValueIssues(
     policy.mayFetchUrl === undefined
       ? undefined
       : { mayFetchUrl: policy.mayFetchUrl };
+  const mode = policy.mayFetchUrl === undefined ? "forgiving" : "strict";
   return styleMapsIn(entry.styles).flatMap(({ at, values }) =>
     validateStyleValues(
       values,
       `classes[${index}].styles.${at}`,
-      "forgiving",
-      undefined,
+      mode,
+      newStyleIssueBudget(),
       false,
       undefined,
       options
