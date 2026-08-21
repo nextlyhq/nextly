@@ -189,7 +189,19 @@ function variantForValue(
   const found = variants.findIndex(variant =>
     variantHolds(variant, value, tokens)
   );
-  return found === -1 ? 0 : found;
+  if (found !== -1) return found;
+  // A token whose kind no arm declares is still ACCEPTED: the engine reports
+  // `token-kind-mismatch` at WARNING severity and writes the value through the
+  // arm that admits tokens at all — measured. Falling through to arm 0 would
+  // draw a keyword select for a stored token that control cannot represent, so
+  // the arm that takes tokens is the honest one to show.
+  if (isTokenRef(value)) {
+    const admits = variants.findIndex(
+      variant => isStyleLeaf(variant) && variant.tokenKinds.length > 0
+    );
+    if (admits !== -1) return admits;
+  }
+  return 0;
 }
 
 /**

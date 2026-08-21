@@ -40,6 +40,7 @@ import {
   PAGE_ROOT_SELECTOR,
   STYLE_STATES,
   type BlockDocument,
+  type BreakpointSet,
   type Declaration,
   type StyleState,
   type StyleValue,
@@ -74,6 +75,20 @@ export interface ScrubTarget {
    * compiled sheet cannot disagree about a scope needing escapes.
    */
   readonly scope?: string;
+  /**
+   * The site's breakpoint definitions, as the canvas compiles with.
+   *
+   * `compilePageCss` wraps a non-base breakpoint's rules in `@media` or
+   * `@container` — measured, a `mobile` value comes out inside
+   * `@media (max-width: 640px)`. A preview that ignored the address's
+   * breakpoint would show the value at every width and lose it on release, and
+   * for a breakpoint id this site does not define the compiler writes no rule
+   * at all while an unconditional preview still showed one.
+   *
+   * Omitted means every value previews unconditionally, which is right only for
+   * a site whose breakpoints are all unconditional.
+   */
+  readonly breakpoints?: BreakpointSet;
   readonly address: StyleAddress;
   /**
    * The custom-property prefix this site emits tokens under.
@@ -164,6 +179,52 @@ export function scrubStateFragments(): ReadonlyMap<StyleState, string> {
   return STATE_FRAGMENTS;
 }
 
+/** At-rules already derived, per breakpoint set and id. */
+const AT_RULES = new WeakMap<BreakpointSet, Map<string, string | null>>();
+
+/**
+ * The at-rule the compiler wraps one breakpoint's declarations in.
+ *
+ * `null` means the compiler writes NO rule for this id — which is what it does
+ * for an id the site does not define, and is a refusal rather than an
+ * unconditional rule. `""` means it writes one with no wrapper, as base does.
+ *
+ * READ from a probe compile rather than rebuilt from the definitions. Turning a
+ * breakpoint into a media query is the compiler's own arithmetic — which axis,
+ * which bound, how a container query differs — and it does not export it, so a
+ * copy here would drift from the sheet the preview is meant to sit beside.
+ */
+function breakpointAtRule(
+  breakpoints: BreakpointSet,
+  id: string
+): string | null {
+  let perId = AT_RULES.get(breakpoints);
+  if (perId === undefined) {
+    perId = new Map();
+    AT_RULES.set(breakpoints, perId);
+  }
+  const cached = perId.get(id);
+  if (cached !== undefined) return cached;
+  const document: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: PROBE_ID,
+        type: "core/box",
+        version: 1,
+        props: {},
+        styles: { base: { [id]: { height: "1px" } } },
+      },
+    ],
+  };
+  const css = compilePageCss(document, { breakpoints }).css.trim();
+  const wrapper = /^@[a-z-]+[^{]*/.exec(css);
+  const derived = css === "" ? null : wrapper === null ? "" : wrapper[0].trim();
+  perId.set(id, derived);
+  return derived;
+}
+
 /**
  * The root every rule for this document is anchored to.
  *
@@ -218,7 +279,8 @@ export type ScrubPreview =
  */
 function ruleText(
   target: ScrubTarget,
-  declarations: readonly Declaration[]
+  declarations: readonly Declaration[],
+  atRule: string
 ): string {
   const root = rootSelector(target.scope);
   const state = stateFragment(target.address.state);
@@ -228,10 +290,10 @@ function ruleText(
         declaration.descendant === undefined
           ? ""
           : ` ${declaration.descendant}`;
-      return (
+      const rule =
         `${root} .${target.nodeClass}${state}${descendant} ` +
-        `{ ${declaration.property}: ${declaration.value} }`
-      );
+        `{ ${declaration.property}: ${declaration.value} }`;
+      return atRule === "" ? rule : `${atRule} {\n  ${rule}\n}`;
     })
     .join("\n");
 }
@@ -248,6 +310,14 @@ export function scrubPreviewCss(
   value: StyleValue
 ): ScrubPreview {
   const { property, path } = target.address;
+  // Resolved BEFORE compiling the value: a breakpoint the site does not define
+  // is one the published sheet carries no rule for, so previewing it would show
+  // an author a result the page will never have.
+  const atRule =
+    target.breakpoints === undefined
+      ? ""
+      : breakpointAtRule(target.breakpoints, target.address.breakpoint);
+  if (atRule === null) return { ok: false, issues: [] };
   const compiled = compileStyleValues(
     { [property]: styleValueAtPath(path, value) },
     "",
@@ -270,7 +340,7 @@ export function scrubPreviewCss(
   }
   return {
     ok: true,
-    css: ruleText(target, compiled.declarations),
+    css: ruleText(target, compiled.declarations, atRule),
     warnings: compiled.warnings,
   };
 }

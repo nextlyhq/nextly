@@ -434,3 +434,32 @@ describe("values that are legal wherever a value is", () => {
     expect(armKind("lineHeight", "1.5rem")).toBe("length");
   });
 });
+
+describe("a token whose kind no arm declares", () => {
+  // `token-kind-mismatch` is a WARNING: the engine accepts the value and writes
+  // it through the arm that admits tokens at all. Rejecting every arm would
+  // fall through to arm 0 — a keyword select, for a stored token that control
+  // cannot represent.
+
+  it("shows the arm that takes tokens, not the first arm", () => {
+    const entry = getStyleProperty("fontWeight");
+    const set = styleControlsFor(
+      entry as StyleProperty,
+      { $token: "brand.blue" },
+      { tokens: { kindOf: () => "color" } }
+    );
+    expect(set.controls[0].kind).toBe("number");
+    expect(set.variants[0].active).toBe(1);
+  });
+
+  it("still prefers an arm that DOES declare the kind", () => {
+    // The control: falling back always would ignore a lookup that matched.
+    const entry = getStyleProperty("lineHeight");
+    const set = styleControlsFor(
+      entry as StyleProperty,
+      { $token: "space.gap" },
+      { tokens: { kindOf: () => "dimension" } }
+    );
+    expect(set.controls[0].kind).toBe("length");
+  });
+});

@@ -469,3 +469,69 @@ describe("a scope the compiler refuses", () => {
     expect(preview.css).toContain(".region-one");
   });
 });
+
+describe("a breakpoint the compiler wraps in a query", () => {
+  const BREAKPOINTS = {
+    viewport: [
+      { id: "base", label: "Desktop" },
+      { id: "mobile", label: "Mobile", maxWidth: 640 },
+    ],
+    container: [],
+  };
+
+  /** The compiled sheet for one node styled at `breakpoint`. */
+  function compiledAt(breakpoint: string): string {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: { [breakpoint]: { margin: { blockEnd: "24px" } } } },
+        },
+      ],
+    };
+    return compilePageCss(document, { breakpoints: BREAKPOINTS }).css.trim();
+  }
+
+  function previewAt(breakpoint: string) {
+    return scrubPreviewCss(
+      {
+        ...TARGET,
+        breakpoints: BREAKPOINTS,
+        address: { ...TARGET.address, breakpoint },
+      },
+      "32px"
+    );
+  }
+
+  it("wraps the preview in the same query the committed rule gets", () => {
+    // Without this the value appears at every width and vanishes on release.
+    expect(compiledAt("mobile")).toContain("@media (max-width: 640px)");
+    const preview = previewAt("mobile");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css).toContain("@media (max-width: 640px)");
+    expect(preview.css).toContain("margin-block-end: 32px");
+  });
+
+  it("leaves an unconditional breakpoint unwrapped", () => {
+    // The control: wrapping everything would pass the assertion above while
+    // burying base values in a query they never had.
+    expect(compiledAt("base")).not.toContain("@media");
+    const preview = previewAt("base");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.css).not.toContain("@media");
+  });
+
+  it("refuses a breakpoint this site does not define", () => {
+    // The compiler writes NO rule for an unknown id, so an unconditional
+    // preview would show a value the published page will never carry.
+    expect(compiledAt("tablet")).toBe("");
+    expect(previewAt("tablet").ok).toBe(false);
+  });
+});

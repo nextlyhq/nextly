@@ -71,14 +71,36 @@ describe("a value this node authored at the position being edited", () => {
     expect(result.kind).toBe("inherited");
   });
 
-  it("does not reach a value written in another state", () => {
-    // States are asked about separately: the trace records which state each
-    // declaration came from, and a base value is not a hover value. So editing
-    // hover with only a base entry recorded reports unset rather than showing
-    // the base value as something hover inherited.
+  it("shows an interaction state the base value it is displaying", () => {
+    // Hovering a node whose colour is set only on base displays that colour, so
+    // a hover control reporting `unset` would claim the browser's own default
+    // applies — which is not what the author is looking at. The base entry
+    // reaches this control the same way a wider breakpoint's value does.
     const trace = [entry({ state: "base" })];
     const result = styleProvenance(query(trace, { state: "hover" }));
-    expect(result.kind).toBe("unset");
+    expect(result.kind).toBe("inherited");
+    if (result.kind !== "inherited") return;
+    expect(result.entry.state).toBe("base");
+  });
+
+  it("prefers the state's OWN value over the base one", () => {
+    // The control for the fallback: it must not shadow a value the state holds.
+    const trace = [entry({ state: "base" }), entry({ state: "hover" })];
+    const result = styleProvenance(query(trace, { state: "hover" }));
+    expect(result.kind).toBe("authored");
+    if (result.kind !== "authored") return;
+    expect(result.entry.state).toBe("hover");
+  });
+
+  it("is still unset when neither the state nor base wrote anything", () => {
+    expect(styleProvenance(query([], { state: "hover" })).kind).toBe("unset");
+  });
+
+  it("does not fall back from base to anywhere", () => {
+    // Base has nothing beneath it, so an empty answer there is genuinely the
+    // browser's default — the meaning `unset` carries.
+    const trace = [entry({ state: "hover" })];
+    expect(styleProvenance(query(trace, { state: "base" })).kind).toBe("unset");
   });
 
   it("is not authored when the winning entry belongs to a DIFFERENT node", () => {

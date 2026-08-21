@@ -186,16 +186,28 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   const candidates = query.trace.filter(
     entry => normalizeDescendant(entry.descendant) === wanted
   );
-  const entry = styleOrigin(candidates, query.subject, {
-    property: query.cssProperty,
-    state: query.state,
-    breakpoints: query.liveBreakpoints,
-  });
-  if (entry === undefined) return { kind: "unset" };
+  const ask = (state: StyleState): StyleTraceEntry | undefined =>
+    styleOrigin(candidates, query.subject, {
+      property: query.cssProperty,
+      state,
+      breakpoints: query.liveBreakpoints,
+    });
+  const entry = ask(query.state);
+  // An interaction state with nothing of its own still SHOWS the base rule —
+  // hovering a node whose colour is set only on base displays that colour. So
+  // reporting `unset` there would say the browser's own default applies, which
+  // is not what the author is looking at. The base entry is what they see, and
+  // it reaches this control the same way a wider breakpoint's value does.
+  const fallback =
+    entry === undefined && query.state !== "base" ? ask("base") : undefined;
+  const winner = entry ?? fallback;
+  if (winner === undefined) return { kind: "unset" };
   // Asked only once a declaration has won: nothing wrote this position is an
   // unambiguous answer whatever else could have written it.
   const sharedWith = propertiesWriting(query.cssProperty, query.descendant);
-  if (sharedWith.length > 1) return { kind: "ambiguous", entry, sharedWith };
-  if (isAuthoredHere(entry, query)) return { kind: "authored", entry };
-  return { kind: "inherited", entry, from: entry.origin };
+  if (sharedWith.length > 1) {
+    return { kind: "ambiguous", entry: winner, sharedWith };
+  }
+  if (isAuthoredHere(winner, query)) return { kind: "authored", entry: winner };
+  return { kind: "inherited", entry: winner, from: winner.origin };
 }
