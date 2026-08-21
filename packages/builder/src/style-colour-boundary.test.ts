@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -74,10 +74,46 @@ function resolveModule(from: string, specifier: string): string | undefined {
   // reports the boundary intact for the route it could not follow, which is the
   // one failure this file exists to prevent.
   const candidates = [
+    // The specifier as written. A barrel using an explicit relative extension
+    // — `export * from "./barrel.js"` — is already a path, and appending to it
+    // only ever produces `barrel.js.ts`.
+    base,
+    // A `.js` specifier resolving to its TypeScript SOURCE, which is how ESM
+    // TypeScript is written: the emitted name is what the import says, and the
+    // file on disk is `.ts`. Same for the module-scoped spellings.
+    ...sourceForEmitted(base),
     ...MODULE_EXTENSIONS.map(ext => `${base}.${ext}`),
     ...MODULE_EXTENSIONS.map(ext => join(base, `index.${ext}`)),
   ];
-  return candidates.find(path => existsSync(path));
+  return candidates.find(path => existsSync(path) && !isDirectory(path));
+}
+
+/** Whether a path names a directory rather than a module. */
+function isDirectory(path: string): boolean {
+  return statSync(path).isDirectory();
+}
+
+/**
+ * The TypeScript sources an emitted-name specifier can resolve to.
+ *
+ * `./x.js` is how an ESM TypeScript import of `x.ts` is spelled, because the
+ * specifier names what will be emitted rather than what is on disk. A resolver
+ * that only appended extensions would never reach the source, so a re-export
+ * written that way would stop the walk — and a walk that stops reports the
+ * boundary intact for the route it could not follow.
+ */
+function sourceForEmitted(base: string): string[] {
+  const swaps: Readonly<Record<string, readonly string[]>> = {
+    ".js": ["ts", "tsx"],
+    ".mjs": ["mts"],
+    ".cjs": ["cts"],
+  };
+  for (const [emitted, sources] of Object.entries(swaps)) {
+    if (!base.endsWith(emitted)) continue;
+    const stem = base.slice(0, -emitted.length);
+    return sources.map(ext => `${stem}.${ext}`);
+  }
+  return [];
 }
 
 /**

@@ -121,6 +121,20 @@ function isComposite(value: StyleValue | undefined): value is CompositeValue {
   return typeof value === "object" && value !== null && !isTokenRef(value);
 }
 
+/**
+ * A value's OWN entry at a name, ignoring anything reached through a prototype.
+ *
+ * The engine reads style maps this way — `validateStyleValues` and the shape
+ * walk beside it both guard with `Object.hasOwn` — so a document carrying
+ * prototype-bearing maps, or running under a polluted `Object.prototype`, is
+ * validated and compiled from own keys alone. Reading any wider here would show
+ * an author a value the page will not carry, and spread it into the op that
+ * stores it; an inherited accessor would also RUN during the read.
+ */
+function ownValue(value: CompositeValue, name: string): StyleValue | undefined {
+  return Object.hasOwn(value, name) ? value[name] : undefined;
+}
+
 /** The value at a path inside one property's stored value. */
 function readAtPath(
   value: StyleValue | undefined,
@@ -129,7 +143,7 @@ function readAtPath(
   let at = value;
   for (const step of path) {
     if (!isComposite(at)) return undefined;
-    at = at[step];
+    at = ownValue(at, step);
   }
   return at;
 }
@@ -154,7 +168,7 @@ function writeAtPath(
   // stored as one measurement, then edited per corner — and preserving the
   // scalar would leave a value that is neither arm.
   const parent: CompositeValue = isComposite(value) ? value : {};
-  return { ...parent, [step]: writeAtPath(parent[step], rest, next) };
+  return { ...parent, [step]: writeAtPath(ownValue(parent, step), rest, next) };
 }
 
 /**
@@ -172,8 +186,11 @@ function clearAtPath(
   if (path.length === 0) return undefined;
   if (!isComposite(value)) return value;
   const [step, ...rest] = path;
-  if (!(step in value)) return value;
-  const next = clearAtPath(value[step], rest);
+  // `in` walks the prototype chain, so an inherited name would be "cleared"
+  // from an own map that never held it — materialising the inherited value as
+  // an own key on the way.
+  if (!Object.hasOwn(value, step)) return value;
+  const next = clearAtPath(ownValue(value, step), rest);
   const remaining: Record<string, StyleValue> = { ...value };
   if (next === undefined) delete remaining[step];
   else remaining[step] = next;
@@ -204,8 +221,29 @@ export function readStyleValue(
   styles: NodeStyles | undefined,
   address: StyleAddress
 ): StyleValue | undefined {
-  const values = styles?.[address.state]?.[address.breakpoint];
-  return readAtPath(values?.[address.property], address.path);
+  const values = valuesAt(styles, address.state, address.breakpoint);
+  if (values === undefined) return undefined;
+  return readAtPath(ownValue(values, address.property), address.path);
+}
+
+/**
+ * The stored values at one state × breakpoint, by own keys at every level.
+ *
+ * Both levels are guarded for the reason the path walk is: the envelope is a
+ * plain object, and a state or breakpoint name reached through a prototype is
+ * one the compiler will not read.
+ */
+function valuesAt(
+  styles: NodeStyles | undefined,
+  state: StyleState,
+  breakpoint: BreakpointId
+): StyleValues | undefined {
+  if (styles === undefined || !Object.hasOwn(styles, state)) return undefined;
+  const breakpoints = styles[state];
+  if (breakpoints === undefined || !Object.hasOwn(breakpoints, breakpoint)) {
+    return undefined;
+  }
+  return breakpoints[breakpoint];
 }
 
 /** The whole envelope with one state × breakpoint replaced, pruning what empties. */
@@ -327,11 +365,11 @@ export function styleWriteOp(
   value: StyleValue,
   policy?: StylePolicy
 ): StyleWrite {
-  const current = styles?.[address.state]?.[address.breakpoint];
+  const current = valuesAt(styles, address.state, address.breakpoint);
   const values: StyleValues = {
     ...current,
     [address.property]: writeAtPath(
-      current?.[address.property],
+      current === undefined ? undefined : ownValue(current, address.property),
       address.path,
       value
     ),
@@ -361,9 +399,14 @@ export function styleClearOp(
   address: StyleAddress,
   policy?: StylePolicy
 ): StyleWrite {
-  const current = styles?.[address.state]?.[address.breakpoint];
+  const current = valuesAt(styles, address.state, address.breakpoint);
   const values: StyleValues = { ...current };
-  const remaining = clearAtPath(values[address.property], address.path);
+  const remaining = clearAtPath(
+    Object.hasOwn(values, address.property)
+      ? values[address.property]
+      : undefined,
+    address.path
+  );
   if (remaining === undefined) delete values[address.property];
   else values[address.property] = remaining;
   // Nothing is being written, so there is nothing to judge: removing a value

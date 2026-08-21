@@ -347,3 +347,51 @@ describe("a breakpoint id JavaScript treats specially", () => {
     );
   });
 });
+
+describe("values reached only through a prototype", () => {
+  // The engine reads style maps by OWN keys — `validateStyleValues` guards with
+  // `Object.hasOwn` in three places — so a document carrying prototype-bearing
+  // maps is validated and compiled from own keys alone. Reading any wider shows
+  // an author a value the page will not carry, and spreads it into the op.
+
+  /** A margin whose sibling side exists only on the prototype. */
+  function inheritedSibling(): NodeStyles {
+    const margin = Object.create({ blockStart: "999px" }) as Record<
+      string,
+      unknown
+    >;
+    margin.blockEnd = "24px";
+    return { base: { desktop: { margin } } } as NodeStyles;
+  }
+
+  it("does not read a side that is only inherited", () => {
+    const address: StyleAddress = { ...BOTTOM, path: ["blockStart"] };
+    expect(readStyleValue(inheritedSibling(), address)).toBeUndefined();
+  });
+
+  it("still reads the side the map owns", () => {
+    // The control: guarding must not hide own values.
+    expect(readStyleValue(inheritedSibling(), BOTTOM)).toBe("24px");
+  });
+
+  it("does not persist an inherited side into the stored op", () => {
+    const result = styleWriteOp("n1", inheritedSibling(), BOTTOM, "32px");
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.op === null) throw new Error("expected an op");
+    expect(patchedStyles(result.op)).toEqual({
+      base: { desktop: { margin: { blockEnd: "32px" } } },
+    });
+  });
+
+  it("does not read a breakpoint reached through a prototype", () => {
+    const breakpoints = Object.create({
+      desktop: { margin: { blockEnd: "999px" } },
+    }) as Record<string, unknown>;
+    breakpoints.mobile = { margin: { blockEnd: "8px" } };
+    const styles = { base: breakpoints } as NodeStyles;
+    expect(readStyleValue(styles, BOTTOM)).toBeUndefined();
+    expect(readStyleValue(styles, { ...BOTTOM, breakpoint: "mobile" })).toBe(
+      "8px"
+    );
+  });
+});
