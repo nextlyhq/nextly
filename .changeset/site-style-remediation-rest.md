@@ -47,12 +47,19 @@ computations of one question, not the wrong answer to it. A table typed over
 every `SiteSheetInput` key records which side each belongs on, so a field added
 there is a compile error until someone says.
 
-`BlocksPageConfig` also gains `siteStyleSingles`. A `siteStyles` provider is
-called per render, which on a pre-rendered route is not the same as being read
-per render: the whole render is cached and only a tag the page carries rebuilds
-it, and a Direct API read contributes none. Naming the single puts
+**Breaking, alpha:** a `siteStyles` PROVIDER is now `{ read, singles }` rather
+than a bare function. Being called per render is not the same as being read per
+render — on a pre-rendered route the whole render is cached and only a tag the
+page carries rebuilds it, while a Direct API read inside the provider
+contributes none. `singles` names the slugs that read consults, which puts
 `nextly:single:<slug>` on the route, so an admin's save reaches the next page
 view as the documentation already promised.
+
+The two are one type rather than a value and a separate optional property,
+because an optional one leaves the unsafe configuration legal: a provider with
+no declared dependencies compiles, serves a stale sheet, and looks exactly like
+a correct route. `singles: []` states that a provider reads no singles. A plain
+value needs none of this — it cannot change after the module loaded.
 
 The Site Style write validators also judged the stored tier alone, while every
 consumer compiles the merge. Config entries are inserted first and both engine

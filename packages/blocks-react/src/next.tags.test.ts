@@ -76,8 +76,7 @@ describe("createBlocksPage cache tags", () => {
     createBlocksPage({
       collections: ["pages"],
       field: "content",
-      siteStyles: () => undefined,
-      siteStyleSingles: ["site-style"],
+      siteStyles: { read: () => undefined, singles: ["site-style"] },
     });
 
     const tags = (created.mock.calls[0][0] as { tags: string[] }).tags;
@@ -85,15 +84,19 @@ describe("createBlocksPage cache tags", () => {
     expect(tags).toContain("nextly:single:site-style");
   });
 
-  it("adds no single tag when the route names none", () => {
-    // The control: the tag must come from the slug the route stated, not from
-    // the helper deciding that any route using siteStyles reads one particular
+  it("adds no single tag when the provider declares it reads none", () => {
+    // The control: the tag comes from the slug the route stated, not from the
+    // helper deciding that any route using siteStyles reads one particular
     // single. A host can store its style anywhere.
+    //
+    // An empty array is a STATEMENT here, not an omission — the provider and
+    // its dependencies are one type, so a provider without them does not
+    // compile and the unsafe configuration is no longer expressible.
     created.mockClear();
     createBlocksPage({
       collections: ["pages"],
       field: "content",
-      siteStyles: () => undefined,
+      siteStyles: { read: () => undefined, singles: [] },
     });
 
     const tags = (created.mock.calls[0][0] as { tags: string[] }).tags;

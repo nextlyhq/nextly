@@ -99,6 +99,44 @@ const MEDIA_TAG_COLLECTION = "media";
 export type SiteStylesInput = Omit<SiteSheetInput, "breakpoints"> &
   Partial<Pick<SiteSheetInput, "breakpoints">>;
 
+/** A provider rather than a plain value: it states what its read depends on. */
+function isSiteStylesProvider(
+  value: SiteStylesInput | SiteStylesProvider | undefined
+): value is SiteStylesProvider {
+  return typeof value === "object" && value !== null && "read" in value;
+}
+
+/**
+ * A per-render site-style read, together with what it depends on.
+ *
+ * ONE unit, deliberately. Being called per render is not the same as being read
+ * per render: a public blocks route is cacheable, so the whole render is what
+ * is cached and only a tag the page carries rebuilds it — while a Direct API
+ * read inside `read` contributes no tag at all. A provider whose dependencies
+ * were a separate optional property left the unsafe configuration legal, and an
+ * omission that silently serves a stale sheet is the kind of rule this codebase
+ * asks to be enforced rather than documented.
+ *
+ * A plain value needs none of this: it cannot change after the module loaded,
+ * so there is nothing for a write to invalidate.
+ */
+export interface SiteStylesProvider {
+  /** Called once per render. Returning `undefined` means what omitting means. */
+  read: () =>
+    | SiteStylesInput
+    | undefined
+    | Promise<SiteStylesInput | undefined>;
+  /**
+   * The single slugs `read` consults, so a write to one busts this page.
+   *
+   * Nextly's write path revalidates `nextly:single:<slug>`; naming the slug
+   * here is what puts that tag on the route, exactly as `mediaCollection` does
+   * for the media reader. An empty array is a statement rather than an
+   * omission: this provider reads no singles.
+   */
+  singles: readonly string[];
+}
+
 /**
  * Config for {@link createBlocksPage}.
  *
@@ -172,29 +210,7 @@ export interface BlocksPageConfig
    * and the page keeps serving the old sheet — the same gap the media
    * collection is in the tag list for.
    */
-  siteStyles?:
-    | SiteStylesInput
-    | (() =>
-        | SiteStylesInput
-        | undefined
-        | Promise<SiteStylesInput | undefined>);
-  /**
-   * The single slugs a `siteStyles` provider reads, so a write to one busts
-   * this page.
-   *
-   * A cacheable route is rebuilt only when a tag it carries is invalidated,
-   * and a Direct API read contributes no tag. Nextly's write path revalidates
-   * `nextly:single:<slug>`; naming the slug here is what puts that tag on the
-   * page, exactly as `mediaCollection` does for the media reader.
-   *
-   * Only pre-rendered routes need it — an access-enforced `createBlocksPage`
-   * is marked dynamic and re-reads every request — but stating it there is
-   * harmless, which is why this is one option rather than two.
-   *
-   * A page builder route reads the plugin's Site Style single:
-   * `siteStyleSingles: [SITE_STYLE_SLUG]`.
-   */
-  siteStyleSingles?: readonly string[];
+  siteStyles?: SiteStylesInput | SiteStylesProvider;
   /**
    * A dynamic collection to resolve media ids against, for a site storing its
    * images in one of its own.
@@ -1039,9 +1055,10 @@ function blocksRouteConfig(
       // media collection is above: that read goes through the Direct API and
       // contributes no tag of its own, so a write to the single would otherwise
       // invalidate nothing this page carries.
-      ...(config.siteStyleSingles ?? []).flatMap(slug =>
-        nextlySingleTags(slug)
-      ),
+      ...(isSiteStylesProvider(config.siteStyles)
+        ? config.siteStyles.singles
+        : []
+      ).flatMap(slug => nextlySingleTags(slug)),
     ],
     // Supplied only when asked for, so a route without it keeps whatever
     // `buildMetadata` the caller passed straight through to the content route.
@@ -1116,10 +1133,9 @@ function blocksRouteConfig(
       // Resolved per render when the config states a provider, so style
       // inputs living in storage reach the next page view rather than the
       // next deploy; a plain value passes through unchanged.
-      const configuredSiteStyles =
-        typeof config.siteStyles === "function"
-          ? await config.siteStyles()
-          : config.siteStyles;
+      const configuredSiteStyles = isSiteStylesProvider(config.siteStyles)
+        ? await config.siteStyles.read()
+        : config.siteStyles;
       // Derived ONCE, from the breakpoints the site already stated. A second
       // answer to "what are this site's breakpoints" is how the shared sheet
       // and the page sheet come to disagree about which at-rules a tier is

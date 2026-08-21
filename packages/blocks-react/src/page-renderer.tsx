@@ -4,10 +4,7 @@ import {
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
   type BlockDocument,
-  type BreakpointSet,
   type DocumentLimits,
-  type NamedClass,
-  type NodeStyles,
   type SiteSheetInput,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -158,58 +155,87 @@ function pruneRenderedPlaceholders(
   return pruneNodes(document, node => rendersOwnMarkup(node, resolver));
 }
 
+/** Where a site-level input is reconciled, if it is reconciled at all. */
+type SiteInputRole = "reconciled-here" | "reconciled-elsewhere" | "sheet-only";
+
 /**
  * Which side of the render each site-level input belongs to.
  *
- * A `SiteSheetInput` field is either SHARED — the shared sheet and the page's
- * own compile both read it, so one render must resolve it once or the two
- * disagree invisibly, each internally consistent — or SHEET-ONLY, meaning the
- * page compile has no use for it.
+ * A `SiteSheetInput` field is read by both compiles or by the sheet alone. When
+ * both read it, one render must resolve it once or the two disagree invisibly,
+ * each internally consistent and neither reporting anything.
  *
- * Typed over every key of `SiteSheetInput` on purpose: adding a field there is
- * a compile error here until someone says which side it is on. Three of these
- * were found divergent one at a time, and the fourth would have been found the
- * same way. This is the list that makes that unnecessary.
+ * `satisfies` rather than a type annotation, so the literal values survive:
+ * `ReconciledHere` below reads them back, and an annotation would widen every
+ * entry to the whole union and derive nothing. The mapped key set is what makes
+ * a field added to `SiteSheetInput` a compile error here until it is
+ * classified, and `ReconciledHere` is what makes classifying it "reconciled
+ * here" an obligation on the resolver rather than a comment.
  */
-const SITE_INPUT_ROLE: {
-  [K in keyof Required<SiteSheetInput>]: "shared" | "sheet-only";
-} = {
+// Only ever read as a type, by `ReconciledHere` below. It has to be a VALUE
+// anyway: `satisfies` checks a value against a type, and it is what preserves
+// the literal roles that a plain annotation would widen to the whole union —
+// which is the difference between a table that derives an obligation and a
+// table that documents an intention.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const SITE_INPUT_ROLE = {
   // Decides which at-rules every tier is emitted under. Required on the compile
   // context, so a stored set that reached only the sheet would put the
   // block-default and class tiers under at-rules the page's own values never
   // use, and drop any value stored under an id the route's set does not define.
-  breakpoints: "shared",
-  // Shared, but NOT one value: the sheet always writes the site's library, and
-  // the page compile attributes from the context's list when it states one.
-  // That asymmetry is deliberate — a context stating its own list defers
-  // ATTRIBUTION while the rules stay in the sheet — so the resolution below
-  // reaches the page context only. Feeding it back to the sheet as well drops
-  // the library whenever a context defers, which the deferral test catches.
-  classes: "shared",
-  // Same shape one level along: the sheet emits the `.nx-bt-*` rules and the
-  // page compile decides which of them a node inherits.
-  blockBases: "shared",
+  breakpoints: "reconciled-here",
+  // Reconciled onto the PAGE context only. The sheet always writes the site's
+  // library, and the page compile attributes from the context's list when it
+  // states one — a context stating its own defers ATTRIBUTION while the rules
+  // stay in the sheet. Feeding the resolved list back to the sheet as well
+  // drops the library whenever a context defers.
+  classes: "reconciled-here",
+  // The sheet emits the `.nx-bt-*` rules and the page compile decides which of
+  // them a node inherits; the page sheet is appended after the shared one, so
+  // two sets means one default silently overwriting the other.
+  blockBases: "reconciled-here",
   // The sheet DECLARES the custom properties; the page compile REFERENCES
   // them. A prefix that reached only the sheet leaves every `{ $token }` on
   // every page pointing at a property nothing declared, and an unresolved
   // custom property invalidates the declaration rather than reporting.
-  tokenPrefix: "shared",
-  // Reconciled a level up, by `effectiveCompile`, which hands one predicate
-  // object to both. Named here so it is not mistaken for an omission.
-  mayFetchUrl: "shared",
+  tokenPrefix: "reconciled-here",
+  // Reconciled a level up, by `effectiveCompile`, which derives one predicate
+  // and hands the same object to both. Classified rather than omitted so it is
+  // not mistaken for an oversight — and it is the reason this table has three
+  // roles instead of two, since calling it "shared" would promise a
+  // reconciliation here that does not happen here.
+  mayFetchUrl: "reconciled-elsewhere",
   // The sheet emits `@font-face` and the token blocks; the page compile emits
   // neither and reads neither.
   fonts: "sheet-only",
   tokens: "sheet-only",
+} as const satisfies { [K in keyof Required<SiteSheetInput>]: SiteInputRole };
+
+/** The inputs the resolver below must produce, taken from the table itself. */
+type ReconciledHere = {
+  [K in keyof typeof SITE_INPUT_ROLE]: (typeof SITE_INPUT_ROLE)[K] extends "reconciled-here"
+    ? K
+    : never;
+}[keyof typeof SITE_INPUT_ROLE];
+
+/** The name an input takes on the compile context, where it differs. */
+type ContextKey<K> = K extends "classes" ? "namedClasses" : K;
+
+/**
+ * What `sharedStyleInputs` must return: every reconciled-here key, present.
+ *
+ * Required rather than optional on purpose. An optional key can be left out
+ * silently, which is exactly the gap this table is supposed to close — a field
+ * classified as reconciled here and then never reconciled.
+ */
+type ResolvedShared = {
+  [K in ReconciledHere as ContextKey<K>]:
+    | NonNullable<Required<SiteSheetInput>[K]>
+    | undefined;
 };
 
-/** The shared inputs a render must resolve once, and give to both compiles. */
-interface SharedStyleInputs {
-  breakpoints?: BreakpointSet;
-  namedClasses?: readonly NamedClass[];
-  blockBases?: Readonly<Record<string, NodeStyles>>;
-  tokenPrefix?: string;
-}
+/** The same inputs as a context patch: unstated keys absent rather than undefined. */
+type SharedStyleInputs = Partial<ResolvedShared>;
 
 /**
  * Resolve every shared input once, so the two compiles cannot disagree.
@@ -236,7 +262,6 @@ function sharedStyleInputs(
   styleContext: StyleCompileContext | undefined,
   site: SiteSheetInput | undefined
 ): SharedStyleInputs {
-  void SITE_INPUT_ROLE;
   // Both tiers normalised once. Every field below would otherwise repeat the
   // same two absence checks, and the resolution is easier to read as a list of
   // precedences than as a list of optional chains.
@@ -266,9 +291,7 @@ function firstStated<T>(...tiers: readonly (T | undefined)[]): T | undefined {
  * the context would then carry the key, and a reader asking whether it was
  * stated gets the wrong answer.
  */
-function defined(value: {
-  [K in keyof SharedStyleInputs]: SharedStyleInputs[K] | undefined;
-}): SharedStyleInputs {
+function defined(value: ResolvedShared): SharedStyleInputs {
   return Object.fromEntries(
     Object.entries(value).filter(([, stated]) => stated !== undefined)
   );

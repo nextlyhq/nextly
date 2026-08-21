@@ -37,7 +37,7 @@ const STORED_BREAKPOINTS: BreakpointSet = {
   container: [],
 };
 
-function documentWith(styles: unknown): BlockDocument {
+function documentWith(styles: unknown, classes?: string[]): BlockDocument {
   return {
     formatVersion: DOCUMENT_FORMAT_VERSION,
     kind: "page",
@@ -48,6 +48,7 @@ function documentWith(styles: unknown): BlockDocument {
         version: 1,
         props: { text: "body" },
         styles,
+        ...(classes === undefined ? {} : { classes }),
       },
     ],
   } as unknown as BlockDocument;
@@ -55,15 +56,18 @@ function documentWith(styles: unknown): BlockDocument {
 
 function render(args: {
   styles?: unknown;
+  classes?: string[];
   styleContext: StyleCompileContext;
-  siteStyles: SiteSheetInput;
+  siteStyles?: SiteSheetInput;
 }): string {
   return renderToStaticMarkup(
     <PageRenderer
-      document={documentWith(args.styles ?? {})}
+      document={documentWith(args.styles ?? {}, args.classes)}
       blocks={createBlockResolver(coreBlocks)}
       styleContext={args.styleContext}
-      siteStyles={args.siteStyles}
+      {...(args.siteStyles === undefined
+        ? {}
+        : { siteStyles: args.siteStyles })}
     />
   );
 }
@@ -85,13 +89,15 @@ describe("breakpoints", () => {
     expect(out).toContain("#ff0000");
   });
 
-  it("still uses the route's set when the site states none", () => {
-    // The control: the site tier winning must not mean the route tier is
+  it("still uses the route's set when there is no site tier at all", () => {
+    // The control, and it has to leave `siteStyles` OUT rather than pass the
+    // same set through it: `SiteSheetInput.breakpoints` is required, so a site
+    // tier always states one, and passing it means the fallback under test is
+    // never reached. The site tier winning must not mean the route tier is
     // ignored when there is nothing to win with.
     const out = render({
       styles: { base: { base: { color: "#00ff00" } } },
       styleContext: { breakpoints: ROUTE_BREAKPOINTS },
-      siteStyles: { breakpoints: ROUTE_BREAKPOINTS },
     });
 
     expect(out).toContain("#00ff00");
@@ -158,31 +164,44 @@ describe("block bases", () => {
 });
 
 describe("named classes", () => {
+  const ACCENT = {
+    id: "c1",
+    slug: "accent",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#fedcba" } } },
+  } as unknown as never;
+
+  it("attributes the site's library to a node that references it", () => {
+    // The positive control, and the reason it comes first. The assertion below
+    // is that an element does NOT carry a class name, and an element whose node
+    // never referenced the class could not carry it under any implementation —
+    // so without this the deferral case passes on a fixture that proves
+    // nothing. `node.classes` holds class IDS, so the reference has to be there
+    // for either assertion to mean anything.
+    const out = render({
+      classes: ["c1"],
+      styleContext: { breakpoints: ROUTE_BREAKPOINTS },
+      siteStyles: { breakpoints: ROUTE_BREAKPOINTS, classes: [ACCENT] },
+    });
+
+    expect(out).toMatch(/class="[^"]*\bnx-c-accent\b/);
+  });
+
   it("keeps letting a context that states its own outrank the site's", () => {
     // Precedence is NOT what this change is about — the defect was two
     // computations of one question, so each input keeps the rule it had. A
     // context stating an empty list means "no classes", and the site's library
     // must not override that.
-    const out = render({
-      styleContext: { breakpoints: ROUTE_BREAKPOINTS, namedClasses: [] },
-      siteStyles: {
-        breakpoints: ROUTE_BREAKPOINTS,
-        classes: [
-          {
-            id: "c1",
-            slug: "accent",
-            orderIndex: 0,
-            styles: { base: { base: { color: "#fedcba" } } },
-          } as unknown as never,
-        ],
-      },
-    });
-
+    //
     // Deferral is about ATTRIBUTION, not about losing the rules: the sheet
     // still carries the library, and what the context's own list changes is
-    // whether an element is given the class name. Asserting the colour's
-    // absence would demand the sheet drop the library, which is a different
-    // and wrong behaviour.
+    // whether the element is given the class name.
+    const out = render({
+      classes: ["c1"],
+      styleContext: { breakpoints: ROUTE_BREAKPOINTS, namedClasses: [] },
+      siteStyles: { breakpoints: ROUTE_BREAKPOINTS, classes: [ACCENT] },
+    });
+
     expect(out).toContain(".nx-c-accent");
     expect(out).not.toMatch(/class="[^"]*\bnx-c-accent\b/);
   });

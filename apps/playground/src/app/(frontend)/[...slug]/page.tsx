@@ -39,7 +39,7 @@
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
-import { loadSiteStyle } from "@nextlyhq/plugin-page-builder";
+import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 
 import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
 import { SITE_STYLE_DEFAULTS } from "../../../lib/site-style-defaults";
@@ -87,8 +87,16 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // admin saves reaches the next page view rather than the next deploy. The
   // defaults are the same object `pageBuilder({ siteStyle })` was handed, so
   // the canvas, the validator and this route agree by construction.
-  siteStyles: () =>
-    loadSiteStyle({ nextly: siteReader, defaults: SITE_STYLE_DEFAULTS }),
+  siteStyles: {
+    read: () =>
+      loadSiteStyle({ nextly: siteReader, defaults: SITE_STYLE_DEFAULTS }),
+    // What that read depends on. This route is cacheable, so the whole render
+    // is what is cached and only a tag it carries rebuilds it — and the Direct
+    // API read inside `read` contributes none. Without naming the single, an
+    // admin's save would invalidate a tag no cache entry here holds and the
+    // page would keep serving the old sheet.
+    singles: [SITE_STYLE_SLUG],
+  },
   metadata: (entry, context, derived) => ({
     title: derived.title ?? (entry.title as string | undefined),
     description: derived.description,
