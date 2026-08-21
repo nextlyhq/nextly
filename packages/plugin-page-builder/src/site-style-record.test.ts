@@ -505,6 +505,34 @@ describe("judging the write against the tier it will be merged with", () => {
     ).toEqual([]);
   });
 
+  it("reports a NEW collision on a slug the config tier already collided on", () => {
+    // Two different collisions on one slug read identically, so a filter keyed
+    // on the rendered message accepts the second as though it were the first.
+    // Config holds `x` and `y` both on `dup`. The write moves `x` off it and
+    // adds `z` onto it: the merge now drops `z` rather than `y`, which is a
+    // different pair and a class the author just wrote that will never render.
+    const config = [
+      { ...stored, id: "x", slug: "dup" },
+      { ...stored, id: "y", slug: "dup" },
+    ];
+    const write = [
+      { ...stored, id: "x", slug: "moved" },
+      { ...stored, id: "z", slug: "dup" },
+    ];
+
+    const result = checkStoredClasses(write, {
+      defaults: { classes: config as never },
+    });
+
+    // BOTH participants, because naming them is what makes one collision
+    // distinguishable from another. A message saying only that "two different
+    // classes" hold the slug reads identically for either pair, and a
+    // difference keyed on it accepts the second as though it were the first.
+    const reported = result.issues.join(" ");
+    expect(reported).toContain('"y"');
+    expect(reported).toContain('"z"');
+  });
+
   it("refuses a stored token colliding with a config one on a custom property", () => {
     const result = checkStoredTokens(
       { tokens: [token("color.primary", "#111111")] },

@@ -412,44 +412,70 @@ function mergedLibraryIssues(
   classes: readonly NamedClass[],
   policy: SectionPolicy
 ): string[] {
-  // Reported as a DIFFERENCE against the config tier alone, the same way token
-  // issues are. A site whose own config already exceeds the cap, or already
-  // holds one slug on two ids, has a problem the writer cannot fix from the
-  // admin and cannot even reach — the merge only ever adds to or replaces
-  // within the config tier, never removes from it — so charging it to their
-  // save would leave them unable to store anything at all.
-  const already = new Set(libraryIssues(policy.defaults?.classes ?? []));
+  // Reported as a DIFFERENCE against the config tier alone. A site whose own
+  // config exceeds the cap, or already holds one slug on two ids, has a problem
+  // the writer cannot reach from the admin — the merge adds to and replaces
+  // within that tier, never removes from it — so charging it to their save
+  // would leave them unable to store anything at all.
+  //
+  // Compared by IDENTITY, not by the rendered message. Two different collisions
+  // on one slug read identically: config holding `x` and `y` both on `dup`
+  // produces the same sentence as `y` and a newly stored `z` on `dup`, so a
+  // message-keyed filter would accept a write whose new class never renders.
+  // The participants are what make one collision a different collision.
+  const already = new Set(
+    libraryViolations(policy.defaults?.classes ?? []).map(v => v.identity)
+  );
   // Run whether or not a config tier was stated: the merge of nothing and the
   // stored array is the stored array, so one path covers both and the cap
   // cannot be lost along with the tier.
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
-  return libraryIssues(merged).filter(issue => !already.has(issue));
+  return libraryViolations(merged)
+    .filter(violation => !already.has(violation.identity))
+    .map(violation => violation.message);
+}
+
+/**
+ * One thing a class library would cost the compiler, and what makes it that one.
+ *
+ * `identity` names the participants rather than describing the outcome, so two
+ * violations are the same violation only when the same entries cause them.
+ *
+ * The message names them too, and that is what the tests can observe: keying
+ * the difference on the message alone is only unsafe while the message says
+ * "two different classes" instead of which two. Comparing `identity` is
+ * therefore belt and braces — it keeps the comparison correct if the wording
+ * is ever shortened, and no test distinguishes it from comparing the message
+ * as that message stands today.
+ */
+interface LibraryViolation {
+  identity: string;
+  message: string;
 }
 
 /** What a class library, as a whole, would cost the compiler. */
-function libraryIssues(library: readonly NamedClass[]): string[] {
-  const issues: string[] = [];
+function libraryViolations(library: readonly NamedClass[]): LibraryViolation[] {
+  const violations: LibraryViolation[] = [];
   if (library.length > MAX_NAMED_CLASSES) {
-    issues.push(
-      `The class library holds ${library.length} entries once merged with this site's config; the compiler reads at most ${MAX_NAMED_CLASSES}.`
-    );
+    violations.push({
+      identity: "cap",
+      message: `The class library holds ${library.length} entries once merged with this site's config; the compiler reads at most ${MAX_NAMED_CLASSES}.`,
+    });
   }
   const owner = new Map<string, string>();
-  const reported = new Set<string>();
   for (const entry of library) {
     const held = owner.get(entry.slug);
     if (held === undefined) {
       owner.set(entry.slug, entry.id);
       continue;
     }
-    if (held !== entry.id && !reported.has(entry.slug)) {
-      reported.add(entry.slug);
-      issues.push(
-        `The slug "${entry.slug}" is held by two different classes once merged with this site's config; the compiler keeps the first, so the other is dropped at render.`
-      );
-    }
+    if (held === entry.id) continue;
+    violations.push({
+      identity: `slug:${entry.slug}|kept:${held}|dropped:${entry.id}`,
+      message: `The slug "${entry.slug}" is held by both "${held}" and "${entry.id}" once merged with this site's config; the compiler keeps the first, so "${entry.id}" is dropped at render.`,
+    });
   }
-  return issues;
+  return violations;
 }
 
 /**
