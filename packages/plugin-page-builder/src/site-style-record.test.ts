@@ -209,6 +209,85 @@ describe("checkStoredClasses", () => {
     expect(result.issues).not.toEqual([]);
   });
 
+  it("bounds the whole section, not each map inside it", () => {
+    // The single-map test below cannot see this. A budget created per map
+    // bounds each map and nothing else, and the number of maps is limited only
+    // by the document's byte cap — measured, the same payload spread over 200
+    // maps produced 40,200 diagnostics that way against 201 with one budget for
+    // the section. The write is refused either way; what differs is how much
+    // work refusing it costs.
+    const byState: Record<string, unknown> = {};
+    for (let m = 0; m < 200; m += 1) {
+      const values: Record<string, unknown> = {};
+      for (let k = 0; k < 300; k += 1) values[`bad${k}`] = "x";
+      byState[`state${m}`] = { base: values };
+    }
+
+    const result = checkStoredClasses(tracker(byState), REFUSING);
+
+    expect(result.issues.join(" ")).toContain("not checked");
+    expect(result.issues.length).toBeLessThan(1000);
+  });
+
+  it("stops reading states once the section budget is spent", () => {
+    // The bound above is visible in the issue COUNT; stopping the walk is not,
+    // because the budget caps the issues either way. So the states are
+    // accessors and the test counts how many were read: what the early stop
+    // buys is work not done, and work not done is only observable if something
+    // records the doing.
+    let statesRead = 0;
+    const byState: Record<string, unknown> = {};
+    for (let m = 0; m < 200; m += 1) {
+      Object.defineProperty(byState, `state${m}`, {
+        enumerable: true,
+        get() {
+          statesRead += 1;
+          const values: Record<string, unknown> = {};
+          for (let k = 0; k < 300; k += 1) values[`bad${k}`] = "x";
+          return { base: values };
+        },
+      });
+    }
+
+    const result = checkStoredClasses(tracker(byState), REFUSING);
+
+    expect(result.issues.join(" ")).toContain("not checked");
+    expect(statesRead).toBeLessThan(5);
+  });
+
+  it("stops judging later classes once the section budget is spent", () => {
+    // The stop inside one class does not imply the stop between classes, and
+    // neither is visible in the issue count. `MAX_NAMED_CLASSES` is 2000 and
+    // the count check reports without stopping the walk, so without this the
+    // cost of refusing scales with the array a caller sends.
+    let laterRead = 0;
+    const exhausting: Record<string, unknown> = {};
+    for (let m = 0; m < 200; m += 1) {
+      const values: Record<string, unknown> = {};
+      for (let k = 0; k < 300; k += 1) values[`bad${k}`] = "x";
+      exhausting[`state${m}`] = { base: values };
+    }
+    const later: Record<string, unknown> = {};
+    Object.defineProperty(later, "base", {
+      enumerable: true,
+      get() {
+        laterRead += 1;
+        return { base: { color: "#111111" } };
+      },
+    });
+
+    const result = checkStoredClasses(
+      [
+        { id: "a", slug: "a", orderIndex: 0, styles: exhausting },
+        { id: "b", slug: "b", orderIndex: 1, styles: later },
+      ],
+      REFUSING
+    );
+
+    expect(result.issues.join(" ")).toContain("not checked");
+    expect(laterRead).toBe(0);
+  });
+
   it("refuses a property map too large to check through", () => {
     // A budget per entry. Given none, the validator walks an unbounded map and
     // allocates a diagnostic per key. Truncation needs no handling of its own:

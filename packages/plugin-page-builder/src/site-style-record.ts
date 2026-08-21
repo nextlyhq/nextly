@@ -40,6 +40,7 @@ import {
   type NamedClass,
   type SiteToken,
   type SiteTokenSet,
+  type StyleIssueBudget,
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
@@ -236,8 +237,8 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
  * Every property map inside a class envelope, with the address it sits at.
  *
  * `NodeStyles` is state × breakpoint × property, and the engine's value
- * validator judges ONE state × breakpoint's properties — so the two levels
- * above it are flattened here, by OWN key as the engine reads style maps.
+ * validator judges ONE state × breakpoint's properties, so the two levels above
+ * it are flattened here, by OWN key as the engine reads style maps.
  *
  * Every key is descended rather than only the states and breakpoints this
  * package knows. A breakpoint the site has not defined compiles to no rule
@@ -245,21 +246,23 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
  * visited only what compiles now would gate less than the sheet eventually
  * serves. A level that is not a record is skipped rather than reported: the
  * envelope's SHAPE is `isUsableNamedClass`'s question, already asked.
+ *
+ * A generator, so a caller that has seen enough stops the walk rather than
+ * receiving a list that was built in full first. The number of maps is bounded
+ * only by the document's byte cap, and a payload can spend that cap on maps as
+ * easily as on values.
  */
-function styleMapsIn(
+function* styleMapsIn(
   styles: Readonly<Record<string, unknown>>
-): { at: string; values: Readonly<Record<string, unknown>> }[] {
-  const maps: { at: string; values: Readonly<Record<string, unknown>> }[] = [];
+): Generator<{ at: string; values: Readonly<Record<string, unknown>> }> {
   for (const state of Object.keys(styles)) {
     const byBreakpoint = styles[state];
     if (!isPlainRecord(byBreakpoint)) continue;
     for (const breakpoint of Object.keys(byBreakpoint)) {
       const values = byBreakpoint[breakpoint];
-      if (isPlainRecord(values))
-        maps.push({ at: `${state}.${breakpoint}`, values });
+      if (isPlainRecord(values)) yield { at: `${state}.${breakpoint}`, values };
     }
   }
-  return maps;
 }
 
 /**
@@ -291,38 +294,47 @@ function styleMapsIn(
  * learns that property, with no further validating write. A gate that cannot
  * judge a value must not pass it: this package's own url-policy module states
  * the same rule for the same reason, that a security control should fail
- * toward the annoyance. The cost is that a site WITH a host policy cannot
- * store a property this engine does not know, and is told which one.
+ * toward the annoyance. The cost is that a site WITH a host policy cannot store
+ * a property this engine does not know, and is told which one.
  *
- * A BUDGET per entry, because `validateStyleValues` walks an unbounded map
- * when given none and allocates a diagnostic per key — measured at 5000 issues
- * for a 5000-key map, against 201 with a budget. Truncation needs no handling
- * of its own: `style-issues-truncated` is itself an error, so a map too large
- * to check through refuses the write rather than passing on a partial read.
+ * The BUDGET is the caller's, spanning the whole section, and the walk stops
+ * when it is spent. One budget per MAP would bound each map and nothing else:
+ * measured, a class spreading bad properties over 200 maps produced 40,200
+ * diagnostics that way against 201 with one budget, and the map count is
+ * limited only by the document's byte cap. Per CLASS has the same shape one
+ * level up — `MAX_NAMED_CLASSES` is 2000, and the count check reports without
+ * stopping the walk, so the array is not bounded at all.
  */
 function classValueIssues(
   entry: NamedClass,
   index: number,
-  policy: SectionPolicy
+  policy: SectionPolicy,
+  budget: StyleIssueBudget
 ): string[] {
   const options =
     policy.mayFetchUrl === undefined
       ? undefined
       : { mayFetchUrl: policy.mayFetchUrl };
   const mode = policy.mayFetchUrl === undefined ? "forgiving" : "strict";
-  return styleMapsIn(entry.styles).flatMap(({ at, values }) =>
-    validateStyleValues(
+  const issues: string[] = [];
+  for (const { at, values } of styleMapsIn(entry.styles)) {
+    for (const issue of validateStyleValues(
       values,
       `classes[${index}].styles.${at}`,
       mode,
-      newStyleIssueBudget(),
+      budget,
       false,
       undefined,
       options
-    )
-      .filter(issue => issue.severity === "error")
-      .map(issue => issue.message)
-  );
+    )) {
+      if (issue.severity === "error") issues.push(issue.message);
+    }
+    // Truncation is itself an error, so it is already among the messages above
+    // and the write is refused. What stopping adds is that the refusal costs a
+    // bounded amount of work rather than one batch per remaining map.
+    if (budget.truncated) break;
+  }
+  return issues;
 }
 
 /**
@@ -360,6 +372,9 @@ export function checkStoredClasses(
       `The class library holds ${raw.length} entries; the compiler reads at most ${MAX_NAMED_CLASSES}.`
     );
   }
+  // ONE for the whole section: see `classValueIssues` for why neither per map
+  // nor per class bounds the work a single write can ask for.
+  const budget = newStyleIssueBudget();
   const classes: NamedClass[] = [];
   const ids = new Set<string>();
   const slugs = new Set<string>();
@@ -383,7 +398,9 @@ export function checkStoredClasses(
     // Reported but still returned, as this module's two postures require: a
     // write refuses the section on any issue, while a read keeps the entry the
     // compiler will narrow for itself.
-    issues.push(...classValueIssues(entry, index, policy));
+    if (!budget.truncated) {
+      issues.push(...classValueIssues(entry, index, policy, budget));
+    }
     classes.push(entry);
   });
   return { value: classes, issues };
