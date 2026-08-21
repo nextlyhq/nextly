@@ -484,3 +484,58 @@ describe("whitespace CSS does not discard", () => {
     ).toBe("select");
   });
 });
+
+describe("a union with more than one composite arm", () => {
+  // No union the catalog ships has two composite arms, so nothing reaches this
+  // today — which is why a record-shaped test would be silent if one arrived.
+
+  const twoShapes = property("p", {
+    kind: "union",
+    of: [
+      { kind: "object", fields: { first: leaf("dimension", "a") } },
+      { kind: "object", fields: { second: leaf("color", "b") } },
+    ],
+  });
+
+  it("selects the arm whose fields the value actually names", () => {
+    const set = styleControlsFor(twoShapes, { second: "#fff" });
+    expect(paths(set.controls)).toEqual([["second"]]);
+    expect(set.variants[0].active).toBe(1);
+  });
+
+  it("still selects the first arm when the value names ITS fields", () => {
+    // The control: matching by fields must not simply invert the old answer.
+    const set = styleControlsFor(twoShapes, { first: "4px" });
+    expect(paths(set.controls)).toEqual([["first"]]);
+    expect(set.variants[0].active).toBe(0);
+  });
+
+  it("falls back to the first arm for a record naming neither", () => {
+    expect(styleControlsFor(twoShapes, { other: "x" }).variants[0].active).toBe(
+      0
+    );
+  });
+
+  it("keeps a partially-set composite on its own arm", () => {
+    // A stored value is sparse: a radius with only one corner is still the
+    // four-corner form, so any overlap counts rather than every field.
+    const radius = getStyleProperty("borderRadius");
+    const set = styleControlsFor(radius as StyleProperty, {
+      startStart: "4px",
+    });
+    expect(set.controls).toHaveLength(4);
+  });
+});
+
+describe("the universal-keyword cache", () => {
+  it("gives every spelling of one keyword the same answer", () => {
+    // Keyed by the canonical spelling, so case and ASCII-whitespace variants
+    // share an entry rather than each retaining one.
+    const entry = getStyleProperty("fontStyle");
+    for (const spelling of ["inherit", "INHERIT", " Inherit ", "InHeRiT"]) {
+      expect(
+        styleControlsFor(entry as StyleProperty, spelling).controls[0].kind
+      ).toBe("select");
+    }
+  });
+});

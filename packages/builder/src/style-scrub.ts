@@ -25,9 +25,18 @@
  * that contract for the duration of a drag, so the preview would land where the
  * committed value will not; spelling a weaker one loses to the rule being
  * previewed over, and the drag shows nothing move. The consequence for the host
- * is that the element holding this text must come AFTER the compiled sheet —
- * later of two equals wins — and removing it on commit reveals the real rule
- * underneath with no visible change.
+ * is that the element holding this text must come after the compiled sheet's
+ * rules for the SAME state — later of two equals wins — and removing it on
+ * commit reveals the real rule underneath with no visible change.
+ *
+ * **Mounting it after the WHOLE sheet is wrong for a base-state preview**, and
+ * this module cannot prevent that on its own. The compiler emits interaction
+ * states after base at equal specificity, so a base rule placed last also
+ * outranks an existing hover, focus or active declaration: the element shows
+ * the scrubbed base value while hovered, and reverts on release. Placing the
+ * preview beside the rules for its own state is the host's part of this
+ * contract; which states carry a declaration for the property is in the trace
+ * the provenance query already reads.
  *
  * @module style-scrub
  */

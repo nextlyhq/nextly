@@ -36,7 +36,17 @@ import {
 
 /** What a control's dot reports. */
 export type StyleProvenance =
-  /** Nothing wrote this property; the browser's own default applies. */
+  /**
+   * Nothing in this document's own cascade wrote this property for this node.
+   *
+   * NOT the same as "the browser's default applies". `styleOrigin` considers an
+   * ancestor's declaration only when it carries a descendant selector, so an
+   * inheritable property — `color`, the font properties — set on an ancestor is
+   * visibly active on this node and reported here as unset. Modelling CSS
+   * inheritance needs to know which properties inherit, which the catalog does
+   * not declare, so it belongs to the engine that owns the cascade rather than
+   * to a reading of its output.
+   */
   | { readonly kind: "unset" }
   /** This node's own value, at the state and breakpoint being edited. */
   | { readonly kind: "authored"; readonly entry: StyleTraceEntry }

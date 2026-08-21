@@ -219,8 +219,46 @@ function variantHolds(
   value: StyleValue,
   tokens: TokenLookup | undefined
 ): boolean {
-  if (!isStyleLeaf(variant)) return isCompositeValue(value);
+  if (!isStyleLeaf(variant)) {
+    return isCompositeValue(value) && addressesAnyField(variant, value);
+  }
   return !isCompositeValue(value) && leafHolds(variant, value, tokens);
+}
+
+/** The field names a composite shape addresses. */
+function fieldsOf(shape: StyleShape): readonly string[] {
+  if (isStyleLeaf(shape)) return [];
+  switch (shape.kind) {
+    case "logicalSides":
+      return Object.keys(shape.sides);
+    case "logicalCorners":
+      return Object.keys(shape.corners);
+    case "object":
+      return Object.keys(shape.fields);
+    case "union":
+      return shape.of.flatMap(fieldsOf);
+  }
+}
+
+/**
+ * Whether a stored record names anything this composite arm declares.
+ *
+ * "Is it a record" is not enough to tell two composite arms apart: a union of
+ * `{ first }` and `{ second }` would take every record through the first, and
+ * the controls returned would address fields the value does not have. No union
+ * the catalog ships has two composite arms today, so nothing reaches that
+ * case — which is exactly why it would be silent if one arrived.
+ *
+ * ANY overlap rather than all, because a stored value is sparse: a radius with
+ * only its top-left corner set is still the four-corner form.
+ */
+function addressesAnyField(
+  variant: StyleShape,
+  value: CompositeValue
+): boolean {
+  const fields = fieldsOf(variant);
+  if (fields.length === 0) return true;
+  return Object.keys(value).some(key => fields.includes(key));
 }
 
 /**
@@ -323,7 +361,12 @@ const NEGATIVE_CACHE_LIMIT = 64;
  * probe answers it, and a keyword this engine learns is picked up with no edit.
  */
 function isUniversallyAccepted(value: string): boolean {
-  const cached = UNIVERSALLY_ACCEPTED.get(value);
+  // Keyed by the CANONICAL spelling, so every case, whitespace and escape
+  // variant of one keyword shares an entry. Keying by the raw string leaves the
+  // ACCEPTED side unbounded too — `inherit`, `INHERIT`, ` Inherit ` and an
+  // escaped spelling are all distinct raw keys for one closed-set answer.
+  const key = keywordKey(value);
+  const cached = UNIVERSALLY_ACCEPTED.get(key);
   if (cached !== undefined) return cached;
   const probe = getStyleProperty(UNIVERSAL_PROBE_PROPERTY);
   if (probe === undefined || probe.shape.kind !== "keyword") {
@@ -334,9 +377,8 @@ function isUniversallyAccepted(value: string): boolean {
   }
   // A value inside the probe's OWN vocabulary would be accepted for the wrong
   // reason, and would report every such word as universal.
-  const key = keywordKey(value);
   if (probe.shape.values.some(keyword => keywordKey(keyword) === key)) {
-    remember(value, false);
+    remember(key, false);
     return false;
   }
   const compiled = compileStyleValues(
@@ -346,14 +388,14 @@ function isUniversallyAccepted(value: string): boolean {
   const accepted =
     compiled.declarations.length > 0 &&
     !compiled.warnings.some(issue => issue.severity === "error");
-  remember(value, accepted);
+  remember(key, accepted);
   return accepted;
 }
 
 /** Keep an answer, bounding what the refusals can grow to. */
-function remember(value: string, accepted: boolean): void {
+function remember(key: string, accepted: boolean): void {
   if (!accepted && UNIVERSALLY_ACCEPTED.size >= NEGATIVE_CACHE_LIMIT) return;
-  UNIVERSALLY_ACCEPTED.set(value, accepted);
+  UNIVERSALLY_ACCEPTED.set(key, accepted);
 }
 
 /**
