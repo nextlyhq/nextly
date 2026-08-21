@@ -63,4 +63,41 @@ describe("createBlocksPage cache tags", () => {
 
     expect(tags.some(tag => tag.includes("photos"))).toBe(true);
   });
+
+  it("tags the single a siteStyles provider reads", () => {
+    // A provider is called per render, which is not the same as being read per
+    // render: on a pre-rendered route the whole render is cached, and only a
+    // tag the page carries rebuilds it. The Direct API read inside the provider
+    // contributes none, so without this an admin's save invalidates
+    // `nextly:single:site-style` and no cache entry anywhere names it — the
+    // page keeps serving the old sheet, which looks exactly like the style
+    // never saving.
+    created.mockClear();
+    createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      siteStyles: () => undefined,
+      siteStyleSingles: ["site-style"],
+    });
+
+    const tags = (created.mock.calls[0][0] as { tags: string[] }).tags;
+
+    expect(tags).toContain("nextly:single:site-style");
+  });
+
+  it("adds no single tag when the route names none", () => {
+    // The control: the tag must come from the slug the route stated, not from
+    // the helper deciding that any route using siteStyles reads one particular
+    // single. A host can store its style anywhere.
+    created.mockClear();
+    createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      siteStyles: () => undefined,
+    });
+
+    const tags = (created.mock.calls[0][0] as { tags: string[] }).tags;
+
+    expect(tags.some(tag => tag.startsWith("nextly:single:"))).toBe(false);
+  });
 });

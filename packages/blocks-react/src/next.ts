@@ -35,6 +35,7 @@ import {
   createSingleRoute,
   getNextly,
   nextlyTags,
+  nextlySingleTags,
   slugToStaticParam,
 } from "nextly/runtime";
 import type {
@@ -161,6 +162,15 @@ export interface BlocksPageConfig
    * tokens at whatever they were when the module loaded — the edit would reach
    * the next deploy instead of the next page view. Returning `undefined`
    * means what omitting the value means.
+   *
+   * **On a PRE-RENDERED route that promise needs `siteStyleSingles`.** Being
+   * called per render is not the same as being read per render: a public
+   * blocks page is cacheable, so the whole render is the thing cached, and it
+   * is only rebuilt when one of the page's TAGS is invalidated. A provider
+   * reading through the Direct API contributes no tag, so without naming the
+   * single it reads, an admin's save invalidates a tag no cache entry carries
+   * and the page keeps serving the old sheet — the same gap the media
+   * collection is in the tag list for.
    */
   siteStyles?:
     | SiteStylesInput
@@ -168,6 +178,23 @@ export interface BlocksPageConfig
         | SiteStylesInput
         | undefined
         | Promise<SiteStylesInput | undefined>);
+  /**
+   * The single slugs a `siteStyles` provider reads, so a write to one busts
+   * this page.
+   *
+   * A cacheable route is rebuilt only when a tag it carries is invalidated,
+   * and a Direct API read contributes no tag. Nextly's write path revalidates
+   * `nextly:single:<slug>`; naming the slug here is what puts that tag on the
+   * page, exactly as `mediaCollection` does for the media reader.
+   *
+   * Only pre-rendered routes need it — an access-enforced `createBlocksPage`
+   * is marked dynamic and re-reads every request — but stating it there is
+   * harmless, which is why this is one option rather than two.
+   *
+   * A page builder route reads the plugin's Site Style single:
+   * `siteStyleSingles: [SITE_STYLE_SLUG]`.
+   */
+  siteStyleSingles?: readonly string[];
   /**
    * A dynamic collection to resolve media ids against, for a site storing its
    * images in one of its own.
@@ -1008,6 +1035,13 @@ function blocksRouteConfig(
       ...(routeConfig.tags ?? []),
       ...nextlyTags(config.mediaCollection ?? MEDIA_TAG_COLLECTION),
       ...routeConfig.collections.flatMap(collection => nextlyTags(collection)),
+      // The singles a `siteStyles` provider reads, for the same reason the
+      // media collection is above: that read goes through the Direct API and
+      // contributes no tag of its own, so a write to the single would otherwise
+      // invalidate nothing this page carries.
+      ...(config.siteStyleSingles ?? []).flatMap(slug =>
+        nextlySingleTags(slug)
+      ),
     ],
     // Supplied only when asked for, so a route without it keeps whatever
     // `buildMetadata` the caller passed straight through to the content route.

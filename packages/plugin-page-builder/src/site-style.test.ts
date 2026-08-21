@@ -51,8 +51,8 @@ const VIEWPORT_ONLY: BreakpointSet = {
 
 describe("resolveSiteStyle", () => {
   it("answers the empty style when nothing is stated on either tier", () => {
-    expect(resolveSiteStyle()).toEqual({});
-    expect(resolveSiteStyle({}, {})).toEqual({});
+    expect(resolveSiteStyle()).toStrictEqual({});
+    expect(resolveSiteStyle({}, {})).toStrictEqual({});
   });
 
   it("passes a lone tier through, whichever side states it", () => {
@@ -155,7 +155,7 @@ describe("siteSheet", () => {
   it("omits undefined sections rather than defaulting them", () => {
     // An invented section would preview a design no published page has; the
     // sheet compiler treats an absent key as "the site defines none".
-    expect(siteSheet()).toEqual({
+    expect(siteSheet()).toStrictEqual({
       breakpoints: { viewport: [], container: [] },
     });
   });
@@ -167,7 +167,7 @@ describe("siteSheet", () => {
       fonts: [face("Geist")],
       breakpoints: VIEWPORT_ONLY,
     };
-    expect(siteSheet(style)).toEqual({
+    expect(siteSheet(style)).toStrictEqual({
       tokens: style.tokens,
       classes: style.classes,
       fonts: style.fonts,
