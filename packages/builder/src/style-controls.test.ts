@@ -575,3 +575,30 @@ describe("a union used as another union's arm", () => {
     expect(set.variants[0].active).toBe(0);
   });
 });
+
+describe("composite arms sharing a field name", () => {
+  // Field NAMES alone do not separate two composite arms that share one: both
+  // claim the value, and the controls returned would describe a form that
+  // cannot hold it.
+
+  const shared = property("p", {
+    kind: "union",
+    of: [
+      { kind: "object", fields: { value: leaf("keyword", "a") } },
+      { kind: "object", fields: { value: leaf("number", "b") } },
+    ],
+  });
+
+  it("selects the arm whose field SHAPE holds the value", () => {
+    expect(styleControlsFor(shared, { value: 2 }).controls[0].kind).toBe(
+      "number"
+    );
+  });
+
+  it("still selects the first arm when its shape holds the value", () => {
+    // The control: recursing must not simply prefer the later arm.
+    expect(styleControlsFor(shared, { value: "normal" }).controls[0].kind).toBe(
+      "select"
+    );
+  });
+});

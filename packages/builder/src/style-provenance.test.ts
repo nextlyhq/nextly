@@ -235,9 +235,35 @@ describe("against a trace the compiler actually produced", () => {
     expect(ask(trace, "color").kind).toBe("unset");
   });
 
-  it("reports a hover link as unset when only the plain link is stored", () => {
+  it("shows a hover link the plain-link value it is displaying", () => {
+    // A hovered anchor matches `a` as well as `a:hover`, so a hover control
+    // with only `linkColor` stored is displaying that rule. Reporting unset
+    // would claim the browser's default applies. Link hover lives in the
+    // catalog's DESCENDANT rather than in `StyleState`, which is why the
+    // interaction-state fallback does not cover it.
     const trace = traceFor({ base: { base: { linkColor: "#ff0000" } } });
-    expect(ask(trace, "color", "a:hover").kind).toBe("unset");
+    const result = ask(trace, "color", "a:hover");
+    expect(result.kind).toBe("inherited");
+    if (result.kind !== "inherited") return;
+    expect(result.entry.value).toBe("#ff0000");
+    expect(result.entry.descendant).toBe(" a");
+  });
+
+  it("prefers the hover rule when the document has one", () => {
+    const trace = traceFor({
+      base: { base: { linkColor: "#ff0000", linkColorHover: "#00ff00" } },
+    });
+    const result = ask(trace, "color", "a:hover");
+    expect(result.kind).toBe("authored");
+    if (result.kind !== "authored") return;
+    expect(result.entry.value).toBe("#00ff00");
+  });
+
+  it("does not show a plain link a rule that needs hovering", () => {
+    // The other direction, which must NOT fall back: an anchor that is not
+    // hovered does not match `a:hover`.
+    const trace = traceFor({ base: { base: { linkColorHover: "#00ff00" } } });
+    expect(ask(trace, "color", "a").kind).toBe("unset");
   });
 });
 

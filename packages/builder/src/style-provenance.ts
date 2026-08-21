@@ -159,6 +159,28 @@ function normalizeDescendant(value: string | undefined): string {
 }
 
 /**
+ * Whether a recorded declaration reaches the element this control addresses.
+ *
+ * Exact equality is too narrow, because a descendant selector carries the
+ * pseudo-classes with it: link hover is `a:hover` in the CATALOG rather than a
+ * `StyleState`, so a hovered anchor matches both `a:hover` and the plain `a`
+ * beside it. A control on `a:hover` with only `a` stored is displaying the `a`
+ * rule, and filtering it out reported the browser's default instead.
+ *
+ * Less-specific only, and never the reverse: an anchor that is NOT hovered does
+ * not match `a:hover`, so a plain-link control must not see a hover rule.
+ * Which of the two wins is left to `styleOrigin`, whose ranking already counts
+ * pseudo-classes as specificity.
+ */
+function reachesControl(entry: string, query: string): boolean {
+  if (entry === query) return true;
+  if (entry === "" || query === "") return false;
+  const [entryBase] = entry.split(":");
+  const [queryBase] = query.split(":");
+  return entryBase === queryBase && !entry.includes(":") && query.includes(":");
+}
+
+/**
  * Every catalog property that writes one CSS property at one descendant.
  *
  * Derived from the catalog rather than listed, so a property added there is
@@ -216,7 +238,14 @@ function isAuthoredHere(
     entry.origin.kind === "node" &&
     entry.origin.id === query.subject.nodeId &&
     entry.breakpoint === query.breakpoint &&
-    entry.state === query.state
+    entry.state === query.state &&
+    // The DESCENDANT too, because a candidate can reach this control without
+    // belonging to it: a plain `a` rule is what a hovered link displays, and it
+    // is this node's own value at this breakpoint and state — but the control
+    // that wrote it is the plain-link one. Calling that authored would offer to
+    // reset a value this control never set.
+    normalizeDescendant(entry.descendant) ===
+      normalizeDescendant(query.descendant)
   );
 }
 
@@ -233,8 +262,8 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   // this only removes the declarations that belong to a different control, so
   // nothing here re-implements tier order, breakpoint axes or specificity.
   const wanted = normalizeDescendant(query.descendant);
-  const candidates = query.trace.filter(
-    entry => normalizeDescendant(entry.descendant) === wanted
+  const candidates = query.trace.filter(entry =>
+    reachesControl(normalizeDescendant(entry.descendant), wanted)
   );
   const ask = (state: StyleState): StyleTraceEntry | undefined =>
     styleOrigin(candidates, query.subject, {

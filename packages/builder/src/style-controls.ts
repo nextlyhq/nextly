@@ -228,7 +228,7 @@ function variantHolds(
     return variant.of.some(arm => variantHolds(arm, value, tokens));
   }
   if (!isStyleLeaf(variant)) {
-    return isCompositeValue(value) && addressesAnyField(variant, value);
+    return isCompositeValue(value) && fieldsHold(variant, value, tokens);
   }
   return !isCompositeValue(value) && leafHolds(variant, value, tokens);
 }
@@ -248,25 +248,55 @@ function fieldsOf(shape: StyleShape): readonly string[] {
   }
 }
 
+/** The shape a composite declares at one of its field names. */
+function shapeAt(variant: StyleShape, name: string): StyleShape | undefined {
+  if (isStyleLeaf(variant)) return undefined;
+  switch (variant.kind) {
+    case "logicalSides":
+      return Object.hasOwn(variant.sides, name)
+        ? variant.sides[name as keyof typeof variant.sides]
+        : undefined;
+    case "logicalCorners":
+      return Object.hasOwn(variant.corners, name)
+        ? variant.corners[name as keyof typeof variant.corners]
+        : undefined;
+    case "object":
+      return Object.hasOwn(variant.fields, name)
+        ? variant.fields[name]
+        : undefined;
+    case "union":
+      return undefined;
+  }
+}
+
 /**
- * Whether a stored record names anything this composite arm declares.
+ * Whether a composite arm holds the fields a stored record names.
  *
- * "Is it a record" is not enough to tell two composite arms apart: a union of
- * `{ first }` and `{ second }` would take every record through the first, and
- * the controls returned would address fields the value does not have. No union
- * the catalog ships has two composite arms today, so nothing reaches that
- * case — which is exactly why it would be silent if one arrived.
+ * Field NAMES alone do not tell two composite arms apart when they share one:
+ * `{ value: keyword }` beside `{ value: number }` both claim `{ value: 2 }`, and
+ * the controls returned would describe a form that cannot hold it. So each named
+ * field is checked against the shape this arm declares for it, recursively,
+ * which is the same walk the leaf matching already performs one level down.
  *
- * ANY overlap rather than all, because a stored value is sparse: a radius with
- * only its top-left corner set is still the four-corner form.
+ * Only the fields the value NAMES are checked, because a stored value is
+ * sparse: a radius with just its top-left corner set is still the four-corner
+ * form, and requiring every field would push it to the scalar arm.
  */
-function addressesAnyField(
+function fieldsHold(
   variant: StyleShape,
-  value: CompositeValue
+  value: CompositeValue,
+  tokens: TokenLookup | undefined
 ): boolean {
   const fields = fieldsOf(variant);
   if (fields.length === 0) return true;
-  return Object.keys(value).some(key => fields.includes(key));
+  const named = Object.keys(value).filter(key => fields.includes(key));
+  if (named.length === 0) return false;
+  return named.every(name => {
+    const shape = shapeAt(variant, name);
+    const held = value[name];
+    if (shape === undefined || held === undefined) return false;
+    return variantHolds(shape, held, tokens);
+  });
 }
 
 /**
