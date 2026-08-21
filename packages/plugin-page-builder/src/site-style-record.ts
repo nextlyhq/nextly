@@ -31,6 +31,7 @@ import {
   isPlainRecord,
   isUsableNamedClass,
   newStyleIssueBudget,
+  usableNamedClasses,
   validateFontFace,
   validateStyleValues,
   type BreakpointDef,
@@ -412,70 +413,49 @@ function mergedLibraryIssues(
   classes: readonly NamedClass[],
   policy: SectionPolicy
 ): string[] {
-  // Reported as a DIFFERENCE against the config tier alone. A site whose own
-  // config exceeds the cap, or already holds one slug on two ids, has a problem
-  // the writer cannot reach from the admin — the merge adds to and replaces
-  // within that tier, never removes from it — so charging it to their save
-  // would leave them unable to store anything at all.
+  // Asked of the engine, never modelled. `usableNamedClasses` is the list the
+  // compiler writes and the renderer is handed, so it already applies the
+  // ordering (`orderIndex`, then `id`) and the claim rules (a slug or an id
+  // already taken drops the later entry). Reproducing those here was wrong four
+  // separate ways, each a different rule; asking cannot be wrong in any of
+  // them.
   //
-  // Compared by IDENTITY, not by the rendered message. Two different collisions
-  // on one slug read identically: config holding `x` and `y` both on `dup`
-  // produces the same sentence as `y` and a newly stored `z` on `dup`, so a
-  // message-keyed filter would accept a write whose new class never renders.
-  // The participants are what make one collision a different collision.
-  const already = new Set(
-    libraryViolations(policy.defaults?.classes ?? []).map(v => v.identity)
-  );
-  // Run whether or not a config tier was stated: the merge of nothing and the
-  // stored array is the stored array, so one path covers both and the cap
-  // cannot be lost along with the tier.
+  // The cap is applied BEFORE resolution, as an array prefix on the whole
+  // library, so it is applied that way here too.
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
-  return libraryViolations(merged)
-    .filter(violation => !already.has(violation.identity))
-    .map(violation => violation.message);
-}
+  const before = renderedIds(policy.defaults?.classes ?? []);
+  const after = renderedIds(merged);
 
-/**
- * One thing a class library would cost the compiler, and what makes it that one.
- *
- * `identity` names the participants rather than describing the outcome, so two
- * violations are the same violation only when the same entries cause them.
- *
- * The message names them too, and that is what the tests can observe: keying
- * the difference on the message alone is only unsafe while the message says
- * "two different classes" instead of which two. Comparing `identity` is
- * therefore belt and braces — it keeps the comparison correct if the wording
- * is ever shortened, and no test distinguishes it from comparing the message
- * as that message stands today.
- */
-interface LibraryViolation {
-  identity: string;
-  message: string;
-}
-
-/** What a class library, as a whole, would cost the compiler. */
-function libraryViolations(library: readonly NamedClass[]): LibraryViolation[] {
-  const violations: LibraryViolation[] = [];
-  if (library.length > MAX_NAMED_CLASSES) {
-    violations.push({
-      identity: "cap",
-      message: `The class library holds ${library.length} entries once merged with this site's config; the compiler reads at most ${MAX_NAMED_CLASSES}.`,
-    });
-  }
-  const owner = new Map<string, string>();
-  for (const entry of library) {
-    const held = owner.get(entry.slug);
-    if (held === undefined) {
-      owner.set(entry.slug, entry.id);
-      continue;
+  const issues: string[] = [];
+  // A class the site used to render and no longer does. This write caused it,
+  // whether by claiming its slug, taking its id, reordering it behind another,
+  // or pushing it past the cap.
+  for (const id of before) {
+    if (!after.has(id)) {
+      issues.push(
+        `Saving this would stop the class "${id}" rendering: once merged with this site's config it is no longer one of the ${MAX_NAMED_CLASSES} the compiler reads, or another class claims its slug or id first.`
+      );
     }
-    if (held === entry.id) continue;
-    violations.push({
-      identity: `slug:${entry.slug}|kept:${held}|dropped:${entry.id}`,
-      message: `The slug "${entry.slug}" is held by both "${held}" and "${entry.id}" once merged with this site's config; the compiler keeps the first, so "${entry.id}" is dropped at render.`,
-    });
   }
-  return violations;
+  // A class in this write that will not render. Reported by id, because that is
+  // what a node references and what the author can act on.
+  for (const entry of classes) {
+    if (!after.has(entry.id)) {
+      issues.push(
+        `The class "${entry.id}" would not render: once merged with this site's config another class claims its slug or id first, or it falls past the ${MAX_NAMED_CLASSES} the compiler reads.`
+      );
+    }
+  }
+  return issues;
+}
+
+/** The ids a library actually renders, as the compiler resolves it. */
+function renderedIds(library: readonly NamedClass[]): Set<string> {
+  const read =
+    library.length > MAX_NAMED_CLASSES
+      ? library.slice(0, MAX_NAMED_CLASSES)
+      : library;
+  return new Set(usableNamedClasses(read).map(entry => entry.id));
 }
 
 /**

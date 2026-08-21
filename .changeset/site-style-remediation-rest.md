@@ -81,9 +81,20 @@ deciding the one property that is true of the set alone — ids colliding across
 axes — and becomes load-bearing for documents once something can reach the
 stored tier.
 
-Class writes are judged through `resolveSiteStyle` rather than against the two
-tiers concatenated. The merge is keyed by class ID, so a stored class sharing an
-id with a configured one REPLACES it — modelling that as a concatenation refuses
-a deliberate override as a duplicate and counts a replacement twice against the
-cap. What survives the merge and still breaks is one slug held by two different
-ids, and the cap is the merged length.
+`blocks-engine` now exports `usableNamedClasses` and `usableNamedClassPositions`
+— the list the compiler writes and the renderer is handed, ordering and claim
+rules included.
+
+The Site Style write gate uses it to answer the only question an author cares
+about: will the class I just wrote render? It compares the ids that resolve
+before and after the write, so it reports a class the write adds that cannot
+render, and a class the site used to render that the write displaces — whether
+by claiming its slug, taking its id, reordering it behind another, or pushing
+it past the cap.
+
+Modelling that instead of asking was wrong four separate ways in review, each a
+different rule: the merge is keyed by id so a shared id REPLACES rather than
+duplicates, a config tier's own problems are not the writer's to fix, two
+collisions on one slug read identically as messages, and the compiler claims
+slugs after sorting by `orderIndex` rather than in array order. Asking cannot be
+wrong in any of them.

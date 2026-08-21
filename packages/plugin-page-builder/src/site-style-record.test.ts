@@ -485,7 +485,11 @@ describe("judging the write against the tier it will be merged with", () => {
       slug: `c-${i}`,
     }));
 
-    expect(checkStoredClasses(tooMany).issues.join(" ")).toContain("at most");
+    // Named by the id that will not render, which is what a node references and
+    // the only thing the author can act on.
+    expect(checkStoredClasses(tooMany).issues.join(" ")).toContain(
+      `"c-${MAX_NAMED_CLASSES}"`
+    );
   });
 
   it("does not charge the writer for a class problem the CONFIG tier already had", () => {
@@ -524,13 +528,45 @@ describe("judging the write against the tier it will be merged with", () => {
       defaults: { classes: config as never },
     });
 
-    // BOTH participants, because naming them is what makes one collision
-    // distinguishable from another. A message saying only that "two different
-    // classes" hold the slug reads identically for either pair, and a
-    // difference keyed on it accepts the second as though it were the first.
-    const reported = result.issues.join(" ");
-    expect(reported).toContain('"y"');
-    expect(reported).toContain('"z"');
+    // `z` is the class that will not render, and naming it is the whole point:
+    // the pre-existing collision dropped `y`, this one drops `z`, and a check
+    // that could not tell those apart accepted the write.
+    expect(result.issues.join(" ")).toContain('"z"');
+  });
+
+  it("reports a class the write pushes past the cap, over an already-full config", () => {
+    // Config alone is over the cap, which the writer cannot fix. Adding one
+    // more is still their doing, and the class they just added is guaranteed
+    // not to render — so the overflow being inherited must not suppress it.
+    const overfull = Array.from({ length: MAX_NAMED_CLASSES + 1 }, (_, i) => ({
+      ...stored,
+      id: `cfg-${i}`,
+      slug: `cfg-${i}`,
+    }));
+
+    const result = checkStoredClasses([{ ...stored, id: "new", slug: "new" }], {
+      defaults: { classes: overfull as never },
+    });
+
+    expect(result.issues.join(" ")).toContain('"new"');
+  });
+
+  it("reports a config class the write reorders out of rendering", () => {
+    // The compiler claims slugs AFTER sorting by orderIndex, so a write that
+    // only changes precedence changes which of two colliding classes survives.
+    // Config renders `a` and drops `b`; moving `b` in front makes it render and
+    // drops `a`, which used to be on the page.
+    const config = [
+      { ...stored, id: "a", slug: "same", orderIndex: 0 },
+      { ...stored, id: "b", slug: "same", orderIndex: 1 },
+    ];
+
+    const result = checkStoredClasses(
+      [{ ...stored, id: "b", slug: "same", orderIndex: -1 }],
+      { defaults: { classes: config as never } }
+    );
+
+    expect(result.issues.join(" ")).toContain('"a"');
   });
 
   it("refuses a stored token colliding with a config one on a custom property", () => {
