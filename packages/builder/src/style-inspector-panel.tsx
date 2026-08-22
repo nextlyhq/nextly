@@ -308,6 +308,15 @@ function StyleControlField({
   const stored = readStyleValue(node?.styles, address);
   const [issue, setIssue] = React.useState<string | null>(null);
 
+  // A refusal describes the draft that produced it, so it stops describing
+  // anything the moment the document holds a different value here. Clearing on
+  // the stored value rather than only on the next commit is what covers an undo
+  // or an edit applied from elsewhere: the remount key changes with the
+  // SELECTION, and neither of those changes the selection.
+  React.useEffect(() => {
+    setIssue(null);
+  }, [stored]);
+
   /*
    * Read the node at commit time rather than closing over one. A field
    * committing on blur can fire after another edit has already replaced the
@@ -335,7 +344,19 @@ function StyleControlField({
   if (!control.supported) {
     return (
       <div className="nx-inspector__field" data-unsupported={control.leaf.kind}>
-        <Label htmlFor={id}>{label}</Label>
+        {/*
+          Plain text, not a `<label>`. This branch renders no control, so a
+          label would carry `htmlFor` to an id nothing has — which a screen
+          reader announces as a field that cannot be reached, worse than the
+          note below saying plainly that there is nothing to reach.
+
+          UNTESTED, and stated rather than left to be assumed: every leaf kind
+          the engine ships resolves to a control, so nothing reaches this branch
+          today. It exists for a catalog written by a NEWER engine, and the
+          catalog is compiled in rather than registered, so no fixture can hand
+          this panel an unknown kind.
+        */}
+        <p className="nx-style-inspector__property-label">{label}</p>
         <p className="nx-inspector__note">
           This build has no control for {control.leaf.kind} values.
         </p>

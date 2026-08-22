@@ -17,12 +17,12 @@ import {
 /*
  * The union-arm assertions below no longer describe a rule this package holds.
  * Arm selection is `styleUnionVariant`'s, in the engine, where it is also
- * tested — and each case here is one of the eight spellings review found a
- * local matcher getting wrong. They are kept rather than moved because what
- * they now cover is the SEAM: that this module asks, that it passes the site's
- * options through, and that it walks the arm it was handed. A change
- * reintroducing a local answer, or dropping `tokens` on the way down, fails
- * here and nowhere in the engine's own suite.
+ * tested. They are kept rather than moved because what they now cover is the
+ * SEAM: that this module asks, that it passes the site's options through, and
+ * that it walks the arm it was handed. A change reintroducing a local answer,
+ * or dropping `tokens` on the way down, fails here and nowhere in the engine's
+ * own suite — and each case is a spelling that is easy to get wrong, which is
+ * why they are worth keeping pointed at the seam rather than deleted.
  */
 
 /**

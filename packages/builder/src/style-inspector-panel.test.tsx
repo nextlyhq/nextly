@@ -325,6 +325,34 @@ describe("controls", () => {
     expect(screen.getByRole("alert").textContent).toContain("is not a length");
   });
 
+  it("drops a refusal once the document holds a different value here", () => {
+    // A refusal describes the draft that produced it. An undo, or an edit
+    // applied from somewhere else, leaves the SELECTION alone — so the remount
+    // key does not change and nothing else would clear the message, leaving an
+    // error under a field that now shows a different value.
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    const { rerender } = render(<StyleInspectorPanel editor={editor} />);
+
+    const field = fieldsOf("padding").getByLabelText("Block start");
+    fireEvent.change(field, { target: { value: "12 furlongs" } });
+    fireEvent.blur(field);
+    expect(screen.getByRole("alert")).toBeDefined();
+
+    const repaired = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { padding: { blockStart: "4px" } } },
+      } as NodeStyles)
+    );
+    rerender(<StyleInspectorPanel editor={repaired} />);
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
+        .value
+    ).toBe("4px");
+  });
+
   it("shows a stored token by name rather than as editable text", () => {
     // `{ $token }` is one value spelled as an object. Typing over it would
     // store the token's NAME as a literal — a value that looks right in the

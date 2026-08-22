@@ -675,8 +675,8 @@ describe("styleUnionVariant", () => {
     // Both arms take records, so the kind rule ties and depth is what decides.
     // The shape is BUILT rather than taken from the catalog because the catalog
     // ships no union of two composites: measured, removing the depth rule
-    // entirely left all 1306 engine tests green. This is a public entry point,
-    // so a caller can hand it the shape the catalog cannot express, and a rule
+    // entirely left every engine test green. This is a public entry point, so a
+    // caller can hand it the shape the catalog cannot express, and a rule
     // nothing exercises is one nobody would notice going wrong.
     //
     // An unknown key is NOT the discriminator — it reports at the key's own
