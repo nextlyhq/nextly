@@ -1181,18 +1181,45 @@ describe("what the arrow keys do and do not claim", () => {
     }
   );
 
+  it("swaps the unit on the quantity the AUTHOR is looking at", () => {
+    // Two controls edit one value. With the draft private to the text field,
+    // the menu read `stored` instead — so typing `20` over `12px` and then
+    // picking `rem` committed `12rem`, silently discarding the 20 on screen.
+    // `20` alone is refused on blur (padding takes no unitless number), which
+    // is exactly why the stale value was still there to be composed from.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const padding = fieldsOf("padding");
+    const field = padding.getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "20" } });
+    fireEvent.blur(field);
+    fireEvent.click(padding.getByLabelText("Unit for Padding block start"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+
+    const written = editor.apply.mock.calls.at(-1)?.[0] as {
+      patch?: {
+        styles?: Record<string, Record<string, Record<string, unknown>>>;
+      };
+    };
+    const side = written.patch?.styles?.base?.[BASE_BREAKPOINT]?.padding as
+      | { blockStart?: unknown }
+      | undefined;
+    expect(side?.blockStart).toBe("20rem");
+  });
+
   it("points a refusal at the unit menu as well as the field", () => {
     // A unit change can be refused, and the message explaining it is rendered
     // once for the whole field. A screen-reader user who returns to the MENU is
     // otherwise sitting on the control that failed with nothing saying so.
-    mount({ spacing: true }, withPadding("12px"), {
-      // A prefix the engine reserves, so any write from this field is refused.
-      allowedTokenKinds: undefined,
-    } as never);
+    // `-5px` is refused because `padding` takes no negative measurement, and it
+    // is still A MEASUREMENT — which matters, because the menu follows the
+    // draft. A refusal that leaves unparseable text behind removes the menu
+    // legitimately, so it could not carry a description at all.
+    mount({ spacing: true }, withPadding("12px"));
     const padding = fieldsOf("padding");
     const field = padding.getByLabelText("Block start");
 
-    fireEvent.change(field, { target: { value: "not a length" } });
+    fireEvent.change(field, { target: { value: "-5px" } });
     fireEvent.blur(field);
 
     // Asserted unconditionally. Guarding this on the menu being present would

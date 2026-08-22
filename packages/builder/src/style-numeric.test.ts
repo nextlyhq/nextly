@@ -65,6 +65,16 @@ describe("what a measurement is", () => {
     expect(measurementOf("-4px")).toMatchObject({ number: -4, unit: "px" });
   });
 
+  it("holds a stored NUMBER to the same round trip as a written one", () => {
+    // `line-height` stores a number, and `1e-7` printed back is `"1e-7"` —
+    // which the text path declines because composing it yields `0`. Read
+    // directly, the number branch answered `decimals: 0` and a step discarded
+    // the quantity entirely. The two paths must agree because they are one
+    // question.
+    expect(measurementOf(1e-7)).toBeUndefined();
+    expect(measurementOf("1e-7")).toBeUndefined();
+  });
+
   it("reads a stored NUMBER as a measurement with no unit", () => {
     // `number` leaves store numbers rather than strings, so reading only
     // strings would leave every opacity and line-height unsteppable while

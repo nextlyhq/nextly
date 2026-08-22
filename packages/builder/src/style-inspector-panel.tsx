@@ -68,7 +68,7 @@ import {
 } from "./style-inspector";
 import {
   CSS_NUMBER,
-  measurementOf,
+  measurementOfText,
   steppedValue,
   toggleOptionsFor,
   toggleShows,
@@ -1129,24 +1129,41 @@ function NumericField({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const units = unitChoicesFor(control.leaf);
-  const measurement = measurementOf(stored);
+  // The draft lives HERE rather than inside the text field, because two
+  // controls edit one value and the unit menu was reading the other copy. An
+  // author who types `20` over `12px` and then picks `rem` had the blur refuse
+  // the unitless draft, leaving `12px` stored — and the menu composed from
+  // THAT, committing `12rem` and discarding the 20 they were looking at.
+  const [draft, setDraft] = React.useState(() => storedText(stored));
+  // The stored value wins whenever it changes underneath — an undo, an edit
+  // applied from elsewhere. Without this both controls go on showing a value
+  // the document no longer has.
+  React.useEffect(() => {
+    setDraft(storedText(stored));
+  }, [stored]);
+  // Read from the DRAFT, so the menu offers units for the quantity on screen
+  // and swaps the unit on that quantity rather than on a superseded one.
+  const measurement = measurementOfText(draft);
   // The menu is shown only where it can act. Rendered against a value it cannot
   // decompose, every choice in it would be a no-op, and a disabled-looking
   // control that silently does nothing is worse than one that is not there.
   //
-  // A UNITLESS measurement is excluded for a different reason: `line-height: 1.5`
-  // has no unit to swap, and adding one changes what the property means rather
-  // than how it is spelled. The menu has no way to offer "no unit" back either,
-  // so showing one would be a one-way door.
-  const showUnits =
-    units.length > 0 && measurement !== undefined && measurement.unit !== "";
+  // A UNITLESS draft keeps the menu rather than losing it, because typing the
+  // quantity and then choosing the unit is an ordinary way to write one — and a
+  // control that vanishes mid-edit is worse than one showing no selection. A
+  // leaf with no units to offer never reaches this: `unitChoicesFor` answers
+  // empty for anything that is not a dimension, so `line-height` as a number
+  // has no menu to gain a unit from.
+  const showUnits = units.length > 0 && measurement !== undefined;
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
   // `PX` the validator folds — is live and compiles while matching no item, and
   // a controlled select over it renders an EMPTY trigger above a value that is
   // doing something. Offered verbatim as its own item, which is what the
   // keyword select above already does for a value outside its vocabulary.
   const extraUnit =
-    measurement !== undefined && !units.includes(measurement.unit)
+    measurement !== undefined &&
+    measurement.unit !== "" &&
+    !units.includes(measurement.unit)
       ? measurement.unit
       : null;
 
@@ -1156,6 +1173,8 @@ function NumericField({
         id={id}
         control={control}
         stored={stored}
+        draft={draft}
+        setDraft={setDraft}
         describedBy={describedBy}
         onCommit={onCommit}
         onStep={(draft, delta) => {
@@ -1170,10 +1189,15 @@ function NumericField({
       />
       {showUnits ? (
         <Select
-          value={measurement.unit}
+          // `undefined` rather than the empty string for a unitless draft: an
+          // empty value is not a choice the list can carry, so it is shown as
+          // no selection and the placeholder names what the menu is for.
+          value={measurement.unit === "" ? undefined : measurement.unit}
           onValueChange={unit => {
-            const next = withUnit(control.leaf, stored, unit);
-            if (next !== undefined) onCommit(next);
+            // Composed from the draft, which is what the author is looking at.
+            const next = withUnit(control.leaf, draft, unit);
+            if (next === undefined) return;
+            if (onCommit(next) !== "refused") setDraft(next);
           }}
         >
           <SelectTrigger
@@ -1188,7 +1212,7 @@ function NumericField({
             aria-describedby={describedBy}
             aria-invalid={describedBy === undefined ? undefined : true}
           >
-            <SelectValue />
+            <SelectValue placeholder="unit" />
           </SelectTrigger>
           <SelectContent>
             {extraUnit === null ? null : (
@@ -1217,6 +1241,8 @@ function TextField({
   id,
   control,
   stored,
+  draft,
+  setDraft,
   describedBy,
   onCommit,
   onStep,
@@ -1224,6 +1250,16 @@ function TextField({
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
+  /**
+   * The text being edited, owned by the caller.
+   *
+   * Lifted because a numeric row has TWO controls over one value — the field
+   * and the unit menu — and a draft private to this one leaves the other
+   * reading the stored value instead, which is a different and usually older
+   * answer to what the author is editing.
+   */
+  draft: string;
+  setDraft: (value: string) => void;
   /** The id of the message explaining a refusal, and what marks this invalid. */
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
@@ -1238,15 +1274,6 @@ function TextField({
    */
   onStep?: (draft: string, delta: number) => string | null;
 }): React.JSX.Element {
-  const [draft, setDraft] = React.useState(() => storedText(stored));
-
-  // The stored value wins whenever it changes underneath the field — an undo, a
-  // scrub, an edit applied from somewhere else. Without this the input would go
-  // on showing a value the document no longer has.
-  React.useEffect(() => {
-    setDraft(storedText(stored));
-  }, [stored]);
-
   const commit = () => {
     if (draft === storedText(stored)) return;
     // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also

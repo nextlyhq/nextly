@@ -134,8 +134,15 @@ export function measurementOf(
   value: StyleValue | undefined
 ): Measurement | undefined {
   if (typeof value === "number") {
+    // DELEGATED to the text path rather than decomposed here, so the
+    // round-trip guard applies to a stored number too. Read directly, this
+    // branch answered `{ number: 1e-7, decimals: 0 }` for a value the text path
+    // declines — and `line-height: 1e-7` then stepped to `1`, discarding the
+    // quantity. Two paths to one answer is the defect this module keeps
+    // producing; the number branch simply prints its value and asks the same
+    // question of it.
     return Number.isFinite(value)
-      ? { number: value, unit: "", decimals: decimalsOf(String(value)) }
+      ? measurementOfText(String(value))
       : undefined;
   }
   // Every remaining non-string is refused by the same test, and a token
