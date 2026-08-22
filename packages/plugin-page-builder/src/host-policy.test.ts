@@ -1,24 +1,16 @@
 /**
  * The host-fetch policy, read back from the wire.
  *
- * The claim this file exists to hold up is a ROUND TRIP: what the plugin
- * publishes onto `clientConfig` can be read back in the browser into a
- * predicate that answers the same way the published compiler does. Testing the
- * two helpers alone would pass on a build where the plugin published nothing,
- * which was the state before this change — the value was on the wire and no
- * surface read it.
+ * The claim this file holds up is a ROUND TRIP: what the plugin publishes onto
+ * `clientConfig` can be read back in the browser into a predicate that answers
+ * the same way the published compiler does. Testing the two helpers alone would
+ * pass on a build that published the patterns and read them nowhere, which is
+ * the state this whole module exists to make impossible.
  *
- * ## What this file does NOT cover
- *
- * The three JSX assignments in `BlocksField` — `hostPolicy` onto the canvas,
- * `policy` onto the inspector, and the `useMemo` that derives them. This
- * package has no React test environment (vitest runs `environment: "node"`,
- * there is no `@testing-library/react`, and no `.test.tsx` file exists here),
- * so a mount would mean standing up jsdom, a form context and a branding
- * provider inside a change that already spans three packages. Stated rather
- * than left for a reader to assume: the derivation is covered, the wiring is
- * covered on the builder side where a harness exists, and the prop assignment
- * itself is read by review.
+ * Which props carry the result to the canvas and the inspector is asserted in
+ * `admin/BlocksField.policy.test.tsx`, by observing what those two surfaces are
+ * handed. The split is deliberate: the derivation can be perfect while both
+ * props are absent, and neither file can see the other's failure.
  */
 import { isFetchableUrl } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
@@ -139,9 +131,10 @@ describe("the round trip from the plugin factory to a verdict", () => {
       remotePatterns: [{ hostname: "cdn.example", protocol: "https" }],
     });
 
-    // The step that was missing. The value being ON the wire was already true
-    // before this change; that nothing read it is what made the canvas and the
-    // inspector permissive while the published page was strict.
+    // The step the surfaces depend on. A value on the wire that nothing reads
+    // back leaves the canvas and the inspector permissive while the published
+    // page is strict, and the two halves fail independently — publishing
+    // without reading, and reading a value that was never published.
     const patterns = readRemotePatterns(config?.remotePatterns);
     const { mayFetchUrl } = hostFetchPolicy(patterns);
 
@@ -162,10 +155,10 @@ describe("the round trip from the plugin factory to a verdict", () => {
   });
 
   it("agrees with the policy the Site Style write gate was given", () => {
-    // Both sides of the wire derive from ONE function now, where the server
-    // previously had a private copy. This is what makes "a class refused on the
-    // canvas and served from the site sheet" unreachable rather than merely
-    // unobserved.
+    // Both sides of the wire derive from ONE function, which is what makes "a
+    // class refused on the canvas and served from the site sheet" unreachable
+    // rather than merely unobserved. Two derivations agreeing today is not the
+    // same property, and it is the one that drifts.
     const declared = [{ hostname: "cdn.example" }] as const;
     const server = hostFetchPolicy(declared);
     const browser = hostFetchPolicy(

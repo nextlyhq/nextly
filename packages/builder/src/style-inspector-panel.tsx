@@ -825,16 +825,23 @@ function RetainedValue({
   note?: string;
   onClear: () => void;
 }): React.JSX.Element {
+  const noteId = React.useId();
   return (
     <>
       {/*
         `group` for the reason {@link TokenValue} carries one: the ARIA
         `paragraph` role a bare paragraph maps to prohibits an accessible name.
+
+        The note is pointed AT rather than left beside: it is the only thing
+        saying why this value cannot be edited, and a group announced with its
+        name and its Clear button but not its reason tells a screen-reader user
+        that a field is read-only without ever saying what made it so.
       */}
       <p
         className="nx-style-inspector__token"
         role="group"
         aria-labelledby={labelledBy}
+        aria-describedby={note === undefined ? undefined : noteId}
         tabIndex={-1}
       >
         {/*
@@ -847,7 +854,11 @@ function RetainedValue({
           Clear
         </button>
       </p>
-      {note === undefined ? null : <p className="nx-inspector__note">{note}</p>}
+      {note === undefined ? null : (
+        <p className="nx-inspector__note" id={noteId}>
+          {note}
+        </p>
+      )}
     </>
   );
 }

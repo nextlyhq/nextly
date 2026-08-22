@@ -368,7 +368,11 @@ export function scrubPreviewCss(
     target.tokenPrefix,
     undefined,
     undefined,
-    { mayFetchUrl: target.policy?.mayFetchUrl }
+    // The WHOLE policy, not just the host half. The token table decides which
+    // arm of a union a stored reference belongs to, so forwarding half of it
+    // would let this preview compile through one arm while the control beside
+    // it draws another.
+    target.policy
   );
   // Two different outcomes wear one field. An ERROR means the compiler refused
   // the value, and nothing was written; a warning can accompany a declaration

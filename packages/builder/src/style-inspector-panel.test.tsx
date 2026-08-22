@@ -975,3 +975,26 @@ describe("a free-form value the panel must let an author repair", () => {
     ).toBeDefined();
   });
 });
+
+describe("naming a value the panel cannot edit", () => {
+  it("points the read-only group at the note explaining it", () => {
+    // The group carries the property's name and a Clear button. Without this
+    // the note beside it — the only thing saying WHY the value cannot be
+    // edited — is never announced, so a screen-reader user meets a read-only
+    // field with no account of what made it one.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontSize: { value: "12px" } } },
+    } as NodeStyles;
+    mount({ typography: true }, styles);
+
+    const group = fieldsOf("fontSize").getByRole("group", {
+      name: "Font size",
+    });
+    const describedBy = group.getAttribute("aria-describedby");
+
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy as string)?.textContent).toBe(
+      "No control here can edit this value. It is still on the page and can be cleared."
+    );
+  });
+});

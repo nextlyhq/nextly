@@ -39,7 +39,6 @@ import {
 import type {
   StyleIssueBudget,
   StyleUnionVariantOptions,
-  StyleValueOptions,
 } from "./validate-style-value";
 import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
 import type { WarningAllowance } from "./warning-allowance";
@@ -418,7 +417,13 @@ export function compileStyleValues(
   // Same object as validation takes, forwarded whole. This decides what reaches
   // a page from what validation REPORTED, so a policy the two do not share is a
   // policy the stylesheet does not have.
-  options?: StyleValueOptions
+  //
+  // The ARM resolver's option type, which is the wider one: it adds the site's
+  // token table. Which arm a token belongs to is a fact about the TOKEN and a
+  // stored reference carries only its name, so a caller holding that table and
+  // unable to pass it here would compile through an arm chosen by the catalog's
+  // order while the control that authored the value chose by the token's kind.
+  options?: StyleUnionVariantOptions
 ): CompiledDeclarations {
   // Strict, because this decides what reaches a page: a property this engine
   // does not know is preserved in the document and left out of the stylesheet,
@@ -453,7 +458,12 @@ export function compileStyleValues(
     "strict",
     budget,
     false,
-    undefined,
+    // The caller's table, so this run and the arm resolver below judge the same
+    // value against the same site. Passing it to one and not the other would
+    // put the arm the walk writes through and the arm validation judged under
+    // back out of step, which is the disagreement this file just stopped
+    // having.
+    options?.tokens,
     options
   );
   const stopped =

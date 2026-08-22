@@ -114,7 +114,7 @@ describe("which arm of a union a value is written through", () => {
     // The property that matters more than any single value: the compiler and
     // the editor ask ONE function. Asserted against `styleUnionVariant` rather
     // than against a table written here, because a table would be a second
-    // answer to the same question — the thing this change removes.
+    // answer to the same question, which is the defect this pins shut.
     const shape = unionShapeOf("borderRadius");
 
     expect(styleUnionVariant(shape, "4px")).toBe(0);
