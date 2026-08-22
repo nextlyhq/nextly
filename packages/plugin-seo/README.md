@@ -113,8 +113,14 @@ seoPlugin({
 Each entry's path below the prefix comes from `slugToStaticParam`, the same function the content
 route pre-renders from and a page's canonical is built with — so the sitemap lists the URL the page
 actually serves. A nested slug (`docs/getting-started`) keeps its segments, and a slug the route
-refuses to serve (a reserved path, a `..` segment, a stray leading or doubled slash) is skipped
-rather than advertised.
+refuses to serve (a `..` segment, a stray leading or doubled slash) is skipped rather than
+advertised.
+
+The reserved-path denylist — `/admin`, `/api`, `/sitemap.xml` and the rest — is judged on the
+**mounted** path, not on the slug alone, because it is anchored at the site root. A page called
+`admin` under a `/pages` mount is served at `/pages/admin` and is listed; the same page mounted at
+the site root collides with the admin panel and is skipped. `basePath` must be a plain path prefix:
+one carrying a query or fragment is rejected rather than silently emitted as a different URL.
 
 `basePath` may be a plain string when every collection shares a prefix, and returning `null` from
 the function excludes that collection from the sitemap entirely. Pass `""` for a collection served

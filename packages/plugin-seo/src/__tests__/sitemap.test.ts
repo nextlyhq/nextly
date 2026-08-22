@@ -94,10 +94,42 @@ describe("defaultUrlForEntry", () => {
     expect(defaultUrlForEntry({ slug: "trailing/" }, "pages")).toBeNull();
   });
 
-  it("skips a reserved path without keeping its own copy of the denylist", () => {
-    // `isReservedPath` is consulted inside slugToStaticParam; this module never
-    // names /admin itself.
-    expect(defaultUrlForEntry({ slug: "admin" }, "pages")).toBeNull();
+  it("judges the reserved-path denylist on the MOUNTED path, not the bare slug", () => {
+    // The denylist is anchored at the site root, so a page mounted under a
+    // prefix may legitimately be called `admin` — judging the slug alone drops
+    // an entry the route serves. None of these is reserved once mounted.
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages")).toBe("/pages/admin");
+    expect(defaultUrlForEntry({ slug: "api/keys" }, "pages")).toBe(
+      "/pages/api/keys"
+    );
+    expect(defaultUrlForEntry({ slug: "sitemap.xml" }, "pages")).toBe(
+      "/pages/sitemap.xml"
+    );
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages", "/blog")).toBe(
+      "/blog/admin"
+    );
+  });
+
+  it("still refuses a slug that IS reserved once mounted at the root", () => {
+    // The check is not weakened, only re-anchored: at the root these collide
+    // with the admin panel, the API and the well-known metadata files.
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages", "")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "api/keys" }, "pages", "")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "sitemap.xml" }, "pages", "")).toBeNull();
+    // And a mount that is itself reserved cannot host anything.
+    expect(defaultUrlForEntry({ slug: "x" }, "pages", "/admin")).toBeNull();
+  });
+
+  it("refuses a basePath carrying URL syntax rather than emitting a wrong URL", () => {
+    // `/docs?lang=en` would reach URL resolution as a query, advertising a
+    // location the route never serves. A misconfiguration should be an error,
+    // not a sitemap of subtly wrong URLs.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs?lang=en")
+    ).toThrow(/basePath must be a path prefix/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs#top")
+    ).toThrow(/basePath must be a path prefix/);
   });
 
   it("mounts a collection at a declared basePath", () => {
@@ -228,6 +260,24 @@ describe("buildSitemapUrls", () => {
     });
 
     expect(urls.map(u => u.loc)).toEqual(["https://x.com/custom/hello"]);
+  });
+
+  it("does not CALL a basePath function when a custom urlFor is supplied", async () => {
+    const services = stubServices({ posts: [[{ slug: "hello" }]] });
+    const basePath = vi.fn(() => null);
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      // Returning null would EXCLUDE the collection. "Ignored" has to mean the
+      // callback never runs, not merely that its string result goes unused —
+      // otherwise the exclusion path silently overrides the custom mapper.
+      basePath,
+      urlFor: entry => `/custom/${String(entry.slug)}`,
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/custom/hello"]);
+    expect(basePath).not.toHaveBeenCalled();
   });
 
   it("drops an entry whose canonical is on another host", async () => {

@@ -21,6 +21,7 @@ import { defaultSeoFields } from "./fields";
 import {
   generateSitemap,
   resolveBaseOrigin,
+  type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
 
@@ -72,8 +73,13 @@ export interface SeoPluginOptions {
    * name; returning `null` excludes that collection from the sitemap.
    *
    * Ignored when `urlFor` is supplied, which already owns the whole path.
+   *
+   * Typed FROM {@link SitemapOptions} rather than restated, because this option
+   * is passed through to it unchanged — the same reason `urlFor` above names
+   * `UrlForEntry`. Two independent declarations of one option agree on the day
+   * they are written and drift silently afterwards.
    */
-  basePath?: string | ((collection: string) => string | null);
+  basePath?: SitemapOptions["basePath"];
   /**
    * Controls the public sitemap route. `true` (the default) serves a sitemap of
    * the `collections` above. `false` omits the route entirely. Pass
@@ -197,9 +203,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   return definePlugin({
     name: "@nextlyhq/plugin-seo",
     version: PLUGIN_VERSION,
-    // Core-compat range (the field is literally `nextly`). Kept wide: the
-    // plugin only uses stable field factories + the `@public` plugin surface.
-    nextly: ">=0.0.2-alpha.21",
+    // Core-compat range (the field is literally `nextly`). Floor set by the
+    // OLDEST core that exports everything this plugin imports, not by the
+    // oldest one its features conceptually need: `sitemap.ts` reaches
+    // `slugToStaticParam` and `isReservedPath` from `nextly/runtime`, and
+    // `slugToStaticParam` first shipped in 0.0.2-alpha.55. On an earlier core
+    // the ESM import fails at module load, before the plugin can initialise, so
+    // a wider range advertises a compatibility that cannot resolve.
+    nextly: ">=0.0.2-alpha.55",
     author: "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)",
     homepage: "https://nextlyhq.com",
     repository: "https://github.com/nextlyhq/nextly",
