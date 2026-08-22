@@ -23,6 +23,29 @@
  * document, and it may already have a theme toggle — so this emits the values
  * under a strategy and takes no position on who flips it.
  *
+ * ## Identity is `id` when there is one, and the name otherwise
+ *
+ * A name is a label an author edits. Two things key off a token's IDENTITY and
+ * neither can move when that label does: the custom property emitted into every
+ * compiled sheet, and the `$token` string every stored document holds. So the
+ * identity is a separate field, exactly as `NamedClass` splits `id` from
+ * `slug` — and for the same reason, since an unresolved custom property
+ * invalidates the declaration rather than reporting, so a moved one loses the
+ * style with no symptom to follow.
+ *
+ * `id` is OPTIONAL, and that is the whole continuity argument rather than a
+ * convenience. Every token stored before the field existed has none, so its
+ * identity is its name, so it emits the property it already emitted and the
+ * documents referencing it already resolve. Nothing migrates. A rename then
+ * FREEZES the identity at the name it had — {@link renameSiteToken} is the one
+ * place that rule lives — and moves only the label.
+ *
+ * One consequence is worth stating because it is not obvious: ids and names
+ * share one custom-property space, so renaming `color.primary` does not fully
+ * free that name. A new token claiming it collides with the frozen id of the
+ * token that left it, and {@link emitTokenBlocks} refuses the second rather
+ * than letting one token resolve to the other's value.
+ *
  * @module style/site-tokens
  */
 import { isPlainRecord } from "../plain-record";
@@ -62,7 +85,18 @@ export type DarkModeStrategy = "attribute" | "media";
 
 /** One site token: a name, what kind of value it holds, and that value. */
 export interface SiteToken {
-  /** Dot-path name, as authors read and write it. */
+  /**
+   * Stable identity, when the token has been given one.
+   *
+   * What the emitted custom property and a document's `$token` key off, and
+   * what a rename never changes. Held to the same grammar as a name, because it
+   * reaches CSS through the same `tokenCustomProperty` call.
+   *
+   * Absent means the name IS the identity, which is what every token stored
+   * before this field existed relies on — see the module note.
+   */
+  id?: string;
+  /** Dot-path name, as authors read and write it. Free to change. */
   name: string;
   kind: TokenKind;
   /**
@@ -92,6 +126,36 @@ export interface SiteTokenSet {
   /** Custom-property prefix; `--site-` when unset. */
   prefix?: string;
   darkMode?: DarkModeStrategy;
+}
+
+/**
+ * What this token is, as against what it is called.
+ *
+ * The one answer to that question, because three things ask it — the custom
+ * property the emitter writes, the key a tier merge overrides on, and the
+ * string a document stores — and they have to agree by construction. Two of
+ * them agreeing today and drifting later has no symptom: a token whose
+ * identity moved emits a property nothing references, which reads exactly like
+ * a token whose value did not apply.
+ */
+export function tokenIdentity(token: SiteToken): string {
+  return token.id ?? token.name;
+}
+
+/**
+ * The token under a new name, with its identity pinned where it already was.
+ *
+ * The rename rule lives here rather than in each editor that offers one,
+ * because getting it wrong is silent in the direction that loses work: setting
+ * `id` to the NEW name moves the custom property and every stored `$token`
+ * stops resolving, which is the defect the field exists to prevent, and the
+ * page still renders — just without the style.
+ *
+ * Idempotent across repeated renames: the second one reads the id the first
+ * froze, so an identity is pinned once and never again.
+ */
+export function renameSiteToken(token: SiteToken, name: string): SiteToken {
+  return { ...token, id: tokenIdentity(token), name };
 }
 
 /** One file a font face can be loaded from. */
@@ -444,8 +508,11 @@ export function checkTokenKind(
  *
  * The three-tier arrangement this implements is the one Gutenberg's
  * `theme.json` reaches: core defaults, then the theme's file, then the user's
- * saved styles, each overriding the last by name. This function is the first
- * two tiers; a stored per-site override is the third and layers the same way.
+ * saved styles, each overriding the last by identity. This function is the
+ * first two tiers; a stored per-site override is the third and layers the same
+ * way. Gutenberg keys that override on a preset's `slug` rather than on its
+ * display `name` for the reason this does: the machine key is the one that
+ * must not move when an author edits the label.
  *
  * **ONE implementation of "what tokens does this site have", deliberately.** The
  * emitter and any future editor must not answer it separately — two answers
@@ -459,15 +526,27 @@ export function checkTokenKind(
  * reason.
  */
 export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
-  const byName = new Map<string, SiteToken>();
-  for (const token of defaultSiteTokens()) byName.set(token.name, token);
-  // Second, so a site's own definition wins the name. Iterated rather than
+  // Keyed on IDENTITY rather than on the name, because a tier overrides the
+  // token and not the label. A site that renamed a default holds it under the
+  // default's identity with a name of its own, and keying on the name would
+  // leave the default in place beside it — two entries where the author edited
+  // one, colliding on the single custom property they both key off.
+  //
+  // For a set where nothing carries an id this is the same map it always was:
+  // every identity is a name, so no existing token changes tier or slot.
+  const byIdentity = new Map<string, SiteToken>();
+  for (const token of defaultSiteTokens()) {
+    byIdentity.set(tokenIdentity(token), token);
+  }
+  // Second, so a site's own definition wins the identity. Iterated rather than
   // spread, because a later duplicate WITHIN the override must also win — an
   // imported DTCG file can carry one, and taking the first would apply a value
   // the author replaced.
-  for (const token of override?.tokens ?? []) byName.set(token.name, token);
+  for (const token of override?.tokens ?? []) {
+    byIdentity.set(tokenIdentity(token), token);
+  }
   return {
-    tokens: [...byName.values()],
+    tokens: [...byIdentity.values()],
     ...(override?.prefix === undefined ? {} : { prefix: override.prefix }),
     ...(override?.darkMode === undefined
       ? {}
@@ -719,6 +798,19 @@ export function emitTokenBlocks(
       );
       continue;
     }
+    // An id reaches the same selector by the same route, so it is held to the
+    // same grammar. Checked separately from the name rather than through the
+    // identity alone, so the report names the field the author has to repair —
+    // a token whose id is unwritable and whose name is fine reads as a good
+    // token otherwise, and "rename it" would be advice that fixes nothing.
+    if (token.id !== undefined && !isTokenName(token.id)) {
+      issues.push(
+        tokenIssue(
+          `"${token.name}" has an id that is not a token name, so it was not written. An id is dot-separated words of letters, digits and dashes, like "color.primary".`
+        )
+      );
+      continue;
+    }
     // A token with no values record at all. Site tokens are one settings row read on every page
     // render and reach here whether or not anything validated them, so a missing field has to
     // cost the token rather than the render: reading through it throws, and one corrupt row would
@@ -766,16 +858,22 @@ export function emitTokenBlocks(
       );
       continue;
     }
-    const property = tokenCustomProperty(token.name, prefix);
-    // Two names can land on one property — `color.primary-dark` and
+    // Composed from the IDENTITY, which is the name until a rename pins one.
+    // That is what keeps an already-compiled page working: its CSS references
+    // the property this token emitted when the page was built, and only a moved
+    // identity moves it.
+    const property = tokenCustomProperty(tokenIdentity(token), prefix);
+    // Two identities can land on one property — `color.primary-dark` and
     // `color-primary.dark` both give `--site-color-primary-dark`. Emitting both
     // would let one silently resolve to the other's value, so the second is
-    // refused and named.
+    // refused and named. Ids share this space with names, so the other way to
+    // arrive here is a new token claiming a name that a renamed token still
+    // holds as its id.
     const previous = seen.get(property);
     if (previous !== undefined) {
       issues.push(
         tokenIssue(
-          `"${token.name}" and "${previous}" both become "${property}", so "${token.name}" was not written. Rename one of them.`
+          `"${token.name}" and "${previous}" both become "${property}", so "${token.name}" was not written. Two tokens cannot share one custom property: rename one of them, or give one a different id.`
         )
       );
       continue;

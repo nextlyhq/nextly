@@ -7,8 +7,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { DtcgNode } from "./dtcg";
 import { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./dtcg";
 import type { SiteToken } from "./site-tokens";
+import { renameSiteToken } from "./site-tokens";
 
 const tokens = (list: SiteToken[]) => ({ tokens: list });
 
@@ -656,5 +658,123 @@ describe("the round trip", () => {
       carried = dtcgToTokens(tokensToDtcg(tokens(carried)).document).tokens;
     }
     expect(carried).toEqual(original);
+  });
+});
+
+describe("a token's stable identity across the format", () => {
+  // The identity DTCG itself cannot express: the format knows a token by its
+  // path, so this rides in `$extensions` under the vendor key the spec asks
+  // for and the spec guarantees other tools preserve.
+  const renamed = renameSiteToken(
+    { name: "color.primary", kind: "color", values: { light: "#2563eb" } },
+    "brand.main"
+  );
+
+  const own = (
+    document: DtcgNode,
+    ...path: string[]
+  ): Record<string, unknown> => {
+    let node: Record<string, unknown> = document;
+    for (const segment of path) node = node[segment] as Record<string, unknown>;
+    const extensions = node.$extensions as Record<string, unknown>;
+    return extensions[NEXTLY_EXTENSION] as Record<string, unknown>;
+  };
+
+  it("nests under the CURRENT name and carries the identity in the extension", () => {
+    // Both halves matter and they pull apart. The path is what a designer reads
+    // in Figma, so it has to be the name the author sees; the identity is what
+    // a document and a compiled sheet key off, so it cannot be the path.
+    const { document, issues } = tokensToDtcg(tokens([renamed]));
+
+    expect(issues).toEqual([]);
+    expect(Object.keys(document)).toEqual(["brand"]);
+    expect(own(document, "brand", "main").id).toBe("color.primary");
+  });
+
+  it("reads the identity back, so a rename survives a trip through the format", () => {
+    // Exporting to Style Dictionary and importing the result must not quietly
+    // re-point a token at its own label — every reference written against the
+    // old identity would stop resolving, and stop resolving silently.
+    const { tokens: read } = dtcgToTokens(
+      tokensToDtcg(tokens([renamed])).document
+    );
+
+    expect(read).toEqual([renamed]);
+    expect(read[0]?.id).toBe("color.primary");
+    expect(read[0]?.name).toBe("brand.main");
+  });
+
+  it("writes no id at all for a token that never moved", () => {
+    // A field present on every token says nothing about identity and everything
+    // about which exporter ran, and it is data another tool must then carry.
+    const { document } = tokensToDtcg(
+      tokens([
+        { name: "color.primary", kind: "color", values: { light: "#2563eb" } },
+      ])
+    );
+
+    expect(own(document, "color", "primary")).not.toHaveProperty("id");
+  });
+
+  it("invents no identity for a file that came from somewhere else", () => {
+    // A file from Figma carries no vendor key of ours to read one out of.
+    // Minting one here would be this importer deciding what a token IS on the
+    // strength of nothing, and the honest answer — the name — is what an absent
+    // id already means everywhere else in the model.
+    const { tokens: read } = dtcgToTokens({
+      color: {
+        primary: {
+          $type: "color",
+          $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+        },
+      },
+    });
+
+    expect(read[0]).not.toHaveProperty("id");
+    expect(read[0]?.name).toBe("color.primary");
+  });
+
+  it("normalises away an id that merely repeats the name", () => {
+    // `id === name` states exactly what an absent id states. Keeping it would
+    // leave the model with two spellings of one fact, and a reader deciding
+    // which of them means "never renamed".
+    const { tokens: read } = dtcgToTokens({
+      brand: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+        $extensions: {
+          [NEXTLY_EXTENSION]: {
+            css: { light: "#000" },
+            kind: "color",
+            id: "brand",
+          },
+        },
+      },
+    });
+
+    expect(read[0]).not.toHaveProperty("id");
+  });
+
+  it("skips a token whose stated id could never be written, rather than dropping the id", () => {
+    // Importing it WITHOUT the id is the tempting repair and it is the wrong
+    // one: the token would arrive with its name for an identity, emit a
+    // different custom property from the one the file describes, and every
+    // reference written against the stated identity would resolve to nothing.
+    const { tokens: read, issues } = dtcgToTokens({
+      brand: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+        $extensions: {
+          [NEXTLY_EXTENSION]: {
+            css: { light: "#000" },
+            kind: "color",
+            id: "color}primary",
+          },
+        },
+      },
+    });
+
+    expect(read).toEqual([]);
+    expect(issues.some(i => i.message.includes("id"))).toBe(true);
   });
 });

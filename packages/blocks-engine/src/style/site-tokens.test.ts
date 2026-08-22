@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import { compileStyleValues } from "./declarations";
+import type { SiteToken } from "./site-tokens";
 import {
   checkTokenKind,
   DARK_MODE_ATTRIBUTE,
@@ -16,6 +17,8 @@ import {
   emitFontFaces,
   emitTokenBlocks,
   isTokenName,
+  renameSiteToken,
+  tokenIdentity,
   tokenValueFetches,
   resolveTokenPrefix,
   validateFontFace,
@@ -739,5 +742,138 @@ describe("the surface, border and muted tokens", () => {
 
     expect(surface?.light).not.toBe(background?.light);
     expect(surface?.dark).not.toBe(background?.dark);
+  });
+});
+
+describe("a token's stable identity", () => {
+  // `color.primary` under a name an author has since moved away from. Written
+  // once because every case below is about what does NOT move with the label.
+  const renamed = (): SiteToken =>
+    renameSiteToken(
+      { name: "color.primary", kind: "color", values: { light: "#2563eb" } },
+      "brand.main"
+    );
+
+  it("is the name while a token carries no id", () => {
+    // The continuity case, and the one that decides whether any of this can
+    // reach an existing site: every token stored before the field existed has
+    // no id, so the identity has to fall back to the thing those sites already
+    // reference. A separate default here — anything but the name — would move
+    // the custom property under every already-compiled page at once.
+    const stored: SiteToken = {
+      name: "color.primary",
+      kind: "color",
+      values: { light: "#2563eb" },
+    };
+
+    expect(tokenIdentity(stored)).toBe("color.primary");
+    const { css } = emitTokenBlocks({ tokens: [stored] }, SCOPE);
+    expect(css).toContain("--site-color-primary:#2563eb");
+  });
+
+  it("keeps the custom property and the stored reference in step across a rename", () => {
+    // The whole point of the field, asserted from BOTH sides at once. A page
+    // compiled before the rename holds `var(--site-color-primary)` in its CSS,
+    // and a stored document holds `{ $token: "color.primary" }`. Neither is
+    // rewritten by a rename, so both have to keep meaning what they meant —
+    // and an unresolved custom property invalidates the declaration rather
+    // than reporting, so the failure this guards has no symptom on the page.
+    const token = renamed();
+    expect(token.name).toBe("brand.main");
+
+    const { css } = emitTokenBlocks({ tokens: [token] }, SCOPE);
+    expect(css).toContain("--site-color-primary:#2563eb");
+    expect(css).not.toContain("--site-brand-main");
+
+    const reference = compileStyleValues(
+      { color: { $token: "color.primary" } },
+      "/styles",
+      undefined
+    );
+    expect(reference.declarations[0]?.value).toBe("var(--site-color-primary)");
+  });
+
+  it("pins the identity ONCE, so a second rename does not move it either", () => {
+    // A rename that read the CURRENT name each time would pin the identity to
+    // whatever the token was called just before the latest edit, which moves
+    // the custom property on every rename after the first — the same defect,
+    // one rename later, and no louder.
+    const twice = renameSiteToken(renamed(), "palette.hero");
+
+    expect(twice.name).toBe("palette.hero");
+    expect(tokenIdentity(twice)).toBe("color.primary");
+    expect(emitTokenBlocks({ tokens: [twice] }, SCOPE).css).toContain(
+      "--site-color-primary:"
+    );
+  });
+
+  it("lets a renamed override replace the default it came from, rather than joining it", () => {
+    // A tier merge keyed on the NAME stops matching the moment an author
+    // renames a default, so the default survives beside the override — two
+    // entries where the author edited one, both keying off the single custom
+    // property they share. The COUNT is the assertion: a set one larger than
+    // the defaults is that failure.
+    const override = renameSiteToken(
+      { name: "color.primary", kind: "color", values: { light: "#ff0000" } },
+      "brand.main"
+    );
+    const resolved = resolveSiteTokens({ tokens: [override] });
+
+    expect(resolved.tokens.length).toBe(defaultSiteTokens().length);
+    const matches = resolved.tokens.filter(
+      t => tokenIdentity(t) === "color.primary"
+    );
+    expect(matches.length).toBe(1);
+    expect(matches[0]?.name).toBe("brand.main");
+    expect(matches[0]?.values.light).toBe("#ff0000");
+  });
+
+  it("refuses a new token claiming the name a renamed one still holds as its id", () => {
+    // Renaming frees the LABEL and not the custom property behind it, because
+    // ids and names share that one space. Writing both would let a page that
+    // still references the old name resolve to the new token's value, which is
+    // a wrong colour rather than a missing one — so the second is refused and
+    // named instead.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          renamed(),
+          {
+            name: "color.primary",
+            kind: "color",
+            values: { light: "#ff0000" },
+          },
+        ],
+      },
+      SCOPE
+    );
+
+    expect(css).toContain("--site-color-primary:#2563eb");
+    expect(css).not.toContain("#ff0000");
+    expect(issues.some(i => i.message.includes("--site-color-primary"))).toBe(
+      true
+    );
+  });
+
+  it("refuses an id that cannot be written as a custom property", () => {
+    // An id reaches the selector by the same route a name does, so it is held
+    // to the same grammar: one holding `}` would close the rule this opened and
+    // everything after it becomes CSS the site never wrote.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            id: "color}primary;color:red",
+            name: "brand.main",
+            kind: "color",
+            values: { light: "#2563eb" },
+          },
+        ],
+      },
+      SCOPE
+    );
+
+    expect(css).toBe("");
+    expect(issues.some(i => i.message.includes("id"))).toBe(true);
   });
 });
