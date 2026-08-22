@@ -205,19 +205,24 @@ export function inspectStyle(
 }
 
 /**
- * The allowed properties of one group, in the catalog's order.
+ * The allowed properties of one group, in the CATALOG's order.
  *
- * Filtered from the allowed set rather than intersected with
- * `stylePropertiesInGroup`, so the ORDER is the one the engine emits in and not
- * an artefact of how the set was built.
+ * Read off `STYLE_CATALOG` rather than off the allowed set. A `Set` iterates in
+ * insertion order, and the set above is built in two passes — everything the
+ * block supports, then anything it merely retains — so a group holding both
+ * listed the supported one first however the catalog declares them. Measured:
+ * a block supporting `border: { radius: true }` while still storing `border`
+ * listed `borderRadius, border` where the catalog says `border, borderRadius`.
  */
 function propertiesInGroup(
   allowed: ReadonlySet<string>,
   group: StyleGroup
 ): readonly string[] {
   const rows: string[] = [];
-  for (const property of allowed) {
-    if (getStyleProperty(property)?.group === group) rows.push(property);
+  for (const entry of STYLE_CATALOG) {
+    if (entry.group === group && allowed.has(entry.property)) {
+      rows.push(entry.property);
+    }
   }
   return rows;
 }

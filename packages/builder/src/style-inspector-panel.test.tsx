@@ -538,6 +538,26 @@ describe("controls", () => {
     expect(editor.apply).toHaveBeenCalledTimes(1);
   });
 
+  it("names a read-only value through its label, which `for` cannot reach", () => {
+    // HTML's `for` associates a label only with a LABELABLE element — input,
+    // select, textarea, button, output, meter, progress. These branches render
+    // a paragraph, so the association is dropped silently and the value has no
+    // accessible name at all.
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: { padding: { blockStart: { $token: "space.4" } } },
+      },
+    } as NodeStyles;
+    mount({ spacing: true }, styles);
+
+    const value = fieldsOf("padding").getByText("space.4").closest("p");
+    const labelledBy = value?.getAttribute("aria-labelledby");
+    expect(labelledBy).toBeTruthy();
+    expect(document.getElementById(labelledBy as string)?.textContent).toBe(
+      "Block start"
+    );
+  });
+
   it("names a token's clear action for its property, not just 'Clear'", () => {
     // Several token-valued properties on one panel would otherwise be a column
     // of identical buttons, and the label pointed at an id nothing carried.

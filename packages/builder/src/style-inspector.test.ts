@@ -241,6 +241,27 @@ describe("a property the block no longer supports", () => {
     expect(typography?.properties[0]?.set).toBe(true);
   });
 
+  it("lists a retained property in the CATALOG's order, not discovery order", () => {
+    // The allowed set is built in two passes — supported, then retained — and a
+    // `Set` iterates in insertion order, so a group holding both listed the
+    // supported one first however the catalog declares them. `border` is
+    // declared before `borderRadius`, and only the second is supported here.
+    register({ border: { radius: true } });
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { border: "1px solid red" } },
+    } as NodeStyles;
+
+    const inspection = inspectStyle(documentOf(styles), "a");
+    const border = inspection?.sections.find(
+      section => section.group === "border"
+    );
+
+    expect(border?.properties.map(p => p.property)).toEqual([
+      "border",
+      "borderRadius",
+    ]);
+  });
+
   it("marks a property the block does support as offered", () => {
     register({ spacing: true });
 

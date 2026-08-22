@@ -597,21 +597,29 @@ function StyleControlField({
     );
   }
 
+  // A value that cannot be typed into is shown, not edited — and HTML's `for`
+  // only associates a label with a LABELABLE element (input, select, textarea,
+  // button, output, meter, progress). Pointing it at the paragraph those
+  // branches render drops the association silently, so the label carries an id
+  // of its own and the value points back at it instead.
+  const readOnly = clearOnly || isTokenRef(stored);
+  const labelId = `${id}-label`;
+
   return (
     <div className="nx-inspector__field" data-control={control.kind}>
-      <Label htmlFor={id} title={summary}>
+      <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
         {label}
       </Label>
       {clearOnly ? (
         <RetainedValue
-          id={id}
+          labelledBy={labelId}
           label={actionName}
           stored={stored}
           onClear={() => commit(null)}
         />
       ) : isTokenRef(stored) ? (
         <TokenValue
-          id={id}
+          labelledBy={labelId}
           label={actionName}
           name={stored.$token}
           onClear={() => commit(null)}
@@ -644,12 +652,13 @@ function StyleControlField({
  * yet, so what is offered here is the honest half: see it, or clear it.
  */
 function TokenValue({
-  id,
+  labelledBy,
   label,
   name,
   onClear,
 }: {
-  id: string;
+  /** The id of the label element that names this value. */
+  labelledBy: string;
   label: string;
   name: string;
   onClear: () => void;
@@ -660,7 +669,11 @@ function TokenValue({
     // PROPERTY, because a panel with several token-valued properties otherwise
     // offers a column of buttons all called "Clear" and a screen-reader user
     // cannot tell which style each one removes.
-    <p className="nx-style-inspector__token" id={id} tabIndex={-1}>
+    <p
+      className="nx-style-inspector__token"
+      aria-labelledby={labelledBy}
+      tabIndex={-1}
+    >
       <span>{name}</span>
       <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
         Clear
@@ -676,18 +689,23 @@ function TokenValue({
  * these on one panel would otherwise be a column of identical "Clear" buttons.
  */
 function RetainedValue({
-  id,
+  labelledBy,
   label,
   stored,
   onClear,
 }: {
-  id: string;
+  /** The id of the label element that names this value. */
+  labelledBy: string;
   label: string;
   stored: StyleValue | undefined;
   onClear: () => void;
 }): React.JSX.Element {
   return (
-    <p className="nx-style-inspector__token" id={id} tabIndex={-1}>
+    <p
+      className="nx-style-inspector__token"
+      aria-labelledby={labelledBy}
+      tabIndex={-1}
+    >
       <span>{isTokenRef(stored) ? stored.$token : storedText(stored)}</span>
       <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
         Clear
