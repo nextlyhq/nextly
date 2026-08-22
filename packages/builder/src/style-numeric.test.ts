@@ -95,6 +95,19 @@ describe("what a measurement is", () => {
     expect(measurementOf(stringifies)).toBeUndefined();
   });
 
+  it.each([
+    ["9007199254740993", "an integer past the safe range"],
+    ["1e-3", "exponent notation"],
+    [".5", "a leading point"],
+    ["+5", "an explicit plus"],
+  ])("declines %s (%s), which does not survive a number round trip", digits => {
+    // The engine accepts all four. A double changes each of them — the first
+    // comes back SMALLER than it started — so composing one writes a value the
+    // author never typed. Asserted as one family rather than one case, because
+    // they were found one at a time and nothing says the list is closed.
+    expect(measurementOf(`${digits}px`)).toBeUndefined();
+  });
+
   it("keeps the author's precision rather than the double's", () => {
     expect(measurementOf("1.50rem")).toMatchObject({
       number: 1.5,
@@ -128,8 +141,15 @@ describe("stepping a dimension", () => {
     }
   );
 
-  it("answers in the author's own precision", () => {
+  it("rounds at the author's own precision", () => {
+    // Rounded at two decimals because the value was written with two. Read at
+    // the double's apparent one, this would answer `1.8rem`.
     expect(steppedValue(PADDING, "1.50rem", 0.25)).toBe("1.75rem");
+    // The count governs ROUNDING and not spelling: the trailing zero does not
+    // come back, because the composed text is re-parsed to drop the zeros that
+    // rounding introduces. Asserted so the distinction is written down rather
+    // than left for a reader to infer from a comment.
+    expect(steppedValue(PADDING, "1.50rem", 0.1)).toBe("1.6rem");
   });
 
   it("does not answer in floating point", () => {

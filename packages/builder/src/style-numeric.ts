@@ -74,12 +74,20 @@ export interface Measurement {
   /** The unit as WRITTEN, or `""` for a unitless value. */
   readonly unit: string;
   /**
-   * How many digits followed the decimal point, so a step can answer in the
+   * How many digits followed the decimal point, so a step ROUNDS at the
    * author's own precision.
    *
-   * Carried rather than recovered from {@link number}, because the number has
-   * already lost it: `1.50` and `1.5` parse to the same double, and stepping
-   * the first should not silently reformat it to the second.
+   * Carried rather than recovered from {@link number}, which has already lost
+   * it: `1.50` and `1.5` parse to the same double, so without this a step of
+   * `0.25` on `1.50rem` would round to the value's apparent one decimal and
+   * answer `1.8rem` instead of `1.75rem`.
+   *
+   * It governs ROUNDING and not spelling. A trailing zero is not preserved
+   * through a step — `1.50` stepped by `0.1` answers `1.6`, not `1.60` —
+   * because the composed text is re-parsed to drop the zeros that rounding
+   * introduces. Stated because the two are easy to conflate, and a reader
+   * expecting the spelling back would find the value correct and the text
+   * changed.
    */
   readonly decimals: number;
 }
@@ -147,34 +155,47 @@ export function measurementOfText(text: string): Measurement | undefined {
   const match = MEASUREMENT.exec(trimmed);
   if (match === null) return undefined;
   const [, digits = "", unit = ""] = match;
-  // Exponent notation is DECLINED rather than decomposed. It is a legal CSS
-  // number, and the affordances cannot carry it: there is no decimal count that
-  // both preserves `1e-3` and survives a step, so composing one back rounds a
-  // real value to `0` — which is the silent destruction this module exists to
-  // prevent, committed by the module itself. Declining keeps the plain field,
-  // where the value stays exactly as written and remains editable.
-  if (/[eE]/.test(digits)) return undefined;
   const number = Number(digits);
   if (!Number.isFinite(number)) return undefined;
   const decimals = decimalsOf(digits);
   // Precision the formatter cannot round to is DECLINED, not truncated. The
   // engine accepts a length with more fractional digits than `toFixed` takes,
-  // and composing one would throw mid-keystroke — so the affordances step aside
-  // and the plain field keeps the value, which is what it does for every other
-  // spelling it cannot decompose.
+  // and composing one would throw mid-keystroke. Checked BEFORE the round trip
+  // below, which would be the thing that throws.
   if (decimals > MAX_FRACTION_DIGITS) return undefined;
+  // THE PROJECTION MUST REPRODUCE ITS OWN INPUT, or it does not get to edit it.
+  //
+  // A `number` is a double, and three separate spellings the engine accepts
+  // survive the trip through one changed: `1e-3` comes back `0.001`,
+  // `9007199254740993` comes back `9007199254740992` — smaller than it started
+  // — and `.5` comes back `0.5`. Composing any of them writes a value the
+  // author never typed, which is the silent rewrite this module exists to
+  // prevent, committed by the module itself.
+  //
+  // Asked as one question rather than as a guard per spelling, because the
+  // three above were found one at a time and there is no reason to think the
+  // list is closed. Anything that does not round-trip keeps the plain field,
+  // where it stays exactly as written and fully editable.
+  //
+  // Conservative by design: `+5` and `05` are legal and do not round-trip
+  // either, so they lose the affordances too. For an editing aid that is the
+  // cheap direction to be wrong in — the value still works and can still be
+  // typed, which is not true of the alternative.
+  const rewritten = decimals === 0 ? String(number) : number.toFixed(decimals);
+  if (rewritten !== digits) return undefined;
   return { number, unit, decimals };
 }
 
 /**
  * How many digits follow the decimal point in a written number.
  *
- * Read from the TEXT rather than from the parsed double, which no longer knows:
- * a step applied to `1.50` answers `1.60` rather than `1.6`, so a field does
- * not reformat itself under an author who was mid-edit.
+ * Read from the TEXT rather than from the parsed double, which no longer knows
+ * the difference between `1.50` and `1.5` — and the count is what a step rounds
+ * at, so losing it coarsens the result rather than merely reformatting it.
  *
- * Exponent notation never reaches here, because {@link measurementOf} declines
- * it — see the note there for why rounding it was the wrong answer.
+ * Exponent notation reaches here and answers 0, which is correct for what this
+ * measures: it never survives the round-trip check in {@link measurementOfText}
+ * regardless, so no caller sees the count.
  */
 function decimalsOf(digits: string): number {
   const point = digits.indexOf(".");
