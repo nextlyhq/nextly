@@ -117,10 +117,15 @@ refuses to serve (a `..` segment, a stray leading or doubled slash) is skipped r
 advertised.
 
 The reserved-path denylist — `/admin`, `/api`, `/sitemap.xml` and the rest — is judged on the
-**mounted** path, not on the slug alone, because it is anchored at the site root. A page called
-`admin` under a `/pages` mount is served at `/pages/admin` and is listed; the same page mounted at
-the site root collides with the admin panel and is skipped. `basePath` must be a plain path prefix:
-one carrying a query or fragment is rejected rather than silently emitted as a different URL.
+**stored slug**, which is the value the content route itself checks: the route joins its catch-all
+params, and those exclude the mount prefix. So a page stored as `admin` is skipped under every
+mount, including a non-root one, because the route answers `notFound()` for it either way. Listing
+it because `/pages/admin` looks unreserved would advertise a dead link.
+
+`basePath` must be a plain path prefix. One carrying a query or fragment is rejected rather than
+silently emitted as a different URL, and it is checked once per collection so an empty collection
+cannot hide the misconfiguration. It is used verbatim — already-escaped prefixes such as
+`/docs%20archive` are not encoded a second time.
 
 `basePath` may be a plain string when every collection shares a prefix, and returning `null` from
 the function excludes that collection from the sitemap entirely. Pass `""` for a collection served

@@ -94,30 +94,27 @@ describe("defaultUrlForEntry", () => {
     expect(defaultUrlForEntry({ slug: "trailing/" }, "pages")).toBeNull();
   });
 
-  it("judges the reserved-path denylist on the MOUNTED path, not the bare slug", () => {
-    // The denylist is anchored at the site root, so a page mounted under a
-    // prefix may legitimately be called `admin` — judging the slug alone drops
-    // an entry the route serves. None of these is reserved once mounted.
-    expect(defaultUrlForEntry({ slug: "admin" }, "pages")).toBe("/pages/admin");
-    expect(defaultUrlForEntry({ slug: "api/keys" }, "pages")).toBe(
-      "/pages/api/keys"
-    );
-    expect(defaultUrlForEntry({ slug: "sitemap.xml" }, "pages")).toBe(
-      "/pages/sitemap.xml"
-    );
-    expect(defaultUrlForEntry({ slug: "admin" }, "pages", "/blog")).toBe(
-      "/blog/admin"
-    );
+  it("refuses a reserved slug under EVERY mount, because the route does", () => {
+    // The route joins its catch-all params — which exclude the static mount
+    // prefix — and checks the denylist on that, so a page stored as `admin`
+    // reaches notFound() wherever it is mounted. Listing `/pages/admin` because
+    // that final URL looks unreserved would advertise a dead link.
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "api/keys" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "sitemap.xml" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages", "/blog")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages", "")).toBeNull();
   });
 
-  it("still refuses a slug that IS reserved once mounted at the root", () => {
-    // The check is not weakened, only re-anchored: at the root these collide
-    // with the admin panel, the API and the well-known metadata files.
-    expect(defaultUrlForEntry({ slug: "admin" }, "pages", "")).toBeNull();
-    expect(defaultUrlForEntry({ slug: "api/keys" }, "pages", "")).toBeNull();
-    expect(defaultUrlForEntry({ slug: "sitemap.xml" }, "pages", "")).toBeNull();
-    // And a mount that is itself reserved cannot host anything.
-    expect(defaultUrlForEntry({ slug: "x" }, "pages", "/admin")).toBeNull();
+  it("does not re-encode an already-escaped mount prefix", () => {
+    // The prefix is a caller-supplied pathname; only the route-derived segments
+    // are encoded. Encoding it twice names a different mount.
+    expect(
+      defaultUrlForEntry({ slug: "about" }, "pages", "/docs%20archive")
+    ).toBe("/docs%20archive/about");
+    expect(defaultUrlForEntry({ slug: "a b" }, "pages", "/caf%C3%A9")).toBe(
+      "/caf%C3%A9/a%20b"
+    );
   });
 
   it("refuses a basePath carrying URL syntax rather than emitting a wrong URL", () => {
@@ -230,11 +227,24 @@ describe("buildSitemapUrls", () => {
   });
 
   it("excludes a collection whose basePath is null WITHOUT reading it", async () => {
-    const spy = vi.fn();
-    const services = stubServices(
+    const listSpy = vi.fn();
+    const metaSpy = vi.fn();
+    const base = stubServices(
       { pages: [[{ slug: "about" }]], secret: [[{ slug: "hidden" }]] },
-      spy
+      listSpy
     );
+    // BOTH service methods are recorded. Watching `listEntries` alone leaves the
+    // metadata read unwatched, and a regression that resolves the collection
+    // before consulting basePath returns the same URLs and passes.
+    const services: SitemapServices = {
+      collections: {
+        getCollection: async (slug, ctx) => {
+          metaSpy(slug);
+          return base.collections.getCollection(slug, ctx);
+        },
+        listEntries: base.collections.listEntries,
+      },
+    };
 
     const urls = await buildSitemapUrls(services, {
       collections: ["pages", "secret"],
@@ -243,10 +253,26 @@ describe("buildSitemapUrls", () => {
     });
 
     expect(urls.map(u => u.loc)).toEqual(["https://x.com/about"]);
-    // The exclusion happens before the read, so the excluded collection costs
+    // The exclusion happens before either read, so the excluded collection costs
     // no queries at all — asserted on the calls rather than on the output,
     // which would look identical if it had been read and then filtered.
-    expect(spy.mock.calls.map(c => c[0])).toEqual(["pages"]);
+    expect(listSpy.mock.calls.map(c => c[0])).toEqual(["pages"]);
+    expect(metaSpy.mock.calls.map(c => c[0])).toEqual(["pages"]);
+  });
+
+  it("rejects a malformed basePath even when the collection has no entries", async () => {
+    // Validation must not depend on there being content: an empty collection
+    // would otherwise accept a mount carrying URL syntax and silently return an
+    // empty sitemap instead of reporting the misconfiguration.
+    const services = stubServices({ posts: [[]] });
+
+    await expect(
+      buildSitemapUrls(services, {
+        collections: ["posts"],
+        baseUrl: "https://x.com",
+        basePath: "/docs?lang=en",
+      })
+    ).rejects.toThrow(/basePath must be a path prefix/);
   });
 
   it("ignores basePath when a custom urlFor owns the whole path", async () => {

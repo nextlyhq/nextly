@@ -18,7 +18,7 @@
 // agnostic: `nextly/runtime` reaches `next/navigation` and `next/cache` through
 // a lazy `createRequire` precisely so that importing it never loads `next`, so
 // the package's zero-`next` guarantee is unaffected.
-import { isReservedPath, slugToStaticParam } from "nextly/runtime";
+import { slugToStaticParam } from "nextly/runtime";
 
 /**
  * The minimal `listEntries` the sitemap builder calls — a structural slice of
@@ -210,46 +210,38 @@ export function defaultUrlForEntry(
   collection: string,
   basePath?: string
 ): string | null {
-  const declared = basePath !== undefined;
-  const base = normalizeBasePath(declared ? basePath : `/${collection}`);
-  const slug = typeof entry.slug === "string" ? entry.slug : "";
-
-  if (slug === "") {
-    // See the docblock: only a caller who named the mount has told us its root
-    // is served. The mount itself still has to be a path the route may serve.
-    if (!declared) return null;
-    if (base === "") return isReservedPath("/") ? null : "/";
-    return isReservedPath(base) ? null : base;
-  }
-
-  // Whitespace-only is NO usable slug, and it has to be rejected here rather
-  // than left to the route's own check: that check asks whether the WHOLE value
-  // is blank, and a value carrying the mount prefix never is. Concatenating
-  // first would turn `"   "` into `pages/   ` and mint a URL of encoded spaces.
-  if (slug.trim() === "") return null;
-
-  // Asked about the MOUNTED path, not the bare slug, because that is the URL
-  // that will be served and the reserved-path denylist is anchored at the site
-  // root. `/admin`, `/api`, `/sitemap.xml` and friends are reserved AT THE ROOT;
-  // a page mounted under `/pages` or `/blog` may legitimately be called `admin`,
-  // and judging its slug in isolation drops an entry the route serves happily.
-  // Concatenating first means one call still decides everything else too —
-  // segment splitting, dot-segment refusal, and the normalization-changed check.
+  // Given the STORED SLUG, which is exactly what the route is given.
   //
-  // The prefix goes in without its leading slash: `slugToStaticParam` refuses a
-  // value whose normalization changed, and a leading slash is exactly such a
-  // change, so passing `/pages/x` would reject every entry under a mount.
-  const param = slugToStaticParam(
-    base === "" ? slug : `${base.slice(1)}/${slug}`
-  );
+  // 🔴 Not the mounted path, and the difference decides whether a `<loc>` is
+  // ever served. The denylist reads as though it were about final URLs, so
+  // asking it about `pages/admin` is the intuitive move — but the route never
+  // sees that value. `createContentRoute` joins the CATCH-ALL PARAMS, which in
+  // the App Router exclude the static mount prefix, and checks `isReservedPath`
+  // on the result. A page stored as `admin` therefore reaches `notFound()`
+  // whether it is mounted at the root or under `/pages`, so reasoning about the
+  // mount here would advertise a URL the route refuses — this module's own
+  // failure mode, reintroduced by a smarter-looking check.
+  //
+  // The input matches the route's input for that reason. That the route ignores
+  // its own mount is the route's to change; agreeing with it is this module's
+  // job, and disagreeing "correctly" still produces a dead link.
+  const param = slugToStaticParam(entry.slug);
   if (param === null) return null;
 
-  // `param.slug` is the WHOLE mounted path, prefix included, because that is
-  // what was asked about — so the prefix is not prepended a second time here.
-  //
-  // Encoded per SEGMENT, so the separators stay separators. `<loc>` must be a
-  // valid URL and XML escaping alone does not make ` ` or `é` URL-safe.
-  return `/${param.slug.map(encodeURIComponent).join("/")}`;
+  const declared = basePath !== undefined;
+  const base = normalizeBasePath(declared ? basePath : `/${collection}`);
+
+  if (param.slug.length === 0) {
+    // See the docblock: only a caller who named the mount has told us its root
+    // is served.
+    if (!declared) return null;
+    return base === "" ? "/" : base;
+  }
+
+  // Only the ROUTE-DERIVED segments are encoded. The prefix is a caller-supplied
+  // pathname that may already carry escapes, and encoding it again would turn
+  // `/docs%20archive` into `/docs%2520archive` — a different mount.
+  return `${base}/${param.slug.map(encodeURIComponent).join("/")}`;
 }
 
 /** XML-escape a text value for safe inclusion in an element body. */
@@ -469,6 +461,12 @@ export async function buildSitemapUrls(
     // pages first would be work whose every row is then discarded.
     const collectionBasePath = basePathFor(collection);
     if (collectionBasePath === null) continue;
+    // Validated HERE as well as at use, because the per-entry path builder only
+    // runs once there is an entry: a collection that happens to be empty would
+    // otherwise accept a malformed mount in silence and return an empty sitemap,
+    // so whether a misconfiguration is reported would depend on the content.
+    // Discarded on purpose — this call is the check, not the value.
+    if (collectionBasePath !== undefined) normalizeBasePath(collectionBasePath);
 
     // Apply the published filter ONLY to collections with the built-in
     // lifecycle. A status-less collection has no unpublished state, and it may

@@ -35,11 +35,11 @@ two segments; encoding the slug whole produced `docs%2Fgetting-started`, a singl
 nothing. A slug the route refuses is now skipped rather than advertised: `..`, `a//b` and a leading
 slash all resolve to somewhere the route answers `notFound()` for.
 
-The reserved-path denylist is asked about the MOUNTED path rather than the slug alone, because it is
-anchored at the site root. A page called `admin` under a `/pages` mount is served at `/pages/admin`
-and belongs in the sitemap; only a collection mounted at the root can collide with `/admin`, `/api`
-or `/sitemap.xml`. The check is re-anchored, not weakened — and the module still keeps no second
-copy of the denylist.
+The reserved-path denylist is asked about the STORED SLUG, which is the value the route itself
+checks — it joins its catch-all params, and those exclude the mount prefix. A page stored as `admin`
+therefore reaches `notFound()` under every mount, so it stays out of the sitemap under every mount
+too. Judging the final URL instead would list `/pages/admin` as unreserved and advertise a dead
+link. The module keeps no second copy of the denylist either way.
 
 `buildSitemapUrls` and `generateSitemap` gain `basePath`, which declares where a collection's route
 is MOUNTED — the one part of an entry's URL that cannot be derived, because it is decided by where
