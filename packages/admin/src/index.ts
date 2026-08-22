@@ -65,6 +65,11 @@ export {
   useUpdateSingleDocument,
 } from "./hooks/queries";
 export type { SingleDocument } from "./hooks/queries";
+// The error a failed request raises. Exported because a caller cannot read the
+// structured reason otherwise: the fetcher throws this, and without the type a
+// consumer receives `Error` from `onError` and `unknown` from `catch`, so the
+// `data` payload is reachable only by inventing a cast.
+export type { ApiError } from "./lib/api/parseApiError";
 
 // Media hooks
 export {

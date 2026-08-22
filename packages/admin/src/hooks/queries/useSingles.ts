@@ -35,6 +35,7 @@ import {
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
+import type { ApiError } from "@admin/lib/api/parseApiError";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
 import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
@@ -599,7 +600,11 @@ export function useUpdateSingleDocument(
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<SingleDocument, Error, Record<string, unknown>>({
+  // `ApiError`, not `Error`. A refused write reaches a caller as the thrown
+  // shape the fetcher raises, and typing it as the base class hides the
+  // `data.errors` payload that says WHICH field was refused — leaving a caller
+  // to cast for something this hook already knows the type of.
+  return useMutation<SingleDocument, ApiError, Record<string, unknown>>({
     ...(options?.scopeId === undefined
       ? {}
       : { scope: { id: options.scopeId } }),

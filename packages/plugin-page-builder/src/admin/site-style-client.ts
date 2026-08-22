@@ -33,6 +33,7 @@
 import {
   useSingleDocument,
   useUpdateSingleDocument,
+  type ApiError,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useMemo } from "react";
 
@@ -114,6 +115,11 @@ interface ValidationErrorData {
   readonly errors?: readonly { path?: string; message?: string }[];
 }
 
+/** Whether a rejection is the structured error the admin's fetcher raises. */
+function isApiError(reason: unknown): reason is ApiError {
+  return reason instanceof Error && "status" in reason;
+}
+
 /**
  * Why a write was refused, keyed by the section the validator named.
  *
@@ -126,7 +132,12 @@ interface ValidationErrorData {
  * envelope does not survive the transport.
  */
 function issuesFromRejection(reason: unknown): Record<string, string> {
-  const data = (reason as { data?: ValidationErrorData })?.data;
+  // Narrowed through the SDK's own error type rather than cast into a shape
+  // spelled here. A local cast would be this file's second opinion about what
+  // the transport raises, and it would go on compiling after that shape moved.
+  const data = isApiError(reason)
+    ? (reason.data as ValidationErrorData | undefined)
+    : undefined;
   const issues: Record<string, string> = {};
   for (const issue of data?.errors ?? []) {
     const path = issue.path ?? "";

@@ -3,6 +3,7 @@
 exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`] = `
 [
   "AdminChromeLayer (type)",
+  "ApiError (type)",
   "AutosaveStatus (type)",
   "BulkAction (type)",
   "Card (value)",

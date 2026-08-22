@@ -294,7 +294,10 @@ export { usePluginClientConfig } from "@nextlyhq/admin";
  * resolving with an envelope to inspect. Handle it: an unhandled rejection is
  * what a plugin gets for awaiting the mutation and reading the result.
  *
- * The reason is on the error rather than in a return value. `ApiError.data`
+ * The reason is on the error rather than in a return value, and `ApiError` is
+ * exported beside the hook so it is reachable with a type rather than a cast —
+ * the mutation is typed with it, so `onError` receives it directly.
+ * `ApiError.data`
  * carries `{ errors: [{ path, code, message }] }`, keyed by `path` — the
  * document field that was refused — which is what lets a surface put the
  * message on the section that produced it. Note `path`, not `field`: the
@@ -305,6 +308,7 @@ export {
   useSingleDocument,
   useUpdateSingleDocument,
   type SingleDocument,
+  type ApiError,
 } from "@nextlyhq/admin";
 export type {
   FieldTypePickerProps,
