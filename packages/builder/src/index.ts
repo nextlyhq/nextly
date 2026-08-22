@@ -449,3 +449,20 @@ export {
   type StyleControlBehaviour,
   type StyleControlBehaviours,
 } from "./style-control-behaviour";
+
+/**
+ * @experimental What the selected block offers on the Style tab.
+ *
+ * From this entry because it is a plain function over a document and the
+ * registry. A host drawing its own style surface — or an agent asked "what can
+ * I set on this block" — needs the same answer the panel draws from, which is
+ * `supports` read through the engine rather than a second reading of it. The
+ * panel itself is behind the client banner in `./shell`.
+ */
+export {
+  inspectStyle,
+  type InspectedStyleProperty,
+  type StyleInspection,
+  type StyleInspectionOptions,
+  type StyleSection,
+} from "./style-inspector";

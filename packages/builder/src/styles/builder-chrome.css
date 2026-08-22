@@ -380,6 +380,105 @@
 }
 
 /*
+ * A refused value, under the control that produced it. Kept in the flow rather
+ * than floated: a message overlaying the field below it hides the next control
+ * exactly when an author is working through several.
+ */
+.nx-inspector__error {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--nx-destructive);
+}
+
+.nx-inspector__tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+}
+
+.nx-style-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+}
+
+/*
+ * The section heading carries its name and, when this node sets anything in it,
+ * how many — so an author can see which sections they have touched without
+ * opening each one in turn.
+ */
+.nx-style-inspector__section-label {
+  flex: 1;
+  text-align: start;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.nx-style-inspector__section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--nx-primary-foreground);
+  background: var(--nx-primary);
+}
+
+/*
+ * A property that draws several controls — a margin's four sides — is grouped
+ * under one heading, so the sides read as one property rather than four.
+ */
+.nx-style-inspector__property {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.nx-style-inspector__property-label {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * A stored design token, which is a value no text field can edit: shown by name
+ * with a way to remove it, because typing over it would store the token's NAME
+ * as a literal.
+ */
+.nx-style-inspector__token {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius-sm, 0.25rem);
+  font-size: 0.8125rem;
+  background: var(--nx-muted);
+}
+
+.nx-style-inspector__token button {
+  font-size: 0.75rem;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-style-inspector__token button:hover {
+  color: var(--nx-foreground);
+}
+
+/*
  * The canvas root is the positioning context for editor chrome drawn over the
  * page.
  *

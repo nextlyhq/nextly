@@ -23,7 +23,11 @@
  * @module inspector-panel
  */
 
-import { findNode } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  type BreakpointId,
+  type StyleState,
+} from "@nextlyhq/blocks-engine";
 import {
   Checkbox,
   Input,
@@ -33,12 +37,17 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   Textarea,
 } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
 import {
+  fieldLabel,
   inspectSelection,
   lockOp,
   lockStateOf,
@@ -49,6 +58,8 @@ import {
   type LockState,
 } from "./inspector";
 import { selectionLock } from "./selection-ops";
+import { StyleInspectorPanel } from "./style-inspector-panel";
+import type { StylePolicy } from "./style-values";
 
 export interface InspectorPanelProps {
   /**
@@ -60,19 +71,36 @@ export interface InspectorPanelProps {
    * writes a merged props object assembled from a stale node.
    */
   editor: EditorState;
+  /**
+   * What the site allows, forwarded to the Style tab.
+   *
+   * Carried rather than defaulted: the engine ships no host list of its own, so
+   * omitting it does not mean "allow" — it means the question was never asked.
+   */
+  policy?: StylePolicy;
+  /** The interaction state the Style tab edits. `base` when the host says nothing. */
+  styleState?: StyleState;
+  /** The breakpoint the Style tab edits. The unconditional one by default. */
+  breakpoint?: BreakpointId;
 }
 
-/** A prop name as a human reads it: `backgroundColor` becomes "Background color". */
-function labelFor(name: string): string {
-  const spaced = name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[-_]+/g, " ")
-    .trim();
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
-}
+/**
+ * Which half of the inspector is showing.
+ *
+ * Two tabs rather than a second rail: two rails meaning different things is the
+ * ambiguity this editor's layout rulings have consistently removed, and the
+ * inspector is already the region that answers "what is selected".
+ */
+const INSPECTOR_TABS = [
+  { value: "content", label: "Content" },
+  { value: "style", label: "Style" },
+] as const;
 
 export function InspectorPanel({
   editor,
+  policy,
+  styleState,
+  breakpoint,
 }: InspectorPanelProps): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
@@ -116,6 +144,15 @@ export function InspectorPanel({
     );
   }
 
+  /*
+   * Nothing selected: one note, and no tabs.
+   *
+   * The entry's OWN fields are not drawn here. They already ship as a left
+   * panel the host renders, and reproducing them in this region would be the
+   * second surface-meaning-two-things the layout ruling removed, wearing a
+   * different shape. Tabs are withheld too: a Style tab over no selection would
+   * offer an author somewhere to click that can never show anything.
+   */
   if (inspection === null) {
     return (
       <div className="nx-inspector" data-empty="no-selection">
@@ -130,11 +167,15 @@ export function InspectorPanel({
 
       {/*
         What the block IS, above what it holds.
-        
+
         First because it answers "which block am I looking at" — a page with six
         headings gives an author six identical inspector titles, and the name is
         the only thing that tells them apart. Both fields are also the two the
         layers panel already shows, so this is where that display gets a writer.
+
+        Above the tabs rather than inside Content, because it describes the block
+        under both of them: an author on the Style tab still needs to know which
+        of six headings they are looking at.
       */}
       <IdentityFields
         // Keyed by node so the name input does not carry an uncommitted edit
@@ -145,24 +186,52 @@ export function InspectorPanel({
         editor={editor}
       />
 
-      {inspection.props.length === 0 ? (
-        <p className="nx-inspector__note">
-          This block has no editable properties.
-        </p>
-      ) : (
-        <div className="nx-inspector__fields">
-          {inspection.props.map(prop => (
-            <PropField
-              // Keyed by node AND prop: a bare prop name would let React reuse
-              // one block's field for the next block's same-named prop, so the
-              // input would keep the previous block's uncommitted text.
-              key={`${inspection.nodeId}:${prop.name}`}
-              prop={prop}
-              onCommit={commit}
-            />
+      {/*
+        Uncontrolled, so the chosen tab survives a change of selection — an
+        author styling one block after another means to stay on Style. React
+        keeps that state because this element's position does not change; a
+        `key` on the node id here would reset it on every click.
+      */}
+      <Tabs defaultValue="content" className="nx-inspector__tabs">
+        <TabsList>
+          {INSPECTOR_TABS.map(tab => (
+            <TabsTrigger key={tab.value} value={tab.value}>
+              {tab.label}
+            </TabsTrigger>
           ))}
-        </div>
-      )}
+        </TabsList>
+
+        <TabsContent value="content">
+          {inspection.props.length === 0 ? (
+            <p className="nx-inspector__note">
+              This block has no editable properties.
+            </p>
+          ) : (
+            <div className="nx-inspector__fields">
+              {inspection.props.map(prop => (
+                <PropField
+                  // Keyed by node AND prop: a bare prop name would let React
+                  // reuse one block's field for the next block's same-named
+                  // prop, so the input would keep the previous block's
+                  // uncommitted text.
+                  key={`${inspection.nodeId}:${prop.name}`}
+                  prop={prop}
+                  onCommit={commit}
+                />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="style">
+          <StyleInspectorPanel
+            editor={editor}
+            policy={policy}
+            state={styleState}
+            breakpoint={breakpoint}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -246,7 +315,7 @@ function PropField({
   if (!prop.supported) {
     return (
       <div className="nx-inspector__field" data-unsupported="">
-        <Label htmlFor={id}>{labelFor(prop.name)}</Label>
+        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
         {/*
           Listed rather than omitted. A block declaring a prop this panel cannot
           draw is still a block with that prop, and hiding it presents an
@@ -268,7 +337,7 @@ function PropField({
           checked={prop.value === true}
           onCheckedChange={checked => onCommit(prop.name, checked === true)}
         />
-        <Label htmlFor={id}>{labelFor(prop.name)}</Label>
+        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
       </div>
     );
   }
@@ -276,7 +345,7 @@ function PropField({
   if (prop.schema.type === "select") {
     return (
       <div className="nx-inspector__field">
-        <Label htmlFor={id}>{labelFor(prop.name)}</Label>
+        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
         <Select
           value={typeof prop.value === "string" ? prop.value : undefined}
           onValueChange={next => onCommit(prop.name, next)}
@@ -369,7 +438,7 @@ function TextishField({
 
   return (
     <div className="nx-inspector__field">
-      <Label htmlFor={id}>{labelFor(prop.name)}</Label>
+      <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
       {prop.schema.type === "textarea" ? (
         <Textarea {...shared} rows={3} />
       ) : (

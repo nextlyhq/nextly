@@ -14,6 +14,17 @@ import {
   type StyleControlKind,
 } from "./style-controls";
 
+/*
+ * The union-arm assertions below no longer describe a rule this package holds.
+ * Arm selection is `styleUnionVariant`'s, in the engine, where it is also
+ * tested. They are kept rather than moved because what they now cover is the
+ * SEAM: that this module asks, that it passes the site's options through, and
+ * that it walks the arm it was handed. A change reintroducing a local answer,
+ * or dropping `tokens` on the way down, fails here and nowhere in the engine's
+ * own suite — and each case is a spelling that is easy to get wrong, which is
+ * why they are worth keeping pointed at the seam rather than deleted.
+ */
+
 /**
  * A VALID leaf of one kind.
  *
@@ -144,7 +155,16 @@ describe("a union, which stores one value in more than one form", () => {
   it("shows the FIRST variant when nothing is stored, which is the form the engine tries first", () => {
     const set = styleControlsFor(radius);
     expect(paths(set.controls)).toEqual([[]]);
-    expect(set.variants).toEqual([{ path: [], active: 0, count: 2 }]);
+    // The arms' own shape kinds travel with the choice, so a renderer offering
+    // it can name the forms from the catalog rather than numbering them.
+    expect(set.variants).toEqual([
+      {
+        path: [],
+        active: 0,
+        count: 2,
+        kinds: ["dimension", "logicalCorners"],
+      },
+    ]);
   });
 
   it("shows the composite variant when a record is stored", () => {
@@ -165,6 +185,43 @@ describe("a union, which stores one value in more than one form", () => {
     const set = styleControlsFor(radius, { $token: "Radius.Card" });
     expect(paths(set.controls)).toEqual([[]]);
     expect(set.variants[0].active).toBe(0);
+  });
+
+  it("shows the form a caller asked for, but only where nothing is stored", () => {
+    // The engine answers with the catalog's FIRST arm for an unset position, and
+    // that answer is right precisely because the author has not spoken yet — so
+    // without this an unset `borderRadius` could only ever be the single radius.
+    const chosen = styleControlsFor(radius, undefined, {
+      variantAt: () => 1,
+    });
+    expect(chosen.variants[0]?.active).toBe(1);
+    expect(paths(chosen.controls)).toEqual([
+      ["startStart"],
+      ["startEnd"],
+      ["endStart"],
+      ["endEnd"],
+    ]);
+  });
+
+  it("lets a STORED value override the form a caller asked for", () => {
+    // A stored value decides its own arm, and the engine decides that. Honouring
+    // a preference here would draw one arm while validation judged the value
+    // under another, which is the disagreement this module exists to remove.
+    const set = styleControlsFor(radius, "4px", { variantAt: () => 1 });
+    expect(set.variants[0]?.active).toBe(0);
+  });
+
+  it("ignores a form outside the union's own arms rather than clamping", () => {
+    // Clamping would draw arm 0 for a caller asking for arm 7, which reads as
+    // the choice having been honoured.
+    expect(
+      styleControlsFor(radius, undefined, { variantAt: () => 7 }).variants[0]
+        ?.active
+    ).toBe(0);
+    expect(
+      styleControlsFor(radius, undefined, { variantAt: () => -1 }).variants[0]
+        ?.active
+    ).toBe(0);
   });
 
   it("records how many variants exist, so an editor can offer the other one", () => {

@@ -24,16 +24,15 @@ import {
   isTokenRef,
   validateStyleValues,
   type BreakpointId,
-  type MayFetchUrl,
   type NodeStyles,
   type StyleState,
   type StyleValue,
   type StyleValues,
-  type TokenLookup,
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
 import { sameStoredValue, type BuilderOp } from "./ops";
+import type { StyleControlOptions } from "./style-controls";
 
 /**
  * The site policy a value is judged against.
@@ -44,20 +43,13 @@ import { sameStoredValue, type BuilderOp } from "./ops";
  * never asked — so a control that never forwarded it would accept a URL the
  * published compiler refuses, show it in the preview, fetch it from the editor,
  * and let the author save a value that then vanishes from the page.
+ *
+ * DERIVED rather than restated. This and `StyleControlOptions` are the same
+ * contract read at two moments — choosing which arm to draw, and judging the
+ * write — and they must never disagree about a field. Both trace to the
+ * engine's own option type, so a field added there reaches all three at once.
  */
-export interface StylePolicy {
-  readonly mayFetchUrl?: MayFetchUrl;
-  /**
-   * The site's token table.
-   *
-   * Without it the validator cannot report `unknown-token` or
-   * `token-kind-mismatch`, so a control silently accepts a reference that
-   * renders as nothing. `styleControlsFor` already takes one for choosing a
-   * union arm; carrying it here is what gives a caller one route to supply it
-   * to both.
-   */
-  readonly tokens?: TokenLookup;
-}
+export type StylePolicy = StyleControlOptions;
 
 /** Where a control reads and writes. */
 export interface StyleAddress {

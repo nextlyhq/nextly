@@ -18,6 +18,7 @@
 import {
   getBlock,
   findNode,
+  type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
   type PropSchema,
@@ -97,6 +98,58 @@ export interface BlockInspection {
   readonly props: readonly EditableProp[];
 }
 
+/** The selected node together with the definition that describes it. */
+export interface SelectedBlock {
+  readonly node: BlockNode;
+  readonly definition: AnyBlockDefinition;
+}
+
+/**
+ * The block an inspector is describing, or `null` when there is none.
+ *
+ * One answer for both tabs, because both ask the same question and would
+ * otherwise answer it separately: the content tab needs `props` and the style
+ * tab needs `supports`, and each lives on the definition.
+ *
+ * `null` for no selection, for an id the document no longer holds, and for a
+ * block the REGISTRY does not know. The last is the one worth stating, because
+ * it is a policy rather than a lookup failing:
+ *
+ * - an unregistered block's props have no schemas, so every content control
+ *   would have to be guessed from the stored value's runtime type — which
+ *   produces a text box for a number and silently rewrites the value on save;
+ * - and it has no `supports`, so the style tab would either offer nothing or
+ *   offer the whole catalog, and the second lets an author write styles the
+ *   compiler then drops.
+ */
+export function selectedBlock(
+  document: BlockDocument,
+  selectedId: string | null
+): SelectedBlock | null {
+  if (selectedId === null) return null;
+  const node = findNode(document.nodes, selectedId);
+  if (node === undefined) return null;
+  const definition = getBlock(node.type);
+  if (definition === undefined) return null;
+  return { node, definition };
+}
+
+/**
+ * A stored key as a human reads it: `backgroundColor` becomes "Background color".
+ *
+ * Here rather than in a panel because both panels label the same way and from
+ * the same kind of key — a prop name on the content tab, a catalog key on the
+ * style tab — and two spellings of one rule would drift the first time either
+ * learned about an acronym or a digit.
+ */
+export function fieldLabel(name: string): string {
+  const spaced = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[-_]+/g, " ")
+    .trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+}
+
 /** Read a schema's `options`, which is untyped by construction. */
 function optionsOf(schema: PropSchema): readonly string[] {
   const declared = schema.options;
@@ -145,25 +198,15 @@ export function lockStateOf(
 
 /**
  * Describe the selected block for editing, or `null` when there is nothing to
- * edit.
- *
- * `null` for no selection, for an id the document no longer holds, and for a
- * block the registry does not know — the last because an unregistered block's
- * props have no schemas, so every control would have to be guessed from the
- * stored value's runtime type. Guessing produces a text box for a number and
- * silently rewrites the value on save.
+ * edit. See {@link selectedBlock} for what "nothing" covers and why.
  */
 export function inspectSelection(
   document: BlockDocument,
   selectedId: string | null
 ): BlockInspection | null {
-  if (selectedId === null) return null;
-
-  const node = findNode(document.nodes, selectedId);
-  if (node === undefined) return null;
-
-  const definition = getBlock(node.type);
-  if (definition === undefined) return null;
+  const selected = selectedBlock(document, selectedId);
+  if (selected === null) return null;
+  const { node, definition } = selected;
 
   const declared = definition.props ?? {};
   const props = Object.entries(declared).flatMap<EditableProp>(

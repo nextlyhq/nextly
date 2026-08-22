@@ -226,6 +226,11 @@ export {
   // at-rule to a browser. Public because every surface deciding what a keyword
   // IS has to fold it the same way.
   asciiLower,
+  // What CSS discards around a value, which is NOT what `String.trim` discards:
+  // JavaScript strips NBSP and the Unicode spaces and CSS does not, so an editor
+  // trimming with the language's own function normalises spellings the engine
+  // then refuses — or worse, converts one into a value it accepts.
+  trimCssWhitespace,
 } from "./style/css-value";
 export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";
@@ -239,8 +244,24 @@ export {
   MAX_SITE_LOOKUPS,
   tokenKindAllowedAt,
   tokenKindsForProperty,
+  // Which arm of a union a stored value belongs to. Public because more than one
+  // surface asks it: validation picks the arm it judges a value against, and an
+  // editor picks the control to draw for it. A second answer drifts silently,
+  // because both surfaces look right on their own — the disagreement is visible
+  // only to an author holding a control for one arm while reading an error
+  // written about another.
+  //
+  // `style/declarations.ts` still selects an arm its OWN way while emitting, by
+  // taking the first that writes bytes. Measured, the two already disagree:
+  // `fontWeight: 700` resolves here to the number arm and emits through the
+  // keyword one, because `scalarText` reads no leaf kind. Nothing is visibly
+  // wrong today only because both arms write `font-weight`.
+  styleUnionVariant,
 } from "./style/validate-style-value";
-export type { StyleIssueBudget } from "./style/validate-style-value";
+export type {
+  StyleIssueBudget,
+  StyleUnionVariantOptions,
+} from "./style/validate-style-value";
 export { compilePageCss, BASE_BREAKPOINT } from "./style/compile-page";
 // The one rule for how a document-global CSS name wears its scope. Public
 // because more than one place has to produce it and they must agree exactly:

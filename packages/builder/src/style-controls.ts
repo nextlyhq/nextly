@@ -14,6 +14,18 @@
  * to the engine is a compile error in exactly one place rather than a silent
  * fallthrough at runtime.
  *
+ * **Which arm of a union a value is shown in is ASKED, not decided.**
+ * `styleUnionVariant` is the engine's own arm selection — the same answer
+ * validation uses to pick the arm it judges a value against — so the control an
+ * author sees and the error they read describe one arm by construction.
+ * Predicting it here instead means restating every rule the engine applies, and
+ * each of these is a rule that is easy to miss and invisible when missed: the
+ * three all-scalar unions, the site's token kind table, a token kind no arm
+ * declares, keyword case and ASCII whitespace and CSS escapes, the CSS-wide
+ * keywords that every leaf accepts, a union nested as another union's arm,
+ * composite arms that share a field name, and a record naming no known field at
+ * all. Nothing here holds any of them.
+ *
  * **What this module does NOT do.** It does not decide which properties a block
  * offers (that is `supports`, read through the catalog's own group helpers), it
  * does not hold the active state or breakpoint, and it does not validate. A
@@ -24,17 +36,14 @@
  */
 
 import {
-  asciiLower,
-  compileStyleValues,
-  decodeIdentifier,
-  getStyleProperty,
   isStyleLeaf,
   isTokenRef,
+  styleUnionVariant,
   type StyleLeaf,
   type StyleProperty,
   type StyleShape,
+  type StyleUnionVariantOptions,
   type StyleValue,
-  type TokenLookup,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -146,18 +155,51 @@ export interface StyleControlVariants {
   readonly active: number;
   /** How many variants the catalog declares at this position. */
   readonly count: number;
+  /**
+   * Each arm's own shape kind, in the catalog's order.
+   *
+   * Carried so an affordance offering the choice can NAME the forms from the
+   * catalog rather than numbering them: `borderRadius` is a length or four
+   * corners, and "Form 1 / Form 2" tells an author nothing about which is
+   * which. The arms have no names of their own, so their shape kind is the
+   * most specific thing the catalog actually says about them.
+   */
+  readonly kinds: readonly StyleShape["kind"][];
 }
 
-/** What a caller can tell the resolver about the site. */
-export interface StyleControlOptions {
+/**
+ * What a caller can tell the resolver about the site.
+ *
+ * DERIVED from the engine's own option type rather than restated beside it.
+ * Both this and `StylePolicy` in `style-values.ts` are the same contract — what
+ * this site allows — read at two moments, and three structural copies of it
+ * would all keep compiling while the next field was added to one: arm selection
+ * and write validation would then disagree about a value, which is the failure
+ * the module docblock above describes from the other direction.
+ *
+ * Kept as a NAME rather than making callers import the engine's, because it is
+ * this package's public surface and a rename there should not be one here.
+ */
+export type StyleControlOptions = StyleUnionVariantOptions;
+
+/**
+ * Everything {@link styleControlsFor} accepts.
+ *
+ * The site policy, plus the one thing the engine has no opinion about: which
+ * form an AUTHOR has chosen to write a value in. A union's arm is decided by
+ * the stored value wherever there is one, so this is consulted only where the
+ * position is unset — which is exactly when the engine has nothing to read and
+ * answers with the catalog's first arm for every caller alike.
+ */
+export interface StyleControlInput extends StyleControlOptions {
   /**
-   * The site's token table, for choosing between union arms that both accept
-   * tokens.
+   * The arm an author picked at one position inside the value, if any.
    *
-   * Optional: without it the catalog's arm order decides, which is the engine's
-   * own fallback for a name it cannot resolve.
+   * Addressed by the same path a control carries, so a union nested below the
+   * property root is answerable too — `position.zIndex` is a number OR `auto`,
+   * and a caller that could only speak about the root could never offer it.
    */
-  readonly tokens?: TokenLookup;
+  readonly variantAt?: (path: readonly string[]) => number | undefined;
 }
 
 /** A property's controls, and every choice of form its shape offers. */
@@ -166,324 +208,6 @@ export interface StyleControlSet {
   readonly controls: readonly StyleControl[];
   /** Empty when the property's shape holds no union at any depth. */
   readonly variants: readonly StyleControlVariants[];
-}
-
-/**
- * Which union variant a stored value is shown in.
- *
- * A PRESENTATION choice and never a validity judgement: it decides which
- * control to draw, and `validateStyleValues` remains the only thing that
- * decides whether a value may be written.
- *
- * Absent a value the FIRST variant wins, which is the order the engine tries
- * them in and therefore the canonical spelling of the property. With a value,
- * the arm that HOLDS it wins — see {@link variantHolds}, which reads the
- * catalog's own declarations rather than restating any grammar.
- */
-function variantForValue(
-  variants: readonly StyleShape[],
-  value: StyleValue | undefined,
-  tokens: TokenLookup | undefined
-): number {
-  if (value === undefined) return 0;
-  const found = variants.findIndex(variant =>
-    variantHolds(variant, value, tokens)
-  );
-  if (found !== -1) return found;
-  // A token whose kind no arm declares is still ACCEPTED: the engine reports
-  // `token-kind-mismatch` at WARNING severity and writes the value through the
-  // arm that admits tokens at all — measured. Falling through to arm 0 would
-  // draw a keyword select for a stored token that control cannot represent, so
-  // the arm that takes tokens is the honest one to show.
-  if (isTokenRef(value)) {
-    const admits = variants.findIndex(
-      variant => isStyleLeaf(variant) && variant.tokenKinds.length > 0
-    );
-    if (admits !== -1) return admits;
-  }
-  return 0;
-}
-
-/**
- * Whether a variant is the shape a stored value is written in.
- *
- * Composite against scalar is not enough on its own, and three of the four
- * unions the catalog ships are the case it misses: `fontWeight` is a keyword OR
- * a number, `lineHeight` a number OR a dimension, `fontStyle` a keyword OR a
- * free-form value. Every arm of those is a leaf, so a composite test picks the
- * first one every time — a numeric weight would draw the keyword select, and a
- * `1.5rem` line height the unitless number field.
- */
-function variantHolds(
-  variant: StyleShape,
-  value: StyleValue,
-  tokens: TokenLookup | undefined
-): boolean {
-  // A union can be an ARM of a union, and it is neither a leaf nor a record of
-  // named fields — `fieldsOf` answers with nothing for one whose arms are all
-  // scalars, and "no fields declared" is read below as "any record fits". So a
-  // nested scalar union would swallow every composite value beside it. Asking
-  // its own arms is the only reading that matches what the engine would accept.
-  if (!isStyleLeaf(variant) && variant.kind === "union") {
-    return variant.of.some(arm => variantHolds(arm, value, tokens));
-  }
-  if (!isStyleLeaf(variant)) {
-    return isCompositeValue(value) && fieldsHold(variant, value, tokens);
-  }
-  return !isCompositeValue(value) && leafHolds(variant, value, tokens);
-}
-
-/** The field names a composite shape addresses. */
-function fieldsOf(shape: StyleShape): readonly string[] {
-  if (isStyleLeaf(shape)) return [];
-  switch (shape.kind) {
-    case "logicalSides":
-      return Object.keys(shape.sides);
-    case "logicalCorners":
-      return Object.keys(shape.corners);
-    case "object":
-      return Object.keys(shape.fields);
-    case "union":
-      return shape.of.flatMap(fieldsOf);
-  }
-}
-
-/** The shape a composite declares at one of its field names. */
-function shapeAt(variant: StyleShape, name: string): StyleShape | undefined {
-  if (isStyleLeaf(variant)) return undefined;
-  switch (variant.kind) {
-    case "logicalSides":
-      return Object.hasOwn(variant.sides, name)
-        ? variant.sides[name as keyof typeof variant.sides]
-        : undefined;
-    case "logicalCorners":
-      return Object.hasOwn(variant.corners, name)
-        ? variant.corners[name as keyof typeof variant.corners]
-        : undefined;
-    case "object":
-      return Object.hasOwn(variant.fields, name)
-        ? variant.fields[name]
-        : undefined;
-    case "union":
-      return undefined;
-  }
-}
-
-/**
- * Whether a composite arm holds the fields a stored record names.
- *
- * Field NAMES alone do not tell two composite arms apart when they share one:
- * `{ value: keyword }` beside `{ value: number }` both claim `{ value: 2 }`, and
- * the controls returned would describe a form that cannot hold it. So each named
- * field is checked against the shape this arm declares for it, recursively,
- * which is the same walk the leaf matching already performs one level down.
- *
- * Only the fields the value NAMES are checked, because a stored value is
- * sparse: a radius with just its top-left corner set is still the four-corner
- * form, and requiring every field would push it to the scalar arm.
- */
-function fieldsHold(
-  variant: StyleShape,
-  value: CompositeValue,
-  tokens: TokenLookup | undefined
-): boolean {
-  const fields = fieldsOf(variant);
-  if (fields.length === 0) return true;
-  const keys = Object.keys(value);
-  // An EMPTY record names nothing and is still this form: the validator accepts
-  // `{}` against a composite with no issues, so rejecting it here sent a stored
-  // `borderRadius: {}` to the scalar arm and drew one length control for a
-  // value the document holds in the four-corner form.
-  if (keys.length === 0) return true;
-  const named = keys.filter(key => fields.includes(key));
-  if (named.length === 0) return false;
-  return named.every(name => {
-    const shape = shapeAt(variant, name);
-    const held = value[name];
-    if (shape === undefined || held === undefined) return false;
-    return variantHolds(shape, held, tokens);
-  });
-}
-
-/**
- * Whether a leaf admits this token reference.
- *
- * Which arm a token belongs to is a fact about the TOKEN, and the stored
- * reference carries only its name. `lineHeight` accepts tokens on both its arms
- * — numbers on one, dimensions on the other — so without the site's table the
- * name alone cannot separate them, and the catalog's arm order decides exactly
- * as the engine's own union check falls back to it.
- */
-function tokenLeafHolds(
-  leaf: StyleLeaf,
-  name: string,
-  tokens: TokenLookup | undefined
-): boolean {
-  if (leaf.tokenKinds.length === 0) return false;
-  const kind = tokens?.kindOf(name);
-  return kind === undefined || leaf.tokenKinds.includes(kind);
-}
-
-/**
- * Whether a leaf stores this number.
- *
- * `0` is the one measurement that needs no unit, which is why a dimension
- * accepts it without `allowNumber`.
- */
-function numberLeafHolds(leaf: StyleLeaf, value: number): boolean {
-  if (leaf.kind === "number") return true;
-  if (leaf.kind !== "dimension") return false;
-  return leaf.allowNumber === true || value === 0;
-}
-
-/**
- * A keyword in the spelling the engine compares keywords in.
- *
- * CSS keywords are ASCII case-insensitive and surrounding whitespace is
- * discarded by parsing, so the validator accepts `"Italic"` and `" italic "`
- * exactly as it accepts `"italic"` — and it decodes escapes before comparing,
- * because an escape can spell an ordinary letter. An exact `includes` therefore
- * misses valid stored values and sends them to the free-form arm, which draws a
- * text box where a select belongs.
- *
- * Normalized with the engine's OWN primitives rather than a lowercase-and-trim
- * written here, so the two cannot disagree about what an escape means.
- *
- * The whitespace stripped is ASCII only, which is what CSS discards.
- * JavaScript's `trim()` also removes NBSP and the Unicode spaces, and the engine
- * does NOT — measured, a value carrying NBSP is refused where the same value
- * with an ordinary space is accepted. Trimming it here would match a closed
- * keyword control to a value that control cannot represent.
- */
-const CSS_TRIM = /^[ \t\n\f\r]+|[ \t\n\f\r]+$/g;
-
-/**
- * A keyword in the spelling the engine compares keywords in.
- */
-function keywordKey(value: string): string {
-  return asciiLower(decodeIdentifier(value.replace(CSS_TRIM, "")));
-}
-
-/**
- * A plain keyword property, used to ask the engine what any leaf would accept.
- *
- * `textAlign` is a single keyword leaf with a closed vocabulary. A value it
- * accepts that is NOT in that vocabulary is accepted for a reason that has
- * nothing to do with this property — it is legal wherever a value is — which is
- * exactly the question below.
- */
-const UNIVERSAL_PROBE_PROPERTY = "textAlign";
-
-/**
- * Answers already derived, so a repeated value costs one lookup.
- *
- * The values that ARE universal are a closed, tiny set, so caching those costs
- * nothing. A NEGATIVE answer is any author-supplied string that reached a
- * scalar union — free-form `fontStyle` input, half-typed values, rejected ones —
- * so caching every one of those in a long-lived editor grows without bound, and
- * each key can be as long as the style-value limit allows. Negatives are
- * therefore capped: past the cap they are recomputed rather than retained.
- */
-const UNIVERSALLY_ACCEPTED = new Map<string, boolean>();
-
-/** How many refusals to remember before recomputing them instead. */
-const NEGATIVE_CACHE_LIMIT = 64;
-
-/**
- * Whether every leaf accepts this string whatever its own vocabulary says.
- *
- * The CSS-wide keywords — `inherit`, `initial` and their siblings — are legal
- * wherever a value is, so a keyword leaf accepts them alongside its own list and
- * a number leaf accepts them despite taking numbers. Without this, a stored
- * `fontStyle: "inherit"` misses the keyword arm and lands on the free-form one,
- * and `lineHeight: "inherit"` misses the number arm — in both cases disagreeing
- * with the arm the engine itself would accept the value through.
- *
- * ASKED of the engine rather than listed here. The engine holds that set and
- * does not export it, so a copy would be a second statement of which keywords
- * are universal, and the two would agree until either moved. Compiling one
- * probe answers it, and a keyword this engine learns is picked up with no edit.
- */
-function isUniversallyAccepted(value: string): boolean {
-  // Keyed by the CANONICAL spelling, so every case, whitespace and escape
-  // variant of one keyword shares an entry. Keying by the raw string leaves the
-  // ACCEPTED side unbounded too — `inherit`, `INHERIT`, ` Inherit ` and an
-  // escaped spelling are all distinct raw keys for one closed-set answer.
-  const key = keywordKey(value);
-  const cached = UNIVERSALLY_ACCEPTED.get(key);
-  if (cached !== undefined) return cached;
-  const probe = getStyleProperty(UNIVERSAL_PROBE_PROPERTY);
-  if (probe === undefined || probe.shape.kind !== "keyword") {
-    throw new Error(
-      `${UNIVERSAL_PROBE_PROPERTY} is no longer a plain keyword property, so ` +
-        `the engine cannot be asked which values are legal everywhere`
-    );
-  }
-  // A value inside the probe's OWN vocabulary would be accepted for the wrong
-  // reason, and would report every such word as universal.
-  if (probe.shape.values.some(keyword => keywordKey(keyword) === key)) {
-    remember(key, false);
-    return false;
-  }
-  const compiled = compileStyleValues(
-    { [UNIVERSAL_PROBE_PROPERTY]: value },
-    ""
-  );
-  const accepted =
-    compiled.declarations.length > 0 &&
-    !compiled.warnings.some(issue => issue.severity === "error");
-  remember(key, accepted);
-  return accepted;
-}
-
-/** Keep an answer, bounding what the refusals can grow to. */
-function remember(key: string, accepted: boolean): void {
-  if (!accepted && UNIVERSALLY_ACCEPTED.size >= NEGATIVE_CACHE_LIMIT) return;
-  UNIVERSALLY_ACCEPTED.set(key, accepted);
-}
-
-/**
- * Whether a leaf stores this string.
- *
- * A keyword leaf claims one only when the string is one of ITS keywords. Every
- * other scalar leaf stores its value as a string, so the catalog's arm order
- * decides between those exactly as the engine's own order does.
- *
- * Compares the value WHOLE rather than splitting it, so a multi-part keyword
- * shorthand — `overflow: hidden auto` — is not recognised as its own vocabulary.
- * No union the catalog ships declares a multi-part keyword arm, so nothing
- * reaches that case today; if one appears, the arm order decides, which is the
- * engine's own fallback and not a wrong answer.
- */
-function stringLeafHolds(leaf: StyleLeaf, value: string): boolean {
-  // Checked FIRST and for every kind, because a value legal everywhere is one
-  // the engine accepts through the earliest arm — including a number arm that
-  // otherwise takes no strings at all.
-  if (isUniversallyAccepted(value)) return true;
-  if (leaf.kind !== "keyword") return leaf.kind !== "number";
-  const key = keywordKey(value);
-  return leaf.values.some(keyword => keywordKey(keyword) === key);
-}
-
-/**
- * Whether a leaf is the one a scalar is stored under.
- *
- * Reads the catalog's own declarations — a keyword leaf's `values`, a
- * dimension's `allowNumber`, an arm's `tokenKinds` — rather than restating any
- * grammar. It stays a PRESENTATION choice: `validateStyleValues` remains the
- * only thing deciding whether a value may be written, and it owes this no
- * agreement. Drawing the wrong control is a legibility bug the next keystroke
- * corrects; the write is gated either way.
- */
-function leafHolds(
-  leaf: StyleLeaf,
-  value: StyleValue,
-  tokens: TokenLookup | undefined
-): boolean {
-  if (isTokenRef(value)) return tokenLeafHolds(leaf, value.$token, tokens);
-  if (typeof value === "number") return numberLeafHolds(leaf, value);
-  if (typeof value === "string") return stringLeafHolds(leaf, value);
-  return false;
 }
 
 /** A stored value holding named sub-values, as a composite shape addresses. */
@@ -536,7 +260,7 @@ function walk(
   path: readonly string[],
   shape: StyleShape,
   value: StyleValue | undefined,
-  tokens: TokenLookup | undefined,
+  options: StyleControlInput | undefined,
   // Collected as the walk descends rather than returned alongside, so a union
   // at ANY depth is recorded by the same line that resolves it.
   variants: StyleControlVariants[]
@@ -547,7 +271,7 @@ function walk(
       [...path, step],
       child,
       childValue(value, step),
-      tokens,
+      options,
       variants
     );
   if (isStyleLeaf(shape)) return [controlForLeaf(property, path, shape)];
@@ -563,11 +287,59 @@ function walk(
         down(field, child)
       );
     case "union": {
-      const active = variantForValue(shape.of, value, tokens);
-      variants.push({ path, active, count: shape.of.length });
-      return walk(property, path, shape.of[active], value, tokens, variants);
+      // ASKED of the engine rather than decided here. Which arm a stored value
+      // belongs to is the same question validation answers when it picks the
+      // arm to judge that value against, so reading its answer makes the
+      // control and the error message beside it describe one arm by
+      // construction. The module docblock lists what predicting it would cost.
+      const active = activeVariant(shape, path, value, options);
+      // A union declaring no arms offers no choice and has nothing to draw. The
+      // catalog ships none; the matcher this replaced answered 0 regardless and
+      // handed `undefined` down as though it were a shape.
+      if (active === undefined) return [];
+      variants.push({
+        path,
+        active,
+        count: shape.of.length,
+        kinds: shape.of.map(arm => arm.kind),
+      });
+      return walk(property, path, shape.of[active], value, options, variants);
     }
   }
+}
+
+/**
+ * Which arm of a union to draw at one position.
+ *
+ * A STORED value settles it, and the engine settles that — so a caller's
+ * preference cannot make the panel show one arm while validation judges the
+ * value under another. Where nothing is stored there is no such value to
+ * disagree with: the engine answers with the catalog's first arm for everyone,
+ * and an author who wants to write the four-corner radius rather than the
+ * single one has no other way to say so.
+ *
+ * A preference outside the union's own arms is ignored rather than clamped.
+ * Clamping would silently draw arm 0 for a caller asking for arm 7, which reads
+ * as the choice having been honoured.
+ */
+function activeVariant(
+  shape: Extract<StyleShape, { kind: "union" }>,
+  path: readonly string[],
+  value: StyleValue | undefined,
+  options: StyleControlInput | undefined
+): number | undefined {
+  if (value === undefined) {
+    const preferred = options?.variantAt?.(path);
+    if (
+      preferred !== undefined &&
+      Number.isInteger(preferred) &&
+      preferred >= 0 &&
+      preferred < shape.of.length
+    ) {
+      return preferred;
+    }
+  }
+  return styleUnionVariant(shape, value, options);
 }
 
 /**
@@ -605,7 +377,7 @@ function childValue(
 export function styleControlsFor(
   property: StyleProperty,
   value?: StyleValue,
-  options?: StyleControlOptions
+  options?: StyleControlInput
 ): StyleControlSet {
   const variants: StyleControlVariants[] = [];
   const controls = walk(
@@ -613,7 +385,7 @@ export function styleControlsFor(
     [],
     property.shape,
     value,
-    options?.tokens,
+    options,
     variants
   );
   return { property: property.property, controls, variants };
