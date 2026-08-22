@@ -576,12 +576,13 @@ describe("controls", () => {
     } as NodeStyles;
     mount({ spacing: true }, styles);
 
-    const value = fieldsOf("padding").getByText("space.4").closest("p");
-    const labelledBy = value?.getAttribute("aria-labelledby");
-    expect(labelledBy).toBeTruthy();
-    expect(document.getElementById(labelledBy as string)?.textContent).toBe(
-      "Block start"
-    );
+    // The COMPUTED accessible name, not the raw attribute. Asserting
+    // `aria-labelledby` and resolving the id by hand passes even when the
+    // element's role prohibits a name — which a bare paragraph's does — so it
+    // would have reported this association as working while it was dropped.
+    expect(
+      fieldsOf("padding").getByRole("group", { name: "Block start" })
+    ).toBeDefined();
   });
 
   it("names a token's clear action for its property, not just 'Clear'", () => {

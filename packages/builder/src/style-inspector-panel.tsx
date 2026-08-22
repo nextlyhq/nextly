@@ -723,13 +723,15 @@ function TokenValue({
   onClear: () => void;
 }): React.JSX.Element {
   return (
-    // The id lands on the value, so the property's own label names it: without
-    // that the label points at nothing. And the button is named for the
-    // PROPERTY, because a panel with several token-valued properties otherwise
-    // offers a column of buttons all called "Clear" and a screen-reader user
-    // cannot tell which style each one removes.
+    // Named by the property's own label, and given a role that can CARRY a
+    // name: a bare paragraph maps to the ARIA `paragraph` role, which prohibits
+    // one, so `aria-labelledby` on it may be dropped outright. The button is
+    // named for the PROPERTY as well, because a panel with several
+    // token-valued properties otherwise offers a column of buttons all called
+    // "Clear" and a screen-reader user cannot tell which style each removes.
     <p
       className="nx-style-inspector__token"
+      role="group"
       aria-labelledby={labelledBy}
       tabIndex={-1}
     >
@@ -760,8 +762,11 @@ function RetainedValue({
   onClear: () => void;
 }): React.JSX.Element {
   return (
+    // `group` for the reason {@link TokenValue} carries one: the ARIA
+    // `paragraph` role a bare paragraph maps to prohibits an accessible name.
     <p
       className="nx-style-inspector__token"
+      role="group"
       aria-labelledby={labelledBy}
       tabIndex={-1}
     >
