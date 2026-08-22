@@ -103,11 +103,37 @@ seoPlugin({
   // origin — correct for a single-origin deployment, wrong behind a host-
   // rewriting proxy, so set it explicitly there.
   baseUrl: "https://example.com",
-  // Path per entry (leading slash). Defaults to `/<collection>/<slug>`.
-  urlFor: (entry, collection) =>
-    collection === "posts" ? `/blog/${entry.slug}` : `/${entry.slug}`,
+  // Where each collection's route is MOUNTED. Defaults to `/<collection>`.
+  // Everything after the prefix is derived from the route's own answer, so this
+  // is all you normally need to supply.
+  basePath: collection => (collection === "posts" ? "/blog" : ""),
 });
 ```
+
+Each entry's path below the prefix comes from `slugToStaticParam`, the same function the content
+route pre-renders from and a page's canonical is built with — so the sitemap lists the URL the page
+actually serves. A nested slug (`docs/getting-started`) keeps its segments, and a slug the route
+refuses to serve (a reserved path, a `..` segment, a stray leading or doubled slash) is skipped
+rather than advertised.
+
+`basePath` may be a plain string when every collection shares a prefix, and returning `null` from
+the function excludes that collection from the sitemap entirely. Pass `""` for a collection served
+at the site root — page-builder pages render at `/about`, not `/pages/about`, and their homepage at
+`/`.
+
+For routing the prefix cannot express, `urlFor` still overrides the whole path:
+
+```ts
+seoPlugin({
+  collections: ["posts"],
+  baseUrl: "https://example.com",
+  urlFor: entry => `/${entry.publishedYear}/${entry.slug}`,
+});
+```
+
+`urlFor` owns the entire path when supplied, so `basePath` is ignored and the route-derived slug
+handling above does not apply — reproduce the encoding you need yourself, and return `null` to
+exclude an entry.
 
 > **The sitemap is public and bypasses read access.** The route is unauthenticated and lists entries as the system role, so it enumerates every published entry's URL (and `lastModified`) **regardless of per-collection read access**. Do not enumerate a collection whose entries should stay private (owner-only, role-gated, or internal). Control it with the `sitemap` option:
 >

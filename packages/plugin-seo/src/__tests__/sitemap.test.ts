@@ -71,6 +71,58 @@ describe("defaultUrlForEntry", () => {
       "/posts/caf%C3%A9"
     );
   });
+
+  // The four ways this used to disagree with the route that serves the page.
+  // Each asserts the value `slugToStaticParam` already decides, so the sitemap
+  // and the canonical cannot drift apart again.
+
+  it("keeps a nested slug's separators as separators, not %2F", () => {
+    // The catch-all route serves `docs/getting-started` as two segments.
+    // Encoding the slug whole produced one segment naming nothing.
+    expect(defaultUrlForEntry({ slug: "docs/getting-started" }, "pages")).toBe(
+      "/pages/docs/getting-started"
+    );
+    expect(defaultUrlForEntry({ slug: "a/b/c" }, "pages")).toBe("/pages/a/b/c");
+  });
+
+  it("skips a slug the route will not serve rather than advertising it", () => {
+    // Each of these makes `slugToStaticParam` return null, so the route answers
+    // notFound() — a <loc> for one lists a URL that 404s or resolves elsewhere.
+    expect(defaultUrlForEntry({ slug: ".." }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "a//b" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "/leading" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "trailing/" }, "pages")).toBeNull();
+  });
+
+  it("skips a reserved path without keeping its own copy of the denylist", () => {
+    // `isReservedPath` is consulted inside slugToStaticParam; this module never
+    // names /admin itself.
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages")).toBeNull();
+  });
+
+  it("mounts a collection at a declared basePath", () => {
+    expect(defaultUrlForEntry({ slug: "about" }, "pages", "")).toBe("/about");
+    expect(defaultUrlForEntry({ slug: "about" }, "pages", "/site")).toBe(
+      "/site/about"
+    );
+    // Normalized so a caller's trailing slash or missing leading slash still
+    // concatenates to one clean path.
+    expect(defaultUrlForEntry({ slug: "about" }, "pages", "/site/")).toBe(
+      "/site/about"
+    );
+    expect(defaultUrlForEntry({ slug: "about" }, "pages", "site")).toBe(
+      "/site/about"
+    );
+  });
+
+  it("emits the mount's root for an empty slug ONLY when the mount is declared", () => {
+    // An empty slug is the site root to a root-mounted collection...
+    expect(defaultUrlForEntry({ slug: "" }, "pages", "")).toBe("/");
+    expect(defaultUrlForEntry({ slug: "" }, "pages", "/site")).toBe("/site");
+    // ...but with no declared mount we cannot know whether the root is served,
+    // so it stays skipped exactly as before.
+    expect(defaultUrlForEntry({ slug: "" }, "pages")).toBeNull();
+  });
 });
 
 describe("buildSitemapUrls", () => {
@@ -122,6 +174,60 @@ describe("buildSitemapUrls", () => {
       "https://x.com/real-a",
       "https://x.com/posts/b",
     ]);
+  });
+
+  it("applies basePath per collection, including the site root", async () => {
+    const services = stubServices({
+      pages: [[{ slug: "about" }, { slug: "" }]],
+      posts: [[{ slug: "hello" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["pages", "posts"],
+      baseUrl: "https://x.com",
+      basePath: collection => (collection === "posts" ? "/blog" : ""),
+    });
+
+    // `pages` is mounted at the root, so its entries carry no prefix and its
+    // empty slug is the homepage; `posts` carries the declared one.
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/about",
+      "https://x.com/",
+      "https://x.com/blog/hello",
+    ]);
+  });
+
+  it("excludes a collection whose basePath is null WITHOUT reading it", async () => {
+    const spy = vi.fn();
+    const services = stubServices(
+      { pages: [[{ slug: "about" }]], secret: [[{ slug: "hidden" }]] },
+      spy
+    );
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["pages", "secret"],
+      baseUrl: "https://x.com",
+      basePath: collection => (collection === "secret" ? null : ""),
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/about"]);
+    // The exclusion happens before the read, so the excluded collection costs
+    // no queries at all — asserted on the calls rather than on the output,
+    // which would look identical if it had been read and then filtered.
+    expect(spy.mock.calls.map(c => c[0])).toEqual(["pages"]);
+  });
+
+  it("ignores basePath when a custom urlFor owns the whole path", async () => {
+    const services = stubServices({ posts: [[{ slug: "hello" }]] });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      basePath: "/ignored",
+      urlFor: entry => `/custom/${String(entry.slug)}`,
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/custom/hello"]);
   });
 
   it("drops an entry whose canonical is on another host", async () => {

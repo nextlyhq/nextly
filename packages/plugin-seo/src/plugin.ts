@@ -57,8 +57,23 @@ export interface SeoPluginOptions {
    * Build the URL path for a sitemap entry (leading slash, appended to the
    * origin). Defaults to `/<collection>/<slug>`. Override it to match your
    * routing (e.g. posts served at `/blog/:slug`).
+   *
+   * Prefer {@link SeoPluginOptions.basePath} where only the PREFIX differs: it
+   * keeps the slug half derived from the route's own answer, which a hand-built
+   * path has to reproduce correctly for nested, encoded and unservable slugs.
    */
   urlFor?: UrlForEntry;
+  /**
+   * Where each collection's route is mounted, which decides the prefix its
+   * sitemap URLs carry. Defaults to `/<collection>`.
+   *
+   * Pass `""` for a collection served at the site root — page-builder pages
+   * render at `/about`, not `/pages/about`. A function receives each collection
+   * name; returning `null` excludes that collection from the sitemap.
+   *
+   * Ignored when `urlFor` is supplied, which already owns the whole path.
+   */
+  basePath?: string | ((collection: string) => string | null);
   /**
    * Controls the public sitemap route. `true` (the default) serves a sitemap of
    * the `collections` above. `false` omits the route entirely. Pass
@@ -157,6 +172,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
             collections: sitemapTargets,
             baseUrl,
             urlFor: options.urlFor,
+            // Spread rather than assigned: `basePath` distinguishes absent from
+            // `""`, and a present-but-undefined key would read as the declared
+            // root mount and start emitting a URL for every empty slug.
+            ...(options.basePath === undefined
+              ? {}
+              : { basePath: options.basePath }),
           });
           const headers: Record<string, string> = {
             "content-type": "application/xml; charset=utf-8",
