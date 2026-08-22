@@ -223,7 +223,14 @@ function tokenEmissionIssues(
   set: SiteTokenSet,
   policy: SectionPolicy
 ): string[] {
-  const own = emittedMessages(set);
+  // Two runs over the stored set, and the second is not redundant with the
+  // first. AS RENDERED is what a page produces. AS AUTHORED is the only view in
+  // which two entries sharing one identity are both still present — resolving
+  // keys them into a Map and keeps one, so the emitter's collision check cannot
+  // observe the pair it names in its own comment. Without this run, an author
+  // can rename a token and then create a new one under the freed name, and the
+  // save succeeds while one of the two silently stops existing.
+  const own = [...new Set([...emittedMessages(set), ...authoredMessages(set)])];
   const merged = resolveSiteStyle(policy.defaults, { tokens: set }).tokens;
   // The config tier emitted under the MERGED prefix, so the two runs are
   // comparable. A collision message renders the custom property the two names
@@ -273,6 +280,23 @@ function emittedMessages(tokens: SiteTokenSet): string[] {
   return emitTokenBlocks(resolveSiteTokens(tokens), ":root").issues.map(
     issue => issue.message
   );
+}
+
+/**
+ * What emitting one token set reports AS AUTHORED, without resolving it.
+ *
+ * The un-resolved run exists for one class the resolved one cannot reach.
+ * `resolveSiteTokens` is a Map keyed on identity, so two stored entries sharing
+ * an identity — a token renamed away from a name, and a new token that claims
+ * it — are reduced to one before `emitTokenBlocks` is handed the set. The
+ * emitter holds the check for exactly that pair and names it in its own
+ * comment; it simply is never shown both.
+ *
+ * Nothing is restated here. It is the same emitter answering the same question
+ * about a set that has not had one of the two removed from it.
+ */
+function authoredMessages(tokens: SiteTokenSet): string[] {
+  return emitTokenBlocks(tokens, ":root").issues.map(issue => issue.message);
 }
 
 /** The stored font faces, each checked by the engine's own face validator. */

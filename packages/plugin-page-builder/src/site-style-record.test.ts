@@ -98,6 +98,29 @@ describe("checkStoredTokens", () => {
       expect(result.issues.join(" ")).toContain("id that is not a token name");
     });
 
+    it("REFUSES a new token that takes a renamed token's identity", () => {
+      // The identity a rename freezes stays claimed, and the name it freed does
+      // not carry the claim with it. So a new token named `color.primary` and a
+      // renamed token still holding `color.primary` as its id both key off one
+      // custom property, and one of them silently loses — the value every
+      // document referencing that identity resolves to.
+      //
+      // The engine anticipates this and cannot see it from here: the gate emits
+      // through `resolveSiteTokens`, which is a Map on identity, so the pair is
+      // deduplicated before `emitTokenBlocks` is handed the set. Judging the set
+      // AS AUTHORED is what puts the two in front of the check at once.
+      const result = checkStoredTokens({
+        tokens: [
+          { ...token("color.brand", "#111111"), id: "color.primary" },
+          token("color.primary", "#222222"),
+        ],
+      });
+
+      expect(result.issues.join(" ")).toContain(
+        'both become "--site-color-primary"'
+      );
+    });
+
     it("leaves a token with no id exactly as it was", () => {
       // Every token stored before the field existed relies on the name BEING
       // the identity, so an absent id must stay absent rather than becoming one.
