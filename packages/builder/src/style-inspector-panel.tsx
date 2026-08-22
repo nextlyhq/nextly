@@ -1075,6 +1075,13 @@ function ToggleField({
             key={option}
             type="button"
             aria-pressed={pressed}
+            // Marked on the BUTTONS rather than on the group, which carries the
+            // description. `aria-invalid` is not a state `role="group"`
+            // supports, so setting it there would be an attribute a screen
+            // reader is entitled to ignore — and the file's own rule is that a
+            // control described by a refusal must also read as invalid, or it
+            // announces the message as a hint rather than as a failure.
+            aria-invalid={describedBy === undefined ? undefined : true}
             // Pressing the pressed option CLEARS rather than re-writing it,
             // which is the only way a two-button group can reach unset without
             // a third button standing for "neither".
