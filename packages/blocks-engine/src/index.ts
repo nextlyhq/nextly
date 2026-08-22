@@ -342,6 +342,14 @@ export {
   isUsableNamedClass,
   namedClassName,
   orderedNamedClasses,
+  // Which classes a library actually RESOLVES to, ordering and claim rules
+  // included. The compiler writes exactly this list and the renderer is handed
+  // exactly this list, so a caller that needs to tell an author whether the
+  // class they wrote will render asks this rather than modelling it: the
+  // ordering is `orderIndex` then `id`, and a slug or id already claimed drops
+  // the later entry, which is four separate rules to get right by hand.
+  usableNamedClasses,
+  usableNamedClassPositions,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";

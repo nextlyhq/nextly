@@ -144,9 +144,28 @@ export function validateBlocksValue(
     // refused for a declaration nobody made.
     nesting: registryNestingSource(),
   });
+  // Errors only, which means the breakpoint set threaded in here decides
+  // nothing about a document — and that is the correct behaviour today, not an
+  // oversight.
+  //
+  // An unknown breakpoint is a warning under forgiving validation. Promoting it
+  // was tried and is WRONG while the set reaching this call is the config tier
+  // alone: `plugin.ts` builds the field from `siteBreakpoints(configStyle)` at
+  // config time, where there is no database to read, so a page styled at a
+  // breakpoint an admin STORED would be refused on save while the published
+  // renderer compiles it happily — and a reference to a config breakpoint the
+  // stored set removed would still be accepted. Rejecting valid pages is worse
+  // than judging none.
+  //
+  // What it needs is the MERGED set, which is the same thing the canvas needs
+  // and for the same reason: nothing here can reach stored site style yet. The
+  // parameter stays for the one property it genuinely decides — a set whose
+  // ids collide across axes — and becomes load-bearing for documents when a
+  // client path to the stored tier exists.
   const documentIssues = allDocumentIssues.filter(
     issue => issue.severity === "error"
   );
+
   const structuralIssues = documentIssues.filter(
     issue => !NON_STRUCTURAL.has(issue.code)
   );

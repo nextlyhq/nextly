@@ -63,4 +63,61 @@ describe("createBlocksPage cache tags", () => {
 
     expect(tags.some(tag => tag.includes("photos"))).toBe(true);
   });
+
+  it("tags the single a siteStyles provider reads", () => {
+    // A provider is called per render, which is not the same as being read per
+    // render: on a pre-rendered route the whole render is cached, and only a
+    // tag the page carries rebuilds it. The Direct API read inside the provider
+    // contributes none, so without this an admin's save invalidates
+    // `nextly:single:site-style` and no cache entry anywhere names it — the
+    // page keeps serving the old sheet, which looks exactly like the style
+    // never saving.
+    created.mockClear();
+    createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      siteStyles: { read: () => undefined, singles: ["site-style"] },
+    });
+
+    const tags = (created.mock.calls[0][0] as { tags: string[] }).tags;
+
+    expect(tags).toContain("nextly:single:site-style");
+  });
+
+  it("adds no single tag when the provider declares it reads none", () => {
+    // The control: the tag comes from the slug the route stated, not from the
+    // helper deciding that any route using siteStyles reads one particular
+    // single. A host can store its style anywhere.
+    //
+    // An empty array is a STATEMENT here, not an omission — the provider and
+    // its dependencies are one type, so a provider without them does not
+    // compile and the unsafe configuration is no longer expressible.
+    created.mockClear();
+    createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      siteStyles: { read: () => undefined, singles: [] },
+    });
+
+    const tags = (created.mock.calls[0][0] as { tags: string[] }).tags;
+
+    expect(tags.some(tag => tag.startsWith("nextly:single:"))).toBe(false);
+  });
+
+  it("refuses a bare function rather than reading it as a style value", () => {
+    // TypeScript rejects it, so this is for the JavaScript caller following
+    // older documentation. Falling through to the style-value branch would
+    // treat the provider as configuration: never invoked, its singles never
+    // tagged, and the page quietly serving config defaults for ever. Throwing
+    // at boot is the one outcome that cannot be mistaken for working.
+    created.mockClear();
+
+    expect(() =>
+      createBlocksPage({
+        collections: ["pages"],
+        field: "content",
+        siteStyles: (() => undefined) as never,
+      })
+    ).toThrow(/singles/);
+  });
 });

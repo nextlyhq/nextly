@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { MAX_NAMED_CLASSES } from "@nextlyhq/blocks-engine";
+
 import {
   checkStoredBreakpoints,
   checkStoredClasses,
@@ -400,5 +402,266 @@ describe("readSiteStyleRecord", () => {
     expect(style.tokens?.tokens.map(t => t.name)).toEqual(["color.primary"]);
     expect(style.classes).toBeUndefined();
     expect(style.breakpoints?.viewport).toHaveLength(1);
+  });
+});
+
+describe("judging the write against the tier it will be merged with", () => {
+  // A checker seeing only the stored array judges something no consumer ever
+  // compiles. What it must NOT do is model the merge as a concatenation:
+  // `resolveSiteStyle` merges classes keyed by ID, so a stored class sharing an
+  // id with a config one REPLACES it.
+  const stored = {
+    id: "stored-1",
+    slug: "hero",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#111111" } } },
+  };
+
+  const CONFIG_CLASS = {
+    id: "config-1",
+    slug: "hero",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#222222" } } },
+  };
+
+  it("refuses a slug two different classes would hold once merged", () => {
+    // Survives the merge and still breaks: two ids on one selector means the
+    // compiler keeps the first and the node referencing the other gets no rule.
+    const result = checkStoredClasses([stored], {
+      defaults: { classes: [CONFIG_CLASS] as never },
+    });
+
+    expect(result.issues.join(" ")).toContain("merged");
+  });
+
+  it("accepts the same class when the caller states no config tier", () => {
+    // The separating control. Without it the refusal above passes just as well
+    // on a checker that rejects the slug for some reason of its own.
+    expect(checkStoredClasses([stored]).issues).toEqual([]);
+  });
+
+  it("ACCEPTS a stored class that overrides a config one by id", () => {
+    // The case a concatenation model gets wrong. Sharing an id is how an
+    // override is expressed — `mergeByKey(defaults, stored, c => c.id)` — so
+    // refusing it as a duplicate refuses the feature.
+    const result = checkStoredClasses([{ ...stored, id: "config-1" }], {
+      defaults: { classes: [CONFIG_CLASS] as never },
+    });
+
+    expect(result.issues).toEqual([]);
+  });
+
+  it("counts the cap over the MERGED library, replacements included", () => {
+    // The compiler truncates the merged library by array PREFIX. Counting the
+    // two tiers added together would refuse a write that only replaces.
+    const many = Array.from({ length: MAX_NAMED_CLASSES }, (_, i) => ({
+      ...stored,
+      id: `config-${i}`,
+      slug: `config-${i}`,
+    }));
+
+    const overflowing = checkStoredClasses([stored], {
+      defaults: { classes: many as never },
+    });
+    expect(overflowing.issues.join(" ")).toContain("merged");
+
+    // And a pure replacement of one of them does not overflow, because the
+    // merge is the same length it was.
+    const replacing = checkStoredClasses(
+      [{ ...stored, id: "config-0", slug: "config-0" }],
+      { defaults: { classes: many as never } }
+    );
+    expect(replacing.issues).toEqual([]);
+  });
+
+  it("still caps the library when there is no config tier at all", () => {
+    // The merge of nothing and the stored array is the stored array, so the cap
+    // applies either way. A site on the plain `pageBuilder()` configuration
+    // states no defaults, which is the common case — skipping the merged checks
+    // for it would let the compiler silently drop everything past the cap.
+    const tooMany = Array.from({ length: MAX_NAMED_CLASSES + 1 }, (_, i) => ({
+      ...stored,
+      id: `c-${i}`,
+      slug: `c-${i}`,
+    }));
+
+    // Named by the id that will not render, which is what a node references and
+    // the only thing the author can act on.
+    expect(checkStoredClasses(tooMany).issues.join(" ")).toContain(
+      `"c-${MAX_NAMED_CLASSES}"`
+    );
+  });
+
+  it("does not charge the writer for a class problem the CONFIG tier already had", () => {
+    // The merge only ever adds to or replaces within the config tier, never
+    // removes from it — so a config tier that already exceeds the cap, or
+    // already holds one slug on two ids, is a problem the writer cannot reach
+    // from the admin. Charging it to their save leaves them unable to store
+    // anything at all, including an empty library.
+    const brokenConfig = [
+      { ...stored, id: "x", slug: "dup" },
+      { ...stored, id: "y", slug: "dup" },
+    ];
+
+    expect(
+      checkStoredClasses([], { defaults: { classes: brokenConfig as never } })
+        .issues
+    ).toEqual([]);
+  });
+
+  it("reports a NEW collision on a slug the config tier already collided on", () => {
+    // Two different collisions on one slug read identically, so a filter keyed
+    // on the rendered message accepts the second as though it were the first.
+    // Config holds `x` and `y` both on `dup`. The write moves `x` off it and
+    // adds `z` onto it: the merge now drops `z` rather than `y`, which is a
+    // different pair and a class the author just wrote that will never render.
+    const config = [
+      { ...stored, id: "x", slug: "dup" },
+      { ...stored, id: "y", slug: "dup" },
+    ];
+    const write = [
+      { ...stored, id: "x", slug: "moved" },
+      { ...stored, id: "z", slug: "dup" },
+    ];
+
+    const result = checkStoredClasses(write, {
+      defaults: { classes: config as never },
+    });
+
+    // `z` is the class that will not render, and naming it is the whole point:
+    // the pre-existing collision dropped `y`, this one drops `z`, and a check
+    // that could not tell those apart accepted the write.
+    expect(result.issues.join(" ")).toContain('"z"');
+  });
+
+  it("reports a class the write pushes past the cap, over an already-full config", () => {
+    // Config alone is over the cap, which the writer cannot fix. Adding one
+    // more is still their doing, and the class they just added is guaranteed
+    // not to render — so the overflow being inherited must not suppress it.
+    const overfull = Array.from({ length: MAX_NAMED_CLASSES + 1 }, (_, i) => ({
+      ...stored,
+      id: `cfg-${i}`,
+      slug: `cfg-${i}`,
+    }));
+
+    const result = checkStoredClasses([{ ...stored, id: "new", slug: "new" }], {
+      defaults: { classes: overfull as never },
+    });
+
+    expect(result.issues.join(" ")).toContain('"new"');
+  });
+
+  it("reports a config class the write reorders out of rendering", () => {
+    // The compiler claims slugs AFTER sorting by orderIndex, so a write that
+    // only changes precedence changes which of two colliding classes survives.
+    // Config renders `a` and drops `b`; moving `b` in front makes it render and
+    // drops `a`, which used to be on the page.
+    const config = [
+      { ...stored, id: "a", slug: "same", orderIndex: 0 },
+      { ...stored, id: "b", slug: "same", orderIndex: 1 },
+    ];
+
+    const result = checkStoredClasses(
+      [{ ...stored, id: "b", slug: "same", orderIndex: -1 }],
+      { defaults: { classes: config as never } }
+    );
+
+    expect(result.issues.join(" ")).toContain('"a"');
+  });
+
+  it("refuses a stored token colliding with a config one on a custom property", () => {
+    // Names the engine does not define, so the collision under test is between
+    // the two SITE tiers rather than with a default. `color.primary` is itself
+    // an engine default, which would attribute the clash a level lower.
+    const result = checkStoredTokens(
+      { tokens: [token("brand.accent-hover", "#111111")] },
+      {
+        defaults: {
+          tokens: { tokens: [token("brand-accent.hover", "#222222")] },
+        },
+      }
+    );
+
+    expect(result.issues).not.toEqual([]);
+  });
+
+  it("reports the stored set's OWN issue even when config emits the same message", () => {
+    // A token issue names the token and not the offending value, so a config
+    // token that already emits one and a stored override that emits a
+    // different one produce identical strings. Comparing merged against config
+    // then accepts a value the compiler drops. What the writer wrote is theirs
+    // whatever the config tier says.
+    const fetching = (name: string, url: string) => ({
+      name,
+      kind: "color" as const,
+      values: { light: `url(${url})` },
+    });
+
+    const result = checkStoredTokens(
+      { tokens: [fetching("brand.image", "https://b.example/2.png")] },
+      {
+        defaults: {
+          tokens: {
+            tokens: [fetching("brand.image", "https://a.example/1.png")],
+          },
+        },
+      }
+    );
+
+    expect(result.issues).not.toEqual([]);
+  });
+
+  it("accepts a write that only changes the prefix over a colliding config tier", () => {
+    // A collision message renders the custom property the two names both
+    // become, so the prefix is inside the string. Emitting the baseline under
+    // its own prefix makes a prefix change look like a brand new collision and
+    // refuses a write for a clash it did not cause and cannot reach — the
+    // stored tier holds no tokens here at all.
+    const colliding = {
+      tokens: [
+        token("color.primary-dark", "#111111"),
+        token("color-primary.dark", "#222222"),
+      ],
+    };
+
+    const result = checkStoredTokens(
+      { tokens: [], prefix: "--brand-" },
+      { defaults: { tokens: colliding } }
+    );
+
+    expect(result.issues).toEqual([]);
+  });
+
+  it("refuses a stored token that collides with an ENGINE default", () => {
+    // A page layers the site's tokens over the engine's defaults before
+    // compiling, so the tier stack a write is judged against has three levels
+    // and not two. `color-primary` emits nothing on its own and collides with
+    // the guaranteed default `color.primary` on `--site-color-primary`, where
+    // the emitter keeps the default and silently drops the saved value.
+    const result = checkStoredTokens({
+      tokens: [token("color-primary", "#111111")],
+    });
+
+    expect(result.issues.join(" ")).toContain("--site-color-primary");
+  });
+
+  it("does not report a problem the CONFIG tier already had on its own", () => {
+    // Reported as a difference. A site whose own config emits an issue has a
+    // problem, but it is not one this write introduced and not one the writer
+    // can fix from here — refusing their save for it tells them about somebody
+    // else's mistake.
+    const brokenConfig = {
+      tokens: [
+        token("brand.accent-hover", "#111111"),
+        token("brand-accent.hover", "#222222"),
+      ],
+    };
+
+    const result = checkStoredTokens(
+      { tokens: [token("brand.other", "#333333")] },
+      { defaults: { tokens: brokenConfig } }
+    );
+
+    expect(result.issues).toEqual([]);
   });
 });

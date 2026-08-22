@@ -31,6 +31,8 @@ import {
   isPlainRecord,
   isUsableNamedClass,
   newStyleIssueBudget,
+  resolveSiteTokens,
+  usableNamedClasses,
   validateFontFace,
   validateStyleValues,
   type BreakpointDef,
@@ -44,7 +46,11 @@ import {
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
-import { siteStyleOf, type SiteStyleData } from "./site-style";
+import {
+  resolveSiteStyle,
+  siteStyleOf,
+  type SiteStyleData,
+} from "./site-style";
 
 /**
  * One section's verdict: the narrowed value a reader may use, and the issues
@@ -79,6 +85,21 @@ export interface SectionPolicy {
    * allowlist is the only limit on a `url()`.
    */
   mayFetchUrl?: MayFetchUrl;
+  /**
+   * The CONFIG tier this write will be merged with, when the caller has one.
+   *
+   * A checker seeing only the stored array judges something no consumer ever
+   * compiles. Every consumer reads the merge, config first, and both engine
+   * resolutions are first-wins — so a stored class whose slug a config class
+   * already holds is accepted here and then dropped at render, and the node
+   * referencing it gets no rule at all. Judging the merge is what makes the
+   * refusal happen while the writer is present.
+   *
+   * Absent means the caller stated no defaults, not that there are none to
+   * consider; a checker with no config tier judges the stored one, which is
+   * exactly what it did before.
+   */
+  defaults?: SiteStyleData;
 }
 
 /** Shared shape guard: a string, when the slot allows one. */
@@ -97,7 +118,10 @@ const optionalString = (value: unknown): value is string | undefined =>
  * write time the author is present to fix it, and accepting a value the
  * browser will drop stores a defect for someone else to debug at render time.
  */
-export function checkStoredTokens(raw: unknown): SectionCheck<SiteTokenSet> {
+export function checkStoredTokens(
+  raw: unknown,
+  policy: SectionPolicy = {}
+): SectionCheck<SiteTokenSet> {
   if (raw === undefined || raw === null) return EMPTY;
   if (!isPlainRecord(raw) || !Array.isArray(raw.tokens)) {
     return {
@@ -155,13 +179,88 @@ export function checkStoredTokens(raw: unknown): SectionCheck<SiteTokenSet> {
     ...(typeof raw.prefix === "string" ? { prefix: raw.prefix } : {}),
     ...(darkMode === "attribute" || darkMode === "media" ? { darkMode } : {}),
   };
-  // The emitter is the validator: it is what will read this set on every
-  // page render, so its report is the one that counts. The selector is
-  // irrelevant to validation; the CSS is discarded.
-  for (const issue of emitTokenBlocks(set, ":root").issues) {
-    issues.push(issue.message);
-  }
+  issues.push(...tokenEmissionIssues(set, policy));
   return { value: set, issues };
+}
+
+/**
+ * What emitting this token set would report, minus what the config tier already
+ * reported on its own.
+ *
+ * The emitter is the validator: it is what will read the set on every page
+ * render, so its report is the one that counts. The selector is irrelevant to
+ * validation; the CSS is discarded.
+ *
+ * Three runs, because "did this write cause it" and "is this new" are different
+ * questions and only the second can be answered by comparing merged against
+ * config.
+ *
+ * The stored set's OWN issues are always reported. A message names the token
+ * and not the offending value, so a config token that already emits one and a
+ * stored override emitting a different one produce byte-identical strings — and
+ * suppressing on that accepts a value the compiler drops. What the writer wrote
+ * is theirs whatever the config tier says.
+ *
+ * Only issues the MERGE creates are compared and suppressed when the config
+ * tier already had them, because a collision that predates this write is not
+ * reachable from the admin. `resolveSiteStyle` does the merging rather than a
+ * second implementation here: it is the one answer to what the merged style is,
+ * and a local copy would drift from the render it exists to predict.
+ */
+function tokenEmissionIssues(
+  set: SiteTokenSet,
+  policy: SectionPolicy
+): string[] {
+  const own = emittedMessages(set);
+  const merged = resolveSiteStyle(policy.defaults, { tokens: set }).tokens;
+  // The config tier emitted under the MERGED prefix, so the two runs are
+  // comparable. A collision message renders the custom property the two names
+  // both become, and the prefix is part of that rendering rather than part of
+  // the collision — emitting the baseline under its own prefix makes a write
+  // that changes only the prefix look like a brand new collision, and refuses
+  // it for a clash it did not cause and cannot reach.
+  const inherited = new Set(
+    policy.defaults?.tokens === undefined
+      ? []
+      : emittedMessages(withPrefixOf(policy.defaults.tokens, merged))
+  );
+  const reported = new Set(own);
+  const issues = [...own];
+  for (const message of emittedMessages(merged ?? set)) {
+    if (inherited.has(message) || reported.has(message)) continue;
+    reported.add(message);
+    issues.push(message);
+  }
+  return issues;
+}
+
+/** One token set as it would render under another's prefix. */
+function withPrefixOf(
+  tokens: SiteTokenSet,
+  under: SiteTokenSet | undefined
+): SiteTokenSet {
+  return under?.prefix === undefined
+    ? tokens
+    : { ...tokens, prefix: under.prefix };
+}
+
+/**
+ * What emitting one token set reports, as plain messages, AS RENDERED.
+ *
+ * Resolved through `resolveSiteTokens` first, because that is what a page does:
+ * `PageRenderer` layers the site's tokens over the engine's defaults before
+ * compiling, so a stored name that collides with a default is dropped at render
+ * while a gate judging the stored and config tiers alone sees nothing at all.
+ * Measured: `color-primary` emits no issue on its own and collides with the
+ * default `color.primary` on `--site-color-primary` once resolved.
+ *
+ * Applied here rather than at each call so all three emissions — the stored set,
+ * the config baseline and the merge — are judged against the same tier stack.
+ */
+function emittedMessages(tokens: SiteTokenSet): string[] {
+  return emitTokenBlocks(resolveSiteTokens(tokens), ":root").issues.map(
+    issue => issue.message
+  );
 }
 
 /** The stored font faces, each checked by the engine's own face validator. */
@@ -348,6 +447,72 @@ function classValueIssues(
 }
 
 /**
+ * What the stored classes do once merged with the tier they will be merged with.
+ *
+ * Asked of `resolveSiteStyle` rather than modelled here, and asked even when
+ * there is no config tier: the merge of nothing and the stored array is the
+ * stored array, so one path covers both and the cap cannot be lost with it.
+ *
+ * The merge is keyed by class ID, so a stored class sharing an id with a config
+ * one REPLACES it — concatenating the two tiers instead would refuse a
+ * deliberate override as a duplicate, and would count a replacement twice
+ * against the cap.
+ *
+ * What survives the merge and still breaks is a SLUG held by two different
+ * ids: the compiler drops the later one, so a node referencing it gets no rule.
+ * The cap is the merged length for the same reason — the compiler truncates the
+ * merged library by array prefix.
+ */
+function mergedLibraryIssues(
+  classes: readonly NamedClass[],
+  policy: SectionPolicy
+): string[] {
+  // Asked of the engine, never modelled. `usableNamedClasses` is the list the
+  // compiler writes and the renderer is handed, so it already applies the
+  // ordering (`orderIndex`, then `id`) and the claim rules (a slug or an id
+  // already taken drops the later entry). Reproducing those here was wrong four
+  // separate ways, each a different rule; asking cannot be wrong in any of
+  // them.
+  //
+  // The cap is applied BEFORE resolution, as an array prefix on the whole
+  // library, so it is applied that way here too.
+  const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
+  const before = renderedIds(policy.defaults?.classes ?? []);
+  const after = renderedIds(merged);
+
+  const issues: string[] = [];
+  // A class the site used to render and no longer does. This write caused it,
+  // whether by claiming its slug, taking its id, reordering it behind another,
+  // or pushing it past the cap.
+  for (const id of before) {
+    if (!after.has(id)) {
+      issues.push(
+        `Saving this would stop the class "${id}" rendering: once merged with this site's config it is no longer one of the ${MAX_NAMED_CLASSES} the compiler reads, or another class claims its slug or id first.`
+      );
+    }
+  }
+  // A class in this write that will not render. Reported by id, because that is
+  // what a node references and what the author can act on.
+  for (const entry of classes) {
+    if (!after.has(entry.id)) {
+      issues.push(
+        `The class "${entry.id}" would not render: once merged with this site's config another class claims its slug or id first, or it falls past the ${MAX_NAMED_CLASSES} the compiler reads.`
+      );
+    }
+  }
+  return issues;
+}
+
+/** The ids a library actually renders, as the compiler resolves it. */
+function renderedIds(library: readonly NamedClass[]): Set<string> {
+  const read =
+    library.length > MAX_NAMED_CLASSES
+      ? library.slice(0, MAX_NAMED_CLASSES)
+      : library;
+  return new Set(usableNamedClasses(read).map(entry => entry.id));
+}
+
+/**
  * The stored class library.
  *
  * Usability per entry is the engine's `isUsableNamedClass` — the same
@@ -377,11 +542,7 @@ export function checkStoredClasses(
     return { issues: ["Classes must be an array of named classes."] };
   }
   const issues: string[] = [];
-  if (raw.length > MAX_NAMED_CLASSES) {
-    issues.push(
-      `The class library holds ${raw.length} entries; the compiler reads at most ${MAX_NAMED_CLASSES}.`
-    );
-  }
+
   // ONE for the whole section: see `classValueIssues` for why neither per map
   // nor per class bounds the work a single write can ask for.
   const budget = newStyleIssueBudget();
@@ -413,6 +574,7 @@ export function checkStoredClasses(
     }
     classes.push(entry);
   });
+  issues.push(...mergedLibraryIssues(classes, policy));
   return { value: classes, issues };
 }
 

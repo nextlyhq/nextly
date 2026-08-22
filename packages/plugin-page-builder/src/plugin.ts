@@ -220,7 +220,16 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // url-policy module, so there is one answer to "may this be fetched"
       // rather than one per surface. A host that configured no patterns gets
       // today's behaviour: the engine treats an absent policy as unasked.
-      singles: [siteStyleSingle(siteStyleWritePolicy(opts.remotePatterns))],
+      singles: [
+        siteStyleSingle({
+          ...siteStyleWritePolicy(opts.remotePatterns),
+          // The CONFIG tier this site states in code, so the write gate judges
+          // what consumers actually compile. Without it a stored class whose
+          // slug a config class already holds is accepted and then dropped at
+          // render, and the node referencing it gets no rule at all.
+          ...(opts.siteStyle === undefined ? {} : { defaults: configStyle }),
+        }),
+      ],
       // One field type, where there were two. The other named the previous
       // editor's document — a shape this package defined itself, stored under a
       // synthetic root, and validated with its own rules. A site that declared

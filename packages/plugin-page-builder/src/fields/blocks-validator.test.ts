@@ -1,3 +1,4 @@
+import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { validateBlocksValue } from "./blocks-validator";
@@ -215,5 +216,69 @@ describe("validateBlocksValue", () => {
     expect(() =>
       validateBlocksValue(hostile, "content", "Content", {})
     ).not.toThrow();
+  });
+});
+
+describe("the breakpoint set a blocks field is validated against", () => {
+  /** A set that declares one breakpoint beyond the base one. */
+  const WIRED: BreakpointSet = {
+    viewport: [
+      { id: "base", label: "Base" },
+      { id: "wide", label: "Wide", maxWidth: 1200 },
+    ],
+    container: [],
+  };
+
+  /** A set that knows the base breakpoint and not `wide`. */
+  const BASE_ONLY: BreakpointSet = {
+    viewport: [{ id: "base", label: "Base" }],
+    container: [],
+  };
+
+  function styledAt(breakpoint: string, value: unknown): unknown {
+    return page([
+      {
+        ...node("core/heading", "11111111-1111-4111-8111-111111111111"),
+        styles: { base: { [breakpoint]: value } },
+      },
+    ]);
+  }
+
+  const check = (doc: unknown, breakpoints: BreakpointSet) =>
+    validateBlocksValue(doc, "content", "Content", {}, breakpoints);
+
+  it("reaches the breakpoint level of the walk at all", () => {
+    // The positive control for the two absences below: a fixture that never
+    // reached the breakpoint level would return an empty list for a reason
+    // that has nothing to do with what is being asserted.
+    const issues = check(styledAt("wide", "not-an-object"), WIRED);
+
+    expect(issues.map(issue => issue.message).join(" ")).toContain("wide");
+  });
+
+  it("does NOT judge a document by the set it is given", () => {
+    // Pinned as the deliberate behaviour it is. The set reaching this call is
+    // the config tier alone, resolved once at config time where there is no
+    // database, so a page styled at a breakpoint an ADMIN stored would be
+    // refused on save while the published renderer compiles it. Rejecting
+    // valid pages is worse than judging none, so an unknown breakpoint stays a
+    // warning and the error filter drops it.
+    expect(check(styledAt("wide", { color: "#000000" }), BASE_ONLY)).toEqual(
+      []
+    );
+    expect(check(styledAt("wide", { color: "#000000" }), WIRED)).toEqual([]);
+  });
+
+  it("does decide the one thing that is a property of the SET", () => {
+    // Not inert in every direction, and this is the direction that needs no
+    // stored tier to be correct: an id repeated across the two axes makes a
+    // node's style key ambiguous, which is true of the set alone.
+    const clashing: BreakpointSet = {
+      viewport: [{ id: "base", label: "Base" }],
+      container: [{ id: "base", label: "Base" }],
+    };
+
+    expect(check(page([]), clashing)).not.toEqual([]);
+    expect(check(page([]), WIRED)).toEqual([]);
   });
 });

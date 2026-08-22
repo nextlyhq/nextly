@@ -156,6 +156,140 @@ function pruneRenderedPlaceholders(
 }
 
 /**
+ * Which side of the render each site-level input belongs to.
+ *
+ * A `SiteSheetInput` field is read by both compiles or by the sheet alone. When
+ * both read it, one render must resolve it once or the two disagree invisibly,
+ * each internally consistent and neither reporting anything.
+ *
+ * - `breakpoints` decides which at-rules every tier is emitted under, and is
+ *   required on the compile context. A set that reached only the sheet puts the
+ *   block-default and class tiers under at-rules the page's own values never
+ *   use, and drops any value stored under an id the other set omits.
+ * - `classes` is reconciled onto the PAGE context only. The sheet always writes
+ *   the site's library; the page compile attributes from the context's list
+ *   when it states one, because a context stating its own defers ATTRIBUTION
+ *   while the rules stay in the sheet. Resolving it back onto the sheet drops
+ *   the library whenever a context defers.
+ * - `blockBases` is the same shape one level along: the sheet emits the
+ *   `.nx-bt-*` rules and the page compile decides which of them a node
+ *   inherits, and the page sheet is appended after the shared one.
+ * - `tokenPrefix` separates declaration from reference. The sheet DECLARES the
+ *   custom properties and the page compile REFERENCES them, so a prefix that
+ *   reaches only one leaves every reference pointing at a property nothing
+ *   declared — and an unresolved custom property invalidates the declaration
+ *   rather than reporting.
+ * - `mayFetchUrl` is reconciled a level up, in `effectiveCompile`, which
+ *   derives one predicate and hands the same object to both. It has its own
+ *   role rather than sharing one, so nothing here promises a reconciliation
+ *   that happens elsewhere.
+ * - `fonts` and `tokens` are the sheet's alone: it emits `@font-face` and the
+ *   token blocks, and the page compile emits neither and reads neither.
+ */
+interface SiteInputRoles {
+  breakpoints: "reconciled-here";
+  classes: "reconciled-here";
+  blockBases: "reconciled-here";
+  tokenPrefix: "reconciled-here";
+  mayFetchUrl: "reconciled-elsewhere";
+  fonts: "sheet-only";
+  tokens: "sheet-only";
+}
+
+/**
+ * The inputs the resolver below must produce, taken from the table itself.
+ *
+ * Indexed by every `SiteSheetInput` key rather than by the table's own keys,
+ * which is what makes the table exhaustive: a field added there and not
+ * classified here cannot index `SiteInputRoles` and the type fails to compile.
+ * Purely a type, so nothing exists at runtime to be unused.
+ */
+type ReconciledHere = {
+  [K in keyof Required<SiteSheetInput>]: SiteInputRoles[K] extends "reconciled-here"
+    ? K
+    : never;
+}[keyof Required<SiteSheetInput>];
+
+/** The name an input takes on the compile context, where it differs. */
+type ContextKey<K> = K extends "classes" ? "namedClasses" : K;
+
+/**
+ * What `sharedStyleInputs` must return: every reconciled-here key, present.
+ *
+ * Required rather than optional on purpose. An optional key can be left out
+ * silently, which is exactly the gap this table is meant to close — a field
+ * classified as reconciled here and then never reconciled.
+ */
+type ResolvedShared = {
+  [K in ReconciledHere as ContextKey<K>]:
+    | NonNullable<Required<SiteSheetInput>[K]>
+    | undefined;
+};
+
+/** The same inputs as a context patch: unstated keys absent rather than undefined. */
+type SharedStyleInputs = Partial<ResolvedShared>;
+
+/**
+ * Resolve every shared input once, so the two compiles cannot disagree.
+ *
+ * The defect this exists to prevent is not a wrong precedence — it is two
+ * computations of one question. Each field therefore keeps the precedence it
+ * already had, and only the number of places that decide changes:
+ *
+ * - `breakpoints` and `blockBases` take the site's when it has one. The site
+ *   tier is the stored one, and stored overrides code, which is the layering
+ *   every global-styles system uses.
+ * - `namedClasses` lets a context that states its own outrank the site's, the
+ *   rule this render already applied. This one is applied to the PAGE context
+ *   only: the sheet keeps emitting the site's library, because deferring means
+ *   deferring attribution, not losing the rules.
+ * - `tokenPrefix` follows the sheet, which reads `tokenPrefix` then the token
+ *   set's own `prefix`; the context's is the last fallback rather than the
+ *   first, because the declaration site is what a reference has to match.
+ *
+ * Only defined values are returned, so spreading this over a context adds no
+ * key the caller did not have.
+ */
+function sharedStyleInputs(
+  styleContext: StyleCompileContext | undefined,
+  site: SiteSheetInput | undefined
+): SharedStyleInputs {
+  // Both tiers normalised once. Every field below would otherwise repeat the
+  // same two absence checks, and the resolution is easier to read as a list of
+  // precedences than as a list of optional chains.
+  const route: Partial<StyleCompileContext> = styleContext ?? {};
+  const stored: Partial<SiteSheetInput> = site ?? {};
+  return defined({
+    breakpoints: firstStated(stored.breakpoints, route.breakpoints),
+    namedClasses: firstStated(route.namedClasses, stored.classes),
+    blockBases: firstStated(stored.blockBases, route.blockBases),
+    tokenPrefix: firstStated(
+      stored.tokenPrefix,
+      stored.tokens?.prefix,
+      route.tokenPrefix
+    ),
+  });
+}
+
+/** The first tier that stated this input, in the precedence its field has. */
+function firstStated<T>(...tiers: readonly (T | undefined)[]): T | undefined {
+  return tiers.find(tier => tier !== undefined);
+}
+
+/**
+ * The same object without its unstated keys.
+ *
+ * Spreading a key whose value is `undefined` is not the same as omitting it:
+ * the context would then carry the key, and a reader asking whether it was
+ * stated gets the wrong answer.
+ */
+function defined(value: ResolvedShared): SharedStyleInputs {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, stated]) => stated !== undefined)
+  );
+}
+
+/**
  * Renders a block document as React.
  *
  * A Server Component, and synchronous: nothing at this level needs to wait, so
@@ -388,21 +522,12 @@ export function PageRenderer({
   // the scope lives on the artifact, the caps come from this prop, and a
   // caller's own fetch predicate needs an identity before a stored sheet can be
   // judged against it.
-  // The site's class library reaches the PAGE compile from the same value the
-  // shared sheet reads. The sheet writes the `.nx-c-<slug>` rule from
-  // `siteStyles.classes`, but a node's stored class IDS resolve to class NAMES
-  // during the page's own compile, from the context's `namedClasses` — two
-  // inputs that must be one list, or a stored class emits a rule no element
-  // ever carries and each half looks internally consistent. A context that
-  // states its own `namedClasses` outranks this, exactly as a context carrying
-  // its own `blockBases` does.
+  const siteInput = siteStyles === false ? undefined : siteStyles;
+  // Every site-level input BOTH compiles read, resolved once. See
+  // `sharedStyleInputs` for why one resolution rather than one per consumer.
+  const shared = sharedStyleInputs(styleContext, siteInput);
   const pageStyleContext =
-    styleContext !== undefined &&
-    styleContext.namedClasses === undefined &&
-    siteStyles !== false &&
-    siteStyles?.classes !== undefined
-      ? { ...styleContext, namedClasses: siteStyles.classes }
-      : styleContext;
+    styleContext === undefined ? undefined : { ...styleContext, ...shared };
 
   const {
     context: compileContext,
@@ -442,11 +567,7 @@ export function PageRenderer({
   // with no sheet. Two answers to "what are this site's breakpoints" is also how
   // the shared sheet and the page sheet come to disagree about which at-rules a
   // tier is emitted under, invisibly, since each sheet is consistent on its own.
-  const siteInput = siteStyles === false ? undefined : siteStyles;
-  const siteBreakpoints =
-    siteStyles === false
-      ? undefined
-      : (siteInput?.breakpoints ?? compileContext?.breakpoints);
+  const siteBreakpoints = siteStyles === false ? undefined : shared.breakpoints;
   // A sheet by DEFAULT. Without one a block cannot reference a token at all —
   // a default reading `color.surface` would resolve on a route and resolve to
   // nothing here — which is why `core/card` shipped with no background.
@@ -458,7 +579,16 @@ export function PageRenderer({
       ? undefined
       : compileSiteSheet({
           ...siteInput,
+          // The RESOLVED values, the same objects the page context above was
+          // given. Spreading `siteInput` alone would leave each consumer
+          // computing its own answer, which is the defect this closes.
           breakpoints: siteBreakpoints,
+          ...(shared.blockBases === undefined
+            ? {}
+            : { blockBases: shared.blockBases }),
+          ...(shared.tokenPrefix === undefined
+            ? {}
+            : { tokenPrefix: shared.tokenPrefix }),
           tokens: resolveSiteTokens(siteInput?.tokens),
           // The SAME predicate the page sheet is compiled with, taken from the
           // one place it is derived rather than derived again here. The class

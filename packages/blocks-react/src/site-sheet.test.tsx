@@ -285,5 +285,11 @@ describe("a node's named-class references", () => {
     // The sheet still carries the library's rule; what the deferral changes
     // is ATTRIBUTION, so the element must not carry the name.
     expect(out).not.toMatch(/class="[^"]*\bnx-c-accent\b/);
+    // The separating property. The absence above is satisfied just as well by a
+    // render that lost the class library altogether — measured, dropping
+    // `siteStyles.classes` produces the same missing attribute — so on its own
+    // it cannot tell deferred attribution from a lost library. The sheet still
+    // carrying the rule is what makes it the former.
+    expect(out).toContain(".nx-c-accent");
   });
 });
