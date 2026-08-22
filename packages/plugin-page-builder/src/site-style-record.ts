@@ -211,12 +211,18 @@ function tokenEmissionIssues(
   policy: SectionPolicy
 ): string[] {
   const own = emittedMessages(set);
+  const merged = resolveSiteStyle(policy.defaults, { tokens: set }).tokens;
+  // The config tier emitted under the MERGED prefix, so the two runs are
+  // comparable. A collision message renders the custom property the two names
+  // both become, and the prefix is part of that rendering rather than part of
+  // the collision — emitting the baseline under its own prefix makes a write
+  // that changes only the prefix look like a brand new collision, and refuses
+  // it for a clash it did not cause and cannot reach.
   const inherited = new Set(
     policy.defaults?.tokens === undefined
       ? []
-      : emittedMessages(policy.defaults.tokens)
+      : emittedMessages(withPrefixOf(policy.defaults.tokens, merged))
   );
-  const merged = resolveSiteStyle(policy.defaults, { tokens: set }).tokens;
   const reported = new Set(own);
   const issues = [...own];
   for (const message of emittedMessages(merged ?? set)) {
@@ -225,6 +231,16 @@ function tokenEmissionIssues(
     issues.push(message);
   }
   return issues;
+}
+
+/** One token set as it would render under another's prefix. */
+function withPrefixOf(
+  tokens: SiteTokenSet,
+  under: SiteTokenSet | undefined
+): SiteTokenSet {
+  return under?.prefix === undefined
+    ? tokens
+    : { ...tokens, prefix: under.prefix };
 }
 
 /** What emitting one token set reports, as plain messages. */

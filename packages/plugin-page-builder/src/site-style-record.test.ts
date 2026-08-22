@@ -604,6 +604,27 @@ describe("judging the write against the tier it will be merged with", () => {
     expect(result.issues).not.toEqual([]);
   });
 
+  it("accepts a write that only changes the prefix over a colliding config tier", () => {
+    // A collision message renders the custom property the two names both
+    // become, so the prefix is inside the string. Emitting the baseline under
+    // its own prefix makes a prefix change look like a brand new collision and
+    // refuses a write for a clash it did not cause and cannot reach — the
+    // stored tier holds no tokens here at all.
+    const colliding = {
+      tokens: [
+        token("color.primary-dark", "#111111"),
+        token("color-primary.dark", "#222222"),
+      ],
+    };
+
+    const result = checkStoredTokens(
+      { tokens: [], prefix: "--brand-" },
+      { defaults: { tokens: colliding } }
+    );
+
+    expect(result.issues).toEqual([]);
+  });
+
   it("does not report a problem the CONFIG tier already had on its own", () => {
     // Reported as a difference. A site whose own config emits an issue has a
     // problem, but it is not one this write introduced and not one the writer
