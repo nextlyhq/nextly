@@ -220,6 +220,50 @@ describe("what a property carries", () => {
   });
 });
 
+describe("a property the block no longer supports", () => {
+  it("still offers a stored property outside supports, marked as not offered", () => {
+    // Measured: neither validation nor compilation consults `supports`, so a
+    // value written before a block update removed the capability — or written
+    // through the API, which never had one — is still valid and still emitted.
+    // Hiding it would show an author styling they can see and cannot clear.
+    register({ spacing: true });
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontSize: "20px" } },
+    } as NodeStyles;
+
+    const inspection = inspectStyle(documentOf(styles), "a");
+    const typography = inspection?.sections.find(
+      section => section.group === "typography"
+    );
+
+    expect(typography?.properties.map(p => p.property)).toEqual(["fontSize"]);
+    expect(typography?.properties[0]?.offered).toBe(false);
+    expect(typography?.properties[0]?.set).toBe(true);
+  });
+
+  it("marks a property the block does support as offered", () => {
+    register({ spacing: true });
+
+    const inspection = inspectStyle(documentOf(), "a");
+
+    expect(inspection?.sections[0]?.properties.every(p => p.offered)).toBe(
+      true
+    );
+  });
+
+  it("does not offer an unsupported property the node does not store", () => {
+    // The reachability rule is about values that EXIST. Without that bound the
+    // panel would list the whole catalog for every block.
+    register({ spacing: true });
+
+    const inspection = inspectStyle(documentOf(), "a");
+
+    expect(inspection?.sections.map(section => section.group)).toEqual([
+      "spacing",
+    ]);
+  });
+});
+
 describe("when there is nothing to style", () => {
   it("answers null with no selection", () => {
     register({ spacing: true });

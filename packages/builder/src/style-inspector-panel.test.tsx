@@ -200,6 +200,24 @@ describe("sections", () => {
     expect(screen.getAllByLabelText("1 set")).toHaveLength(2);
   });
 
+  it("keeps a section collapsed when the author closes it", () => {
+    // The accordion sends "" on collapse. Treating that as "not chosen" made
+    // the first section impossible to close, and closing any later one opened
+    // the first instead.
+    mount({ spacing: true, effects: true });
+    const spacing = screen.getByRole("button", { name: /Spacing/ });
+    expect(spacing.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(spacing);
+
+    expect(spacing.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      screen
+        .getByRole("button", { name: /Effects/ })
+        .getAttribute("aria-expanded")
+    ).toBe("false");
+  });
+
   it("says so when a block offers no style properties at all", () => {
     mount({});
 
@@ -457,6 +475,21 @@ describe("controls", () => {
       screen.getByText("2 blocks selected. Select one to style it.")
     ).toBeDefined();
     expect(screen.queryByLabelText("Block start")).toBeNull();
+  });
+
+  it("stores only the numeric grammar CSS accepts, leaving other spellings alone", () => {
+    // `Number` reads spellings CSS does not: `0x10` is 16, `0b10` is 2, `0o10`
+    // is 8. Converting those would store a number the author never typed and
+    // pass validation on the way through.
+    const editor = mount({ effects: true });
+    const field = screen.getByLabelText("Opacity");
+
+    fireEvent.change(field, { target: { value: "0x10" } });
+    fireEvent.blur(field);
+
+    // Left as text, so the catalog refuses it and says why.
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("is not a number");
   });
 
   it("shows a stored token by name rather than as editable text", () => {

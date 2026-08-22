@@ -102,7 +102,11 @@ export function StyleInspectorPanel({
   state,
   breakpoint,
 }: StyleInspectorPanelProps): React.JSX.Element {
-  const [openGroup, setOpenGroup] = React.useState("");
+  // `null` is "the author has not chosen yet", which is NOT the same as the
+  // empty string the accordion sends when they collapse the open section. The
+  // two collapsed onto one value made the first section impossible to close,
+  // and closing any later one silently opened the first.
+  const [openGroup, setOpenGroup] = React.useState<string | null>(null);
   // The form an author chose at a union position, keyed by property and path.
   // Panel state rather than document state: it is only consulted where nothing
   // is stored, so there is nothing to persist — the moment a value exists, the
@@ -175,8 +179,8 @@ export function StyleInspectorPanel({
   // Compared as strings because that is what the accordion hands back, and
   // narrowing its argument to a catalog group would be this file claiming to
   // know the vocabulary rather than reading it off the sections in hand.
-  const offered = new Set<string>(groups);
-  const open = offered.has(openGroup) ? openGroup : (groups[0] ?? "");
+  const available = new Set<string>(groups);
+  const open = openSection(openGroup, available, groups[0] ?? "");
 
   return (
     <div className="nx-style-inspector">
@@ -710,6 +714,32 @@ function TextField({
   );
 }
 
+/**
+ * Which section is open, given what the author has said.
+ *
+ * Three states, not two: not yet chosen falls back to the first section so the
+ * panel never opens onto a column of headings; the empty string is an explicit
+ * collapse and is honoured; and a section the newly selected block does not
+ * offer falls back, because an accordion asked to open one it does not have
+ * shows nothing open at all.
+ */
+function openSection(
+  chosen: string | null,
+  available: ReadonlySet<string>,
+  first: string
+): string {
+  if (chosen === null) return first;
+  if (chosen === "") return "";
+  return available.has(chosen) ? chosen : first;
+}
+
+/**
+ * The grammar CSS calls a `<number>`: an optional sign, digits with an optional
+ * decimal part, and an optional exponent. Deliberately narrower than
+ * `Number` — see {@link committedValue}.
+ */
+const CSS_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
 /** A stored value as a text field shows it. */
 function storedText(value: StyleValue | undefined): string {
   if (typeof value === "string") return value;
@@ -736,6 +766,11 @@ function committedValue(
 ): StyleValue {
   if (kind !== "number") return draft;
   const trimmed = draft.trim();
+  // `Number` reads spellings CSS does not: `0x10` becomes 16, `0b10` becomes 2,
+  // `0o10` becomes 8. Converting those would store a number the author never
+  // typed and pass validation, so only the grammar CSS calls a <number> is
+  // converted and everything else is left for the catalog to judge.
+  if (!CSS_NUMBER.test(trimmed)) return draft;
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : draft;
 }

@@ -31,6 +31,7 @@
 import {
   BASE_BREAKPOINT,
   getStyleProperty,
+  STYLE_CATALOG,
   STYLE_GROUP_DEFS,
   stylePropertiesForSupports,
   type BlockDocument,
@@ -105,6 +106,17 @@ export interface InspectedStyleProperty {
    * needs the compiler's trace rather than the document.
    */
   readonly set: boolean;
+  /**
+   * Whether the block's `supports` still declares this property.
+   *
+   * False only for a property this node STORES and the block no longer offers —
+   * a capability removed by a block update, or a value written through the API,
+   * which never consults `supports` at all. Carried rather than dropped so the
+   * panel can say why a control is there: the value is live on the page, and an
+   * author looking at styling they cannot explain needs the control that clears
+   * it more than they need it hidden.
+   */
+  readonly offered: boolean;
 }
 
 /** One accordion section: a catalog group, and the properties this block has in it. */
@@ -149,16 +161,33 @@ export function inspectStyle(
   const breakpoint = options?.breakpoint ?? BASE_BREAKPOINT;
   // ASKED of the engine. `supports` is a capability declaration whose meaning —
   // `true` for a whole group, an object naming sub-flags — is the registry's,
-  // and a second reading of it here would offer a property the compiler
-  // silently drops, or withhold one the block really has.
-  const allowed = new Set(
+  // and a second reading of it here would withhold a property the block really
+  // has, or offer one it does not.
+  const offered = new Set(
     stylePropertiesForSupports(definition.supports).map(entry => entry.property)
   );
+  // Plus anything this node ALREADY stores here, whether the block still
+  // supports it or not. Measured: neither `validation.ts` nor `compile-page.ts`
+  // consults `supports`, so a value written before a block update removed the
+  // capability — or written by the API, which never had one — stays valid and
+  // is still emitted on the page. Filtering on `supports` alone would show the
+  // author styling that is visibly active with no control able to clear it.
+  const allowed = new Set(offered);
+  for (const entry of STYLE_CATALOG) {
+    if (allowed.has(entry.property)) continue;
+    const stored = readStyleValue(node.styles, {
+      state,
+      breakpoint,
+      property: entry.property,
+      path: [],
+    });
+    if (stored !== undefined) allowed.add(entry.property);
+  }
 
   const sections: StyleSection[] = [];
   for (const group of STYLE_GROUP_DEFS) {
     const properties = propertiesInGroup(allowed, group.key).map(property =>
-      inspectProperty(property, node.styles, {
+      inspectProperty(property, node.styles, offered.has(property), {
         ...options,
         state,
         breakpoint,
@@ -197,6 +226,7 @@ function propertiesInGroup(
 function inspectProperty(
   property: string,
   styles: Parameters<typeof readStyleValue>[0],
+  offered: boolean,
   options: StyleInspectionOptions & {
     state: StyleState;
     breakpoint: BreakpointId;
@@ -231,5 +261,6 @@ function inspectProperty(
     variants: set.variants,
     value,
     set: value !== undefined,
+    offered,
   };
 }

@@ -239,12 +239,18 @@ export {
   MAX_SITE_LOOKUPS,
   tokenKindAllowedAt,
   tokenKindsForProperty,
-  // Which arm of a union a stored value belongs to. Public because the compiler
-  // and an editor ask the same question of it — one to decide which arm's rules
-  // to emit and which complaint to report, the other to decide which control to
-  // draw. A second answer to it drifts silently, because both surfaces look
-  // right on their own: the disagreement is only visible to an author holding a
-  // control for one arm while reading an error written about another.
+  // Which arm of a union a stored value belongs to. Public because more than one
+  // surface asks it: validation picks the arm it judges a value against, and an
+  // editor picks the control to draw for it. A second answer drifts silently,
+  // because both surfaces look right on their own — the disagreement is visible
+  // only to an author holding a control for one arm while reading an error
+  // written about another.
+  //
+  // `style/declarations.ts` still selects an arm its OWN way while emitting, by
+  // taking the first that writes bytes. Measured, the two already disagree:
+  // `fontWeight: 700` resolves here to the number arm and emits through the
+  // keyword one, because `scalarText` reads no leaf kind. Nothing is visibly
+  // wrong today only because both arms write `font-weight`.
   styleUnionVariant,
 } from "./style/validate-style-value";
 export type {
