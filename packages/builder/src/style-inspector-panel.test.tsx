@@ -376,7 +376,7 @@ describe("controls", () => {
     // engine answers with the catalog's first arm when nothing is stored.
     mount({ border: { radius: true } });
 
-    const trigger = screen.getByLabelText("Form");
+    const trigger = screen.getByLabelText("Border radius form");
     fireEvent.click(trigger);
     // Named from the arms' own shape kinds rather than numbered.
     expect(screen.getByRole("option", { name: "Per corner" })).toBeDefined();
@@ -397,7 +397,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ border: { radius: true } }, styles);
 
-    fireEvent.click(screen.getByLabelText("Form"));
+    fireEvent.click(screen.getByLabelText("Border radius form"));
     fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
 
     expect(editor.apply).toHaveBeenCalledTimes(1);
@@ -536,6 +536,32 @@ describe("controls", () => {
 
     fireEvent.click(fontSize.getByRole("button", { name: "Clear Font size" }));
     expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("names every ROOT form selector for its own property", () => {
+    // A property whose shape is a union at the top draws one control and so no
+    // heading. `fontWeight`, `lineHeight` and `fontStyle` are all such unions,
+    // and a selector called "Form" three times over tells a screen-reader user
+    // nothing about which property it changes.
+    mount({ typography: true });
+
+    expect(screen.getByLabelText("Font weight form")).toBeDefined();
+    expect(screen.getByLabelText("Line height form")).toBeDefined();
+    expect(screen.getByLabelText("Font style form")).toBeDefined();
+  });
+
+  it("leaves a trailing decimal point for the catalog, rather than reading it as a number", () => {
+    // CSS requires a digit AFTER a decimal point, so `1.` is a number followed
+    // by a stray delimiter rather than a number. `Number("1.")` answers 1
+    // regardless, which would store a value the author never spelled validly.
+    const editor = mount({ effects: true });
+    const field = screen.getByLabelText("Opacity");
+
+    fireEvent.change(field, { target: { value: "1." } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toBeDefined();
   });
 
   it("names a read-only value through its label, which `for` cannot reach", () => {

@@ -453,8 +453,15 @@ function FormChoice({
   return (
     <div className="nx-inspector__field" data-form-choice={property.property}>
       <Label htmlFor={id}>
+        {/*
+          The PROPERTY's name at the root, because a property whose shape is a
+          union at the top draws one control and therefore no heading — so
+          `fontWeight`, `lineHeight` and `fontStyle` would all offer a selector
+          called "Form". Below the root the heading is rendered, so the position
+          is enough to tell them apart.
+        */}
         {variant.path.length === 0
-          ? "Form"
+          ? `${property.label} form`
           : `${fieldLabel(variant.path[variant.path.length - 1] ?? "")} form`}
       </Label>
       <Select value={String(variant.active)} onValueChange={choose}>
@@ -866,10 +873,16 @@ function openSection(
 
 /**
  * The grammar CSS calls a `<number>`: an optional sign, digits with an optional
- * decimal part, and an optional exponent. Deliberately narrower than
- * `Number` — see {@link committedValue}.
+ * decimal part, and an optional exponent.
+ *
+ * Deliberately narrower than `Number` in both directions. `Number` reads
+ * spellings CSS does not (`0x10`, `0b10`, `0o10`), and it also accepts a
+ * trailing point: CSS requires at least one digit AFTER a decimal point, so
+ * `1.` is a number followed by a stray delimiter rather than a number, and
+ * `Number("1.")` quietly answering `1` would store a value the author never
+ * wrote a valid spelling of.
  */
-const CSS_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const CSS_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 /** A stored value as a text field shows it. */
 function storedText(value: StyleValue | undefined): string {
