@@ -577,10 +577,32 @@ export function useSingleSchema(
  * }
  * ```
  */
-export function useUpdateSingleDocument(slug: string, locale?: string) {
+export function useUpdateSingleDocument(
+  slug: string,
+  locale?: string,
+  options?: {
+    /**
+     * Serialize this mutation against others sharing the id.
+     *
+     * TanStack runs mutations in parallel by default, each with a unique scope.
+     * Several surfaces owning different fields of ONE document is the case that
+     * wants otherwise: two saves in flight against the same record interleave
+     * their success handlers, so a cache update from the first can land after
+     * the second and show a document neither surface is looking at. Giving them
+     * one scope id makes the second wait for the first.
+     *
+     * Absent by default, because a document edited by one form has nothing to
+     * serialize against and would only pay the wait.
+     */
+    scopeId?: string;
+  }
+) {
   const queryClient = useQueryClient();
 
   return useMutation<SingleDocument, Error, Record<string, unknown>>({
+    ...(options?.scopeId === undefined
+      ? {}
+      : { scope: { id: options.scopeId } }),
     // i18n: route the save to the editor's active language so translatable values land on that
     // locale's companion row (shared columns still update). Omitted for non-localized singles.
     mutationFn: async (data: Record<string, unknown>) => {

@@ -100,6 +100,20 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The stored style tier. Answered as "nothing stored yet" here, because what
+  // this file asserts is which props reach the two enforcing surfaces — the
+  // merge of stored over defaults is `site-style-client`'s own question and has
+  // its own coverage. Standing a real query client up here would put a second
+  // subject in every assertion below.
+  useSingleDocument: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+  }),
+  useUpdateSingleDocument: () => ({
+    mutateAsync: async () => ({ success: true }),
+    isPending: false,
+  }),
 }));
 
 // Imported after the mocks, which is what makes them take effect: the module

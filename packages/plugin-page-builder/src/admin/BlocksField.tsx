@@ -81,6 +81,7 @@ import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+import { useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
 
 export interface BlocksFieldProps<
@@ -396,17 +397,25 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * the empty style (block defaults and the engine's guaranteed tokens)
    * rather than crashing the editor.
    *
-   * Defaults only, deliberately. The STORED tier reaches the published page
-   * through `loadSiteStyle` on the route; wiring it into the canvas needs a
-   * fetch this surface does not have yet, and belongs to the style studios.
-   * Until then the canvas previews the code-stated design — closer to the
-   * published page than the empty sheet it drew before, and honestly short of
-   * it exactly where an admin has stored an override.
+   * BOTH tiers, which is what makes the canvas a preview of the published page
+   * rather than of the repository. The defaults are the host's code-stated
+   * design, delivered as plain data; the stored tier is what an admin saved,
+   * read through the same client every style studio uses and merged by
+   * `resolveSiteStyle` — the one place those two meet, on the server and here
+   * alike. Drawing from the defaults alone showed an author a page that
+   * differed from the live one at exactly the properties someone had
+   * deliberately overridden.
+   *
+   * A save re-renders this without anything being told to: the studios and this
+   * canvas read one query, so the cache update IS the propagation. There is no
+   * preview channel to keep in step because there are not two sources to keep
+   * in step.
    */
-  const canvasSiteStyle = useMemo(
+  const configSiteStyle = useMemo(
     () => readSiteStyleRecord(clientConfig?.siteStyle),
     [clientConfig]
   );
+  const { siteStyle: canvasSiteStyle } = useSiteStyle(configSiteStyle);
 
   /*
    * The hosts this site loads media from, read back from the same client

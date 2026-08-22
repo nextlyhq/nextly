@@ -58,7 +58,13 @@ export {
   // Bulk collection hooks
   useBulkDeleteCollections,
   useBulkUpdateCollections,
+  // Single-document hooks. A plugin that owns a Single needs the same read and
+  // write the admin's own Single form uses; a second client for one document
+  // would be a second answer to how it caches and when it invalidates.
+  useSingleDocument,
+  useUpdateSingleDocument,
 } from "./hooks/queries";
+export type { SingleDocument } from "./hooks/queries";
 
 // Media hooks
 export {

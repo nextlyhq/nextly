@@ -271,6 +271,32 @@ export {
  * the value reaches anonymous callers and must hold nothing secret.
  */
 export { usePluginClientConfig } from "@nextlyhq/admin";
+
+/**
+ * @experimental Read and write a Single this plugin owns, through the same
+ * client the admin's own Single form uses.
+ *
+ * `useSingleDocument(slug)` is a TanStack Query hook whose cache key already
+ * carries the locale and the draft overlay; `useUpdateSingleDocument(slug)` is
+ * the matching mutation. A plugin fetching its own Single some other way would
+ * be a second answer to how that one document caches and when it invalidates,
+ * and the two would disagree the first time either learned something — which is
+ * the failure a plugin surface cannot see, because each half looks correct.
+ *
+ * A write is PARTIAL: the fields named are the fields changed, and every other
+ * field of the document is left as it was. Measured across SQLite, Postgres and
+ * MySQL. So several surfaces owning different fields of one Single can each
+ * send only their own and never clobber one another.
+ *
+ * A refused write RESOLVES rather than rejecting, carrying `success: false` and
+ * a per-field error. Treating a settled promise as a successful save reports
+ * "saved" over a write the database refused.
+ */
+export {
+  useSingleDocument,
+  useUpdateSingleDocument,
+  type SingleDocument,
+} from "@nextlyhq/admin";
 export type {
   FieldTypePickerProps,
   FieldDefaultValueInputProps,

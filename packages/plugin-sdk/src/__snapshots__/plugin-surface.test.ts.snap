@@ -59,6 +59,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "PluginMenuItem (type)",
   "RichTextEditorKit (type)",
   "RowAction (type)",
+  "SingleDocument (type)",
   "Stack (value)",
   "StackProps (type)",
   "Stat (value)",
@@ -87,7 +88,9 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "usePluginClientConfig (value)",
   "usePluginFieldTypeEntries (value)",
   "useReportUnsavedWork (value)",
+  "useSingleDocument (value)",
   "useSuppressAdminChrome (value)",
+  "useUpdateSingleDocument (value)",
   "withOptionIds (value)",
 ]
 `;
