@@ -67,6 +67,14 @@ import {
   type StyleSection,
 } from "./style-inspector";
 import {
+  measurementOf,
+  steppedValue,
+  toggleOptionsFor,
+  toggleShows,
+  unitChoicesFor,
+  withUnit,
+} from "./style-numeric";
+import {
   readStyleValue,
   styleClearOp,
   styleWriteOp,
@@ -744,6 +752,7 @@ function ControlValue({
   return (
     <ValueField
       id={id}
+      labelledBy={labelledBy}
       control={control}
       stored={stored}
       actionName={actionName}
@@ -864,17 +873,14 @@ function RetainedValue({
 }
 
 /**
- * The control a leaf's kind resolves to.
+ * A closed vocabulary of more than two keywords, as a menu.
  *
- * A keyword leaf carries a closed vocabulary and gets a select over it. Every
- * other kind is drawn as a text field in this build: `length`, `number`,
- * `color`, `css` and `url` all store a scalar the catalog judges, and the
- * affordances that tell them apart — a unit stepper, a colour surface, a token
- * picker — are the control set's, not this panel's. Drawing a text field for
- * them is what makes each editable now, rather than presenting an incomplete
- * property as a complete one.
+ * Its own component rather than a branch inside the router, so that deciding
+ * WHICH surface a leaf gets and drawing one are separate readings: the router
+ * is then short enough to see all three choices at once, which is the thing a
+ * reader comes to it for.
  */
-function ValueField({
+function SelectField({
   id,
   control,
   stored,
@@ -883,6 +889,90 @@ function ValueField({
   onCommit,
 }: {
   id: string;
+  control: StyleControl & { leaf: Extract<StyleLeaf, { kind: "keyword" }> };
+  stored: StyleValue | undefined;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const current = typeof stored === "string" ? stored : "";
+  // The validator accepts a keyword case-insensitively, with surrounding CSS
+  // whitespace and escapes, and accepts the CSS-wide keywords everywhere — so
+  // a stored `Bold` or `inherit` is live and compiles while matching no item
+  // here, and the select would render empty over a value that is doing
+  // something. Offered VERBATIM as its own item rather than normalised: any
+  // rule written here to fold spellings would be a second copy of the
+  // engine's, and the stored string is the one thing that needs no rule.
+  const extra =
+    current !== "" && !control.leaf.values.includes(current) ? current : null;
+  return (
+    <div className="nx-style-inspector__select">
+      <Select value={current} onValueChange={value => onCommit(value)}>
+        <SelectTrigger
+          id={id}
+          aria-describedby={describedBy}
+          aria-invalid={describedBy === undefined ? undefined : true}
+        >
+          <SelectValue placeholder="Not set" />
+        </SelectTrigger>
+        <SelectContent>
+          {extra === null ? null : (
+            <SelectItem value={extra}>{extra}</SelectItem>
+          )}
+          {control.leaf.values.map(option => (
+            <SelectItem key={option} value={option}>
+              {option}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {/*
+          A select cannot offer "unset" as an item: an empty value is not a
+          choice the list can carry, and a sentinel standing for it would mean
+          two things at once. A button beside it clears, which is the same act
+          an emptied text field performs.
+        */}
+      {current === "" ? null : (
+        <button
+          type="button"
+          onClick={() => onCommit(null)}
+          aria-label={`Clear ${actionName}`}
+        >
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+/**
+ * The control a leaf's kind resolves to.
+ *
+ * A keyword leaf carries a closed vocabulary: two values get a toggle and more
+ * than two get a select over them. Every other kind is drawn as a text field
+ * that accepts whatever the catalog judges — `length`, `number`, `color`, `css`
+ * and `url` all store a scalar — with the numeric affordances layered on top
+ * where the stored value is a single measurement.
+ *
+ * Layered rather than substituted, which is the decision worth keeping. A field
+ * that MODELLED a length as a number and a unit could not hold `auto`,
+ * `clamp(...)`, a two-part shorthand or a token, and would write each of them
+ * away on the first edit. So the text field remains the control and the stepper
+ * and unit menu are affordances it grows when the value is simple enough to
+ * carry them; `style-numeric.ts` decides when that is, and answers `undefined`
+ * rather than guessing.
+ */
+function ValueField({
+  id,
+  labelledBy,
+  control,
+  stored,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  /** The field label's id, so a group of buttons can be named by it. */
+  labelledBy: string;
   control: StyleControl;
   stored: StyleValue | undefined;
   /** What this control's clear action removes, named for the property. */
@@ -896,64 +986,175 @@ function ValueField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // A keyword vocabulary too wide for a toggle is a menu. Narrowed here rather
+  // than inside the component so the leaf carries its own kind through.
   if (control.kind === "select" && control.leaf.kind === "keyword") {
-    const current = typeof stored === "string" ? stored : "";
-    // The validator accepts a keyword case-insensitively, with surrounding CSS
-    // whitespace and escapes, and accepts the CSS-wide keywords everywhere — so
-    // a stored `Bold` or `inherit` is live and compiles while matching no item
-    // here, and the select would render empty over a value that is doing
-    // something. Offered VERBATIM as its own item rather than normalised: any
-    // rule written here to fold spellings would be a second copy of the
-    // engine's, and the stored string is the one thing that needs no rule.
-    const extra =
-      current !== "" && !control.leaf.values.includes(current) ? current : null;
     return (
-      <div className="nx-style-inspector__select">
-        <Select value={current} onValueChange={value => onCommit(value)}>
-          <SelectTrigger
-            id={id}
-            aria-describedby={describedBy}
-            aria-invalid={describedBy === undefined ? undefined : true}
-          >
-            <SelectValue placeholder="Not set" />
-          </SelectTrigger>
-          <SelectContent>
-            {extra === null ? null : (
-              <SelectItem value={extra}>{extra}</SelectItem>
-            )}
-            {control.leaf.values.map(option => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {/*
-          A select cannot offer "unset" as an item: an empty value is not a
-          choice the list can carry, and a sentinel standing for it would mean
-          two things at once. A button beside it clears, which is the same act
-          an emptied text field performs.
-        */}
-        {current === "" ? null : (
-          <button
-            type="button"
-            onClick={() => onCommit(null)}
-            aria-label={`Clear ${actionName}`}
-          >
-            Clear
-          </button>
-        )}
-      </div>
+      <SelectField
+        id={id}
+        control={{ ...control, leaf: control.leaf }}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
     );
   }
+  // A two-value keyword is drawn as a pair of buttons rather than a menu: both
+  // options are visible and each is one click, where a select costs two and
+  // hides the alternative until it is opened. Offered only where the whole
+  // vocabulary fits — `toggleOptionsFor` declines a shorthand — and only where
+  // the STORED value is one of the two, so a CSS-wide keyword or a token keeps
+  // the field that can actually show it.
+  const toggle = toggleOptionsFor(control.leaf);
+  if (toggle !== undefined && toggleShows(toggle, stored)) {
+    return (
+      <ToggleField
+        id={id}
+        labelledBy={labelledBy}
+        options={toggle}
+        stored={stored}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+
   return (
-    <TextField
+    <NumericField
       id={id}
       control={control}
       stored={stored}
       describedBy={describedBy}
       onCommit={onCommit}
     />
+  );
+}
+
+/**
+ * Two keywords as two buttons, with the current one pressed.
+ *
+ * `aria-pressed` rather than a radio group: these are two states of one
+ * property rather than a choice among options that includes "neither", and the
+ * clear affordance beside them is what expresses unset. Labelled by the field's
+ * own label, so a screen reader reads the property name before the state.
+ */
+function ToggleField({
+  id,
+  labelledBy,
+  options,
+  stored,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  labelledBy: string;
+  options: readonly [string, string];
+  stored: StyleValue | undefined;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  return (
+    <div
+      className="nx-style-inspector__toggle"
+      role="group"
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
+    >
+      {options.map((option, index) => {
+        const pressed = stored === option;
+        return (
+          <button
+            key={option}
+            // Only the first carries the field's id, because a label points at
+            // one control and the group is what the label names.
+            id={index === 0 ? id : undefined}
+            type="button"
+            aria-pressed={pressed}
+            // Pressing the pressed option CLEARS rather than re-writing it,
+            // which is the only way a two-button group can reach unset without
+            // a third button standing for "neither".
+            onClick={() => onCommit(pressed ? null : option)}
+          >
+            {option}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The text field, plus the affordances a value that is one measurement earns.
+ *
+ * The input stays a TEXT field whatever the value is, which is the whole design:
+ * `auto`, `clamp(...)`, a shorthand and a token all remain typeable and none is
+ * rewritten. The numeric behaviour is LAYERED on — arrow keys step the quantity
+ * and a menu swaps the unit — and both disengage silently when the current value
+ * is not a single measurement, so nothing an author can express is taken away by
+ * the field being clever about the common case.
+ */
+function NumericField({
+  id,
+  control,
+  stored,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  control: StyleControl;
+  stored: StyleValue | undefined;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const units = unitChoicesFor(control.leaf);
+  const measurement = measurementOf(stored);
+  // The menu is shown only where it can act. Rendered against a value it cannot
+  // decompose, every choice in it would be a no-op, and a disabled-looking
+  // control that silently does nothing is worse than one that is not there.
+  const showUnits = units.length > 0 && measurement !== undefined;
+
+  return (
+    <div className="nx-style-inspector__numeric">
+      <TextField
+        id={id}
+        control={control}
+        stored={stored}
+        describedBy={describedBy}
+        onCommit={onCommit}
+        onStep={delta => {
+          const next = steppedValue(control.leaf, stored, delta);
+          // `undefined` means this value cannot be stepped or the result would
+          // be refused, so the key does nothing rather than writing a value the
+          // document then rejects.
+          if (next === undefined) return false;
+          onCommit(next);
+          return true;
+        }}
+      />
+      {showUnits ? (
+        <Select
+          value={measurement.unit}
+          onValueChange={unit => {
+            const next = withUnit(control.leaf, stored, unit);
+            if (next !== undefined) onCommit(next);
+          }}
+        >
+          <SelectTrigger
+            aria-label={`Unit for ${fieldLabel(control.property)}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {units.map(unit => (
+              <SelectItem key={unit} value={unit}>
+                {unit}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+    </div>
   );
 }
 
@@ -970,6 +1171,7 @@ function TextField({
   stored,
   describedBy,
   onCommit,
+  onStep,
 }: {
   id: string;
   control: StyleControl;
@@ -977,6 +1179,14 @@ function TextField({
   /** The id of the message explaining a refusal, and what marks this invalid. */
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /**
+   * Applies one arrow-key step, answering whether it did.
+   *
+   * `false` leaves the key to its default behaviour, which is what keeps a
+   * value that is not a single measurement — a shorthand, a function, a
+   * keyword — behaving like ordinary text under the caret.
+   */
+  onStep?: (delta: number) => boolean;
 }): React.JSX.Element {
   const [draft, setDraft] = React.useState(() => storedText(stored));
 
@@ -1018,9 +1228,27 @@ function TextField({
       onChange={event => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={event => {
-        if (event.key !== "Enter") return;
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+          return;
+        }
+        if (onStep === undefined) return;
+        // Arrow steps by one and Shift by ten, which is what Figma, Framer and
+        // Webflow all do — an author arrives already knowing it, and a
+        // different scale here would cost them for no gain.
+        const direction =
+          event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0;
+        if (direction === 0) return;
+        // A draft the author has typed but not committed is what they mean by
+        // "this value", so stepping a stale STORED number would discard it.
+        // Committing first is deliberately not done: it would make one arrow
+        // key produce two ops and two undo steps.
+        if (draft !== storedText(stored)) return;
+        if (!onStep(direction * (event.shiftKey ? 10 : 1))) return;
+        // Only once the step was applied, so an unsteppable value keeps the
+        // caret movement the key would otherwise perform.
         event.preventDefault();
-        commit();
       }}
     />
   );

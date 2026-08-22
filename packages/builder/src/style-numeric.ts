@@ -1,0 +1,380 @@
+/**
+ * The numeric view of a stored style value, and the choices a control may offer
+ * over it.
+ *
+ * Pure, for the reason `style-controls.ts` is: what a value decomposes into,
+ * whether it may be stepped, and which units are worth offering are all
+ * derivation, and a jsdom test of the rendered field cannot separate a correct
+ * answer from a plausible wrong one — both draw an input with a number in it.
+ *
+ * ## A measurement is a PROJECTION over the string, never a model of it
+ *
+ * A `dimension` is stored as a string, and the catalog lets one hold far more
+ * than a number and a unit: per-property `keywords` (`auto` centres a margin
+ * and is discarded on padding), `maxParts` (four corners, or a row and a column
+ * gap), `functions` (`clamp()`, `fit-content()`), a unitless number where the
+ * property says so, the CSS-wide keywords everywhere, and a `{ $token }`
+ * reference that is a record and nonetheless a scalar.
+ *
+ * So `16px`, `auto`, `10px 20px`, `clamp(1rem, 2vw, 3rem)`, `inherit` and a
+ * token are all legal in one position. A control that MODELLED the value as a
+ * number plus a unit could represent one of those six, and would write the
+ * other five away the moment a field was focused and blurred — the author's
+ * `clamp()` replaced by `0px`, with nothing to say it happened.
+ *
+ * Everything here therefore answers with `undefined` rather than with a guess.
+ * A caller that gets `undefined` keeps the plain text field it already had,
+ * which accepts every one of those spellings; a caller that gets a measurement
+ * may additionally offer stepping and a unit. Nothing here ever rewrites a
+ * value it could not decompose.
+ *
+ * ## The engine decides, and this asks it
+ *
+ * No grammar is restated here. Whether a composed string is a legal value for a
+ * property is `checkDimensionValue`'s question, asked with the leaf's own rules,
+ * and a step or a unit swap that would produce something the engine refuses is
+ * answered `undefined` instead of being offered. Predicting it here would mean
+ * a second copy of the rules for negatives, percentages, functions and unitless
+ * numbers — the copy that keeps compiling while the two drift apart, which is
+ * invisible because a refused value and an unoffered one look identical.
+ *
+ * @module style-numeric
+ */
+
+import {
+  checkDimensionValue,
+  trimCssWhitespace,
+  type StyleLeaf,
+  type StyleValue,
+} from "@nextlyhq/blocks-engine";
+
+/**
+ * The grammar CSS calls a `<number>`: an optional sign, digits with an optional
+ * decimal part, and an optional exponent.
+ *
+ * Deliberately narrower than `Number` in both directions. `Number` reads
+ * spellings CSS does not (`0x10`, `0b10`, `0o10`), and it also accepts a
+ * trailing point: CSS requires at least one digit AFTER a decimal point, so
+ * `1.` is a number followed by a stray delimiter rather than a number, and
+ * `Number("1.")` quietly answering `1` would store a value the author never
+ * wrote a valid spelling of.
+ */
+export const CSS_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * One measurement split into the parts a control edits separately.
+ *
+ * A unit can be absent — `line-height: 1.5` is unitless and `0` is legal
+ * everywhere — so the empty string means "no unit" rather than "unknown", and a
+ * caller composing a new value joins the two with nothing between them.
+ */
+export interface Measurement {
+  /** The numeric part, as CSS reads it. */
+  readonly number: number;
+  /** The unit as WRITTEN, or `""` for a unitless value. */
+  readonly unit: string;
+  /**
+   * How many digits followed the decimal point, so a step can answer in the
+   * author's own precision.
+   *
+   * Carried rather than recovered from {@link number}, because the number has
+   * already lost it: `1.50` and `1.5` parse to the same double, and stepping
+   * the first should not silently reformat it to the second.
+   */
+  readonly decimals: number;
+}
+
+/**
+ * A number followed by an optional unit, and nothing else.
+ *
+ * The unit is matched as letters or a single `%` rather than by a list, because
+ * a list here would be a second copy of the engine's — this only has to SPLIT
+ * the string; whether the unit means anything is decided by asking. Anchored at
+ * both ends so a value with a second term (`10px 20px`), a function, or any
+ * trailing text fails to match rather than matching its first part and
+ * presenting a shorthand as though it were one measurement.
+ */
+const MEASUREMENT =
+  /^([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Z]+|%)?$/;
+
+/**
+ * The measurement a stored value holds, when it holds exactly one.
+ *
+ * Answers `undefined` for everything a numeric affordance cannot represent —
+ * a keyword, a shorthand, a function, a token reference, an object at a scalar
+ * position — so the caller keeps its text field rather than narrowing what the
+ * author can express.
+ *
+ * A stored NUMBER is a measurement with no unit. `number` leaves store numbers
+ * rather than strings, so reading only strings would leave every `opacity` and
+ * `line-height` unsteppable while looking supported.
+ */
+export function measurementOf(
+  value: StyleValue | undefined
+): Measurement | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value)
+      ? { number: value, unit: "", decimals: decimalsOf(String(value)) }
+      : undefined;
+  }
+  // Every remaining non-string is refused by the same test, and a token
+  // reference is one of them: `{ $token }` is one value spelled as a record, so
+  // it arrives here as an object and is never decomposed. A control that
+  // offered to step it would be offering to replace the reference with a
+  // literal. Named because the shape is easy to mistake for a composite —
+  // `isTokenRef` is deliberately NOT called, since it could only ever agree
+  // with the test already made.
+  if (typeof value !== "string") return undefined;
+  return measurementOfText(value);
+}
+
+/** The measurement a typed draft holds, when it holds exactly one. */
+export function measurementOfText(text: string): Measurement | undefined {
+  const trimmed = trimCssWhitespace(text);
+  const match = MEASUREMENT.exec(trimmed);
+  if (match === null) return undefined;
+  const [, digits = "", unit = ""] = match;
+  const number = Number(digits);
+  if (!Number.isFinite(number)) return undefined;
+  return { number, unit, decimals: decimalsOf(digits) };
+}
+
+/**
+ * How many digits follow the decimal point in a written number.
+ *
+ * Read from the TEXT rather than from the parsed double, which no longer knows:
+ * a step applied to `1.50` answers `1.60` rather than `1.6`, so a field does
+ * not reformat itself under an author who was mid-edit.
+ *
+ * An exponent abandons the question — `1e-3` written back at three decimals
+ * would be `0.001`, a different spelling of the same value, and rewriting a
+ * spelling nobody asked to change is the thing this module exists to avoid.
+ */
+function decimalsOf(digits: string): number {
+  if (/[eE]/.test(digits)) return 0;
+  const point = digits.indexOf(".");
+  return point === -1 ? 0 : digits.length - point - 1;
+}
+
+/**
+ * The value written back after a measurement is composed, in the author's own
+ * precision.
+ *
+ * Rounded rather than left to floating point, because the arithmetic is not
+ * exact in the base the author is typing in: stepping `0.1` by `0.2` answers
+ * `0.30000000000000004`, which is a valid CSS number and a value no one would
+ * choose to store.
+ */
+function composeMeasurement(
+  number: number,
+  unit: string,
+  decimals: number
+): string {
+  // `toFixed` rather than a multiply-round-divide, which reintroduces the error
+  // it was meant to remove at the magnitudes a length actually takes.
+  const rounded = Number(number.toFixed(decimals));
+  return `${String(rounded)}${unit}`;
+}
+
+/**
+ * The rules the engine judges this leaf's values by.
+ *
+ * Read off the leaf rather than assembled from defaults, so a property that
+ * declares nothing is judged by the engine's own defaults rather than by a
+ * guess made here about what they are.
+ */
+function rulesOf(leaf: Extract<StyleLeaf, { kind: "dimension" }>): {
+  keywords?: readonly string[];
+  maxParts?: number;
+  allowNegative?: boolean;
+  allowPercentage?: boolean;
+  functions?: readonly string[];
+  allowNumber?: boolean;
+} {
+  return {
+    ...(leaf.keywords === undefined ? {} : { keywords: leaf.keywords }),
+    ...(leaf.maxParts === undefined ? {} : { maxParts: leaf.maxParts }),
+    ...(leaf.allowNegative === undefined
+      ? {}
+      : { allowNegative: leaf.allowNegative }),
+    ...(leaf.allowPercentage === undefined
+      ? {}
+      : { allowPercentage: leaf.allowPercentage }),
+    ...(leaf.functions === undefined ? {} : { functions: leaf.functions }),
+    ...(leaf.allowNumber === undefined
+      ? {}
+      : { allowNumber: leaf.allowNumber }),
+  };
+}
+
+/** Whether the engine accepts this text as a value for this leaf. */
+function accepts(
+  leaf: Extract<StyleLeaf, { kind: "dimension" }>,
+  text: string
+): boolean {
+  return checkDimensionValue(text, rulesOf(leaf)) === null;
+}
+
+/**
+ * The units a control may OFFER for this leaf, in the order an author meets
+ * them.
+ *
+ * Every candidate is tried against the engine before being offered, so the list
+ * is filtered by the property's own rules rather than by a belief about them: a
+ * leaf that refuses percentages never shows `%`, and no offered unit can
+ * produce a value the write path then rejects.
+ *
+ * **The candidate list is a discoverability aid and NOT a grammar, which is the
+ * honest description of its limits.** A unit missing from it is still typeable,
+ * because the field it sits beside accepts any text the engine does; a unit
+ * wrongly present is filtered out by the check above. So the failure mode is a
+ * shorter menu, which an author routes around, rather than an offered value the
+ * document then refuses. That asymmetry is why a fixed list is acceptable here
+ * and would not be in the write path — the engine's own unit sets are private
+ * to it, and reaching for them would put a second copy in this package.
+ */
+export function unitChoicesFor(leaf: StyleLeaf): readonly string[] {
+  if (leaf.kind !== "dimension") return [];
+  return UNIT_CANDIDATES.filter(unit => accepts(leaf, `1${unit}`));
+}
+
+/**
+ * Units common enough in authoring to be worth a menu entry.
+ *
+ * Absolute first, then the two font-relative units, then the viewport pair,
+ * then the percentage — the order an author reaches for them rather than
+ * alphabetical, which would open the menu on `%`. `ch` and the container-query
+ * units are omitted deliberately: they are typeable, and a menu long enough to
+ * scroll costs every author to serve a few.
+ */
+const UNIT_CANDIDATES: readonly string[] = ["px", "rem", "em", "vw", "vh", "%"];
+
+/**
+ * The same value carrying a different unit, or `undefined` when the swap would
+ * produce something this property refuses.
+ *
+ * The NUMBER is carried across unchanged rather than converted. A conversion
+ * would have to know the font size and the viewport to be correct, and neither
+ * is knowable from here — so `16px` becoming `16rem` is what the author asked
+ * for and is what a design tool does; inventing `1rem` instead would be a
+ * guess dressed as help.
+ */
+export function withUnit(
+  leaf: StyleLeaf,
+  value: StyleValue | undefined,
+  unit: string
+): string | undefined {
+  if (leaf.kind !== "dimension") return undefined;
+  const current = measurementOf(value);
+  if (current === undefined) return undefined;
+  const next = composeMeasurement(current.number, unit, current.decimals);
+  return accepts(leaf, next) ? next : undefined;
+}
+
+/**
+ * The value one step away, or `undefined` when this value cannot be stepped or
+ * the result would be refused.
+ *
+ * The unit is preserved, so stepping is an edit to the quantity and never a
+ * change of kind. A result the property refuses — a negative margin on a
+ * padding, a percentage where none resolves — answers `undefined` so the key
+ * does nothing visible, rather than writing a value the document then rejects
+ * and leaving the field holding text that was never stored.
+ */
+export function steppedValue(
+  leaf: StyleLeaf,
+  value: StyleValue | undefined,
+  delta: number
+): string | number | undefined {
+  if (leaf.kind === "number") return steppedNumber(leaf, value, delta);
+  if (leaf.kind !== "dimension") return undefined;
+  const current = measurementOf(value);
+  if (current === undefined) return undefined;
+  const next = composeMeasurement(
+    current.number + delta,
+    current.unit,
+    stepDecimals(current.decimals, delta)
+  );
+  return accepts(leaf, next) ? next : undefined;
+}
+
+/**
+ * A `number` leaf stepped within its declared bounds.
+ *
+ * Separate from the dimension path because the two are judged by different
+ * things: a number carries `min`, `max` and `integer` on the leaf itself, where
+ * a dimension's legality is a question only the engine can answer. Clamped
+ * rather than refused at the ends, which is what a spinbutton does — holding an
+ * arrow key at the maximum should rest there rather than stop responding.
+ */
+function steppedNumber(
+  leaf: Extract<StyleLeaf, { kind: "number" }>,
+  value: StyleValue | undefined,
+  delta: number
+): number | undefined {
+  const current = measurementOf(value);
+  // A unit on a number leaf is not a number: `opacity: 5px` is stored text the
+  // engine refuses, and stepping it would answer `6px`, which it also refuses.
+  if (current === undefined || current.unit !== "") return undefined;
+  const stepped =
+    leaf.integer === true
+      ? Math.round(current.number + delta)
+      : current.number + delta;
+  const decimals =
+    leaf.integer === true ? 0 : stepDecimals(current.decimals, delta);
+  const rounded = Number(stepped.toFixed(decimals));
+  if (leaf.min !== undefined && rounded < leaf.min) return leaf.min;
+  if (leaf.max !== undefined && rounded > leaf.max) return leaf.max;
+  return rounded;
+}
+
+/**
+ * How many decimals the stepped result keeps.
+ *
+ * The wider of the value's own precision and the step's, so a fine step off a
+ * whole number lands on `0.1` rather than being rounded straight back to `0`,
+ * and a coarse step off `1.50` does not drop the trailing zero the author
+ * typed.
+ */
+function stepDecimals(valueDecimals: number, delta: number): number {
+  return Math.max(valueDecimals, decimalsOf(String(Math.abs(delta))));
+}
+
+/**
+ * The two options a keyword leaf offers, when offering both at once is
+ * possible.
+ *
+ * A toggle is a PROJECTION of a keyword leaf and not a shape of its own — the
+ * engine has no boolean — so it is offered only where the whole vocabulary fits
+ * in it: exactly two values, and one keyword per value. A leaf taking a
+ * shorthand of two keywords (`overflow: hidden auto`) has more to say than two
+ * buttons can, and drawing one would hide the second axis entirely.
+ */
+export function toggleOptionsFor(
+  leaf: StyleLeaf
+): readonly [string, string] | undefined {
+  if (leaf.kind !== "keyword") return undefined;
+  if ((leaf.maxParts ?? 1) !== 1) return undefined;
+  const [first, second, ...rest] = leaf.values;
+  if (first === undefined || second === undefined || rest.length > 0) {
+    return undefined;
+  }
+  return [first, second];
+}
+
+/**
+ * Whether a toggle may show this stored value as one of its two options.
+ *
+ * A stored value outside the pair — a CSS-wide keyword, a token, a spelling the
+ * validator folds — is live and compiles while matching neither button, and a
+ * toggle rendered over it would show one side selected and silently replace the
+ * value on the first click. Answering `false` keeps the text field, which can
+ * show what is actually stored.
+ */
+export function toggleShows(
+  options: readonly [string, string],
+  value: StyleValue | undefined
+): boolean {
+  if (value === undefined) return true;
+  return typeof value === "string" && options.includes(value);
+}
