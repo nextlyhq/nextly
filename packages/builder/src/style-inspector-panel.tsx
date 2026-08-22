@@ -1146,14 +1146,14 @@ function NumericField({
         stored={stored}
         describedBy={describedBy}
         onCommit={onCommit}
-        onStep={delta => {
-          const next = steppedValue(control.leaf, stored, delta);
+        onStep={(draft, delta) => {
+          const next = steppedValue(control.leaf, draft, delta);
           // `undefined` means this value cannot be stepped or the result would
           // be refused, so the key does nothing rather than writing a value the
           // document then rejects.
-          if (next === undefined) return false;
+          if (next === undefined) return null;
           onCommit(next);
-          return true;
+          return String(next);
         }}
       />
       {showUnits ? (
@@ -1205,13 +1205,15 @@ function TextField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
   /**
-   * Applies one arrow-key step, answering whether it did.
+   * Applies one arrow-key step to the text currently shown, answering the text
+   * that was written or `null` when nothing was.
    *
-   * `false` leaves the key to its default behaviour, which is what keeps a
-   * value that is not a single measurement — a shorthand, a function, a
-   * keyword — behaving like ordinary text under the caret.
+   * `null` leaves the key to its default behaviour, which is what keeps a value
+   * that is not a single measurement — a shorthand, a function, a keyword —
+   * behaving like ordinary text under the caret. The DRAFT is passed rather
+   * than read from the store, so a step lands on what the author is looking at.
    */
-  onStep?: (delta: number) => boolean;
+  onStep?: (draft: string, delta: number) => string | null;
 }): React.JSX.Element {
   const [draft, setDraft] = React.useState(() => storedText(stored));
 
@@ -1259,24 +1261,49 @@ function TextField({
           return;
         }
         if (onStep === undefined) return;
-        // Arrow steps by one and Shift by ten, which is what Figma, Framer and
-        // Webflow all do — an author arrives already knowing it, and a
-        // different scale here would cost them for no gain.
-        const direction =
-          event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0;
-        if (direction === 0) return;
-        // A draft the author has typed but not committed is what they mean by
-        // "this value", so stepping a stale STORED number would discard it.
-        // Committing first is deliberately not done: it would make one arrow
-        // key produce two ops and two undo steps.
-        if (draft !== storedText(stored)) return;
-        if (!onStep(direction * (event.shiftKey ? 10 : 1))) return;
+        const delta = arrowStep(event);
+        if (delta === null) return;
+        // Stepped from the DRAFT rather than from what is stored, so the key
+        // works while an author is mid-edit — which is most of when they reach
+        // for it. Reading `stored` instead would either discard an uncommitted
+        // edit or, if it declined to act, leave the arrow doing nothing in a
+        // text input that has no numeric fallback: an affordance that appears
+        // broken exactly while it is being used.
+        const next = onStep(draft, delta);
+        if (next === null) return;
+        // The draft follows the value that was written, so the field shows the
+        // step immediately rather than waiting for `stored` to come back.
+        setDraft(next);
         // Only once the step was applied, so an unsteppable value keeps the
         // caret movement the key would otherwise perform.
         event.preventDefault();
       }}
     />
   );
+}
+
+/**
+ * The step one key press asks for, or `null` when it asks for none.
+ *
+ * Separated from the handler so that WHICH keys are claimed is one readable
+ * answer rather than a run of early returns inside an event callback — and so
+ * the two rules it encodes sit together, since they are easy to change apart
+ * and wrong apart.
+ *
+ * Arrow steps by one and Shift by ten, which is what Figma, Framer and Webflow
+ * all do: an author arrives already knowing it, and a different scale here
+ * would cost them for no gain.
+ *
+ * Alt, Control and Meta are refused outright. Those chords are platform,
+ * browser and assistive-navigation shortcuts, so claiming one would mutate a
+ * style and add an undo entry from a keystroke aimed somewhere else entirely.
+ */
+function arrowStep(event: React.KeyboardEvent): number | null {
+  if (event.altKey || event.ctrlKey || event.metaKey) return null;
+  const direction =
+    event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0;
+  if (direction === 0) return null;
+  return direction * (event.shiftKey ? 10 : 1);
 }
 
 /**

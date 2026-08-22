@@ -1136,3 +1136,61 @@ describe("the numeric affordances a simple measurement earns", () => {
     ).toBeNull();
   });
 });
+
+describe("what the arrow keys do and do not claim", () => {
+  const withPadding = (value: string): NodeStyles =>
+    ({
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: value } } },
+    }) as NodeStyles;
+
+  it("steps the DRAFT an author is mid-edit on, not the stored value", () => {
+    // A text input has no numeric fallback, so declining here would leave the
+    // arrow doing nothing precisely while the field is being used — and reading
+    // `stored` instead would step from a value the author has already moved on
+    // from, discarding what they typed.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "20px" } });
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+
+    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+      patch: {
+        styles: {
+          base: { [BASE_BREAKPOINT]: { padding: { blockStart: "21px" } } },
+        },
+      },
+    });
+    // One op, not a commit of the draft followed by a step of the result.
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(field).toHaveProperty("value", "21px");
+  });
+
+  it.each(["altKey", "ctrlKey", "metaKey"])(
+    "leaves %s+Arrow to the platform",
+    modifier => {
+      // These chords are OS, browser and assistive-navigation shortcuts.
+      // Claiming one mutates a style and adds an undo entry from a keystroke
+      // the author aimed somewhere else entirely.
+      const editor = mount({ spacing: true }, withPadding("12px"));
+      const field = fieldsOf("padding").getByLabelText("Block start");
+
+      fireEvent.keyDown(field, { key: "ArrowUp", [modifier]: true });
+
+      expect(editor.apply).not.toHaveBeenCalled();
+    }
+  );
+
+  it("declines precision the formatter cannot round, rather than throwing", () => {
+    // The engine accepts more fractional digits than `toFixed` takes, so
+    // composing one would raise a RangeError in the middle of a keystroke.
+    const editor = mount(
+      { spacing: true },
+      withPadding(`0.${"1".repeat(101)}px`)
+    );
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    expect(() => fireEvent.keyDown(field, { key: "ArrowUp" })).not.toThrow();
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+});

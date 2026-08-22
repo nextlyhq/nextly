@@ -85,6 +85,15 @@ export interface Measurement {
 }
 
 /**
+ * The most fractional digits `Number.prototype.toFixed` accepts.
+ *
+ * Named rather than inlined because it is a limit of the FORMATTER and not a
+ * judgement about how precise a length may be: the engine accepts more, and
+ * anything beyond this is declined rather than truncated for that reason.
+ */
+const MAX_FRACTION_DIGITS = 100;
+
+/**
  * A number followed by an optional unit, and nothing else.
  *
  * The unit is matched as letters or a single `%` rather than by a list, because
@@ -147,7 +156,14 @@ export function measurementOfText(text: string): Measurement | undefined {
   if (/[eE]/.test(digits)) return undefined;
   const number = Number(digits);
   if (!Number.isFinite(number)) return undefined;
-  return { number, unit, decimals: decimalsOf(digits) };
+  const decimals = decimalsOf(digits);
+  // Precision the formatter cannot round to is DECLINED, not truncated. The
+  // engine accepts a length with more fractional digits than `toFixed` takes,
+  // and composing one would throw mid-keystroke — so the affordances step aside
+  // and the plain field keeps the value, which is what it does for every other
+  // spelling it cannot decompose.
+  if (decimals > MAX_FRACTION_DIGITS) return undefined;
+  return { number, unit, decimals };
 }
 
 /**
@@ -346,7 +362,13 @@ function steppedNumber(
  * typed.
  */
 function stepDecimals(valueDecimals: number, delta: number): number {
-  return Math.max(valueDecimals, decimalsOf(String(Math.abs(delta))));
+  // Bounded as well as widened. A measurement reaching here is already within
+  // the formatter's range, but the step's own precision is a caller's value and
+  // widening past the limit would throw where the measurement alone would not.
+  return Math.min(
+    MAX_FRACTION_DIGITS,
+    Math.max(valueDecimals, decimalsOf(String(Math.abs(delta))))
+  );
 }
 
 /**
