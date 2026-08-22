@@ -28,6 +28,8 @@
 
 import type { UseFormSetError, FieldPath, FieldValues } from "react-hook-form";
 
+import { normalizeValidationIssues } from "../api/parseApiError";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -118,16 +120,17 @@ export function parseServerErrors(
     ) {
       const data = errorObj.data as Record<string, unknown>;
       if (Array.isArray(data.errors)) {
-        return data.errors.filter(
-          (e): e is ServerFieldError =>
-            typeof e === "object" &&
-            e !== null &&
-            "path" in e &&
-            "code" in e &&
-            "message" in e &&
-            typeof (e as ServerFieldError).path === "string" &&
-            typeof (e as ServerFieldError).code === "string" &&
-            typeof (e as ServerFieldError).message === "string"
+        // Normalized once, in `parseApiError`, then NARROWED here. Traversing
+        // `data.errors` a second time would be a second answer to what the
+        // wire carries, and the two drifted the moment they existed: this
+        // form needs all three fields to name a form control, which is a
+        // stricter requirement than a consumer showing a sentence has. The
+        // requirement belongs here; the reading does not.
+        return normalizeValidationIssues(data.errors).filter(
+          (issue): issue is ServerFieldError =>
+            issue.path !== undefined &&
+            issue.code !== undefined &&
+            issue.message !== undefined
         );
       }
     }
