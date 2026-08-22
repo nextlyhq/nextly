@@ -936,3 +936,42 @@ describe("a value the panel shows and could not remove", () => {
     expect(field.getAttribute("aria-invalid")).toBe("true");
   });
 });
+
+describe("a free-form value the panel must let an author repair", () => {
+  it("draws a TEXT FIELD for a free-form value the arm refuses on content", () => {
+    // `fontStyle` is a keyword or a free-form value. `"oblique; color: red"` is
+    // refused by both arms, and until the engine's rank learned to tell a
+    // vocabulary refusal from a content one the catalog's first arm won — so
+    // the author was handed a select, and the only way to repair the value was
+    // to abandon it and choose a keyword instead.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontStyle: "oblique; color: red" } },
+    } as NodeStyles;
+    const editor = mount({ typography: true }, styles);
+    const fontStyle = fieldsOf("fontStyle");
+
+    const field = fontStyle.getByDisplayValue("oblique; color: red");
+    fireEvent.change(field, { target: { value: "oblique 10deg" } });
+    fireEvent.blur(field);
+
+    // Repaired in place, which is the whole point: a select could only ever
+    // have replaced the value with one of its three keywords.
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("still draws a SELECT for a value the keyword arm accepts", () => {
+    // The control that separates "the rank learned something" from "the panel
+    // stopped drawing selects".
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
+    } as NodeStyles;
+    mount({ typography: true }, styles);
+
+    // Named, because a union property draws TWO comboboxes — the form selector
+    // and the value — and an unnamed query would pass on either.
+    expect(fieldsOf("fontStyle").queryByRole("textbox")).toBeNull();
+    expect(
+      fieldsOf("fontStyle").getByRole("combobox", { name: "Font style" })
+    ).toBeDefined();
+  });
+});
