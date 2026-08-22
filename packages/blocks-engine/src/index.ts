@@ -226,6 +226,11 @@ export {
   // at-rule to a browser. Public because every surface deciding what a keyword
   // IS has to fold it the same way.
   asciiLower,
+  // What CSS discards around a value, which is NOT what `String.trim` discards:
+  // JavaScript strips NBSP and the Unicode spaces and CSS does not, so an editor
+  // trimming with the language's own function normalises spellings the engine
+  // then refuses — or worse, converts one into a value it accepts.
+  trimCssWhitespace,
 } from "./style/css-value";
 export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";

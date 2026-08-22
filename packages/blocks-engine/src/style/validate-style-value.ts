@@ -1040,8 +1040,23 @@ interface VariantRank {
   readonly accepts: boolean;
   /** Whether the value is written in a form this arm stores at all. */
   readonly stores: boolean;
-  /** How deep the arm's first complaint points. */
+  /** How deep the arm's first complaint points, in pointer SEGMENTS. */
   readonly depth: number;
+}
+
+/**
+ * How far into a value a JSON Pointer reaches.
+ *
+ * Segments, not characters. `path.length` is the length of the STRING, so
+ * `/veryLongField` would outrank `/x/y` and a property's NAME would decide
+ * which arm of a union a value is judged under.
+ */
+function pointerDepth(path: string): number {
+  let depth = 0;
+  for (let index = 0; index < path.length; index += 1) {
+    if (path[index] === "/") depth += 1;
+  }
+  return depth;
 }
 
 function variantRank(
@@ -1052,7 +1067,7 @@ function variantRank(
   return {
     accepts: !issues.some(issue => issue.severity === "error"),
     stores: shapeStoresKindOf(variant, value),
-    depth: issues[0]?.path.length ?? 0,
+    depth: pointerDepth(issues[0]?.path ?? ""),
   };
 }
 

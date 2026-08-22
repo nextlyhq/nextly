@@ -695,6 +695,34 @@ describe("styleUnionVariant", () => {
     expect(styleUnionVariant(both, { startStart: { blockStart: 5 } })).toBe(1);
   });
 
+  it("ranks a deeper complaint by pointer SEGMENTS, not by string length", () => {
+    // `path` is a JSON Pointer STRING, so measuring its length lets a property
+    // NAME decide which arm a value is judged under. Both arms here take
+    // records, so the kind rule ties and depth is what answers — and the
+    // shallow arm's complaint is the LONGER string, which is the case a
+    // character count gets backwards.
+    const leaf = leafOf("letterSpacing");
+    const shallow: ObjectShape = {
+      kind: "object",
+      fields: { aVeryLongKeyNameIndeed: leaf, s: leaf },
+    };
+    const deep: ObjectShape = {
+      kind: "object",
+      fields: {
+        aVeryLongKeyNameIndeed: leafOf("opacity"),
+        s: { kind: "object", fields: { t: leafOf("opacity") } },
+      },
+    };
+    const both: UnionShape = { kind: "union", of: [shallow, deep] };
+    // `0.5` is a length nowhere and a valid opacity, so against `shallow` the
+    // first key refuses at `/aVeryLongKeyNameIndeed` — 23 characters, ONE
+    // segment — while against `deep` it is accepted and the refusal falls to
+    // `/s/t`, 4 characters and TWO segments.
+    expect(
+      styleUnionVariant(both, { aVeryLongKeyNameIndeed: 0.5, s: { t: "x" } })
+    ).toBe(1);
+  });
+
   it("chooses by the value's form rather than by the catalog's order", () => {
     // Every union the catalog ships happens to list the arm a malformed STRING
     // belongs to first, so order and the rule agree on all of them and a test

@@ -32,6 +32,7 @@
 import {
   findNode,
   isTokenRef,
+  trimCssWhitespace,
   type BreakpointId,
   type StyleLeaf,
   type StyleShape,
@@ -327,9 +328,22 @@ function StylePropertyFields({
             onChooseForm={onChooseForm}
           />
         ))}
+      {property.offered ? null : (
+        <p className="nx-inspector__note" data-not-offered={property.property}>
+          This block no longer offers {property.label}. The value is still on
+          the page and can be cleared.
+        </p>
+      )}
       {property.controls.map(control => (
         <StyleControlField
-          key={[property.property, ...control.path].join(".")}
+          // The ADDRESS, not just the position: a host switching state or
+          // breakpoint leaves this field mounted, and where the old and new
+          // addresses hold the same value — both unset, most often — the
+          // synchronisation effect does not run either. An unfinished draft
+          // from the base breakpoint would then commit into the hover state.
+          key={[state, breakpoint, property.property, ...control.path].join(
+            "."
+          )}
           control={control}
           label={
             many
@@ -337,6 +351,8 @@ function StylePropertyFields({
               : property.label
           }
           summary={many ? undefined : property.summary}
+          propertyLabel={property.label}
+          clearOnly={!property.offered}
           nodeId={nodeId}
           state={state}
           breakpoint={breakpoint}
@@ -462,6 +478,8 @@ function StyleControlField({
   control,
   label,
   summary,
+  propertyLabel,
+  clearOnly,
   nodeId,
   state,
   breakpoint,
@@ -471,6 +489,27 @@ function StyleControlField({
   control: StyleControl;
   label: string;
   summary: string | undefined;
+  /**
+   * The whole property's name, for naming an ACTION rather than a field.
+   *
+   * A field is labelled by its position — "Block start" — which is enough
+   * beside its own property's heading and not enough on a button: `padding` and
+   * `margin` both have a block start, so two buttons called "Clear block start"
+   * name the same thing twice and a screen-reader user cannot tell which style
+   * each removes.
+   */
+  propertyLabel: string;
+  /**
+   * Whether this value may only be REMOVED, not changed.
+   *
+   * True for a property the block's `supports` no longer declares. The value is
+   * still emitted — nothing in validation or compilation reads `supports` — so
+   * withholding the control entirely would leave styling on the page that the
+   * author can see and cannot remove. Letting them go on EDITING it is the
+   * other error: it writes new values through a capability the block has
+   * withdrawn, which is the definition the panel is supposed to be reading.
+   */
+  clearOnly: boolean;
   nodeId: string;
   state: StyleState;
   breakpoint: BreakpointId;
@@ -486,6 +525,12 @@ function StyleControlField({
   };
   const node = findNode(editor.document.nodes, nodeId);
   const stored = readStyleValue(node?.styles, address);
+  // The property alone where a property draws one control, and the property
+  // plus the position where it draws several.
+  const actionName =
+    propertyLabel === label
+      ? propertyLabel
+      : `${propertyLabel} ${label.toLowerCase()}`;
   const [issue, setIssue] = React.useState<string | null>(null);
 
   // A refusal describes the draft that produced it, so it stops describing
@@ -557,8 +602,20 @@ function StyleControlField({
       <Label htmlFor={id} title={summary}>
         {label}
       </Label>
-      {isTokenRef(stored) ? (
-        <TokenValue name={stored.$token} onClear={() => commit(null)} />
+      {clearOnly ? (
+        <RetainedValue
+          id={id}
+          label={actionName}
+          stored={stored}
+          onClear={() => commit(null)}
+        />
+      ) : isTokenRef(stored) ? (
+        <TokenValue
+          id={id}
+          label={actionName}
+          name={stored.$token}
+          onClear={() => commit(null)}
+        />
       ) : (
         <ValueField
           id={id}
@@ -586,16 +643,52 @@ function StyleControlField({
  * yet, so what is offered here is the honest half: see it, or clear it.
  */
 function TokenValue({
+  id,
+  label,
   name,
   onClear,
 }: {
+  id: string;
+  label: string;
   name: string;
   onClear: () => void;
 }): React.JSX.Element {
   return (
-    <p className="nx-style-inspector__token">
+    // The id lands on the value, so the property's own label names it: without
+    // that the label points at nothing. And the button is named for the
+    // PROPERTY, because a panel with several token-valued properties otherwise
+    // offers a column of buttons all called "Clear" and a screen-reader user
+    // cannot tell which style each one removes.
+    <p className="nx-style-inspector__token" id={id} tabIndex={-1}>
       <span>{name}</span>
-      <button type="button" onClick={onClear}>
+      <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
+        Clear
+      </button>
+    </p>
+  );
+}
+
+/**
+ * A value the block no longer supports: shown, and removable, not editable.
+ *
+ * Named for the property for the same reason the token control is — several of
+ * these on one panel would otherwise be a column of identical "Clear" buttons.
+ */
+function RetainedValue({
+  id,
+  label,
+  stored,
+  onClear,
+}: {
+  id: string;
+  label: string;
+  stored: StyleValue | undefined;
+  onClear: () => void;
+}): React.JSX.Element {
+  return (
+    <p className="nx-style-inspector__token" id={id} tabIndex={-1}>
+      <span>{isTokenRef(stored) ? stored.$token : storedText(stored)}</span>
+      <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
         Clear
       </button>
     </p>
@@ -772,7 +865,11 @@ function committedValue(
   draft: string
 ): StyleValue {
   if (kind !== "number") return draft;
-  const trimmed = draft.trim();
+  // The engine's own trim, not `String.prototype.trim`, which also strips NBSP
+  // and the Unicode spaces where CSS strips neither. Trimming wider than CSS
+  // does turns a spelling the engine REFUSES into a number it accepts: pasting
+  // a non-breaking space before a digit would silently store the digit.
+  const trimmed = trimCssWhitespace(draft);
   // `Number` reads spellings CSS does not: `0x10` becomes 16, `0b10` becomes 2,
   // `0o10` becomes 8. Converting those would store a number the author never
   // typed and pass validation, so only the grammar CSS calls a <number> is

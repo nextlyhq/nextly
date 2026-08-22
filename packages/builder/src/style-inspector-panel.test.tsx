@@ -516,6 +516,85 @@ describe("controls", () => {
     expect(screen.getByRole("alert").textContent).toContain("is not a number");
   });
 
+  it("makes a retained but unsupported value clear-only, not editable", () => {
+    // The value is live on the page — nothing in validation or compilation
+    // reads `supports` — so it must be removable. Letting it go on being EDITED
+    // is the other error: that writes new values through a capability the block
+    // has withdrawn.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontSize: "20px" } },
+    } as NodeStyles;
+    const editor = mount({ spacing: true, typography: false }, styles);
+
+    fireEvent.click(screen.getByRole("button", { name: /Typography/ }));
+    const fontSize = fieldsOf("fontSize");
+
+    expect(fontSize.queryByRole("textbox")).toBeNull();
+    expect(fontSize.getByText("20px")).toBeDefined();
+
+    fireEvent.click(fontSize.getByRole("button", { name: "Clear Font size" }));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("names a token's clear action for its property, not just 'Clear'", () => {
+    // Several token-valued properties on one panel would otherwise be a column
+    // of identical buttons, and the label pointed at an id nothing carried.
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: {
+          padding: { blockStart: { $token: "space.4" } },
+          margin: { blockStart: { $token: "space.2" } },
+        },
+      },
+    } as NodeStyles;
+    mount({ spacing: true }, styles);
+
+    // Each names the PROPERTY it clears, not just the side: `padding` and
+    // `margin` both have a block start, so a name built from the side alone
+    // says the same thing twice.
+    expect(
+      screen.getByRole("button", { name: "Clear Padding block start" })
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Clear Margin block start" })
+    ).toBeDefined();
+  });
+
+  it("trims the whitespace CSS trims, not the whitespace JavaScript trims", () => {
+    // `String.prototype.trim` strips NBSP and the Unicode spaces where CSS
+    // strips neither, so trimming with it would turn a spelling the engine
+    // refuses into a number it accepts.
+    const editor = mount({ effects: true });
+    const field = screen.getByLabelText("Opacity");
+
+    fireEvent.change(field, { target: { value: "\u00a00.5" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toBeDefined();
+  });
+
+  it("gives a field an identity that includes the address it writes to", () => {
+    // A host switching state or breakpoint leaves this field mounted, and where
+    // both addresses hold the same value the synchronisation effect does not
+    // run — so an unfinished draft would commit into the new address.
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    const { rerender } = render(<StyleInspectorPanel editor={editor} />);
+
+    fireEvent.change(fieldsOf("padding").getByLabelText("Block start"), {
+      target: { value: "99px" },
+    });
+
+    rerender(<StyleInspectorPanel editor={editor} state="hover" />);
+
+    // A fresh field for the new address, not the base breakpoint's draft.
+    expect(
+      (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
+        .value
+    ).toBe("");
+  });
+
   it("shows a stored token by name rather than as editable text", () => {
     // `{ $token }` is one value spelled as an object. Typing over it would
     // store the token's NAME as a literal — a value that looks right in the
@@ -531,7 +610,9 @@ describe("controls", () => {
     expect(padding.getByText("space.4")).toBeDefined();
     expect(padding.queryByDisplayValue("space.4")).toBeNull();
 
-    fireEvent.click(padding.getByRole("button", { name: "Clear" }));
+    fireEvent.click(
+      padding.getByRole("button", { name: "Clear Padding block start" })
+    );
 
     expect(editor.apply).toHaveBeenCalledTimes(1);
   });
