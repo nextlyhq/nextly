@@ -33,6 +33,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 import { StyleInspectorPanel } from "./style-inspector-panel";
+import type { StylePolicy } from "./style-values";
 
 afterEach(() => {
   cleanup();
@@ -109,11 +110,17 @@ function editorFor(
 
 function mount(
   supports: Record<string, boolean | Record<string, boolean>>,
-  styles?: NodeStyles
+  styles?: NodeStyles,
+  policy?: StylePolicy
 ) {
   register(supports);
   const editor = editorFor(documentOf(styles));
-  render(<StyleInspectorPanel editor={editor} />);
+  render(
+    <StyleInspectorPanel
+      editor={editor}
+      {...(policy === undefined ? {} : { policy })}
+    />
+  );
   return editor;
 }
 
@@ -717,5 +724,80 @@ describe("controls", () => {
     );
 
     expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the site's host-fetch policy", () => {
+  /*
+   * What a host hands the panel, and what the published compiler judges the
+   * same value by. The panel carries it to `styleWriteOp` and to the engine's
+   * arm selection; a panel mounted without one asks the engine to validate
+   * with no host list, and absence means UNASKED rather than allowed.
+   */
+  const REFUSE: StylePolicy = { mayFetchUrl: () => false };
+  const ALLOW: StylePolicy = { mayFetchUrl: () => true };
+  const REMOTE = "https://cdn.example/hero.png";
+
+  it("refuses a URL naming a host the site does not load from", () => {
+    const editor = mount({ background: { image: true } }, undefined, REFUSE);
+    const field = fieldsOf("background").getByLabelText("Url");
+
+    fireEvent.change(field, { target: { value: REMOTE } });
+    fireEvent.blur(field);
+
+    // The write is withheld, so the author never stores a value the page
+    // would drop. Without the policy this call happens and the URL is saved.
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    const describedBy = field.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(
+      document.getElementById(describedBy as string)?.textContent
+    ).toBeTruthy();
+  });
+
+  it("accepts the same URL when the site DOES load from that host", () => {
+    // The positive control, and it is what separates "the policy is applied"
+    // from "the panel refuses every URL". Both halves produce a refused write
+    // in the test above; only this one distinguishes them.
+    const editor = mount({ background: { image: true } }, undefined, ALLOW);
+    const field = fieldsOf("background").getByLabelText("Url");
+
+    fireEvent.change(field, { target: { value: REMOTE } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(field.getAttribute("aria-invalid")).not.toBe("true");
+  });
+
+  it("asks nothing at all when the host declared no list", () => {
+    // A site that configured nothing keeps today's behaviour: the engine's
+    // scheme allowlist is the only limit. Passing an empty policy here rather
+    // than a refusing one is what makes that distinct from a lockdown.
+    const editor = mount({ background: { image: true } });
+    const field = fieldsOf("background").getByLabelText("Url");
+
+    fireEvent.change(field, { target: { value: REMOTE } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries the policy from the Inspector's Style tab, not just its own prop", () => {
+    // The forwarding hop. `StyleInspectorPanel` taking a policy proves nothing
+    // about the panel a host actually mounts, which is `InspectorPanel` — and
+    // that is the component the page-builder plugin hands its derived policy.
+    register({ background: { image: true } });
+    const editor = editorFor(documentOf());
+    render(<InspectorPanel editor={editor} policy={REFUSE} />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    const field = fieldsOf("background").getByLabelText("Url");
+
+    fireEvent.change(field, { target: { value: REMOTE } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(field.getAttribute("aria-invalid")).toBe("true");
   });
 });

@@ -1,4 +1,4 @@
-import { isFetchableUrl, type RemotePattern } from "@nextlyhq/blocks-engine";
+import { type RemotePattern } from "@nextlyhq/blocks-engine";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 // Imported rather than read at runtime so it can never drift from the published
@@ -17,6 +17,7 @@ import {
 } from "./blocks/registration-service";
 import { pagesCollection } from "./collections/pages";
 import { blocksFieldType } from "./fields/blocksField";
+import { hostFetchPolicy } from "./host-policy";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
@@ -120,27 +121,6 @@ export interface PageBuilderOptions {
 }
 
 /**
- * The host-fetch policy the Site Style write gate judges stored classes by.
- *
- * Derived from the SAME `remotePatterns` list the published page and the
- * canvas are given, through `isFetchableUrl` — the engine's matcher, which
- * this package re-exports. One implementation of "may this be fetched" is the
- * point: a class refused on the canvas and served from the site sheet is the
- * disagreement a second matcher would produce.
- *
- * No patterns means no policy rather than an empty allowlist, because the two
- * are opposite answers. An empty list refuses every remote URL, which would
- * break every site that has not configured one; absent leaves the engine's
- * scheme allowlist as the only limit, which is what those sites have today.
- */
-function siteStyleWritePolicy(patterns: readonly RemotePattern[] | undefined): {
-  mayFetchUrl?: (url: string) => boolean;
-} {
-  if (patterns === undefined) return {};
-  return { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) };
-}
-
-/**
  * The Page Builder plugin factory. Call it in a host app's
  * `defineConfig({ plugins: [pageBuilder()] })`.
  */
@@ -213,16 +193,17 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // stored style tier lives in. Registered whether or not the host stated
       // defaults, because the storage existing is what the style studios and
       // the API write against.
-      // Given the SAME host list the published sheet and the canvas are given,
-      // through the same predicate: a named class is emitted verbatim into
-      // every public page, so a `url()` stored here is a request every visitor
-      // makes. `isFetchableUrl` is the engine's, re-exported by this package's
-      // url-policy module, so there is one answer to "may this be fetched"
-      // rather than one per surface. A host that configured no patterns gets
-      // today's behaviour: the engine treats an absent policy as unasked.
+      // Given the SAME host list the published sheet, the canvas and the
+      // inspector are given, through the same derivation: a named class is
+      // emitted verbatim into every public page, so a `url()` stored here is a
+      // request every visitor makes. `hostFetchPolicy` is the one place that
+      // turns a pattern list into a predicate, so there is one answer to "may
+      // this be fetched" rather than one per surface. A host that configured
+      // no patterns gets today's behaviour: the engine treats an absent policy
+      // as unasked.
       singles: [
         siteStyleSingle({
-          ...siteStyleWritePolicy(opts.remotePatterns),
+          ...hostFetchPolicy(opts.remotePatterns),
           // The CONFIG tier this site states in code, so the write gate judges
           // what consumers actually compile. Without it a stored class whose
           // slug a config class already holds is accepted and then dropped at
