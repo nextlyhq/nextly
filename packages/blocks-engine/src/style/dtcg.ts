@@ -36,6 +36,20 @@
  * format requires it: "Tools that process design token files MUST preserve any
  * extension data they do not themselves understand."
  *
+ * ## A token's identity travels in the extension, because DTCG has none
+ *
+ * The format knows a token by its path and nothing else — there is no id, and
+ * an alias `{color.primary}` resolves by name. A `SiteToken`'s identity is
+ * therefore not expressible in the format's own vocabulary, and inventing a
+ * `$id` for it would take a prefix the spec reserves for itself. So it rides in
+ * `$extensions` beside the exact CSS, which is both the conformant place for it
+ * and a preserved one.
+ *
+ * That leaves the two directions asymmetric, deliberately. A file this wrote
+ * comes back with the identity it left with. A file from anywhere else has no
+ * identity to read, and gets none invented for it: its tokens arrive with their
+ * names as identities, which is what a token with no id means everywhere else.
+ *
  * @module style/dtcg
  */
 import type { ValidationIssue } from "../validation";
@@ -59,6 +73,22 @@ interface NextlyExtension {
   /** The exact CSS per mode, which is what makes a round trip exact. */
   css: { light: string; dark?: string };
   kind: TokenKind;
+  /**
+   * The token's stable identity, when it has one distinct from its name.
+   *
+   * It rides HERE because the format leaves nowhere else for it. DTCG has no
+   * concept of a token id — a name is the only identity it knows, and `{a.b}`
+   * aliases resolve by path — while every property the format defines is
+   * `$`-prefixed and that prefix is reserved for future versions of the spec,
+   * so a `$id` of this system's invention would squat on it. `$extensions`
+   * under a reverse-domain key is what the spec offers instead, and what it
+   * guarantees: extension data a tool does not understand MUST be preserved,
+   * so an identity that leaves through Figma or Style Dictionary comes back.
+   *
+   * Omitted when the name IS the identity, so a file this exports carries no
+   * field a reader has to interpret to arrive at the token that was written.
+   */
+  id?: string;
 }
 
 /** A DTCG group or token; the format is a tree of plain JSON. */
@@ -106,45 +136,101 @@ export function tokensToDtcg(set: SiteTokenSet): {
   const issues: ValidationIssue[] = [];
 
   for (const token of set.tokens) {
-    if (!isTokenName(token.name)) {
-      issues.push(
-        issue(`"${token.name}" is not a token name, so it was not exported.`)
-      );
-      continue;
-    }
-
-    const type = DTCG_TYPE[token.kind];
-    const value = type === undefined ? undefined : toDtcgValue(token);
-    if (type === undefined || value === undefined) {
-      issues.push(
-        issue(
-          `"${token.name}" holds a value the design-token format cannot express, so it was not exported. Its value is still here in Nextly.`
-        )
-      );
-      continue;
-    }
-
-    const extension: NextlyExtension = {
-      css:
-        token.values.dark === undefined
-          ? { light: token.values.light }
-          : { light: token.values.light, dark: token.values.dark },
-      kind: token.kind,
-    };
-    const entry: DtcgNode = {
-      $type: type,
-      $value: value,
-      $extensions: {
-        ...(token.extensions ?? {}),
-        [NEXTLY_EXTENSION]: extension,
-      },
-    };
-    if (token.description !== undefined) entry.$description = token.description;
-
+    const entry = dtcgEntry(token, issues);
+    // Skipped rather than placed: `dtcgEntry` has already said why, and a name
+    // it refused is one `place` would split into a path anyway.
+    if (entry === undefined) continue;
     place(document, token.name.split("."), entry, issues);
   }
 
   return { document, issues };
+}
+
+/**
+ * One token as the format holds it, or nothing when it cannot be written.
+ *
+ * Split from the checks the way {@link readToken} is split from its assembly,
+ * and for the same reason: deciding whether a token can cross the boundary and
+ * building the node that crosses it are separate jobs, and a guard added to the
+ * builder would be a second place that answers the first question.
+ */
+function dtcgEntry(
+  token: SiteToken,
+  issues: ValidationIssue[]
+): DtcgNode | undefined {
+  const writable = exportableValue(token, issues);
+  if (writable === undefined) return undefined;
+  return entryFor(token, writable.type, writable.value);
+}
+
+/**
+ * What this token becomes in the format, or nothing with the reason reported.
+ *
+ * Returns the converted value rather than merely approving the token, so the
+ * caller does not convert it a second time — two conversions of one value is
+ * the shape that lets an approval and an emission disagree about what was
+ * approved.
+ */
+function exportableValue(
+  token: SiteToken,
+  issues: ValidationIssue[]
+): { type: string; value: unknown } | undefined {
+  if (!isTokenName(token.name)) {
+    issues.push(
+      issue(`"${token.name}" is not a token name, so it was not exported.`)
+    );
+    return undefined;
+  }
+  // The id is held to the grammar too, and refused rather than written. Writing
+  // it produces a file this module's own importer refuses on the way back in —
+  // and it refuses the WHOLE token, because an id it cannot read is an identity
+  // it cannot honour. An exporter emitting a document that fails its own round
+  // trip is the one shape this module exists to prevent.
+  if (token.id !== undefined && !isTokenName(token.id)) {
+    issues.push(
+      issue(
+        `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
+      )
+    );
+    return undefined;
+  }
+
+  const type = DTCG_TYPE[token.kind];
+  const value = type === undefined ? undefined : toDtcgValue(token);
+  if (type === undefined || value === undefined) {
+    issues.push(
+      issue(
+        `"${token.name}" holds a value the design-token format cannot express, so it was not exported. Its value is still here in Nextly.`
+      )
+    );
+    return undefined;
+  }
+  return { type, value };
+}
+
+/** The node for a token already established as writable. */
+function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
+  const extension: NextlyExtension = {
+    css:
+      token.values.dark === undefined
+        ? { light: token.values.light }
+        : { light: token.values.light, dark: token.values.dark },
+    kind: token.kind,
+    // Written only when the token carries one. Exporting `id: name` for every
+    // token that never moved would make the field say nothing about identity
+    // and everything about which version of this exporter ran.
+    ...(token.id === undefined ? {} : { id: token.id }),
+  };
+  const entry: DtcgNode = {
+    $type: type,
+    $value: value,
+    $extensions: {
+      ...(token.extensions ?? {}),
+      [NEXTLY_EXTENSION]: extension,
+    },
+  };
+  if (token.description !== undefined) entry.$description = token.description;
+  return entry;
 }
 
 /** Put a token at its path, creating the groups it passes through. */
@@ -555,6 +641,52 @@ function readToken(
     typeof node.$description === "string" ? node.$description : undefined;
   const carried = Object.keys(extensions).length > 0 ? extensions : undefined;
 
+  // Read ahead of the branch below, because identity does not depend on which
+  // value path is taken: an extension whose `css` is unreadable still says
+  // which token this is, and the native `$value` beside it is that same token's
+  // value. A file from Figma carries no such key and arrives with no id, which
+  // is the same thing as arriving with its name for an identity.
+  const stated = isPlainObject(own) ? own.id : undefined;
+  if (
+    stated !== undefined &&
+    !(typeof stated === "string" && isTokenName(stated))
+  ) {
+    issues.push(
+      issue(
+        `"${name}" carries an id that is not a usable token name, so it was skipped. Importing it without the id would give it a different identity from the one the file states, and every reference written against that identity would stop resolving.`
+      )
+    );
+    return undefined;
+  }
+  // A stated id equal to the name says exactly what an absent one says, so it
+  // is normalised away — `id === undefined` then means one thing everywhere in
+  // the model rather than two spellings of it.
+  const id = stated === name ? undefined : stated;
+
+  // Both value paths below finish identically — same identity, same label, same
+  // description, same carried extensions — and differ only in the kind and
+  // values they arrived at. Assembled once so the two cannot drift into
+  // disagreeing about what a token read from a file IS, which is a
+  // disagreement with no symptom: whichever path a given file happens to take
+  // is the only one anyone sees.
+  const assemble = (
+    kind: TokenKind,
+    values: { light: string; dark?: string }
+  ): SiteToken | undefined => {
+    // The guard lives here rather than at each call, so the shorter extension
+    // path cannot be the one that skips it: its CSS is arbitrary JSON from a
+    // file exactly as `$value` is, and is trusted no further.
+    if (!isWritableValue(values, name, issues)) return undefined;
+    return {
+      ...(id !== undefined ? { id } : {}),
+      name,
+      kind,
+      values,
+      ...(description !== undefined ? { description } : {}),
+      ...(carried !== undefined ? { extensions: carried } : {}),
+    };
+  };
+
   // The exact CSS this system wrote, when the file came from here. Read field
   // by field rather than asserted: the extension is arbitrary JSON from a file,
   // and a cast would be this function agreeing to whatever shape it found.
@@ -567,17 +699,7 @@ function readToken(
         typeof dark === "string"
           ? { light: css.light, dark }
           : { light: css.light };
-      // The extension is arbitrary JSON from a file, so its CSS gets the same
-      // guards a value read from `$value` does. It is the shorter path, not the
-      // trusted one.
-      if (!isWritableValue(values, name, issues)) return undefined;
-      return {
-        name,
-        kind,
-        values,
-        ...(description !== undefined ? { description } : {}),
-        ...(carried !== undefined ? { extensions: carried } : {}),
-      };
+      return assemble(kind, values);
     }
   }
 
@@ -600,15 +722,7 @@ function readToken(
     return undefined;
   }
 
-  const values = { light };
-  if (!isWritableValue(values, name, issues)) return undefined;
-  return {
-    name,
-    kind,
-    values,
-    ...(description !== undefined ? { description } : {}),
-    ...(carried !== undefined ? { extensions: carried } : {}),
-  };
+  return assemble(kind, { light });
 }
 
 /**
