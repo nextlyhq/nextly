@@ -1189,10 +1189,13 @@ function NumericField({
       />
       {showUnits ? (
         <Select
-          // `undefined` rather than the empty string for a unitless draft: an
-          // empty value is not a choice the list can carry, so it is shown as
-          // no selection and the placeholder names what the menu is for.
-          value={measurement.unit === "" ? undefined : measurement.unit}
+          // The empty string, never `undefined`. Radix reads `""` as "no
+          // selection" and shows the placeholder, while `undefined` switches it
+          // from controlled to UNCONTROLLED — where it keeps whatever was last
+          // picked, so a unit added and then undone leaves the trigger still
+          // displaying it while the draft has none. The draft is the only unit
+          // state, and passing `undefined` would give it a second one.
+          value={measurement.unit}
           onValueChange={unit => {
             // Composed from the draft, which is what the author is looking at.
             const next = withUnit(control.leaf, draft, unit);
@@ -1349,6 +1352,12 @@ function TextField({
  * style and add an undo entry from a keystroke aimed somewhere else entirely.
  */
 function arrowStep(event: React.KeyboardEvent): number | null {
+  // A keystroke arriving mid-composition belongs to the IME, which uses the
+  // arrows to move through conversion candidates. Stepping there would edit the
+  // style AND suppress the candidate move, so the author loses both. The
+  // shortcut manager states the same rule for the same reason, and this is the
+  // second reader of a keyboard event in this repository that has to know it.
+  if (event.nativeEvent.isComposing) return null;
   if (event.altKey || event.ctrlKey || event.metaKey) return null;
   const direction =
     event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0;

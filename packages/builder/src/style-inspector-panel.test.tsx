@@ -1166,6 +1166,18 @@ describe("what the arrow keys do and do not claim", () => {
     expect(field).toHaveProperty("value", "21px");
   });
 
+  it("leaves an arrow to the IME while a composition is in progress", () => {
+    // An IME uses the arrows to move through conversion candidates. Stepping
+    // there edits the style AND suppresses the candidate move, so the author
+    // loses the keystroke twice over. The shortcut manager states the same rule.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.keyDown(field, { key: "ArrowUp", isComposing: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
   it.each(["altKey", "ctrlKey", "metaKey"])(
     "leaves %s+Arrow to the platform",
     modifier => {
