@@ -33,19 +33,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { pageBuilder } from "../plugin";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 
-/** Only what this suite calls, so it does not reach into core's private types. */
-interface SingleEntryService {
-  update(
-    slug: string,
-    data: Record<string, unknown>,
-    ctx?: Record<string, unknown>
-  ): Promise<Record<string, unknown>>;
-  get(
-    slug: string,
-    ctx?: Record<string, unknown>
-  ): Promise<Record<string, unknown>>;
-}
-
 /** The document a single's read answers with, whatever envelope it arrives in. */
 function dataOf(result: unknown): Record<string, unknown> {
   const envelope = result as { data?: Record<string, unknown> };
@@ -82,8 +69,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("leaves the sections it did not name untouched", async () => {
       current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
-      const singles =
-        current.getService<SingleEntryService>("singleEntryService");
+      const singles = current.getService("singleEntryService");
 
       // The tokens studio saves. Only its own field is sent, which is the
       // whole question: a studio that has never read `breakpoints` cannot
@@ -114,8 +100,7 @@ describe.each(getConfiguredTestDialects())(
       // and a value that comes back as a STRING would satisfy "the section
       // survived" while breaking every reader downstream.
       current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
-      const singles =
-        current.getService<SingleEntryService>("singleEntryService");
+      const singles = current.getService("singleEntryService");
 
       await singles.update(
         SITE_STYLE_SLUG,
@@ -139,8 +124,7 @@ describe.each(getConfiguredTestDialects())(
       // studio that awaits the save and treats a settled promise as a
       // successful one would show "saved" over a write the database refused.
       current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
-      const singles =
-        current.getService<SingleEntryService>("singleEntryService");
+      const singles = current.getService("singleEntryService");
 
       await singles.update(
         SITE_STYLE_SLUG,
@@ -170,8 +154,7 @@ describe.each(getConfiguredTestDialects())(
       // The half that matters most: a studio showing an error while silently
       // blanking another studio's work is the worst outcome available here.
       current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
-      const singles =
-        current.getService<SingleEntryService>("singleEntryService");
+      const singles = current.getService("singleEntryService");
 
       await singles.update(
         SITE_STYLE_SLUG,
