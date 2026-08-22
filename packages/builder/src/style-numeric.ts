@@ -408,10 +408,37 @@ function steppedNumber(
       : current.number + delta;
   const decimals =
     leaf.integer === true ? 0 : stepDecimals(current.decimals, delta);
-  const rounded = Number(stepped.toFixed(decimals));
-  if (leaf.min !== undefined && rounded < leaf.min) return leaf.min;
-  if (leaf.max !== undefined && rounded > leaf.max) return leaf.max;
+  const rounded = roundedTo(stepped, decimals);
+  // Clamping comes FIRST and is exempt from the check below. Resting at a
+  // declared bound is the correct answer to a step rather than a step that
+  // failed to happen, so requiring movement there would make the arrow go dead
+  // exactly at the ends, which is where a spinbutton is most often held.
+  const bound = boundFor(leaf, rounded);
+  if (bound !== undefined) return bound;
+  // Everywhere else a number leaf is subject to the same arithmetic as a
+  // dimension, and was not asking the same question of it: `z-index` is an
+  // unbounded integer, so `9007199254740992` plus one is the same double and
+  // `9007199254740994` plus one lands two away — a dead key and a doubled step,
+  // in a branch the dimension path's guard never reached.
+  if (!movedBy(current.number, rounded, delta, decimals)) return undefined;
   return rounded;
+}
+
+/**
+ * The bound this leaf holds a value to, when the value has passed one.
+ *
+ * Its own answer rather than two conditionals inside the step, because "has
+ * this left the declared range" and "did this move by what was asked" are
+ * different questions with opposite answers at the ends: one says the value is
+ * correct, the other would say the step failed.
+ */
+function boundFor(
+  leaf: Extract<StyleLeaf, { kind: "number" }>,
+  value: number
+): number | undefined {
+  if (leaf.min !== undefined && value < leaf.min) return leaf.min;
+  if (leaf.max !== undefined && value > leaf.max) return leaf.max;
+  return undefined;
 }
 
 /**

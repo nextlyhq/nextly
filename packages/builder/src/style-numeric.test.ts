@@ -47,6 +47,17 @@ const PADDING = side("padding");
 const MARGIN = side("margin");
 const OPACITY = entry("opacity").shape as unknown as StyleLeaf;
 
+/** `position.zIndex` is a union; its number arm is an UNBOUNDED integer. */
+const Z_INDEX: StyleLeaf = (() => {
+  const fields = entry("position").shape.fields as Record<
+    string,
+    { of?: readonly Record<string, unknown>[] }
+  >;
+  const arm = fields.zIndex?.of?.find(candidate => candidate.kind === "number");
+  if (arm === undefined) throw new Error("position.zIndex has no number arm");
+  return arm as unknown as StyleLeaf;
+})();
+
 describe("what a measurement is", () => {
   it("decomposes a single measurement into its number and unit", () => {
     expect(measurementOf("16px")).toMatchObject({ number: 16, unit: "px" });
@@ -186,6 +197,25 @@ describe("stepping a number leaf", () => {
 
   it("steps within the bounds", () => {
     expect(steppedValue(OPACITY, 0.5, 0.1)).toBe(0.6);
+  });
+
+  it.each([
+    [9007199254740992, "a step a double cannot represent"],
+    [9007199254740994, "a step a double turns into two"],
+  ])("declines to step %s (%s) on a number leaf too", stored => {
+    // `z-index` is an unbounded integer leaf, so the same arithmetic that
+    // defeats a dimension defeats it — and the dimension path's guard does not
+    // run here. Asserted against a REAL catalog leaf rather than the bounded
+    // `opacity`, because a min/max would clamp before the arithmetic showed.
+    expect(steppedValue(Z_INDEX, stored, 1)).toBeUndefined();
+  });
+
+  it("still rests at a declared bound, which is not a failed step", () => {
+    // Clamping must stay exempt: resting at the maximum is the right answer to
+    // a step, and requiring movement there would kill the arrow exactly at the
+    // ends, where a spinbutton is most often held.
+    expect(steppedValue(OPACITY, 0.9, 0.2)).toBe(1);
+    expect(steppedValue(OPACITY, 0.1, -0.5)).toBe(0);
   });
 
   it("refuses a value carrying a unit, which is not a number", () => {
