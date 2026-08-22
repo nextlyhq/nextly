@@ -353,6 +353,112 @@ describe("controls", () => {
     ).toBe("4px");
   });
 
+  it("offers every form the catalog declares, so an unset union is authorable", () => {
+    // Without this, an unset `borderRadius` could only ever be one radius: the
+    // engine answers with the catalog's first arm when nothing is stored.
+    mount({ border: { radius: true } });
+
+    const trigger = screen.getByLabelText("Form");
+    fireEvent.click(trigger);
+    // Named from the arms' own shape kinds rather than numbered.
+    expect(screen.getByRole("option", { name: "Per corner" })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+
+    expect(
+      fieldsOf("borderRadius").getByLabelText("Start start")
+    ).toBeDefined();
+  });
+
+  it("clears the stored value when the form changes under it", () => {
+    // One radius is not four corners, so there is nothing to carry across — and
+    // leaving the value would snap the panel straight back, because a stored
+    // value decides its own arm.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { borderRadius: "4px" } },
+    } as NodeStyles;
+    const editor = mount({ border: { radius: true } }, styles);
+
+    fireEvent.click(screen.getByLabelText("Form"));
+    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["styles"],
+    });
+  });
+
+  it("lets a keyword selection be cleared, which a select cannot offer as an item", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { mixBlendMode: "multiply" } },
+    } as NodeStyles;
+    const editor = mount({ effects: true }, styles);
+
+    fireEvent.click(
+      fieldsOf("mixBlendMode").getByRole("button", { name: "Clear" })
+    );
+
+    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["styles"],
+    });
+  });
+
+  it("shows a stored keyword the catalog does not list verbatim, rather than blank", () => {
+    // The validator accepts keywords case-insensitively and accepts the CSS-wide
+    // keywords everywhere, so `inherit` is live and compiles while matching no
+    // catalog item — and a select showing nothing over a working value reads as
+    // an unset property.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { mixBlendMode: "inherit" } },
+    } as NodeStyles;
+    mount({ effects: true }, styles);
+
+    expect(fieldsOf("mixBlendMode").getByText("inherit")).toBeDefined();
+  });
+
+  it("reports an edit the op store refused, which the validator cannot anticipate", () => {
+    // `styleWriteOp` judges the edited leaf; `applyOp` judges the whole
+    // document. A page at its byte limit refuses an edit whose value is valid,
+    // and an unreported refusal leaves the field reading as saved.
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    editor.apply.mockReturnValue(null);
+    render(<StyleInspectorPanel editor={editor} />);
+
+    const field = fieldsOf("padding").getByLabelText("Block start");
+    fireEvent.change(field, { target: { value: "12px" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be applied"
+    );
+  });
+
+  it("refuses to style a multi-selection rather than editing its primary", () => {
+    // Exported standalone, so a host can mount it with no wrapper to make this
+    // refusal for it — and `selectedId` is the PRIMARY, so it would silently
+    // change one block while the canvas outlines six.
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    const many = {
+      ...editor,
+      selection: { ids: ["a", "b"], primary: "a" },
+    } as unknown as EditorState;
+    render(<StyleInspectorPanel editor={many} />);
+
+    expect(
+      screen.getByText("2 blocks selected. Select one to style it.")
+    ).toBeDefined();
+    expect(screen.queryByLabelText("Block start")).toBeNull();
+  });
+
   it("shows a stored token by name rather than as editable text", () => {
     // `{ $token }` is one value spelled as an object. Typing over it would
     // store the token's NAME as a literal — a value that looks right in the

@@ -52,6 +52,18 @@ import { readStyleValue } from "./style-values";
 /** Which state × breakpoint the panel reads and writes, and what the site is. */
 export interface StyleInspectionOptions extends StyleControlOptions {
   /**
+   * The form an author picked for one union position, if any.
+   *
+   * Addressed by property AND path, because a union can sit below the property
+   * root — `position.zIndex` is a number or `auto`. Consulted only where
+   * nothing is stored: a stored value decides its own arm, and the engine
+   * decides that.
+   */
+  readonly variantAt?: (
+    property: string,
+    path: readonly string[]
+  ) => number | undefined;
+  /**
    * The interaction state being edited.
    *
    * `base` unless a caller says otherwise. The switcher that changes it does
@@ -204,7 +216,13 @@ function inspectProperty(
     property,
     path: [],
   });
-  const set = styleControlsFor(entry, value, options);
+  const set = styleControlsFor(entry, value, {
+    ...options,
+    // Bound to THIS property before it reaches the walk, which speaks only in
+    // paths: two properties can both hold a union at the root, and a resolver
+    // told only the path would answer for whichever asked first.
+    variantAt: path => options.variantAt?.(property, path),
+  });
   return {
     property,
     label: fieldLabel(property),

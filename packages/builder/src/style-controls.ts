@@ -39,12 +39,11 @@ import {
   isStyleLeaf,
   isTokenRef,
   styleUnionVariant,
-  type MayFetchUrl,
   type StyleLeaf,
   type StyleProperty,
   type StyleShape,
+  type StyleUnionVariantOptions,
   type StyleValue,
-  type TokenLookup,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -156,36 +155,51 @@ export interface StyleControlVariants {
   readonly active: number;
   /** How many variants the catalog declares at this position. */
   readonly count: number;
+  /**
+   * Each arm's own shape kind, in the catalog's order.
+   *
+   * Carried so an affordance offering the choice can NAME the forms from the
+   * catalog rather than numbering them: `borderRadius` is a length or four
+   * corners, and "Form 1 / Form 2" tells an author nothing about which is
+   * which. The arms have no names of their own, so their shape kind is the
+   * most specific thing the catalog actually says about them.
+   */
+  readonly kinds: readonly StyleShape["kind"][];
 }
 
 /**
  * What a caller can tell the resolver about the site.
  *
- * Structurally the engine's own `StyleUnionVariantOptions`, and handed to it
- * unchanged: a field this named and the engine did not would be silently
- * dropped, and one the engine reads and this omits would make the arm shown
- * disagree with the arm a write is judged under.
+ * DERIVED from the engine's own option type rather than restated beside it.
+ * Both this and `StylePolicy` in `style-values.ts` are the same contract — what
+ * this site allows — read at two moments, and three structural copies of it
+ * would all keep compiling while the next field was added to one: arm selection
+ * and write validation would then disagree about a value, which is the failure
+ * the module docblock above describes from the other direction.
+ *
+ * Kept as a NAME rather than making callers import the engine's, because it is
+ * this package's public surface and a rename there should not be one here.
  */
-export interface StyleControlOptions {
+export type StyleControlOptions = StyleUnionVariantOptions;
+
+/**
+ * Everything {@link styleControlsFor} accepts.
+ *
+ * The site policy, plus the one thing the engine has no opinion about: which
+ * form an AUTHOR has chosen to write a value in. A union's arm is decided by
+ * the stored value wherever there is one, so this is consulted only where the
+ * position is unset — which is exactly when the engine has nothing to read and
+ * answers with the catalog's first arm for every caller alike.
+ */
+export interface StyleControlInput extends StyleControlOptions {
   /**
-   * The site's token table, for choosing between union arms that both accept
-   * tokens.
+   * The arm an author picked at one position inside the value, if any.
    *
-   * Optional: without it the catalog's arm order decides, which is the engine's
-   * own fallback for a name it cannot resolve.
+   * Addressed by the same path a control carries, so a union nested below the
+   * property root is answerable too — `position.zIndex` is a number OR `auto`,
+   * and a caller that could only speak about the root could never offer it.
    */
-  readonly tokens?: TokenLookup;
-  /**
-   * Which hosts this site will fetch from.
-   *
-   * Carried because the arm choice is the engine's, and the engine asks this
-   * question of a `url` or free-form leaf. No union the catalog ships has such
-   * an arm today, so nothing measurable changes by supplying it — which is the
-   * moment to wire it, rather than after a catalog change makes its absence a
-   * defect. Absent means UNASKED rather than allowed, exactly as everywhere
-   * else the policy travels.
-   */
-  readonly mayFetchUrl?: MayFetchUrl;
+  readonly variantAt?: (path: readonly string[]) => number | undefined;
 }
 
 /** A property's controls, and every choice of form its shape offers. */
@@ -246,7 +260,7 @@ function walk(
   path: readonly string[],
   shape: StyleShape,
   value: StyleValue | undefined,
-  options: StyleControlOptions | undefined,
+  options: StyleControlInput | undefined,
   // Collected as the walk descends rather than returned alongside, so a union
   // at ANY depth is recorded by the same line that resolves it.
   variants: StyleControlVariants[]
@@ -278,15 +292,54 @@ function walk(
       // arm to judge that value against, so reading its answer makes the
       // control and the error message beside it describe one arm by
       // construction. The module docblock lists what predicting it would cost.
-      const active = styleUnionVariant(shape, value, options);
+      const active = activeVariant(shape, path, value, options);
       // A union declaring no arms offers no choice and has nothing to draw. The
       // catalog ships none; the matcher this replaced answered 0 regardless and
       // handed `undefined` down as though it were a shape.
       if (active === undefined) return [];
-      variants.push({ path, active, count: shape.of.length });
+      variants.push({
+        path,
+        active,
+        count: shape.of.length,
+        kinds: shape.of.map(arm => arm.kind),
+      });
       return walk(property, path, shape.of[active], value, options, variants);
     }
   }
+}
+
+/**
+ * Which arm of a union to draw at one position.
+ *
+ * A STORED value settles it, and the engine settles that — so a caller's
+ * preference cannot make the panel show one arm while validation judges the
+ * value under another. Where nothing is stored there is no such value to
+ * disagree with: the engine answers with the catalog's first arm for everyone,
+ * and an author who wants to write the four-corner radius rather than the
+ * single one has no other way to say so.
+ *
+ * A preference outside the union's own arms is ignored rather than clamped.
+ * Clamping would silently draw arm 0 for a caller asking for arm 7, which reads
+ * as the choice having been honoured.
+ */
+function activeVariant(
+  shape: Extract<StyleShape, { kind: "union" }>,
+  path: readonly string[],
+  value: StyleValue | undefined,
+  options: StyleControlInput | undefined
+): number | undefined {
+  if (value === undefined) {
+    const preferred = options?.variantAt?.(path);
+    if (
+      preferred !== undefined &&
+      Number.isInteger(preferred) &&
+      preferred >= 0 &&
+      preferred < shape.of.length
+    ) {
+      return preferred;
+    }
+  }
+  return styleUnionVariant(shape, value, options);
 }
 
 /**
@@ -324,7 +377,7 @@ function childValue(
 export function styleControlsFor(
   property: StyleProperty,
   value?: StyleValue,
-  options?: StyleControlOptions
+  options?: StyleControlInput
 ): StyleControlSet {
   const variants: StyleControlVariants[] = [];
   const controls = walk(

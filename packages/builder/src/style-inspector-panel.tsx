@@ -34,6 +34,7 @@ import {
   isTokenRef,
   type BreakpointId,
   type StyleLeaf,
+  type StyleShape,
   type StyleState,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
@@ -54,7 +55,11 @@ import * as React from "react";
 
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
-import type { StyleControl, StyleControlKind } from "./style-controls";
+import type {
+  StyleControl,
+  StyleControlKind,
+  StyleControlVariants,
+} from "./style-controls";
 import {
   inspectStyle,
   type InspectedStyleProperty,
@@ -97,6 +102,15 @@ export function StyleInspectorPanel({
   state,
   breakpoint,
 }: StyleInspectorPanelProps): React.JSX.Element {
+  const [openGroup, setOpenGroup] = React.useState("");
+  // The form an author chose at a union position, keyed by property and path.
+  // Panel state rather than document state: it is only consulted where nothing
+  // is stored, so there is nothing to persist — the moment a value exists, the
+  // value decides its own form.
+  const [chosenForms, setChosenForms] = React.useState<Record<string, number>>(
+    {}
+  );
+
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
   // anywhere changes both the document and the values shown.
@@ -104,9 +118,34 @@ export function StyleInspectorPanel({
     ...policy,
     state,
     breakpoint,
+    variantAt: (property, path) => chosenForms[formKey(property, path)],
   });
 
-  const [openGroup, setOpenGroup] = React.useState("");
+  const chooseForm = (property: string, path: readonly string[], arm: number) =>
+    setChosenForms(current => ({ ...current, [formKey(property, path)]: arm }));
+
+  /*
+   * Several blocks selected: a different panel, not a thinner one.
+   *
+   * `selectedId` is the PRIMARY of the selection, so inspecting it would draw
+   * writable controls that change one block while the canvas outlines six —
+   * two surfaces answering different questions with the same words. The
+   * inspector wrapper makes the same refusal for the content half; this one
+   * makes it for itself because it is exported standalone, and a host mounting
+   * it directly gets no wrapper.
+   *
+   * Per-property batch editing is Plan 05's batch edit and is deliberately not
+   * here.
+   */
+  if (editor.selection.ids.length > 1) {
+    return (
+      <div className="nx-style-inspector" data-empty="many-selected">
+        <p className="nx-inspector__note">
+          {editor.selection.ids.length} blocks selected. Select one to style it.
+        </p>
+      </div>
+    );
+  }
 
   if (inspection === null) {
     return (
@@ -159,6 +198,7 @@ export function StyleInspectorPanel({
             breakpoint={inspection.breakpoint}
             editor={editor}
             policy={policy}
+            onChooseForm={chooseForm}
           />
         ))}
       </Accordion>
@@ -174,6 +214,7 @@ function StyleSectionItem({
   breakpoint,
   editor,
   policy,
+  onChooseForm,
 }: {
   section: StyleSection;
   nodeId: string;
@@ -181,6 +222,7 @@ function StyleSectionItem({
   breakpoint: BreakpointId;
   editor: EditorState;
   policy: StylePolicy | undefined;
+  onChooseForm: ChooseForm;
 }): React.JSX.Element {
   // How many of this section's properties this node sets HERE, so an author can
   // see which sections they have touched without opening each one.
@@ -211,6 +253,7 @@ function StyleSectionItem({
               breakpoint={breakpoint}
               editor={editor}
               policy={policy}
+              onChooseForm={onChooseForm}
             />
           ))}
         </div>
@@ -234,6 +277,7 @@ function StylePropertyFields({
   breakpoint,
   editor,
   policy,
+  onChooseForm,
 }: {
   property: InspectedStyleProperty;
   nodeId: string;
@@ -241,6 +285,7 @@ function StylePropertyFields({
   breakpoint: BreakpointId;
   editor: EditorState;
   policy: StylePolicy | undefined;
+  onChooseForm: ChooseForm;
 }): React.JSX.Element {
   const many = property.controls.length > 1;
   return (
@@ -256,6 +301,28 @@ function StylePropertyFields({
           {property.label}
         </p>
       ) : null}
+      {/*
+        The forms the catalog offers at each union position, so every one is
+        reachable. Without this an unset `borderRadius` could only ever be
+        authored as a single radius and `position.zIndex` only as a number: the
+        engine answers with the catalog's first arm when nothing is stored, and
+        that answer is right precisely because the author has not spoken yet.
+      */}
+      {property.variants
+        .filter(variant => variant.count > 1)
+        .map(variant => (
+          <FormChoice
+            key={variant.path.join(".")}
+            property={property}
+            variant={variant}
+            nodeId={nodeId}
+            state={state}
+            breakpoint={breakpoint}
+            editor={editor}
+            policy={policy}
+            onChooseForm={onChooseForm}
+          />
+        ))}
       {property.controls.map(control => (
         <StyleControlField
           key={[property.property, ...control.path].join(".")}
@@ -273,6 +340,108 @@ function StylePropertyFields({
           policy={policy}
         />
       ))}
+    </div>
+  );
+}
+
+/** How an author says which form they mean to write a value in. */
+type ChooseForm = (
+  property: string,
+  path: readonly string[],
+  arm: number
+) => void;
+
+/** The panel-state key for one union position. */
+function formKey(property: string, path: readonly string[]): string {
+  return [property, ...path].join(".");
+}
+
+/**
+ * What each form is called, from the arm's own shape kind.
+ *
+ * The catalog gives arms no names, so their shape kind is the most specific
+ * thing it says about them — and "Form 1 / Form 2" tells an author nothing
+ * about which is which. Partial for the same reason the placeholders are: this
+ * is a label, so a kind this build has not learned about gets the kind itself
+ * rather than a compile error.
+ */
+const FORM_LABEL: Partial<Record<StyleShape["kind"], string>> = {
+  dimension: "Length",
+  number: "Number",
+  keyword: "Keyword",
+  color: "Colour",
+  cssValue: "Custom",
+  url: "URL",
+  logicalSides: "Per side",
+  logicalCorners: "Per corner",
+  object: "Fields",
+  union: "Mixed",
+};
+
+/**
+ * The choice of form at one union position.
+ *
+ * Choosing a form while a value is stored CLEARS it. The two forms hold
+ * different things — one radius is not four corners — so there is nothing to
+ * carry across, and leaving the value in place would be worse than clearing:
+ * the stored value decides its own arm, so the panel would snap straight back
+ * to the form the author just moved away from.
+ */
+function FormChoice({
+  property,
+  variant,
+  nodeId,
+  state,
+  breakpoint,
+  editor,
+  policy,
+  onChooseForm,
+}: {
+  property: InspectedStyleProperty;
+  variant: StyleControlVariants;
+  nodeId: string;
+  state: StyleState;
+  breakpoint: BreakpointId;
+  editor: EditorState;
+  policy: StylePolicy | undefined;
+  onChooseForm: ChooseForm;
+}): React.JSX.Element {
+  const id = React.useId();
+  const choose = (raw: string) => {
+    const arm = Number(raw);
+    if (!Number.isInteger(arm)) return;
+    onChooseForm(property.property, variant.path, arm);
+    if (!property.set) return;
+    const current = findNode(editor.document.nodes, nodeId);
+    if (current === undefined) return;
+    const cleared = styleClearOp(
+      nodeId,
+      current.styles,
+      { state, breakpoint, property: property.property, path: [] },
+      policy
+    );
+    if (cleared.ok && cleared.op !== null) editor.apply(cleared.op);
+  };
+
+  return (
+    <div className="nx-inspector__field" data-form-choice={property.property}>
+      <Label htmlFor={id}>
+        {variant.path.length === 0
+          ? "Form"
+          : `${fieldLabel(variant.path[variant.path.length - 1] ?? "")} form`}
+      </Label>
+      <Select value={String(variant.active)} onValueChange={choose}>
+        <SelectTrigger id={id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {variant.kinds.map((kind, index) => (
+            <SelectItem key={`${index}:${kind}`} value={String(index)}>
+              {FORM_LABEL[kind] ?? kind}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -338,7 +507,15 @@ function StyleControlField({
     // the ordinary case for a field blurred without being changed. Applying it
     // would ask the op store for a history entry that undoes to no visible
     // effect, which it refuses.
-    if (write.op !== null) editor.apply(write.op);
+    if (write.op === null) return;
+    // The store's own refusal, which the validator cannot anticipate: it judges
+    // the edited leaf, while `applyOp` judges the whole document — a page at
+    // its byte limit rejects an edit whose value is perfectly valid. Unreported,
+    // the field goes on showing the draft and reads as saved while neither the
+    // document nor the undo history moved.
+    if (editor.apply(write.op) === null) {
+      setIssue("This edit could not be applied to the document.");
+    }
   };
 
   if (!control.supported) {
@@ -437,22 +614,45 @@ function ValueField({
   onCommit: (value: StyleValue | null) => void;
 }): React.JSX.Element {
   if (control.kind === "select" && control.leaf.kind === "keyword") {
+    const current = typeof stored === "string" ? stored : "";
+    // The validator accepts a keyword case-insensitively, with surrounding CSS
+    // whitespace and escapes, and accepts the CSS-wide keywords everywhere — so
+    // a stored `Bold` or `inherit` is live and compiles while matching no item
+    // here, and the select would render empty over a value that is doing
+    // something. Offered VERBATIM as its own item rather than normalised: any
+    // rule written here to fold spellings would be a second copy of the
+    // engine's, and the stored string is the one thing that needs no rule.
+    const extra =
+      current !== "" && !control.leaf.values.includes(current) ? current : null;
     return (
-      <Select
-        value={typeof stored === "string" ? stored : ""}
-        onValueChange={value => onCommit(value)}
-      >
-        <SelectTrigger id={id}>
-          <SelectValue placeholder="Not set" />
-        </SelectTrigger>
-        <SelectContent>
-          {control.leaf.values.map(option => (
-            <SelectItem key={option} value={option}>
-              {option}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="nx-style-inspector__select">
+        <Select value={current} onValueChange={value => onCommit(value)}>
+          <SelectTrigger id={id}>
+            <SelectValue placeholder="Not set" />
+          </SelectTrigger>
+          <SelectContent>
+            {extra === null ? null : (
+              <SelectItem value={extra}>{extra}</SelectItem>
+            )}
+            {control.leaf.values.map(option => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {/*
+          A select cannot offer "unset" as an item: an empty value is not a
+          choice the list can carry, and a sentinel standing for it would mean
+          two things at once. A button beside it clears, which is the same act
+          an emptied text field performs.
+        */}
+        {current === "" ? null : (
+          <button type="button" onClick={() => onCommit(null)}>
+            Clear
+          </button>
+        )}
+      </div>
     );
   }
   return (
