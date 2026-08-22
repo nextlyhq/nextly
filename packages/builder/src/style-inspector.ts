@@ -30,6 +30,7 @@
 
 import {
   BASE_BREAKPOINT,
+  getBlock,
   getStyleProperty,
   STYLE_CATALOG,
   STYLE_GROUP_DEFS,
@@ -41,7 +42,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { fieldLabel, selectedBlock } from "./inspector";
+import { fieldLabel, selectedNode } from "./inspector";
 import {
   styleControlsFor,
   type StyleControl,
@@ -145,17 +146,23 @@ export interface StyleInspection {
 /**
  * Describe the selected block's style surface, or `null` when there is none.
  *
- * `null` under exactly the conditions the content tab returns null under, which
- * is why they share one answer — see {@link selectedBlock}.
+ * `null` for no selection and for an id the document no longer holds — but NOT
+ * for a block the registry does not know, which is where this parts company
+ * with the content tab. A node whose plugin was disabled, or whose type was
+ * renamed, still has its styles emitted: `compile-page.ts` walks every node and
+ * hands `node.styles` to `envelopeRules` without asking the registry anything.
+ * So the panel that could clear them is the one surface that must not go away
+ * when the definition does. With no definition nothing is OFFERED, every stored
+ * property is retained, and the whole section set is clear-only.
  */
 export function inspectStyle(
   document: BlockDocument,
   selectedId: string | null,
   options?: StyleInspectionOptions
 ): StyleInspection | null {
-  const selected = selectedBlock(document, selectedId);
-  if (selected === null) return null;
-  const { node, definition } = selected;
+  const node = selectedNode(document, selectedId);
+  if (node === null) return null;
+  const definition = getBlock(node.type);
 
   const state = options?.state ?? "base";
   const breakpoint = options?.breakpoint ?? BASE_BREAKPOINT;
@@ -163,8 +170,17 @@ export function inspectStyle(
   // `true` for a whole group, an object naming sub-flags — is the registry's,
   // and a second reading of it here would withhold a property the block really
   // has, or offer one it does not.
+  //
+  // Empty where the registry has no definition, which is not the same as a
+  // block that supports nothing: the retaining pass below still finds every
+  // stored property, so the panel offers exactly the properties that ARE on the
+  // page and offers each of them clear-only.
   const offered = new Set(
-    stylePropertiesForSupports(definition.supports).map(entry => entry.property)
+    definition === undefined
+      ? []
+      : stylePropertiesForSupports(definition.supports).map(
+          entry => entry.property
+        )
   );
   // Plus anything this node ALREADY stores here, whether the block still
   // supports it or not. Measured: neither `validation.ts` nor `compile-page.ts`

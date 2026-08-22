@@ -313,8 +313,17 @@ function StylePropertyFields({
         authored as a single radius and `position.zIndex` only as a number: the
         engine answers with the catalog's first arm when nothing is stored, and
         that answer is right precisely because the author has not spoken yet.
+
+        Withheld for a property the block no longer offers. `FormChoice`
+        REMOVES what is stored at the union's position — `styleClearOp`, so the
+        new form starts empty — which is right while a property is still
+        editable and wrong once it is not: a selector left enabled beside the
+        notice below reads as "switch this to corners" and instead deletes the
+        value, through a capability the block has withdrawn. The Clear action on
+        the value itself is the honest way to remove it, and it is already
+        there.
       */}
-      {property.variants
+      {(property.offered ? property.variants : [])
         .filter(variant => variant.count > 1)
         .map(variant => (
           <FormChoice
@@ -481,6 +490,19 @@ function FormChoice({
   );
 }
 
+/**
+ * What a commit did to the document.
+ *
+ * Three outcomes rather than a boolean, because the surface showing the value
+ * has to do something different in each and two of them are easy to conflate.
+ * `refused` KEEPS what the author typed, so they can correct it beside the
+ * message. `unchanged` means the write was valid and the document already held
+ * that value — `01` where it holds `1` — so the field has to go back to what
+ * the document says, and nothing else will make it: the stored value never
+ * moved, so no effect keyed on it fires.
+ */
+type CommitOutcome = "applied" | "refused" | "unchanged";
+
 /** One editable position, drawn as the control its leaf kind resolves to. */
 function StyleControlField({
   control,
@@ -560,23 +582,23 @@ function StyleControlField({
    * committing on blur can fire after another edit has already replaced the
    * node, and writing from the older copy would resurrect its styles.
    */
-  const commit = (value: StyleValue | null) => {
+  const commit = (value: StyleValue | null): CommitOutcome => {
     const current = findNode(editor.document.nodes, nodeId);
-    if (current === undefined) return;
+    if (current === undefined) return "refused";
     const write =
       value === null
         ? styleClearOp(nodeId, current.styles, address, policy)
         : styleWriteOp(nodeId, current.styles, address, value, policy);
     if (!write.ok) {
       setIssue(write.issues[0]?.message ?? "This value cannot be used here.");
-      return;
+      return "refused";
     }
     setIssue(null);
     // Null is the store saying the document already holds this value, which is
     // the ordinary case for a field blurred without being changed. Applying it
     // would ask the op store for a history entry that undoes to no visible
     // effect, which it refuses.
-    if (write.op === null) return;
+    if (write.op === null) return "unchanged";
     // The store's own refusal, which the validator cannot anticipate: it judges
     // the edited leaf, while `applyOp` judges the whole document — a page at
     // its byte limit rejects an edit whose value is perfectly valid. Unreported,
@@ -584,39 +606,53 @@ function StyleControlField({
     // document nor the undo history moved.
     if (editor.apply(write.op) === null) {
       setIssue("This edit could not be applied to the document.");
+      return "refused";
     }
+    return "applied";
   };
-
-  if (!control.supported) {
-    return (
-      <div className="nx-inspector__field" data-unsupported={control.leaf.kind}>
-        {/*
-          Plain text, not a `<label>`. This branch renders no control, so a
-          label would carry `htmlFor` to an id nothing has — which a screen
-          reader announces as a field that cannot be reached, worse than the
-          note below saying plainly that there is nothing to reach.
-
-          UNTESTED, and stated rather than left to be assumed: every leaf kind
-          the engine ships resolves to a control, so nothing reaches this branch
-          today. It exists for a catalog written by a NEWER engine, and the
-          catalog is compiled in rather than registered, so no fixture can hand
-          this panel an unknown kind.
-        */}
-        <p className="nx-style-inspector__property-label">{label}</p>
-        <p className="nx-inspector__note">
-          This build has no control for {control.leaf.kind} values.
-        </p>
-      </div>
-    );
-  }
 
   // A value that cannot be typed into is shown, not edited — and HTML's `for`
   // only associates a label with a LABELABLE element (input, select, textarea,
   // button, output, meter, progress). Pointing it at the paragraph those
   // branches render drops the association silently, so the label carries an id
   // of its own and the value points back at it instead.
-  const readOnly = clearOnly || isTokenRef(stored);
+  //
+  // `control.supported` is NOT a term here: the branch below returns before
+  // this is read, so including it would be a condition that can never be true
+  // where it is used.
+  const readOnly =
+    clearOnly ||
+    isTokenRef(stored) ||
+    editableText(control, stored) === undefined;
   const labelId = `${id}-label`;
+
+  if (!control.supported) {
+    return (
+      <div className="nx-inspector__field" data-unsupported={control.leaf.kind}>
+        {/*
+          The label carries no `htmlFor`, for the reason stated above: this
+          branch renders no labelable element.
+
+          UNTESTED as a CATALOG case, and stated rather than left to be assumed:
+          every leaf kind the engine ships resolves to a control, so a catalog
+          written by a newer engine is the only thing that reaches this — and
+          the catalog is compiled in rather than registered, so no fixture can
+          hand this panel an unknown kind. What IS reachable and IS covered is
+          the value: a node can store one at such a leaf, and it compiles.
+        */}
+        <Label id={labelId} title={summary}>
+          {label}
+        </Label>
+        <RetainedValue
+          labelledBy={labelId}
+          label={actionName}
+          stored={stored}
+          note={`This build has no control for ${control.leaf.kind} values.`}
+          onClear={() => commit(null)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="nx-inspector__field" data-control={control.kind}>
@@ -667,7 +703,7 @@ function ControlValue({
   actionName: string;
   clearOnly: boolean;
   describedBy: string | undefined;
-  onCommit: (value: StyleValue | null) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   if (clearOnly) {
     return (
@@ -685,6 +721,22 @@ function ControlValue({
         labelledBy={labelledBy}
         label={actionName}
         name={stored.$token}
+        onClear={() => onCommit(null)}
+      />
+    );
+  }
+  // A value the editing surface below cannot represent. Drawing it anyway is
+  // the worst of the three outcomes: the control reads as unset, the value goes
+  // on compiling, and the keystroke that would clear it is the one the field
+  // refuses. Shown and removable instead, which is what the other two branches
+  // already do for the other two kinds of unteachable value.
+  if (editableText(control, stored) === undefined) {
+    return (
+      <RetainedValue
+        labelledBy={labelledBy}
+        label={actionName}
+        stored={stored}
+        note="No control here can edit this value. It is still on the page and can be cleared."
         onClear={() => onCommit(null)}
       />
     );
@@ -744,7 +796,16 @@ function TokenValue({
 }
 
 /**
- * A value the block no longer supports: shown, and removable, not editable.
+ * A value that is live on the page and cannot be edited here: shown, and
+ * removable.
+ *
+ * Three different reasons reach this one surface — the block's `supports` no
+ * longer declares the property, no control in this build can draw the leaf's
+ * kind, or the stored value has a shape the control cannot represent — and they
+ * share it because the author's position is identical in all three: the styling
+ * is on the page, nothing here can change it, and the panel owes them the
+ * action that removes it. `note` is what tells them WHICH of the three, since
+ * only the first has a notice of its own beside the property.
  *
  * Named for the property for the same reason the token control is — several of
  * these on one panel would otherwise be a column of identical "Clear" buttons.
@@ -753,28 +814,52 @@ function RetainedValue({
   labelledBy,
   label,
   stored,
+  note,
   onClear,
 }: {
   /** The id of the label element that names this value. */
   labelledBy: string;
   label: string;
   stored: StyleValue | undefined;
+  /** Why this value cannot be edited, where the property does not already say. */
+  note?: string;
   onClear: () => void;
 }): React.JSX.Element {
+  const noteId = React.useId();
   return (
-    // `group` for the reason {@link TokenValue} carries one: the ARIA
-    // `paragraph` role a bare paragraph maps to prohibits an accessible name.
-    <p
-      className="nx-style-inspector__token"
-      role="group"
-      aria-labelledby={labelledBy}
-      tabIndex={-1}
-    >
-      <span>{isTokenRef(stored) ? stored.$token : storedText(stored)}</span>
-      <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
-        Clear
-      </button>
-    </p>
+    <>
+      {/*
+        `group` for the reason {@link TokenValue} carries one: the ARIA
+        `paragraph` role a bare paragraph maps to prohibits an accessible name.
+
+        The note is pointed AT rather than left beside: it is the only thing
+        saying why this value cannot be edited, and a group announced with its
+        name and its Clear button but not its reason tells a screen-reader user
+        that a field is read-only without ever saying what made it so.
+      */}
+      <p
+        className="nx-style-inspector__token"
+        role="group"
+        aria-labelledby={labelledBy}
+        aria-describedby={note === undefined ? undefined : noteId}
+        tabIndex={-1}
+      >
+        {/*
+          `displayText` rather than the text-field projection, which answers
+          `""` for a shape it cannot type — and an empty span beside a Clear
+          button asks an author to remove something they cannot see.
+        */}
+        <span>{displayText(stored)}</span>
+        <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
+          Clear
+        </button>
+      </p>
+      {note === undefined ? null : (
+        <p className="nx-inspector__note" id={noteId}>
+          {note}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -809,7 +894,7 @@ function ValueField({
    * marked invalid reads as one carrying a hint.
    */
   describedBy: string | undefined;
-  onCommit: (value: StyleValue | null) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   if (control.kind === "select" && control.leaf.kind === "keyword") {
     const current = typeof stored === "string" ? stored : "";
@@ -891,7 +976,7 @@ function TextField({
   stored: StyleValue | undefined;
   /** The id of the message explaining a refusal, and what marks this invalid. */
   describedBy: string | undefined;
-  onCommit: (value: StyleValue | null) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const [draft, setDraft] = React.useState(() => storedText(stored));
 
@@ -909,7 +994,16 @@ function TextField({
     // non-breaking space would read as empty and DELETE the declaration —
     // where the engine treats it as a value and refuses it.
     const emptied = trimCssWhitespace(draft) === "";
-    onCommit(emptied ? null : committedValue(control.kind, draft));
+    const outcome = onCommit(
+      emptied ? null : committedValue(control.kind, draft)
+    );
+    // The document did not move because it already holds this value in another
+    // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The
+    // effect above cannot cover it — `stored` is identical, so it does not fire
+    // — and without this the field goes on showing text the document does not
+    // contain until something remounts it. A REFUSAL deliberately keeps the
+    // draft: the author has to be able to correct what they typed.
+    if (outcome === "unchanged") setDraft(storedText(stored));
   };
 
   return (
@@ -969,6 +1063,81 @@ function storedText(value: StyleValue | undefined): string {
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
   return "";
+}
+
+/** How much of an unrepresentable value is worth showing before it stops helping. */
+const DISPLAY_LIMIT = 80;
+
+/**
+ * A stored value as a READ-ONLY surface shows it, including one no field can
+ * edit.
+ *
+ * Separate from {@link storedText}, which answers what a text field's draft
+ * starts as and is right to give `""` for a shape it cannot type. Here `""`
+ * would be a lie: the surface exists precisely because something IS stored, and
+ * a blank one beside a Clear button tells an author to remove they-cannot-see-
+ * what.
+ */
+function displayText(value: StyleValue | undefined): string {
+  if (value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (isTokenRef(value)) return value.$token;
+  // Its own JSON, because there is nothing else honest to show: the value is
+  // live on the page and the author is being asked whether to remove it.
+  // Truncated because a panel column is not a document viewer, and a value long
+  // enough to need this is already one nothing here can repair.
+  const json = jsonText(value);
+  return json.length > DISPLAY_LIMIT
+    ? `${json.slice(0, DISPLAY_LIMIT)}…`
+    : json;
+}
+
+/**
+ * A value's JSON, or a stand-in when it has none.
+ *
+ * `JSON.stringify` THROWS on a circular reference rather than declining to
+ * answer, and a panel that throws while rendering leaves the author with no
+ * Clear button at all — which is the exact failure this surface exists to
+ * prevent, arrived at from the other direction. Nothing in the document
+ * pipeline can produce one today, since a stored document is parsed from JSON;
+ * the guard is here because it costs one branch on a path that already decided
+ * the value is unrepresentable.
+ *
+ * The fallback makes no claim about the value beyond being unable to show it,
+ * which is what keeps it honest: the Clear beside it still works.
+ */
+function jsonText(value: StyleValue): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "(value cannot be shown)";
+  }
+}
+
+/**
+ * A stored value as this control's EDITING surface shows it, or `undefined`
+ * when that surface cannot show it at all.
+ *
+ * Two shapes reach this. An object at a scalar position — `fontSize: {value:
+ * "12px"}` from an import or the API — has no text spelling, and a text field
+ * given `""` for it reads as UNSET while the value compiles; worse, the one
+ * keystroke that would clear it is refused, because an emptied draft already
+ * equals that empty projection. And a number stored where the leaf's vocabulary
+ * is keywords has no item to be current, so the select renders its "Not set"
+ * placeholder over a value that is doing something.
+ *
+ * Both are the same question — can the author see and change this here — so
+ * they get one answer rather than a check in each control.
+ */
+function editableText(
+  control: StyleControl,
+  value: StyleValue | undefined
+): string | undefined {
+  if (value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "number") return undefined;
+  return control.kind === "select" ? undefined : String(value);
 }
 
 /**

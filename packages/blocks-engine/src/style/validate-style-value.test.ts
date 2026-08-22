@@ -42,10 +42,24 @@ function messages(values: StyleValues): string[] {
  * being a union fails HERE, naming the property, instead of leaving a test
  * asserting arm indices against a shape that has no arms.
  */
-function unionShapeOf(property: string): UnionShape {
-  const shape = shapeOf(property);
+function unionShapeOf(
+  property: string,
+  path: readonly string[] = []
+): UnionShape {
+  let shape = shapeOf(property);
+  // Walked rather than reached for directly, because a union can sit BELOW a
+  // property's root: `position` holds a type, an inset and a zIndex, and only
+  // the last is a union.
+  for (const step of path) {
+    if (isStyleLeaf(shape) || shape.kind !== "object") {
+      throw new Error(`${property} has no object at ${step}`);
+    }
+    const next = shape.fields[step];
+    if (next === undefined) throw new Error(`${property} has no field ${step}`);
+    shape = next;
+  }
   if (isStyleLeaf(shape) || shape.kind !== "union") {
-    throw new Error(`${property} is no longer a union`);
+    throw new Error(`${[property, ...path].join(".")} is no longer a union`);
   }
   return shape;
 }
@@ -646,6 +660,39 @@ describe("styleUnionVariant", () => {
     expect(styleUnionVariant(lineHeight, "1.5rem")).toBe(1);
     expect(styleUnionVariant(borderRadius, "4px")).toBe(0);
     expect(styleUnionVariant(borderRadius, { startStart: "4px" })).toBe(1);
+  });
+
+  it("prefers a FREE-FORM arm over a keyword arm the value can never satisfy", () => {
+    // `fontStyle` is a keyword or a free-form value, and both arms refuse
+    // `"oblique; color: red"` — the keyword arm because it is not a keyword,
+    // the free-form arm because of the characters in it. They are different
+    // refusals: no edit can make that string one of three keywords, while
+    // repairing the content makes it a legal free-form value. So the free-form
+    // arm is the one the author was writing in, and the one whose control can
+    // repair it. Ranked by kind and depth alone the two tie and the catalog's
+    // first arm wins, which hands the author a select over a value the select
+    // cannot express.
+    const fontStyle = unionShapeOf("fontStyle");
+
+    expect(styleUnionVariant(fontStyle, "oblique; color: red")).toBe(1);
+    // The control cases either side of it: a real keyword still goes to the
+    // keyword arm, and a free-form value the arm ACCEPTS was already going to
+    // the right place.
+    expect(styleUnionVariant(fontStyle, "italic")).toBe(0);
+    expect(styleUnionVariant(fontStyle, "oblique 10deg")).toBe(1);
+  });
+
+  it("does NOT demote a keyword arm below an arm that stores another form", () => {
+    // The other direction, and the reason the vocabulary test is a tie-break
+    // below "stores" rather than part of it. `position.zIndex` is a number or
+    // `auto`; `"top"` is outside that vocabulary too, but the only other arm
+    // takes numbers and does not store a string at all. Demoting the keyword
+    // arm here would hand the tie to the catalog's order and report that
+    // `"top"` is not a number, where not being one of the allowed values is
+    // what the author got wrong.
+    const zIndex = unionShapeOf("position", ["zIndex"]);
+
+    expect(styleUnionVariant(zIndex, "top")).toBe(1);
   });
 
   it("reads a keyword as CSS does, through case, whitespace and escapes", () => {

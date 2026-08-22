@@ -598,30 +598,9 @@ function leafIssues(
         // string match a short keyword, and every copy made along the way is
         // work bought with a value that should never have been read.
         if (isOverlongValue(value)) return rejected(path, value, "too-long");
-        // Split before decoding: an escape can spell a space, and that space
-        // belongs INSIDE its identifier rather than separating two of them.
-        const parts = splitCssTokens(value).map(token =>
-          asciiLower(decodeIdentifier(token))
-        );
-        // Collapsed rather than compared raw, so that a vocabulary entry
-        // written as two words — `grid-auto-flow: row dense` is one value, not
-        // two — still matches however the stored string was spaced.
-        const written = parts.join(" ");
-        const allowed = (part: string): boolean =>
-          leaf.values.some(entry => asciiLower(entry) === part);
+        const parts = keywordParts(value);
         if (parts.length === 0) return rejected(path, value, "unparsable");
-        if (isCssWideKeyword(written) || allowed(written)) return [];
-        // Only a property declared as a shorthand reads its value as several
-        // keywords; for every other one the whole string is the value, which is
-        // what keeps a two-word entry from being mistaken for two entries. A
-        // value listed as solo is a complete declaration like a CSS-wide
-        // keyword, so it may not appear as one part of a shorthand.
-        const solo = leaf.soloValues ?? [];
-        const pairable = (part: string): boolean =>
-          allowed(part) && !solo.some(entry => asciiLower(entry) === part);
-        if (parts.length <= (leaf.maxParts ?? 1) && parts.every(pairable)) {
-          return [];
-        }
+        if (keywordAdmits(leaf, parts)) return [];
       }
       return [
         invalid(
@@ -853,6 +832,51 @@ function partIssues(
 }
 
 /**
+ * A stored keyword value's parts, normalised the way the vocabulary is
+ * compared against.
+ *
+ * Split before decoding: an escape can spell a space, and that space belongs
+ * INSIDE its identifier rather than separating two of them.
+ */
+function keywordParts(value: string): readonly string[] {
+  return splitCssTokens(value).map(token =>
+    asciiLower(decodeIdentifier(token))
+  );
+}
+
+/**
+ * Whether a keyword leaf's own vocabulary admits these parts.
+ *
+ * Extracted so the validator and the arm rank ask it once between them. The
+ * rank needs it because a keyword leaf's vocabulary is CLOSED — see
+ * {@link leafStoresKindOf} — and a second membership test written there would
+ * be a second answer to "is this one of the allowed values", drifting the first
+ * time either learned about escapes, case or two-word entries.
+ */
+function keywordAdmits(
+  leaf: Extract<StyleLeaf, { kind: "keyword" }>,
+  parts: readonly string[]
+): boolean {
+  if (parts.length === 0) return false;
+  // Collapsed rather than compared raw, so that a vocabulary entry written as
+  // two words — `grid-auto-flow: row dense` is one value, not two — still
+  // matches however the stored string was spaced.
+  const written = parts.join(" ");
+  const allowed = (part: string): boolean =>
+    leaf.values.some(entry => asciiLower(entry) === part);
+  if (isCssWideKeyword(written) || allowed(written)) return true;
+  // Only a property declared as a shorthand reads its value as several
+  // keywords; for every other one the whole string is the value, which is what
+  // keeps a two-word entry from being mistaken for two entries. A value listed
+  // as solo is a complete declaration like a CSS-wide keyword, so it may not
+  // appear as one part of a shorthand.
+  const solo = leaf.soloValues ?? [];
+  const pairable = (part: string): boolean =>
+    allowed(part) && !solo.some(entry => asciiLower(entry) === part);
+  return parts.length <= (leaf.maxParts ?? 1) && parts.every(pairable);
+}
+
+/**
  * Whether a leaf STORES values of this one's runtime kind.
  *
  * Not "would this leaf accept this value" — {@link leafIssues} answers that,
@@ -888,6 +912,51 @@ function leafStoresKindOf(leaf: StyleLeaf, value: unknown): boolean {
   }
   if (typeof value === "string") return leaf.kind !== "number";
   return false;
+}
+
+/**
+ * Whether a leaf's own CLOSED vocabulary admits this value.
+ *
+ * A tie-break BELOW {@link leafStoresKindOf} rather than a part of it, and the
+ * two answer genuinely different questions. "Stores" asks whether the value's
+ * runtime form is one the leaf reads at all; this asks whether a leaf that has
+ * a finite list of legal strings has this one on it.
+ *
+ * Only a keyword leaf has such a list. Every other kind judges CONTENT — a
+ * length's units, a colour's syntax, a URL's host — so there is nothing closed
+ * for a value to be outside of and the answer is yes.
+ *
+ * What it separates: `fontStyle` is a keyword OR a free-form value, and
+ * `"oblique; color: red"` is refused by both — by the keyword arm because it is
+ * not a keyword, and by the free-form arm because of the characters in it.
+ * Those are different refusals. The keyword arm can never accept that string
+ * however it is edited; the free-form arm can, once the content is repaired. So
+ * the free-form arm is the one the author was writing in, and it is the one
+ * whose control can repair the value.
+ *
+ * Why it must sit BELOW "stores" rather than inside it: `position.zIndex` is a
+ * number OR `auto`, and `"top"` is outside that vocabulary too — but the only
+ * other arm takes numbers and does not store a string at all. Folding this into
+ * "stores" would drop the keyword arm to the number arm's level, hand the tie
+ * to the catalog's order, and report that `"top"` is not a number when not
+ * being one of the allowed values is what the author got wrong.
+ */
+function leafAdmitsValue(leaf: StyleLeaf, value: unknown): boolean {
+  if (leaf.kind !== "keyword" || typeof value !== "string") return true;
+  // Overlong is a RESOURCE rule rather than a vocabulary one, so it is answered
+  // without parsing: the cap exists to avoid exactly this work, and a value
+  // refused for its size is refused by every string arm alike.
+  if (isOverlongValue(value)) return true;
+  return keywordAdmits(leaf, keywordParts(value));
+}
+
+/** Whether a shape's own closed vocabulary, if it has one, admits this value. */
+function shapeAdmitsValue(shape: StyleShape, value: unknown): boolean {
+  if (isStyleLeaf(shape)) return leafAdmitsValue(shape, value);
+  if (shape.kind === "union") {
+    return shape.of.some(arm => shapeAdmitsValue(arm, value));
+  }
+  return true;
 }
 
 /**
@@ -1040,6 +1109,14 @@ interface VariantRank {
   readonly accepts: boolean;
   /** Whether the value is written in a form this arm stores at all. */
   readonly stores: boolean;
+  /**
+   * Whether the arm's own CLOSED vocabulary admits the value, where it has one.
+   *
+   * See {@link leafAdmitsValue}. This is what separates an arm that can never
+   * accept the value from one that could once its content is repaired, which
+   * decides whether the author is handed a select or a field they can retype in.
+   */
+  readonly admits: boolean;
   /** How deep the arm's DEEPEST complaint points, in pointer SEGMENTS. */
   readonly depth: number;
 }
@@ -1067,6 +1144,7 @@ function variantRank(
   return {
     accepts: !issues.some(issue => issue.severity === "error"),
     stores: shapeStoresKindOf(variant, value),
+    admits: shapeAdmitsValue(variant, value),
     // The DEEPEST complaint, not the first one enumerated. Issues arrive in the
     // stored object's key order, so reading `issues[0]` makes the answer depend
     // on insertion order: `{ a, x }` and `{ x, a }` hold the same value and
@@ -1082,14 +1160,15 @@ function variantRank(
 /**
  * Whether one arm's refusal describes the value better than another's.
  *
- * Lexicographic over the three properties in {@link VariantRank}'s order, which
- * is what makes each one a tie-break for the one above rather than a vote: a
+ * Lexicographic over the properties in {@link VariantRank}'s order, which is
+ * what makes each one a tie-break for the one above rather than a vote: a
  * deeper complaint from an arm that cannot hold the value at all must never
  * beat a shallower one from the arm the author was writing in.
  */
 function outranks(candidate: VariantRank, best: VariantRank): boolean {
   if (candidate.accepts !== best.accepts) return candidate.accepts;
   if (candidate.stores !== best.stores) return candidate.stores;
+  if (candidate.admits !== best.admits) return candidate.admits;
   return candidate.depth > best.depth;
 }
 

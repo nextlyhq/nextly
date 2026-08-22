@@ -296,10 +296,67 @@ describe("when there is nothing to style", () => {
     expect(inspectStyle(documentOf(), "gone")).toBeNull();
   });
 
-  it("answers null for a block the registry does not know", () => {
+  it("offers NO sections for an unregistered block that stores nothing", () => {
     // Deliberately NOT registered. `supports` lives on the definition, so an
-    // unregistered block has no statement of what it may set — and offering the
-    // whole catalog would let an author write styles the compiler then drops.
-    expect(inspectStyle(documentOf(), "a")).toBeNull();
+    // unregistered block has no statement of what it may set, and offering the
+    // whole catalog would invite an author to style a block nothing can draw.
+    //
+    // An inspection with no sections rather than null, for the same reason a
+    // block that opts into nothing gets one: this block IS selected, and null
+    // is what the panel reads as "nothing selected". The two empty states say
+    // different things to an author and only one of them is true here.
+    const inspection = inspectStyle(documentOf(), "a");
+
+    expect(inspection).not.toBeNull();
+    expect(inspection?.sections).toEqual([]);
+  });
+});
+
+describe("a block the registry does not know but that STORES styles", () => {
+  /*
+   * The panel used to answer null here, and the value went on compiling.
+   * `compile-page.ts` walks every node and hands `node.styles` to
+   * `envelopeRules` without consulting the registry, so a node whose plugin was
+   * disabled still emits its styles — and withholding the panel left an author
+   * looking at styling with nothing able to remove it.
+   */
+  const STORED = {
+    base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
+  } as NodeStyles;
+
+  it("offers the stored property so it can be cleared", () => {
+    const inspection = inspectStyle(documentOf(STORED), "a");
+
+    expect(inspection).not.toBeNull();
+    const properties = (inspection?.sections ?? []).flatMap(
+      section => section.properties
+    );
+    expect(properties.map(property => property.property)).toEqual(["padding"]);
+  });
+
+  it("offers it as CLEAR-ONLY, because no definition declares it supported", () => {
+    // The separating property. Reporting `offered: true` would draw editable
+    // controls and let an author write NEW values through a block that no
+    // longer exists, which is the opposite error from hiding the panel.
+    const inspection = inspectStyle(documentOf(STORED), "a");
+    const padding = (inspection?.sections ?? [])
+      .flatMap(section => section.properties)
+      .find(property => property.property === "padding");
+
+    expect(padding?.offered).toBe(false);
+    expect(padding?.set).toBe(true);
+  });
+
+  it("offers ONLY what is stored, never the rest of the catalog", () => {
+    // With no `supports` to read, the retaining pass is the only thing filling
+    // the panel — so a catalog of fifty properties must not arrive as fifty
+    // controls on a block nothing can draw.
+    const inspection = inspectStyle(documentOf(STORED), "a");
+    const properties = (inspection?.sections ?? []).flatMap(
+      section => section.properties
+    );
+
+    expect(properties).toHaveLength(1);
+    expect(inspection?.sections).toHaveLength(1);
   });
 });

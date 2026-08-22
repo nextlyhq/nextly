@@ -6,8 +6,20 @@ import {
   STYLE_CATALOG,
 } from "./catalog";
 import { isStyleLeaf } from "./catalog-types";
-import type { UrlLeaf } from "./catalog-types";
+import type { UnionShape, UrlLeaf } from "./catalog-types";
 import { compileStyleValues, urlText } from "./declarations";
+import { styleUnionVariant } from "./validate-style-value";
+
+/** The union a catalog property declares, for the arm-choice tests. */
+function unionShapeOf(property: string): UnionShape {
+  const entry = getStyleProperty(property);
+  if (entry === undefined) throw new Error(`no catalog property ${property}`);
+  const shape = entry.shape;
+  if (isStyleLeaf(shape) || shape.kind !== "union") {
+    throw new Error(`${property} is no longer a union`);
+  }
+  return shape;
+}
 
 /** The url leaf `background.url` stores its value at. */
 function backgroundUrlLeaf(): UrlLeaf {
@@ -58,6 +70,55 @@ describe("a url is written as a quoted CSS string", () => {
       "/styles"
     );
     expect(declarations[0]?.value).toBe('url("/a.png")');
+  });
+});
+
+describe("which arm of a union a value is written through", () => {
+  /*
+   * ONE answer, shared with validation and with the editor. The walk used to
+   * take the first arm that wrote any bytes, and `scalarText` reads no leaf
+   * kind for a number — so `fontWeight: 700` was written through the KEYWORD
+   * arm while the validator and the inspector both judged it under the number
+   * one. That produced identical CSS, because every catalog union's arms write
+   * the same property today, which is exactly why nothing caught it.
+   *
+   * These tests pin the choice where it is OBSERVABLE. Measured while writing
+   * them: forcing the walk to the LAST arm of every union left all 1311 engine
+   * tests green, so the arm the compiler picks had no coverage at all.
+   */
+  it("writes a scalar through the SCALAR arm, not the composite one", () => {
+    // The one place the choice changes the bytes. A string handed to the
+    // corners arm addresses named fields it does not have, so it places
+    // nothing — the declaration would simply be missing from the stylesheet.
+    const out = compileStyleValues({ borderRadius: "4px" }, "/styles");
+
+    expect(out.declarations).toEqual([
+      { property: "border-radius", value: "4px" },
+    ]);
+  });
+
+  it("writes a composite through the COMPOSITE arm, not the scalar one", () => {
+    // The other direction, so a walk that had simply been pinned to the second
+    // arm would fail the test above and pass this one rather than passing both.
+    const out = compileStyleValues(
+      { borderRadius: { startStart: "4px" } },
+      "/styles"
+    );
+
+    expect(out.declarations).toEqual([
+      { property: "border-start-start-radius", value: "4px" },
+    ]);
+  });
+
+  it("agrees with the resolver the editor draws its control from", () => {
+    // The property that matters more than any single value: the compiler and
+    // the editor ask ONE function. Asserted against `styleUnionVariant` rather
+    // than against a table written here, because a table would be a second
+    // answer to the same question, which is the defect this pins shut.
+    const shape = unionShapeOf("borderRadius");
+
+    expect(styleUnionVariant(shape, "4px")).toBe(0);
+    expect(styleUnionVariant(shape, { startStart: "4px" })).toBe(1);
   });
 });
 

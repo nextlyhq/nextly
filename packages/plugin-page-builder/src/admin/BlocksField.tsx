@@ -75,6 +75,7 @@ import {
 } from "react-hook-form";
 
 import { emptyBlockDocument } from "../fields/blocks-document";
+import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
 import { siteBreakpoints, siteSheet } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
@@ -407,6 +408,84 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     [clientConfig]
   );
 
+  /*
+   * The hosts this site loads media from, read back from the same client
+   * config the plugin published them on.
+   *
+   * ONE read for TWO surfaces below, because the canvas and the inspector
+   * enforce the same rule at different moments — the canvas when it draws a
+   * block's image, the inspector when it judges a style value at the
+   * keystroke — and a second read here would be a second chance to disagree
+   * about what this site allows.
+   *
+   * `undefined` survives as `undefined` all the way to both consumers, which
+   * is what leaves a site that configured nothing exactly as permissive as it
+   * is today. `readRemotePatterns` is what keeps that distinction from
+   * collapsing into an empty allowlist that would refuse every remote image.
+   */
+  const remotePatterns = useMemo(
+    () => readRemotePatterns(clientConfig?.remotePatterns),
+    [clientConfig]
+  );
+
+  /*
+   * What the inspector judges a written URL by.
+   *
+   * Without this the Style tab asks the engine to validate a value with no
+   * host policy, and absent means UNASKED rather than allowed — so a URL
+   * naming a host this site does not load from is accepted at the keystroke,
+   * previewed, and stored, then dropped by the published compiler, which does
+   * apply the policy. The author sees a value that works while editing and
+   * vanishes on the page.
+   *
+   * Carries only the host half today. The token half of `StylePolicy` arrives
+   * with the client path to the stored site-style document; until then a token
+   * reference is judged by the engine's own table.
+   */
+  const stylePolicy = useMemo(
+    () => hostFetchPolicy(remotePatterns),
+    [remotePatterns]
+  );
+
+  /*
+   * What the canvas hands `PageRenderer` beyond the document and the sheet.
+   *
+   * `styleContext` is the per-node style tier, a SEPARATE input from
+   * `siteStyles` that was once reaching only the published page. `PageRenderer`
+   * compiles a document's own node styles only when it is given a style
+   * context; without one `resolvePageStyles` withholds the sheet and — in its
+   * own words — "Classes are kept either way, so blocks still carry the names
+   * the rest of the system expects". The symptom is therefore silent and
+   * specific: every block carries its `nx-pb-<hash>` class and nothing defines
+   * it, so an author's margins, spacing and dimensions render on the published
+   * page and vanish in the editor. Measured before this existed: the same
+   * document rendered zero scoped rules and flush blocks here, six rules and
+   * 24px gaps through the public route.
+   *
+   * The breakpoints come from `siteBreakpoints()` rather than a set spelled
+   * here, because `site-style.ts` exists precisely so the field validator and
+   * the canvas cannot disagree about what this site's breakpoints are.
+   *
+   * `hostPolicy` is what makes the canvas enforce the allowlist the published
+   * page enforces. Absent, `RenderNode`'s image and embed boundaries test
+   * `patterns === undefined || isFetchableUrl(...)` and let everything through
+   * — so the editor drew media from hosts the live page drops, which is the
+   * preview lying in the one direction an author cannot detect.
+   *
+   * Memoized as a whole because `Canvas` keys its rendered tree on this
+   * object's identity: rebuilt inline it is a fresh object on every render,
+   * and the tree behind it is re-rendered on every selection and keystroke.
+   */
+  const canvasRender = useMemo(
+    () => ({
+      styleContext: { breakpoints: siteBreakpoints(canvasSiteStyle) },
+      ...(remotePatterns === undefined
+        ? {}
+        : { hostPolicy: { remotePatterns } }),
+    }),
+    [canvasSiteStyle, remotePatterns]
+  );
+
   useCheckpoints({ name, control, document: editor.document });
 
   /*
@@ -475,7 +554,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears
         // with the selection makes the canvas resize on every click.
-        inspector={<InspectorPanel editor={editor} />}
+        // The policy travels with the panel because the Style tab judges a
+        // written value at the keystroke and has to reach the same verdict the
+        // published compiler will.
+        inspector={<InspectorPanel editor={editor} policy={stylePolicy} />}
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter
@@ -537,29 +619,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             selectedId={editor.selectedId}
             selectedIds={editor.selection.ids}
             onSelect={editor.select}
-            // The per-node style tier, which is a SEPARATE input from
-            // `siteStyles` and was reaching only the published page.
-            //
-            // `PageRenderer` compiles a document's own node styles only when it
-            // is given a style context; without one `resolvePageStyles`
-            // withholds the sheet and — in its own words — "Classes are kept
-            // either way, so blocks still carry the names the rest of the
-            // system expects". The symptom is therefore silent and specific:
-            // every block carries its `nx-pb-<hash>` class and nothing defines
-            // it, so an author's margins, spacing and dimensions render on the
-            // published page and vanish in the editor. Measured before this
-            // line existed: the same document rendered zero scoped rules and
-            // flush blocks here, six rules and 24px gaps through the public
-            // route.
-            //
-            // The breakpoints come from `siteBreakpoints()` rather than a set
-            // spelled here, because `site-style.ts` exists precisely so the
-            // field validator and the canvas cannot disagree about what this
-            // site's breakpoints are — and this is now the third consumer of
-            // that one answer.
-            render={{
-              styleContext: { breakpoints: siteBreakpoints(canvasSiteStyle) },
-            }}
+            // The style context and the host policy, derived above so both are
+            // one object with one identity rather than rebuilt per render.
+            render={canvasRender}
             dragHandlers={drag.handlers}
             // The pointer route into typing a block's text. Its keyboard
             // counterpart is the Enter binding above, registered in the same
