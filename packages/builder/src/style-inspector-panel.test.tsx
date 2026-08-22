@@ -440,7 +440,9 @@ describe("controls", () => {
     const editor = mount({ effects: true }, styles);
 
     fireEvent.click(
-      fieldsOf("mixBlendMode").getByRole("button", { name: "Clear" })
+      fieldsOf("mixBlendMode").getByRole("button", {
+        name: "Clear Mix blend mode",
+      })
     );
 
     expect(editor.apply.mock.calls[0]?.[0]).toEqual({
@@ -558,6 +560,40 @@ describe("controls", () => {
     expect(
       screen.getByRole("button", { name: "Clear Margin block start" })
     ).toBeDefined();
+  });
+
+  it("names every keyword clear action for its own property", () => {
+    // Two keyword properties set at once would otherwise offer two buttons
+    // both called "Clear", and a screen-reader user cannot tell which
+    // declaration each removes.
+    // One section, so both controls are in the OPEN accordion: a closed section
+    // hides its buttons and `getByRole` would report them missing rather than
+    // unnamed, which is a different failure wearing the same message.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { mixBlendMode: "multiply", filter: "none" } },
+    } as NodeStyles;
+    mount({ effects: true }, styles);
+
+    expect(
+      screen.getByRole("button", { name: "Clear Mix blend mode" })
+    ).toBeDefined();
+  });
+
+  it("does not read NBSP-only text as an empty field, which would DELETE the value", () => {
+    // `String.prototype.trim` strips NBSP; CSS does not. Reading it as empty
+    // turns a value the engine refuses into a silent clear of the declaration.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
+    } as NodeStyles;
+    const editor = mount({ spacing: true }, styles);
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "\u00a0" } });
+    fireEvent.blur(field);
+
+    // Refused as a value, not treated as a request to clear.
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toBeDefined();
   });
 
   it("trims the whitespace CSS trims, not the whitespace JavaScript trims", () => {

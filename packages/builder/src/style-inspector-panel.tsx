@@ -621,6 +621,7 @@ function StyleControlField({
           id={id}
           control={control}
           stored={stored}
+          actionName={actionName}
           onCommit={commit}
         />
       )}
@@ -710,11 +711,14 @@ function ValueField({
   id,
   control,
   stored,
+  actionName,
   onCommit,
 }: {
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
+  /** What this control's clear action removes, named for the property. */
+  actionName: string;
   onCommit: (value: StyleValue | null) => void;
 }): React.JSX.Element {
   if (control.kind === "select" && control.leaf.kind === "keyword") {
@@ -752,7 +756,11 @@ function ValueField({
           an emptied text field performs.
         */}
         {current === "" ? null : (
-          <button type="button" onClick={() => onCommit(null)}>
+          <button
+            type="button"
+            onClick={() => onCommit(null)}
+            aria-label={`Clear ${actionName}`}
+          >
             Clear
           </button>
         )}
@@ -793,7 +801,12 @@ function TextField({
 
   const commit = () => {
     if (draft === storedText(stored)) return;
-    onCommit(draft.trim() === "" ? null : committedValue(control.kind, draft));
+    // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
+    // strips NBSP and the Unicode spaces, so a draft of nothing but a
+    // non-breaking space would read as empty and DELETE the declaration —
+    // where the engine treats it as a value and refuses it.
+    const emptied = trimCssWhitespace(draft) === "";
+    onCommit(emptied ? null : committedValue(control.kind, draft));
   };
 
   return (
