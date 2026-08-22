@@ -81,6 +81,7 @@ import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+import { useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
 
 export interface BlocksFieldProps<
@@ -396,17 +397,29 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * the empty style (block defaults and the engine's guaranteed tokens)
    * rather than crashing the editor.
    *
-   * Defaults only, deliberately. The STORED tier reaches the published page
-   * through `loadSiteStyle` on the route; wiring it into the canvas needs a
-   * fetch this surface does not have yet, and belongs to the style studios.
-   * Until then the canvas previews the code-stated design — closer to the
-   * published page than the empty sheet it drew before, and honestly short of
-   * it exactly where an admin has stored an override.
+   * BOTH tiers, which is what makes the canvas a preview of the published page
+   * rather than of the repository. The defaults are the host's code-stated
+   * design, delivered as plain data; the stored tier is what an admin saved,
+   * read through the same client every style studio uses and merged by
+   * `resolveSiteStyle` — the one place those two meet, on the server and here
+   * alike. Drawing from the defaults alone showed an author a page that
+   * differed from the live one at exactly the properties someone had
+   * deliberately overridden.
+   *
+   * A save re-renders this without anything being told to: the studios and this
+   * canvas read one query, so the cache update IS the propagation. There is no
+   * preview channel to keep in step because there are not two sources to keep
+   * in step.
    */
-  const canvasSiteStyle = useMemo(
+  const configSiteStyle = useMemo(
     () => readSiteStyleRecord(clientConfig?.siteStyle),
     [clientConfig]
   );
+  const {
+    siteStyle: canvasSiteStyle,
+    pending: siteStylePending,
+    error: siteStyleError,
+  } = useSiteStyle(configSiteStyle);
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -613,38 +626,74 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             behave differently.
           */}
           <EditorCommandPalette editor={editor} onExit={done} />
-          <Canvas
-            document={editor.document}
-            siteStyles={siteSheet(canvasSiteStyle)}
-            selectedId={editor.selectedId}
-            selectedIds={editor.selection.ids}
-            onSelect={editor.select}
-            // The style context and the host policy, derived above so both are
-            // one object with one identity rather than rebuilt per render.
-            render={canvasRender}
-            dragHandlers={drag.handlers}
-            // The pointer route into typing a block's text. Its keyboard
-            // counterpart is the Enter binding above, registered in the same
-            // place so a surface cannot gain one without the other.
-            onDoubleClick={inline.onDoubleClick}
-            // Both pieces of chrome go through the canvas rather than beside it,
-            // because both are positioned in the canvas's own content
-            // coordinates and the canvas root is what establishes them.
-            overlay={
-              <>
-                <DropIndicator target={drag.target} />
-                {/*
+          {/*
+            Held back until the stored style has arrived.
+
+            `useSiteStyle` answers with the host's defaults while the read is in
+            flight, and those defaults are a legitimate design rather than a
+            placeholder — so a canvas mounted on them looks finished and is
+            wrong at exactly the properties an admin overrode. The author would
+            see the page re-lay-out under them, and could start dragging against
+            a design the site does not have.
+
+            A FAILED read is held back for the same reason, and it is not the
+            same state. When the request exhausts its retry — a network fault,
+            or a 403 for an editor without `read-site-style` — `pending` goes
+            false while the merged value falls back to the config defaults. So
+            "not pending" alone would mount a finished-looking canvas over a
+            stored tier nobody has read, which is the exact problem the wait was
+            added to prevent, arrived at down the failure path instead. Absent
+            is not the same as unknown, and the author is told which.
+
+            Only the canvas waits. The shell, the rail and the inspector are all
+            about the DOCUMENT, which is already in hand, and blanking them
+            would make the editor feel slower than it is. After the first open
+            the read is cached, so this is one brief state per session rather
+            than one per opening.
+          */}
+          {siteStylePending || siteStyleError !== null ? (
+            <p
+              className="nx-inspector__note"
+              data-canvas-state={siteStyleError === null ? "loading" : "failed"}
+            >
+              {siteStyleError === null
+                ? "Loading this site\u2019s styles\u2026"
+                : "This site\u2019s styles could not be loaded, so the canvas would not match the published page. Reload to try again."}
+            </p>
+          ) : (
+            <Canvas
+              document={editor.document}
+              siteStyles={siteSheet(canvasSiteStyle)}
+              selectedId={editor.selectedId}
+              selectedIds={editor.selection.ids}
+              onSelect={editor.select}
+              // The style context and the host policy, derived above so both are
+              // one object with one identity rather than rebuilt per render.
+              render={canvasRender}
+              dragHandlers={drag.handlers}
+              // The pointer route into typing a block's text. Its keyboard
+              // counterpart is the Enter binding above, registered in the same
+              // place so a surface cannot gain one without the other.
+              onDoubleClick={inline.onDoubleClick}
+              // Both pieces of chrome go through the canvas rather than beside it,
+              // because both are positioned in the canvas's own content
+              // coordinates and the canvas root is what establishes them.
+              overlay={
+                <>
+                  <DropIndicator target={drag.target} />
+                  {/*
                   Suppressed for the duration of a drag. The bar would otherwise
                   sit over the canvas the author is aiming at, naming a block
                   that is in the middle of moving.
                 */}
-                <BlockToolbar
-                  editor={editor}
-                  hidden={drag.draggingId !== null}
-                />
-              </>
-            }
-          />
+                  <BlockToolbar
+                    editor={editor}
+                    hidden={drag.draggingId !== null}
+                  />
+                </>
+              }
+            />
+          )}
         </BlockKeyboardActions>
       </BuilderShell>
     </div>
