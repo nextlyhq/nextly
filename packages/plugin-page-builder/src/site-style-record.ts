@@ -139,14 +139,26 @@ export function checkStoredTokens(
       !isPlainRecord(entry.values) ||
       typeof entry.values.light !== "string" ||
       !optionalString(entry.values.dark) ||
-      !optionalString(entry.description)
+      !optionalString(entry.description) ||
+      // Shape only. Whether the id can become a custom property is the
+      // emitter's question and it already asks it, holding an id to the same
+      // grammar as a name because it reaches CSS by the same route. What has
+      // to happen HERE is that a non-string is refused rather than skipped:
+      // this identity is what a document's `$token` resolves through, so
+      // letting an unusable one fall out of the object would lose it on a save
+      // the author is told succeeded.
+      !optionalString(entry.id)
     ) {
       issues.push(
-        `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional).`
+        `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string.`
       );
       return;
     }
     tokens.push({
+      // Carried, not rebuilt. The id is the whole point of the field: it is
+      // what a rename leaves alone, so a write that does not preserve it turns
+      // every rename into a silent break of every reference.
+      ...(entry.id === undefined ? {} : { id: entry.id }),
       name: entry.name,
       kind: entry.kind as TokenKind,
       values: {

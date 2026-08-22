@@ -52,6 +52,64 @@ describe("checkStoredTokens", () => {
     expect(result.value?.tokens.map(t => t.name)).toEqual(["color.primary"]);
   });
 
+  // A token's identity is what a document's `$token` and the emitted custom
+  // property key off, so a save that does not carry it forward undoes the
+  // guarantee the field exists for — silently, and in the worst direction: the
+  // rename appears to have worked.
+  describe("a token's stable identity", () => {
+    it("carries an id through the write", () => {
+      const result = checkStoredTokens({
+        tokens: [{ ...token("color.brand", "#111111"), id: "color.primary" }],
+      });
+
+      expect(result.issues).toEqual([]);
+      expect(result.value?.tokens[0]?.id).toBe("color.primary");
+    });
+
+    it("REFUSES an id that is not a string rather than dropping it", () => {
+      // Dropping is what the allowlist did to every unrecognised field, and it
+      // is the shape of the defect this repairs: the write succeeds, the author
+      // is told nothing, and the identity is gone.
+      const result = checkStoredTokens({
+        tokens: [{ ...token("color.brand", "#111111"), id: 42 }],
+      });
+
+      expect(result.issues).toHaveLength(1);
+      expect(result.value?.tokens).toEqual([]);
+    });
+
+    it("reports the ENGINE's refusal of an id that cannot become a property", () => {
+      // Grammar is not re-checked here. The emitter already holds an id to the
+      // token-name grammar because it reaches CSS by the same route, and this
+      // gate refuses on the emitter's whole report — so carrying the field is
+      // what makes that check reachable, and a second one here would be a
+      // second answer to the same question.
+      //
+      // Reported, not excluded, and that is this module's stated split: a
+      // shape the checker cannot type is dropped from `value`, while a
+      // VALUE-level refusal is reported and left in place, because the engine
+      // already drops that entry per-token at compile time. The issue is what
+      // matters — `refusing` in site-style-storage turns any issue into a
+      // rejected write, so this never reaches storage.
+      const result = checkStoredTokens({
+        tokens: [{ ...token("color.brand", "#111111"), id: "not a name!" }],
+      });
+
+      expect(result.issues.join(" ")).toContain("id that is not a token name");
+    });
+
+    it("leaves a token with no id exactly as it was", () => {
+      // Every token stored before the field existed relies on the name BEING
+      // the identity, so an absent id must stay absent rather than becoming one.
+      const result = checkStoredTokens({
+        tokens: [token("color.primary", "#111111")],
+      });
+
+      expect(result.issues).toEqual([]);
+      expect(result.value?.tokens[0]).not.toHaveProperty("id");
+    });
+  });
+
   it("reports what the engine's emitter refuses: a value that would fetch", () => {
     const result = checkStoredTokens({
       tokens: [token("color.primary", "url(https://evil.example/a.png)")],

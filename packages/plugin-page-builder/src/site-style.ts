@@ -33,6 +33,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/site-style
  */
+import { tokenIdentity } from "@nextlyhq/blocks-engine";
 import type {
   BreakpointSet,
   FontFaceDef,
@@ -154,16 +155,27 @@ function mergeByKey<T>(
   return [...byKey.values()];
 }
 
-/** Token sets merged by token name; `prefix`/`darkMode` from the override. */
+/** Token sets merged by token identity; `prefix`/`darkMode` from the override. */
 function mergeTokens(
   defaults: SiteTokenSet | undefined,
   stored: SiteTokenSet | undefined
 ): SiteTokenSet | undefined {
   if (defaults === undefined && stored === undefined) return undefined;
+  // `tokenIdentity`, not the name, and imported rather than restated. The
+  // engine names three things that have to agree by construction — the custom
+  // property the emitter writes, the key a tier merge overrides on, and the
+  // string a document stores — and this is the second of them. Keyed on the
+  // name, a renamed stored token stops matching its config counterpart and the
+  // default survives beside the override: not a collision, because the engine's
+  // own resolution deduplicates on identity and the stored token wins, but a
+  // stale entry in the LIST that every studio and `useSiteStyle` read.
+  //
+  // Tokens with no id key exactly as they did, because the identity falls back
+  // to the name.
   const tokens = mergeByKey<SiteToken>(
     defaults?.tokens,
     stored?.tokens,
-    token => token.name
+    tokenIdentity
   );
   const prefix = stored?.prefix ?? defaults?.prefix;
   const darkMode = stored?.darkMode ?? defaults?.darkMode;
