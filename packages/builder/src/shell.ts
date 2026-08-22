@@ -84,6 +84,18 @@ export type { CanvasProps } from "./canvas";
 export { InspectorPanel } from "./inspector-panel";
 export type { InspectorPanelProps } from "./inspector-panel";
 
+/**
+ * The Style half of the same inspector.
+ *
+ * Exported beside it rather than only through it, because a host embedding the
+ * editor in a surface of its own may have somewhere else to put styling — and
+ * withholding it would invite exactly the second implementation the note above
+ * is about. Mounting BOTH is the ordinary case and needs nothing here:
+ * `InspectorPanel` already renders this one under its Style tab.
+ */
+export { StyleInspectorPanel } from "./style-inspector-panel";
+export type { StyleInspectorPanelProps } from "./style-inspector-panel";
+
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
 
