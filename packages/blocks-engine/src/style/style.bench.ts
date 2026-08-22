@@ -1,6 +1,7 @@
 import { bench, describe } from "vitest";
 
 import { checkContrast } from "./contrast";
+import { compileStyleValues } from "./declarations";
 import { dtcgToTokens, tokensToDtcg } from "./dtcg";
 import { emitFontFaces, emitTokenBlocks } from "./site-tokens";
 import type { FontFaceDef, SiteToken } from "./site-tokens";
@@ -114,5 +115,59 @@ describe("contrast", () => {
 
   bench("one pair, translucent rgb()", () => {
     checkContrast("rgb(0 0 0 / 50%)", "rgb(255 255 255)");
+  });
+});
+
+/**
+ * A style map with every catalog union in it, and values that exercise both
+ * sides of each.
+ *
+ * Unions are the expensive case for the declaration walk, because choosing an
+ * arm is the one decision that cannot be made from the shape alone. The rest of
+ * the walk is a switch over a leaf kind.
+ */
+const UNION_VALUES: Readonly<Record<string, unknown>> = {
+  // A keyword and a number through the same union, so neither arm's cost is
+  // measured alone.
+  fontWeight: "bold",
+  lineHeight: 1.5,
+  fontStyle: "italic",
+  borderRadius: "4px",
+  position: { type: "relative", zIndex: 10 },
+};
+
+/** The same map with the arm a value belongs to being the SECOND one each time. */
+const UNION_VALUES_SECOND_ARM: Readonly<Record<string, unknown>> = {
+  fontWeight: 700,
+  lineHeight: "1.5rem",
+  fontStyle: "oblique 10deg",
+  borderRadius: { startStart: "4px", startEnd: "4px" },
+  position: { type: "relative", zIndex: "auto" },
+};
+
+/** A map of ordinary scalars, as the baseline the union cost is read against. */
+const SCALAR_VALUES: Readonly<Record<string, unknown>> = {
+  color: "#111111",
+  backgroundColor: "#ffffff",
+  padding: { blockStart: "8px", blockEnd: "8px" },
+  margin: "0",
+  opacity: 0.5,
+};
+
+describe("compiling declarations", () => {
+  // This walk runs once per node, per interaction state, per breakpoint, so a
+  // page of a hundred blocks with three states and four breakpoints runs it
+  // 1200 times. The union arms are what this measures; the scalar map beside it
+  // is what says how much of the number is the union decision.
+  bench("scalar values, no unions", () => {
+    compileStyleValues(SCALAR_VALUES, "");
+  });
+
+  bench("every catalog union, first arm", () => {
+    compileStyleValues(UNION_VALUES, "");
+  });
+
+  bench("every catalog union, second arm", () => {
+    compileStyleValues(UNION_VALUES_SECOND_ARM, "");
   });
 });

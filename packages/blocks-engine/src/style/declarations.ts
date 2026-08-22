@@ -33,10 +33,12 @@ import {
   newStyleIssueBudget,
   normalizeStyleIssueBudget,
   structuralAllowanceSpent,
+  styleUnionVariant,
   validateStyleValues,
 } from "./validate-style-value";
 import type {
   StyleIssueBudget,
+  StyleUnionVariantOptions,
   StyleValueOptions,
 } from "./validate-style-value";
 import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
@@ -187,6 +189,17 @@ interface Walk {
    * carrying its full pointer.
    */
   allowance: WarningAllowance;
+  /**
+   * What the site allows, as validation was told it.
+   *
+   * Carried because choosing a union's arm depends on it: which arm a token
+   * belongs to is a fact about the TOKEN rather than about its name, and a URL
+   * arm's verdict depends on the host policy. Asking the resolver without them
+   * would answer a different question from the one validation answered about
+   * the same value, which is the disagreement sharing the resolver exists to
+   * remove.
+   */
+  options: StyleUnionVariantOptions | undefined;
 }
 
 /** The CSS text for one stored scalar, or nothing when it cannot be written. */
@@ -291,44 +304,43 @@ function shapeDeclarations(
     case "object":
       partDeclarations(shape.fields, value, path, walk);
       return;
-    case "union": {
-      // The stored value decides which arm it is: a corner radius written as
-      // one scalar and the same property written as four corners are different
-      // arms of the same entry. The first arm that writes something wins, which
-      // is the order the catalog lists them in.
-      let refused: Walk | undefined;
-      for (const variant of shape.of) {
-        const attempt: Walk = {
-          placed: [],
-          warnings: [],
-          prefix: walk.prefix,
-          allowance: walk.allowance,
-        };
-        shapeDeclarations(variant, value, path, attempt);
-        if (attempt.placed.length > 0) {
-          walk.placed.push(...attempt.placed);
-          walk.warnings.push(...attempt.warnings);
-          return;
-        }
-        // The first arm that OBJECTED, not merely the first arm tried. Arms of
-        // a structurally disjoint union cannot all object: `borderRadius` is
-        // one scalar or four named corners, and handed an object the scalar arm
-        // places nothing and says nothing, because an object is not a value it
-        // could have read. Keeping that silence would discard the corner arm's
-        // reason and return neither the declaration nor the explanation this
-        // result promises.
-        if (refused === undefined || refused.warnings.length === 0) {
-          refused = attempt;
-        }
-      }
-      // No arm wrote anything. Whatever the first objecting one said is why, and
-      // dropping it would leave a value missing from the stylesheet with
-      // nothing anywhere saying so — which is the one thing these warnings
-      // exist to prevent.
-      if (refused !== undefined) walk.warnings.push(...refused.warnings);
+    case "union":
+      unionDeclarations(shape, value, path, walk);
       return;
-    }
   }
+}
+
+/**
+ * Compile a union through the ONE arm the resolver picks.
+ *
+ * ASKED, not guessed. This used to take the first arm that wrote any bytes,
+ * which is a THIRD answer to a question the validator and the editor already
+ * share — and `scalarText` reads no leaf kind for a number, so
+ * `fontWeight: 700` was written through the KEYWORD arm while both of the
+ * others judged it under the number one. Invisible today only because every
+ * catalog union's arms write the same CSS property; the day one does not, the
+ * stylesheet disagrees with the control that authored it and with the message
+ * explaining the refusal.
+ *
+ * Written straight into the caller's walk rather than into a trial copy. The
+ * trial existed so a losing arm's output could be discarded, and there are no
+ * losing arms once one is chosen — whatever this arm places is what the
+ * stylesheet gets, and whatever it objects to is why a value is missing from
+ * it.
+ */
+function unionDeclarations(
+  shape: Extract<StyleShape, { kind: "union" }>,
+  value: unknown,
+  path: string,
+  walk: Walk
+): void {
+  // `undefined` only for a union declaring no arms, which has no shape to
+  // write through and nothing to object with.
+  const arm = styleUnionVariant(shape, value, walk.options);
+  if (arm === undefined) return;
+  const variant = shape.of[arm];
+  if (variant === undefined) return;
+  shapeDeclarations(variant, value, path, walk);
 }
 
 /** Compile the named parts of a composite. */
@@ -491,6 +503,7 @@ export function compileStyleValues(
     warnings: [],
     prefix: safe.prefix,
     allowance,
+    options,
   };
   // Once per run. The prefix is one setting, and every map compiled under it
   // would otherwise repeat the same sentence about it.
