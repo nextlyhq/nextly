@@ -219,8 +219,7 @@ function composeMeasurement(
 ): string {
   // `toFixed` rather than a multiply-round-divide, which reintroduces the error
   // it was meant to remove at the magnitudes a length actually takes.
-  const rounded = Number(number.toFixed(decimals));
-  return `${String(rounded)}${unit}`;
+  return `${String(roundedTo(number, decimals))}${unit}`;
 }
 
 /**
@@ -337,12 +336,52 @@ export function steppedValue(
   if (leaf.kind !== "dimension") return undefined;
   const current = measurementOf(value);
   if (current === undefined) return undefined;
+  const decimals = stepDecimals(current.decimals, delta);
+  const stepped = roundedTo(current.number + delta, decimals);
+  if (!movedBy(current.number, stepped, delta, decimals)) return undefined;
   const next = composeMeasurement(
     current.number + delta,
     current.unit,
-    stepDecimals(current.decimals, delta)
+    decimals
   );
   return accepts(leaf, next) ? next : undefined;
+}
+
+/**
+ * Whether the composed result actually moved by the step that was asked for.
+ *
+ * The round-trip guard in {@link measurementOfText} proves the STARTING value
+ * survives a double. It says nothing about the step, and near the safe-integer
+ * boundary the two come apart: `9007199254740992` plus one is the same double,
+ * so the arrow is consumed and nothing happens, and `9007199254740994` plus one
+ * lands on `...996` — a silent step of two. Neither is a value the author asked
+ * for, and the first is worse than an error because it looks like a dead key.
+ *
+ * Measured at the composition's own precision rather than exactly, because
+ * binary arithmetic does not land on decimal boundaries: `1.25 + 0.1` differs
+ * from `1.25` by `0.10000000000000009`, which is the correct step and is not
+ * `0.1`. Rounding both sides at the digits the value is written to compares
+ * what an author would read rather than what a double holds.
+ */
+function movedBy(
+  from: number,
+  stepped: number,
+  delta: number,
+  decimals: number
+): boolean {
+  return roundedTo(stepped - from, decimals) === roundedTo(delta, decimals);
+}
+
+/**
+ * A number as it reads at a given precision.
+ *
+ * The one rounding used by both the composer and the check above, so what gets
+ * written and what gets verified cannot be two different roundings — which is
+ * the disagreement this module has already produced once, between a guard and
+ * the composer it was guarding.
+ */
+function roundedTo(value: number, decimals: number): number {
+  return Number(value.toFixed(decimals));
 }
 
 /**

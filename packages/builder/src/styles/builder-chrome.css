@@ -393,13 +393,14 @@
  * or three characters and the quantity is what an author edits, so an even
  * split would take space from the half that needs it.
  *
- * `:not(:first-child)` is load-bearing rather than defensive. Most fields draw
- * NO unit menu — every colour, URL, free-CSS, unitless number and non-simple
- * dimension — and there the input is the first and last child at once, so a
- * bare `:last-child` would override the design system's full-width input and
- * shrink ordinary inspector rows to their intrinsic width.
+ * Named on the control rather than found by position. A positional selector
+ * has to be read against how many children the row happens to have, and most
+ * rows draw NO unit menu — every colour, URL, free-CSS, unitless number and
+ * non-simple dimension — so one written for the trigger claimed the lone input
+ * instead and shrank ordinary inspector rows to their intrinsic width. A class
+ * cannot match the wrong element however the row is composed.
  */
-.nx-style-inspector__numeric > :last-child:not(:first-child) {
+.nx-style-inspector__unit {
   flex: 0 0 auto;
   width: auto;
   min-width: 4.5rem;

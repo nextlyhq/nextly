@@ -1055,19 +1055,24 @@ function ToggleField({
 }): React.JSX.Element {
   return (
     <div
+      // The field's id sits on the GROUP rather than on either button. The
+      // field label carries `htmlFor`, and a label pointing at a button
+      // forwards a click to it — so naming the first option that way would make
+      // clicking the property label press it, or clear it when already pressed,
+      // and write an edit the author never asked for. A `div` is not labelable,
+      // so the association is inert and the group is named by `aria-labelledby`
+      // instead, which is what a screen reader reads either way.
+      id={id}
       className="nx-style-inspector__toggle"
       role="group"
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
     >
-      {options.map((option, index) => {
+      {options.map(option => {
         const pressed = stored === option;
         return (
           <button
             key={option}
-            // Only the first carries the field's id, because a label points at
-            // one control and the group is what the label names.
-            id={index === 0 ? id : undefined}
             type="button"
             aria-pressed={pressed}
             // Pressing the pressed option CLEARS rather than re-writing it,
@@ -1164,7 +1169,18 @@ function NumericField({
             if (next !== undefined) onCommit(next);
           }}
         >
-          <SelectTrigger aria-label={`Unit for ${actionName}`}>
+          <SelectTrigger
+            className="nx-style-inspector__unit"
+            aria-label={`Unit for ${actionName}`}
+            // A unit change can be refused — a document at its byte limit, a
+            // value the validator rejects — and the message that explains it is
+            // rendered once for the field. Pointed at from HERE as well as from
+            // the text input, because a screen-reader user who returns to the
+            // menu is otherwise on the control that failed with nothing saying
+            // so and no way to reach the reason.
+            aria-describedby={describedBy}
+            aria-invalid={describedBy === undefined ? undefined : true}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

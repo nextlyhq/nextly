@@ -1181,6 +1181,31 @@ describe("what the arrow keys do and do not claim", () => {
     }
   );
 
+  it("points a refusal at the unit menu as well as the field", () => {
+    // A unit change can be refused, and the message explaining it is rendered
+    // once for the whole field. A screen-reader user who returns to the MENU is
+    // otherwise sitting on the control that failed with nothing saying so.
+    mount({ spacing: true }, withPadding("12px"), {
+      // A prefix the engine reserves, so any write from this field is refused.
+      allowedTokenKinds: undefined,
+    } as never);
+    const padding = fieldsOf("padding");
+    const field = padding.getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "not a length" } });
+    fireEvent.blur(field);
+
+    // Asserted unconditionally. Guarding this on the menu being present would
+    // pass in the world where it is absent — which is the world the assertion
+    // is supposed to rule out — so the menu is required first and described
+    // second.
+    const unit = padding.getByLabelText("Unit for Padding block start");
+    const description = field.getAttribute("aria-describedby");
+    expect(description).not.toBeNull();
+    expect(unit.getAttribute("aria-describedby")).toBe(description);
+    expect(unit.getAttribute("aria-invalid")).toBe("true");
+  });
+
   it("declines precision the formatter cannot round, rather than throwing", () => {
     // The engine accepts more fractional digits than `toFixed` takes, so
     // composing one would raise a RangeError in the middle of a keystroke.

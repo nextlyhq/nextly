@@ -145,6 +145,18 @@ describe("stepping a dimension", () => {
     }
   );
 
+  it.each([
+    ["9007199254740992", "a step a double cannot represent at all"],
+    ["9007199254740994", "a step a double turns into two"],
+  ])("declines to step %s (%s)", digits => {
+    // The round-trip guard proves the STARTING value survives a double and
+    // says nothing about the step. Near the safe-integer boundary the two come
+    // apart: the first value plus one is the same double, so the arrow is
+    // consumed and nothing happens — a key that looks dead — and the second
+    // lands two away. Neither is what the author asked for.
+    expect(steppedValue(PADDING, `${digits}px`, 1)).toBeUndefined();
+  });
+
   it("rounds at the author's own precision", () => {
     // Rounded at the two decimals the value was written with. Ignored, the
     // step would round to the whole number and answer `1rem`.
