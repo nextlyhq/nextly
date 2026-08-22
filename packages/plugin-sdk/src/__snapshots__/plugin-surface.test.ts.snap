@@ -67,8 +67,10 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "StatProps (type)",
   "UseDocumentCheckpointOptions (type)",
   "UseDocumentCheckpointResult (type)",
+  "ValidationIssue (type)",
   "ValidationNumberField (value)",
   "ValidationNumberFieldProps (type)",
+  "isApiError (value)",
   "loadRichTextEditorKit (value)",
   "operatorTakesValue (value)",
   "operatorsForType (value)",
@@ -92,6 +94,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useSingleDocument (value)",
   "useSuppressAdminChrome (value)",
   "useUpdateSingleDocument (value)",
+  "validationIssues (value)",
   "withOptionIds (value)",
 ]
 `;

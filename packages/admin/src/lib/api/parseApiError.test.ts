@@ -7,7 +7,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { apiErrorMessage, parseApiError } from "./parseApiError";
+import {
+  apiErrorMessage,
+  isApiError,
+  parseApiError,
+  validationIssues,
+} from "./parseApiError";
 
 const validationBody = (
   errors: Array<{ path?: string; code?: string; message?: string }>
@@ -46,6 +51,98 @@ describe("parseApiError", () => {
     const err = parseApiError({ oops: true }, 500);
 
     expect(err.code).toBe("UNKNOWN");
+  });
+});
+
+describe("isApiError", () => {
+  it("says yes to what the fetcher raises for a refused request", () => {
+    expect(isApiError(parseApiError(validationBody([]), 400))).toBe(true);
+  });
+
+  // The case the guard exists for. `fetcher` awaits `fetch` without wrapping
+  // it, so going offline rejects with this and never reaches `parseApiError`.
+  // Anything that read `status` off a rejection would find `undefined` under a
+  // type that promises a number.
+  it("says NO to the native error a dead network rejects with", () => {
+    expect(isApiError(new TypeError("Failed to fetch"))).toBe(false);
+  });
+
+  it("says no when status is present but not a number", () => {
+    // A truthiness check, or `"status" in reason`, would pass this.
+    const wrong = Object.assign(new Error("odd"), { status: "400" });
+
+    expect(isApiError(wrong)).toBe(false);
+  });
+
+  it("says no to values that are not errors at all", () => {
+    expect(isApiError({ status: 400 })).toBe(false);
+    expect(isApiError(undefined)).toBe(false);
+  });
+});
+
+describe("validationIssues", () => {
+  it("hands back what the server said, field by field", () => {
+    const err = parseApiError(
+      validationBody([
+        { path: "name", code: "REQUIRED", message: "A role needs a name." },
+      ]),
+      400
+    );
+
+    expect(validationIssues(err)).toEqual([
+      { path: "name", code: "REQUIRED", message: "A role needs a name." },
+    ]);
+  });
+
+  // A consumer keying by field gets an array either way, so "not a validation
+  // failure" needs no separate branch anywhere that calls this.
+  it("is empty for a transport failure, which carries no payload", () => {
+    expect(validationIssues(new TypeError("Failed to fetch"))).toEqual([]);
+  });
+
+  it("is empty when the error carries no field errors", () => {
+    const err = parseApiError(
+      { error: { code: "FORBIDDEN", message: "Not allowed.", requestId: "r" } },
+      403
+    );
+
+    expect(validationIssues(err)).toEqual([]);
+  });
+
+  // The wire is untrusted, so a field the server sent as the wrong type has to
+  // arrive as absent rather than be passed along under a string type.
+  it("drops a field that did not arrive as a string", () => {
+    const err = parseApiError(
+      {
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Validation failed.",
+          requestId: "r",
+          data: { errors: [{ path: 42, code: null, message: "Bad." }] },
+        },
+      },
+      400
+    );
+
+    expect(validationIssues(err)).toEqual([
+      { path: undefined, code: undefined, message: "Bad." },
+    ]);
+  });
+
+  it("survives errors being something other than an array", () => {
+    const err = parseApiError(
+      {
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Validation failed.",
+          requestId: "r",
+          data: { errors: "nope" },
+        },
+      },
+      400
+    );
+
+    expect(validationIssues(err)).toEqual([]);
   });
 });
 

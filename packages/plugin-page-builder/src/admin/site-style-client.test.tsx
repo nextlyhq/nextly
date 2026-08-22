@@ -16,6 +16,7 @@
  *
  * @module admin/site-style-client.test
  */
+import type { ValidationIssue } from "@nextlyhq/plugin-sdk/admin";
 import { renderHook, act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,12 +38,24 @@ let readAnswer: {
  * never sees.
  */
 let writeBehaviour: () => Promise<unknown> = async () => ({ id: "1" });
+
+/**
+ * What the stubbed extractor answers with.
+ *
+ * A fixed list rather than a second reading of `ApiError.data`, so this file
+ * states no opinion about the wire shape — that is `validationIssues`' own
+ * question and is asserted where it lives, against a payload built by
+ * `parseApiError`. What IS only true here is what this module does with the
+ * result: which issues it keeps and what it keys them by.
+ */
+let issuesAnswer: readonly ValidationIssue[] = [];
 const writes: Record<string, unknown>[] = [];
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useSingleDocument: () => readAnswer,
+  validationIssues: () => issuesAnswer,
   useUpdateSingleDocument: (
     _slug: string,
     _locale?: string,
@@ -75,6 +88,7 @@ const DEFAULTS = {
 beforeEach(() => {
   readAnswer = { data: undefined, isPending: false, error: null };
   writeBehaviour = async () => ({ id: "1" });
+  issuesAnswer = [];
   writes.length = 0;
   writeOptions = undefined;
 });
@@ -163,32 +177,23 @@ describe("writing one section", () => {
   });
 
   it("reports a REJECTED write as a refusal rather than letting it throw", async () => {
-    // The shape a refusal actually has by the time a browser sees it. Keyed by
-    // `path`, which is what `ValidationPublicData` carries and what
-    // `parseApiError` puts on the thrown error's `data` — NOT the `field` the
-    // service-level envelope uses. Reading the service's spelling here would
-    // find nothing and report a refused write as saved.
+    // A refusal REJECTS by the time a browser sees it, so the whole result has
+    // to be built from the rejected path rather than from a returned envelope.
     //
-    // The other links are proven where they live: that the service refuses is
+    // Every other link is proven where it lives: that the service refuses is
     // asserted in `__tests__/site-style-section-write.integration.test.ts`
-    // against three dialects, and that a non-2xx becomes a thrown `ApiError` is
-    // asserted in the admin's own `fetcher.response-shape.test.ts`.
-    writeBehaviour = () =>
-      Promise.reject(
-        Object.assign(new Error("Validation failed."), {
-          status: 400,
-          code: "VALIDATION_ERROR",
-          data: {
-            errors: [
-              {
-                path: "breakpoints",
-                code: "CUSTOM",
-                message: "breakpoints.viewport[0] is not a breakpoint.",
-              },
-            ],
-          },
-        })
-      );
+    // against three dialects, that a non-2xx becomes a thrown `ApiError` is
+    // asserted in the admin's own `fetcher.response-shape.test.ts`, and that
+    // the payload is read by `path` rather than the service envelope's `field`
+    // is asserted against `validationIssues` itself.
+    writeBehaviour = () => Promise.reject(new Error("Validation failed."));
+    issuesAnswer = [
+      {
+        path: "breakpoints",
+        code: "CUSTOM",
+        message: "breakpoints.viewport[0] is not a breakpoint.",
+      },
+    ];
     const { result } = renderHook(() => useSaveSiteStyle());
 
     let verdict;
@@ -202,6 +207,31 @@ describe("writing one section", () => {
         breakpoints: "breakpoints.viewport[0] is not a breakpoint.",
       },
     });
+  });
+
+  it("drops an issue with nothing to attach it to, or nothing to say", async () => {
+    // The requirement this module adds on top of the extractor. `path` and
+    // `message` are both optional over the wire, and keeping a half-formed
+    // issue would key a message under `undefined` or show the word `undefined`
+    // against a section — so an issue missing either is not a message this
+    // surface can display, and the section names itself instead.
+    writeBehaviour = () => Promise.reject(new Error("Validation failed."));
+    issuesAnswer = [
+      { path: "tokens", code: "CUSTOM" },
+      { code: "CUSTOM", message: "Something was wrong somewhere." },
+    ];
+    const { result } = renderHook(() => useSaveSiteStyle());
+
+    let verdict: { saved: boolean; issues: Record<string, string> } | undefined;
+    await act(async () => {
+      verdict = (await result.current.save("tokens", {})) as {
+        saved: boolean;
+        issues: Record<string, string>;
+      };
+    });
+
+    expect(verdict?.saved).toBe(false);
+    expect(verdict?.issues).toEqual({ tokens: "Validation failed." });
   });
 
   it("names the section itself when a rejection carries no per-path detail", async () => {

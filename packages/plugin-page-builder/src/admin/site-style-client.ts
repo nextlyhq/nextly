@@ -33,7 +33,7 @@
 import {
   useSingleDocument,
   useUpdateSingleDocument,
-  type ApiError,
+  validationIssues,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useMemo } from "react";
 
@@ -104,23 +104,6 @@ export interface SiteStyleSaveResult {
 }
 
 /**
- * The public payload a validation failure carries, as it reaches a browser.
- *
- * Keyed by `path`, which is NOT what the service-level envelope uses — that one
- * says `field`. The two are different shapes at different boundaries, and this
- * is the one a client sees: `ValidationPublicData` is what rides in the error
- * body, and `parseApiError` puts it on the thrown error's `data`.
- */
-interface ValidationErrorData {
-  readonly errors?: readonly { path?: string; message?: string }[];
-}
-
-/** Whether a rejection is the structured error the admin's fetcher raises. */
-function isApiError(reason: unknown): reason is ApiError {
-  return reason instanceof Error && "status" in reason;
-}
-
-/**
  * Why a write was refused, keyed by the section the validator named.
  *
  * A refused write REJECTS by the time it reaches here, and the path there is
@@ -130,19 +113,21 @@ function isApiError(reason: unknown): reason is ApiError {
  * turns THAT into a rejected promise carrying an `ApiError`. So a client
  * reading the service's envelope would never see a refusal at all — the
  * envelope does not survive the transport.
+ *
+ * Keyed by `path`, which is NOT what the service-level envelope uses — that one
+ * says `field`. The two are different shapes at different boundaries, and this
+ * is the one a client sees.
  */
 function issuesFromRejection(reason: unknown): Record<string, string> {
-  // Narrowed through the SDK's own error type rather than cast into a shape
-  // spelled here. A local cast would be this file's second opinion about what
-  // the transport raises, and it would go on compiling after that shape moved.
-  const data = isApiError(reason)
-    ? (reason.data as ValidationErrorData | undefined)
-    : undefined;
   const issues: Record<string, string> = {};
-  for (const issue of data?.errors ?? []) {
-    const path = issue.path ?? "";
-    if (path !== "" && issue.message !== undefined)
-      issues[path] = issue.message;
+  // Read through the SDK's own extractor rather than a shape spelled here. A
+  // local interface plus a cast would be this file's second opinion about what
+  // the transport raises, and it would go on compiling after that shape moved.
+  // What stays local is the REQUIREMENT: an issue with no field to attach to,
+  // or nothing to say, cannot be shown against a section.
+  for (const issue of validationIssues(reason)) {
+    if (issue.path !== undefined && issue.message !== undefined)
+      issues[issue.path] = issue.message;
   }
   return issues;
 }

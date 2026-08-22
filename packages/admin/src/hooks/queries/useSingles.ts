@@ -35,7 +35,6 @@ import {
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
-import type { ApiError } from "@admin/lib/api/parseApiError";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
 import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
@@ -600,11 +599,14 @@ export function useUpdateSingleDocument(
 ) {
   const queryClient = useQueryClient();
 
-  // `ApiError`, not `Error`. A refused write reaches a caller as the thrown
-  // shape the fetcher raises, and typing it as the base class hides the
-  // `data.errors` payload that says WHICH field was refused — leaving a caller
-  // to cast for something this hook already knows the type of.
-  return useMutation<SingleDocument, ApiError, Record<string, unknown>>({
+  // `Error`, not `ApiError`, because not every rejection is one. `fetcher`
+  // awaits `fetch` without wrapping it, so an offline, DNS or CORS failure
+  // rejects with the native `TypeError` carrying no `status` — and the narrower
+  // type would promise every consumer a number that is absent on exactly the
+  // failures a retry or a reporter most needs to tell apart. `isApiError` and
+  // `validationIssues` recover the refusal payload where there is one, and they
+  // CHECK for it rather than asserting it.
+  return useMutation<SingleDocument, Error, Record<string, unknown>>({
     ...(options?.scopeId === undefined
       ? {}
       : { scope: { id: options.scopeId } }),

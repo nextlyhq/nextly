@@ -65,11 +65,19 @@ export {
   useUpdateSingleDocument,
 } from "./hooks/queries";
 export type { SingleDocument } from "./hooks/queries";
-// The error a failed request raises. Exported because a caller cannot read the
-// structured reason otherwise: the fetcher throws this, and without the type a
-// consumer receives `Error` from `onError` and `unknown` from `catch`, so the
-// `data` payload is reachable only by inventing a cast.
-export type { ApiError } from "./lib/api/parseApiError";
+// What a failed request raises, and the two guards that read it. Exported
+// together because the type alone does not let a caller reach the payload: a
+// rejection arrives as `Error` from `onError` and `unknown` from `catch`, and
+// `ApiError.data` is `Record<string, unknown>`, so the reasons stay behind a
+// cast at both steps. `isApiError` narrows the first and `validationIssues`
+// answers the second, each by CHECKING rather than asserting — which matters
+// because a transport failure rejects with a native error that is neither.
+export {
+  isApiError,
+  validationIssues,
+  type ApiError,
+  type ValidationIssue,
+} from "./lib/api/parseApiError";
 
 // Media hooks
 export {
