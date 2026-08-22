@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   apiErrorMessage,
   isApiError,
+  normalizeValidationIssues,
   parseApiError,
   validationIssues,
 } from "./parseApiError";
@@ -77,6 +78,48 @@ describe("isApiError", () => {
   it("says no to values that are not errors at all", () => {
     expect(isApiError({ status: 400 })).toBe(false);
     expect(isApiError(undefined)).toBe(false);
+  });
+
+  // This narrows `unknown` across the published SDK boundary, so a numeric
+  // `status` alone is not proof of the shape: another client's error that
+  // records one would be handed to a plugin author as an `ApiError` whose
+  // `code` is declared `string` and is not.
+  describe("a present field of the wrong type", () => {
+    it.each([
+      ["code", { status: 400, code: 42 }],
+      ["requestId", { status: 400, requestId: 7 }],
+      ["data", { status: 400, data: "not an object" }],
+    ])("rejects a wrong %s", (_field, extra) => {
+      expect(isApiError(Object.assign(new Error("x"), extra))).toBe(false);
+    });
+
+    it("still accepts them absent, because the type says optional", () => {
+      expect(isApiError(Object.assign(new Error("x"), { status: 400 }))).toBe(
+        true
+      );
+    });
+  });
+});
+
+describe("normalizeValidationIssues", () => {
+  // The blankness rule lives HERE and nowhere else, so a consumer keying by
+  // field and a consumer showing a sentence cannot disagree about whether ""
+  // counts as a message.
+  it.each([
+    ["an empty string", ""],
+    ["whitespace only", "   "],
+  ])("reports %s as absent rather than carrying it", (_name, message) => {
+    expect(normalizeValidationIssues([{ path: "name", message }])).toEqual([
+      { path: "name", code: undefined, message: undefined },
+    ]);
+  });
+
+  it("keeps a message that merely has surrounding space", () => {
+    // Blank is absent; padded is not. Trimming the retained value would be a
+    // separate decision about presentation.
+    expect(
+      normalizeValidationIssues([{ path: "name", message: " Need it. " }])
+    ).toEqual([{ path: "name", code: undefined, message: " Need it. " }]);
   });
 });
 
@@ -191,6 +234,18 @@ describe("apiErrorMessage", () => {
   // A malformed payload should not produce "undefined" on screen.
   it("ignores field errors that carry no message", () => {
     const err = parseApiError(validationBody([{ path: "name" }]), 400);
+
+    expect(apiErrorMessage(err)).toBe("Validation failed.");
+  });
+
+  it("ignores a field error whose message is blank", () => {
+    // Same case as the one above by the time it reaches here, and it has to be:
+    // a message with nothing in it explains nothing, so falling back to the
+    // top-level sentence is what leaves a reader with something to read.
+    const err = parseApiError(
+      validationBody([{ path: "name", code: "REQUIRED", message: "   " }]),
+      400
+    );
 
     expect(apiErrorMessage(err)).toBe("Validation failed.");
   });
