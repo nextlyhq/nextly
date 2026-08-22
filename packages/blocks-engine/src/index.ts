@@ -239,8 +239,18 @@ export {
   MAX_SITE_LOOKUPS,
   tokenKindAllowedAt,
   tokenKindsForProperty,
+  // Which arm of a union a stored value belongs to. Public because the compiler
+  // and an editor ask the same question of it — one to decide which arm's rules
+  // to emit and which complaint to report, the other to decide which control to
+  // draw. A second answer to it drifts silently, because both surfaces look
+  // right on their own: the disagreement is only visible to an author holding a
+  // control for one arm while reading an error written about another.
+  styleUnionVariant,
 } from "./style/validate-style-value";
-export type { StyleIssueBudget } from "./style/validate-style-value";
+export type {
+  StyleIssueBudget,
+  StyleUnionVariantOptions,
+} from "./style/validate-style-value";
 export { compilePageCss, BASE_BREAKPOINT } from "./style/compile-page";
 // The one rule for how a document-global CSS name wears its scope. Public
 // because more than one place has to produce it and they must agree exactly:

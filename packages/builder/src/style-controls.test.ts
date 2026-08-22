@@ -14,6 +14,17 @@ import {
   type StyleControlKind,
 } from "./style-controls";
 
+/*
+ * The union-arm assertions below no longer describe a rule this package holds.
+ * Arm selection is `styleUnionVariant`'s, in the engine, where it is also
+ * tested — and each case here is one of the eight spellings review found a
+ * local matcher getting wrong. They are kept rather than moved because what
+ * they now cover is the SEAM: that this module asks, that it passes the site's
+ * options through, and that it walks the arm it was handed. A change
+ * reintroducing a local answer, or dropping `tokens` on the way down, fails
+ * here and nowhere in the engine's own suite.
+ */
+
 /**
  * A VALID leaf of one kind.
  *

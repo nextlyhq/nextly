@@ -20,7 +20,12 @@ import type {
 
 import { getStyleProperty } from "./catalog";
 import { isStyleLeaf, shapeLeaves } from "./catalog-types";
-import type { StyleLeaf, StyleShape, TokenKind } from "./catalog-types";
+import type {
+  StyleLeaf,
+  StyleShape,
+  TokenKind,
+  UnionShape,
+} from "./catalog-types";
 import {
   checkColorValue,
   checkCssValue,
@@ -847,6 +852,224 @@ function partIssues(
   return issues;
 }
 
+/**
+ * Whether a leaf STORES values of this one's runtime kind.
+ *
+ * Not "would this leaf accept this value" — {@link leafIssues} answers that,
+ * and asking it twice would be two implementations of one question. This is the
+ * coarser question of whether the value is written in a form the leaf reads at
+ * all, which is what separates two arms that both REFUSED a value: `fontWeight`
+ * is a keyword or a number, `5000` is refused by each, and only one of them is
+ * the form the author was writing in.
+ *
+ * A string is a value form for every leaf kind except `number`, where it is
+ * only ever the CSS-wide-keyword escape hatch: `inherit` is legal in a numeric
+ * position, and `"nonsense"` is not a number spelled differently. Counting a
+ * string as fitting a number leaf would send `lineHeight: "nonsense"` there and
+ * report that it is not a number, where not being a LENGTH is what the author
+ * got wrong.
+ */
+function leafStoresKindOf(leaf: StyleLeaf, value: unknown): boolean {
+  // A token reference is a scalar spelled as an object, so it is a form every
+  // LEAF reads and no composite does. Whether THIS leaf accepts tokens is a
+  // validity question that `leafIssues` answers; folding it in here would rank
+  // a token no arm accepts onto a composite arm, because `$token` reads to a
+  // composite as an unknown field one level down and so looks like the deeper
+  // match — and that arm's controls cannot hold a token at all.
+  if (isTokenRef(value)) return true;
+  if (typeof value === "number") {
+    if (leaf.kind === "number") return true;
+    // The same pair `leafIssues` reads: a dimension takes a bare number only
+    // where the catalog allows one, and zero regardless, because zero is the
+    // one measurement that is a complete length without a unit.
+    return (
+      leaf.kind === "dimension" && (leaf.allowNumber === true || value === 0)
+    );
+  }
+  if (typeof value === "string") return leaf.kind !== "number";
+  return false;
+}
+
+/**
+ * Whether a shape stores values of this one's runtime kind.
+ *
+ * A composite addresses named sub-values, so it stores records and nothing
+ * else — and a token reference is a record that is nonetheless a scalar, so it
+ * is excluded rather than counted as one. Counting it would report both arms of
+ * a scalar-versus-composite union as fitting a token, and the tie would fall to
+ * the catalog's order rather than to the arm that admits tokens at all.
+ */
+function shapeStoresKindOf(shape: StyleShape, value: unknown): boolean {
+  if (isStyleLeaf(shape)) return leafStoresKindOf(shape, value);
+  if (shape.kind === "union") {
+    return shape.of.some(arm => shapeStoresKindOf(arm, value));
+  }
+  return !isTokenRef(value) && isPlainRecord(value);
+}
+
+/**
+ * A union's verdict on a token reference, judged against EVERY arm's kinds at
+ * once, or `undefined` when the question does not arise and the arms decide.
+ *
+ * Asked before the arms are tried, because reporting the first refusing arm's
+ * list names a subset: `lineHeight` takes a number OR a dimension token, and a
+ * colour token there would be told the property takes only numbers, steering
+ * the author away from a spelling that works.
+ *
+ * The allowance is asked BEFORE the lookup, not after: `kindOf` is the caller's
+ * code and may be expensive, and a run that has already said name checking
+ * stopped must stop calling it rather than call it and discard the answer. The
+ * lookup and reporting allowances are distinct — a name already answered this
+ * run costs the caller nothing — so the same guard the leaf reference uses
+ * bounds the ask here too.
+ */
+function unionTokenKindIssues(
+  shape: UnionShape,
+  value: unknown,
+  path: string,
+  budget: ReadyStyleIssueBudget | undefined,
+  check: ValueCheckContext
+): ValidationIssue[] | undefined {
+  const { tokens } = check;
+  if (!isTokenRef(value) || tokens === undefined) return undefined;
+  if (extraTokenKeys(value)) return undefined;
+  const kinds = unionTokenKinds(shape);
+  if (kinds.length === 0) return undefined;
+  if (!canResolveName(tokens, value.$token, budget)) {
+    return siteTruncationNotice(budget, path);
+  }
+  const kind = tokens.kindOf(value.$token);
+  if (kind === undefined || kinds.includes(kind)) return undefined;
+  return reportSiteIssue(budget, {
+    path,
+    code: "token-kind-mismatch",
+    severity: "warning",
+    message: `The design token "${describeValue(value.$token)}" is a ${kind}, and this value takes ${kinds.join(" or ")}.`,
+    suggestion: `Use a token of kind ${kinds.join(" or ")}.`,
+  });
+}
+
+/** The arm of a union a value belongs to, and whether that arm accepted it. */
+interface UnionVariantChoice {
+  /** Which arm, as an index into the union's own `of`. */
+  readonly index: number;
+  /** The arm itself, so a caller does not index `of` a second time. */
+  readonly variant: StyleShape;
+  /**
+   * Whether the arm reported nothing at all.
+   *
+   * Distinct from "reported no errors": an arm can accept a value and remark on
+   * it, and that remark is the one worth reporting.
+   */
+  readonly clean: boolean;
+}
+
+/**
+ * Which arm of a union a value belongs to.
+ *
+ * Arms are tried in the catalog's order and the first reporting nothing wins,
+ * so the catalog decides the canonical spelling. When none accepts, the arm
+ * chosen is the one whose issues describe what the author actually got wrong,
+ * ranked on three properties in this order:
+ *
+ * 1. **An arm that only WARNED beats one that ERRORED.** A warning is an arm
+ *    accepting a value and remarking on it; an error is a refusal. Without
+ *    this, a refusal wins a tie against an advisory note and turns it into
+ *    something that blocks a publish.
+ * 2. **An arm that STORES this kind of value beats one that does not.** Two
+ *    scalar arms report at the same path, so rule 3 cannot separate them and
+ *    the catalog's first arm won whatever the value was — `fontWeight: 5000`
+ *    was told it is not one of `normal, bold, lighter, bolder` rather than that
+ *    it is outside 1-1000.
+ * 3. **A deeper first issue beats a shallower one.** Within one kind-fit, an
+ *    arm the value structurally matches points at the offending leaf while a
+ *    mismatched one reports only that the whole value is the wrong shape. This
+ *    is what separates two COMPOSITE arms, which rule 2 cannot.
+ *
+ * `undefined` only for a union declaring no arms: it holds no shape to check
+ * against, so there is nothing it can refuse.
+ */
+function chooseUnionVariant(
+  shape: UnionShape,
+  value: unknown,
+  path: string,
+  budget?: ReadyStyleIssueBudget,
+  spent = 0,
+  spentBytes = 0,
+  check: ValueCheckContext = {}
+): UnionVariantChoice | undefined {
+  let chosen: UnionVariantChoice | undefined;
+  let bestRank: VariantRank | undefined;
+  for (let index = 0; index < shape.of.length; index += 1) {
+    const variant = shape.of[index];
+    // Tried against a COPY of the allowances, because trying is speculative and
+    // spending is not. The copy still gates, so an arm cannot allocate past the
+    // cap; nothing it charges outlives it, so a value is not billed once per arm
+    // and a discarded arm's truncation marker cannot suppress one a later
+    // reference was going to get. The winner is re-run by the caller against
+    // the real budget, unless it was clean.
+    const issues = shapeIssues(
+      variant,
+      value,
+      path,
+      speculativeBudget(budget),
+      spent,
+      spentBytes,
+      check
+    );
+    if (issues.length === 0) return { index, variant, clean: true };
+    const rank = variantRank(variant, value, issues);
+    if (bestRank !== undefined && !outranks(rank, bestRank)) continue;
+    chosen = { index, variant, clean: false };
+    bestRank = rank;
+  }
+  return chosen;
+}
+
+/** How well one refusing arm describes what the author actually wrote. */
+interface VariantRank {
+  /**
+   * Whether the arm ACCEPTED the value and merely remarked on it.
+   *
+   * Not separately observable today: every warning an arm can produce comes
+   * from the token branch of `leafIssues`, which runs only where the leaf
+   * declares token kinds — and a reference is a form every leaf stores, so
+   * {@link VariantRank.stores} is true wherever this is. Kept because a warning
+   * IS an acceptance, so the ordering is right whatever comes to reach it.
+   */
+  readonly accepts: boolean;
+  /** Whether the value is written in a form this arm stores at all. */
+  readonly stores: boolean;
+  /** How deep the arm's first complaint points. */
+  readonly depth: number;
+}
+
+function variantRank(
+  variant: StyleShape,
+  value: unknown,
+  issues: readonly ValidationIssue[]
+): VariantRank {
+  return {
+    accepts: !issues.some(issue => issue.severity === "error"),
+    stores: shapeStoresKindOf(variant, value),
+    depth: issues[0]?.path.length ?? 0,
+  };
+}
+
+/**
+ * Whether one arm's refusal describes the value better than another's.
+ *
+ * Lexicographic over the three properties in {@link VariantRank}'s order, which
+ * is what makes each one a tie-break for the one above rather than a vote: a
+ * deeper complaint from an arm that cannot hold the value at all must never
+ * beat a shallower one from the arm the author was writing in.
+ */
+function outranks(candidate: VariantRank, best: VariantRank): boolean {
+  if (candidate.accepts !== best.accepts) return candidate.accepts;
+  if (candidate.stores !== best.stores) return candidate.stores;
+  return candidate.depth > best.depth;
+}
+
 /** Validate a value against any shape, leaf or composite. */
 function shapeIssues(
   shape: StyleShape,
@@ -893,90 +1116,41 @@ function shapeIssues(
         check
       );
     case "union": {
-      // A token is judged against every arm's kinds at once. Reporting the
-      // first refusing arm's list names a subset: `lineHeight` takes a number
-      // OR a dimension token, and a colour token there would be told the
-      // property takes only numbers, steering the author away from a spelling
-      // that works.
-      // The allowance is asked BEFORE the lookup, not after: `kindOf` is the
-      // caller's code and may be expensive, and a run that has already said
-      // name checking stopped must stop calling it rather than call it and
-      // discard the answer. The lookup and reporting allowances are distinct
-      // (a name already answered this run costs the caller nothing), so the
-      // same guard the leaf reference uses bounds the ask here too.
-      const { tokens } = check;
-      if (isTokenRef(value) && tokens !== undefined && !extraTokenKeys(value)) {
-        const kinds = unionTokenKinds(shape);
-        if (kinds.length > 0) {
-          if (!canResolveName(tokens, value.$token, budget)) {
-            return siteTruncationNotice(budget, path);
-          }
-          const kind = tokens.kindOf(value.$token);
-          if (kind !== undefined && !kinds.includes(kind)) {
-            return reportSiteIssue(budget, {
-              path,
-              code: "token-kind-mismatch",
-              severity: "warning",
-              message: `The design token "${describeValue(value.$token)}" is a ${kind}, and this value takes ${kinds.join(" or ")}.`,
-              suggestion: `Use a token of kind ${kinds.join(" or ")}.`,
-            });
-          }
-        }
-      }
-      // A union accepts the value if any variant does. Variants are tried in
-      // order and the first clean one wins; when none accepts, the first
-      // variant's issues are reported, because it is the shape the catalog
-      // lists first and therefore the one an author most likely intended.
-      let best: ValidationIssue[] | undefined;
-      let bestVariant: StyleShape | undefined;
-      let bestRejects = true;
-      for (const variant of shape.of) {
-        // Tried against a COPY of the allowances, because trying is
-        // speculative and spending is not. The copy still gates, so an arm
-        // cannot allocate past the cap; nothing it charges outlives it, so a
-        // value is not billed once per arm and a discarded arm's truncation
-        // marker cannot suppress one a later reference was going to get. The
-        // winner is re-run below against the real budget.
-        const issues = shapeIssues(
-          variant,
-          value,
-          path,
-          speculativeBudget(budget),
-          spent,
-          spentBytes,
-          check
-        );
-        if (issues.length === 0) return [];
-        // A variant that reports only warnings has ACCEPTED the value and
-        // remarked on it. One that reports an error has refused it. Ranking by
-        // path depth alone cannot tell those apart, so a value the catalog
-        // lists two ways — a keyword or a number — could be refused by the arm
-        // that structurally forbids it while the other arm merely warned, and
-        // the refusal would win on a tie. That would turn an advisory note into
-        // something that blocks a publish.
-        const rejects = issues.some(issue => issue.severity === "error");
-        if (bestRejects && !rejects) {
-          best = issues;
-          bestVariant = variant;
-          bestRejects = false;
-          continue;
-        }
-        if (rejects !== bestRejects) continue;
-        // Within the same verdict, prefer whichever variant the value
-        // structurally resembles: its issues point at the offending leaf, while
-        // a mismatched variant only reports that the whole value is the wrong
-        // shape.
-        const deeper =
-          best === undefined ||
-          (issues[0]?.path.length ?? 0) > (best[0]?.path.length ?? 0);
-        if (deeper) {
-          best = issues;
-          bestVariant = variant;
-        }
-      }
-      if (bestVariant === undefined) return [];
+      const kindMismatch = unionTokenKindIssues(
+        shape,
+        value,
+        path,
+        budget,
+        check
+      );
+      if (kindMismatch !== undefined) return kindMismatch;
+      // Which arm the value belongs to is decided in ONE place and read from
+      // here. It is also the question an editor asks to decide which control to
+      // draw, so it is exported rather than kept private: a caller that had to
+      // predict this answer would be maintaining a second copy of every rule
+      // below, and the two would agree on the day they were written.
+      const chosen = chooseUnionVariant(
+        shape,
+        value,
+        path,
+        budget,
+        spent,
+        spentBytes,
+        check
+      );
+      // A union declaring no arms holds no shape to check against, so there is
+      // nothing it can refuse.
+      if (chosen === undefined) return [];
+      // A clean arm is NOT re-run against the real budget, which is the
+      // behaviour this refactor had to preserve rather than an optimisation it
+      // introduced. Re-running would return the same nothing and cost a second
+      // walk of the arm — and it would NOT double-charge the site allowance,
+      // which is what it looks like it would do: name resolution is memoized
+      // per run and `canResolveName` answers a cached name without spending, so
+      // the second pass asks the caller nothing. Measured, not assumed.
+      if (chosen.clean) return [];
       return shapeIssues(
-        bestVariant,
+        chosen.variant,
         value,
         path,
         budget,
@@ -1080,4 +1254,53 @@ export function validateStyleValues(
     );
   }
   return issues;
+}
+
+/** What a caller can tell the arm resolver about the site it is resolving for. */
+export interface StyleUnionVariantOptions extends StyleValueOptions {
+  /**
+   * The site's token table.
+   *
+   * Which arm a token belongs to is a fact about the TOKEN, and a stored
+   * reference carries only its name: `lineHeight` takes tokens on both arms,
+   * numbers on one and dimensions on the other, so without the table the name
+   * alone cannot separate them and the catalog's order decides.
+   */
+  tokens?: TokenLookup;
+}
+
+/**
+ * Which arm of a union a stored value belongs to, as an index into `of`.
+ *
+ * Exported because more than one surface asks it and they must not answer it
+ * separately. The compiler asks it to decide which arm's rules to emit and
+ * which arm's complaint to report; an editor asks it to decide which control to
+ * draw for a stored value. Those are the same question, and a second
+ * implementation of it drifts silently — a control drawn for one arm while
+ * validation judges the value under another leaves an author looking at a
+ * keyword select and reading an error about a number.
+ *
+ * `undefined` only for a union declaring no arms, which has no shape to draw
+ * and nothing to refuse.
+ *
+ * This is a PRESENTATION answer as much as a validation one, and it is not a
+ * verdict: {@link validateStyleValues} remains the only thing deciding whether
+ * a value may be written. An arm is returned for a value every arm refuses,
+ * because the author is looking at something and the honest control to show is
+ * the one whose complaint they will read.
+ */
+export function styleUnionVariant(
+  shape: UnionShape,
+  value: unknown,
+  options?: StyleUnionVariantOptions
+): number | undefined {
+  // Its own allowance, because this run reports nothing: the issues an arm
+  // produces are read only to rank the arms and are then discarded, so charging
+  // them to a caller's budget would spend a document's reporting allowance on a
+  // question about a control.
+  const budget = newStyleIssueBudget();
+  return chooseUnionVariant(shape, value, "", budget, 0, 0, {
+    tokens: memoizeTokenLookup(options?.tokens, budget),
+    mayFetchUrl: options?.mayFetchUrl,
+  })?.index;
 }

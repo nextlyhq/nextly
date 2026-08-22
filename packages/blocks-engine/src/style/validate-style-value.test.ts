@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { StyleValues } from "../document";
 import { ISSUE_CODES } from "../validation";
+import { getStyleProperty } from "./catalog";
+import { isStyleLeaf } from "./catalog-types";
+import type {
+  ObjectShape,
+  StyleLeaf,
+  StyleShape,
+  UnionShape,
+} from "./catalog-types";
 import { checkColorValue, checkCssValue, checkUrlValue } from "./css-value";
 import {
   MAX_SITE_ISSUES,
@@ -10,6 +18,7 @@ import {
   memoizeTokenLookup,
   newStyleIssueBudget,
   speculativeBudget,
+  styleUnionVariant,
   validateStyleValues,
 } from "./validate-style-value";
 
@@ -20,6 +29,39 @@ function check(values: StyleValues) {
 
 function codes(values: StyleValues): string[] {
   return check(values).map(issue => issue.code);
+}
+
+function messages(values: StyleValues): string[] {
+  return check(values).map(issue => issue.message);
+}
+
+/**
+ * The union a catalog property declares.
+ *
+ * Narrowed rather than asserted, so a catalog change that stops a property
+ * being a union fails HERE, naming the property, instead of leaving a test
+ * asserting arm indices against a shape that has no arms.
+ */
+function unionShapeOf(property: string): UnionShape {
+  const shape = shapeOf(property);
+  if (isStyleLeaf(shape) || shape.kind !== "union") {
+    throw new Error(`${property} is no longer a union`);
+  }
+  return shape;
+}
+
+/** The shape a catalog property declares. */
+function shapeOf(property: string): StyleShape {
+  const entry = getStyleProperty(property);
+  if (entry === undefined) throw new Error(`no catalog property ${property}`);
+  return entry.shape;
+}
+
+/** The leaf a catalog property declares, for tests that vary one field of it. */
+function leafOf(property: string): StyleLeaf {
+  const shape = shapeOf(property);
+  if (!isStyleLeaf(shape)) throw new Error(`${property} is not a leaf`);
+  return shape;
 }
 
 describe("a design token reference is checked against the site", () => {
@@ -525,6 +567,193 @@ describe("union shapes", () => {
       "invalid-style-value",
     ]);
     expect(codes({ fontWeight: "heavy" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("the arm a union reports through is the one the value was written in", () => {
+  // Every value here is refused by BOTH arms, so which complaint comes back is
+  // a choice between them rather than the only one on offer. Ranking by issue
+  // depth alone cannot make that choice for two SCALAR arms, because both
+  // report at the property's own path — so the catalog's first arm used to win
+  // whatever had been stored.
+
+  it("names the numeric bound rather than the keyword arm's vocabulary", () => {
+    // `fontWeight` is a keyword or a number bounded to 1-1000. A number is not
+    // a spelling of a keyword, so the vocabulary is not what the author broke.
+    expect(messages({ fontWeight: 5000 })).toEqual([
+      "5000 is above the maximum of 1000.",
+    ]);
+    expect(messages({ fontWeight: 0 })).toEqual([
+      "0 is below the minimum of 1.",
+    ]);
+  });
+
+  it("names the length arm for a string a number arm could only read as a keyword", () => {
+    // `lineHeight` is a number or a dimension. A string reaches the number arm
+    // only as a CSS-wide keyword, so a string that is not one is a length that
+    // failed to parse rather than a number that was misspelled.
+    expect(messages({ lineHeight: "nonsense" })).toEqual([
+      "nonsense is not a length.",
+    ]);
+  });
+
+  it("names the keyword arm for a string where the other arm takes numbers", () => {
+    // `position.zIndex` is an integer or `auto`, and it is a union nested one
+    // level down — so this also covers the choice being made at depth.
+    expect(messages({ position: { zIndex: "top" } })).toEqual([
+      "top is not one of the allowed values.",
+    ]);
+  });
+
+  it("reports a record through the composite arm, however the record is spelled", () => {
+    // `borderRadius` is one length or four corners, and only the corners arm
+    // stores a record — so this is the KIND rule, not the depth rule below it.
+    // Measured: removing depth entirely left both of these passing.
+    expect(messages({ borderRadius: { bogus: "4px" } })).toEqual([
+      '"bogus" is not a known corner.',
+    ]);
+    expect(messages({ borderRadius: { startStart: "-4px" } })).toEqual([
+      "-4px is not a length.",
+    ]);
+  });
+
+  // The rule that an ACCEPTING arm's warning outranks a refusing arm's error is
+  // deliberately not asserted here, because nothing can reach it: every warning
+  // an arm produces comes from a leaf's token branch, which runs only where the
+  // leaf declares token kinds — and that is the same fact the kind rule reads,
+  // so the two never disagree. A test over a token would be answered by the
+  // union's own kind shortcut before any arm was ranked, which is covered
+  // already by "a union says which kinds it really accepts". Saying so beats a
+  // green that reads as coverage; the code carries the same note.
+});
+
+describe("styleUnionVariant", () => {
+  const fontWeight = unionShapeOf("fontWeight");
+  const lineHeight = unionShapeOf("lineHeight");
+  const borderRadius = unionShapeOf("borderRadius");
+
+  it("answers with the catalog's first arm when there is no value yet", () => {
+    // A panel is drawn before anything is loaded, and the arm the catalog lists
+    // first is the property's canonical spelling.
+    expect(styleUnionVariant(fontWeight, undefined)).toBe(0);
+    expect(styleUnionVariant(borderRadius, undefined)).toBe(0);
+  });
+
+  it("answers with the arm that accepts the value", () => {
+    expect(styleUnionVariant(fontWeight, "bold")).toBe(0);
+    expect(styleUnionVariant(fontWeight, 700)).toBe(1);
+    expect(styleUnionVariant(lineHeight, 1.5)).toBe(0);
+    expect(styleUnionVariant(lineHeight, "1.5rem")).toBe(1);
+    expect(styleUnionVariant(borderRadius, "4px")).toBe(0);
+    expect(styleUnionVariant(borderRadius, { startStart: "4px" })).toBe(1);
+  });
+
+  it("reads a keyword as CSS does, through case, whitespace and escapes", () => {
+    expect(styleUnionVariant(fontWeight, "BOLD")).toBe(0);
+    expect(styleUnionVariant(fontWeight, "  bold  ")).toBe(0);
+    expect(styleUnionVariant(fontWeight, "bol\\64 ")).toBe(0);
+  });
+
+  it("puts a CSS-wide keyword on the arm that accepts it first", () => {
+    // `inherit` is legal wherever a value is, so every arm takes it and the
+    // catalog's order decides — which is the engine's own answer, not a rule
+    // stated here.
+    expect(styleUnionVariant(fontWeight, "inherit")).toBe(0);
+    expect(styleUnionVariant(lineHeight, "inherit")).toBe(0);
+  });
+
+  it("answers with the arm a value NO arm accepts was written in", () => {
+    // The whole point of returning an arm for a refused value: the author is
+    // looking at something, and the control to show is the one whose complaint
+    // they will read.
+    expect(styleUnionVariant(fontWeight, 5000)).toBe(1);
+    expect(styleUnionVariant(lineHeight, "nonsense")).toBe(1);
+    expect(styleUnionVariant(borderRadius, "not-a-length")).toBe(0);
+  });
+
+  it("separates two arms that both store records by which issue points deeper", () => {
+    // Both arms take records, so the kind rule ties and depth is what decides.
+    // The shape is BUILT rather than taken from the catalog because the catalog
+    // ships no union of two composites: measured, removing the depth rule
+    // entirely left all 1306 engine tests green. This is a public entry point,
+    // so a caller can hand it the shape the catalog cannot express, and a rule
+    // nothing exercises is one nobody would notice going wrong.
+    //
+    // An unknown key is NOT the discriminator — it reports at the key's own
+    // path, exactly as a bad value at a known key does. What differs is how far
+    // each arm has to descend before something refuses.
+    const shallow = unionShapeOf("borderRadius").of[1];
+    const deep: ObjectShape = {
+      kind: "object",
+      fields: { startStart: shapeOf("padding") },
+    };
+    const both: UnionShape = { kind: "union", of: [shallow, deep] };
+    // Against the corners arm, `startStart` is a length and the record handed
+    // to it refuses one level down. Against the deep arm the same record is a
+    // set of logical sides, and the refusal is a further level in — at the leaf
+    // that actually holds the offending value.
+    expect(styleUnionVariant(both, { startStart: { blockStart: 5 } })).toBe(1);
+  });
+
+  it("chooses by the value's form rather than by the catalog's order", () => {
+    // Every union the catalog ships happens to list the arm a malformed STRING
+    // belongs to first, so order and the rule agree on all of them and a test
+    // over a real property cannot say which one answered. Reversing
+    // `fontWeight`'s arms separates the two: the keyword arm is now second, and
+    // "heavy" is a keyword outside its vocabulary rather than a badly written
+    // number, so order alone would answer 0.
+    const reversed: UnionShape = {
+      kind: "union",
+      of: [...fontWeight.of].reverse(),
+    };
+    expect(styleUnionVariant(reversed, "heavy")).toBe(1);
+  });
+
+  it("keeps a record on the composite arm, however it is spelled", () => {
+    // An EMPTY record names nothing and is still the four-corner form: the
+    // validator accepts `{}` there, so sending it to the scalar arm would draw
+    // one length control for a value the document holds as a record. A record
+    // naming only UNKNOWN fields is the same form with a mistake in it.
+    expect(styleUnionVariant(borderRadius, {})).toBe(1);
+    expect(styleUnionVariant(borderRadius, { bogus: "4px" })).toBe(1);
+  });
+
+  it("uses the site's table to place a token between two arms that take one", () => {
+    // `lineHeight` accepts a number token on one arm and a dimension token on
+    // the other, so the NAME alone cannot separate them.
+    const kinds = { kindOf: () => "dimension" as const };
+    expect(styleUnionVariant(lineHeight, { $token: "space.4" })).toBe(0);
+    expect(
+      styleUnionVariant(lineHeight, { $token: "space.4" }, { tokens: kinds })
+    ).toBe(1);
+  });
+
+  it("puts a token on the arm that admits tokens at all", () => {
+    // `fontWeight`'s keyword arm declares no token kinds, so a reference there
+    // is refused outright while the number arm takes it.
+    expect(styleUnionVariant(fontWeight, { $token: "weight.bold" })).toBe(1);
+  });
+
+  it("keeps a token no arm accepts on a scalar arm rather than a composite", () => {
+    // A reference is one value spelled as an object. To a COMPOSITE arm that
+    // spelling reads as an unknown field one level down, which looks like the
+    // deeper — and therefore better — match, so the token would be shown in a
+    // four-corner control that cannot hold it in any of them.
+    const noTokensAnywhere: UnionShape = {
+      kind: "union",
+      of: [
+        { ...leafOf("letterSpacing"), tokenKinds: [] },
+        unionShapeOf("borderRadius").of[1],
+      ],
+    };
+    expect(styleUnionVariant(noTokensAnywhere, { $token: "r.card" })).toBe(0);
+  });
+
+  it("answers undefined for a union that declares no arms", () => {
+    // Nothing to draw and nothing it can refuse. The catalog ships none, and a
+    // caller indexing `of` with a number this did not return would read
+    // `undefined` as a shape.
+    expect(styleUnionVariant({ kind: "union", of: [] }, "4px")).toBeUndefined();
   });
 });
 
