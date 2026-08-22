@@ -230,42 +230,22 @@ function composeMeasurement(
 }
 
 /**
- * The rules the engine judges this leaf's values by.
+ * Whether the engine accepts this text as a value for this leaf.
  *
- * Read off the leaf rather than assembled from defaults, so a property that
- * declares nothing is judged by the engine's own defaults rather than by a
- * guess made here about what they are.
+ * The LEAF is handed over whole rather than having its rule fields copied into
+ * a fresh object. A dimension leaf already carries everything
+ * `checkDimensionValue` reads, so passing it through means the preflight this
+ * module performs and the validation the write path performs are judged by
+ * literally the same values — including any the engine adds later, which an
+ * enumeration here would silently omit while continuing to compile. A control
+ * that offered a unit the write path then refused would be the visible half of
+ * that drift; the invisible half is a restriction quietly not applied.
  */
-function rulesOf(leaf: Extract<StyleLeaf, { kind: "dimension" }>): {
-  keywords?: readonly string[];
-  maxParts?: number;
-  allowNegative?: boolean;
-  allowPercentage?: boolean;
-  functions?: readonly string[];
-  allowNumber?: boolean;
-} {
-  return {
-    ...(leaf.keywords === undefined ? {} : { keywords: leaf.keywords }),
-    ...(leaf.maxParts === undefined ? {} : { maxParts: leaf.maxParts }),
-    ...(leaf.allowNegative === undefined
-      ? {}
-      : { allowNegative: leaf.allowNegative }),
-    ...(leaf.allowPercentage === undefined
-      ? {}
-      : { allowPercentage: leaf.allowPercentage }),
-    ...(leaf.functions === undefined ? {} : { functions: leaf.functions }),
-    ...(leaf.allowNumber === undefined
-      ? {}
-      : { allowNumber: leaf.allowNumber }),
-  };
-}
-
-/** Whether the engine accepts this text as a value for this leaf. */
 function accepts(
   leaf: Extract<StyleLeaf, { kind: "dimension" }>,
   text: string
 ): boolean {
-  return checkDimensionValue(text, rulesOf(leaf)) === null;
+  return checkDimensionValue(text, leaf) === null;
 }
 
 /**
