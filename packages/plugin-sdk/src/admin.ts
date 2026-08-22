@@ -288,9 +288,18 @@ export { usePluginClientConfig } from "@nextlyhq/admin";
  * MySQL. So several surfaces owning different fields of one Single can each
  * send only their own and never clobber one another.
  *
- * A refused write RESOLVES rather than rejecting, carrying `success: false` and
- * a per-field error. Treating a settled promise as a successful save reports
- * "saved" over a write the database refused.
+ * A refused write REJECTS. The service answers `{ success: false }`,
+ * `unwrapServiceResult` turns that into a throw, the route answers non-2xx, and
+ * the fetcher raises an `ApiError` — so `mutateAsync` rejects rather than
+ * resolving with an envelope to inspect. Handle it: an unhandled rejection is
+ * what a plugin gets for awaiting the mutation and reading the result.
+ *
+ * The reason is on the error rather than in a return value. `ApiError.data`
+ * carries `{ errors: [{ path, code, message }] }`, keyed by `path` — the
+ * document field that was refused — which is what lets a surface put the
+ * message on the section that produced it. Note `path`, not `field`: the
+ * service-level envelope spells it the other way, and that envelope is not what
+ * survives the transport.
  */
 export {
   useSingleDocument,

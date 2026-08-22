@@ -415,8 +415,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     () => readSiteStyleRecord(clientConfig?.siteStyle),
     [clientConfig]
   );
-  const { siteStyle: canvasSiteStyle, pending: siteStylePending } =
-    useSiteStyle(configSiteStyle);
+  const {
+    siteStyle: canvasSiteStyle,
+    pending: siteStylePending,
+    error: siteStyleError,
+  } = useSiteStyle(configSiteStyle);
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -633,15 +636,29 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             see the page re-lay-out under them, and could start dragging against
             a design the site does not have.
 
+            A FAILED read is held back for the same reason, and it is not the
+            same state. When the request exhausts its retry — a network fault,
+            or a 403 for an editor without `read-site-style` — `pending` goes
+            false while the merged value falls back to the config defaults. So
+            "not pending" alone would mount a finished-looking canvas over a
+            stored tier nobody has read, which is the exact problem the wait was
+            added to prevent, arrived at down the failure path instead. Absent
+            is not the same as unknown, and the author is told which.
+
             Only the canvas waits. The shell, the rail and the inspector are all
             about the DOCUMENT, which is already in hand, and blanking them
             would make the editor feel slower than it is. After the first open
             the read is cached, so this is one brief state per session rather
             than one per opening.
           */}
-          {siteStylePending ? (
-            <p className="nx-inspector__note" data-canvas-state="loading">
-              Loading this site&rsquo;s styles&hellip;
+          {siteStylePending || siteStyleError !== null ? (
+            <p
+              className="nx-inspector__note"
+              data-canvas-state={siteStyleError === null ? "loading" : "failed"}
+            >
+              {siteStyleError === null
+                ? "Loading this site\u2019s styles\u2026"
+                : "This site\u2019s styles could not be loaded, so the canvas would not match the published page. Reload to try again."}
             </p>
           ) : (
             <Canvas

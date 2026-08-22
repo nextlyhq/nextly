@@ -32,11 +32,12 @@ const seen: {
 let clientConfig: Record<string, unknown> | undefined;
 
 /** What the stored-style read answers with for the test in hand. */
-let siteStyleRead: { data: unknown; isPending: boolean; error: null } = {
-  data: undefined,
-  isPending: false,
-  error: null,
-};
+let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
+  {
+    data: undefined,
+    isPending: false,
+    error: null,
+  };
 
 vi.mock("@nextlyhq/builder/shell", () => {
   const record =
@@ -217,5 +218,40 @@ describe("what the canvas waits for", () => {
 
     expect(seen.canvas).toBeDefined();
     expect(document.querySelector('[data-canvas-state="loading"]')).toBeNull();
+  });
+});
+
+describe("when the stored style cannot be read at all", () => {
+  it("holds the canvas back and says so, rather than mounting on defaults", () => {
+    // The failure path into the same defect the pending gate exists to stop.
+    // A read that exhausts its retry — a network fault, or a 403 for an editor
+    // without `read-site-style` — leaves `pending` false while the merged value
+    // falls back to the config defaults. Gating on `pending` alone would mount a
+    // finished-looking canvas over a stored tier nobody has read.
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("Forbidden"),
+    };
+
+    openEditor();
+
+    expect(seen.canvas).toBeUndefined();
+    expect(
+      document.querySelector('[data-canvas-state="failed"]')
+    ).not.toBeNull();
+  });
+
+  it("tells a FAILED read apart from a pending one", () => {
+    // Two different sentences for two different states: "still coming" and
+    // "will not come". Collapsing them would leave an author watching a
+    // loading message that never resolves.
+    siteStyleRead = { data: undefined, isPending: true, error: null };
+    openEditor();
+
+    expect(
+      document.querySelector('[data-canvas-state="loading"]')
+    ).not.toBeNull();
+    expect(document.querySelector('[data-canvas-state="failed"]')).toBeNull();
   });
 });
