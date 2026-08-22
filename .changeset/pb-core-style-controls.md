@@ -28,6 +28,8 @@
 
 Give the page-builder style inspector unit-aware numeric editing and a two-state toggle, without narrowing what a style value may be.
 
-Arrow keys step a measurement and keep its unit — Shift steps by ten, matching what Figma, Framer and Webflow all do — and a menu beside the field swaps the unit, offering only units the property itself accepts. A keyword property with exactly two values is drawn as a pair of buttons instead of a menu, so both options are visible and each is one click.
+Arrow keys step a measurement and keep its unit — Shift steps by ten, matching what Figma, Framer and Webflow all do — and a menu beside the field swaps the unit, offering only units the property itself accepts.
+
+A keyword property with exactly two values draws a pair of buttons instead of a menu, so both options are visible and each is one click. No property in the style catalog declares a two-value keyword today, so this changes nothing an author currently sees; it takes effect for the first property that does, with no further editor change.
 
 Every one of these is layered ON the existing text field rather than replacing it. A style value is stored as a string and may legitimately be `auto`, `clamp(1rem, 2vw, 3rem)`, a two-part shorthand like `10px 20px`, a CSS-wide keyword, or a design-token reference — so a control that modelled a length as a number plus a unit would write five of those six away the first time the field was touched. The affordances engage only where the stored value is a single simple measurement and disengage silently everywhere else, and whether a stepped or unit-swapped result is legal is decided by asking the engine with the property's own rules rather than by restating them.

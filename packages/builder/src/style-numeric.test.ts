@@ -98,9 +98,11 @@ describe("what a measurement is", () => {
   it.each([
     ["9007199254740993", "an integer past the safe range"],
     ["1e-3", "exponent notation"],
+    ["1e-7", "an exponent JavaScript itself prints back"],
     [".5", "a leading point"],
     ["+5", "an explicit plus"],
-  ])("declines %s (%s), which does not survive a number round trip", digits => {
+    ["1.50", "a trailing zero"],
+  ])("declines %s (%s), which the composer cannot reproduce", digits => {
     // The engine accepts all four. A double changes each of them — the first
     // comes back SMALLER than it started — so composing one writes a value the
     // author never typed. Asserted as one family rather than one case, because
@@ -109,8 +111,10 @@ describe("what a measurement is", () => {
   });
 
   it("keeps the author's precision rather than the double's", () => {
-    expect(measurementOf("1.50rem")).toMatchObject({
-      number: 1.5,
+    // Two decimals because two were written. The double alone reports one, so
+    // a step of `0.05` read from it would round to `1.3` instead of `1.25`.
+    expect(measurementOf("1.25rem")).toMatchObject({
+      number: 1.25,
       decimals: 2,
     });
   });
@@ -142,14 +146,9 @@ describe("stepping a dimension", () => {
   );
 
   it("rounds at the author's own precision", () => {
-    // Rounded at two decimals because the value was written with two. Read at
-    // the double's apparent one, this would answer `1.8rem`.
-    expect(steppedValue(PADDING, "1.50rem", 0.25)).toBe("1.75rem");
-    // The count governs ROUNDING and not spelling: the trailing zero does not
-    // come back, because the composed text is re-parsed to drop the zeros that
-    // rounding introduces. Asserted so the distinction is written down rather
-    // than left for a reader to infer from a comment.
-    expect(steppedValue(PADDING, "1.50rem", 0.1)).toBe("1.6rem");
+    // Rounded at the two decimals the value was written with. Ignored, the
+    // step would round to the whole number and answer `1rem`.
+    expect(steppedValue(PADDING, "1.25rem", 0.1)).toBe("1.35rem");
   });
 
   it("does not answer in floating point", () => {
@@ -210,6 +209,13 @@ describe("units offered", () => {
 });
 
 describe("a toggle is a projection of a keyword leaf", () => {
+  // NO CATALOG PROPERTY DECLARES A TWO-VALUE KEYWORD LEAF, verified by walking
+  // every entry in `STYLE_CATALOG` including nested shapes. So the leaf below
+  // is constructed, and what these assertions cover is the PROJECTION —
+  // whether a vocabulary of this shape is offered as a toggle — and not that a
+  // toggle reaches the panel for any block a site can use, which today it does
+  // not. Said here rather than left to be inferred: a reader meeting a green
+  // suite is entitled to know which half of the claim it stands behind.
   const two: StyleLeaf = {
     kind: "keyword",
     cssProperty: "font-style",

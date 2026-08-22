@@ -165,24 +165,25 @@ export function measurementOfText(text: string): Measurement | undefined {
   if (decimals > MAX_FRACTION_DIGITS) return undefined;
   // THE PROJECTION MUST REPRODUCE ITS OWN INPUT, or it does not get to edit it.
   //
-  // A `number` is a double, and three separate spellings the engine accepts
-  // survive the trip through one changed: `1e-3` comes back `0.001`,
-  // `9007199254740993` comes back `9007199254740992` — smaller than it started
-  // — and `.5` comes back `0.5`. Composing any of them writes a value the
-  // author never typed, which is the silent rewrite this module exists to
-  // prevent, committed by the module itself.
+  // A `number` is a double and several spellings the engine accepts do not
+  // survive the trip through one: `9007199254740993` comes back smaller than it
+  // started, `1e-7` composes to `0`, `.5` becomes `0.5`. Composing any of them
+  // writes a value the author never typed, which is the silent rewrite this
+  // module exists to prevent, committed by the module itself.
   //
-  // Asked as one question rather than as a guard per spelling, because the
-  // three above were found one at a time and there is no reason to think the
-  // list is closed. Anything that does not round-trip keeps the plain field,
-  // where it stays exactly as written and fully editable.
+  // Asked by CALLING THE COMPOSER rather than by re-deriving what it would do.
+  // That is the whole point of the check and not an implementation detail: a
+  // guard written as its own expression is a second answer to "what will this
+  // become", and the two drifted apart at exactly one input — `String(1e-7)` is
+  // `"1e-7"` and round-trips, while `toFixed(0)` on the same value is `"0"`. So
+  // the guard admitted a value the composer then destroyed. Sharing the
+  // function makes that disagreement unrepresentable.
   //
-  // Conservative by design: `+5` and `05` are legal and do not round-trip
-  // either, so they lose the affordances too. For an editing aid that is the
-  // cheap direction to be wrong in — the value still works and can still be
-  // typed, which is not true of the alternative.
-  const rewritten = decimals === 0 ? String(number) : number.toFixed(decimals);
-  if (rewritten !== digits) return undefined;
+  // Conservative by design: `1.50`, `+5`, `05` and `.5` are all legal and none
+  // reproduces itself, so they lose the affordances too. For an editing aid
+  // that is the cheap direction to be wrong in — the value still works and can
+  // still be typed, which is not true of the alternative.
+  if (composeMeasurement(number, "", decimals) !== digits) return undefined;
   return { number, unit, decimals };
 }
 
