@@ -723,6 +723,29 @@ describe("styleUnionVariant", () => {
     ).toBe(1);
   });
 
+  it("ranks by the DEEPEST complaint, so key order cannot change the answer", () => {
+    // Issues arrive in the stored object's key order, so reading only the first
+    // one makes the arm depend on insertion order — and `{ a, x }` and
+    // `{ x, a }` are the same value. Both arms take records, so the kind rule
+    // ties and depth decides; only the second arm can complain below `x`.
+    const leaf = leafOf("letterSpacing");
+    const shallow: ObjectShape = {
+      kind: "object",
+      fields: { a: leaf, x: leaf },
+    };
+    const deep: ObjectShape = {
+      kind: "object",
+      fields: {
+        a: leaf,
+        x: { kind: "object", fields: { y: leafOf("opacity") } },
+      },
+    };
+    const both: UnionShape = { kind: "union", of: [shallow, deep] };
+
+    expect(styleUnionVariant(both, { a: 5, x: { y: "bad" } })).toBe(1);
+    expect(styleUnionVariant(both, { x: { y: "bad" }, a: 5 })).toBe(1);
+  });
+
   it("chooses by the value's form rather than by the catalog's order", () => {
     // Every union the catalog ships happens to list the arm a malformed STRING
     // belongs to first, so order and the rule agree on all of them and a test

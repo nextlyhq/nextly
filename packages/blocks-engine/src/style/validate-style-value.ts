@@ -1040,7 +1040,7 @@ interface VariantRank {
   readonly accepts: boolean;
   /** Whether the value is written in a form this arm stores at all. */
   readonly stores: boolean;
-  /** How deep the arm's first complaint points, in pointer SEGMENTS. */
+  /** How deep the arm's DEEPEST complaint points, in pointer SEGMENTS. */
   readonly depth: number;
 }
 
@@ -1067,7 +1067,15 @@ function variantRank(
   return {
     accepts: !issues.some(issue => issue.severity === "error"),
     stores: shapeStoresKindOf(variant, value),
-    depth: pointerDepth(issues[0]?.path ?? ""),
+    // The DEEPEST complaint, not the first one enumerated. Issues arrive in the
+    // stored object's key order, so reading `issues[0]` makes the answer depend
+    // on insertion order: `{ a, x }` and `{ x, a }` hold the same value and
+    // would be judged under different arms, producing different diagnostics and
+    // different controls for one document.
+    depth: issues.reduce(
+      (deepest, issue) => Math.max(deepest, pointerDepth(issue.path)),
+      0
+    ),
   };
 }
 

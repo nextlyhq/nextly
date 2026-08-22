@@ -677,6 +677,25 @@ describe("controls", () => {
     ).toBe("");
   });
 
+  it("ties a refusal to the control that produced it", () => {
+    // `role="alert"` announces once and is then gone. Without the relationship
+    // being stated, a screen-reader user returning to the field — or meeting
+    // several rejected controls — cannot tell which message belongs to which.
+    const editor = mount({ spacing: true });
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "12 furlongs" } });
+    fireEvent.blur(field);
+    expect(editor.apply).not.toHaveBeenCalled();
+
+    const describedBy = field.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(
+      document.getElementById(describedBy as string)?.textContent
+    ).toContain("is not a length");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+
   it("shows a stored token by name rather than as editable text", () => {
     // `{ $token }` is one value spelled as an object. Typing over it would
     // store the token's NAME as a literal — a value that looks right in the

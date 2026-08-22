@@ -139,8 +139,9 @@ export function StyleInspectorPanel({
    * makes it for itself because it is exported standalone, and a host mounting
    * it directly gets no wrapper.
    *
-   * Per-property batch editing is Plan 05's batch edit and is deliberately not
-   * here.
+   * Editing one property across a whole selection — one field showing "Mixed"
+   * and writing to every block — is a different surface with its own rules
+   * about what a shared value means, and it does not exist yet.
    */
   if (editor.selection.ids.length > 1) {
     return (
@@ -524,6 +525,11 @@ function StyleControlField({
   policy: StylePolicy | undefined;
 }): React.JSX.Element {
   const id = React.useId();
+  // The message's own id, so the control can point at it. A `role="alert"`
+  // announces once and then it is gone: a screen-reader user who returns to the
+  // field, or meets several rejected controls, has no way to tell which message
+  // belongs to which without the relationship being stated.
+  const errorId = `${id}-error`;
   const address: StyleAddress = {
     state,
     breakpoint,
@@ -617,35 +623,81 @@ function StyleControlField({
       <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
         {label}
       </Label>
-      {clearOnly ? (
-        <RetainedValue
-          labelledBy={labelId}
-          label={actionName}
-          stored={stored}
-          onClear={() => commit(null)}
-        />
-      ) : isTokenRef(stored) ? (
-        <TokenValue
-          labelledBy={labelId}
-          label={actionName}
-          name={stored.$token}
-          onClear={() => commit(null)}
-        />
-      ) : (
-        <ValueField
-          id={id}
-          control={control}
-          stored={stored}
-          actionName={actionName}
-          onCommit={commit}
-        />
-      )}
+      <ControlValue
+        id={id}
+        labelledBy={labelId}
+        control={control}
+        stored={stored}
+        actionName={actionName}
+        clearOnly={clearOnly}
+        describedBy={issue === null ? undefined : errorId}
+        onCommit={commit}
+      />
       {issue === null ? null : (
-        <p className="nx-inspector__error" role="alert">
+        <p className="nx-inspector__error" id={errorId} role="alert">
           {issue}
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * The surface one value is shown through: read-only, a token, or editable.
+ *
+ * Its own component rather than a chain of conditionals inside the field,
+ * because the three are genuinely different surfaces — one of them cannot be
+ * typed into at all — and reading them as early returns says that, where a
+ * nested ternary reads as one control with two exceptions.
+ */
+function ControlValue({
+  id,
+  labelledBy,
+  control,
+  stored,
+  actionName,
+  clearOnly,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  labelledBy: string;
+  control: StyleControl;
+  stored: StyleValue | undefined;
+  actionName: string;
+  clearOnly: boolean;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => void;
+}): React.JSX.Element {
+  if (clearOnly) {
+    return (
+      <RetainedValue
+        labelledBy={labelledBy}
+        label={actionName}
+        stored={stored}
+        onClear={() => onCommit(null)}
+      />
+    );
+  }
+  if (isTokenRef(stored)) {
+    return (
+      <TokenValue
+        labelledBy={labelledBy}
+        label={actionName}
+        name={stored.$token}
+        onClear={() => onCommit(null)}
+      />
+    );
+  }
+  return (
+    <ValueField
+      id={id}
+      control={control}
+      stored={stored}
+      actionName={actionName}
+      describedBy={describedBy}
+      onCommit={onCommit}
+    />
   );
 }
 
@@ -737,6 +789,7 @@ function ValueField({
   control,
   stored,
   actionName,
+  describedBy,
   onCommit,
 }: {
   id: string;
@@ -744,6 +797,13 @@ function ValueField({
   stored: StyleValue | undefined;
   /** What this control's clear action removes, named for the property. */
   actionName: string;
+  /**
+   * The id of the message explaining why this control's last value was refused,
+   * or `undefined` when nothing was. Also what marks the control invalid: the
+   * two travel together because a control described by an error message and not
+   * marked invalid reads as one carrying a hint.
+   */
+  describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => void;
 }): React.JSX.Element {
   if (control.kind === "select" && control.leaf.kind === "keyword") {
@@ -760,7 +820,11 @@ function ValueField({
     return (
       <div className="nx-style-inspector__select">
         <Select value={current} onValueChange={value => onCommit(value)}>
-          <SelectTrigger id={id}>
+          <SelectTrigger
+            id={id}
+            aria-describedby={describedBy}
+            aria-invalid={describedBy === undefined ? undefined : true}
+          >
             <SelectValue placeholder="Not set" />
           </SelectTrigger>
           <SelectContent>
@@ -793,7 +857,13 @@ function ValueField({
     );
   }
   return (
-    <TextField id={id} control={control} stored={stored} onCommit={onCommit} />
+    <TextField
+      id={id}
+      control={control}
+      stored={stored}
+      describedBy={describedBy}
+      onCommit={onCommit}
+    />
   );
 }
 
@@ -808,11 +878,14 @@ function TextField({
   id,
   control,
   stored,
+  describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
+  /** The id of the message explaining a refusal, and what marks this invalid. */
+  describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => void;
 }): React.JSX.Element {
   const [draft, setDraft] = React.useState(() => storedText(stored));
@@ -839,6 +912,8 @@ function TextField({
       id={id}
       value={draft}
       placeholder={placeholderFor(control)}
+      aria-describedby={describedBy}
+      aria-invalid={describedBy === undefined ? undefined : true}
       // Committed on blur and on Enter, matching the content tab: an op per
       // keystroke would make one undo remove one character.
       onChange={event => setDraft(event.target.value)}
