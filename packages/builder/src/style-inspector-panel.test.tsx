@@ -1076,7 +1076,7 @@ describe("the numeric affordances a simple measurement earns", () => {
   it("offers a unit menu only where the value is one measurement", () => {
     mount({ spacing: true }, withPadding("12px"));
     expect(
-      fieldsOf("padding").getByLabelText("Unit for Padding")
+      fieldsOf("padding").getByLabelText("Unit for Padding block start")
     ).toBeDefined();
 
     cleanup();
@@ -1084,6 +1084,55 @@ describe("the numeric affordances a simple measurement earns", () => {
     mount({ spacing: true }, withPadding("auto"));
     // A menu rendered over `auto` could only offer no-ops, and a control that
     // silently does nothing is worse than one that is not drawn.
-    expect(fieldsOf("padding").queryByLabelText("Unit for Padding")).toBeNull();
+    expect(
+      fieldsOf("padding").queryByLabelText("Unit for Padding block start")
+    ).toBeNull();
+  });
+
+  it("names each side's unit menu for that side, not for the property", () => {
+    // A composite draws one menu per side. Named from the property alone, all
+    // four would announce "Unit for Padding" and a screen-reader user could not
+    // tell which side a menu edits, so the distinctness is asserted by naming
+    // two of them rather than by matching one string.
+    mount({ spacing: true }, {
+      base: {
+        [BASE_BREAKPOINT]: {
+          padding: { blockStart: "12px", blockEnd: "4px" },
+        },
+      },
+    } as NodeStyles);
+    const padding = fieldsOf("padding");
+
+    expect(
+      padding.getByLabelText("Unit for Padding block start")
+    ).toBeDefined();
+    expect(padding.getByLabelText("Unit for Padding block end")).toBeDefined();
+  });
+
+  it("keeps a stored unit the menu does not offer, rather than showing an empty one", () => {
+    // `ch` is a valid length this build does not put in the menu. A controlled
+    // select with no matching item renders a BLANK trigger over a value that is
+    // doing something, so the stored unit is carried as its own item.
+    mount({ spacing: true }, withPadding("12ch"));
+
+    expect(
+      fieldsOf("padding").getByLabelText("Unit for Padding block start")
+    ).toHaveProperty("textContent", "ch");
+  });
+
+  it("leaves scientific notation to the plain field", () => {
+    // `1e-3rem` is a legal value with no decimal count that both preserves it
+    // and survives a step: composing one back rounds it to `0`. Declining is
+    // what keeps it intact, so neither affordance is offered.
+    const editor = mount({ spacing: true }, withPadding("1e-3rem"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(field).toHaveProperty("value", "1e-3rem");
+    expect(
+      fieldsOf("padding").queryByLabelText("Unit for Padding block start")
+    ).toBeNull();
   });
 });

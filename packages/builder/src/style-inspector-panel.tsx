@@ -67,6 +67,7 @@ import {
   type StyleSection,
 } from "./style-inspector";
 import {
+  CSS_NUMBER,
   measurementOf,
   steppedValue,
   toggleOptionsFor,
@@ -986,26 +987,9 @@ function ValueField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  // A keyword vocabulary too wide for a toggle is a menu. Narrowed here rather
-  // than inside the component so the leaf carries its own kind through.
-  if (control.kind === "select" && control.leaf.kind === "keyword") {
-    return (
-      <SelectField
-        id={id}
-        control={{ ...control, leaf: control.leaf }}
-        stored={stored}
-        actionName={actionName}
-        describedBy={describedBy}
-        onCommit={onCommit}
-      />
-    );
-  }
-  // A two-value keyword is drawn as a pair of buttons rather than a menu: both
-  // options are visible and each is one click, where a select costs two and
-  // hides the alternative until it is opened. Offered only where the whole
-  // vocabulary fits — `toggleOptionsFor` declines a shorthand — and only where
-  // the STORED value is one of the two, so a CSS-wide keyword or a token keeps
-  // the field that can actually show it.
+  // Decided BEFORE the menu, because every keyword leaf resolves to the
+  // `select` control kind — so a branch on that kind placed first would return
+  // for all of them and the toggle could never be reached.
   const toggle = toggleOptionsFor(control.leaf);
   if (toggle !== undefined && toggleShows(toggle, stored)) {
     return (
@@ -1020,11 +1004,26 @@ function ValueField({
     );
   }
 
+  // A keyword vocabulary too wide for a toggle is a menu. Narrowed here rather
+  // than inside the component so the leaf carries its own kind through.
+  if (control.kind === "select" && control.leaf.kind === "keyword") {
+    return (
+      <SelectField
+        id={id}
+        control={{ ...control, leaf: control.leaf }}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   return (
     <NumericField
       id={id}
       control={control}
       stored={stored}
+      actionName={actionName}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -1098,12 +1097,22 @@ function NumericField({
   id,
   control,
   stored,
+  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
+  /**
+   * This control's own name, position included.
+   *
+   * Taken from the caller rather than derived from the property here: a
+   * composite draws one of these per side, and a name built from the property
+   * alone would give all four of `padding`'s menus the same accessible name,
+   * leaving a screen reader no way to tell which side one edits.
+   */
+  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -1112,7 +1121,22 @@ function NumericField({
   // The menu is shown only where it can act. Rendered against a value it cannot
   // decompose, every choice in it would be a no-op, and a disabled-looking
   // control that silently does nothing is worse than one that is not there.
-  const showUnits = units.length > 0 && measurement !== undefined;
+  //
+  // A UNITLESS measurement is excluded for a different reason: `line-height: 1.5`
+  // has no unit to swap, and adding one changes what the property means rather
+  // than how it is spelled. The menu has no way to offer "no unit" back either,
+  // so showing one would be a one-way door.
+  const showUnits =
+    units.length > 0 && measurement !== undefined && measurement.unit !== "";
+  // A stored unit the candidate list does not carry — `ch`, or an uppercase
+  // `PX` the validator folds — is live and compiles while matching no item, and
+  // a controlled select over it renders an EMPTY trigger above a value that is
+  // doing something. Offered verbatim as its own item, which is what the
+  // keyword select above already does for a value outside its vocabulary.
+  const extraUnit =
+    measurement !== undefined && !units.includes(measurement.unit)
+      ? measurement.unit
+      : null;
 
   return (
     <div className="nx-style-inspector__numeric">
@@ -1140,12 +1164,13 @@ function NumericField({
             if (next !== undefined) onCommit(next);
           }}
         >
-          <SelectTrigger
-            aria-label={`Unit for ${fieldLabel(control.property)}`}
-          >
+          <SelectTrigger aria-label={`Unit for ${actionName}`}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            {extraUnit === null ? null : (
+              <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
+            )}
             {units.map(unit => (
               <SelectItem key={unit} value={unit}>
                 {unit}
@@ -1272,19 +1297,6 @@ function openSection(
   if (chosen === "") return "";
   return available.has(chosen) ? chosen : first;
 }
-
-/**
- * The grammar CSS calls a `<number>`: an optional sign, digits with an optional
- * decimal part, and an optional exponent.
- *
- * Deliberately narrower than `Number` in both directions. `Number` reads
- * spellings CSS does not (`0x10`, `0b10`, `0o10`), and it also accepts a
- * trailing point: CSS requires at least one digit AFTER a decimal point, so
- * `1.` is a number followed by a stray delimiter rather than a number, and
- * `Number("1.")` quietly answering `1` would store a value the author never
- * wrote a valid spelling of.
- */
-const CSS_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 /** A stored value as a text field shows it. */
 function storedText(value: StyleValue | undefined): string {

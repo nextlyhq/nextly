@@ -94,8 +94,12 @@ export interface Measurement {
  * trailing text fails to match rather than matching its first part and
  * presenting a shorthand as though it were one measurement.
  */
-const MEASUREMENT =
-  /^([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Z]+|%)?$/;
+const MEASUREMENT = new RegExp(
+  // Composed from the one grammar rather than spelled again: a second copy of
+  // the number rule would let a draft this accepts and `committedValue`
+  // rejects — or the reverse — pass every test either side owns.
+  `^(${CSS_NUMBER.source.replace(/^\^|\$$/g, "")})([a-zA-Z]+|%)?$`
+);
 
 /**
  * The measurement a stored value holds, when it holds exactly one.
@@ -134,6 +138,13 @@ export function measurementOfText(text: string): Measurement | undefined {
   const match = MEASUREMENT.exec(trimmed);
   if (match === null) return undefined;
   const [, digits = "", unit = ""] = match;
+  // Exponent notation is DECLINED rather than decomposed. It is a legal CSS
+  // number, and the affordances cannot carry it: there is no decimal count that
+  // both preserves `1e-3` and survives a step, so composing one back rounds a
+  // real value to `0` — which is the silent destruction this module exists to
+  // prevent, committed by the module itself. Declining keeps the plain field,
+  // where the value stays exactly as written and remains editable.
+  if (/[eE]/.test(digits)) return undefined;
   const number = Number(digits);
   if (!Number.isFinite(number)) return undefined;
   return { number, unit, decimals: decimalsOf(digits) };
@@ -146,12 +157,10 @@ export function measurementOfText(text: string): Measurement | undefined {
  * a step applied to `1.50` answers `1.60` rather than `1.6`, so a field does
  * not reformat itself under an author who was mid-edit.
  *
- * An exponent abandons the question — `1e-3` written back at three decimals
- * would be `0.001`, a different spelling of the same value, and rewriting a
- * spelling nobody asked to change is the thing this module exists to avoid.
+ * Exponent notation never reaches here, because {@link measurementOf} declines
+ * it — see the note there for why rounding it was the wrong answer.
  */
 function decimalsOf(digits: string): number {
-  if (/[eE]/.test(digits)) return 0;
   const point = digits.indexOf(".");
   return point === -1 ? 0 : digits.length - point - 1;
 }
