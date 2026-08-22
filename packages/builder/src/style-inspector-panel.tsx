@@ -415,15 +415,22 @@ function FormChoice({
     const arm = Number(raw);
     if (!Number.isInteger(arm)) return;
     onChooseForm(property.property, variant.path, arm);
-    if (!property.set) return;
     const current = findNode(editor.document.nodes, nodeId);
     if (current === undefined) return;
-    const cleared = styleClearOp(
-      nodeId,
-      current.styles,
-      { state, breakpoint, property: property.property, path: [] },
-      policy
-    );
+    // The union's OWN position, not the property's root. A union can sit below
+    // it — `position` holds a type, an inset and a zIndex, and only the last is
+    // a union — so clearing the root to change the zIndex form would delete the
+    // author's positioning scheme and offsets along with it.
+    const address: StyleAddress = {
+      state,
+      breakpoint,
+      property: property.property,
+      path: variant.path,
+    };
+    // Read at this position for the same reason: `property.set` answers for the
+    // whole property, which is true whenever any sibling holds a value.
+    if (readStyleValue(current.styles, address) === undefined) return;
+    const cleared = styleClearOp(nodeId, current.styles, address, policy);
     if (cleared.ok && cleared.op !== null) editor.apply(cleared.op);
   };
 

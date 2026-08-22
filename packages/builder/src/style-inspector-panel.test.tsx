@@ -409,6 +409,30 @@ describe("controls", () => {
     });
   });
 
+  it("clears only the union position when a NESTED form changes", () => {
+    // `position` holds a type, an inset and a zIndex, and only the last is a
+    // union. Clearing the property root to change the zIndex form would delete
+    // the author's positioning scheme and offsets with it.
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: { position: { type: "relative", zIndex: 3 } },
+      },
+    } as NodeStyles;
+    const editor = mount({ position: true }, styles);
+
+    fireEvent.click(screen.getByLabelText("Z index form"));
+    fireEvent.click(screen.getByRole("option", { name: "Keyword" }));
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+      patch: {
+        styles: {
+          base: { [BASE_BREAKPOINT]: { position: { type: "relative" } } },
+        },
+      },
+    });
+  });
+
   it("lets a keyword selection be cleared, which a select cannot offer as an item", () => {
     const styles = {
       base: { [BASE_BREAKPOINT]: { mixBlendMode: "multiply" } },
