@@ -58,7 +58,26 @@ export {
   // Bulk collection hooks
   useBulkDeleteCollections,
   useBulkUpdateCollections,
+  // Single-document hooks. A plugin that owns a Single needs the same read and
+  // write the admin's own Single form uses; a second client for one document
+  // would be a second answer to how it caches and when it invalidates.
+  useSingleDocument,
+  useUpdateSingleDocument,
 } from "./hooks/queries";
+export type { SingleDocument } from "./hooks/queries";
+// What a failed request raises, and the two guards that read it. Exported
+// together because the type alone does not let a caller reach the payload: a
+// rejection arrives as `Error` from `onError` and `unknown` from `catch`, and
+// `ApiError.data` is `Record<string, unknown>`, so the reasons stay behind a
+// cast at both steps. `isApiError` narrows the first and `validationIssues`
+// answers the second, each by CHECKING rather than asserting — which matters
+// because a transport failure rejects with a native error that is neither.
+export {
+  isApiError,
+  validationIssues,
+  type ApiError,
+  type ValidationIssue,
+} from "./lib/api/parseApiError";
 
 // Media hooks
 export {

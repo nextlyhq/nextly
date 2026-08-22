@@ -3,6 +3,7 @@
 exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`] = `
 [
   "AdminChromeLayer (type)",
+  "ApiError (type)",
   "AutosaveStatus (type)",
   "BulkAction (type)",
   "Card (value)",
@@ -59,14 +60,17 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "PluginMenuItem (type)",
   "RichTextEditorKit (type)",
   "RowAction (type)",
+  "SingleDocument (type)",
   "Stack (value)",
   "StackProps (type)",
   "Stat (value)",
   "StatProps (type)",
   "UseDocumentCheckpointOptions (type)",
   "UseDocumentCheckpointResult (type)",
+  "ValidationIssue (type)",
   "ValidationNumberField (value)",
   "ValidationNumberFieldProps (type)",
+  "isApiError (value)",
   "loadRichTextEditorKit (value)",
   "operatorTakesValue (value)",
   "operatorsForType (value)",
@@ -87,7 +91,10 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "usePluginClientConfig (value)",
   "usePluginFieldTypeEntries (value)",
   "useReportUnsavedWork (value)",
+  "useSingleDocument (value)",
   "useSuppressAdminChrome (value)",
+  "useUpdateSingleDocument (value)",
+  "validationIssues (value)",
   "withOptionIds (value)",
 ]
 `;
