@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import * as publicEntry from "../index";
 import { compileStyleValues } from "./declarations";
 import type { SiteToken } from "./site-tokens";
 import {
@@ -853,6 +854,21 @@ describe("a token's stable identity", () => {
     expect(issues.some(i => i.message.includes("--site-color-primary"))).toBe(
       true
     );
+  });
+
+  it("reaches an editor through the package's public entry", () => {
+    // Imported from `../index` rather than from `./site-tokens`, because the
+    // module resolving is not the surface a consumer resolves: `packages/builder`
+    // sees only the `.` export, and a helper absent from it is a helper the
+    // rename UI cannot call. Left unexported, the pinning rule gets reimplemented
+    // or `name` is written directly — which moves the custom property every
+    // compiled page references, which is the defect the rule exists to prevent.
+    //
+    // Identity rather than mere presence: a re-declaration at the entry would
+    // satisfy a `toBeDefined`, and would be the second implementation this is
+    // asserting does not exist.
+    expect(publicEntry.tokenIdentity).toBe(tokenIdentity);
+    expect(publicEntry.renameSiteToken).toBe(renameSiteToken);
   });
 
   it("refuses an id that cannot be written as a custom property", () => {

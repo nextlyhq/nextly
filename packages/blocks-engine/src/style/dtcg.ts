@@ -136,49 +136,101 @@ export function tokensToDtcg(set: SiteTokenSet): {
   const issues: ValidationIssue[] = [];
 
   for (const token of set.tokens) {
-    if (!isTokenName(token.name)) {
-      issues.push(
-        issue(`"${token.name}" is not a token name, so it was not exported.`)
-      );
-      continue;
-    }
-
-    const type = DTCG_TYPE[token.kind];
-    const value = type === undefined ? undefined : toDtcgValue(token);
-    if (type === undefined || value === undefined) {
-      issues.push(
-        issue(
-          `"${token.name}" holds a value the design-token format cannot express, so it was not exported. Its value is still here in Nextly.`
-        )
-      );
-      continue;
-    }
-
-    const extension: NextlyExtension = {
-      css:
-        token.values.dark === undefined
-          ? { light: token.values.light }
-          : { light: token.values.light, dark: token.values.dark },
-      kind: token.kind,
-      // Written only when the token carries one. Exporting `id: name` for every
-      // token that never moved would make the field say nothing about identity
-      // and everything about which version of this exporter ran.
-      ...(token.id === undefined ? {} : { id: token.id }),
-    };
-    const entry: DtcgNode = {
-      $type: type,
-      $value: value,
-      $extensions: {
-        ...(token.extensions ?? {}),
-        [NEXTLY_EXTENSION]: extension,
-      },
-    };
-    if (token.description !== undefined) entry.$description = token.description;
-
+    const entry = dtcgEntry(token, issues);
+    // Skipped rather than placed: `dtcgEntry` has already said why, and a name
+    // it refused is one `place` would split into a path anyway.
+    if (entry === undefined) continue;
     place(document, token.name.split("."), entry, issues);
   }
 
   return { document, issues };
+}
+
+/**
+ * One token as the format holds it, or nothing when it cannot be written.
+ *
+ * Split from the checks the way {@link readToken} is split from its assembly,
+ * and for the same reason: deciding whether a token can cross the boundary and
+ * building the node that crosses it are separate jobs, and a guard added to the
+ * builder would be a second place that answers the first question.
+ */
+function dtcgEntry(
+  token: SiteToken,
+  issues: ValidationIssue[]
+): DtcgNode | undefined {
+  const writable = exportableValue(token, issues);
+  if (writable === undefined) return undefined;
+  return entryFor(token, writable.type, writable.value);
+}
+
+/**
+ * What this token becomes in the format, or nothing with the reason reported.
+ *
+ * Returns the converted value rather than merely approving the token, so the
+ * caller does not convert it a second time — two conversions of one value is
+ * the shape that lets an approval and an emission disagree about what was
+ * approved.
+ */
+function exportableValue(
+  token: SiteToken,
+  issues: ValidationIssue[]
+): { type: string; value: unknown } | undefined {
+  if (!isTokenName(token.name)) {
+    issues.push(
+      issue(`"${token.name}" is not a token name, so it was not exported.`)
+    );
+    return undefined;
+  }
+  // The id is held to the grammar too, and refused rather than written. Writing
+  // it produces a file this module's own importer refuses on the way back in —
+  // and it refuses the WHOLE token, because an id it cannot read is an identity
+  // it cannot honour. An exporter emitting a document that fails its own round
+  // trip is the one shape this module exists to prevent.
+  if (token.id !== undefined && !isTokenName(token.id)) {
+    issues.push(
+      issue(
+        `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
+      )
+    );
+    return undefined;
+  }
+
+  const type = DTCG_TYPE[token.kind];
+  const value = type === undefined ? undefined : toDtcgValue(token);
+  if (type === undefined || value === undefined) {
+    issues.push(
+      issue(
+        `"${token.name}" holds a value the design-token format cannot express, so it was not exported. Its value is still here in Nextly.`
+      )
+    );
+    return undefined;
+  }
+  return { type, value };
+}
+
+/** The node for a token already established as writable. */
+function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
+  const extension: NextlyExtension = {
+    css:
+      token.values.dark === undefined
+        ? { light: token.values.light }
+        : { light: token.values.light, dark: token.values.dark },
+    kind: token.kind,
+    // Written only when the token carries one. Exporting `id: name` for every
+    // token that never moved would make the field say nothing about identity
+    // and everything about which version of this exporter ran.
+    ...(token.id === undefined ? {} : { id: token.id }),
+  };
+  const entry: DtcgNode = {
+    $type: type,
+    $value: value,
+    $extensions: {
+      ...(token.extensions ?? {}),
+      [NEXTLY_EXTENSION]: extension,
+    },
+  };
+  if (token.description !== undefined) entry.$description = token.description;
+  return entry;
 }
 
 /** Put a token at its path, creating the groups it passes through. */

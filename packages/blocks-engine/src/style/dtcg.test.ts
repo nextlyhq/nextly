@@ -755,6 +755,29 @@ describe("a token's stable identity across the format", () => {
     expect(read[0]).not.toHaveProperty("id");
   });
 
+  it("refuses to EXPORT an id it would refuse to import, so a file survives its own round trip", () => {
+    // The three readers of a token have to agree about what an unusable id
+    // means. `emitTokenBlocks` refuses the token and the importer below refuses
+    // it; an exporter that wrote it anyway would produce a document this very
+    // module rejects on the way back in — and reject the WHOLE token, because
+    // an id it cannot read is an identity it cannot honour.
+    const bad: SiteToken[] = [
+      {
+        id: "color}primary",
+        name: "brand.main",
+        kind: "color",
+        values: { light: "#2563eb" },
+      },
+    ];
+    const { document, issues } = tokensToDtcg(tokens(bad));
+
+    expect(Object.keys(document)).toEqual([]);
+    expect(issues.some(i => i.message.includes("id"))).toBe(true);
+    // The round trip is the property, so it is asserted as one rather than
+    // inferred from the export being empty.
+    expect(dtcgToTokens(document).tokens).toEqual([]);
+  });
+
   it("skips a token whose stated id could never be written, rather than dropping the id", () => {
     // Importing it WITHOUT the id is the tempting repair and it is the wrong
     // one: the token would arrive with its name for an identity, emit a

@@ -284,6 +284,13 @@ export {
   emitFontFaces,
   emitTokenBlocks,
   isTokenName,
+  // Both halves of token identity, public for the same reason the types are:
+  // an editor that offers rename has to pin the identity the way this package
+  // pins it, and one that cannot reach these has no way to do that except to
+  // reimplement the rule or to write `name` directly — which moves the custom
+  // property every compiled page references, silently.
+  renameSiteToken,
+  tokenIdentity,
   resolveTokenPrefix,
   validateFontFace,
 } from "./style/site-tokens";
