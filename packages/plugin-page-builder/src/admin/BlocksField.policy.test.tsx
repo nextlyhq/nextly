@@ -31,6 +31,13 @@ const seen: {
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
 
+/** What the stored-style read answers with for the test in hand. */
+let siteStyleRead: { data: unknown; isPending: boolean; error: null } = {
+  data: undefined,
+  isPending: false,
+  error: null,
+};
+
 vi.mock("@nextlyhq/builder/shell", () => {
   const record =
     (key: "inspector" | "canvas") =>
@@ -105,11 +112,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // merge of stored over defaults is `site-style-client`'s own question and has
   // its own coverage. Standing a real query client up here would put a second
   // subject in every assertion below.
-  useSingleDocument: () => ({
-    data: undefined,
-    isPending: false,
-    error: null,
-  }),
+  useSingleDocument: () => siteStyleRead,
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -137,6 +140,7 @@ beforeEach(() => {
   seen.inspector = undefined;
   seen.canvas = undefined;
   clientConfig = undefined;
+  siteStyleRead = { data: undefined, isPending: false, error: null };
 });
 
 afterEach(() => {
@@ -185,5 +189,33 @@ describe("what the editor hands its two enforcing surfaces", () => {
       | { mayFetchUrl?: (url: string) => boolean }
       | undefined;
     expect(policy?.mayFetchUrl).toBeUndefined();
+  });
+});
+
+describe("what the canvas waits for", () => {
+  it("holds the canvas back while the stored style is still arriving", () => {
+    // The defaults `useSiteStyle` answers with meanwhile are a real design, not
+    // a placeholder — so a canvas mounted on them looks finished and is wrong
+    // wherever an admin overrode something. An author would watch the page
+    // re-lay-out, and could drag against a design the site does not have.
+    siteStyleRead = { data: undefined, isPending: true, error: null };
+
+    openEditor();
+
+    expect(seen.canvas).toBeUndefined();
+    expect(
+      document.querySelector('[data-canvas-state="loading"]')
+    ).not.toBeNull();
+  });
+
+  it("mounts the canvas once the read has answered", () => {
+    // The control. Without it a build that never mounted the canvas at all
+    // would pass the test above.
+    siteStyleRead = { data: undefined, isPending: false, error: null };
+
+    openEditor();
+
+    expect(seen.canvas).toBeDefined();
+    expect(document.querySelector('[data-canvas-state="loading"]')).toBeNull();
   });
 });

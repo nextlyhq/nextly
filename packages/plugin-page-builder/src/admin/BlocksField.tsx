@@ -415,7 +415,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     () => readSiteStyleRecord(clientConfig?.siteStyle),
     [clientConfig]
   );
-  const { siteStyle: canvasSiteStyle } = useSiteStyle(configSiteStyle);
+  const { siteStyle: canvasSiteStyle, pending: siteStylePending } =
+    useSiteStyle(configSiteStyle);
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -622,38 +623,60 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             behave differently.
           */}
           <EditorCommandPalette editor={editor} onExit={done} />
-          <Canvas
-            document={editor.document}
-            siteStyles={siteSheet(canvasSiteStyle)}
-            selectedId={editor.selectedId}
-            selectedIds={editor.selection.ids}
-            onSelect={editor.select}
-            // The style context and the host policy, derived above so both are
-            // one object with one identity rather than rebuilt per render.
-            render={canvasRender}
-            dragHandlers={drag.handlers}
-            // The pointer route into typing a block's text. Its keyboard
-            // counterpart is the Enter binding above, registered in the same
-            // place so a surface cannot gain one without the other.
-            onDoubleClick={inline.onDoubleClick}
-            // Both pieces of chrome go through the canvas rather than beside it,
-            // because both are positioned in the canvas's own content
-            // coordinates and the canvas root is what establishes them.
-            overlay={
-              <>
-                <DropIndicator target={drag.target} />
-                {/*
+          {/*
+            Held back until the stored style has arrived.
+
+            `useSiteStyle` answers with the host's defaults while the read is in
+            flight, and those defaults are a legitimate design rather than a
+            placeholder — so a canvas mounted on them looks finished and is
+            wrong at exactly the properties an admin overrode. The author would
+            see the page re-lay-out under them, and could start dragging against
+            a design the site does not have.
+
+            Only the canvas waits. The shell, the rail and the inspector are all
+            about the DOCUMENT, which is already in hand, and blanking them
+            would make the editor feel slower than it is. After the first open
+            the read is cached, so this is one brief state per session rather
+            than one per opening.
+          */}
+          {siteStylePending ? (
+            <p className="nx-inspector__note" data-canvas-state="loading">
+              Loading this site&rsquo;s styles&hellip;
+            </p>
+          ) : (
+            <Canvas
+              document={editor.document}
+              siteStyles={siteSheet(canvasSiteStyle)}
+              selectedId={editor.selectedId}
+              selectedIds={editor.selection.ids}
+              onSelect={editor.select}
+              // The style context and the host policy, derived above so both are
+              // one object with one identity rather than rebuilt per render.
+              render={canvasRender}
+              dragHandlers={drag.handlers}
+              // The pointer route into typing a block's text. Its keyboard
+              // counterpart is the Enter binding above, registered in the same
+              // place so a surface cannot gain one without the other.
+              onDoubleClick={inline.onDoubleClick}
+              // Both pieces of chrome go through the canvas rather than beside it,
+              // because both are positioned in the canvas's own content
+              // coordinates and the canvas root is what establishes them.
+              overlay={
+                <>
+                  <DropIndicator target={drag.target} />
+                  {/*
                   Suppressed for the duration of a drag. The bar would otherwise
                   sit over the canvas the author is aiming at, naming a block
                   that is in the middle of moving.
                 */}
-                <BlockToolbar
-                  editor={editor}
-                  hidden={drag.draggingId !== null}
-                />
-              </>
-            }
-          />
+                  <BlockToolbar
+                    editor={editor}
+                    hidden={drag.draggingId !== null}
+                  />
+                </>
+              }
+            />
+          )}
         </BlockKeyboardActions>
       </BuilderShell>
     </div>

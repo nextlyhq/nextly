@@ -178,11 +178,19 @@ describe.each(getConfiguredTestDialects())(
         { tokens: TOKENS },
         { overrideAccess: true }
       );
-      await singles.update(
+      const refused = (await singles.update(
         SITE_STYLE_SLUG,
         { breakpoints: { viewport: [{ id: "", label: "" }] } },
         { overrideAccess: true }
-      );
+      )) as { success?: boolean; committed?: boolean };
+
+      // Asserted here rather than borrowed from the test above. Retention is
+      // satisfied just as well by a write that was a no-op for some other
+      // reason — a slug that matched nothing, a section the schema dropped —
+      // and this is what separates "the validator refused it" from "nothing
+      // happened".
+      expect(refused.success).toBe(false);
+      expect(refused.committed).toBe(false);
 
       const stored = dataOf(
         await singles.get(SITE_STYLE_SLUG, { overrideAccess: true })

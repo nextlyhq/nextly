@@ -102,35 +102,38 @@ export interface SiteStyleSaveResult {
   readonly issues: Readonly<Record<string, string>>;
 }
 
-/** The shape a refused write answers with, which is a RESULT and not a throw. */
-interface WriteEnvelope {
-  readonly success?: boolean;
-  readonly committed?: boolean;
-  readonly errors?: readonly { field?: string; message?: string }[];
+/**
+ * The public payload a validation failure carries, as it reaches a browser.
+ *
+ * Keyed by `path`, which is NOT what the service-level envelope uses — that one
+ * says `field`. The two are different shapes at different boundaries, and this
+ * is the one a client sees: `ValidationPublicData` is what rides in the error
+ * body, and `parseApiError` puts it on the thrown error's `data`.
+ */
+interface ValidationErrorData {
+  readonly errors?: readonly { path?: string; message?: string }[];
 }
 
 /**
- * Read a write's verdict out of what the API answered with.
+ * Why a write was refused, keyed by the section the validator named.
  *
- * A refused write RESOLVES — measured — carrying `success: false` and a
- * per-field error rather than rejecting. So a caller that awaited the promise
- * and took a settled one for a successful one would report "saved" over a write
- * the database refused, which is the one outcome a studio must never show.
+ * A refused write REJECTS by the time it reaches here, and the path there is
+ * worth stating because the service and the browser disagree about it. The
+ * service returns `{ success: false, committed: false }`; `unwrapServiceResult`
+ * turns that into a throw, the route answers non-2xx, and the admin's fetcher
+ * turns THAT into a rejected promise carrying an `ApiError`. So a client
+ * reading the service's envelope would never see a refusal at all — the
+ * envelope does not survive the transport.
  */
-function verdictOf(result: unknown): SiteStyleSaveResult {
-  const envelope = (result ?? {}) as WriteEnvelope;
-  // Absent means the endpoint answered without saying otherwise, which is what
-  // a plain success looks like. Only an explicit `false` is a refusal.
-  const saved = envelope.success !== false && envelope.committed !== false;
-  if (saved) return { saved: true, issues: {} };
+function issuesFromRejection(reason: unknown): Record<string, string> {
+  const data = (reason as { data?: ValidationErrorData })?.data;
   const issues: Record<string, string> = {};
-  for (const issue of envelope.errors ?? []) {
-    const field = issue.field ?? "";
-    if (field !== "" && issue.message !== undefined) {
-      issues[field] = issue.message;
-    }
+  for (const issue of data?.errors ?? []) {
+    const path = issue.path ?? "";
+    if (path !== "" && issue.message !== undefined)
+      issues[path] = issue.message;
   }
-  return { saved: false, issues };
+  return issues;
 }
 
 /** Saving one section, and what the last attempt said. */
@@ -165,8 +168,28 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       section: SiteStyleSection,
       value: unknown
     ): Promise<SiteStyleSaveResult> => {
-      const result = await mutation.mutateAsync({ [section]: value });
-      return verdictOf(result);
+      try {
+        await mutation.mutateAsync({ [section]: value });
+        return { saved: true, issues: {} };
+      } catch (reason) {
+        // Caught rather than propagated, because a studio needs the reason
+        // beside the section that produced it. Letting this reject would push
+        // the same decision onto four surfaces, and the one that forgot would
+        // show an unhandled rejection where a field message belongs.
+        const issues = issuesFromRejection(reason);
+        // A rejection carrying no per-path detail is still a refusal. Answering
+        // `saved: true` because nothing could be read from it would report a
+        // save that did not happen, which is the one outcome worth failing
+        // loudly over — so the section names itself and the message stands in.
+        if (Object.keys(issues).length === 0) {
+          const message =
+            reason instanceof Error
+              ? reason.message
+              : "This could not be saved.";
+          return { saved: false, issues: { [section]: message } };
+        }
+        return { saved: false, issues };
+      }
     },
     [mutation]
   );

@@ -26,8 +26,17 @@ let readAnswer: {
   error: Error | null;
 } = { data: undefined, isPending: false, error: null };
 
-/** What the stubbed write answers with, and what it was called with. */
-let writeAnswer: unknown = { success: true };
+/**
+ * What the stubbed write does, and what it was called with.
+ *
+ * A function rather than a value, because the contract under test is that a
+ * refusal REJECTS: the service answers `{ success: false }`,
+ * `unwrapServiceResult` throws it, the route answers non-2xx, and the admin's
+ * fetcher turns that into a rejected promise carrying an `ApiError`. A stub
+ * that resolved with the service's envelope would test a boundary the browser
+ * never sees.
+ */
+let writeBehaviour: () => Promise<unknown> = async () => ({ id: "1" });
 const writes: Record<string, unknown>[] = [];
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
@@ -43,7 +52,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     return {
       mutateAsync: async (data: Record<string, unknown>) => {
         writes.push(data);
-        return writeAnswer;
+        return writeBehaviour();
       },
       isPending: false,
     };
@@ -65,7 +74,7 @@ const DEFAULTS = {
 
 beforeEach(() => {
   readAnswer = { data: undefined, isPending: false, error: null };
-  writeAnswer = { success: true };
+  writeBehaviour = async () => ({ id: "1" });
   writes.length = 0;
   writeOptions = undefined;
 });
@@ -153,20 +162,33 @@ describe("writing one section", () => {
     expect(writeOptions?.scopeId).toBe("site-style");
   });
 
-  it("reports a refusal rather than taking a settled promise for a save", async () => {
-    // Measured: a refused write RESOLVES, carrying `success: false`. Reading a
-    // settled promise as success is the one outcome a studio must never show,
-    // because the author walks away believing their work is stored.
-    writeAnswer = {
-      success: false,
-      committed: false,
-      errors: [
-        {
-          field: "breakpoints",
-          message: "breakpoints.viewport[0] is not a breakpoint.",
-        },
-      ],
-    };
+  it("reports a REJECTED write as a refusal rather than letting it throw", async () => {
+    // The shape a refusal actually has by the time a browser sees it. Keyed by
+    // `path`, which is what `ValidationPublicData` carries and what
+    // `parseApiError` puts on the thrown error's `data` — NOT the `field` the
+    // service-level envelope uses. Reading the service's spelling here would
+    // find nothing and report a refused write as saved.
+    //
+    // The other links are proven where they live: that the service refuses is
+    // asserted in `__tests__/site-style-section-write.integration.test.ts`
+    // against three dialects, and that a non-2xx becomes a thrown `ApiError` is
+    // asserted in the admin's own `fetcher.response-shape.test.ts`.
+    writeBehaviour = () =>
+      Promise.reject(
+        Object.assign(new Error("Validation failed."), {
+          status: 400,
+          code: "VALIDATION_ERROR",
+          data: {
+            errors: [
+              {
+                path: "breakpoints",
+                code: "CUSTOM",
+                message: "breakpoints.viewport[0] is not a breakpoint.",
+              },
+            ],
+          },
+        })
+      );
     const { result } = renderHook(() => useSaveSiteStyle());
 
     let verdict;
@@ -182,30 +204,30 @@ describe("writing one section", () => {
     });
   });
 
-  it("keys a refusal by FIELD, so a studio shows it on its own section", async () => {
-    // A document-wide error over one bad row would send an author looking
-    // through four studios for the one that refused.
-    writeAnswer = {
-      success: false,
-      errors: [{ field: "tokens", message: "bad token" }],
-    };
+  it("names the section itself when a rejection carries no per-path detail", async () => {
+    // A refusal with nothing readable in it is still a refusal. Answering
+    // `saved: true` because the payload could not be parsed would tell an
+    // author their work is stored when it is not.
+    writeBehaviour = () => Promise.reject(new Error("Network request failed"));
     const { result } = renderHook(() => useSaveSiteStyle());
 
-    let verdict: { issues: Record<string, string> } | undefined;
+    let verdict: { saved: boolean; issues: Record<string, string> } | undefined;
     await act(async () => {
       verdict = (await result.current.save("tokens", {})) as {
+        saved: boolean;
         issues: Record<string, string>;
       };
     });
 
-    expect(Object.keys(verdict?.issues ?? {})).toEqual(["tokens"]);
+    expect(verdict?.saved).toBe(false);
+    expect(verdict?.issues).toEqual({ tokens: "Network request failed" });
   });
 
-  it("treats an answer that says nothing as a save", async () => {
-    // Only an explicit `false` is a refusal. An endpoint answering with a bare
-    // document must not read as a failed write, or every successful save shows
-    // an error.
-    writeAnswer = { id: "1", tokens: {} };
+  it("treats a resolved write as a save", async () => {
+    // Success resolves with the document itself — `singleApi.updateDocument`
+    // returns `result.item` — so there is no envelope to inspect and nothing
+    // that should read as a failure.
+    writeBehaviour = async () => ({ id: "1", tokens: {} });
     const { result } = renderHook(() => useSaveSiteStyle());
 
     let verdict: { saved: boolean } | undefined;
