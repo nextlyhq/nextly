@@ -105,30 +105,44 @@ export interface SelectedBlock {
 }
 
 /**
- * The block an inspector is describing, or `null` when there is none.
+ * The selected NODE, whether or not the registry knows what it is.
  *
- * One answer for both tabs, because both ask the same question and would
- * otherwise answer it separately: the content tab needs `props` and the style
- * tab needs `supports`, and each lives on the definition.
+ * Separate from {@link selectedBlock} because the two tabs need different
+ * things from a selection, and only one of them needs the definition. Both
+ * derive from this, so "which node is selected" has one answer.
+ */
+export function selectedNode(
+  document: BlockDocument,
+  selectedId: string | null
+): BlockNode | null {
+  if (selectedId === null) return null;
+  return findNode(document.nodes, selectedId) ?? null;
+}
+
+/**
+ * The block an inspector is describing, or `null` when there is none.
  *
  * `null` for no selection, for an id the document no longer holds, and for a
  * block the REGISTRY does not know. The last is the one worth stating, because
- * it is a policy rather than a lookup failing:
+ * it is a policy rather than a lookup failing: an unregistered block's props
+ * have no schemas, so every content control would have to be guessed from the
+ * stored value's runtime type — which produces a text box for a number and
+ * silently rewrites the value on save.
  *
- * - an unregistered block's props have no schemas, so every content control
- *   would have to be guessed from the stored value's runtime type — which
- *   produces a text box for a number and silently rewrites the value on save;
- * - and it has no `supports`, so the style tab would either offer nothing or
- *   offer the whole catalog, and the second lets an author write styles the
- *   compiler then drops.
+ * The STYLE tab does not use this, and the difference is the point. It reads a
+ * definition's `supports` where one exists and needs nothing from it where one
+ * does not: a node whose block is unregistered still has its styles compiled,
+ * because neither `validation.ts` nor `compile-page.ts` consults the registry
+ * before emitting them. Withholding the style panel there would leave an author
+ * looking at styling nothing can remove, so `inspectStyle` resolves the node
+ * itself and treats every stored property as retained.
  */
 export function selectedBlock(
   document: BlockDocument,
   selectedId: string | null
 ): SelectedBlock | null {
-  if (selectedId === null) return null;
-  const node = findNode(document.nodes, selectedId);
-  if (node === undefined) return null;
+  const node = selectedNode(document, selectedId);
+  if (node === null) return null;
   const definition = getBlock(node.type);
   if (definition === undefined) return null;
   return { node, definition };

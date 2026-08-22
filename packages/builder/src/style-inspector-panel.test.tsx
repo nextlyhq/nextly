@@ -801,3 +801,138 @@ describe("the site's host-fetch policy", () => {
     expect(field.getAttribute("aria-invalid")).toBe("true");
   });
 });
+
+describe("a value the panel shows and could not remove", () => {
+  /*
+   * One shape at several sites: the panel renders a value that IS emitted on
+   * the page while offering no action that removes it. Each test below is one
+   * site, and the separating property is the same throughout — the author can
+   * SEE what is set, and one action clears it.
+   */
+
+  it("keeps the panel for an UNREGISTERED block, clear-only", () => {
+    // No `register` call at all. `compile-page.ts` walks every node and hands
+    // `node.styles` to `envelopeRules` without asking the registry, so this
+    // padding is on the page. The panel used to answer null here.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
+    } as NodeStyles;
+    const editor = editorFor(documentOf(styles));
+    render(<StyleInspectorPanel editor={editor} />);
+
+    const padding = fieldsOf("padding");
+    expect(padding.getByText("12px")).toBeDefined();
+    // Not editable: no definition declares the property supported, so writing
+    // a NEW value through a block that no longer exists is the opposite error.
+    expect(padding.queryByDisplayValue("12px")).toBeNull();
+
+    fireEvent.click(
+      padding.getByRole("button", { name: "Clear Padding block start" })
+    );
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a scalar no field can type, and clears it", () => {
+    // `{ value: "12px" }` at a scalar position, which an import or the API can
+    // write. The text projection of it is `""`, so the field read as UNSET
+    // while the value compiled — and the one keystroke that would clear it,
+    // emptying the field, was refused because the empty draft already equalled
+    // that empty projection.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontSize: { value: "12px" } } },
+    } as NodeStyles;
+    const editor = mount({ typography: true }, styles);
+    const fontSize = fieldsOf("fontSize");
+
+    expect(fontSize.queryByRole("textbox")).toBeNull();
+    expect(fontSize.getByText('{"value":"12px"}')).toBeDefined();
+
+    fireEvent.click(fontSize.getByRole("button", { name: "Clear Font size" }));
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a value a SELECT has no item for, and clears it", () => {
+    // A number stored where the leaf's vocabulary is keywords. The trigger has
+    // no item to be current, so it rendered its "Not set" placeholder over a
+    // live value — and the Clear button beside it was withheld for exactly the
+    // same reason, because it keys off the same empty string.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { textAlign: 4 } },
+    } as NodeStyles;
+    const editor = mount({ typography: true }, styles);
+    const textAlign = fieldsOf("textAlign");
+
+    expect(textAlign.getByText("4")).toBeDefined();
+
+    fireEvent.click(
+      textAlign.getByRole("button", { name: "Clear Text align" })
+    );
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("withholds the form selector on a property the block no longer offers", () => {
+    // `FormChoice` REMOVES what is stored at the union's position, which is
+    // right while a property is editable and wrong once it is not: the selector
+    // sat enabled beside the "no longer offers" notice, reading as "switch this
+    // to corners" and deleting the value instead.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { borderRadius: "4px" } },
+    } as NodeStyles;
+    mount({ border: { line: true } }, styles);
+
+    expect(
+      document.querySelector('[data-not-offered="borderRadius"]')
+    ).not.toBeNull();
+    expect(
+      document.querySelector('[data-form-choice="borderRadius"]')
+    ).toBeNull();
+  });
+
+  it("offers the form selector while the property IS still supported", () => {
+    // The positive control for the test above. Without it, a panel that had
+    // simply stopped rendering form selectors altogether would pass.
+    mount({ border: { radius: true } });
+
+    expect(
+      document.querySelector('[data-form-choice="borderRadius"]')
+    ).not.toBeNull();
+  });
+
+  it("puts back what the document holds when a draft only RE-SPELLS it", () => {
+    // `01` commits as the `1` already stored, so `styleWriteOp` answers with no
+    // op and the stored value never moves — which means the effect that syncs
+    // the field cannot fire. The typed text stayed on screen, showing something
+    // the document does not contain, until the panel remounted.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { opacity: 1 } },
+    } as NodeStyles;
+    const editor = mount({ effects: true }, styles);
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+
+    fireEvent.change(field, { target: { value: "01" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect((field as HTMLInputElement).value).toBe("1");
+  });
+
+  it("KEEPS a refused draft, so the author can correct it", () => {
+    // The other half of the rule above, and the reason it is three outcomes
+    // rather than a boolean: resetting here would delete what the author typed
+    // the instant they got it wrong.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { opacity: 1 } },
+    } as NodeStyles;
+    mount({ effects: true }, styles);
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+
+    fireEvent.change(field, { target: { value: "12 furlongs" } });
+    fireEvent.blur(field);
+
+    expect((field as HTMLInputElement).value).toBe("12 furlongs");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+});
