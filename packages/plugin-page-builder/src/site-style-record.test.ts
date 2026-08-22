@@ -570,9 +570,16 @@ describe("judging the write against the tier it will be merged with", () => {
   });
 
   it("refuses a stored token colliding with a config one on a custom property", () => {
+    // Names the engine does not define, so the collision under test is between
+    // the two SITE tiers rather than with a default. `color.primary` is itself
+    // an engine default, which would attribute the clash a level lower.
     const result = checkStoredTokens(
-      { tokens: [token("color.primary", "#111111")] },
-      { defaults: { tokens: { tokens: [token("color-primary", "#222222")] } } }
+      { tokens: [token("brand.accent-hover", "#111111")] },
+      {
+        defaults: {
+          tokens: { tokens: [token("brand-accent.hover", "#222222")] },
+        },
+      }
     );
 
     expect(result.issues).not.toEqual([]);
@@ -625,6 +632,19 @@ describe("judging the write against the tier it will be merged with", () => {
     expect(result.issues).toEqual([]);
   });
 
+  it("refuses a stored token that collides with an ENGINE default", () => {
+    // A page layers the site's tokens over the engine's defaults before
+    // compiling, so the tier stack a write is judged against has three levels
+    // and not two. `color-primary` emits nothing on its own and collides with
+    // the guaranteed default `color.primary` on `--site-color-primary`, where
+    // the emitter keeps the default and silently drops the saved value.
+    const result = checkStoredTokens({
+      tokens: [token("color-primary", "#111111")],
+    });
+
+    expect(result.issues.join(" ")).toContain("--site-color-primary");
+  });
+
   it("does not report a problem the CONFIG tier already had on its own", () => {
     // Reported as a difference. A site whose own config emits an issue has a
     // problem, but it is not one this write introduced and not one the writer
@@ -632,13 +652,13 @@ describe("judging the write against the tier it will be merged with", () => {
     // else's mistake.
     const brokenConfig = {
       tokens: [
-        token("color.primary", "#111111"),
-        token("color-primary", "#222222"),
+        token("brand.accent-hover", "#111111"),
+        token("brand-accent.hover", "#222222"),
       ],
     };
 
     const result = checkStoredTokens(
-      { tokens: [token("color.accent", "#333333")] },
+      { tokens: [token("brand.other", "#333333")] },
       { defaults: { tokens: brokenConfig } }
     );
 

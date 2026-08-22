@@ -31,6 +31,7 @@ import {
   isPlainRecord,
   isUsableNamedClass,
   newStyleIssueBudget,
+  resolveSiteTokens,
   usableNamedClasses,
   validateFontFace,
   validateStyleValues,
@@ -243,9 +244,23 @@ function withPrefixOf(
     : { ...tokens, prefix: under.prefix };
 }
 
-/** What emitting one token set reports, as plain messages. */
+/**
+ * What emitting one token set reports, as plain messages, AS RENDERED.
+ *
+ * Resolved through `resolveSiteTokens` first, because that is what a page does:
+ * `PageRenderer` layers the site's tokens over the engine's defaults before
+ * compiling, so a stored name that collides with a default is dropped at render
+ * while a gate judging the stored and config tiers alone sees nothing at all.
+ * Measured: `color-primary` emits no issue on its own and collides with the
+ * default `color.primary` on `--site-color-primary` once resolved.
+ *
+ * Applied here rather than at each call so all three emissions — the stored set,
+ * the config baseline and the merge — are judged against the same tier stack.
+ */
 function emittedMessages(tokens: SiteTokenSet): string[] {
-  return emitTokenBlocks(tokens, ":root").issues.map(issue => issue.message);
+  return emitTokenBlocks(resolveSiteTokens(tokens), ":root").issues.map(
+    issue => issue.message
+  );
 }
 
 /** The stored font faces, each checked by the engine's own face validator. */
