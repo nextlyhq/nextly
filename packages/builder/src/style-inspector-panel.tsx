@@ -1504,6 +1504,9 @@ function ColourField({
             identity={reference}
             token={colourTokenFor(reference, tokens, mode)}
             actionName={actionName}
+            onSupersede={() => {
+              pending.current = null;
+            }}
             onClear={() => commitInstead(null)}
           />
         )}
@@ -1628,6 +1631,7 @@ function TokenName({
   identity,
   token,
   actionName,
+  onSupersede,
   onClear,
 }: {
   /** What the document stores, and the fallback when nothing resolves it. */
@@ -1635,6 +1639,19 @@ function TokenName({
   /** The site's token of that identity, when it defines one. */
   token: ColourToken | undefined;
   actionName: string;
+  /**
+   * The clear has begun, before anything around it can react to the pointer.
+   *
+   * Separate from {@link onClear} because of WHEN it runs rather than what it
+   * does. This button sits outside the picker'"'"'s popover, so pressing it is an
+   * outside interaction: Radix dismisses on a `pointerdown` listener attached
+   * to the document, and React'"'"'s handlers are attached to the root container
+   * inside it — so this fires first, and the surrounding control can drop an
+   * unfinished gesture before the dismissal commits it. Without that the close
+   * writes the picker'"'"'s literal and the clear removes it, two history entries
+   * where one undo returns an intermediate value the author never chose.
+   */
+  onSupersede: () => void;
   onClear: () => void;
 }): React.JSX.Element {
   return (
@@ -1644,6 +1661,7 @@ function TokenName({
       </span>
       <button
         type="button"
+        onPointerDown={onSupersede}
         onClick={onClear}
         aria-label={`Clear ${actionName}`}
       >

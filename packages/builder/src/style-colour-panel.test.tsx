@@ -629,3 +629,32 @@ describe("a superseded gesture stays superseded even when the choice is refused"
     expect(editor.apply.mock.calls.length).toBe(afterToken);
   });
 });
+
+describe("clearing a token while the picker is open", () => {
+  it("records ONE operation, and it is the clear", () => {
+    // The Clear button sits outside the popover, so pressing it is an outside
+    // interaction: Radix dismisses on a document `pointerdown`, which closes the
+    // picker and commits its gesture, and only then does the click clear. That
+    // is two history entries, and one undo returns an intermediate literal the
+    // author never chose. The pointer-down supersede drops the gesture first.
+    const editor = mount(styles({ $token: "color.ink" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    const hex = screen.getAllByRole("textbox")[0];
+    expect(hex).toBeDefined();
+    if (hex === undefined) return;
+    fireEvent.change(hex, { target: { value: "#ff0000" } });
+
+    // The real order: React's handler on the button, then the document
+    // dismissal Radix listens for, then the click.
+    const clear = screen.getByRole("button", { name: "Clear Color" });
+    fireEvent.pointerDown(clear);
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    fireEvent.click(clear);
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    // A clear removes the entry rather than writing one.
+    expect(JSON.stringify(editor.apply.mock.calls[0])).not.toContain("#ff0000");
+  });
+});
