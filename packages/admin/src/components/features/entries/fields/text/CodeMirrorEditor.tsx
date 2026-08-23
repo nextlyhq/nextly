@@ -25,6 +25,11 @@ import CodeMirror, { type ReactCodeMirrorProps } from "@uiw/react-codemirror";
 import type { CodeLanguage } from "nextly/config";
 import { useMemo } from "react";
 
+import {
+  nextlyEditorChrome,
+  nextlyHighlighting,
+} from "@admin/lib/code-highlight";
+
 /** Extension type extracted from ReactCodeMirror props (avoids direct @codemirror/state dependency) */
 type Extension = NonNullable<ReactCodeMirrorProps["extensions"]>[number];
 
@@ -36,7 +41,6 @@ export interface CodeMirrorEditorProps {
   value: string;
   onChange: (value: string) => void;
   language: CodeLanguage | "plaintext";
-  theme: "dark" | "light";
   disabled: boolean;
   readOnly: boolean;
   minHeight: number;
@@ -273,7 +277,6 @@ export function CodeMirrorEditor({
   value,
   onChange,
   language,
-  theme,
   disabled,
   readOnly,
   minHeight,
@@ -282,58 +285,38 @@ export function CodeMirrorEditor({
   placeholder,
   onCreateEditor,
 }: CodeMirrorEditorProps) {
-  // Get language extensions with linters
-  const extensions = useMemo(() => getLanguageExtensions(language), [language]);
-
-  // Editor theme configuration
-  const editorTheme = useMemo(() => {
-    return EditorView.theme({
-      "&": {
-        fontSize: `${editorOptions.fontSize ?? 14}px`,
-        fontFamily:
-          editorOptions.fontFamily ??
-          "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
-      },
-      ".cm-scroller": {
-        fontFamily:
-          editorOptions.fontFamily ??
-          "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
-      },
-      ".cm-gutters": {
-        borderRight: "1px solid var(--nx-border)",
-        backgroundColor: "var(--nx-muted)",
-      },
-      ".cm-activeLineGutter": {
-        backgroundColor: "var(--nx-accent)",
-      },
-      ".cm-activeLine": {
-        backgroundColor:
-          "color-mix(in srgb, var(--nx-accent) 10%, transparent)",
-      },
-      ".cm-selectionMatch": {
-        backgroundColor:
-          "color-mix(in srgb, var(--nx-primary) 20%, transparent)",
-      },
-      ".cm-searchMatch": {
-        backgroundColor:
-          "color-mix(in srgb, var(--nx-warning) 30%, transparent)",
-      },
-      ".cm-searchMatch.cm-searchMatch-selected": {
-        backgroundColor:
-          "color-mix(in srgb, var(--nx-warning) 50%, transparent)",
-      },
-    });
-  }, [editorOptions.fontSize, editorOptions.fontFamily]);
+  const extensions = useMemo(
+    () => [
+      ...getLanguageExtensions(language),
+      nextlyHighlighting,
+      nextlyEditorChrome({ fontSize: editorOptions.fontSize ?? 14 }),
+      // A caller may still pin a face — a code field whose content is meant to
+      // be read in a particular one. Absent that, the shared chrome's
+      // `--font-mono` stands, so the editor matches every other mono surface.
+      ...(editorOptions.fontFamily
+        ? [
+            EditorView.theme({
+              "&": { fontFamily: editorOptions.fontFamily },
+              ".cm-scroller": { fontFamily: editorOptions.fontFamily },
+            }),
+          ]
+        : []),
+    ],
+    [language, editorOptions.fontSize, editorOptions.fontFamily]
+  );
 
   return (
     <CodeMirror
       value={value}
       onChange={onChange}
-      extensions={[...extensions, editorTheme]}
+      extensions={extensions}
       height={maxHeight ? undefined : `${minHeight}px`}
       minHeight={`${minHeight}px`}
       maxHeight={maxHeight ? `${maxHeight}px` : undefined}
-      theme={theme}
+      // "none" rather than a resolved light/dark: the colours come from
+      // `--nx-code-*`, which the theme redeclares under `.dark`, so CSS settles
+      // the mode and a bundled palette here would only fight it.
+      theme="none"
       editable={!disabled && !readOnly}
       readOnly={disabled || readOnly}
       basicSetup={{

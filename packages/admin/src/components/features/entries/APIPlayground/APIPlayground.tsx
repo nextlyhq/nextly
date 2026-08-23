@@ -43,7 +43,6 @@ import {
 
 import { RotateCcw } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
-import { useTheme } from "@admin/context/providers/ThemeProvider";
 import { cn } from "@admin/lib/utils";
 
 import { generateCode } from "./generate-code";
@@ -272,8 +271,6 @@ export function APIPlayground({
 
   // Copy state
   const [copied, setCopied] = useState(false);
-
-  const { resolvedTheme } = useTheme();
 
   /** The in-flight request, so a re-send or Escape can call it off. */
   const abortRef = useRef<AbortController | null>(null);
@@ -779,7 +776,6 @@ export function APIPlayground({
                           value={requestBody}
                           onChange={setRequestBody}
                           language="json"
-                          theme={resolvedTheme === "dark" ? "dark" : "light"}
                           disabled={false}
                           readOnly={false}
                           minHeight={320}

@@ -22,7 +22,10 @@ import { EditorView } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { useEffect, useMemo, useState } from "react";
 
-import { useTheme } from "@admin/context/providers/ThemeProvider";
+import {
+  nextlyEditorChrome,
+  nextlyHighlighting,
+} from "@admin/lib/code-highlight";
 
 export type CodeBlockLanguage = "json" | "typescript" | "javascript" | "shell";
 
@@ -53,10 +56,6 @@ export function CodeBlock({
   language,
   showGutter = false,
 }: CodeBlockProps) {
-  // resolvedTheme, not theme: the default is "system", which never equals
-  // "dark" and would leave the editor light inside a dark admin.
-  const { resolvedTheme } = useTheme();
-
   // CodeMirror reaches for browser globals, so it renders after mount.
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => {
@@ -64,39 +63,24 @@ export function CodeBlock({
   }, []);
 
   const extensions = useMemo(
-    () => [languageExtension(language), EditorView.lineWrapping],
-    [language]
-  );
-
-  const editorTheme = useMemo(
-    () =>
+    () => [
+      languageExtension(language),
+      EditorView.lineWrapping,
+      nextlyHighlighting,
+      nextlyEditorChrome({
+        showGutter,
+        padding: showGutter ? "16px 12px" : "16px 24px",
+      }),
+      // Nothing here is editable, so the affordances that say otherwise are
+      // switched off rather than merely unused.
       EditorView.theme({
-        "&": {
-          fontSize: "12px",
-          backgroundColor: "transparent !important",
-        },
-        ".cm-scroller": {
-          // `--font-mono` is the theme's mono stack, so the editor renders in
-          // the same face as every other mono surface in the admin. The
-          // fallback only covers a host that has not loaded the theme.
-          fontFamily: "var(--font-mono, ui-monospace, monospace)",
-          padding: showGutter ? "16px 12px" : "16px 24px",
-        },
-        ".cm-gutters": {
-          borderRight:
-            "1px solid color-mix(in srgb, var(--nx-border) 50%, transparent)",
-          backgroundColor:
-            "color-mix(in srgb, var(--nx-muted) 30%, transparent)",
-          color:
-            "color-mix(in srgb, var(--nx-muted-foreground) 50%, transparent)",
-          padding: "0 4px",
-        },
         ".cm-activeLine, .cm-activeLineGutter": {
           backgroundColor: "transparent",
         },
         ".cm-cursor": { display: "none" },
       }),
-    [showGutter]
+    ],
+    [language, showGutter]
   );
 
   if (!isMounted) {
@@ -110,8 +94,11 @@ export function CodeBlock({
   return (
     <CodeMirror
       value={value}
-      extensions={[...extensions, editorTheme]}
-      theme={resolvedTheme === "dark" ? "dark" : "light"}
+      extensions={extensions}
+      // "none" rather than a resolved light/dark: the colours come from
+      // `--nx-code-*`, which the theme redeclares under `.dark`, so CSS settles
+      // the mode and a bundled palette here would only fight it.
+      theme="none"
       editable={false}
       readOnly
       basicSetup={{
