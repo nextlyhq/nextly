@@ -104,7 +104,28 @@ export const MAX_TOKEN_NAME_LENGTH = 256;
  * cap bounds nothing it was added to bound.
  */
 export function isTokenName(name: string): boolean {
-  return name.length <= MAX_TOKEN_NAME_LENGTH && TOKEN_NAME_RE.test(name);
+  return name.length <= MAX_TOKEN_NAME_LENGTH && isAuthorableTokenName(name);
+}
+
+/**
+ * Whether a name may be WRITTEN as a token name, without asking whether it can
+ * be emitted.
+ *
+ * The grammar half of {@link isTokenName}, separated because the two answer
+ * different questions and one value can need only the first. A token's identity
+ * is `id ?? name`, so a renamed token emits under its id and its display name
+ * reaches no stylesheet at all — holding that name to the emission cap would
+ * refuse a token whose every emitted string is well within it, and the token
+ * would vanish from the site sheet on being renamed.
+ *
+ * So: this for a value that is only ever read by a person, {@link isTokenName}
+ * for one that reaches CSS. Bounded is the default and the wider name; a caller
+ * has to reach for this one deliberately, which is the safe direction — using
+ * the bounded predicate where the grammar alone was needed refuses a little too
+ * much, while the reverse writes an unbounded string into a stylesheet.
+ */
+export function isAuthorableTokenName(name: string): boolean {
+  return TOKEN_NAME_RE.test(name);
 }
 
 /** The default custom-property prefix for site tokens. */

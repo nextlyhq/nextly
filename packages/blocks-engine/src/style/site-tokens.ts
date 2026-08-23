@@ -64,6 +64,7 @@ import {
 import {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_PREFIX_LENGTH,
+  isAuthorableTokenName,
   isTokenName,
   safeTokenPrefix,
   tokenCustomProperty,
@@ -236,7 +237,12 @@ function tokenIssue(
  * everything after it is CSS the site never wrote. `x:1}body{color` is the
  * whole attack.
  */
-export { isTokenName, MAX_TOKEN_NAME_LENGTH, MAX_TOKEN_PREFIX_LENGTH };
+export {
+  isAuthorableTokenName,
+  isTokenName,
+  MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_PREFIX_LENGTH,
+};
 
 /**
  * A font descriptor that goes inside a quoted CSS string, made safe to put
@@ -766,6 +772,39 @@ export function emitFontFaces(faces: readonly FontFaceDef[]): {
 }
 
 /**
+ * Why a token cannot be written under the name it carries, or nothing.
+ *
+ * Three refusals with one subject — what this token is CALLED — so they answer
+ * together rather than as separate branches inside the emitter, and each names
+ * the field an author has to repair rather than reporting "invalid token".
+ *
+ * The split between grammar and length is the point. A token's identity is
+ * `id ?? name`, so a renamed token emits under its id and its display name
+ * reaches no stylesheet: the grammar applies to both, because either can become
+ * the identity, while the EMISSION cap applies only to the one that actually
+ * does. Capping the display name instead would drop a working token from the
+ * sheet the moment an author gave it a long label.
+ */
+function tokenNamingRefusal(token: SiteToken): string | undefined {
+  // Grammar first, and on both fields. A name holding `}` closes the rule the
+  // emitter opened and everything after it is CSS the site never wrote, and an
+  // id reaches the same selector by the same route.
+  if (!isAuthorableTokenName(token.name)) {
+    return `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`;
+  }
+  if (token.id !== undefined && !isAuthorableTokenName(token.id)) {
+    return `"${token.name}" has an id that is not a token name, so it was not written. An id is dot-separated words of letters, digits and dashes, like "color.primary".`;
+  }
+  // The cap, on the string `tokenCustomProperty` actually composes.
+  const identity = tokenIdentity(token);
+  if (identity.length > MAX_TOKEN_NAME_LENGTH) {
+    const field = token.id === undefined ? "name" : "id";
+    return `"${token.name}" emits under ${identity.length} characters, so it was not written. The ${field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
+  }
+  return undefined;
+}
+
+/**
  * The custom-property blocks a site's tokens resolve in.
  *
  * Emitted onto a selector the caller supplies rather than `:root`, so a page's
@@ -789,28 +828,9 @@ export function emitTokenBlocks(
   const seen = new Map<string, string>();
 
   for (const token of set.tokens) {
-    // The name becomes the custom PROPERTY, so it is checked before it is
-    // composed: a name holding `}` closes the rule this opened, and everything
-    // after it is CSS the site never wrote.
-    if (!isTokenName(token.name)) {
-      issues.push(
-        tokenIssue(
-          `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`
-        )
-      );
-      continue;
-    }
-    // An id reaches the same selector by the same route, so it is held to the
-    // same grammar. Checked separately from the name rather than through the
-    // identity alone, so the report names the field the author has to repair —
-    // a token whose id is unwritable and whose name is fine reads as a good
-    // token otherwise, and "rename it" would be advice that fixes nothing.
-    if (token.id !== undefined && !isTokenName(token.id)) {
-      issues.push(
-        tokenIssue(
-          `"${token.name}" has an id that is not a token name, so it was not written. An id is dot-separated words of letters, digits and dashes, like "color.primary".`
-        )
-      );
+    const naming = tokenNamingRefusal(token);
+    if (naming !== undefined) {
+      issues.push(tokenIssue(naming));
       continue;
     }
     // A token with no values record at all. Site tokens are one settings row read on every page

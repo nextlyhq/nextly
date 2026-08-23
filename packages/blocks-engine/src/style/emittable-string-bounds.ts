@@ -45,14 +45,25 @@ export interface EmittableStringBound {
 /**
  * Every string the compiler emits whose length this package bounds.
  *
- * Ordered by nothing in particular; a consumer reads all of them. Frozen
- * because a caller mutating it would silently narrow what it then verifies.
+ * Ordered by nothing in particular; a consumer reads all of them.
+ *
+ * Each ENTRY is frozen as well as the array. `Object.freeze` is shallow, so
+ * freezing the array alone leaves every `max` writable: a consumer in the same
+ * process could assign one and silently narrow the contract every later reader
+ * observes, while the array itself reported as frozen. `readonly` is a
+ * compile-time claim and reaches no JavaScript caller at all.
  */
 export const EMITTABLE_STRING_BOUNDS: readonly EmittableStringBound[] =
   Object.freeze([
-    { what: "a named class id or slug", max: MAX_NAMED_CLASS_NAME_LENGTH },
-    { what: "a breakpoint id", max: MAX_BREAKPOINT_ID_LENGTH },
-    { what: "a design token name", max: MAX_TOKEN_NAME_LENGTH },
-    { what: "a block type", max: MAX_BLOCK_TYPE_LENGTH },
-    { what: "a custom-property prefix", max: MAX_TOKEN_PREFIX_LENGTH },
+    Object.freeze({
+      what: "a named class id or slug",
+      max: MAX_NAMED_CLASS_NAME_LENGTH,
+    }),
+    Object.freeze({ what: "a breakpoint id", max: MAX_BREAKPOINT_ID_LENGTH }),
+    Object.freeze({ what: "a design token name", max: MAX_TOKEN_NAME_LENGTH }),
+    Object.freeze({ what: "a block type", max: MAX_BLOCK_TYPE_LENGTH }),
+    Object.freeze({
+      what: "a custom-property prefix",
+      max: MAX_TOKEN_PREFIX_LENGTH,
+    }),
   ]);

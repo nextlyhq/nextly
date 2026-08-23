@@ -85,3 +85,9 @@ the block-version bound, and the engine-parity test holds the two equal.
 `isBlockType` and its cap are also exported from `@nextlyhq/blocks-engine/format`,
 so a generator reading the document format from the lightweight entry can apply
 the same rule instead of deciding independently what a node type may be.
+
+The emission cap applies to a token's IDENTITY rather than to its display name.
+A token's identity is its id when it has one, so a renamed token emits under
+that id and its name reaches no stylesheet — capping the name would have deleted
+a working token from the site sheet the moment an author gave it a long label,
+and a rename is meant to cost nothing.

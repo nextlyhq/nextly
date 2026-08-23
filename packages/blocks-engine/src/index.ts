@@ -310,6 +310,7 @@ export {
   resolveSiteTokens,
   emitFontFaces,
   emitTokenBlocks,
+  isAuthorableTokenName,
   isTokenName,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_PREFIX_LENGTH,

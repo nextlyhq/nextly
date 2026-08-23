@@ -386,6 +386,49 @@ describe("the token name grammar", () => {
     expect(cssFor(first)).toBe("");
   });
 
+  it("still writes a renamed token whose DISPLAY name is past the cap", () => {
+    // A token's identity is `id ?? name`, so a renamed one emits under its id
+    // and its display name reaches no stylesheet. Holding that name to the
+    // emission cap would delete a working token from the sheet the moment an
+    // author gave it a long label — a rename is supposed to cost nothing, which
+    // is the whole reason identity is pinned separately from the name.
+    const longLabel = "a".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            id: "color.primary",
+            name: longLabel,
+            kind: "color",
+            values: { light: "#000" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(issues).toEqual([]);
+    expect(css).toContain("color-primary");
+  });
+
+  it("refuses a token whose IDENTITY is past the cap", () => {
+    // The other side, and the one that reaches CSS: with no id the name IS the
+    // identity, so the cap applies to it here and to nothing else.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "a".repeat(MAX_TOKEN_NAME_LENGTH + 1),
+            kind: "color",
+            values: { light: "#000" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
   it("accepts a name exactly at the cap", () => {
     // A cap that took the boundary with it would be a different rule from the
     // one documented, and the off-by-one is invisible in any test that only

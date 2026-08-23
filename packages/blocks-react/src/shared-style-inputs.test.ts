@@ -59,12 +59,15 @@ describe("the stamp", () => {
     // can emit may be longer than the walk keeps, or two inputs agreeing to the
     // cut and differing after it stamp alike and compile apart.
     //
-    // Read from the ENGINE'S own list rather than named here. A copy of that
-    // set was written twice as prose and was short by one both times, and a
-    // copy in a test is the same copy with a green tick on it: it would assert
-    // over the members someone remembered while the member they forgot is
-    // exactly the one carrying the defect. Reading the array means a bound
-    // added to the compiler is covered here without this file being touched.
+    // Read from the ENGINE'S own list rather than named here, because a list
+    // restated at the consumer is a copy of the producer's set with nothing
+    // keeping the two in step — and it would assert over the members it names
+    // while the member it omits is the one whose bound nobody has written.
+    // Reading the array means a bound added to the compiler is covered without
+    // this file being edited.
+    //
+    // The length check is the population assertion: an empty set satisfies the
+    // loop below perfectly, so without it this passes by reading nothing.
     expect(EMITTABLE_STRING_BOUNDS.length).toBeGreaterThan(0);
     for (const bound of EMITTABLE_STRING_BOUNDS) {
       expect(bound.max, bound.what).toBeLessThanOrEqual(MAX_VALUE_LENGTH);
