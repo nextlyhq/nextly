@@ -96,9 +96,14 @@ export {
   // recompile its CSS on every render for ever.
   fetchPolicyLabel,
   resolvePageStyles,
+  resolvePageStylesWithTrace,
   styleTextForInjection,
 } from "./styles";
-export type { PageStyles, ResolveStyleOptions } from "./styles";
+export type {
+  PageStyles,
+  ResolvedPageStyles,
+  ResolveStyleOptions,
+} from "./styles";
 
 /**
  * Exported because `resolvePageStyles` has a precondition a caller could not otherwise meet.

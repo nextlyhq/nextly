@@ -14,6 +14,7 @@ import {
   type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
+  type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
 import type { DocumentReadStages } from "./prepare-document";
@@ -875,9 +876,40 @@ export interface ResolveStyleOptions {
    * that has not pruned.
    */
   storedDocument?: BlockDocument;
+  /**
+   * Ask for the cascade that produced the sheet, alongside the sheet.
+   *
+   * The editor needs it and nothing else does. A control showing where its
+   * value came from — authored here, inherited from a class, inherited from a
+   * wider breakpoint — is answering a question only the compiler can answer,
+   * because it has already settled tier order, both breakpoint axes, states,
+   * refused values, descendant selectors and specificity. Re-deriving that
+   * beside the compiler is the drift every staleness test in this file exists
+   * to catch.
+   *
+   * Off by default, and the compiler builds the array only when asked, so an
+   * ordinary render pays nothing. It is deliberately NOT part of
+   * {@link PageStyles}: that shape is what gets stored, and a cascade recorded
+   * for one editing session has no business in the database.
+   */
+  trace?: boolean;
 }
 
-export function resolvePageStyles(
+/** A resolved sheet, and the cascade that produced it when one was asked for. */
+export interface ResolvedPageStyles {
+  readonly styles: PageStyles;
+  /**
+   * Present only when `trace` was asked for AND a compile actually ran.
+   *
+   * Absent is a real answer rather than a failure: a page served from a stored
+   * artifact is not recompiled, so there IS no cascade to report, and a caller
+   * that treats absence as "nothing is authored" would tell an author their
+   * values came from nowhere. Show no provenance rather than a wrong one.
+   */
+  readonly trace?: readonly StyleTraceEntry[];
+}
+
+export function resolvePageStylesWithTrace(
   document: BlockDocument,
   styles: PageStyles | undefined,
   styleContext: StyleCompileContext | undefined,
@@ -911,7 +943,7 @@ export function resolvePageStyles(
    * boolean with only its type to separate them.
    */
   options: ResolveStyleOptions = {}
-): PageStyles {
+): ResolvedPageStyles {
   // Derived before either branch, so the read path and the compile path cannot
   // answer differently about the same document.
   const drawsNothing = drawlessTestFor(blocks);
@@ -994,9 +1026,11 @@ export function resolvePageStyles(
     // A refused artifact had its classes rebuilt, so the gated rules — written
     // against the classes it USED to carry — would select nothing. Nothing is
     // appended, which is the same answer the sheet itself got.
-    return normalized.refused
-      ? normalized.styles
-      : withGatedRules(normalized.styles, document, drawsNothing);
+    return {
+      styles: normalized.refused
+        ? normalized.styles
+        : withGatedRules(normalized.styles, document, drawsNothing),
+    };
   }
   if (
     styles &&
@@ -1006,7 +1040,9 @@ export function resolvePageStyles(
       compiledAgainstOtherInputs) &&
     styleContext === undefined
   ) {
-    return { ...normalizeStoredStyles(styles, document).styles, css: "" };
+    return {
+      styles: { ...normalizeStoredStyles(styles, document).styles, css: "" },
+    };
   }
   if (compileContext) {
     // Compiled with the context built above rather than the caller's, for the
@@ -1014,17 +1050,56 @@ export function resolvePageStyles(
     // only by `PageRenderer` would mean every sheet written through this entry
     // keeps its drawless nodes' rules in `css` and carries no `gated` entry for
     // them, so republishing a page would never enable the drop.
-    return toPageStyles(
-      compilePageCss(document, compileContext),
-      compileContext.scope,
-      options.fetchPolicyId,
-      sharedInputsId
-    );
+    const compiled = compilePageCss(document, {
+      ...compileContext,
+      // Asked for only when a caller wants it. The compiler builds the array
+      // lazily, so an ordinary render pays nothing for a facility the editor
+      // is the only consumer of.
+      ...(options.trace === true ? { trace: true } : {}),
+    });
+    return {
+      styles: toPageStyles(
+        compiled,
+        compileContext.scope,
+        options.fetchPolicyId,
+        sharedInputsId
+      ),
+      ...(compiled.trace === undefined ? {} : { trace: compiled.trace }),
+    };
   }
   return {
-    css: "",
-    classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
+    styles: {
+      css: "",
+      classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
+    },
   };
+}
+
+/**
+ * The compiled sheet alone, which is what almost every caller wants.
+ *
+ * DERIVED from {@link resolvePageStylesWithTrace} rather than computed beside
+ * it. The two answers would otherwise be two resolutions of one question, and
+ * this file already carries several reasons why a second answer about the same
+ * document drifts from the first — every staleness test above exists because a
+ * stored sheet and a fresh compile disagreed.
+ */
+export function resolvePageStyles(
+  document: BlockDocument,
+  styles: PageStyles | undefined,
+  styleContext: StyleCompileContext | undefined,
+  blocks: BlockResolver,
+  repairedDocument = false,
+  options: ResolveStyleOptions = {}
+): PageStyles {
+  return resolvePageStylesWithTrace(
+    document,
+    styles,
+    styleContext,
+    blocks,
+    repairedDocument,
+    options
+  ).styles;
 }
 
 /**

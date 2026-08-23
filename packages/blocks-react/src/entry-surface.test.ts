@@ -294,6 +294,7 @@ describe("the root entry", () => {
       "registeredBlocks",
       "rendersOwnMarkup",
       "resolvePageStyles",
+      "resolvePageStylesWithTrace",
       "styleTextForInjection",
     ]);
   });
