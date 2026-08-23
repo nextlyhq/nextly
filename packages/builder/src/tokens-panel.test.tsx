@@ -823,17 +823,24 @@ describe("an export that could not be written", () => {
     expect(said.textContent).not.toContain("Saved");
   });
 
-  it("still reports a successful export as a status", () => {
-    // The control. Without it, a panel that called every export a refusal
-    // would pass the assertion above.
-    const withUnusable: SiteTokenSet = {
+  it("still reports a successful export as a STATUS, not merely as not-an-alert", () => {
+    // The control, and it has to REQUIRE the status rather than assert the
+    // absence of an alert: no report at all satisfies "no alert", so the weaker
+    // form passes for a panel that reports nothing and for one that calls every
+    // export a refusal — the second only by accident.
+    //
+    // The fixture therefore has something to report: a token whose kind the
+    // format cannot carry, so the export succeeds AND warns.
+    const partly: SiteTokenSet = {
       tokens: [
         { name: "color.ok", kind: "color", values: { light: "#111111" } },
-        { name: "shadow.x", kind: "shadow", values: { light: "0 0 0 #000" } },
+        { name: "odd.one", kind: "custom", values: { light: "0" } },
       ],
     };
-    render(<TokensPanel tokens={withUnusable} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Export CSS" }));
+    render(<TokensPanel tokens={partly} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+    const said = screen.getByRole("status");
+    expect(said.textContent).toContain("Saved tokens.json");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });

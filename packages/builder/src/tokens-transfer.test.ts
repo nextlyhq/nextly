@@ -576,26 +576,40 @@ describe("what goes in", () => {
     expect(result.skipped).toEqual([]);
   });
 
-  it("does not spread a wide document across the argument limit", () => {
-    // A shallow file with enough top-level entries: `push(...frontier)` passes
-    // every entry as an ARGUMENT and exceeds the engine's limit. Making the
-    // walk iterative to escape recursion depth and then spreading its frontier
-    // trades one stack overflow for another.
-    // Asserted as a SUCCESS rather than as "does not throw". The boundary now
-    // catches a `RangeError` and answers with a refusal, so not-throwing holds
-    // whether the walk works or blows up and is caught — measured: with the
-    // spread restored, this file is refused and `not.toThrow()` still passes.
-    // Only "the import succeeded and brought everything" separates them.
-    const wide: Record<string, unknown> = {};
-    for (let n = 0; n < 200_000; n += 1) {
-      wide[`n${String(n)}`] = { $type: "number", $value: n };
+  it(
+    "does not spread a wide document across the argument limit",
+    /*
+     * A deliberate stress case with an explicit budget. Two hundred thousand
+     * entries take well under a second here and were measured at nearly seven
+     * on slower hardware under a full package run — past Vitest's five-second
+     * default, so the suite failed for the machine rather than for the code.
+     *
+     * Given time rather than shrunk: the argument limit is engine-dependent
+     * (about 125,000 here), so a fixture sized to just cross it would stop
+     * crossing it somewhere else and quietly test nothing.
+     */
+    { timeout: 60_000 },
+    () => {
+      // A shallow file with enough top-level entries: `push(...frontier)` passes
+      // every entry as an ARGUMENT and exceeds the engine's limit. Making the
+      // walk iterative to escape recursion depth and then spreading its frontier
+      // trades one stack overflow for another.
+      // Asserted as a SUCCESS rather than as "does not throw". The boundary now
+      // catches a `RangeError` and answers with a refusal, so not-throwing holds
+      // whether the walk works or blows up and is caught — measured: with the
+      // spread restored, this file is refused and `not.toThrow()` still passes.
+      // Only "the import succeeded and brought everything" separates them.
+      const wide: Record<string, unknown> = {};
+      for (let n = 0; n < 200_000; n += 1) {
+        wide[`n${String(n)}`] = { $type: "number", $value: n };
+      }
+      const result = importDtcg(JSON.stringify(wide), { tokens: [] });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.imported).toBe(200_000);
+      expect(result.skipped).toEqual([]);
     }
-    const result = importDtcg(JSON.stringify(wide), { tokens: [] });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.imported).toBe(200_000);
-    expect(result.skipped).toEqual([]);
-  });
+  );
 
   it("says nothing about a well-formed document", () => {
     // The control: a detector that named everything would satisfy the test
@@ -689,5 +703,107 @@ describe("what goes in", () => {
     );
     expect(theirs.length).toBeGreaterThan(0);
     for (const said of theirs) expect(mine.skipped).toContain(said);
+  });
+});
+
+describe("what a file can and cannot carry back out", () => {
+  it("refuses a collection that LOOKS like a record", () => {
+    // A `Map` has no own enumerable keys, so a walk over its values finds
+    // nothing and calls it safe — and `JSON.stringify` writes it as `{}`,
+    // erasing everything it held. Counting keys cannot see this; the prototype
+    // can, which is what the engine's own guard reads.
+    const made = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111" },
+          extensions: { vendor: new Map([["lost", 1]]) } as never,
+        },
+      ],
+    });
+    expect(made.skipped.join(" ")).toContain(
+      "vendor data that a file cannot hold"
+    );
+  });
+
+  it("does not throw when reading vendor data throws", () => {
+    // The preflight reads the same values the write does, so a throwing getter
+    // reaches it one line before `JSON.stringify` — a check added to stop an
+    // export throwing out of a click handler, throwing out of it first.
+    const hostile = {} as Record<string, unknown>;
+    Object.defineProperty(hostile, "toJSON", {
+      enumerable: true,
+      get: () => {
+        throw new Error("no");
+      },
+    });
+    let made: ReturnType<typeof exportDtcg> | undefined;
+    expect(() => {
+      made = exportDtcg({
+        tokens: [
+          {
+            name: "color.ink",
+            kind: "color",
+            values: { light: "#111111" },
+            extensions: { vendor: hostile } as never,
+          },
+        ],
+      });
+    }).not.toThrow();
+    expect(made?.text).toBe("");
+    expect(made?.skipped.join(" ")).toContain("cannot be written to a file");
+  });
+
+  it("hands over NOTHING when there is no CSS to write", () => {
+    // A newline downloads as `tokens.css` and reports as saved, telling an
+    // author their tokens were written when nothing was.
+    const made = exportCss({ tokens: [] });
+    expect(made.text).toBe("");
+  });
+});
+
+describe("metadata a token loses on the way in", () => {
+  it("names a $description the reader will not keep", () => {
+    // The reader keeps a string and takes nothing otherwise — no message, no
+    // field. The token imports looking successful and comes back out without
+    // its description.
+    const document = {
+      foo: { $type: "number", $value: 1, $description: 42 },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.imported).toBe(1);
+    expect(result.skipped.join(" ")).toContain("foo.$description");
+    expect(result.skipped.join(" ")).toContain("is not a string");
+  });
+
+  it("names $extensions that are not an object", () => {
+    const document = {
+      foo: { $type: "number", $value: 1, $extensions: "vendor" },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skipped.join(" ")).toContain("foo.$extensions");
+    expect(result.skipped.join(" ")).toContain("is not an object");
+  });
+
+  it("says nothing about metadata the reader DOES keep", () => {
+    // The control. Reporting a well-formed description would name a loss that
+    // did not happen, on every file carrying one.
+    const document = {
+      foo: {
+        $type: "number",
+        $value: 1,
+        $description: "fine",
+        $extensions: { "com.figma": { id: 1 } },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skipped).toEqual([]);
   });
 });

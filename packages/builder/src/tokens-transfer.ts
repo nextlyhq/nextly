@@ -33,6 +33,7 @@
  * @module tokens-transfer
  */
 import {
+  isPlainRecord,
   compileSiteSheet,
   dtcgToTokens,
   tokenCustomProperty,
@@ -226,21 +227,43 @@ function lostAt(
   if (key === "$root") {
     return `"${path}" is a group's own token, which this site cannot read yet, so it was skipped.`;
   }
-  /*
-   * On a TOKEN these are read and carried. On a GROUP they are not: the reader
-   * flattens a group's children and keeps nothing of the group itself, so a
-   * group's description and any vendor data on it are gone from the next export
-   * with nothing said.
-   */
   if (key === "$description" || key === "$extensions") {
-    return isToken
-      ? undefined
-      : `"${path}" belongs to a group rather than to a token, and this site keeps only tokens, so it was skipped.`;
+    return metadataLostAt(key, value, path, isToken);
   }
   if (key.startsWith("$")) return undefined;
   return isRecord(value)
     ? undefined
     : `"${path}" is neither a token nor a group of them, so it was skipped.`;
+}
+
+/**
+ * Why a description or an extensions block will not be kept, or `undefined`.
+ *
+ * Its own question because it turns on two things the rest of the walk does not
+ * care about: WHOSE metadata this is, and whether it is the shape the reader
+ * accepts.
+ *
+ * On a GROUP it is dropped whatever its shape — the reader flattens a group's
+ * children and keeps nothing of the group itself. On a TOKEN it is kept, but
+ * only when a description is a string and extensions are a plain object; the
+ * reader takes neither otherwise and says nothing, so a token with
+ * `$description: 42` imports looking perfectly successful and comes back out
+ * having lost it.
+ */
+function metadataLostAt(
+  key: string,
+  value: unknown,
+  path: string,
+  isToken: boolean
+): string | undefined {
+  if (!isToken) {
+    return `"${path}" belongs to a group rather than to a token, and this site keeps only tokens, so it was skipped.`;
+  }
+  const kept =
+    key === "$description" ? typeof value === "string" : isPlainRecord(value);
+  if (kept) return undefined;
+  const wanted = key === "$description" ? "a string" : "an object";
+  return `"${path}" is not ${wanted}, so it was skipped and the token arrived without it.`;
 }
 
 /** An object with named keys, which is what a group and a token both are. */
@@ -502,12 +525,18 @@ export interface ExportResult {
  */
 export function exportDtcg(tokens: SiteTokenSet): ExportResult {
   const { document, issues } = tokensToDtcg(tokens);
-  const skipped = [
-    ...issues.map(issue => issue.message),
-    ...unwritable(tokens),
-  ];
+  const said = issues.map(issue => issue.message);
+  let skipped: string[];
   let text: string;
   try {
+    /*
+     * The preflight runs INSIDE the guard, because it reads the same vendor
+     * data the write does. An enumerable `toJSON` getter that throws is read by
+     * that walk before `JSON.stringify` ever sees it — so a check added to stop
+     * an export throwing out of a click handler would have thrown out of it
+     * first, one line earlier.
+     */
+    skipped = [...said, ...unwritable(tokens)];
     text = `${JSON.stringify(document, null, 2)}\n`;
   } catch {
     /*
@@ -527,7 +556,7 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
       filename: "tokens.json",
       mime: "application/json",
       skipped: [
-        ...skipped,
+        ...said,
         "This site's tokens carry vendor data that cannot be written to a file — a value JSON has no form for, such as a very large number or a structure that refers to itself. Nothing was exported.",
       ],
     };
@@ -595,7 +624,14 @@ function holdsOnlyJson(value: unknown, seen = new Set<unknown>()): boolean {
   if (Array.isArray(value)) {
     return value.every(item => holdsOnlyJson(item, seen));
   }
-  if (!isRecord(value)) return false;
+  /*
+   * A PLAIN record, not merely an object. A `Map` or a `Set` has no own
+   * enumerable keys, so walking its values finds nothing and it looks safe —
+   * and `JSON.stringify` writes it as `{}`, erasing everything it held. The
+   * same trap the engine's own `isPlainRecord` exists for, and the reason that
+   * one reads the prototype rather than counting keys.
+   */
+  if (!isPlainRecord(value)) return false;
   // `toJSON` means the written form is something OTHER than the value, so a
   // reader gets back something that was never stored — the loss being looked
   // for, whether or not the substitute is itself writable.
@@ -645,7 +681,11 @@ export function exportCss(tokens: SiteTokenSet): ExportResult {
     breakpoints: { viewport: [], container: [] },
   });
   return {
-    text: `${sheet.css}\n`,
+    // An empty sheet stays empty rather than becoming a newline. A
+    // one-character file downloads as `tokens.css` and reports as saved, which
+    // tells an author their tokens were written when nothing was — and the
+    // warnings saying why are the report they actually needed.
+    text: sheet.css === "" ? "" : `${sheet.css}\n`,
     filename: "tokens.css",
     mime: "text/css",
     skipped: sheet.warnings.map(warning => warning.message),

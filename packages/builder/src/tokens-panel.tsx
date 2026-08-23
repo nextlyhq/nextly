@@ -265,8 +265,24 @@ function TokenTransfer({
   // ref exists to close, left open by the mechanism meant to close it. A ref is
   // a mutable box rather than state, so writing the newest value this component
   // has been given is idempotent and observed by nothing.
-  current.current = tokens;
-  latestChange.current = onChange;
+  /*
+   * Published at COMMIT, not during render.
+   *
+   * Both earlier forms were wrong in opposite directions. A passive effect runs
+   * after the commit, leaving a window where a read resolves against the
+   * previous value. Assigning during render closes that one and opens another:
+   * a concurrent render that is later abandoned — a sibling suspending after
+   * this component — still ran this line, so a read resolving then merges into
+   * a table nobody was shown and calls a callback from a render that never
+   * happened.
+   *
+   * A layout effect runs when a render COMMITS and only when it commits, which
+   * is the property both windows were about.
+   */
+  React.useLayoutEffect(() => {
+    current.current = tokens;
+    latestChange.current = onChange;
+  });
 
   /*
    * Which read is the current one.
