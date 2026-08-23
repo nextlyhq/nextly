@@ -61,6 +61,7 @@
 
 import {
   checkContrast,
+  isTokenRef,
   parseColor,
   STYLE_CATALOG,
   tokenIdentity,
@@ -95,8 +96,20 @@ export interface ColourToken {
   readonly identity: string;
   /** What the author reads and edits. Free to change. */
   readonly name: string;
-  /** The literal this token holds, for painting and for measuring. */
+  /** The literal this token holds, as the site recorded it. */
   readonly colour: string;
+  /**
+   * The colour a preset swatch may be PAINTED with, or `undefined` when this
+   * package cannot resolve one.
+   *
+   * Carried rather than left to the call site, because a token's value is a
+   * string like any other and may be `var(--brand)`, `currentcolor` or a
+   * CSS-wide keyword. Painted raw into a preset button those resolve against
+   * the INSPECTOR rather than the canvas — the exact failure
+   * {@link colourHexOf} exists to prevent for the main swatch, arrived at by a
+   * second route. Resolving here means both swatches answer the same way.
+   */
+  readonly swatch: string | undefined;
 }
 
 /**
@@ -143,6 +156,12 @@ function colourTokenOf(token: SiteToken): ColourToken {
     identity: tokenIdentity(token),
     name: token.name,
     colour: token.values.light,
+    // Resolved with NO table, which is what stops this recursing: a token whose
+    // value is itself a reference would otherwise re-enter the lookup that is
+    // building this record. Without a table a reference resolves to nothing and
+    // the swatch is simply unpainted, which is the honest answer for a value
+    // this package cannot follow.
+    swatch: colourHexOf(token.values.light, undefined),
   };
 }
 
@@ -208,18 +227,10 @@ function resolvedColourOf(
   tokens: SiteTokenSet | undefined
 ): string | undefined {
   if (typeof value === "string") return value;
-  // A token reference is one value spelled as a record, so it arrives as an
-  // object. Matched on the `$token` key rather than through `isTokenRef`, which
-  // could only ever agree with the test already made here, and which would then
-  // be a second place this module decides what a reference looks like.
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "$token" in value &&
-    typeof value.$token === "string"
-  ) {
-    return colourTokenFor(value.$token, tokens)?.colour;
-  }
+  // The ENGINE's own test for a reference, which is also what
+  // {@link colourShowable} routes on — so what counts as a token here and what
+  // the panel sends to a colour control cannot drift apart.
+  if (isTokenRef(value)) return colourTokenFor(value.$token, tokens)?.colour;
   return undefined;
 }
 
@@ -264,6 +275,24 @@ export function colourHexOf(
  */
 function hexOf(rgb: Rgb): string {
   return toHex({ r: rgb.r / 255, g: rgb.g / 255, b: rgb.b / 255 }, rgb.a);
+}
+
+/**
+ * Whether a colour control can show this stored value at all.
+ *
+ * A colour surface has two shapes — a literal string it puts in a text field,
+ * and a `{ $token }` reference it names — plus the unset case. Anything else is
+ * a value no colour control can represent: an object at a scalar position from
+ * an import or the API, or a number. Those keep the panel's own read-only
+ * surface, which shows the value and offers to clear it, rather than being
+ * projected to an empty field that reads as unset while the value goes on
+ * compiling.
+ *
+ * Asked HERE rather than in the panel so that the routing question and the
+ * resolution below cannot disagree about what a colour value is.
+ */
+export function colourShowable(value: StyleValue | undefined): boolean {
+  return value === undefined || typeof value === "string" || isTokenRef(value);
 }
 
 /**
@@ -378,9 +407,22 @@ export function contrastOf(
   // second answer to what a value resolves to, and the two would disagree first
   // on tokens, where one of them consults the table and the other does not.
   const fg = colourHexOf(foreground, tokens);
-  const bg = colourHexOf(background, tokens);
-  if (fg === undefined || bg === undefined) return undefined;
-  return checkContrast(fg, bg);
+  const back = colourChannelsOf(background, tokens);
+  if (fg === undefined || back === undefined) return undefined;
+  // A TRANSLUCENT background has no contrast this can compute, because what
+  // shows through it is not known here. `checkContrast` composites the
+  // background over WHITE, which is a reasonable default for a page and wrong
+  // for a block sitting on another block, on a site background, or on a dark
+  // canvas — and it fails in the direction that matters: white text on
+  // `rgba(0,0,0,.5)` reports as PASSING after white compositing while
+  // rendering nearly invisible over a dark backdrop. Withheld rather than
+  // reported, for the same reason the engine withholds a figure for a colour it
+  // cannot read.
+  //
+  // A translucent FOREGROUND is fine and is not refused: it composites over the
+  // background, which is a colour this does know.
+  if (back.a < 1) return undefined;
+  return checkContrast(fg, hexOf(back));
 }
 
 /**

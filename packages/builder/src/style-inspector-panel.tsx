@@ -65,6 +65,7 @@ import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
 import {
   colourHexOf,
+  colourShowable,
   colourTokenFor,
   colourTokensFor,
   contrastAtLeaf,
@@ -729,8 +730,15 @@ function ControlValue({
    * Narrowed on the LEAF rather than on `control.kind`, because the leaf is what
    * carries `tokenKinds` and `cssProperty` — the two facts the colour surface
    * asks the catalog for — so passing it narrowed means neither is re-derived.
+   *
+   * Guarded by {@link colourShowable}, so a value NO colour control can
+   * represent — an object at a scalar position from an import or the API — does
+   * not take this branch and skip the read-only surface below. Without it the
+   * field projects that object to an empty draft and reads as unset while the
+   * value goes on compiling, which is the failure the surface below exists to
+   * prevent.
    */
-  if (control.leaf.kind === "color") {
+  if (control.leaf.kind === "color" && colourShowable(stored)) {
     return (
       <ColourField
         id={id}
@@ -1202,6 +1210,12 @@ function ColourField({
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const choices = colourTokensFor(control.leaf, tokens);
+  // What the picker composed, written once the gesture is over. Compared
+  // against the stored text so closing a picker nobody moved writes nothing.
+  const commitDraft = (): void => {
+    if (draft === storedText(stored)) return;
+    if (onCommit(draft) === "unchanged") setDraft(storedText(stored));
+  };
   // What the surface is currently SHOWING: the draft while a literal is being
   // typed, so the swatch follows the field, and the stored value for a
   // reference, which no field is editing. Named once and resolved once, rather
@@ -1210,6 +1224,14 @@ function ColourField({
   const showing = reference === null ? draft : stored;
   const shown = colourHexOf(showing, tokens);
   const contrast = contrastAtLeaf(control.leaf, stored, pairedColour, tokens);
+  // Both descriptions, not one. A control pointed only at the refusal message
+  // never announces the contrast verdict, and one pointed only at the verdict
+  // drops the reason its last value was refused — so a screen-reader user gets
+  // whichever happens to be listed and no way to reach the other.
+  const describes =
+    [describedBy, contrast === undefined ? undefined : noteId]
+      .filter(part => part !== undefined)
+      .join(" ") || undefined;
 
   return (
     <>
@@ -1226,15 +1248,25 @@ function ColourField({
           shown={shown}
           choices={choices}
           actionName={actionName}
-          describedBy={describedBy}
+          describedBy={describes}
           // A warning is only worth showing where there is something to lose:
           // an empty field has nothing, and a value the picker CAN show needs
           // no notice. A reference falls out of the first test on its own,
           // since it is displayed by name and never as draft text.
           unrepresented={shown === undefined && draft !== ""}
-          onColour={value => {
-            if (onCommit(value) !== "refused") setDraft(value);
-          }}
+          // The draft moves with the pointer and the DOCUMENT does not. A drag
+          // across the saturation surface fires `onColorChange` on every
+          // pointer event, and committing each one writes an editor op each
+          // time: one gesture becomes dozens of undo entries, and `MAX_HISTORY`
+          // is 100, so a single drag can evict unrelated earlier edits and
+          // leave undo walking intermediate colours instead of reverting the
+          // gesture. This is the rule the text fields already follow — an op
+          // per keystroke would make one undo remove one character.
+          onColour={setDraft}
+          // Committed when the picker CLOSES, which is where the gesture ends.
+          onClosed={commitDraft}
+          // A preset is one discrete choice rather than a gesture, so it
+          // commits immediately, exactly as the select and toggle controls do.
           onToken={identity => onCommit({ $token: identity })}
         />
         {reference === null ? (
@@ -1250,7 +1282,7 @@ function ColourField({
             stored={stored}
             draft={draft}
             setDraft={setDraft}
-            describedBy={describedBy}
+            describedBy={describes}
             onCommit={onCommit}
           />
         ) : (
@@ -1288,6 +1320,7 @@ function ColourPicker({
   describedBy,
   unrepresented,
   onColour,
+  onClosed,
   onToken,
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
@@ -1297,11 +1330,14 @@ function ColourPicker({
   describedBy: string | undefined;
   /** Whether the stored value is one the picker cannot show. */
   unrepresented: boolean;
+  /** The picker moved. Fires on every pointer event during a drag. */
   onColour: (hex: string) => void;
+  /** The picker closed, which is where a gesture ends and a write belongs. */
+  onClosed: () => void;
   onToken: (identity: string) => void;
 }): React.JSX.Element {
   return (
-    <Popover>
+    <Popover onOpenChange={open => !open && onClosed()}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -1340,7 +1376,14 @@ function ColourPicker({
             // token and a new one that took its old name.
             id: choice.identity,
             label: choice.name,
-            color: choice.colour,
+            // The RESOLVED colour, never the token's raw value. A preset button
+            // paints what it is handed, so a token holding `var(--brand)`,
+            // `currentcolor` or a CSS-wide keyword would resolve against the
+            // inspector rather than the canvas and show a colour the page does
+            // not have — the same failure the main swatch refuses. A token this
+            // package cannot resolve paints nothing and stays choosable, which
+            // is what keeps the reference reachable.
+            color: choice.swatch ?? "transparent",
             value: choice,
           }))}
           onColorChange={onColour}

@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   colourHexOf,
+  colourShowable,
   colourTokenFor,
   colourTokensFor,
   contrastOf,
@@ -71,6 +72,9 @@ const OPACITY = leaf("opacity");
 const TOKENS: SiteTokenSet = {
   tokens: [
     { name: "color.ink", kind: "color", values: { light: "#111111" } },
+    // A token whose value resolves somewhere else. Valid, storable, and not
+    // paintable by this package.
+    { name: "color.themed", kind: "color", values: { light: "var(--brand)" } },
     {
       id: "color.primary",
       name: "brand.main",
@@ -86,6 +90,7 @@ describe("which tokens a colour control offers", () => {
     const offered = colourTokensFor(COLOR, TOKENS);
     expect(offered.map(token => token.name)).toEqual([
       "color.ink",
+      "color.themed",
       "brand.main",
     ]);
     // The positive control for the filter: the site DOES define a token of
@@ -371,5 +376,81 @@ describe("how a ratio reads", () => {
     };
     expect(contrastRatioText(near)).toBe("4.5:1");
     expect(near.passesBodyText).toBe(false);
+  });
+});
+
+describe("what a preset swatch may be painted with", () => {
+  it("carries a RESOLVED colour, not the token's raw value", () => {
+    // A preset button paints what it is handed, so the resolution has to happen
+    // before the value reaches it.
+    const offered = colourTokensFor(COLOR, TOKENS);
+    const ink = offered.find(token => token.name === "color.ink");
+    expect(ink?.colour).toBe("#111111");
+    expect(ink?.swatch).toBe("#111111");
+  });
+
+  it("paints NOTHING for a token that resolves somewhere else", () => {
+    // The separating case, and the one that made this a defect: `var(--brand)`
+    // is a valid colour a site may store in a token, and painted raw into the
+    // inspector it resolves against the PANEL rather than the canvas.
+    const themed = colourTokensFor(COLOR, TOKENS).find(
+      token => token.name === "color.themed"
+    );
+    // Still offered, so the reference stays choosable.
+    expect(themed).toBeDefined();
+    // And still truthful about what the site stores.
+    expect(themed?.colour).toBe("var(--brand)");
+    // But not paintable.
+    expect(themed?.swatch).toBeUndefined();
+  });
+
+  it("agrees with the main swatch about what can be painted", () => {
+    for (const token of colourTokensFor(COLOR, TOKENS)) {
+      expect(token.swatch).toBe(colourHexOf(token.colour, undefined));
+    }
+  });
+});
+
+describe("which stored values a colour control can show", () => {
+  it("shows a literal, a reference, and nothing set", () => {
+    expect(colourShowable(undefined)).toBe(true);
+    expect(colourShowable("#3b82f6")).toBe(true);
+    expect(colourShowable("oklch(0.7 0.1 200)")).toBe(true);
+    expect(colourShowable({ $token: "color.ink" })).toBe(true);
+  });
+
+  it("REFUSES a value no colour surface can represent", () => {
+    // An object at a scalar position, from an import or the API. Routed to a
+    // colour control it would project to an empty field and read as unset while
+    // the value goes on compiling — so it has to keep the read-only surface.
+    expect(colourShowable({ value: "#fff" } as never)).toBe(false);
+    expect(colourShowable(16)).toBe(false);
+  });
+});
+
+describe("a translucent background withholds the verdict", () => {
+  it("reports nothing when the background carries alpha", () => {
+    // `checkContrast` composites a background over WHITE, which is wrong for a
+    // block sitting on a dark backdrop — and wrong in the direction that
+    // matters: this pair reports as passing after white compositing while
+    // rendering nearly invisible over black.
+    const overWhite = contrastOf("#ffffff", "rgba(0, 0, 0, 0.5)", TOKENS);
+    expect(overWhite).toBeUndefined();
+    // The positive control: the SAME pair opaque is measured, so the refusal
+    // above is the alpha and not the parser declining the notation.
+    const opaque = contrastOf("#ffffff", "rgba(0, 0, 0, 1)", TOKENS);
+    expect(opaque?.ratio).toBeCloseTo(21, 5);
+  });
+
+  it("still measures a translucent FOREGROUND, which composites over a known colour", () => {
+    // Not refused: what sits behind the foreground is the background, and that
+    // is a colour this does know.
+    const result = contrastOf("rgba(0, 0, 0, 0.5)", "#ffffff", TOKENS);
+    expect(result).toBeDefined();
+    expect(result?.ratio).toBeGreaterThan(1);
+  });
+
+  it("refuses an alpha hex background as readily as an rgba() one", () => {
+    expect(contrastOf("#ffffff", "#00000080", TOKENS)).toBeUndefined();
   });
 });

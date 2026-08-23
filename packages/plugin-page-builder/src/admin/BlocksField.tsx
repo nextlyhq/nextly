@@ -570,7 +570,21 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // The policy travels with the panel because the Style tab judges a
         // written value at the keystroke and has to reach the same verdict the
         // published compiler will.
-        inspector={<InspectorPanel editor={editor} policy={stylePolicy} />}
+        //
+        // The tokens travel with it for the same reason one step further: a
+        // colour control offers the site's tokens and resolves a stored
+        // reference to the name an author currently reads, and `policy.tokens`
+        // cannot serve either — a `TokenLookup` answers ABOUT a name the caller
+        // already holds and cannot enumerate one. This is the MERGED set the
+        // canvas compiles with, so the picker offers exactly the tokens the
+        // page will resolve.
+        inspector={
+          <InspectorPanel
+            editor={editor}
+            policy={stylePolicy}
+            tokens={canvasSiteStyle?.tokens}
+          />
+        }
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter

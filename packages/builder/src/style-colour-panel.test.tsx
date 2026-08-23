@@ -308,3 +308,91 @@ describe("the contrast readout", () => {
     expect(screen.getAllByText(/Contrast 21\.0:1/).length).toBeGreaterThan(0);
   });
 });
+
+describe("a value no colour surface can represent", () => {
+  it("keeps the read-only surface rather than an empty colour field", () => {
+    // An object at a scalar position, from an import or the API. Routed to the
+    // colour control it projects to an empty draft and reads as UNSET while the
+    // value goes on compiling — and the one action that would remove it, Clear,
+    // is the one the field does not offer.
+    mount(styles({ value: "#fff" }));
+    expect(screen.queryByRole("textbox", { name: "Color" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Colour for Color" })
+    ).toBeNull();
+    // Shown, and removable.
+    expect(screen.getByRole("button", { name: "Clear Color" })).toBeDefined();
+    expect(screen.getByText(/"value"/)).toBeDefined();
+  });
+
+  it("still routes an ordinary literal and a reference to the colour control", () => {
+    // The positive control for the guard: it must refuse the shape above and
+    // nothing else, or every colour would fall back to read-only.
+    mount(styles("#3b82f6"));
+    expect(
+      screen.getByRole("button", { name: "Colour for Color" })
+    ).toBeDefined();
+  });
+});
+
+describe("the contrast verdict is reachable from the control it describes", () => {
+  it("points the field and the swatch at the readout", () => {
+    // Without this the verdict is rendered and announced to nobody: focusing
+    // the colour control says nothing about the WCAG result beside it.
+    mount(styles("#000000", "#ffffff"));
+    const note = document.querySelector(".nx-style-inspector__contrast");
+    expect(note).not.toBeNull();
+    const noteId = note?.getAttribute("id");
+    expect(noteId).toBeTruthy();
+    const field = screen.getByRole("textbox", { name: "Color" });
+    const swatchButton = screen.getByRole("button", {
+      name: "Colour for Color",
+    });
+    expect(field.getAttribute("aria-describedby")).toContain(noteId as string);
+    expect(swatchButton.getAttribute("aria-describedby")).toContain(
+      noteId as string
+    );
+  });
+
+  it("describes nothing when there is no verdict to describe", () => {
+    mount(styles("#000000"));
+    expect(
+      screen
+        .getByRole("textbox", { name: "Color" })
+        .getAttribute("aria-describedby")
+    ).toBeNull();
+  });
+});
+
+describe("a picker gesture is ONE editor operation", () => {
+  it("does not write while the picker is being moved, and writes once on close", () => {
+    // The UI picker fires `onColorChange` on every pointer event, so committing
+    // each one turns a single drag into dozens of undo entries — and
+    // `MAX_HISTORY` is 100, so one drag can evict unrelated earlier edits and
+    // leave undo walking intermediate colours instead of reverting the gesture.
+    // The same rule the text fields follow: an op per keystroke would make one
+    // undo remove one character.
+    const editor = mount(styles("#3b82f6"));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+
+    // The picker's own hex field stands in for the drag: it reaches the same
+    // `onColorChange` the surface and sliders do.
+    const hex = screen
+      .getAllByRole("textbox")
+      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
+    expect(hex).toBeDefined();
+    if (hex === undefined) return;
+    fireEvent.change(hex, { target: { value: "#ff0000" } });
+    fireEvent.change(hex, { target: { value: "#00ff00" } });
+    fireEvent.change(hex, { target: { value: "#0000ff" } });
+
+    // Three moves, no writes.
+    expect(editor.apply).not.toHaveBeenCalled();
+
+    // Closing ends the gesture and writes once.
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+});
