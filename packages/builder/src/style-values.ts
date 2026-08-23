@@ -221,21 +221,58 @@ export function readStyleValue(
 /**
  * The stored values at one state × breakpoint, by own keys at every level.
  *
- * Both levels are guarded for the reason the path walk is: the envelope is a
- * plain object, and a state or breakpoint name reached through a prototype is
- * one the compiler will not read.
+ * Every level is guarded for two reasons at once, and the second is the one
+ * that bites. The envelope is a plain object, so a state or breakpoint name
+ * reached through a PROTOTYPE is one the compiler will not read — that is what
+ * `Object.hasOwn` is for.
+ *
+ * And every level is tested for being a record before it is read at all,
+ * because the envelope arrives from storage rather than from this editor. A
+ * migration, a DTCG import or a hand-edited row can leave `{ base: null }`
+ * here, and the field's own guard admits it: it checks that `nodes` is an
+ * array and no more, deliberately, so a malformed document does not throw
+ * inside the render. `Object.hasOwn(null, …)` throws, which is precisely the
+ * failure that guard exists to prevent — and it throws during render, so it
+ * takes the whole Style tab down and leaves the author no way to repair the
+ * value that broke it.
+ *
+ * This is the CHOKEPOINT for that: reading a value, writing one and clearing
+ * one all come through here, so guarding it covers every path into a tier
+ * rather than the one path someone remembered.
+ *
+ * The guard is deliberately NOT the engine's `isPlainRecord`, which answers a
+ * different question. That one asks whether a value is JSON-shaped, and refuses
+ * anything carrying a prototype — which would refuse the very shapes the own-key
+ * rule above exists to handle correctly, reading nothing from a map whose own
+ * keys are perfectly good. What is needed here is only whether own keys can be
+ * read from the value AT ALL, which is the question `Object.hasOwn` throws on.
  */
+/**
+ * Whether own keys can be read from this at all.
+ *
+ * The narrowest question that prevents the throw, and narrower on purpose than
+ * "is this a record". `Object.hasOwn` rejects a prototype-reached key by
+ * itself, so a map carrying a prototype is handled correctly by the checks that
+ * follow and must not be refused here — refusing it would drop values the
+ * document really does own. What it cannot survive is `null` or a primitive,
+ * which is the whole of what this excludes.
+ */
+function hasOwnKeys(value: unknown): value is Record<string, never> {
+  return typeof value === "object" && value !== null;
+}
+
 function valuesAt(
   styles: NodeStyles | undefined,
   state: StyleState,
   breakpoint: BreakpointId
 ): StyleValues | undefined {
-  if (styles === undefined || !Object.hasOwn(styles, state)) return undefined;
+  if (!hasOwnKeys(styles) || !Object.hasOwn(styles, state)) return undefined;
   const breakpoints = styles[state];
-  if (breakpoints === undefined || !Object.hasOwn(breakpoints, breakpoint)) {
+  if (!hasOwnKeys(breakpoints) || !Object.hasOwn(breakpoints, breakpoint)) {
     return undefined;
   }
-  return breakpoints[breakpoint];
+  const values = breakpoints[breakpoint];
+  return hasOwnKeys(values) ? values : undefined;
 }
 
 /** The whole envelope with one state × breakpoint replaced, pruning what empties. */

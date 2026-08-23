@@ -890,3 +890,67 @@ describe("two tokens under one name are told apart", () => {
     ).not.toBeNull();
   });
 });
+
+describe("a malformed stored document does not take the Style tab down", () => {
+  /*
+   * The evidence gap this closes is worth naming. A first attempt guarded the
+   * obscuring SCAN and asserted it by calling that scan directly — and the
+   * panel still threw, because `readStyleValue` and its contrast partner read
+   * the same tier BEFORE the scan runs. A test that reaches the mechanism by
+   * its own front door proves the mechanism, not the screen.
+   *
+   * So these mount the real panel. `documentFrom` admits any value whose
+   * `nodes` is an array — deliberately, because a stored document is whatever a
+   * migration, an import or a hand-edited row left behind — so every shape
+   * below reaches the editor intact, and a throw here happens during render.
+   */
+  /*
+   * A malformed TIER, where the envelope itself is the wrong shape. The leaf
+   * has nothing set, so the panel draws its control with no value — which is
+   * the same thing it draws for a node that simply has no styles, and is the
+   * correct answer.
+   */
+  const malformedTiers: readonly [string, unknown][] = [
+    ["a null tier", { base: null }],
+    ["a null breakpoint map", { base: { base: null } }],
+    ["a tier that is a string", { base: "base" }],
+    ["a tier that is an array", { base: [{ color: "#000" }] }],
+    ["a breakpoint map that is an array", { base: { base: ["color"] } }],
+  ];
+
+  for (const [what, styles] of malformedTiers) {
+    it(`renders rather than throwing for ${what}`, () => {
+      expect(() => render_with(styles)).not.toThrow();
+      // A live panel, not an error boundary's remains: the control for this
+      // leaf is still drawn and still operable.
+      expect(
+        screen.getByRole("button", { name: "Colour for Color" })
+      ).toBeDefined();
+    });
+  }
+
+  it("renders rather than throwing for a malformed VALUE", () => {
+    // Different from the tiers above and asserted apart from them: the
+    // envelope is well formed and the value inside it is not, so the panel
+    // legitimately draws the read-only surface for a value no colour control
+    // can represent rather than the swatch.
+    expect(() =>
+      render_with({ base: { base: { color: null } } })
+    ).not.toThrow();
+    // The read-only surface for a value nothing here can represent, which is
+    // the honest answer: the value is still on the page and still removable.
+    expect(
+      screen.getByText(/No control here can edit this value/)
+    ).toBeDefined();
+  });
+
+  it("still shows a GOOD address when another one is malformed", () => {
+    // The guard must skip the broken tier, not abandon the read. A document
+    // with one bad address and one good one must still show the good value.
+    render_with({ base: { base: { color: "#3b82f6" } }, hover: null });
+    expect(screen.getByRole("textbox", { name: "Color" })).toHaveProperty(
+      "value",
+      "#3b82f6"
+    );
+  });
+});

@@ -27,9 +27,8 @@
 ---
 
 Keep the Style tab alive when a stored document holds a malformed style tier.
-The colour control scans every state and breakpoint for effects that obscure a
-contrast pair, and enumerated each tier after checking only that it was defined.
-A node holding `styles: { base: null }` — which reaches the editor, because the
-field's guard admits any value whose `nodes` is an array — then threw during
-render and took the whole tab down. Every tier is now tested with the engine's
-own record guard before it is read.
+A node holding `styles: { base: null }` reaches the editor — the field's guard
+admits any value whose `nodes` is an array, deliberately — and every read of a
+tier then threw during render, taking the whole tab down. Guarded at
+`valuesAt`, which is the one place reading, writing and clearing a value all
+pass through, and at the contrast scan that walks every address.
