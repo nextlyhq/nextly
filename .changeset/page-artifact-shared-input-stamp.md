@@ -84,13 +84,23 @@ those prunes are licensed to KEEP the stored artifact, so an identity derived
 from what survived would drop a type whose last node such a prune removed and
 refuse the very sheet it was allowed in order to reuse.
 
-`breakpointContexts` now bounds a stored axis BEFORE it sorts. The per-axis
+`breakpointContexts` now bounds a stored axis BEFORE anything filters it. The per-axis
 limit bounded its output and not its work, so an axis of a million definitions
-was filtered and sorted in full on the way to keeping seven — paid by every
-reader keyed on which breakpoints a site emits under, including one whose
-stylesheet is reusable. Past `MAX_SCANNED_KEYS` definitions on one axis the
-survivors are now chosen from a prefix; nothing legitimate reaches that, since
+was scanned in full on the way to keeping seven — paid by every reader keyed on
+which breakpoints a site emits under, including one whose stylesheet is
+reusable. The bound is on the RAW axis rather than on what survives the filter,
+because a bound after the filter bounds only the sort while every stored
+definition is still visited. Past `MAX_SCANNED_KEYS` definitions on one axis the
+survivors are now chosen from that prefix; nothing legitimate reaches it, since
 the declared limit is seven.
+
+The shared-input identity is not part of this package's public entry. It was
+briefly published so an external write path could stamp what `toPageStyles`
+stores, and that was wrong: the identity a reader derives is taken over a
+compile context the resolver has already narrowed, so a writer computing one
+from its own context writes an artifact every read refuses. A writer's answer is
+`resolvePageStyles` with no stored artifact — it compiles and returns the
+stamped result, so the value written is the value a reader recomputes.
 
 `@nextlyhq/blocks-engine` exports `breakpointContexts`, `safeTokenPrefix`,
 `MAX_SCANNED_KEYS` and `MAX_NAMED_CLASS_NAME_LENGTH`: the compiler's own normalised breakpoints, the prefix tokens

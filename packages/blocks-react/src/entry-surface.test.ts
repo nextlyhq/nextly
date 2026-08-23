@@ -98,11 +98,29 @@ const SOURCE_MODULES: ReadonlyArray<{
   {
     name: "shared-style-inputs",
     module: sharedStyleInputsModule,
-    // The label and the sentinel are this package's own. A writer needs only
-    // the identity — `sharedStyleInputsId` — and the pre-hash label exists to
-    // explain an unexpected recompile from inside, not to be compared by a
-    // consumer who would then be holding a second opinion about staleness.
-    internal: ["sharedStyleInputsLabel", "UNIDENTIFIED_SHARED_INPUTS"],
+    // Nothing here is a consumer surface, and `sharedStyleInputsId` is the one
+    // that had to be WITHDRAWN rather than never offered. It was published so a
+    // write path outside the package could stamp what `toPageStyles` stores —
+    // but the identity a READER derives is taken over a compile context the
+    // resolver has narrowed first: block defaults reduced to the types the
+    // document draws, and filled in from the resolver where the caller stated
+    // none. A writer calling this with its own context computes a different
+    // answer and writes an artifact every read refuses, which is the opposite of
+    // what publishing it was for.
+    //
+    // A writer's answer is `resolvePageStyles` with no stored artifact: it
+    // compiles and RETURNS the stamped result, so the value written is the value
+    // a reader recomputes. Publishing a way to assemble the identity by hand
+    // offers a second answer to a question that must have one.
+    //
+    // The pre-hash label exists to explain an unexpected recompile from inside,
+    // not to be compared by a consumer who would then be holding a second
+    // opinion about staleness.
+    internal: [
+      "sharedStyleInputsId",
+      "sharedStyleInputsLabel",
+      "UNIDENTIFIED_SHARED_INPUTS",
+    ],
   },
   {
     name: "styles",
@@ -256,7 +274,6 @@ describe("the root entry", () => {
       "pruneHiddenNodes",
       "registeredBlocks",
       "resolvePageStyles",
-      "sharedStyleInputsId",
       "styleTextForInjection",
       "toPageStyles",
     ]);

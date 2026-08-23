@@ -350,35 +350,49 @@ export function breakpointContexts(
   const axisDefs = (axis: BreakpointAxis): BreakpointDef[] => {
     const defs = isPlainRecord(rawSet) ? rawSet[axis] : undefined;
     if (!Array.isArray(defs)) return [];
-    const usable = defs.filter((def: unknown): def is BreakpointDef => {
-      if (!isPlainRecord(def) || typeof def.id !== "string") return false;
-      // The base id names the unconditional context and carries no bound by
-      // definition; it is skipped below, and asking it for one would drop the
-      // very breakpoint every other rule is written against.
-      if (def.id === BASE_BREAKPOINT) return true;
-      if (def.maxWidth === undefined) {
-        // Only one unbounded definition per container axis. Two both compile to
-        // `@container (min-width: 0)`, so they cover the identical range and
-        // whichever sorts later silently overrides the other — the same
-        // ambiguity a duplicate id creates, spelled differently.
-        if (axis === "container") {
-          if (unboundedContainer) return false;
-          unboundedContainer = true;
-          return true;
+    // Bounded on the RAW axis, before anything reads it. A bound applied after
+    // the filter below bounds only the sort: the filter still visits every
+    // stored definition and materialises every usable one, so a million-entry
+    // row costs O(n) and its allocation on each call — and this is called on
+    // every render keyed on what a site emits under, including one whose
+    // stylesheet is reusable.
+    //
+    // The prefix is what a bound on unvalidated input can be. Past this many
+    // definitions the survivors are chosen from the first `MAX_SCANNED_KEYS`
+    // rather than from the whole axis, so an axis whose only usable entries sit
+    // beyond that prefix now defines no breakpoints. Nothing legitimate is
+    // close: the declared per-axis limit is `MAX_BREAKPOINTS_PER_AXIS`.
+    const usable = defs
+      .slice(0, MAX_SCANNED_KEYS)
+      .filter((def: unknown): def is BreakpointDef => {
+        if (!isPlainRecord(def) || typeof def.id !== "string") return false;
+        // The base id names the unconditional context and carries no bound by
+        // definition; it is skipped below, and asking it for one would drop the
+        // very breakpoint every other rule is written against.
+        if (def.id === BASE_BREAKPOINT) return true;
+        if (def.maxWidth === undefined) {
+          // Only one unbounded definition per container axis. Two both compile to
+          // `@container (min-width: 0)`, so they cover the identical range and
+          // whichever sorts later silently overrides the other — the same
+          // ambiguity a duplicate id creates, spelled differently.
+          if (axis === "container") {
+            if (unboundedContainer) return false;
+            unboundedContainer = true;
+            return true;
+          }
+          // A VIEWPORT definition without a bound would emit no at-rule at all:
+          // a second unconditional context, overriding the real base at every
+          // width, from a settings record the type system accepts. The container
+          // axis is not the same case and was answered above, because its
+          // unbounded definition still emits a query and stays scoped.
+          return false;
         }
-        // A VIEWPORT definition without a bound would emit no at-rule at all:
-        // a second unconditional context, overriding the real base at every
-        // width, from a settings record the type system accepts. The container
-        // axis is not the same case and was answered above, because its
-        // unbounded definition still emits a query and stays scoped.
-        return false;
-      }
-      return (
-        typeof def.maxWidth === "number" &&
-        Number.isFinite(def.maxWidth) &&
-        def.maxWidth > 0
-      );
-    });
+        return (
+          typeof def.maxWidth === "number" &&
+          Number.isFinite(def.maxWidth) &&
+          def.maxWidth > 0
+        );
+      });
     // The declared per-axis limit, enforced here because nothing else enforces
     // it. Every style envelope in the document scans the whole context list, so
     // the cost of a corrupt settings record is multiplied by every node rather
@@ -395,13 +409,9 @@ export function breakpointContexts(
     // ahead of its pattern test: a cheap rejection has to come first for the cap
     // to bound anything.
     //
-    // It costs a behaviour change on input this size, and that is the trade
-    // rather than an oversight: past this many definitions the widest seven are
-    // chosen from a prefix rather than from the whole axis. Nothing legitimate
-    // reaches it — the declared limit is seven — and `MAX_SCANNED_KEYS` is this
-    // engine's existing answer to how much of one stored record it reads at all.
+    // Bounding the WORK is done above, on the raw axis, because a bound applied
+    // here would leave the filter scanning all of it first.
     return usable
-      .slice(0, MAX_SCANNED_KEYS)
       .sort(widthDescending)
       .filter(def => {
         if (claimed.has(def.id)) return false;
