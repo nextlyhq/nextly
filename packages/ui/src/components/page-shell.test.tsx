@@ -14,8 +14,9 @@
  * answers that.
  */
 import type { ReactNode } from "react";
+import { useState } from "react";
 
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { Bleed, PageShell } from "./page-shell";
@@ -181,6 +182,56 @@ describe("PageShell", () => {
     expect(calls).toEqual([]);
   });
 
+  it("warns when a child swaps an element for text after mount", async () => {
+    // The shell does not re-render when a child changes its OWN state, so a
+    // check that only runs with this component would never see this. Watching
+    // the child list is what makes it a property of the rendered DOM.
+    function Swapper() {
+      const [text, setText] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setText(true)}>
+            swap
+          </button>
+          {text ? "now bare text" : <p>an element</p>}
+        </>
+      );
+    }
+
+    vi.resetModules();
+    const fresh = await import("./page-shell");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      render(
+        <fresh.PageShell>
+          <Swapper />
+        </fresh.PageShell>
+      );
+      expect(warn).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "swap" }));
+      await waitFor(() => {
+        expect(warn).toHaveBeenCalledTimes(1);
+      });
+      expect(String(warn.mock.calls[0]?.[0])).toContain("anonymous grid item");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns when a direct child is taken out of the grid by display:contents", async () => {
+    // The child is present and correctly classed, so nothing in the markup says
+    // its own children left the measure.
+    const calls = await renderFresh(
+      <div style={{ display: "contents" }}>
+        <p>promoted into the shell grid</p>
+      </div>
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("display: contents");
+  });
+
   it("stays silent when every rendered child is an element", async () => {
     // The negative control, and it is only evidence because the cases above run
     // against their own module instances rather than sharing this one's cache.
@@ -232,6 +283,87 @@ describe("PageShell", () => {
 
     expect(measureOf(container)).toBe("var(--nx-measure-wide)");
     expect(shellOf(container)?.style.paddingTop).toBe("4px");
+  });
+});
+
+describe("nested PageShell", () => {
+  it("adds no second grid and says so", async () => {
+    // An outer shell has already inset this content. A second grid would add
+    // another pair of gutter tracks and inset it twice, which is the defect
+    // this primitive exists to make unrepresentable — so nesting must not be
+    // left to every caller knowing whether an ancestor layout owns a shell.
+    vi.resetModules();
+    const fresh = await import("./page-shell");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { container } = render(
+        <fresh.PageShell>
+          <fresh.PageShell>
+            <p>inner</p>
+          </fresh.PageShell>
+        </fresh.PageShell>
+      );
+
+      expect(
+        container.querySelectorAll("[data-slot='page-shell']")
+      ).toHaveLength(1);
+      const inner = container.querySelector("[data-slot='page-shell-nested']");
+      expect(inner).not.toBeNull();
+      expect(inner?.classList.contains("nx-page-shell")).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain(
+        "ancestor already renders"
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("still owns the grid when shells are siblings rather than nested", async () => {
+    // The negative control: the context must not leak across the tree, or two
+    // ordinary pages rendered side by side would silently lose their inset.
+    vi.resetModules();
+    const fresh = await import("./page-shell");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { container } = render(
+        <div>
+          <fresh.PageShell>
+            <p>one</p>
+          </fresh.PageShell>
+          <fresh.PageShell>
+            <p>two</p>
+          </fresh.PageShell>
+        </div>
+      );
+
+      expect(
+        container.querySelectorAll("[data-slot='page-shell']")
+      ).toHaveLength(2);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("forwarded ref", () => {
+  it("passes a callback ref's cleanup back to React", async () => {
+    // React 19 runs the RETURNED cleanup instead of calling the ref again with
+    // null, so discarding it would silently drop a caller's disconnect.
+    vi.resetModules();
+    const fresh = await import("./page-shell");
+    const cleanup = vi.fn();
+
+    const { unmount } = render(
+      <fresh.PageShell ref={() => cleanup}>
+        <p>x</p>
+      </fresh.PageShell>
+    );
+
+    expect(cleanup).not.toHaveBeenCalled();
+    unmount();
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 });
 

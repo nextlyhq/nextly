@@ -1,5 +1,12 @@
 import type { CSSProperties, HTMLAttributes } from "react";
-import { forwardRef, useCallback, useEffect, useRef } from "react";
+import {
+  createContext,
+  forwardRef,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+} from "react";
 
 import { devWarnOnce, isDevelopmentRuntime } from "../lib/dev-warn";
 import { cn } from "../lib/utils";
@@ -14,12 +21,6 @@ export interface PageShellProps extends HTMLAttributes<HTMLDivElement> {
   width?: "form" | "wide" | "full";
 }
 
-/**
- * Declared as a lookup rather than branched at the call site so the three arms
- * are one list. A `switch` here would let a fourth width be added to the type
- * and forgotten in the mapping, which the checker cannot see through a
- * `default` arm.
- */
 /**
  * `CSSProperties` models only the properties csstype knows about, so a CSS
  * custom property is not assignable to it.
@@ -54,6 +55,39 @@ function hasBareTextChild(shell: HTMLElement): boolean {
   );
 }
 
+/**
+ * A shell already owns the inset somewhere up the tree.
+ *
+ * Nesting is what would otherwise reintroduce the exact defect this primitive
+ * exists to end: an outer shell places the inner one in its content column and
+ * the inner grid adds a second pair of gutter tracks, so content is inset
+ * twice. Relying on every caller to know whether an ancestor layout already
+ * rendered a shell is the kind of unwritten precondition that holds until one
+ * page is composed differently.
+ */
+const InsideShell = createContext(false);
+
+/**
+ * Whether a direct child has been taken out of the grid by `display: contents`.
+ *
+ * Such a child generates no box, so the `grid-column` rule has nothing to
+ * apply to, while ITS children are promoted into this grid and match no
+ * selector — they auto-place from the first track, which is a gutter. The
+ * element is present and correctly classed, so nothing about the markup says
+ * the content left the measure.
+ */
+function hasDisplayContentsChild(shell: HTMLElement): boolean {
+  return Array.from(shell.children).some(
+    child => getComputedStyle(child).display === "contents"
+  );
+}
+
+/**
+ * Declared as a lookup rather than branched at the call site so the three arms
+ * are one list. A `switch` here would let a fourth width be added to the type
+ * and forgotten in the mapping, which the checker cannot see through a
+ * `default` arm.
+ */
 const MEASURE: Record<NonNullable<PageShellProps["width"]>, string> = {
   form: "var(--nx-measure-form)",
   wide: "var(--nx-measure-wide)",
@@ -95,25 +129,55 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
     const attachRef = useCallback(
       (node: HTMLDivElement | null) => {
         shellRef.current = node;
-        if (typeof ref === "function") ref(node);
-        else if (ref) ref.current = node;
+        // A callback ref's RETURN is the caller's cleanup under React 19, and
+        // React runs it instead of calling the ref again with null. Discarding
+        // it here would silently drop, say, an observer's disconnect. Passing it
+        // straight through is also correct under the React 18 half of this
+        // package's peer range, where such a ref returns nothing.
+        if (typeof ref === "function") return ref(node);
+        if (ref) ref.current = node;
       },
       [ref]
     );
 
-    // Gated on the runtime up front so the DOM read itself never happens in
-    // production, not merely its console output.
+    const nested = useContext(InsideShell);
+
+    // Gated on the runtime up front so neither the DOM read nor the observer
+    // below exists in production, not merely their console output.
     useEffect(() => {
       if (!isDevelopmentRuntime()) return;
       const shell = shellRef.current;
       if (!shell) return;
-      devWarnOnce(
-        !hasBareTextChild(shell),
-        "PageShell: a direct child renders as bare text. CSS Grid wraps it in an anonymous " +
-          "grid item, which no selector can reach, so it is placed in the gutter rather than " +
-          "the content column and sits outside the page's measure. Wrap it in an element — a " +
-          "`<p>`, or the section it belongs to."
-      );
+
+      const check = () => {
+        devWarnOnce(
+          !hasBareTextChild(shell),
+          "PageShell: a direct child renders as bare text. CSS Grid wraps it in an anonymous " +
+            "grid item, which no selector can reach, so it is placed in the gutter rather than " +
+            "the content column and sits outside the page's measure. Wrap it in an element — " +
+            "a `<p>`, or the section it belongs to."
+        );
+        devWarnOnce(
+          !hasDisplayContentsChild(shell),
+          "PageShell: a direct child has `display: contents`, so it generates no grid item and " +
+            "the content-column rule has nothing to apply to. Its own children are promoted " +
+            "into this grid, match no selector, and are placed from the gutter onward. Give " +
+            "the child a box, or move `display: contents` inside it."
+        );
+      };
+
+      check();
+
+      // A child that swaps an element for text through its OWN state does not
+      // re-render this component, so the effect above would never run again and
+      // the defect would arrive unreported. Watching the child list is what
+      // makes the check a property of the rendered DOM rather than of when this
+      // component happened to render.
+      const observer = new MutationObserver(check);
+      observer.observe(shell, { childList: true });
+      return () => {
+        observer.disconnect();
+      };
     });
 
     // The caller's `style` is spread FIRST so the measure this component
@@ -125,20 +189,46 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
       "--nx-shell-measure": MEASURE[width],
     };
 
+    // A nested shell contributes NO second grid: the outer one already inset
+    // this content, and adding another pair of gutter tracks is precisely the
+    // double inset this primitive exists to make unrepresentable. It renders a
+    // plain box so its children stay in the outer measure, and says so, because
+    // the redundant shell is what the author should remove.
+    if (nested) {
+      devWarnOnce(
+        false,
+        "PageShell: an ancestor already renders a PageShell. A nested one would add a second " +
+          "pair of gutter tracks and inset its content twice, so this one renders as a plain " +
+          "box and its `width` is ignored. Remove it, or move the outer shell."
+      );
+      return (
+        <div
+          ref={attachRef}
+          data-slot="page-shell-nested"
+          className={className}
+          {...props}
+        >
+          {children}
+        </div>
+      );
+    }
+
     return (
-      <div
-        ref={attachRef}
-        data-slot="page-shell"
-        // The measure travels as a custom property rather than as a utility
-        // class because the grid template reads it: one `grid-template-columns`
-        // serves all three widths, instead of three near-identical templates
-        // that would each have to be corrected together.
-        style={shellStyle}
-        className={cn("nx-page-shell py-8", className)}
-        {...props}
-      >
-        {children}
-      </div>
+      <InsideShell.Provider value={true}>
+        <div
+          ref={attachRef}
+          data-slot="page-shell"
+          // The measure travels as a custom property rather than as a utility
+          // class because the grid template reads it: one `grid-template-columns`
+          // serves all three widths, instead of three near-identical templates
+          // that would each have to be corrected together.
+          style={shellStyle}
+          className={cn("nx-page-shell py-8", className)}
+          {...props}
+        >
+          {children}
+        </div>
+      </InsideShell.Provider>
     );
   }
 );
