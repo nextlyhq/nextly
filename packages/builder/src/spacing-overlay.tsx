@@ -63,12 +63,14 @@ import { CANVAS_ROOT_CLASS, nodeElement, nodeElements } from "./canvas";
 import type { EditorState } from "./editor-state";
 import {
   canvasContentRect,
+  clippedByAncestor,
   hasScrollbarGutter,
   layoutFragments,
   renderedScale,
   type RenderedScale,
 } from "./geometry-dom";
 import {
+  overlayEscape,
   sameBands,
   spacingApplies,
   spacingBands,
@@ -139,6 +141,16 @@ function boxesOf(style: CSSStyleDeclaration): {
   };
 }
 
+/**
+ * How far a value chip can overflow the band it is centred on.
+ *
+ * Bounded by the chip's own size, which this package sets: `0.6875rem` text on a
+ * `1.4` line box with two pixels of padding, so a little over twenty pixels tall
+ * and wider than that only for a value nobody authors. Twenty-four covers it
+ * with room and keeps the clip allowance small.
+ */
+const CHIP_OVERFLOW_PX = 24;
+
 /** Four zero edges, for a box CSS gives no margin or no padding. */
 const NO_EDGES: EdgeLengths = { top: 0, right: 0, bottom: 0, left: 0 };
 
@@ -161,6 +173,7 @@ function describable(
   fragments: number,
   position: string,
   gutter: boolean,
+  clipped: boolean,
   scale: RenderedScale
 ): boolean {
   // No box at all — `display: none`, `display: contents`.
@@ -185,6 +198,12 @@ function describable(
    * writing direction.
    */
   if (gutter) return false;
+  /*
+   * Cut off by an ancestor. The block's own rectangle is reported unclipped and
+   * the overlay draws outside that container, so bands taken from it would paint
+   * over ground where the block is not rendered.
+   */
+  if (clipped) return false;
   // A rotation, skew, reflection, perspective, or a collapse to zero.
   return scale.describable;
 }
@@ -195,6 +214,13 @@ export function SpacingOverlay({
 }: SpacingOverlayProps): React.JSX.Element | null {
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [bands, setBands] = React.useState<readonly SpacingBand[]>([]);
+  /*
+   * How far the layer may paint outside itself, in pixels.
+   *
+   * Held beside the bands rather than derived at render because it needs the
+   * LAYER's size, which only the measurement has.
+   */
+  const [escape, setEscape] = React.useState(0);
 
   const { document, selectedId } = editor;
 
@@ -207,8 +233,16 @@ export function SpacingOverlay({
    * selection alone would keep describing the layout it used to have.
    */
   const measure = React.useCallback(() => {
-    const apply = (next: readonly SpacingBand[]): void => {
+    const apply = (
+      next: readonly SpacingBand[],
+      layerBox?: { width: number; height: number }
+    ): void => {
       setBands(current => (sameBands(current, next) ? current : next));
+      setEscape(
+        next.length === 0 || layerBox === undefined
+          ? 0
+          : overlayEscape(next, layerBox, CHIP_OVERFLOW_PX)
+      );
     };
     const element = layer.current;
     if (element === null || selectedId === null) {
@@ -260,6 +294,7 @@ export function SpacingOverlay({
         layoutFragments(block),
         style.position,
         hasScrollbarGutter(block, borders),
+        clippedByAncestor(block, root),
         scale
       )
     ) {
@@ -267,6 +302,12 @@ export function SpacingOverlay({
       return;
     }
 
+    /*
+     * The layer's own box, measured the same way every other rectangle here is.
+     * It fills the root, so the root's content rectangle IS the layer's, and
+     * asking for it separately would be a second answer to one question.
+     */
+    const layerBox = canvasContentRect(root, root);
     apply(
       spacingBands({
         // Through `canvasContentRect` rather than a rectangle read here: this
@@ -279,7 +320,8 @@ export function SpacingOverlay({
         // Composed from the real transform between the block and the root, so
         // a scaled ancestor counts and no rounded layout value is involved.
         scale: { x: scale.x, y: scale.y },
-      })
+      }),
+      layerBox
     );
   }, [selectedId]);
 
@@ -380,12 +422,23 @@ export function SpacingOverlay({
     const settled = (): void => measure();
     root.addEventListener("transitionend", settled);
     root.addEventListener("transitioncancel", settled);
+    /*
+     * `overflow: auto` and `overflow: scroll` are catalog values, so a block can
+     * sit inside a container the author scrolls. Scrolling it moves the block
+     * relative to the canvas while resizing nothing, mutating nothing and
+     * finishing no transition — none of the subscriptions above hear it.
+     *
+     * CAPTURE, because a scroll event does not bubble: listening on the root in
+     * the capture phase is what reaches a scroller nested anywhere inside it.
+     */
+    root.addEventListener("scroll", settled, true);
 
     return () => {
       sizes?.disconnect();
       styles?.disconnect();
       root.removeEventListener("transitionend", settled);
       root.removeEventListener("transitioncancel", settled);
+      root.removeEventListener("scroll", settled, true);
     };
     /*
      * `document` re-subscribes, and dropping it strands the observer on a
@@ -412,6 +465,14 @@ export function SpacingOverlay({
        * bury that surface in exactly the readers it is for.
        */
       aria-hidden="true"
+      /*
+       * How far the clip may extend, measured rather than fixed. A band can
+       * legitimately sit outside the canvas — a collapsed top margin does — and
+       * any constant allowance is too small for some legal value.
+       */
+      style={
+        { "--nx-spacing-escape": `${String(escape)}px` } as React.CSSProperties
+      }
     >
       {bands.map(band => (
         <div

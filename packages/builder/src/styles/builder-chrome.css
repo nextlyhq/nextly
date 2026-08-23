@@ -933,7 +933,12 @@
    * region contributes no scrollable overflow.
    */
   overflow: clip;
-  overflow-clip-margin: 2rem;
+  /*
+   * Set by the component from the bands it actually measured, because a fixed
+   * allowance is too small for some legal value — `2rem` clipped an ordinary
+   * `64px` spacing step. Zero is the floor when nothing escapes.
+   */
+  overflow-clip-margin: var(--nx-spacing-escape, 0px);
 }
 
 .nx-spacing-overlay__band {

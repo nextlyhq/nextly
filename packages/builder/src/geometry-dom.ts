@@ -326,3 +326,51 @@ export function hasScrollbarGutter(
   const gutterY = element.offsetHeight - element.clientHeight - borders.y;
   return gutterX > ROUNDING_BOUND_PX || gutterY > ROUNDING_BOUND_PX;
 }
+
+/**
+ * Whether an ancestor between this element and the canvas root clips it.
+ *
+ * `overflow` is a catalog keyword taking `hidden`, `clip`, `scroll` or `auto`, so
+ * an author can put a block inside a container that cuts part of it off. The
+ * element's own bounding rectangle is reported UNCLIPPED, and the overlay draws
+ * as a sibling of the page rather than inside that container — so bands derived
+ * from the full rectangle escape the ancestor's clip and paint over ground where
+ * the block is not rendered.
+ *
+ * Only a clip that ACTUALLY cuts is reported. A block sitting wholly inside an
+ * `overflow: hidden` card is not clipped by it, and that is the ordinary case —
+ * refusing on the presence of a clipping ancestor rather than on the fact of
+ * being clipped would blank the overlay for most well-built pages.
+ *
+ * The walk stops BELOW the root. The shell scrolls the canvas from above, and
+ * that clipping applies to the bands and the page alike, so it produces no
+ * mismatch; only a clip between the block and the root does.
+ */
+export function clippedByAncestor(element: Element, root: Element): boolean {
+  const view = element.ownerDocument.defaultView;
+  if (view === null) return false;
+  const box = element.getBoundingClientRect();
+
+  for (
+    let node: Element | null = element.parentElement;
+    node !== null && node !== root;
+    node = node.parentElement
+  ) {
+    const style = view.getComputedStyle(node);
+    if (style.overflowX === "visible" && style.overflowY === "visible")
+      continue;
+    const clip = node.getBoundingClientRect();
+    // Half a pixel, because both rectangles are fractional and a block laid out
+    // flush against its container's edge is not clipped by rounding.
+    const slack = 0.5;
+    if (
+      box.top < clip.top - slack ||
+      box.left < clip.left - slack ||
+      box.bottom > clip.bottom + slack ||
+      box.right > clip.right + slack
+    ) {
+      return true;
+    }
+  }
+  return false;
+}

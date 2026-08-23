@@ -612,6 +612,112 @@ test.describe("spacing values on the canvas", () => {
     expect(bandBox.y).toBeLessThan(layerBox.y);
   });
 
+  test("bands follow a block inside a scrolling container", async ({
+    page,
+  }) => {
+    /*
+     * `overflow: auto` and `overflow: scroll` are catalog values, so a block can
+     * sit inside a container the author scrolls. Scrolling it moves the block
+     * relative to the canvas while resizing nothing, mutating nothing and
+     * finishing no transition — every other subscription is silent. A scroll
+     * event does not bubble either, which is why the listener is registered in
+     * the CAPTURE phase on the root.
+     *
+     * The nested block is given a margin here because the seed gives it none —
+     * measured, it carries no `styles` key at all, so without this the test would
+     * assert against an overlay that correctly had nothing to draw.
+     *
+     * It is parked MID-SCROLL on purpose. A scroller has content outside its box
+     * by definition, and a block at that boundary is genuinely cut off — which
+     * the clipping guard refuses, correctly. Both scroll positions here keep the
+     * block wholly inside its container, so what moves is the block and not its
+     * visibility.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      /*
+       * `box-sizing: border-box` with generous padding is what makes this scroll
+       * at all. Padding counts INSIDE `clientHeight`, so a fixed height smaller
+       * than the padding is raised to fit it — measured, this configuration gives
+       * a `scrollHeight` of 848 against a `clientHeight` of 800, so the scrollable
+       * range is 48px and a request beyond that is silently clamped. An earlier
+       * version asked for 320, got 48, and asserted a movement that never
+       * happened.
+       */
+      section.style.boxSizing = "border-box";
+      section.style.overflow = "auto";
+      section.style.height = "200px";
+      section.style.paddingTop = "400px";
+      section.style.paddingBottom = "400px";
+    });
+
+    await target.click({ force: true });
+    const before = await page.locator(band("margin", "bottom")).boundingBox();
+    if (before === null) throw new Error("no band before the scroll");
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).scrollTop = 40;
+    });
+
+    await expect
+      .poll(async () => {
+        const box = await page.locator(band("margin", "bottom")).boundingBox();
+        return box === null ? null : Math.round(before.y - box.y);
+      })
+      .toBeGreaterThan(25);
+  });
+
+  test("draws nothing for a block CUT OFF by a clipping ancestor", async ({
+    page,
+  }) => {
+    /*
+     * The block's own rectangle is reported UNCLIPPED, and the overlay draws as a
+     * sibling of the page rather than inside the container — so bands taken from
+     * that rectangle escape the clip and paint over ground where the block is not
+     * rendered.
+     *
+     * Only a clip that ACTUALLY cuts is refused, and the control below is what
+     * pins that: a block wholly inside an `overflow: hidden` container still
+     * draws. Refusing on the mere presence of a clipping ancestor would blank the
+     * overlay for most well-built pages.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).style.overflow = "hidden";
+    });
+    await target.click();
+
+    // CONTROL: a clipping ancestor that does not cut still draws.
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).style.height = "10px";
+    });
+
+    await expect(page.locator(BAND)).toHaveCount(0);
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {

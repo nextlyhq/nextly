@@ -377,3 +377,39 @@ export function spacingApplies(display: string): {
     padding: !PADDINGLESS.has(display),
   };
 }
+
+/**
+ * How far outside its own box the overlay layer must be allowed to paint.
+ *
+ * A band can legitimately sit outside the canvas. The first block's top margin
+ * collapses through the page wrapper and the root — neither establishes a
+ * formatting context — so its band is placed above the layer entirely; a
+ * negative margin or an edge-flush block can do the same on any side.
+ *
+ * A FIXED allowance is the wrong shape and was the first attempt: any constant
+ * is too small for some legal value, and `2rem` clipped an ordinary `64px`
+ * spacing step. This measures what the bands actually need instead, so the clip
+ * is exactly as loose as the content requires and no looser.
+ *
+ * `chip` is added unconditionally because the value chip is CENTRED on its band
+ * and deliberately unclipped, so a band flush with an edge overflows by its own
+ * half-height even when the band itself escapes by nothing. It is bounded by the
+ * chip's own size, which this package controls.
+ */
+export function overlayEscape(
+  bands: readonly SpacingBand[],
+  layer: { readonly width: number; readonly height: number },
+  chip: number
+): number {
+  let escape = 0;
+  for (const band of bands) {
+    escape = Math.max(
+      escape,
+      -band.rect.y,
+      -band.rect.x,
+      band.rect.y + band.rect.height - layer.height,
+      band.rect.x + band.rect.width - layer.width
+    );
+  }
+  return Math.max(0, escape) + chip;
+}

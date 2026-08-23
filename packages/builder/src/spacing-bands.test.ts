@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Rect } from "./geometry";
 import {
+  overlayEscape,
   sameBands,
   spacingApplies,
   spacingBands,
@@ -420,4 +421,57 @@ describe("which spacing a generated box can have", () => {
       expect(spacingApplies(display)).toEqual({ margin: true, padding: true });
     }
   );
+});
+
+describe("how far the overlay must be allowed to paint outside itself", () => {
+  const LAYER = { width: 1000, height: 800 };
+  const CHIP = 24;
+  const at = (rect: Rect): SpacingBand => ({
+    box: "margin",
+    side: "top",
+    rect,
+    label: "40",
+    negative: false,
+  });
+
+  it("allows the chip alone when nothing escapes", () => {
+    // A band wholly inside still needs room: the chip is CENTRED on it and
+    // deliberately unclipped, so a band flush with an edge overflows by its own
+    // half-height even when the band escapes by nothing.
+    const bands = [at({ x: 10, y: 10, width: 100, height: 20 })];
+    expect(overlayEscape(bands, LAYER, CHIP)).toBe(CHIP);
+  });
+
+  it("measures a band that escapes ABOVE the layer", () => {
+    /*
+     * The collapsed-margin case: the first block's top margin escapes the canvas
+     * entirely, so its band is placed at a negative offset. A fixed allowance is
+     * what this replaces — `2rem` clipped an ordinary 64px spacing step.
+     */
+    const bands = [at({ x: 0, y: -64, width: 1000, height: 64 })];
+    expect(overlayEscape(bands, LAYER, CHIP)).toBe(64 + CHIP);
+  });
+
+  it.each<[string, Rect, number]>([
+    ["left", { x: -30, y: 10, width: 30, height: 50 }, 30],
+    ["right", { x: 980, y: 10, width: 60, height: 50 }, 40],
+    ["below", { x: 0, y: 780, width: 100, height: 45 }, 25],
+  ])("measures a band escaping to the %s", (_side, rect, expected) => {
+    expect(overlayEscape([at(rect)], LAYER, CHIP)).toBe(expected + CHIP);
+  });
+
+  it("takes the LARGEST escape across every band", () => {
+    // One allowance covers all four sides, so the widest escape decides it. A
+    // per-band answer would clip whichever band was not asked about.
+    const bands = [
+      at({ x: 0, y: -10, width: 100, height: 10 }),
+      at({ x: 0, y: -90, width: 100, height: 90 }),
+      at({ x: 0, y: 10, width: 100, height: 10 }),
+    ];
+    expect(overlayEscape(bands, LAYER, CHIP)).toBe(90 + CHIP);
+  });
+
+  it("never returns a negative allowance", () => {
+    expect(overlayEscape([], LAYER, CHIP)).toBe(CHIP);
+  });
 });

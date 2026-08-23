@@ -101,8 +101,20 @@ function styleOf(values: Record<string, string>): CSSStyleDeclaration {
  * own layer is measured by nothing here, and replacing every style in the
  * document would change what the canvas itself renders.
  */
+/**
+ * jsdom's own implementation, captured ONCE at module load.
+ *
+ * Re-reading `window.getComputedStyle` inside the stub captures whatever is
+ * installed at that moment — which, on a second call, is the FIRST stub. The
+ * delegate then calls the spy that owns it and the stack overflows. That stayed
+ * invisible while the overlay only asked about the selected block, because a
+ * node id always hits the fake and never reaches the delegate; the ancestor
+ * walks added for the clip and gutter guards ask about elements that do.
+ */
+const REAL_COMPUTED_STYLE = window.getComputedStyle.bind(window);
+
 function stubComputedStyle(byNodeId: Record<string, Record<string, string>>) {
-  const real = window.getComputedStyle.bind(window);
+  const real = REAL_COMPUTED_STYLE;
   vi.spyOn(window, "getComputedStyle").mockImplementation(((
     element: Element,
     pseudo?: string | null
