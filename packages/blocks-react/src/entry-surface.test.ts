@@ -30,6 +30,7 @@ import * as placeholderModule from "./placeholder";
 import * as prepareModule from "./prepare-document";
 import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
+import * as sharedStyleInputsModule from "./shared-style-inputs";
 import * as stylesModule from "./styles";
 import * as visibilityModule from "./visibility";
 import * as rootEntry from "./index";
@@ -95,6 +96,33 @@ const SOURCE_MODULES: ReadonlyArray<{
   },
   { name: "resolver", module: resolverModule, internal: [] },
   {
+    name: "shared-style-inputs",
+    module: sharedStyleInputsModule,
+    // Nothing here is a consumer surface, and `sharedStyleInputsId` is the one
+    // that had to be WITHDRAWN rather than never offered. It was published so a
+    // write path outside the package could stamp what `toPageStyles` stores —
+    // but the identity a READER derives is taken over a compile context the
+    // resolver has narrowed first: block defaults reduced to the types the
+    // document draws, and filled in from the resolver where the caller stated
+    // none. A writer calling this with its own context computes a different
+    // answer and writes an artifact every read refuses, which is the opposite of
+    // what publishing it was for.
+    //
+    // A writer's answer is `resolvePageStyles` with no stored artifact: it
+    // compiles and RETURNS the stamped result, so the value written is the value
+    // a reader recomputes. Publishing a way to assemble the identity by hand
+    // offers a second answer to a question that must have one.
+    //
+    // The pre-hash label exists to explain an unexpected recompile from inside,
+    // not to be compared by a consumer who would then be holding a second
+    // opinion about staleness.
+    internal: [
+      "sharedStyleInputsId",
+      "sharedStyleInputsLabel",
+      "UNIDENTIFIED_SHARED_INPUTS",
+    ],
+  },
+  {
     name: "styles",
     module: stylesModule,
     // `readableGatedRules` is exported so `page-renderer` reads a stored artifact's gated map
@@ -134,8 +162,30 @@ const SOURCE_MODULES: ReadonlyArray<{
     // and a duplicate id suppresses both twins' rules either way. They cross a
     // module boundary inside this package; a consumer asks the question through
     // `preparePageForRead` rather than assembling the verdict itself.
+    // `toPageStyles` converts a compile into the storable shape, and it asks its
+    // caller for the shared-input identity — a value only the resolver can
+    // produce, because the identity is taken over a context the resolver has
+    // narrowed first. Published, it is a converter that CANNOT make a reusable
+    // artifact: every sheet written through it is unstamped, and an unstamped
+    // sheet is refused by every context-bearing read. `resolvePageStyles` with
+    // no stored artifact is the whole answer — it compiles, stamps and returns
+    // the storable value in one call.
+    //
+    // `fetchPolicyLabel` stays public beside it, and the difference is the
+    // point: that label is a pure function of the host's pattern list, and the
+    // reader computes it from the same list, so a writer CAN match it.
     internal: [
       "UNIDENTIFIED_FETCH_POLICY",
+      "toPageStyles",
+      // `blockBasesFor` is the ONE reading of "which block types does this tree
+      // draw defaults from". `resolvePageStyles` derives it from the tree it is
+      // handed, which is already narrowed by the read-time passes; `page-renderer`
+      // holds the wider tree the stored artifact was compiled from and states the
+      // answer for it, so a covered drop does not move the identity and refuse
+      // the very artifact that drop was licensed to keep. Two derivations of it
+      // would disagree exactly there. It crosses a module boundary inside this
+      // package; a consumer states its own through `styleContext.blockBases`.
+      "blockBasesFor",
       "drawlessTestFor",
       "effectiveCompile",
       "gatedEntriesCoverRemovedNodes",
@@ -238,7 +288,6 @@ describe("the root entry", () => {
       "registeredBlocks",
       "resolvePageStyles",
       "styleTextForInjection",
-      "toPageStyles",
     ]);
   });
 

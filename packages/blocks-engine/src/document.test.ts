@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import * as entry from "./index";
+
 import type { BlockDocument } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
@@ -126,5 +128,38 @@ describe("JSON round-trip", () => {
     };
     // Same JSON string length per character, but CJK is 3 UTF-8 bytes each.
     expect(documentBytes(cjk)).toBeGreaterThan(documentBytes(ascii));
+  });
+});
+
+describe("the bounds a writer must honour are reachable from the entry", () => {
+  // Every one of these SILENTLY discards stored input past its limit: a class
+  // over `MAX_NAMED_CLASS_NAME_LENGTH` is rejected whole, a breakpoint over
+  // `MAX_BREAKPOINT_ID_LENGTH` is dropped, definitions past
+  // `MAX_BREAKPOINTS_PER_AXIS` and entries past `MAX_NAMED_CLASSES` are never
+  // read, and one record wider than `MAX_SCANNED_KEYS` stops being enumerated.
+  //
+  // A store validating on write can only refuse what the compiler will not read
+  // if it can SEE the rule. The package's export map exposes `.` and `./format`
+  // and nothing else, so a constant that lives in a module without being
+  // re-exported is unreachable — and a consumer then accepts a value that
+  // satisfies the published type and loses every style keyed to it.
+  //
+  // Asserted as a set rather than one at a time because the defect is an
+  // omission: `MAX_BREAKPOINT_ID_LENGTH` was added beside its sibling and not
+  // re-exported, which no test in this package could see.
+  it("exposes every limit that discards input rather than reporting it", () => {
+    const bounds: Record<string, unknown> = {
+      MAX_BREAKPOINTS_PER_AXIS: entry.MAX_BREAKPOINTS_PER_AXIS,
+      MAX_BREAKPOINT_ID_LENGTH: entry.MAX_BREAKPOINT_ID_LENGTH,
+      MAX_NAMED_CLASSES: entry.MAX_NAMED_CLASSES,
+      MAX_NAMED_CLASS_NAME_LENGTH: entry.MAX_NAMED_CLASS_NAME_LENGTH,
+      MAX_SCANNED_KEYS: entry.MAX_SCANNED_KEYS,
+    };
+
+    for (const [name, value] of Object.entries(bounds)) {
+      expect(typeof value, `${name} is not exported from the entry`).toBe(
+        "number"
+      );
+    }
   });
 });

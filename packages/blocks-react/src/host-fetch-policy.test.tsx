@@ -28,6 +28,7 @@ import type { PageStyles } from "./styles";
 import { PageRenderer } from "./page-renderer";
 import { effectiveCompile, fetchPolicyLabel } from "./styles";
 import { createBlockResolver } from "./resolver";
+import { sharedStyleInputsId } from "./shared-style-inputs";
 import { coreBlocks } from "./blocks";
 
 const ALLOWED: readonly RemotePattern[] = [
@@ -129,6 +130,11 @@ function siteSheetMarkup(
     />
   );
 }
+
+/** The shared inputs both reuse cases render under. */
+const EMPTY_BREAKPOINTS = {
+  breakpoints: { viewport: [], container: [] },
+};
 
 describe("the one derived fetch predicate", () => {
   // Identity, not equivalence. Two closures over the same pattern list behave
@@ -374,7 +380,14 @@ describe("a stored stylesheet records the policy that compiled it", () => {
       <PageRenderer
         document={styledDocument("https://player.allowed.test/a.png")}
         blocks={createBlockResolver(coreBlocks)}
-        styles={stale}
+        // Stamped for the SHARED inputs, so the only thing that can refuse this
+        // artifact is the policy. Left unstamped, the shared-input branch
+        // recompiles it first and this test passes with the policy check
+        // deleted — it would assert nothing about the policy at all.
+        styles={{
+          ...stale,
+          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+        }}
         styleContext={{ breakpoints: { viewport: [], container: [] } }}
         hostPolicy={{ remotePatterns: ALLOWED }}
       />
@@ -390,6 +403,11 @@ describe("a stored stylesheet records the policy that compiled it", () => {
       ...stale,
       css: ".nx-n1{color:rebeccapurple}",
       fetchPolicyId: fetchPolicyLabel(ALLOWED),
+      // Stamped with the shared inputs too, because this asserts reuse and a
+      // sheet is reused only when EVERY stamp it carries still describes the
+      // render. Without this the artifact is refused for the shared inputs and
+      // the test would pass or fail for a reason other than the policy.
+      sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
     };
     const markup = renderToStaticMarkup(
       <PageRenderer
@@ -509,7 +527,12 @@ describe("a caller's own fetch predicate", () => {
       <PageRenderer
         document={doc}
         blocks={createBlockResolver(coreBlocks)}
-        styles={stored}
+        // Stamped for the shared inputs, for the reason the sibling refusal
+        // test gives: only the unidentified PREDICATE may be what refuses this.
+        styles={{
+          ...stored,
+          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+        }}
         styleContext={{
           breakpoints: { viewport: [], container: [] },
           mayFetchUrl: () => true,
@@ -526,7 +549,11 @@ describe("a caller's own fetch predicate", () => {
       <PageRenderer
         document={doc}
         blocks={createBlockResolver(coreBlocks)}
-        styles={{ ...stored, fetchPolicyId: "mine-v3" }}
+        styles={{
+          ...stored,
+          fetchPolicyId: "mine-v3",
+          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+        }}
         styleContext={{
           breakpoints: { viewport: [], container: [] },
           mayFetchUrl: () => true,
@@ -597,5 +624,72 @@ describe("the render and the link preview choose the same image", () => {
     } as BlockRenderArgs<{ mediaId: string; src: string; alt: string }>);
 
     expect(out).toBeNull();
+  });
+});
+
+describe("a page RECOMPILED from stored site styles", () => {
+  // The route that supplies a stored artifact plus `siteStyles` and states no
+  // `styleContext` can now recompile, because the site's own inputs are enough
+  // to compile with. What it compiles under is this describe's subject: the site
+  // sheet has always honoured `siteStyles.mayFetchUrl`, and the page sheet is
+  // emitted AFTER it, so a page compiled under weaker rules publishes a request
+  // the shared sheet beside it was refused.
+  const URL = "https://cdn.other.test/a.png";
+
+  const page: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "n1",
+        type: "core/text",
+        version: 1,
+        props: { text: "body" },
+        // NODE-local, so only a page compile can emit it. A url on the class
+        // tier would be emitted by the site sheet and would answer whether THAT
+        // honours the predicate, which was never in question.
+        styles: { base: { base: { background: { url: URL } } } } as NodeStyles,
+      },
+    ],
+  };
+
+  /** A stored artifact carrying no stamp, so this render must recompile it. */
+  const stale: PageStyles = {
+    css: ".nx-n1{color:teal}",
+    classes: { n1: "nx-n1" },
+  };
+
+  function render(mayFetchUrl?: (candidate: string) => boolean) {
+    return renderToStaticMarkup(
+      <PageRenderer
+        document={page}
+        blocks={createBlockResolver(coreBlocks)}
+        styles={stale}
+        siteStyles={{
+          breakpoints: { viewport: [], container: [] },
+          ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
+        }}
+      />
+    );
+  }
+
+  it("asks the site's OWN predicate about a node-local url", () => {
+    // The defect: with no `styleContext`, the synthesized compile context is
+    // built from the site's inputs — and a context that omitted this predicate
+    // would leave the recompile asking the host list, or asking nothing at all.
+    const markup = render(() => false);
+
+    expect(markup).not.toContain("color:teal");
+    expect(markup).not.toContain("cdn.other.test");
+  });
+
+  it("CONTROL: emits the same url when the site asks nothing", () => {
+    // The separating property. A render that dropped the url unconditionally —
+    // or one that never recompiled at all — would satisfy the assertion above
+    // while asking no host question anywhere.
+    const markup = render();
+
+    expect(markup).not.toContain("color:teal");
+    expect(markup).toContain("cdn.other.test");
   });
 });

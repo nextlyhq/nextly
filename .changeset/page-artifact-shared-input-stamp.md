@@ -1,0 +1,133 @@
+---
+"nextly": patch
+"create-nextly-app": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
+---
+
+A stored page stylesheet now records which shared style inputs it was compiled against.
+
+A page's compiled CSS is cached beside the document and reused on later renders.
+That cache was keyed on the host-fetch policy alone, so four site-level inputs
+could move underneath it with nothing noticing: the breakpoints, whose ids and
+bounds decide every at-rule; the token prefix, which renders into every `var()`
+the sheet references; the named-class library, whose slugs become the selectors
+themselves; and the block-type defaults, which are emitted into that same sheet.
+
+When one moved, the newly compiled site sheet and the stored page sheet stopped
+agreeing and CSS failed silently — an unresolved custom property invalidates its
+declaration rather than reporting, and a selector nothing declares never
+matches. The page rendered, partly unstyled, with no error anywhere.
+
+`PageStyles` gains `sharedInputsId`, a digest of those inputs, compared on every
+render and treated as a repair cause when it disagrees. Artifacts written before
+this field existed carry no stamp and are recompiled against any render that
+states its inputs. The resolver RETURNS the stamped result and does not write it,
+so whether that is paid once or on every request depends on whether the caller
+persists or caches what it gets back.
+
+`PageRenderer` derives the identity from the site styles it was given as well as
+from a compile context, so the ordinary route — a stored artifact plus
+`siteStyles`, compiling nothing itself — is covered rather than exempt. Because
+those inputs can also compile a replacement, a refusal there recompiles the sheet
+instead of withholding it.
+
+The identity is taken over what the compiler READS, not over what was stored,
+which is the difference between invalidating a page and invalidating the site.
+Breakpoints are read through the engine's normalisation, so a definition it
+discards moves nothing; the token prefix is the one tokens are actually written
+under, so swapping one rejected spelling for another moves nothing; and block
+defaults are narrowed to the types a page draws, so a default changing for a
+block it does not hold moves nothing. A stored record wider than the compiler
+will read declines to identify the inputs at all rather than being read past
+that bound, which recompiles rather than reusing a sheet that was only partly
+described.
+
+`PageRenderer` also hands the site's own `mayFetchUrl` to the compile it
+synthesizes from `siteStyles`. The shared sheet has always honoured it, the
+page sheet is emitted after, and a page compiled under weaker rules would
+publish a request the sheet beside it was refused.
+
+A class or block-base envelope is read only under the states the compiler emits
+from. `compilePageCss` iterates `STYLE_STATES` and never reaches a key outside
+it, so two envelopes differing only under an unrecognised state compile to the
+same CSS — reading the whole object rejected every stored artifact over a
+difference no stylesheet can show. The state list is imported rather than
+restated, so it follows the engine rather than drifting from it.
+
+Block defaults are narrowed to the types a page draws in ONE place, the
+resolver, so the exported entry point and the renderer cannot answer
+differently. `resolvePageStyles` gains `storedDocument` for the caller that
+pruned before calling it: the documented flow is prune-then-resolve, and two of
+those prunes are licensed to KEEP the stored artifact, so an identity derived
+from what survived would drop a type whose last node such a prune removed and
+refuse the very sheet it was allowed in order to reuse.
+
+`breakpointContexts` now bounds a stored axis BEFORE anything filters it. The per-axis
+limit bounded its output and not its work, so an axis of a million definitions
+was scanned in full on the way to keeping seven — paid by every reader keyed on
+which breakpoints a site emits under, including one whose stylesheet is
+reusable. The bound is on the RAW axis rather than on what survives the filter,
+because a bound after the filter bounds only the sort while every stored
+definition is still visited. Past `MAX_SCANNED_KEYS` definitions on one axis the
+survivors are now chosen from that prefix; nothing legitimate reaches it, since
+the declared limit is seven.
+
+`breakpointContexts` also drops a definition whose id is longer than the new
+`MAX_BREAKPOINT_ID_LENGTH`, which is exported beside the per-axis cap so a store
+validating on write can refuse what the compiler will not read.
+
+`validate()` now derives which breakpoint ids a site defines from that same
+normalisation instead of scanning the stored axes. The two disagreed about the
+same document: a definition the compiler drops — an unusable bound, a viewport
+entry with no bound, a duplicate past the first, one past the per-axis cap, or
+an over-long id — was counted as known by validation, so styles keyed to it
+validated with no issue and then compiled to nothing. It corrects the opposite
+case too: `base` is always defined, even when the stored set names no base
+definition, which the scan alone reported as unknown. The per-axis limit bounded how MANY definitions are
+read and said nothing about their size, and an id is a lookup key every reader
+of the normalised axis carries — so one enormous stored value was copied on
+every render that asked which breakpoints a site defines. Dropped rather than
+truncated, so the id is simply not one this site defines and the values stored
+under it are reported stale, exactly as an unusable bound already behaves.
+
+Neither the shared-input identity nor `toPageStyles` is part of this package's
+public entry. It was
+briefly published so an external write path could stamp what `toPageStyles`
+stores, and that was wrong: the identity a reader derives is taken over a
+compile context the resolver has already narrowed, so a writer computing one
+from its own context writes an artifact every read refuses. A writer's answer is
+`resolvePageStyles` with no stored artifact — it compiles and returns the
+stamped result, so the value written is the value a reader recomputes.
+`toPageStyles` goes with it: it asks its caller for that same identity, so
+published it is a converter that cannot make a reusable artifact. `fetchPolicyLabel`
+stays, and the difference is the point — that label is a pure function of the
+host's pattern list, which a reader computes from the same list, so a writer can
+match it.
+
+`@nextlyhq/blocks-engine` exports `breakpointContexts`, `safeTokenPrefix`,
+`MAX_SCANNED_KEYS` and `MAX_NAMED_CLASS_NAME_LENGTH`: the compiler's own normalised breakpoints, the prefix tokens
+are really written under, and the width past which a stored record is not read.
+Anything keyed on what a stylesheet contains reads these rather than the stored
+settings, which change without the output changing.

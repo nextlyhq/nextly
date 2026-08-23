@@ -179,10 +179,11 @@ function pruneRenderedPlaceholders(
  *   reaches only one leaves every reference pointing at a property nothing
  *   declared — and an unresolved custom property invalidates the declaration
  *   rather than reporting.
- * - `mayFetchUrl` is reconciled a level up, in `effectiveCompile`, which
- *   derives one predicate and hands the same object to both. It has its own
- *   role rather than sharing one, so nothing here promises a reconciliation
- *   that happens elsewhere.
+ * - `mayFetchUrl` is reconciled a level up, in `effectiveCompile`, which derives
+ *   one predicate and hands the same object to both. It has its own role rather
+ *   than sharing one, so nothing here promises a reconciliation that happens
+ *   elsewhere — but the context handed to that reconciler has to CARRY the
+ *   site's predicate, or the reconciliation is over a value it never saw.
  * - `fonts` and `tokens` are the sheet's alone: it emits `@font-face` and the
  *   token blocks, and the page compile emits neither and reads neither.
  */
@@ -526,8 +527,48 @@ export function PageRenderer({
   // Every site-level input BOTH compiles read, resolved once. See
   // `sharedStyleInputs` for why one resolution rather than one per consumer.
   const shared = sharedStyleInputs(styleContext, siteInput);
-  const pageStyleContext =
-    styleContext === undefined ? undefined : { ...styleContext, ...shared };
+  const pageShared = shared;
+  // Present whenever the render knows this site's breakpoints, whether they came
+  // from a compile context or from `siteStyles`. Taking only the context leaves
+  // the documented normal path — a route that supplies a stored artifact and the
+  // site's styles, and compiles nothing itself — with no identity to compare a
+  // stamp against and no inputs to recompile from, so a stored sheet is reused
+  // however far the site's classes, prefix or breakpoints have moved since.
+  //
+  // Breakpoints are the condition because they are the one field a compile
+  // cannot proceed without, and because it is already the condition this render
+  // uses to decide whether a site sheet can be built at all. A render that knows
+  // them can compile both sheets; one that does not can compile neither, and
+  // there the stored artifact is all there is.
+  const pageStyleContext: StyleCompileContext | undefined =
+    styleContext !== undefined
+      ? { ...styleContext, ...pageShared }
+      : pageShared.breakpoints === undefined
+        ? undefined
+        : {
+            ...pageShared,
+            breakpoints: pageShared.breakpoints,
+            // The site's own fetch predicate, handed to the reconciler rather
+            // than reconciled here. `effectiveCompile` derives ONE predicate and
+            // gives it to both compiles — but only from what the context it is
+            // passed carries, and a synthesized context that omitted this would
+            // leave the site sheet judging a `url(...)` by the site's rules
+            // while the page sheet beside it judged the same value by the host's
+            // alone. The site sheet is emitted FIRST, so a page sheet cannot
+            // retract what it published.
+            //
+            // It carries no identity — `SiteSheetInput` has no `fetchPolicyId`,
+            // because the site artifact is addressed by the hash of its own
+            // bytes and needs none. So a page compiled under it is compiled
+            // under an ANONYMOUS predicate, and `effectiveCompile` already
+            // states what that means: no stored sheet can be judged against a
+            // predicate nothing can name, so every one of them is recompiled.
+            // That cost is the site opting into its own predicate, and it is the
+            // same answer a caller gets for passing one on the style context.
+            ...(siteInput?.mayFetchUrl === undefined
+              ? {}
+              : { mayFetchUrl: siteInput.mayFetchUrl }),
+          };
 
   const {
     context: compileContext,
@@ -546,7 +587,16 @@ export function PageRenderer({
     compileContext,
     resolver,
     repairedDocument,
-    { fetchPolicyId }
+    {
+      fetchPolicyId,
+      // The tree the stored artifact describes. This render prunes before it
+      // resolves — a gated drop and a drawless drop are both covered by the
+      // artifact and licensed to keep it — and both can remove the last node of
+      // a type, so anything derived from `styleInput` for the identity would
+      // drop that type's defaults and refuse the artifact those passes exist to
+      // preserve. This is the only place that still holds the wider tree.
+      storedDocument: doc,
+    }
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 

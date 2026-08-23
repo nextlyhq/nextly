@@ -18,6 +18,10 @@ import {
 
 import type { DocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
+import {
+  UNIDENTIFIED_SHARED_INPUTS,
+  sharedStyleInputsId,
+} from "./shared-style-inputs";
 import { pruneNodes } from "./visibility";
 
 /**
@@ -55,6 +59,27 @@ export interface PageStyles {
    * written before this field existed was.
    */
   fetchPolicyId?: string;
+  /**
+   * Which SHARED style inputs this CSS was compiled against, when they were
+   * knowable.
+   *
+   * The same argument as `fetchPolicyId`, for the three inputs it does not
+   * cover: the site's breakpoints, its token prefix and its named-class
+   * library. All three are site-level, every page compiles against them, and
+   * each renders directly into the stored sheet — breakpoints as the at-rules,
+   * the prefix inside every `var()`, and a class's slug as the selector itself.
+   * Move one and this artifact references at-rules, properties and selectors
+   * the newly compiled site sheet no longer declares, which CSS reports by
+   * silently dropping the declaration.
+   *
+   * A digest rather than the inputs, because a class library reaches thousands
+   * of entries and this is stored on every page.
+   *
+   * Absent means UNTRUSTED, not "compiled against none" — the two are
+   * indistinguishable from the artifact alone, and the reading that trusts it
+   * is the one that serves a stale sheet forever.
+   */
+  sharedInputsId?: string;
   /** Node id to generated class name. */
   classes: Record<string, string>;
   /**
@@ -90,12 +115,15 @@ export function toPageStyles(
   compiled: CompiledPageCss,
   scope?: string,
   /** The policy the compile ran under, recorded so a later read can check it. */
-  fetchPolicyId?: string
+  fetchPolicyId?: string,
+  /** The shared inputs the compile ran against, recorded for the same reason. */
+  sharedInputsId?: string
 ): PageStyles {
   const styles: PageStyles = {
     css: compiled.css,
     classes: Object.fromEntries(compiled.classes),
     ...(fetchPolicyId === undefined ? {} : { fetchPolicyId }),
+    ...(sharedInputsId === undefined ? {} : { sharedInputsId }),
   };
   // Carried through because THIS is the shape that gets stored: a compiler that
   // splits the sheet and a writer that drops half of it leave the gated rules
@@ -120,18 +148,82 @@ export function toPageStyles(
  *
  * A context that already carries `blockBases` is left alone — an explicit
  * choice by the caller outranks what can be derived here.
+ *
+ * `stated` narrows a supplied record to this tree instead of deriving from the
+ * resolver, and it is the same walk because it is the same question: which
+ * types does this document draw defaults from. `compilePageCss` reads a base
+ * only for a type the document uses, so a site library carrying every block it
+ * has installed emits nothing for the rest — and anything keyed on what the
+ * sheet contains must not move when a default changes for a type this page does
+ * not hold.
  */
-function blockBasesFor(
+export function blockBasesFor(
   document: BlockDocument,
-  blocks: BlockResolver
+  blocks: BlockResolver,
+  stated?: Readonly<Record<string, NodeStyles>>
 ): Record<string, NodeStyles> {
   const bases: Record<string, NodeStyles> = {};
   walkNodes(document.nodes, node => {
     if (bases[node.type] !== undefined) return;
-    const baseStyles = blocks.get(node.type)?.baseStyles;
+    const baseStyles =
+      stated === undefined
+        ? blocks.get(node.type)?.baseStyles
+        : stated[node.type];
     if (baseStyles !== undefined) bases[node.type] = baseStyles;
   });
   return bases;
+}
+
+/**
+ * The context a render will ACTUALLY compile with.
+ *
+ * Not the one the caller handed over: `blockBases` is derived from the resolver
+ * when the caller did not state them, and `drawsNothing` is this layer's own
+ * answer rather than something it accepts. A reader judging the caller's
+ * context instead describes a compile that never happens — and a block package
+ * changing its `baseStyles` would leave a stamp unmoved while the sheet it
+ * produces changes.
+ *
+ * `drawsNothing` is set LAST, so it replaces anything the caller put there. The
+ * renderer asks each block's declaration what to draw, so a supplied answer
+ * could only make the rules disagree with the markup.
+ *
+ * Built here rather than by a caller because this function is exported and a
+ * write path uses it directly to produce the artifact it stores: a value
+ * supplied only by `PageRenderer` would leave every sheet written through the
+ * other door describing something else. It is also not something a consumer
+ * could supply — neither `effectiveCompile` nor `sharedStyleInputsId` is part
+ * of this package's entry.
+ */
+function compileContextFor(
+  styleContext: StyleCompileContext | undefined,
+  document: BlockDocument,
+  blocks: BlockResolver,
+  drawsNothing: (node: BlockNode) => boolean,
+  storedDocument: BlockDocument | undefined
+): StyleCompileContext | undefined {
+  if (styleContext === undefined) return undefined;
+  return {
+    ...styleContext,
+    // Derived when the caller stated none, NARROWED when it stated a record —
+    // one call, because it is one question. `compilePageCss` reads a base only
+    // for a type the document uses, so a site library carrying every installed
+    // block emits nothing for the rest, and carrying those into the identity
+    // rejects a byte-identical sheet whenever a default moves for a block this
+    // page does not hold.
+    //
+    // Over the tree the ARTIFACT describes, which is not always the one being
+    // compiled: a caller that pruned first still holds a sheet compiled from the
+    // wider tree, and narrowing to what survived would drop a type whose last
+    // node a covered prune removed — refusing the artifact that prune existed to
+    // keep.
+    blockBases: blockBasesFor(
+      storedDocument ?? document,
+      blocks,
+      styleContext.blockBases
+    ),
+    drawsNothing,
+  };
 }
 
 /** Every node id in a document, in document order. */
@@ -748,6 +840,21 @@ export interface ResolveStyleOptions {
    * under other rules and cannot be trusted for this render.
    */
   fetchPolicyId?: string;
+  /**
+   * The tree the STORED artifact describes, when the caller narrowed the
+   * document before calling this.
+   *
+   * The documented direct-caller flow is prune-then-resolve, so `document` here
+   * is often already smaller than the tree the artifact was compiled from — and
+   * two of those prunes are LICENSED to keep the artifact rather than to refuse
+   * it. Anything derived from the tree for the artifact's identity has to be
+   * derived from this one instead, or a covered prune moves that identity and
+   * rejects the very sheet it was allowed in order to reuse.
+   *
+   * Absent means the two are the same tree, which is the case for every caller
+   * that has not pruned.
+   */
+  storedDocument?: BlockDocument;
 }
 
 export function resolvePageStyles(
@@ -777,17 +884,26 @@ export function resolvePageStyles(
    */
   repairedDocument = false,
   /**
-   * The host-fetch policy in force for THIS render, as an opaque label.
+   * What this render knows that the positional arguments cannot carry.
    *
-   * An object rather than a sixth positional: five is already where a call
-   * stops reading by position, and the next thing added in line would sit
-   * beside a boolean with only its type to separate them.
+   * An object rather than more positionals: five is already where a call stops
+   * reading by position, and the next thing added in line would sit beside a
+   * boolean with only its type to separate them.
    */
   options: ResolveStyleOptions = {}
 ): PageStyles {
   // Derived before either branch, so the read path and the compile path cannot
   // answer differently about the same document.
   const drawsNothing = drawlessTestFor(blocks);
+
+  const compileContext = compileContextFor(
+    styleContext,
+    document,
+    blocks,
+    drawsNothing,
+    options.storedDocument
+  );
+  const sharedInputsId = sharedStyleInputsId(compileContext);
 
   // An artifact naming classes for nodes this document does not contain was compiled from a
   // DIFFERENT, larger tree — which is exactly what pruning produces. Its `css` may carry those
@@ -824,11 +940,35 @@ export function resolvePageStyles(
     (styles.fetchPolicyId !== options.fetchPolicyId ||
       styles.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY);
 
+  // The same test for the site-level inputs, and it refuses an ABSENT stamp for
+  // the same reason the policy one refuses its sentinel: absence is equally the
+  // honest stamp for a compile that had no shared inputs at all, so treating it
+  // as a match would reuse a sheet compiled against a library, a prefix and a
+  // breakpoint set that nothing here has seen.
+  //
+  // Every artifact written before this field existed is unstamped, so each is
+  // recompiled and the value returned carries the stamp. Whether that is paid
+  // ONCE is not this module's to promise: it returns a stamped value and does
+  // not write one, so the cost is once per artifact where a caller persists or
+  // caches the result, and once per request where nothing does. The correctness
+  // is the same either way; only the price differs.
+  // Only ASKED when a context exists. With none there is nothing to compare a
+  // stamp against and nothing to recompile with, so a mismatch could not be
+  // acted on — it would withhold the sheet and render the page unstyled, which
+  // is worse than the staleness it was guarding. A context-free read is not a
+  // place this question can be answered, so it is not asked there.
+  const compiledAgainstOtherInputs =
+    styles !== undefined &&
+    compileContext !== undefined &&
+    (styles.sharedInputsId !== sharedInputsId ||
+      styles.sharedInputsId === UNIDENTIFIED_SHARED_INPUTS);
+
   if (
     styles &&
     !repairedDocument &&
     !compiledFromAnotherTree &&
-    !compiledUnderAnotherPolicy
+    !compiledUnderAnotherPolicy &&
+    !compiledAgainstOtherInputs
   ) {
     const normalized = normalizeStoredStyles(styles, document);
     // A refused artifact had its classes rebuilt, so the gated rules — written
@@ -842,36 +982,23 @@ export function resolvePageStyles(
     styles &&
     (repairedDocument ||
       compiledFromAnotherTree ||
-      compiledUnderAnotherPolicy) &&
+      compiledUnderAnotherPolicy ||
+      compiledAgainstOtherInputs) &&
     styleContext === undefined
   ) {
     return { ...normalizeStoredStyles(styles, document).styles, css: "" };
   }
-  if (styleContext) {
-    // Both derivations happen HERE rather than at the one call site that knows
-    // about them, because this function is exported and a write path uses it
-    // directly to produce the artifact it stores. A predicate injected only by
-    // `PageRenderer` would mean every sheet written through this entry keeps its
-    // drawless nodes' rules in `css` and carries no `gated` entry for them — so
-    // republishing a page would never enable the drop, and the behaviour would
-    // depend on which door the compile came through.
-    //
-    // `drawsNothing` is set LAST, so it replaces anything the caller put there.
-    // The field is how this layer states its derived answer to the compiler, not
-    // a way to be told one: the renderer asks each block's declaration for what
-    // to draw, so a supplied answer could only make the rules disagree with the
-    // markup.
-    const context: StyleCompileContext = {
-      ...styleContext,
-      ...(styleContext.blockBases === undefined
-        ? { blockBases: blockBasesFor(document, blocks) }
-        : {}),
-      drawsNothing,
-    };
+  if (compileContext) {
+    // Compiled with the context built above rather than the caller's, for the
+    // reasons `compileContextFor` states — including that a predicate injected
+    // only by `PageRenderer` would mean every sheet written through this entry
+    // keeps its drawless nodes' rules in `css` and carries no `gated` entry for
+    // them, so republishing a page would never enable the drop.
     return toPageStyles(
-      compilePageCss(document, context),
-      context.scope,
-      options.fetchPolicyId
+      compilePageCss(document, compileContext),
+      compileContext.scope,
+      options.fetchPolicyId,
+      sharedInputsId
     );
   }
   return {

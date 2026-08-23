@@ -27,6 +27,7 @@ import type {
 } from "../document";
 import {
   MAX_BREAKPOINTS_PER_AXIS,
+  MAX_BREAKPOINT_ID_LENGTH,
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   STYLE_STATES,
@@ -276,13 +277,49 @@ const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
 };
 
 /** One breakpoint to emit under, with the at-rule it needs. */
-interface BreakpointContext {
+export interface BreakpointContext {
   id: string;
   atRule?: string;
   /** Which axis this belongs to; visibility bands are computed per axis. */
   axis?: BreakpointAxis;
   /** The upper bound, for narrowing a hiding rule that a narrower id undoes. */
   maxWidth?: number;
+}
+
+/**
+ * Whether a stored definition names itself in a way this engine can read.
+ *
+ * Length BEFORE anything else reads the id, which is the ordering
+ * `isUsableNamedClass` states its own reason for. The id is a lookup key every
+ * reader of the normalised axis carries, so an unbounded one is copied on each
+ * call — and that call runs on every render keyed on what a site emits under,
+ * including one whose stylesheet is reusable.
+ */
+function namedDefinition(
+  def: unknown
+): def is Record<string, unknown> & { id: string } {
+  return (
+    isPlainRecord(def) &&
+    typeof def.id === "string" &&
+    def.id.length <= MAX_BREAKPOINT_ID_LENGTH
+  );
+}
+
+/**
+ * Whether a stored bound is one a media or container query can be built from.
+ *
+ * A `maxWidth` that is not a positive finite number is dropped rather than read
+ * as unbounded: unbounded is not a safe reading of a broken bound, since it
+ * would apply the breakpoint's values at every width the author meant to
+ * exclude. Zero and below are as unusable and quieter about it — nothing has a
+ * negative width, so `@media (max-width: -1px)` is well-formed and can never
+ * match, and kept, its id would count as known while everything stored under it
+ * went missing with nothing reported.
+ */
+function emittableBound(maxWidth: unknown): boolean {
+  return (
+    typeof maxWidth === "number" && Number.isFinite(maxWidth) && maxWidth > 0
+  );
 }
 
 /**
@@ -294,8 +331,23 @@ interface BreakpointContext {
  * narrower breakpoint overrides it, so a narrower one has to come later to win.
  * Container rules follow viewport rules so that an element asked to respond to
  * its own box wins over the same value keyed to the window.
+ *
+ * Public because it is the only answer to "which breakpoints does this site
+ * actually emit under". A stored settings axis is not that answer: definitions
+ * whose bound is missing, unusable or duplicated are dropped here, the rest are
+ * sorted and capped, and each survivor carries the at-rule text itself. Anything
+ * keyed on the emitted stylesheet — a cache stamp, most of all — has to read
+ * this rather than the raw set, because two axes that differ only in what this
+ * function discards produce byte-identical CSS.
  */
-function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
+export function breakpointContexts(
+  // Widened past what the compiler's own caller holds, because the answer is
+  // read by anything keyed on what this site's breakpoints ARE, and those
+  // readers hold the stored settings record rather than a validated context.
+  // The body already treats the argument as untrusted, so an absent set answers
+  // with the base context alone rather than being a case to guard at each call.
+  set: BreakpointSet | undefined
+): BreakpointContext[] {
   // The base context carries no upper bound and no at-rule, but it still needs
   // to be bounded from below when a narrower breakpoint shows a node again:
   // without that, hiding at base emits an unconditional rule that a later
@@ -335,41 +387,63 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   const axisDefs = (axis: BreakpointAxis): BreakpointDef[] => {
     const defs = isPlainRecord(rawSet) ? rawSet[axis] : undefined;
     if (!Array.isArray(defs)) return [];
-    const usable = defs.filter((def: unknown): def is BreakpointDef => {
-      if (!isPlainRecord(def) || typeof def.id !== "string") return false;
-      // The base id names the unconditional context and carries no bound by
-      // definition; it is skipped below, and asking it for one would drop the
-      // very breakpoint every other rule is written against.
-      if (def.id === BASE_BREAKPOINT) return true;
-      if (def.maxWidth === undefined) {
-        // Only one unbounded definition per container axis. Two both compile to
-        // `@container (min-width: 0)`, so they cover the identical range and
-        // whichever sorts later silently overrides the other — the same
-        // ambiguity a duplicate id creates, spelled differently.
-        if (axis === "container") {
-          if (unboundedContainer) return false;
-          unboundedContainer = true;
-          return true;
+    // Bounded on the RAW axis, before anything reads it. A bound applied after
+    // the filter below bounds only the sort: the filter still visits every
+    // stored definition and materialises every usable one, so a million-entry
+    // row costs O(n) and its allocation on each call — and this is called on
+    // every render keyed on what a site emits under, including one whose
+    // stylesheet is reusable.
+    //
+    // The prefix is what a bound on unvalidated input can be. Past this many
+    // definitions the survivors are chosen from the first `MAX_SCANNED_KEYS`
+    // rather than from the whole axis, so an axis whose only usable entries sit
+    // beyond that prefix now defines no breakpoints. Nothing legitimate is
+    // close: the declared per-axis limit is `MAX_BREAKPOINTS_PER_AXIS`.
+    const usable = defs
+      .slice(0, MAX_SCANNED_KEYS)
+      .filter((def: unknown): def is BreakpointDef => {
+        if (!namedDefinition(def)) return false;
+        // The base id names the unconditional context and carries no bound by
+        // definition; it is skipped below, and asking it for one would drop the
+        // very breakpoint every other rule is written against.
+        if (def.id === BASE_BREAKPOINT) return true;
+        if (def.maxWidth === undefined) {
+          // Only one unbounded definition per container axis. Two both compile to
+          // `@container (min-width: 0)`, so they cover the identical range and
+          // whichever sorts later silently overrides the other — the same
+          // ambiguity a duplicate id creates, spelled differently.
+          if (axis === "container") {
+            if (unboundedContainer) return false;
+            unboundedContainer = true;
+            return true;
+          }
+          // A VIEWPORT definition without a bound would emit no at-rule at all:
+          // a second unconditional context, overriding the real base at every
+          // width, from a settings record the type system accepts. The container
+          // axis is not the same case and was answered above, because its
+          // unbounded definition still emits a query and stays scoped.
+          return false;
         }
-        // A VIEWPORT definition without a bound would emit no at-rule at all:
-        // a second unconditional context, overriding the real base at every
-        // width, from a settings record the type system accepts. The container
-        // axis is not the same case and was answered above, because its
-        // unbounded definition still emits a query and stays scoped.
-        return false;
-      }
-      return (
-        typeof def.maxWidth === "number" &&
-        Number.isFinite(def.maxWidth) &&
-        def.maxWidth > 0
-      );
-    });
+        return emittableBound(def.maxWidth);
+      });
     // The declared per-axis limit, enforced here because nothing else enforces
     // it. Every style envelope in the document scans the whole context list, so
     // the cost of a corrupt settings record is multiplied by every node rather
     // than paid once, and a byte-bounded document could still stall a render.
     // The widest are kept, and values keyed to the rest are reported stale like
     // any other id this site does not define.
+    //
+    // Bounded BEFORE the sort, which is what makes that limit bound the WORK and
+    // not merely the output. `MAX_BREAKPOINTS_PER_AXIS` is applied to the result,
+    // so a stored axis of a million definitions is still filtered and sorted in
+    // full on the way to keeping seven — and anything keyed on what this returns
+    // pays that on every render, including one whose stylesheet is reusable.
+    // The same reasoning `isUsableNamedClass` states for putting a length test
+    // ahead of its pattern test: a cheap rejection has to come first for the cap
+    // to bound anything.
+    //
+    // Bounding the WORK is done above, on the raw axis, because a bound applied
+    // here would leave the filter scanning all of it first.
     return usable
       .sort(widthDescending)
       .filter(def => {
@@ -510,8 +584,15 @@ function boundedKeys(record: Record<string, unknown>): string[] {
   return keys.sort();
 }
 
-/** How many keys of one stored record are read before the walk gives up. */
-const MAX_SCANNED_KEYS = 256;
+/**
+ * How many keys of one stored record are read before the walk gives up.
+ *
+ * Public because it is this engine's only answer to how wide a stored record can
+ * be and still be read. A reader that walks the same records — a cache stamp,
+ * most of all — has to stop where this stops, or a corrupt settings row costs it
+ * the unbounded scan this bound exists to prevent while compilation pays 256.
+ */
+export const MAX_SCANNED_KEYS = 256;
 
 function unknownBreakpointWarnings(
   styles: NodeStyles,

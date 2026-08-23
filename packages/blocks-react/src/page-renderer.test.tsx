@@ -19,6 +19,7 @@ import {
   blockTypeClassName,
   type AnyBlockDefinition,
   type BlockDocument,
+  type StyleCompileContext,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
@@ -26,7 +27,7 @@ import type { PageContext } from "./context";
 import { createStandaloneContext, defineBlock } from "./context";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
-import { resolvePageStyles } from "./styles";
+import { resolvePageStyles, type PageStyles } from "./styles";
 
 /**
  * Render to HTML the way a server actually would.
@@ -3921,6 +3922,23 @@ describe("PageRenderer", () => {
   });
 
   describe("a consumer assembling styles by hand", () => {
+    /**
+     * A hand-written artifact carrying the stamp a real compile would give it.
+     *
+     * These cases are about gated rules, not about staleness — they need the
+     * artifact REUSED so the appending is observable. An unstamped one is
+     * refused as stale, correctly, so the base comes from an actual compile and
+     * only the hand-written parts are laid over it.
+     */
+    const assembled = (
+      document: BlockDocument,
+      context: StyleCompileContext,
+      resolver: ReturnType<typeof createBlockResolver>,
+      parts: Partial<PageStyles>
+    ): PageStyles => ({
+      ...resolvePageStyles(document, undefined, context, resolver),
+      ...parts,
+    });
     it("does not get a drawless node's rules appended back", async () => {
       // The documented direct flow is `prepareDocumentForRead` then
       // `resolvePageStyles`, and it has no pass that removes a node whose block
@@ -4018,24 +4036,27 @@ describe("PageRenderer", () => {
       // what to draw, so a caller answering differently here could only publish
       // rules for markup that never appears — this node DOES draw, and gets its
       // rules however the caller answers.
+      const document = doc(
+        node("a", "test/drawless", { props: { draw: true } }),
+        node("b", "test/text", { props: { value: "y" } })
+      );
+      const styleContext = {
+        breakpoints: { viewport: [], container: [] },
+        drawsNothing: (candidate: BlockNode) => candidate.id === "a",
+      };
+      const resolver = createBlockResolver([
+        drawless as AnyBlockDefinition,
+        text as AnyBlockDefinition,
+      ]);
       const artifact = resolvePageStyles(
-        doc(
-          node("a", "test/drawless", { props: { draw: true } }),
-          node("b", "test/text", { props: { value: "y" } })
-        ),
-        {
+        document,
+        assembled(document, styleContext, resolver, {
           css: ".nx-b { color: teal }",
           classes: { a: "nx-a", b: "nx-b" },
           gated: { a: ".nx-a { background-image: url(/host-gated.png) }" },
-        },
-        {
-          breakpoints: { viewport: [], container: [] },
-          drawsNothing: candidate => candidate.id === "a",
-        },
-        createBlockResolver([
-          drawless as AnyBlockDefinition,
-          text as AnyBlockDefinition,
-        ])
+        }),
+        styleContext,
+        resolver
       );
 
       expect(artifact.css).toContain("host-gated.png");
@@ -4044,15 +4065,22 @@ describe("PageRenderer", () => {
     it("keeps the page when a block's declaration throws", async () => {
       // Style resolution runs with no block boundary above it, so a throw must
       // cost the node's exemption rather than the page.
+      const document = doc(
+        node("a", "test/drawless-throws", { props: { value: "x" } })
+      );
+      const styleContext = { breakpoints: { viewport: [], container: [] } };
+      const resolver = createBlockResolver([
+        drawlessThrows as AnyBlockDefinition,
+      ]);
       const artifact = resolvePageStyles(
-        doc(node("a", "test/drawless-throws", { props: { value: "x" } })),
-        {
+        document,
+        assembled(document, styleContext, resolver, {
           css: ".nx-a { color: teal }",
           classes: { a: "nx-a" },
           gated: { a: ".nx-a { background-image: url(/host-gated.png) }" },
-        },
-        { breakpoints: { viewport: [], container: [] } },
-        createBlockResolver([drawlessThrows as AnyBlockDefinition])
+        }),
+        styleContext,
+        resolver
       );
 
       // Answered "draws", so the node keeps its styling rather than losing it.
@@ -4067,15 +4095,22 @@ describe("PageRenderer", () => {
       const unhandled = vi.fn();
       process.on("unhandledRejection", unhandled);
       try {
+        const document = doc(
+          node("a", "test/drawless-rejects", { props: { value: "x" } })
+        );
+        const styleContext = { breakpoints: { viewport: [], container: [] } };
+        const resolver = createBlockResolver([
+          drawlessRejects as AnyBlockDefinition,
+        ]);
         const artifact = resolvePageStyles(
-          doc(node("a", "test/drawless-rejects", { props: { value: "x" } })),
-          {
+          document,
+          assembled(document, styleContext, resolver, {
             css: ".nx-a { color: teal }",
             classes: { a: "nx-a" },
             gated: { a: ".nx-a { background-image: url(/host-gated.png) }" },
-          },
-          { breakpoints: { viewport: [], container: [] } },
-          createBlockResolver([drawlessRejects as AnyBlockDefinition])
+          }),
+          styleContext,
+          resolver
         );
 
         // Answered "draws", so the node keeps its styling.

@@ -17,6 +17,13 @@ export {
   COMPONENT_INSTANCE_TYPE,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
+  // Public for exactly the reason the per-axis cap is. A definition whose id is
+  // longer than this is DROPPED by `breakpointContexts`, so a store that
+  // accepted one would satisfy the published `BreakpointDef` type and then lose
+  // every style keyed to that id, reported only as an unknown breakpoint. A
+  // writer cannot honour a rule it cannot read, and a copy of the number in
+  // another package is a second statement that goes stale silently.
+  MAX_BREAKPOINT_ID_LENGTH,
   // Public alongside the per-axis cap: a store validating a class library on
   // write must refuse what the compiler will not read, and a copy of this
   // number in another package is a second statement that goes stale silently.
@@ -262,7 +269,21 @@ export type {
   StyleIssueBudget,
   StyleUnionVariantOptions,
 } from "./style/validate-style-value";
-export { compilePageCss, BASE_BREAKPOINT } from "./style/compile-page";
+export {
+  compilePageCss,
+  BASE_BREAKPOINT,
+  // The width past which a stored record is not read. Exported for the same
+  // reason as the breakpoints below: a reader keyed on what compilation emits
+  // must stop reading where compilation stops, and a second constant would
+  // drift from the one that decides the output.
+  MAX_SCANNED_KEYS,
+  // The normalised breakpoints, for a reader keyed on what the compiler emits
+  // rather than on what was stored. Exported rather than restated because a
+  // second copy of the dropping, sorting and capping rules would drift from the
+  // one that decides the output, and would drift silently in both directions.
+  breakpointContexts,
+} from "./style/compile-page";
+export type { BreakpointContext } from "./style/compile-page";
 // The one rule for how a document-global CSS name wears its scope. Public
 // because more than one place has to produce it and they must agree exactly:
 // the compiler namespaces the names it emits, the custom-CSS sanitizer
@@ -336,6 +357,11 @@ export {
   compileStyleValues,
   tokenCustomProperty,
   DEFAULT_TOKEN_PREFIX,
+  // The prefix tokens are actually written under, which is not the one that was
+  // stored: unset, malformed and reserved prefixes all resolve to the default.
+  // Exported so a reader keyed on the emitted custom-property names asks this
+  // rather than the setting, which changes without the output changing.
+  safeTokenPrefix,
 } from "./style/declarations";
 export type { CompiledDeclarations, Declaration } from "./style/declarations";
 export { serializeRules } from "./style/serialize";
@@ -370,6 +396,11 @@ export {
   isUsableNamedClass,
   namedClassName,
   orderedNamedClasses,
+  // How long a class id or slug may be before the compiler discards the class.
+  // Exported so a reader that walks the same library bounds its reads where the
+  // compiler bounds its own, rather than copying megabytes of a name the
+  // compiler rejected by length before it looked at anything else.
+  MAX_NAMED_CLASS_NAME_LENGTH,
   // Which classes a library actually RESOLVES to, ordering and claim rules
   // included. The compiler writes exactly this list and the renderer is handed
   // exactly this list, so a caller that needs to tell an author whether the
