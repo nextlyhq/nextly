@@ -141,11 +141,13 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
  * purpose is naming what was lost.
  *
  * Detected here rather than in the engine because that is a change to a shared
- * package this task does not own — and because the question this asks is
- * narrow: not "is this a valid token", which is the engine's to answer and
- * would be a second implementation of it, but "is this shaped like anything at
- * all". A number where a group or a token belongs is neither, whatever the
- * rules for tokens turn out to be.
+ * package this task does not own. That placement has a cost worth naming: this
+ * walk MIRRORS `dtcgToTokens`'s traversal rather than deriving from it, so the
+ * two can drift, and a reader taught to accept something new goes on being
+ * reported here as dropping it. `fateOf` is arranged so the drift errs toward
+ * saying too much rather than too little, which is the best a mirror can do —
+ * the fix is for the engine to report its own losses, and when it does this
+ * whole traversal should be DELETED rather than left beside it.
  *
  * Walked with an explicit stack rather than by recursion, for the reason the
  * conversion is caught above: a deep document must not put this on the stack
@@ -193,30 +195,68 @@ function childrenOf(here: Frame): { descend: Frame[]; lost: string[] } {
 
   const isToken = Object.hasOwn(here.node, "$value");
   for (const [key, value] of Object.entries(here.node)) {
-    const said = lostAt(key, value, here, isToken);
-    if (said !== undefined) lost.push(said);
-    else if (!key.startsWith("$") && isRecord(value)) {
+    const fate = fateOf(key, value, [...here.path, key].join("."), isToken);
+    if (fate.kind === "lost") lost.push(fate.said);
+    else if (fate.kind === "descend") {
       descend.push({ node: value, path: [...here.path, key] });
     }
   }
   return { descend, lost };
 }
 
+/** What the reader does with one child: keeps it, walks into it, or drops it. */
+type Fate =
+  | { readonly kind: "kept" }
+  | { readonly kind: "descend" }
+  | { readonly kind: "lost"; readonly said: string };
+
 /**
- * Why this child will not survive the import, or `undefined` when it will.
+ * What becomes of one child of one node, as an EXHAUSTIVE decision.
  *
- * The three ways a child goes missing, asked in one place because a reader
- * following "where does the walk go next" should not have to step through them,
- * and because they share one shape: a key the reader passes over without a
- * word.
+ * An ALLOWLIST: each branch below names something the reader keeps or walks
+ * into, and anything no branch claims is reported. The denylist it replaced
+ * asked the opposite question — which children are lost — and needed a new
+ * branch for every field the reader happens to pass over, so it was extended
+ * three times running: a group's own `$root` token, then a malformed
+ * `$description`, then a `$type` that is not a name and a token nested inside
+ * another token. Each repair was right and none could be the last, because
+ * "what this reader ignores" is not a set that can be finished from here — it
+ * grows whenever the shared package changes, silently, in the direction of
+ * losing more.
+ *
+ * Reversed, the same uncertainty costs a line of noise instead: a field the
+ * reader does read but this file has not heard of is reported as skipped, which
+ * is wrong and visible, rather than dropped, which is wrong and invisible.
+ *
+ * Split on whether the key is the format's own, because the two are different
+ * questions. A `$` key asks about the DTCG VOCABULARY — which of its fields
+ * this reader takes, and in what shape. Any other key asks about the document's
+ * TREE: whether there is anywhere left to walk.
  */
-function lostAt(
+function fateOf(
   key: string,
   value: unknown,
-  here: Frame,
+  path: string,
   isToken: boolean
-): string | undefined {
-  const path = [...here.path, key].join(".");
+): Fate {
+  return key.startsWith("$")
+    ? reservedFate(key, value, path, isToken)
+    : namedFate(value, path, isToken);
+}
+
+/** What the reader does with one of the format's own `$` fields. */
+function reservedFate(
+  key: string,
+  value: unknown,
+  path: string,
+  isToken: boolean
+): Fate {
+  // What makes the node a token at all, and the two fields carried with it.
+  if (key === "$value") return { kind: "kept" };
+  if (key === "$description" || key === "$extensions") {
+    const said = metadataLostAt(key, value, path, isToken);
+    return said === undefined ? { kind: "kept" } : { kind: "lost", said };
+  }
   /*
    * `$root` is a TOKEN, not a reserved field: DTCG 2025.10 gives a group its
    * own token under that name, so `color.$root` is a real token at the path
@@ -225,15 +265,52 @@ function lostAt(
    * key that is not metadata.
    */
   if (key === "$root") {
-    return `"${path}" is a group's own token, which this site cannot read yet, so it was skipped.`;
+    return {
+      kind: "lost",
+      said: `"${path}" is a group's own token, which this site cannot read yet, so it was skipped.`,
+    };
   }
-  if (key === "$description" || key === "$extensions") {
-    return metadataLostAt(key, value, path, isToken);
+  /*
+   * A type descends through the groups to the tokens under them, and the
+   * reader takes it only when it is a name. Anything else falls back to the
+   * enclosing group's type without a word, so the file states one type and the
+   * site holds another — the token arrives looking imported and is not the
+   * token the file described.
+   */
+  if (key === "$type" && typeof value === "string") return { kind: "kept" };
+  if (key === "$type") {
+    return {
+      kind: "lost",
+      said: `"${path}" is not a usable type — a type is written as a name, such as "color" — so it was ignored and the type was taken from the group around it instead.`,
+    };
   }
-  if (key.startsWith("$")) return undefined;
+  return {
+    kind: "lost",
+    said: `"${path}" is a design-token field this site does not read, so it was skipped.`,
+  };
+}
+
+/** Whether one NAMED child is somewhere the reader still has to go. */
+function namedFate(value: unknown, path: string, isToken: boolean): Fate {
+  /*
+   * The reader STOPS at a token. `dtcgToTokens` reads the entry and moves to
+   * the next SIBLING rather than descending, so a token written inside another
+   * token is never reached. Walking in here would find a perfectly valid child
+   * and report nothing about it — the shape this file is least able to notice,
+   * because everything about the child looks importable.
+   */
+  if (isToken) {
+    return {
+      kind: "lost",
+      said: `"${path}" is written inside a token, where this site's reader does not look, so it was skipped.`,
+    };
+  }
   return isRecord(value)
-    ? undefined
-    : `"${path}" is neither a token nor a group of them, so it was skipped.`;
+    ? { kind: "descend" }
+    : {
+        kind: "lost",
+        said: `"${path}" is neither a token nor a group of them, so it was skipped.`,
+      };
 }
 
 /**
@@ -410,14 +487,20 @@ function applyAll(
 /**
  * Which incoming identities cannot land, because the result would be invalid.
  *
- * Two keys, and they are different questions. A NAME belongs to one token: the
- * studio refuses a duplicate label outright, so admitting one imports a state
- * the editor cannot create, and the export would place both at one design-token
- * path and drop one. A composed CUSTOM PROPERTY belongs to one token too, and
- * that one is not visible in the names: `color.primary-dark` and
- * `color-primary.dark` read as different tokens and are the same property, so
- * the emitter writes the first and refuses the second — an import that looked
- * successful whose value never reaches the page.
+ * Three constraints, and they are different questions. A NAME belongs to one
+ * token: the studio refuses a duplicate label outright, so admitting one
+ * imports a state the editor cannot create. A name is also a PATH — a design
+ * token file writes `brand.main` as a token `main` inside a group `brand` —
+ * so a token named `brand` cannot sit beside one named `brand.main`, which
+ * asks `brand` to be a token and a group at once. And a composed CUSTOM
+ * PROPERTY belongs to one token too, which is not visible in the names at all:
+ * `color.primary-dark` and `color-primary.dark` read as different tokens and
+ * are the same property, so the emitter writes the first and refuses the
+ * second.
+ *
+ * All three are the same failure from an author's side — an import that
+ * reported success and lost a token on the way back out — and none of them is
+ * implied by the others.
  *
  * Only INCOMING tokens are blocked. A clash the destination already had is not
  * this file's doing, and refusing the import for it would leave an author
@@ -429,53 +512,59 @@ function clashingIn(
   refused: string[],
   against: "forced" | "mutual"
 ): Set<string> {
+  const block = (
+    clashes: readonly Clash[],
+    say: (token: SiteToken, key: string) => string
+  ) => blocking(clashes, wanted, refused, against, say);
+
   return new Set([
-    ...sharingAKey(
-      proposed,
-      wanted,
-      refused,
-      against,
-      token => token.name,
+    ...block(
+      groupedBy(proposed, token => token.name),
       (token, name) =>
         `"${name}" is already the name of a different token on this site, so it was not imported. Rename one of them and try again.`
     ),
-    ...sharingAKey(
-      proposed,
-      wanted,
-      refused,
-      against,
-      // The prefix is the same string in front of every property, so it can
-      // neither create a collision nor prevent one — the same reason the
-      // studio's own collision check composes without it.
-      token => tokenCustomProperty(tokenIdentity(token), ""),
+    ...block(
+      nestedUnder(proposed),
+      (token, above) =>
+        `"${token.name}" cannot be imported beside "${above}", which is a token on this site too. A design-token file writes "${above}" as either a token or a group holding others, never both, so a file exported with these two would lose one of them.`
+    ),
+    ...block(
+      groupedBy(proposed, token =>
+        // The prefix is the same string in front of every property, so it can
+        // neither create a collision nor prevent one — the same reason the
+        // studio's own collision check composes without it.
+        tokenCustomProperty(tokenIdentity(token), "")
+      ),
       (token, property) =>
         `"${token.name}" and another token here both become "${property}", so it was not imported. Two tokens cannot share one custom property.`
     ),
   ]);
 }
 
+/** Tokens that cannot coexist, and the thing they are fighting over. */
+interface Clash {
+  readonly key: string;
+  readonly sharing: readonly SiteToken[];
+}
+
 /**
- * The incoming identities that share `keyOf` with some other token.
+ * Which incoming participants in a clash to refuse, and what to say about it.
  *
- * One question asked twice rather than two loops that happen to look alike:
- * what differs between the name check and the property check is the key and
- * the wording, and writing each out separately is how the two stop agreeing
- * about which side of a clash gets blocked.
+ * One implementation for every constraint, taking the clashes already found.
+ * What differs between them is how a group is FORMED — equal keys for two of
+ * them, a path relation for the third — and the policy on top is identical:
+ * which side is blocked, and when a clash is forced rather than resolvable.
+ * Written out per constraint, that policy is how the three stop agreeing.
  */
-function sharingAKey(
-  proposed: readonly SiteToken[],
+function blocking(
+  clashes: readonly Clash[],
   wanted: ReadonlyMap<string, SiteToken>,
   refused: string[],
   against: "forced" | "mutual",
-  keyOf: (token: SiteToken) => string,
   say: (token: SiteToken, key: string) => string
 ): Set<string> {
-  const held = new Map<string, SiteToken[]>();
-  for (const token of proposed) group(held, keyOf(token), token);
-
   const blocked = new Set<string>();
-  for (const [key, sharing] of held) {
-    if (sharing.length < 2) continue;
+  for (const { key, sharing } of clashes) {
     // Whether this clash involves a token the file does not touch. If it does,
     // the refusal is forced; if it does not, the incoming tokens are only
     // clashing with each other and may still be freed by an earlier removal.
@@ -483,16 +572,61 @@ function sharingAKey(
     if (against === "forced" && !untouched) continue;
     for (const token of sharing) {
       const identity = tokenIdentity(token);
-      // Only INCOMING tokens are blocked. A clash the destination already had
-      // is not this file's doing, and refusing the import for it would leave an
-      // author unable to bring anything in until they had repaired something
-      // else entirely.
       if (!wanted.has(identity)) continue;
       blocked.add(identity);
       refused.push(say(token, key));
     }
   }
   return blocked;
+}
+
+/** Tokens sharing one key, where more than one holds it. */
+function groupedBy(
+  proposed: readonly SiteToken[],
+  keyOf: (token: SiteToken) => string
+): Clash[] {
+  const held = new Map<string, SiteToken[]>();
+  for (const token of proposed) group(held, keyOf(token), token);
+  const found: Clash[] = [];
+  for (const [key, sharing] of held) {
+    if (sharing.length > 1) found.push({ key, sharing });
+  }
+  return found;
+}
+
+/**
+ * Tokens whose name sits on a path another token already occupies.
+ *
+ * Not the same question as two equal names, and not reachable from it: `brand`
+ * and `brand.main` are different strings, so every key-based check accepts
+ * both, and the loss appears only on the way back OUT — `place` walks to
+ * `brand` looking for a group, finds a token, and drops the entry with an
+ * issue. An import that reported success has quietly made the table
+ * unexportable.
+ *
+ * Indexed by name rather than compared pair by pair. A name has a handful of
+ * segments and a table can have thousands of tokens, and the quadratic form of
+ * this runs on the main thread with the studio open — the same measurement that
+ * decided how `applyAll` looks up its destination.
+ */
+function nestedUnder(proposed: readonly SiteToken[]): Clash[] {
+  const at = new Map<string, SiteToken>();
+  for (const token of proposed) {
+    if (!at.has(token.name)) at.set(token.name, token);
+  }
+  const found: Clash[] = [];
+  for (const token of proposed) {
+    const segments = token.name.split(".");
+    // Every group this name passes through on its way to its own last segment.
+    for (let cut = 1; cut < segments.length; cut++) {
+      const above = segments.slice(0, cut).join(".");
+      const holder = at.get(above);
+      if (holder !== undefined) {
+        found.push({ key: above, sharing: [holder, token] });
+      }
+    }
+  }
+  return found;
 }
 
 /** Add a token to the list under a key, starting the list if it is the first. */
@@ -524,19 +658,21 @@ export interface ExportResult {
  * between a reviewable change and an opaque one.
  */
 export function exportDtcg(tokens: SiteTokenSet): ExportResult {
-  const { document, issues } = tokensToDtcg(tokens);
-  const said = issues.map(issue => issue.message);
   let skipped: string[];
   let text: string;
   try {
     /*
-     * The preflight runs INSIDE the guard, because it reads the same vendor
-     * data the write does. An enumerable `toJSON` getter that throws is read by
-     * that walk before `JSON.stringify` ever sees it — so a check added to stop
-     * an export throwing out of a click handler would have thrown out of it
-     * first, one line earlier.
+     * EVERY step that reads the vendor data is inside this guard, the
+     * conversion included. Each was moved in separately after being found to
+     * touch the same untrusted values one step earlier than the last: the
+     * write reaches them through `JSON.stringify`, the preflight walks them
+     * first, and `tokensToDtcg` SPREADS `token.extensions` before either runs,
+     * so an enumerable getter that throws is read there. The boundary is the
+     * whole export rather than any one of its steps, which is what stops a
+     * line added later from landing outside it.
      */
-    skipped = [...said, ...unwritable(tokens)];
+    const { document, issues } = tokensToDtcg(tokens);
+    skipped = [...issues.map(issue => issue.message), ...unwritable(tokens)];
     text = `${JSON.stringify(document, null, 2)}\n`;
   } catch {
     /*
@@ -555,8 +691,13 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
       text: "",
       filename: "tokens.json",
       mime: "application/json",
+      /*
+       * The engine's own issues are absent here deliberately: the conversion
+       * that produces them is inside the guard, so a failure during it leaves
+       * nothing to report but this. Naming issues from a conversion that did
+       * not finish would be reporting a list nobody produced.
+       */
       skipped: [
-        ...said,
         "This site's tokens carry vendor data that cannot be written to a file — a value JSON has no form for, such as a very large number or a structure that refers to itself. Nothing was exported.",
       ],
     };

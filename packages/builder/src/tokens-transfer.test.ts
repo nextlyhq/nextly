@@ -807,3 +807,132 @@ describe("metadata a token loses on the way in", () => {
     expect(result.skipped).toEqual([]);
   });
 });
+
+describe("what the reader passes over", () => {
+  it("names a token written INSIDE another token", () => {
+    // `dtcgToTokens` reads an entry with a `$value` and moves to the next
+    // SIBLING, so a token nested in one is never reached. It is the loss this
+    // walk is least able to notice, because everything about the child looks
+    // importable.
+    const document = {
+      parent: {
+        $type: "number",
+        $value: 1,
+        child: { $type: "number", $value: 2 },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The control: the PARENT did import, so the fixture reached the reader
+    // and the child's absence is the reader's decision rather than a document
+    // nothing could read.
+    expect(result.tokens.tokens.map(token => token.name)).toEqual(["parent"]);
+    expect(result.skipped.join(" ")).toContain("parent.child");
+  });
+
+  it("names a $type the reader cannot use, and the type it fell back to", () => {
+    // The token still arrives — with the GROUP's type, not the one the file
+    // states — so nothing about the import looks wrong.
+    const document = {
+      group: { $type: "number", foo: { $type: 42, $value: 1 } },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tokens.tokens.map(token => token.kind)).toEqual(["number"]);
+    expect(result.skipped.join(" ")).toContain("group.foo.$type");
+  });
+
+  it("names a reserved field it has never heard of", () => {
+    // The property the allowlist buys: a field this file does not know is
+    // REPORTED rather than passed over, so the walk erring costs a line of
+    // noise instead of a token lost in silence.
+    const document = { foo: { $type: "number", $value: 1, $deprecated: true } };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tokens.tokens.map(token => token.name)).toEqual(["foo"]);
+    expect(result.skipped.join(" ")).toContain("foo.$deprecated");
+  });
+});
+
+describe("a name is also a PATH", () => {
+  it("refuses a token that would make one name a token AND a group", () => {
+    const into: SiteTokenSet = {
+      tokens: [{ name: "brand.main", kind: "number", values: { light: "1" } }],
+    };
+    const document = { brand: { $type: "number", $value: 2 } };
+    const result = importDtcg(JSON.stringify(document), into);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.tokens.tokens.map(token => token.name)).toEqual([
+      "brand.main",
+    ]);
+    expect(result.imported).toBe(0);
+    expect(result.skipped.join(" ")).toContain("cannot be imported beside");
+
+    /*
+     * The harm, demonstrated rather than asserted: a table holding both cannot
+     * be written back out. One of the two is dropped whichever order they are
+     * placed in — the exporter says "already a token" or "exported more than
+     * once" depending on which it reaches first — so the LOSS is what this
+     * asserts rather than either wording.
+     */
+    const both = exportDtcg({
+      tokens: [
+        ...into.tokens,
+        { name: "brand", kind: "number", values: { light: "2" } },
+      ],
+    });
+    expect(both.skipped).toHaveLength(1);
+    expect(
+      dtcgToTokens(JSON.parse(both.text)).tokens.map(token => token.name)
+    ).toEqual(["brand.main"]);
+  });
+
+  it("still imports a name that only SHARES a group with another", () => {
+    // The control. `brand.main` and `brand.dark` pass through the same group
+    // and neither IS that group, so a check reading the relation too widely
+    // would refuse an ordinary file.
+    const into: SiteTokenSet = {
+      tokens: [{ name: "brand.main", kind: "number", values: { light: "1" } }],
+    };
+    const document = {
+      brand: { dark: { $type: "number", $value: 2 } },
+    };
+    const result = importDtcg(JSON.stringify(document), into);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tokens.tokens.map(token => token.name)).toEqual([
+      "brand.main",
+      "brand.dark",
+    ]);
+    expect(result.imported).toBe(1);
+  });
+});
+
+describe("the export guard covers the CONVERSION too", () => {
+  it("reports vendor data that throws while being COPIED", () => {
+    // A getter on the extensions record itself is read by `tokensToDtcg` when
+    // it spreads them — before the preflight walks them and before
+    // `JSON.stringify` sees anything.
+    const extensions: Record<string, unknown> = {};
+    Object.defineProperty(extensions, "com.figma", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable");
+      },
+    });
+    const tokens: SiteTokenSet = {
+      tokens: [
+        { name: "foo", kind: "number", values: { light: "1" }, extensions },
+      ],
+    };
+
+    const result = exportDtcg(tokens);
+    expect(result.text).toBe("");
+    expect(result.skipped.join(" ")).toContain("cannot be written to a file");
+  });
+});
