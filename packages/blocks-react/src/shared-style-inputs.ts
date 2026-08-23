@@ -44,8 +44,15 @@
  * runtime imports, and `crypto.subtle` is asynchronous while every caller here
  * is not.
  *
+ * The digest is the engine's own `hashId` rather than one written here. It
+ * already content-addresses a compiled site sheet, so this is the question it
+ * was built for, and it states its own non-cryptographic bound. A second hash
+ * beside it would be a second answer to how this repository fingerprints
+ * compiled CSS.
+ *
  * @module shared-style-inputs
  */
+import { hashId } from "@nextlyhq/blocks-engine";
 import type {
   BreakpointSet,
   NamedClass,
@@ -151,34 +158,6 @@ export function sharedStyleInputsLabel(inputs: SharedStyleInputs): string {
 }
 
 /**
- * A 64-bit FNV-1a digest, as two 32-bit halves.
- *
- * FNV-1a because it needs no import at all: this package may import `react`,
- * `react/jsx-runtime` and the engine, and nothing else — a boundary its own
- * `layering.test.ts` enforces. It is also synchronous, which every caller here
- * requires and `crypto.subtle` cannot offer.
- *
- * Two independent 32-bit passes with different offset bases rather than one, so
- * the result is 64 bits of state. JavaScript has no 64-bit integer arithmetic
- * that survives `Math.imul`, and two seeded passes are the standard way to widen
- * a 32-bit hash without reaching for `BigInt` on every page render.
- *
- * Iterated over UTF-16 code units. The input is JSON produced by this module, so
- * it is already escaped to a stable subset and no normalization question arises
- * — two labels differ here exactly when they differ as strings.
- */
-function digest(text: string): string {
-  let high = 0x811c9dc5;
-  let low = 0x01000193;
-  for (let i = 0; i < text.length; i += 1) {
-    const code = text.charCodeAt(i);
-    high = Math.imul(high ^ code, 0x01000193) >>> 0;
-    low = Math.imul(low ^ code, 0x811c9dc5) >>> 0;
-  }
-  return high.toString(16).padStart(8, "0") + low.toString(16).padStart(8, "0");
-}
-
-/**
  * The stamp to write onto an artifact and to compare a stored one against.
  *
  * `undefined` when the caller stated no shared inputs at all — which is a real
@@ -190,5 +169,5 @@ export function sharedStyleInputsId(
   inputs: SharedStyleInputs | undefined
 ): string | undefined {
   if (inputs === undefined) return undefined;
-  return `${ENCODING}:${digest(sharedStyleInputsLabel(inputs))}`;
+  return `${ENCODING}:${hashId(sharedStyleInputsLabel(inputs))}`;
 }

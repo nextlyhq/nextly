@@ -229,7 +229,7 @@ describe("the label the stamp is taken over", () => {
 
   it("carries its encoding version, so a later change invalidates rather than matches", () => {
     expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v1");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v1:[0-9a-f]{16}$/);
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v1:[0-9a-z]+$/);
   });
 
   it("omits the label a breakpoint carries", () => {
