@@ -62,6 +62,7 @@
 import {
   checkContrast,
   emitTokenBlocks,
+  isPlainRecord,
   isTokenRef,
   locateNode,
   parseColor,
@@ -761,16 +762,31 @@ export function contrastObscuredIn(
  * that drifts, and the drift would be silent in the failing-open direction.
  */
 function obscuringAnywhereIn(
-  styles: NodeStyles | undefined,
+  styles: unknown,
   properties: readonly string[]
 ): string | undefined {
-  if (styles === undefined) return undefined;
+  // Every tier is tested for being a record before it is enumerated, rather
+  // than only for being defined. Styles arrive from storage — a migration, a
+  // DTCG import, a hand-edited row — and `documentFrom` admits anything whose
+  // `nodes` is an array, so a node holding `styles: { base: null }` reaches
+  // here intact. `Object.values(null)` throws, and a throw during render takes
+  // the whole Style tab down, which is the failure `documentFrom` exists to
+  // prevent: an editor that crashes on open leaves the author no way to repair
+  // the value that crashed it.
+  //
+  // `isPlainRecord` is the ENGINE's own guard, the one its style validator and
+  // token emitter apply to the same stored shapes. A local `!== null` would
+  // agree with it today and diverge the moment either side learns about arrays
+  // or exotic objects — and it already refuses both, which a null check does
+  // not.
+  if (!isPlainRecord(styles)) return undefined;
   for (const breakpoints of Object.values(styles)) {
-    if (breakpoints === undefined) continue;
+    if (!isPlainRecord(breakpoints)) continue;
     for (const values of Object.values(breakpoints)) {
-      if (values === undefined) continue;
-      const found = properties.find(property =>
-        Object.hasOwn(values, property) ? values[property] !== undefined : false
+      if (!isPlainRecord(values)) continue;
+      const found = properties.find(
+        property =>
+          Object.hasOwn(values, property) && values[property] !== undefined
       );
       if (found !== undefined) return found;
     }

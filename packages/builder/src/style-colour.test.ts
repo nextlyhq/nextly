@@ -927,3 +927,52 @@ describe("what a token is CALLED where two share a name", () => {
     expect(colourTokenLabel(one, [one])).toBe("brand.main");
   });
 });
+
+describe("a malformed document does not take the panel down with it", () => {
+  // `documentFrom` admits any value whose `nodes` is an array, because a stored
+  // document is whatever a migration, an import or a hand-edited row left
+  // behind. Everything below therefore REACHES this code, and a throw here runs
+  // during render — taking out the whole Style tab and leaving the author no
+  // way to repair the value that broke it.
+  const malformed: readonly [string, unknown][] = [
+    ["a null tier", { base: null }],
+    ["a null breakpoint map", { base: { base: null } }],
+    ["styles that are null", null],
+    ["a tier that is a string", { base: "base" }],
+    ["a tier that is an ARRAY", { base: [{ opacity: "0.1" }] }],
+    ["a breakpoint map that is an array", { base: { base: ["opacity"] } }],
+  ];
+
+  for (const [what, styles] of malformed) {
+    it(`answers rather than throwing for ${what}`, () => {
+      expect(() => contrastObscuredIn(styles as never)).not.toThrow();
+      expect(contrastObscuredIn(styles as never)).toBeUndefined();
+    });
+  }
+
+  it("does not throw when an ANCESTOR carries the malformed tier", () => {
+    // The ancestor walk reads styles the author never selected, so it meets
+    // malformed data on nodes they are not even looking at.
+    const nodes = [
+      {
+        id: "wrap",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        styles: { base: null },
+        slots: {
+          children: [{ id: "leaf", type: "acme/box", version: 1, props: {} }],
+        },
+      },
+    ] as unknown as BlockNode[];
+    expect(() => contrastObscuredAbove(nodes, "leaf")).not.toThrow();
+    expect(contrastObscuredAbove(nodes, "leaf")).toBeUndefined();
+  });
+
+  it("still finds a real effect on a node whose OTHER tier is malformed", () => {
+    // The guard must skip the broken tier, not abandon the scan: a document
+    // with one bad address and one good one must still withhold the verdict.
+    const styles = { base: null, hover: { base: { opacity: "0.1" } } };
+    expect(contrastObscuredIn(styles as never)).toBe("opacity");
+  });
+});
