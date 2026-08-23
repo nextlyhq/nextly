@@ -52,6 +52,7 @@ import {
   InsertPanel,
   InspectorPanel,
   LayersPanel,
+  TokensPanel,
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
@@ -83,7 +84,7 @@ import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
-import { useSiteStyle } from "./site-style-client";
+import { useSaveSiteStyle, useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
 
 export interface BlocksFieldProps<
@@ -117,14 +118,14 @@ export interface BlocksFieldProps<
 /**
  * Every left panel the editor can fill today.
  *
- * The inserter and the layers tree; the rest are not built. The shell draws all
- * seven regardless and disables the ones nothing fills, so the rail describes
- * the editor's shape while never opening a region with nothing in it. Listing a
- * panel here that renders nothing would reserve space and shrink the canvas to
- * show it, which is why this grows one entry at a time rather than being
- * declared ahead of the panels.
+ * The inserter, the layers tree and the tokens studio; the rest are not built.
+ * The shell draws all seven regardless and disables the ones nothing fills, so
+ * the rail describes the editor's shape while never opening a region with
+ * nothing in it. Listing a panel here that renders nothing would reserve space
+ * and shrink the canvas to show it, which is why this grows one entry at a time
+ * rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["insert", "layers"] as const;
+const AVAILABLE_PANELS = ["insert", "layers", "tokens"] as const;
 
 /**
  * With an entry-fields panel to fill, `settings` joins them.
@@ -453,6 +454,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     pending: siteStylePending,
     error: siteStyleError,
   } = useSiteStyle(configSiteStyle);
+  /*
+   * The studio's write. Section-scoped, so saving tokens leaves the fonts,
+   * classes and breakpoints sections exactly as they were — four surfaces own
+   * four fields of one record, and a whole-document write from any of them
+   * would clobber whatever the others had saved since it last read.
+   */
+  const { save: saveSiteStyle } = useSaveSiteStyle();
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -648,6 +656,25 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             );
           }
           if (panel === "layers") return <LayersPanel editor={editor} />;
+          if (panel === "tokens") {
+            return (
+              <TokensPanel
+                tokens={offerableTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                /*
+                 * Saved as it is edited rather than behind a save button. A
+                 * token is site-wide, so the canvas behind this panel is the
+                 * preview — an unsaved edit would show the author a page that
+                 * no visitor would see, and there is no other surface on which
+                 * to notice the difference.
+                 */
+                onChange={next => void saveSiteStyle("tokens", next)}
+              />
+            );
+          }
           /*
            * The entry's own fields — SEO, relations, whatever this collection
            * declares — which the takeover removed from the page behind this
