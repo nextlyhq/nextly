@@ -136,3 +136,15 @@ with no cap.
 `safeTokenPrefix` takes what actually reaches it. A persisted `null` is not the
 absent value its old signature described, and reading a length off it aborted
 the compile the fallback exists to keep going.
+
+A stored page stylesheet records the scope its selectors were actually written
+under rather than the one the caller asked for. A scope the compiler refuses is
+dropped and the sheet compiled global, so recording the request stored an
+artifact claiming an isolation its own selectors did not carry — and the
+renderer attaches that class, which is how one document's rules reach another
+rendered beside it. That held for any refused scope, not only an oversized one.
+
+A font format is bounded, and the token studio refuses a name that lands on a
+custom property another token already occupies. The name-to-property mapping is
+deliberately not injective, so two visibly different, individually legal names
+can collide and the compiler drops whichever it reaches second.

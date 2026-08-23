@@ -35,6 +35,7 @@ import { MAX_SCOPE_LENGTH } from "./compile-page";
 import { MAX_VALUE_LENGTH } from "./css-value";
 import { MAX_TOKEN_NAME_LENGTH, MAX_TOKEN_PREFIX_LENGTH } from "./declarations";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./named-class";
+import { MAX_FONT_FORMAT_LENGTH } from "./site-tokens";
 
 /** One bounded string the compiler can write, named so a failure says which. */
 export interface EmittableStringBound {
@@ -73,4 +74,5 @@ export const EMITTABLE_STRING_BOUNDS: readonly EmittableStringBound[] =
       max: MAX_TOKEN_PREFIX_LENGTH,
     }),
     Object.freeze({ what: "a page scope", max: MAX_SCOPE_LENGTH }),
+    Object.freeze({ what: "a font format", max: MAX_FONT_FORMAT_LENGTH }),
   ]);

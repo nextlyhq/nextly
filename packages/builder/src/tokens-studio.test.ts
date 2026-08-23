@@ -438,3 +438,30 @@ describe("a row key that survives a removal elsewhere in the list", () => {
     );
   });
 });
+
+describe("two names that land on one custom property", () => {
+  // The name-to-property mapping is deliberately not injective: a dot and a
+  // dash both become a dash. So two visibly different, individually legal names
+  // can be written under one property, and the compiler drops whichever it
+  // reaches second — leaving a token the author can see in the table and cannot
+  // find on the page.
+  const pair = {
+    tokens: [
+      {
+        name: "color.primary-dark",
+        kind: "color",
+        values: { light: "#111111" },
+      },
+    ],
+  } as SiteTokenSet;
+
+  it("refuses the spelling that collides, though the names differ", () => {
+    expect(tokenNameIssue(pair, 1, "color-primary.dark")).toBeDefined();
+  });
+
+  it("accepts a spelling that lands somewhere else", () => {
+    // The control. A gate refusing every name would satisfy the case above and
+    // make the studio unusable.
+    expect(tokenNameIssue(pair, 1, "color.primary-light")).toBeUndefined();
+  });
+});

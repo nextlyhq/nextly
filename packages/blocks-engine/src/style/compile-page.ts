@@ -206,6 +206,17 @@ function readClassSlug(value: unknown): unknown {
 export interface CompiledPageCss {
   css: string;
   /**
+   * The scope these selectors were actually written under, or `undefined` when
+   * they were written unscoped.
+   *
+   * Returned rather than assumed to equal the requested one, because a scope
+   * this compiler cannot write is dropped and the sheet compiled global. A
+   * caller recording the REQUESTED scope then stores an artifact claiming an
+   * isolation its CSS does not have — and the renderer attaches that class, so
+   * the rules reach whatever else is on the page.
+   */
+  scope?: string;
+  /**
    * What was not written, and why. Every entry names a value that is in the
    * document and absent from the stylesheet, so "my style did nothing" always
    * has an answer.
@@ -1144,6 +1155,11 @@ export function compilePageCss(
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   const mayFetchUrl = ctx.mayFetchUrl;
   const scope = scopeSelector(ctx.scope, warnings);
+  // What was WRITTEN, which is not always what was asked for: a scope this
+  // compiler refuses is dropped and the sheet compiled global, and a caller that
+  // recorded the request would store an artifact claiming an isolation its own
+  // selectors do not carry.
+  const effectiveScope = scope === "" ? undefined : ctx.scope;
   const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
 
   const nodes = documentNodes(
@@ -1607,6 +1623,7 @@ export function compilePageCss(
   }
 
   return {
+    ...(effectiveScope === undefined ? {} : { scope: effectiveScope }),
     css: serializeRules(rules),
     warnings,
     classes: attributeClasses,

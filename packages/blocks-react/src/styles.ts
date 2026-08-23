@@ -132,7 +132,17 @@ export function toPageStyles(
     compiled.gated === undefined
       ? styles
       : { ...styles, gated: compiled.gated };
-  return scope === undefined ? withGated : { ...withGated, scope };
+  // The scope the compiler WROTE, not the one the caller asked for. A scope the
+  // compiler cannot write is dropped and the sheet compiled global, so recording
+  // the request stores an artifact claiming an isolation its own selectors do
+  // not carry — and the renderer attaches that class, which is how one
+  // document's rules reach another rendered beside it.
+  //
+  // The parameter is no longer read for this: a caller cannot know whether the
+  // compiler accepted its scope, and only the compiler does.
+  return compiled.scope === undefined
+    ? withGated
+    : { ...withGated, scope: compiled.scope };
 }
 
 /**

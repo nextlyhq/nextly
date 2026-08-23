@@ -252,11 +252,6 @@ export function tokenNameIssue(
 ): string | undefined {
   const trimmed = name.trim();
   if (trimmed === "") return "A token needs a name.";
-  // The grammar, and the depth that keeps a name round-trippable — but NOT the
-  // emission cap. Renaming pins the previous name as the token's id, so the new
-  // label is not what the token is written under and the engine accepts it at
-  // every gate. Refusing it here would be the editor forbidding what the engine
-  // supports, which reads to an author as a rule nobody can find.
   // Asked of the token the rename would PRODUCE, not of the label alone. A
   // rename keeps a working identity pinned, so a long label is fine — but where
   // the current identity is one the engine cannot write, the rename re-pins to
@@ -278,10 +273,40 @@ export function tokenNameIssue(
   if (problem?.reason === "length") {
     return `A name is at most ${MAX_TOKEN_NAME_LENGTH} characters when it is what the token is written under.`;
   }
-  const taken = (tokens?.tokens ?? []).some(
-    (token, index) => index !== at && token.name === trimmed
-  );
-  return taken ? `Another token is already called "${trimmed}".` : undefined;
+  // Compared by the custom property each token is WRITTEN under, not by the
+  // name an author reads. The mapping is deliberately not injective — a dot and
+  // a dash both become a dash — so `color.primary-dark` and `color-primary.dark`
+  // are two legal names that land on one property, and the engine drops
+  // whichever it reaches second. A check on raw names accepts that edit and
+  // leaves a token silently unwritten.
+  const others = (tokens?.tokens ?? []).filter((_, index) => index !== at);
+
+  // Two questions, and neither answers the other. This one is what an author
+  // reads: two tokens answering to one name is a table nobody can use, whatever
+  // each is written under.
+  if (others.some(token => token.name === trimmed)) {
+    return `Another token is already called "${trimmed}".`;
+  }
+
+  // And this one is what the engine writes. The name-to-property mapping is
+  // deliberately not injective — a dot and a dash both become a dash — so
+  // `color.primary-dark` and `color-primary.dark` are two legal, visibly
+  // different names landing on one custom property, and the compiler drops
+  // whichever it reaches second. The name check above cannot see that.
+  const identityOf = (token: { name: string; id?: string }) =>
+    token.id ?? token.name;
+  const claimedIdentity = identityOf(proposed);
+  const claimed = tokenCustomProperty(claimedIdentity, "");
+  const clash = others.find(token => {
+    // A row sharing this row's identity is the same token twice — a repair the
+    // author is in the middle of rather than a name they may not take. Report
+    // it and that row is unfixable whatever they type.
+    if (identityOf(token) === claimedIdentity) return false;
+    return tokenCustomProperty(identityOf(token), "") === claimed;
+  });
+  return clash === undefined
+    ? undefined
+    : `"${trimmed}" is written under the same custom property as "${clash.name}".`;
 }
 
 /** Replace one token in the set, leaving every other entry untouched. */

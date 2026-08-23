@@ -209,6 +209,16 @@ export interface FontFaceDef {
 export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
 
 /** The `format()` hints a face may declare: plain keywords, nothing else. */
+/**
+ * The longest font format this engine will write.
+ *
+ * The grammar below constrains the alphabet and not the length, and a format is
+ * emitted into `format("...")` on every source of every face. Real values are
+ * `woff2`, `truetype`, `opentype` — so this sits far above anything meaningful
+ * and is only met by data already wrong.
+ */
+export const MAX_FONT_FORMAT_LENGTH = 32;
+
 const FONT_FORMAT = /^[a-z0-9-]+$/i;
 
 /**
@@ -710,7 +720,12 @@ export function validateFontFace(
     }
   }
   for (const source of face.src) {
-    if (source.format !== undefined && !FONT_FORMAT.test(source.format)) {
+    if (
+      source.format !== undefined &&
+      (typeof source.format !== "string" ||
+        source.format.length > MAX_FONT_FORMAT_LENGTH ||
+        !FONT_FORMAT.test(source.format))
+    ) {
       fail(`"${face.family}" has a font format that cannot be used.`);
     }
   }
