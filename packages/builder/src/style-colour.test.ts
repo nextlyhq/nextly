@@ -684,6 +684,29 @@ describe("the emitter decides which tokens are offered", () => {
     expect(names).not.toContain("color.wrong");
   });
 
+  it("KEEPS a token whose other mode is broken but whose active one is not", () => {
+    // A token that renders perfectly well in light, and badly in dark. Judged
+    // across both modes at once it looks unusable; judged in the mode the
+    // canvas is showing it is fine. Removing it from a light-mode picker takes
+    // away a token that works from an author who cannot see the problem.
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.half",
+          kind: "color",
+          values: { light: "#ffffff", dark: "16px" },
+        },
+      ],
+    };
+    expect(colourTokensFor(COLOR, set, "light").map(t => t.name)).toContain(
+      "color.half"
+    );
+    // And withheld in the mode where it really is broken.
+    expect(colourTokensFor(COLOR, set, "dark").map(t => t.name)).not.toContain(
+      "color.half"
+    );
+  });
+
   it("withholds a token with no usable light value", () => {
     const set = {
       tokens: [

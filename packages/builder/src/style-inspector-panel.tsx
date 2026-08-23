@@ -1417,6 +1417,17 @@ function ColourField({
     () => () => {
       const unwritten = pending.current;
       pending.current = null;
+      // The outcome is DROPPED, and that is the honest limit rather than an
+      // oversight. A refusal here — a document at its byte limit, say — is
+      // reported through state belonging to a component that is going away, so
+      // there is nobody left to show it to and nowhere to keep the value: the
+      // ref does not survive the remount either. Writing when the document
+      // accepts strictly improves on not writing at all, and cannot improve the
+      // case where it does not.
+      //
+      // Closing it properly means the pending edit living somewhere that
+      // outlives one field, which is the same thing undo and the unsaved-work
+      // guard need and is tracked with them.
       if (unwritten !== null) write.current(unwritten);
     },
     []

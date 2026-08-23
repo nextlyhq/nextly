@@ -205,7 +205,7 @@ function offeredTokens(
   const hit = byMode.get(mode);
   if (hit !== undefined) return hit;
   const resolved = resolveSiteTokens(tokens);
-  const built = emittableTokens(resolved).map(token =>
+  const built = emittableTokens(resolved, mode).map(token =>
     colourTokenOf(token, mode)
   );
   byMode.set(mode, built);
@@ -233,11 +233,14 @@ const cache = new WeakMap<SiteTokenSet, Map<TokenMode, ColourToken[]>>();
  * a token the canvas silently drops for any case they did not — which stores a
  * reference to a property nothing declares and loses the style with no symptom.
  */
-function emittableTokens(set: SiteTokenSet): readonly SiteToken[] {
+function emittableTokens(
+  set: SiteTokenSet,
+  mode: TokenMode
+): readonly SiteToken[] {
   const seen = new Set<string>();
   const emittable: SiteToken[] = [];
   for (const token of set.tokens) {
-    if (!emits(set, token)) continue;
+    if (!emits(token, mode)) continue;
     // Which of two ACCEPTED tokens actually gets the property is the one thing
     // the emitter cannot be asked, because both are individually fine and only
     // their order decides. `tokenCustomProperty` composes the key, so the
@@ -266,15 +269,24 @@ function emittableTokens(set: SiteTokenSet): readonly SiteToken[] {
  * The whole SET is passed rather than a bare token, because a token's
  * acceptance can depend on the set's own prefix.
  */
-function emits(set: SiteTokenSet, token: SiteToken): boolean {
-  const alone = emitTokenBlocks({ tokens: [token] }, ":root");
+function emits(token: SiteToken, mode: TokenMode): boolean {
+  // Asked about a token carrying ONLY the value the canvas is currently
+  // showing. Emitting the whole token would report the other mode too, and a
+  // token whose light value is a colour and whose dark value is not renders
+  // perfectly well in light — rejecting it there would remove a token that
+  // works from the picker of an author who cannot see the problem.
+  const active = token.values[mode] ?? token.values.light;
+  const alone = emitTokenBlocks(
+    { tokens: [{ ...token, values: { light: active } }] },
+    ":root"
+  );
   // Nothing WRITTEN means refused outright. Nothing SAID means the engine had
-  // no objection to what was written, which is a different and equally
-  // necessary question: a token whose value contradicts its kind — `16px` on a
-  // colour — is emitted deliberately, with a warning, because refusing it would
-  // cost the author the token on a verdict the engine is not certain enough to
-  // act on. The browser then drops the declaration where it is USED, so a
-  // picker offering it hands over a reference that does nothing.
+  // no objection to what it wrote, which is a different and equally necessary
+  // question: a value that contradicts its kind — `16px` on a colour — is
+  // emitted deliberately, with a warning, because refusing it would cost the
+  // author the token on a verdict the engine is not certain enough to act on.
+  // The browser then drops the declaration where it is USED, so a picker
+  // offering it hands over a reference that does nothing.
   //
   // Read as issues rather than by asking `checkTokenKind`, which the engine
   // does not export, and rather than by matching the message text, which would
