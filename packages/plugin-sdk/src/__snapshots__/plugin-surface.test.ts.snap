@@ -107,6 +107,12 @@ exports[`plugin-sdk public export surface > \`./client\` surface is unchanged 1`
 ]
 `;
 
+exports[`plugin-sdk public export surface > \`./routing\` surface is unchanged 1`] = `
+[
+  "slugToStaticParam (value)",
+]
+`;
+
 exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1`] = `
 [
   "Action (type)",

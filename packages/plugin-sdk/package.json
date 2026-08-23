@@ -41,6 +41,11 @@
       "types": "./dist/admin.d.ts",
       "import": "./dist/admin.mjs",
       "default": "./dist/admin.mjs"
+    },
+    "./routing": {
+      "types": "./dist/routing.d.ts",
+      "import": "./dist/routing.mjs",
+      "default": "./dist/routing.mjs"
     }
   },
   "files": [
