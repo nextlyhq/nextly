@@ -91,15 +91,43 @@ const TOKENS: SiteTokenSet = {
 
 describe("which tokens a colour control offers", () => {
   it("offers the site's colour tokens and withholds the others", () => {
-    const offered = colourTokensFor(COLOR, TOKENS);
-    expect(offered.map(token => token.name)).toEqual([
-      "color.ink",
-      "color.themed",
-      "brand.main",
-    ]);
-    // The positive control for the filter: the site DOES define a token of
-    // another kind, so an empty exclusion list would show here.
+    const offered = colourTokensFor(COLOR, TOKENS).map(token => token.name);
+    expect(offered).toContain("color.ink");
+    expect(offered).toContain("color.themed");
+    expect(offered).toContain("brand.main");
+    // The positive control for the KIND filter: the site defines a dimension
+    // token, and the engine's defaults carry two more, so an empty exclusion
+    // list would show every one of them here.
     expect(TOKENS.tokens.some(token => token.kind === "dimension")).toBe(true);
+    expect(offered).not.toContain("space.4");
+    expect(offered).not.toContain("content.width");
+    expect(offered).not.toContain("font.body");
+  });
+
+  it("offers the ENGINE's default colour tokens, which every page emits", () => {
+    // `PageRenderer` compiles with `resolveSiteTokens`, which layers these
+    // underneath whatever the site defines — so a page emits them whether or
+    // not the site has any tokens of its own. A picker reading the raw override
+    // set offered none of them, and could not resolve a document referencing
+    // one.
+    const bare = colourTokensFor(COLOR, { tokens: [] }).map(t => t.name);
+    expect(bare).toContain("color.text");
+    expect(bare).toContain("color.background");
+    expect(bare).toContain("color.primary");
+    // Still only colours.
+    expect(bare).not.toContain("space.4");
+  });
+
+  it("still offers nothing when the question was never asked", () => {
+    // `undefined` is not "the site has the defaults" — it is "no host has said
+    // what this site holds", and answering with the defaults would be a claim.
+    expect(colourTokensFor(COLOR, undefined)).toEqual([]);
+  });
+
+  it("resolves a stored reference to a DEFAULT token", () => {
+    expect(colourTokenFor("color.primary", { tokens: [] })?.name).toBe(
+      "color.primary"
+    );
   });
 
   it("offers nothing at a leaf whose catalog entry admits no colour token", () => {
@@ -408,9 +436,14 @@ describe("what a preset swatch may be painted with", () => {
     expect(themed?.swatch).toBeUndefined();
   });
 
-  it("agrees with the main swatch about what can be painted", () => {
+  it("paints only hex, or nothing", () => {
+    // Stated as a property the RESOLVER does not decide, rather than by calling
+    // the same function that produced the field: comparing `swatch` against
+    // `colourHexOf(colour)` is the expression that built it, so it holds for
+    // any implementation including a wrong one.
     for (const token of colourTokensFor(COLOR, TOKENS)) {
-      expect(token.swatch).toBe(colourHexOf(token.colour, undefined));
+      if (token.swatch === undefined) continue;
+      expect(token.swatch).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/);
     }
   });
 });
@@ -526,7 +559,9 @@ describe("only tokens the canvas will declare are offered", () => {
         { name: "color primary!", kind: "color", values: { light: "#222222" } },
       ],
     };
-    expect(colourTokensFor(COLOR, set).map(t => t.name)).toEqual(["color.ok"]);
+    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    expect(names).toContain("color.ok");
+    expect(names).not.toContain("color primary!");
   });
 
   it("withholds the SECOND of two identities that collide on one property", () => {
@@ -547,14 +582,18 @@ describe("only tokens the canvas will declare are offered", () => {
         },
       ],
     };
-    const offered = colourTokensFor(COLOR, set);
-    expect(offered.map(t => t.name)).toEqual(["color.primary-dark"]);
+    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    expect(names).toContain("color.primary-dark");
+    expect(names).not.toContain("color-primary.dark");
   });
 
   it("offers a set with no collisions untouched", () => {
     // The positive control: the filter must remove those two shapes and
     // nothing else, or every picker would come back empty.
-    expect(colourTokensFor(COLOR, TOKENS).length).toBe(3);
+    const names = colourTokensFor(COLOR, TOKENS).map(t => t.name);
+    expect(names).toContain("color.ink");
+    expect(names).toContain("brand.main");
+    expect(names).toContain("color.themed");
   });
 });
 
@@ -606,7 +645,9 @@ describe("the emitter decides which tokens are offered", () => {
         },
       ],
     };
-    expect(colourTokensFor(COLOR, set).map(t => t.name)).toEqual(["color.ok"]);
+    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    expect(names).toContain("color.ok");
+    expect(names).not.toContain("color.bad");
   });
 
   it("withholds a token with no usable light value", () => {
@@ -616,7 +657,9 @@ describe("the emitter decides which tokens are offered", () => {
         { name: "color.empty", kind: "color", values: { light: 4 } },
       ],
     } as unknown as SiteTokenSet;
-    expect(colourTokensFor(COLOR, set).map(t => t.name)).toEqual(["color.ok"]);
+    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    expect(names).toContain("color.ok");
+    expect(names).not.toContain("color.empty");
   });
 });
 

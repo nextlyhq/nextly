@@ -1359,6 +1359,21 @@ function ColourField({
   // in state because the unmount flush below reads it from a cleanup that runs
   // once, where the closed-over `draft` would be the value at first render.
   const pending = React.useRef<string | null>(null);
+  /*
+   * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
+   *
+   * Choosing a preset or clearing does not close the popover, so without
+   * dropping the pending gesture the unmount flush below would write the older
+   * literal over the choice just made — an author picks a token and the token
+   * is silently replaced by the hex they had been dragging past.
+   *
+   * One function for both, because "this supersedes the gesture" is one rule
+   * and two copies of it is one edit away from covering only one path.
+   */
+  const commitInstead = (value: StyleValue | null): void => {
+    pending.current = null;
+    onCommit(value);
+  };
   const commitDraft = (): void => {
     pending.current = null;
     if (!edited) return;
@@ -1452,7 +1467,7 @@ function ColourField({
           onClosed={commitDraft}
           // A preset is one discrete choice rather than a gesture, so it
           // commits immediately, exactly as the select and toggle controls do.
-          onToken={identity => onCommit({ $token: identity })}
+          onToken={identity => commitInstead({ $token: identity })}
         />
         {reference === null ? (
           // The SAME field every other text control uses, rather than one
@@ -1478,7 +1493,7 @@ function ColourField({
             identity={reference}
             token={colourTokenFor(reference, tokens, mode)}
             actionName={actionName}
-            onClear={() => onCommit(null)}
+            onClear={() => commitInstead(null)}
           />
         )}
       </div>

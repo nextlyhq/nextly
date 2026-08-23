@@ -350,7 +350,13 @@ function offerableTokens(
   error: unknown
 ): SiteTokenSet | undefined {
   if (pending || error !== null) return undefined;
-  return style?.tokens;
+  // A SET even when the site defines nothing, because the renderer compiles
+  // with `resolveSiteTokens`, which layers the engine's own defaults underneath.
+  // A site with no tokens of its own still emits `color.text`, `color.primary`
+  // and the rest, so handing over `undefined` here would have the picker offer
+  // none of them — and `undefined` already means something else to the control:
+  // that the question was never asked.
+  return style?.tokens ?? { tokens: [] };
 }
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({

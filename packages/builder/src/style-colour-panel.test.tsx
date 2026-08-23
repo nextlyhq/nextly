@@ -554,3 +554,46 @@ describe("a picker gesture survives the field being replaced", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 });
+
+describe("a discrete choice supersedes an unfinished gesture", () => {
+  it("does not let a pending literal overwrite a token chosen after it", () => {
+    // Choosing a preset does not close the popover, so the pending gesture
+    // survives it. Unflushed correctly, the unmount write then lands the older
+    // hex on top of the token the author just picked — the reference silently
+    // becoming a literal.
+    const editor = mount(styles("#3b82f6"));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+
+    const hex = screen
+      .getAllByRole("textbox")
+      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
+    expect(hex).toBeDefined();
+    if (hex === undefined) return;
+    fireEvent.change(hex, { target: { value: "#ff0000" } });
+
+    // Now pick a token preset, which commits immediately.
+    fireEvent.click(screen.getByRole("button", { name: "color.ink" }));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+
+    // Leave without closing the popover.
+    cleanup();
+
+    // Still one write, and it is the token.
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.apply.mock.calls[0])).toContain("$token");
+  });
+
+  it("does not let one overwrite a CLEAR either", () => {
+    const editor = mount(styles({ $token: "color.ink" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    const hex = screen.getAllByRole("textbox")[0];
+    expect(hex).toBeDefined();
+    if (hex === undefined) return;
+    fireEvent.change(hex, { target: { value: "#ff0000" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear Color" }));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    cleanup();
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+});

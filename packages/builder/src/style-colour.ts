@@ -64,6 +64,7 @@ import {
   emitTokenBlocks,
   isTokenRef,
   parseColor,
+  resolveSiteTokens,
   STYLE_CATALOG,
   tokenCustomProperty,
   tokenIdentity,
@@ -72,6 +73,7 @@ import {
   type NodeStyles,
   type SiteToken,
   type SiteTokenSet,
+  type TokenKind,
   type TokenMode,
   type StyleLeaf,
   type StyleValue,
@@ -100,6 +102,8 @@ export interface ColourToken {
   readonly identity: string;
   /** What the author reads and edits. Free to change. */
   readonly name: string;
+  /** What the token holds, so a leaf can be asked whether it admits one. */
+  readonly kind: TokenKind;
   /** The literal this token holds, as the site recorded it. */
   readonly colour: string;
   /**
@@ -166,31 +170,68 @@ export function colourTokensFor(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
 ): readonly ColourToken[] {
-  if (tokens === undefined) return [];
-  return emittableTokens(tokens)
-    .filter(token => leaf.tokenKinds.includes(token.kind))
-    .map(token => colourTokenOf(token, mode));
+  return offeredTokens(tokens, mode).filter(token =>
+    leaf.tokenKinds.includes(token.kind)
+  );
 }
+
+/**
+ * Every token the canvas will resolve, in the mode it is showing.
+ *
+ * THE one projection, and everything else here reads it. Which tokens exist,
+ * which of them the canvas actually declares, and what each resolves to are one
+ * question asked once — so the list a picker offers, the table a stored
+ * reference is looked up in, and the colours a contrast figure is measured from
+ * cannot disagree. Each of those was a separate search before, and each was
+ * wrong in a different way.
+ *
+ * `resolveSiteTokens` FIRST, because that is what the renderer does:
+ * `PageRenderer` compiles with `resolveSiteTokens(siteInput?.tokens)`, which
+ * layers the engine's own defaults under the site's overrides. A site that
+ * defines nothing still emits `color.text`, `color.primary` and the rest, so a
+ * picker reading the raw override set offered none of them and could not
+ * resolve a document that referenced one.
+ *
+ * `undefined` still means the question was never asked and answers empty — NOT
+ * the defaults. A host that has not said what the site holds has not said that
+ * it holds the defaults either.
+ */
+function offeredTokens(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode
+): readonly ColourToken[] {
+  if (tokens === undefined) return [];
+  const byMode = cache.get(tokens) ?? new Map<TokenMode, ColourToken[]>();
+  const hit = byMode.get(mode);
+  if (hit !== undefined) return hit;
+  const resolved = resolveSiteTokens(tokens);
+  const built = emittableTokens(resolved).map(token =>
+    colourTokenOf(token, mode)
+  );
+  byMode.set(mode, built);
+  cache.set(tokens, byMode);
+  return built;
+}
+
+/**
+ * Built projections, by the set they came from.
+ *
+ * Held because building one emits every token individually to ask the engine
+ * whether it accepts it, and a control rebuilds on every render of every colour
+ * field. Keyed on the set's identity, which is safe for the same reason the
+ * engine's own `memoizeTokenLookup` is: these are immutable props, so a set
+ * that is the same object is the same data.
+ */
+const cache = new WeakMap<SiteTokenSet, Map<TokenMode, ColourToken[]>>();
 
 /**
  * The tokens the canvas will actually declare a custom property for.
  *
- * `emitTokenBlocks` DROPS two kinds of token, and a picker that offered them
- * would let an author store a reference to a property nothing declares — which
- * invalidates the declaration rather than reporting, so the style is simply
- * absent and the page still renders. That is the failure this whole control
- * exists around, reached through the token list instead of through the name.
- *
- * Both rules are applied with the ENGINE's own primitives rather than restated:
- * `isTokenName` decides whether a name can become a property, and
- * `tokenCustomProperty` composes the property that two identities can collide
- * on. Only the ORDER is repeated — first one wins — which is a single line and
- * the one thing the engine does not export a way to ask.
- *
- * The prefix is deliberately omitted from the collision key. A prefix is the
- * same string in front of every property, so it cannot make two identities
- * collide or stop them colliding; asking for the site's real prefix would need
- * `resolveTokenPrefix`, which the engine keeps private.
+ * `emitTokenBlocks` drops a token for more reasons than are obvious from
+ * outside, and a partial copy of that list is worse than none: it reads as
+ * complete, agrees with the engine on the cases someone thought of, and offers
+ * a token the canvas silently drops for any case they did not — which stores a
+ * reference to a property nothing declares and loses the style with no symptom.
  */
 function emittableTokens(set: SiteTokenSet): readonly SiteToken[] {
   const seen = new Set<string>();
@@ -218,15 +259,9 @@ function emittableTokens(set: SiteTokenSet): readonly SiteToken[] {
  *
  * ASKED, by emitting the token on its own and seeing whether anything came out.
  * `emitTokenBlocks` returns empty CSS when it wrote no light declaration, which
- * is exactly its own verdict on the token — and it refuses for more reasons
- * than are obvious from outside: a name that cannot become a property, an
- * unusable id, a missing or non-string light value, a value that is not safe
- * CSS, and a value that would make the page fetch something.
- *
- * A partial copy of that list is worse than none. It reads as complete, agrees
- * with the engine on the cases someone thought of, and offers a token the
- * canvas silently drops for any case they did not — which stores a reference to
- * a property nothing declares and loses the style with no symptom.
+ * is exactly its own verdict — and it refuses for an unusable id, a missing or
+ * non-string light value, a value that is not safe CSS, and a value that would
+ * make the page fetch something, as well as for an unusable name.
  *
  * The whole SET is passed rather than a bare token, because a token's
  * acceptance can depend on the set's own prefix.
@@ -236,12 +271,11 @@ function emits(set: SiteTokenSet, token: SiteToken): boolean {
 }
 
 /**
- * One site token in the three forms a control needs it in.
+ * One site token in the forms a control needs it in.
  *
- * Shared by the list and the single lookup rather than written at each, so the
- * identity rule is applied once: a second copy is one edit from storing the
- * NAME, which compiles to a custom property nothing declares and loses the
- * style with no symptom.
+ * Shared by every reader rather than written at each, so the identity rule is
+ * applied once: a second copy is one edit from storing the NAME, which compiles
+ * to a custom property nothing declares and loses the style with no symptom.
  */
 function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
   // `light` is required and `dark` is not, so a token defined only for light
@@ -251,12 +285,12 @@ function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
   return {
     identity: tokenIdentity(token),
     name: token.name,
+    kind: token.kind,
     colour,
-    // Resolved with NO table, which is what stops this recursing: a token whose
-    // value is itself a reference would otherwise re-enter the lookup that is
-    // building this record. Without a table a reference resolves to nothing and
-    // the swatch is simply unpainted, which is the honest answer for a value
-    // this package cannot follow.
+    // Resolved with an EMPTY table, which is what stops this recursing: a token
+    // whose value is itself a reference would otherwise re-enter the lookup that
+    // is building this record. Unresolvable then means unpainted, which is the
+    // honest answer for a value this package cannot follow.
     swatch: colourHexOf(colour, undefined),
   };
 }
@@ -279,9 +313,11 @@ export function colourTokenFor(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
 ): ColourToken | undefined {
-  if (tokens === undefined) return undefined;
-  const token = tokens.tokens.find(entry => tokenIdentity(entry) === identity);
-  return token === undefined ? undefined : colourTokenOf(token, mode);
+  // The OFFERED projection, not the raw set. Searching the raw set resolved a
+  // reference the canvas never declares — an imported document naming a token
+  // the emitter rejects painted its value anyway — and, for two identities that
+  // collide, showed the loser while the page resolves the winner's declaration.
+  return offeredTokens(tokens, mode).find(token => token.identity === identity);
 }
 
 /**
