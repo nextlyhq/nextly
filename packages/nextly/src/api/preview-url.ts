@@ -79,7 +79,7 @@ async function settingsService(): Promise<GeneralSettingsService> {
  * find it empty, and the resolver would correctly report `notConfigured` for a
  * collection whose preview works.
  */
-async function previewDeclarationFor(
+export async function previewDeclarationFor(
   collection: string
 ): Promise<PreviewDeclaration | undefined> {
   await getCachedNextly();

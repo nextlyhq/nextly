@@ -26,26 +26,48 @@ import {
 /** The cookie carrying the preview token for the rest of the session. */
 export const PREVIEW_SCOPE_COOKIE = "__nextly_preview";
 
+/**
+ * Every member is optional.
+ *
+ * Each one has a default resolved from the booted instance, so the ordinary
+ * mount is `createPreviewRoute()` with no argument at all. They remain
+ * overridable because the resolution genuinely is the application's to change —
+ * a site that routes its own content needs its own `redirectTo`, and a test
+ * needs all four — but REQUIRING them meant every value had to be restated by
+ * hand in a route file, and a mount that costs a paragraph of wiring is a mount
+ * that does not get written.
+ *
+ * The defaults are imported inside the handler rather than at the top of this
+ * module. A static import would make `import { createPreviewRoute } from
+ * "nextly/runtime"` pull in the service container and `next/headers` with it.
+ */
 export interface PreviewRouteConfig {
-  /** The signing secret; the same `NEXTLY_SECRET` sessions use. */
-  secret: string;
+  /** The signing secret; the same `NEXTLY_SECRET` sessions use. Defaults to it. */
+  secret?: string;
   /**
    * The site's current revocation generation. Read per request so raising it
    * ends existing preview sessions rather than only refusing new links.
+   *
+   * Defaults to the value stored in general settings, read per request for the
+   * same reason.
    */
-  generation: number | (() => number | Promise<number>);
+  generation?: number | (() => number | Promise<number>);
   /**
    * Where to send the visitor once the link checks out.
    *
-   * Supplied by the app because only it knows how its content is routed. The
-   * returned value must be a site-relative path.
+   * The returned value must be a site-relative path.
+   *
+   * Defaults to the collection's own preview declaration — the `url` function a
+   * code-first collection carries, or the `urlTemplate` a UI-created one does —
+   * resolved against the configured site URL. An application whose content is
+   * routed some other way supplies its own.
    *
    * Returning `null` refuses the link the same way an invalid token is
    * refused. A preview link outlives what it points at — the entry can be
    * deleted, unpublished or moved between minting and clicking — and this is
    * how an app says so without having to throw.
    */
-  redirectTo: (
+  redirectTo?: (
     scope: PreviewTokenScope
   ) => string | null | Promise<string | null>;
   /**
@@ -54,8 +76,10 @@ export interface PreviewRouteConfig {
    * Accepts a synchronous return as well: `draftMode()` is sync on Next 14 and
    * async from 15, and the peer range covers both, so requiring a promise would
    * make the natural import fail to typecheck on the older one.
+   *
+   * Defaults to `draftMode` from `next/headers`.
    */
-  draftMode: () => { enable: () => void } | Promise<{ enable: () => void }>;
+  draftMode?: () => { enable: () => void } | Promise<{ enable: () => void }>;
 }
 
 /**
@@ -113,22 +137,54 @@ function siteRelativeTarget(target: string, requestUrl: string): string | null {
  * distinguishable from one naming a document that does not exist — otherwise
  * the endpoint becomes an oracle for which entries are in draft.
  */
-export function createPreviewRoute(config: PreviewRouteConfig): {
+/**
+ * The two values every token verification needs, resolved from a config that
+ * may name neither.
+ *
+ * Written once and shared by the route and the scope reader rather than spelled
+ * out in both. They ask the identical question — which key signs this site's
+ * preview tokens, and which generation is current — and two copies of that
+ * answer agree only until one of them is edited: a route that kept reading a
+ * cached generation while the reader re-read it would let revoked links keep
+ * working through whichever path was not updated.
+ *
+ * The defaults module is imported here, inside the call, so neither caller
+ * pulls the service container or `next/headers` at load time.
+ */
+async function verificationInputs(config: {
+  secret?: string;
+  generation?: number | (() => number | Promise<number>);
+}): Promise<{ secret: string; generation: number }> {
+  const defaults = await import("./preview-route-defaults");
+
+  const generation =
+    config.generation === undefined
+      ? await defaults.defaultGeneration()
+      : typeof config.generation === "function"
+        ? await config.generation()
+        : config.generation;
+
+  return { secret: config.secret ?? defaults.defaultSecret(), generation };
+}
+
+export function createPreviewRoute(config: PreviewRouteConfig = {}): {
   GET: (request: Request) => Promise<Response>;
 } {
   const refuse = () => new Response(null, { status: 404 });
+
+  // Loaded per call rather than once at factory time. Hoisting it would start
+  // the dynamic import at module scope, behind a promise nothing awaits, which
+  // is exactly the eager coupling this indirection exists to avoid.
+  const loadDefaults = () => import("./preview-route-defaults");
 
   return {
     async GET(request: Request): Promise<Response> {
       const token = new URL(request.url).searchParams.get("token");
       if (token === null || token.length === 0) return refuse();
 
-      const generation =
-        typeof config.generation === "function"
-          ? await config.generation()
-          : config.generation;
+      const { secret, generation } = await verificationInputs(config);
 
-      const verified = await verifyPreviewToken(token, config.secret, {
+      const verified = await verifyPreviewToken(token, secret, {
         generation,
       });
       if (!verified.valid) return refuse();
@@ -142,7 +198,9 @@ export function createPreviewRoute(config: PreviewRouteConfig): {
       // existed from one that never did.
       let target: string | null;
       try {
-        target = await config.redirectTo(verified.scope);
+        const redirectTo =
+          config.redirectTo ?? (await loadDefaults()).defaultRedirectTo;
+        target = await redirectTo(verified.scope);
       } catch {
         return refuse();
       }
@@ -175,7 +233,9 @@ export function createPreviewRoute(config: PreviewRouteConfig): {
       // on the outgoing request, and enabling it before a step that can still
       // refuse would leave the visitor holding a draft session for a request
       // that answered 404.
-      const draft = await config.draftMode();
+      const draft = await (config.draftMode
+        ? config.draftMode()
+        : (await loadDefaults()).defaultDraftMode());
       draft.enable();
 
       return response;
@@ -183,14 +243,22 @@ export function createPreviewRoute(config: PreviewRouteConfig): {
   };
 }
 
+/**
+ * Optional throughout, for the same reason {@link PreviewRouteConfig} is: these
+ * are facts about the booted instance and the request in hand rather than
+ * decisions a site makes, and requiring them turned the one-line draft gate
+ * built on this into a paragraph of wiring that no route ever wrote.
+ */
 export interface PreviewScopeReaderConfig {
-  secret: string;
-  generation: number | (() => number | Promise<number>);
+  secret?: string;
+  generation?: number | (() => number | Promise<number>);
   /**
    * Reads the request's cookies. Injected so the reader is testable, and
    * accepting a synchronous return for the same reason `draftMode` does.
+   *
+   * Defaults to `cookies` from `next/headers`.
    */
-  cookies: () =>
+  cookies?: () =>
     | { get: (name: string) => { value: string } | undefined }
     | Promise<{ get: (name: string) => { value: string } | undefined }>;
 }
@@ -204,16 +272,19 @@ export interface PreviewScopeReaderConfig {
  * something for sessions already in flight.
  */
 export async function readPreviewScope(
-  config: PreviewScopeReaderConfig
+  config: PreviewScopeReaderConfig = {}
 ): Promise<PreviewTokenScope | null> {
-  const store = await config.cookies();
+  const loadDefaults = () => import("./preview-route-defaults");
+
+  const store = await (config.cookies
+    ? config.cookies()
+    : (await loadDefaults()).defaultCookies());
   const raw = store.get(PREVIEW_SCOPE_COOKIE)?.value;
+  // Read before anything else is resolved: a request with no preview cookie is
+  // the overwhelmingly common case, and it must not cost a settings read.
   if (raw === undefined || raw.length === 0) return null;
 
-  const generation =
-    typeof config.generation === "function"
-      ? await config.generation()
-      : config.generation;
+  const { secret, generation } = await verificationInputs(config);
 
   // A cookie is request input whoever sent it, and `%` alone makes
   // `decodeURIComponent` throw — which would answer a page request with a 500
@@ -225,7 +296,7 @@ export async function readPreviewScope(
     return null;
   }
 
-  const verified = await verifyPreviewToken(token, config.secret, {
+  const verified = await verifyPreviewToken(token, secret, {
     generation,
   });
   return verified.valid ? verified.scope : null;
