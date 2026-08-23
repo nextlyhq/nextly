@@ -21,6 +21,7 @@ import { defaultSeoFields } from "./fields";
 import {
   generateSitemap,
   resolveBaseOrigin,
+  type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
 
@@ -57,8 +58,32 @@ export interface SeoPluginOptions {
    * Build the URL path for a sitemap entry (leading slash, appended to the
    * origin). Defaults to `/<collection>/<slug>`. Override it to match your
    * routing (e.g. posts served at `/blog/:slug`).
+   *
+   * Prefer {@link SeoPluginOptions.basePath} where only the PREFIX differs: it
+   * keeps the slug half derived from the route's own answer, which a hand-built
+   * path has to reproduce correctly for nested, encoded and unservable slugs.
    */
   urlFor?: UrlForEntry;
+  /**
+   * Where each collection's route is mounted, which decides the prefix its
+   * sitemap URLs carry. Defaults to `/<collection>`.
+   *
+   * Pass `""` for a collection served at the site root — page-builder pages
+   * render at `/about`, not `/pages/about`. A function receives each collection
+   * name; returning `null` excludes that collection from the sitemap.
+   *
+   * It does not declare that the mount's own root is served: an entry with an
+   * empty slug is skipped regardless, because whether that root routes depends
+   * on the route file rather than on the prefix. List a homepage with `urlFor`.
+   *
+   * Ignored when `urlFor` is supplied, which already owns the whole path.
+   *
+   * Typed FROM {@link SitemapOptions} rather than restated, because this option
+   * is passed through to it unchanged — the same reason `urlFor` above names
+   * `UrlForEntry`. Two independent declarations of one option agree on the day
+   * they are written and drift silently afterwards.
+   */
+  basePath?: SitemapOptions["basePath"];
   /**
    * Controls the public sitemap route. `true` (the default) serves a sitemap of
    * the `collections` above. `false` omits the route entirely. Pass
@@ -157,6 +182,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
             collections: sitemapTargets,
             baseUrl,
             urlFor: options.urlFor,
+            // Spread rather than assigned: `basePath` distinguishes absent from
+            // `""`, and a present-but-undefined key would read as the declared
+            // root mount and start emitting a URL for every empty slug.
+            ...(options.basePath === undefined
+              ? {}
+              : { basePath: options.basePath }),
           });
           const headers: Record<string, string> = {
             "content-type": "application/xml; charset=utf-8",
@@ -176,9 +207,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   return definePlugin({
     name: "@nextlyhq/plugin-seo",
     version: PLUGIN_VERSION,
-    // Core-compat range (the field is literally `nextly`). Kept wide: the
-    // plugin only uses stable field factories + the `@public` plugin surface.
-    nextly: ">=0.0.2-alpha.21",
+    // Core-compat range (the field is literally `nextly`). Floor set by the
+    // OLDEST core that exports everything this plugin imports, not by the
+    // oldest one its features conceptually need: `sitemap.ts` reaches
+    // `slugToStaticParam` and `isReservedPath` from `nextly/runtime`, and
+    // `slugToStaticParam` first shipped in 0.0.2-alpha.55. On an earlier core
+    // the ESM import fails at module load, before the plugin can initialise, so
+    // a wider range advertises a compatibility that cannot resolve.
+    nextly: ">=0.0.2-alpha.55",
     author: "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)",
     homepage: "https://nextlyhq.com",
     repository: "https://github.com/nextlyhq/nextly",

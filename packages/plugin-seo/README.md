@@ -103,11 +103,52 @@ seoPlugin({
   // origin — correct for a single-origin deployment, wrong behind a host-
   // rewriting proxy, so set it explicitly there.
   baseUrl: "https://example.com",
-  // Path per entry (leading slash). Defaults to `/<collection>/<slug>`.
-  urlFor: (entry, collection) =>
-    collection === "posts" ? `/blog/${entry.slug}` : `/${entry.slug}`,
+  // Where each collection's route is MOUNTED. Defaults to `/<collection>`.
+  // Everything after the prefix is derived from the route's own answer, so this
+  // is all you normally need to supply.
+  basePath: collection => (collection === "posts" ? "/blog" : ""),
 });
 ```
+
+Each entry's path below the prefix comes from `slugToStaticParam`, the same function the content
+route pre-renders from and a page's canonical is built with — so the sitemap lists the URL the page
+actually serves. A nested slug (`docs/getting-started`) keeps its segments, and a slug the route
+refuses to serve (a `..` segment, a stray leading or doubled slash) is skipped rather than
+advertised.
+
+The reserved-path denylist — `/admin`, `/api`, `/sitemap.xml` and the rest — is judged on the
+**stored slug**, which is the value the content route itself checks: the route joins its catch-all
+params, and those exclude the mount prefix. So a page stored as `admin` is skipped under every
+mount, including a non-root one, because the route answers `notFound()` for it either way. Listing
+it because `/pages/admin` looks unreserved would advertise a dead link.
+
+`basePath` must be a plain path prefix. One carrying a query or fragment is rejected rather than
+silently emitted as a different URL, and it is checked once per collection so an empty collection
+cannot hide the misconfiguration. It is used verbatim — already-escaped prefixes such as
+`/docs%20archive` are not encoded a second time.
+
+`basePath` may be a plain string when every collection shares a prefix, and returning `null` from
+the function excludes that collection from the sitemap entirely. Pass `""` for a collection served
+at the site root — page-builder pages render at `/about`, not `/pages/about`.
+
+It names the prefix only. An entry whose slug is EMPTY — a site's homepage — is skipped whatever
+`basePath` says, because whether a mount's own root routes depends on the route file: a required
+`[...slug]` catch-all matches no segments and 404s there, an optional `[[...slug]]` serves it. List
+a homepage with `urlFor`.
+
+For routing the prefix cannot express, `urlFor` still overrides the whole path:
+
+```ts
+seoPlugin({
+  collections: ["posts"],
+  baseUrl: "https://example.com",
+  urlFor: entry => `/${entry.publishedYear}/${entry.slug}`,
+});
+```
+
+`urlFor` owns the entire path when supplied, so `basePath` is ignored and the route-derived slug
+handling above does not apply — reproduce the encoding you need yourself, and return `null` to
+exclude an entry.
 
 > **The sitemap is public and bypasses read access.** The route is unauthenticated and lists entries as the system role, so it enumerates every published entry's URL (and `lastModified`) **regardless of per-collection read access**. Do not enumerate a collection whose entries should stay private (owner-only, role-gated, or internal). Control it with the `sitemap` option:
 >

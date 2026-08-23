@@ -71,6 +71,173 @@ describe("defaultUrlForEntry", () => {
       "/posts/caf%C3%A9"
     );
   });
+
+  // The four ways this used to disagree with the route that serves the page.
+  // Each asserts the value `slugToStaticParam` already decides, so the sitemap
+  // and the canonical cannot drift apart again.
+
+  it("keeps a nested slug's separators as separators, not %2F", () => {
+    // The catch-all route serves `docs/getting-started` as two segments.
+    // Encoding the slug whole produced one segment naming nothing.
+    expect(defaultUrlForEntry({ slug: "docs/getting-started" }, "pages")).toBe(
+      "/pages/docs/getting-started"
+    );
+    expect(defaultUrlForEntry({ slug: "a/b/c" }, "pages")).toBe("/pages/a/b/c");
+  });
+
+  it("skips a slug the route will not serve rather than advertising it", () => {
+    // Each of these makes `slugToStaticParam` return null, so the route answers
+    // notFound() — a <loc> for one lists a URL that 404s or resolves elsewhere.
+    expect(defaultUrlForEntry({ slug: ".." }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "a//b" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "/leading" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "trailing/" }, "pages")).toBeNull();
+  });
+
+  it("refuses a reserved slug under EVERY mount, because the route does", () => {
+    // The route joins its catch-all params — which exclude the static mount
+    // prefix — and checks the denylist on that, so a page stored as `admin`
+    // reaches notFound() wherever it is mounted. Listing `/pages/admin` because
+    // that final URL looks unreserved would advertise a dead link.
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "api/keys" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "sitemap.xml" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages", "/blog")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "admin" }, "pages", "")).toBeNull();
+  });
+
+  it("does not re-encode an already-escaped mount prefix", () => {
+    // The prefix is a caller-supplied pathname; only the route-derived segments
+    // are encoded. Encoding it twice names a different mount.
+    expect(
+      defaultUrlForEntry({ slug: "about" }, "pages", "/docs%20archive")
+    ).toBe("/docs%20archive/about");
+    expect(defaultUrlForEntry({ slug: "a b" }, "pages", "/caf%C3%A9")).toBe(
+      "/caf%C3%A9/a%20b"
+    );
+  });
+
+  it("refuses a basePath carrying URL syntax rather than emitting a wrong URL", () => {
+    // `/docs?lang=en` would reach URL resolution as a query, advertising a
+    // location the route never serves. A misconfiguration should be an error,
+    // not a sitemap of subtly wrong URLs.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs?lang=en")
+    ).toThrow(/basePath must be a path prefix/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs#top")
+    ).toThrow(/basePath must be a path prefix/);
+  });
+
+  it("mounts a collection at a declared basePath", () => {
+    expect(defaultUrlForEntry({ slug: "about" }, "pages", "")).toBe("/about");
+    expect(defaultUrlForEntry({ slug: "about" }, "pages", "/site")).toBe(
+      "/site/about"
+    );
+    // Normalized so a caller's trailing slash or missing leading slash still
+    // concatenates to one clean path.
+    expect(defaultUrlForEntry({ slug: "about" }, "pages", "/site/")).toBe(
+      "/site/about"
+    );
+    expect(defaultUrlForEntry({ slug: "about" }, "pages", "site")).toBe(
+      "/site/about"
+    );
+  });
+
+  it("refuses control characters, which URL parsing deletes rather than encodes", () => {
+    // A tab, CR or LF is REMOVED by `new URL()`, so `/docs\nadmin` reaches the
+    // origin as `/docsadmin` — a mount nobody wrote, advertised silently.
+    // `.trim()` only removes them at the ends; an embedded one survives.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\nadmin")
+    ).toThrow(/must not contain control characters/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\tadmin")
+    ).toThrow(/must not contain control characters/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\radmin")
+    ).toThrow(/must not contain control characters/);
+    // The whole C0 range, not just the three that are stripped: the rest are
+    // percent-encoded, which is visible rather than silent but still names a
+    // mount nobody configured. Written as an escape so this file carries no
+    // literal control character of its own.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\u0001x")
+    ).toThrow(/must not contain control characters/);
+  });
+
+  it("refuses a protocol-relative or absolute mount rather than rewriting it", () => {
+    // `//host/path` is authority syntax, and URL resolution reads it as a HOST:
+    // `//docs/a` against https://x.com resolves to https://docs/a, off-origin,
+    // which the origin check silently drops. Collapsing it to `/docs` instead
+    // would trade that silent omission for a silent redirection onto the site's
+    // own origin — `//cdn.example/blog` plainly means a host, so neither reading
+    // can be dismissed and neither is guessed at.
+    expect(() => defaultUrlForEntry({ slug: "a" }, "pages", "//docs")).toThrow(
+      /not a protocol-relative URL/
+    );
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "//cdn.example/blog")
+    ).toThrow(/not a protocol-relative URL/);
+    // A full URL is a whole location, not a prefix. Left alone the leading-slash
+    // and collapse steps would emit `/https:/cdn.example/blog`, a path naming a
+    // scheme on the site's own origin.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "https://cdn.example/blog")
+    ).toThrow(/not a URL with a scheme/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "http://x/y")
+    ).toThrow(/not a URL with a scheme/);
+  });
+
+  it("collapses an INTERNAL doubled separator, which carries no ambiguity", () => {
+    // No scheme and no authority — just a doubled separator, which the route
+    // normalizes the same way for its own slugs.
+    expect(defaultUrlForEntry({ slug: "a" }, "pages", "/a//b")).toBe("/a/b/a");
+    expect(defaultUrlForEntry({ slug: "a" }, "pages", "/x///y")).toBe("/x/y/a");
+  });
+
+  it("skips an empty slug under every mount, declared or not", () => {
+    // Whether a mount's own root is served depends on the bracket count of the
+    // route file — `[...slug]` matches no segments and 404s there, `[[...slug]]`
+    // serves it — and basePath names the prefix, not that. Declaring a mount is
+    // not a claim that its root is routable, so this does not infer one.
+    expect(defaultUrlForEntry({ slug: "" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "" }, "pages", "")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "" }, "pages", "/site")).toBeNull();
+  });
+
+  it("refuses a basePath whose dot segments would escape the mount", () => {
+    // `/docs/../admin` resolves to `/admin` before the request is sent, so the
+    // prefix escapes itself and can land on a reserved root.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs/../admin")
+    ).toThrow(/must not contain/);
+    // Percent-encoded dots decode to the same thing, so the encoded spelling
+    // cannot be used to evade the check.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs/%2e%2e/admin")
+    ).toThrow(/must not contain/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs/./x")
+    ).toThrow(/must not contain/);
+    // A name that merely CONTAINS dots is a legitimate segment and is kept.
+    expect(defaultUrlForEntry({ slug: "a" }, "pages", "/docs/v1.2")).toBe(
+      "/docs/v1.2/a"
+    );
+  });
+
+  it("refuses a backslash, which the URL parser reads as a separator", () => {
+    // On an http(s) origin `\` separates path segments, so `/docs\..\admin` is
+    // one segment to a check that splits on "/" and three to URL resolution —
+    // which would carry the dot-segment escape straight past the check above.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\\..\\admin")
+    ).toThrow(/must not contain a backslash/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\\x")
+    ).toThrow(/must not contain a backslash/);
+  });
 });
 
 describe("buildSitemapUrls", () => {
@@ -122,6 +289,107 @@ describe("buildSitemapUrls", () => {
       "https://x.com/real-a",
       "https://x.com/posts/b",
     ]);
+  });
+
+  it("applies basePath per collection, including the site root", async () => {
+    const services = stubServices({
+      pages: [[{ slug: "about" }, { slug: "" }]],
+      posts: [[{ slug: "hello" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["pages", "posts"],
+      baseUrl: "https://x.com",
+      basePath: collection => (collection === "posts" ? "/blog" : ""),
+    });
+
+    // `pages` is mounted at the root so its entries carry no prefix; `posts`
+    // carries the declared one. The empty slug is skipped under both, because
+    // whether a mount's root is routable is not something this can know.
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/about",
+      "https://x.com/blog/hello",
+    ]);
+  });
+
+  it("excludes a collection whose basePath is null WITHOUT reading it", async () => {
+    const listSpy = vi.fn();
+    const metaSpy = vi.fn();
+    const base = stubServices(
+      { pages: [[{ slug: "about" }]], secret: [[{ slug: "hidden" }]] },
+      listSpy
+    );
+    // BOTH service methods are recorded. Watching `listEntries` alone leaves the
+    // metadata read unwatched, and a regression that resolves the collection
+    // before consulting basePath returns the same URLs and passes.
+    const services: SitemapServices = {
+      collections: {
+        getCollection: async (slug, ctx) => {
+          metaSpy(slug);
+          return base.collections.getCollection(slug, ctx);
+        },
+        listEntries: base.collections.listEntries,
+      },
+    };
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["pages", "secret"],
+      baseUrl: "https://x.com",
+      basePath: collection => (collection === "secret" ? null : ""),
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/about"]);
+    // The exclusion happens before either read, so the excluded collection costs
+    // no queries at all — asserted on the calls rather than on the output,
+    // which would look identical if it had been read and then filtered.
+    expect(listSpy.mock.calls.map(c => c[0])).toEqual(["pages"]);
+    expect(metaSpy.mock.calls.map(c => c[0])).toEqual(["pages"]);
+  });
+
+  it("rejects a malformed basePath even when the collection has no entries", async () => {
+    // Validation must not depend on there being content: an empty collection
+    // would otherwise accept a mount carrying URL syntax and silently return an
+    // empty sitemap instead of reporting the misconfiguration.
+    const services = stubServices({ posts: [[]] });
+
+    await expect(
+      buildSitemapUrls(services, {
+        collections: ["posts"],
+        baseUrl: "https://x.com",
+        basePath: "/docs?lang=en",
+      })
+    ).rejects.toThrow(/basePath must be a path prefix/);
+  });
+
+  it("ignores basePath when a custom urlFor owns the whole path", async () => {
+    const services = stubServices({ posts: [[{ slug: "hello" }]] });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      basePath: "/ignored",
+      urlFor: entry => `/custom/${String(entry.slug)}`,
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/custom/hello"]);
+  });
+
+  it("does not CALL a basePath function when a custom urlFor is supplied", async () => {
+    const services = stubServices({ posts: [[{ slug: "hello" }]] });
+    const basePath = vi.fn(() => null);
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      // Returning null would EXCLUDE the collection. "Ignored" has to mean the
+      // callback never runs, not merely that its string result goes unused —
+      // otherwise the exclusion path silently overrides the custom mapper.
+      basePath,
+      urlFor: entry => `/custom/${String(entry.slug)}`,
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/custom/hello"]);
+    expect(basePath).not.toHaveBeenCalled();
   });
 
   it("drops an entry whose canonical is on another host", async () => {
