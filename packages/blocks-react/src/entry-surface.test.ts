@@ -162,8 +162,21 @@ const SOURCE_MODULES: ReadonlyArray<{
     // and a duplicate id suppresses both twins' rules either way. They cross a
     // module boundary inside this package; a consumer asks the question through
     // `preparePageForRead` rather than assembling the verdict itself.
+    // `toPageStyles` converts a compile into the storable shape, and it asks its
+    // caller for the shared-input identity — a value only the resolver can
+    // produce, because the identity is taken over a context the resolver has
+    // narrowed first. Published, it is a converter that CANNOT make a reusable
+    // artifact: every sheet written through it is unstamped, and an unstamped
+    // sheet is refused by every context-bearing read. `resolvePageStyles` with
+    // no stored artifact is the whole answer — it compiles, stamps and returns
+    // the storable value in one call.
+    //
+    // `fetchPolicyLabel` stays public beside it, and the difference is the
+    // point: that label is a pure function of the host's pattern list, and the
+    // reader computes it from the same list, so a writer CAN match it.
     internal: [
       "UNIDENTIFIED_FETCH_POLICY",
+      "toPageStyles",
       // `blockBasesFor` is the ONE reading of "which block types does this tree
       // draw defaults from". `resolvePageStyles` derives it from the tree it is
       // handed, which is already narrowed by the read-time passes; `page-renderer`
@@ -275,7 +288,6 @@ describe("the root entry", () => {
       "registeredBlocks",
       "resolvePageStyles",
       "styleTextForInjection",
-      "toPageStyles",
     ]);
   });
 

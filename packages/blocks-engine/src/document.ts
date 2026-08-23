@@ -431,6 +431,26 @@ export interface BreakpointSet {
 export const MAX_BREAKPOINTS_PER_AXIS = 7;
 
 /**
+ * The longest breakpoint id this engine will accept from a stored axis.
+ *
+ * `MAX_BREAKPOINTS_PER_AXIS` bounds how MANY definitions are read and says
+ * nothing about their size, which is the same gap `MAX_NAMED_CLASS_NAME_LENGTH`
+ * closes for a class name — and the same consequence: an id is a lookup key
+ * carried by every reader of the normalised axis, so one enormous stored value
+ * is copied on every render that asks which breakpoints this site defines.
+ *
+ * A definition carrying one is DROPPED rather than truncated, for the reason a
+ * definition with an unusable bound is: the id is then simply not one this site
+ * defines, and the values stored under it are reported stale like any other
+ * unknown breakpoint. Truncating would keep it usable under a name no document
+ * references, which loses those values with nothing reported at all.
+ *
+ * The same value as a class name's cap, and for the same reason — well above
+ * anything a person types, so it is only ever reached by data already wrong.
+ */
+export const MAX_BREAKPOINT_ID_LENGTH = 128;
+
+/**
  * Maximum named classes read from the site library on one compile.
  *
  * The library is site settings, not part of a document, so the document's own byte cap does not

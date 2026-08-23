@@ -94,13 +94,27 @@ definition is still visited. Past `MAX_SCANNED_KEYS` definitions on one axis the
 survivors are now chosen from that prefix; nothing legitimate reaches it, since
 the declared limit is seven.
 
-The shared-input identity is not part of this package's public entry. It was
+`breakpointContexts` also drops a definition whose id is longer than the new
+`MAX_BREAKPOINT_ID_LENGTH`. The per-axis limit bounded how MANY definitions are
+read and said nothing about their size, and an id is a lookup key every reader
+of the normalised axis carries — so one enormous stored value was copied on
+every render that asked which breakpoints a site defines. Dropped rather than
+truncated, so the id is simply not one this site defines and the values stored
+under it are reported stale, exactly as an unusable bound already behaves.
+
+Neither the shared-input identity nor `toPageStyles` is part of this package's
+public entry. It was
 briefly published so an external write path could stamp what `toPageStyles`
 stores, and that was wrong: the identity a reader derives is taken over a
 compile context the resolver has already narrowed, so a writer computing one
 from its own context writes an artifact every read refuses. A writer's answer is
 `resolvePageStyles` with no stored artifact — it compiles and returns the
 stamped result, so the value written is the value a reader recomputes.
+`toPageStyles` goes with it: it asks its caller for that same identity, so
+published it is a converter that cannot make a reusable artifact. `fetchPolicyLabel`
+stays, and the difference is the point — that label is a pure function of the
+host's pattern list, which a reader computes from the same list, so a writer can
+match it.
 
 `@nextlyhq/blocks-engine` exports `breakpointContexts`, `safeTokenPrefix`,
 `MAX_SCANNED_KEYS` and `MAX_NAMED_CLASS_NAME_LENGTH`: the compiler's own normalised breakpoints, the prefix tokens

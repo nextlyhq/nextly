@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "../document";
-import { MAX_BREAKPOINTS_PER_AXIS } from "../document";
+import {
+  MAX_BREAKPOINTS_PER_AXIS,
+  MAX_BREAKPOINT_ID_LENGTH,
+} from "../document";
 import { DEFAULT_LIMITS } from "../limits";
 import { validate } from "../validation";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
@@ -1282,6 +1285,56 @@ describe("settings the compiler cannot use are dropped, not obeyed", () => {
       }
     );
     expect(within.css).toContain("max-width: 500px");
+  });
+
+  it("drops a breakpoint whose id is longer than the engine will read", () => {
+    // `MAX_BREAKPOINTS_PER_AXIS` bounds how many definitions are read and says
+    // nothing about their size. An id is a lookup key every reader of the
+    // normalised axis carries, so an unbounded one is copied on each call — and
+    // that call runs on every render keyed on what a site emits under, including
+    // one whose stylesheet is reusable.
+    //
+    // Dropped rather than truncated, so the id is simply not one this site
+    // defines and the values stored under it are reported stale. Truncating
+    // would keep it usable under a name no document references, losing those
+    // values with nothing reported at all.
+    const huge = "b".repeat(MAX_BREAKPOINT_ID_LENGTH + 1);
+    const out = compilePageCss(
+      doc([node("n1", { base: { [huge]: { color: "red" } } })]),
+      {
+        breakpoints: {
+          viewport: [{ id: huge, label: "Huge", maxWidth: 700 }],
+          container: [],
+        },
+      }
+    );
+
+    expect(out.css).not.toContain("max-width: 700px");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "unknown-breakpoint"
+    );
+    // The control, so the absence is the LENGTH rather than the fixture failing
+    // to reach the mechanism: the same definition at the limit is emitted.
+    const within = compilePageCss(
+      doc([
+        node("n1", {
+          base: { ["b".repeat(MAX_BREAKPOINT_ID_LENGTH)]: { color: "red" } },
+        }),
+      ]),
+      {
+        breakpoints: {
+          viewport: [
+            {
+              id: "b".repeat(MAX_BREAKPOINT_ID_LENGTH),
+              label: "At limit",
+              maxWidth: 700,
+            },
+          ],
+          container: [],
+        },
+      }
+    );
+    expect(within.css).toContain("max-width: 700px");
   });
 
   it("says so when a stored visibility value is not a boolean", () => {

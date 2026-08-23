@@ -27,6 +27,7 @@ import type {
 } from "../document";
 import {
   MAX_BREAKPOINTS_PER_AXIS,
+  MAX_BREAKPOINT_ID_LENGTH,
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   STYLE_STATES,
@@ -286,6 +287,42 @@ export interface BreakpointContext {
 }
 
 /**
+ * Whether a stored definition names itself in a way this engine can read.
+ *
+ * Length BEFORE anything else reads the id, which is the ordering
+ * `isUsableNamedClass` states its own reason for. The id is a lookup key every
+ * reader of the normalised axis carries, so an unbounded one is copied on each
+ * call — and that call runs on every render keyed on what a site emits under,
+ * including one whose stylesheet is reusable.
+ */
+function namedDefinition(
+  def: unknown
+): def is Record<string, unknown> & { id: string } {
+  return (
+    isPlainRecord(def) &&
+    typeof def.id === "string" &&
+    def.id.length <= MAX_BREAKPOINT_ID_LENGTH
+  );
+}
+
+/**
+ * Whether a stored bound is one a media or container query can be built from.
+ *
+ * A `maxWidth` that is not a positive finite number is dropped rather than read
+ * as unbounded: unbounded is not a safe reading of a broken bound, since it
+ * would apply the breakpoint's values at every width the author meant to
+ * exclude. Zero and below are as unusable and quieter about it — nothing has a
+ * negative width, so `@media (max-width: -1px)` is well-formed and can never
+ * match, and kept, its id would count as known while everything stored under it
+ * went missing with nothing reported.
+ */
+function emittableBound(maxWidth: unknown): boolean {
+  return (
+    typeof maxWidth === "number" && Number.isFinite(maxWidth) && maxWidth > 0
+  );
+}
+
+/**
  * The breakpoints to emit, in cascade order.
  *
  * The base breakpoint first and unconditional, then viewport widths descending,
@@ -365,7 +402,7 @@ export function breakpointContexts(
     const usable = defs
       .slice(0, MAX_SCANNED_KEYS)
       .filter((def: unknown): def is BreakpointDef => {
-        if (!isPlainRecord(def) || typeof def.id !== "string") return false;
+        if (!namedDefinition(def)) return false;
         // The base id names the unconditional context and carries no bound by
         // definition; it is skipped below, and asking it for one would drop the
         // very breakpoint every other rule is written against.
@@ -387,11 +424,7 @@ export function breakpointContexts(
           // unbounded definition still emits a query and stays scoped.
           return false;
         }
-        return (
-          typeof def.maxWidth === "number" &&
-          Number.isFinite(def.maxWidth) &&
-          def.maxWidth > 0
-        );
+        return emittableBound(def.maxWidth);
       });
     // The declared per-axis limit, enforced here because nothing else enforces
     // it. Every style envelope in the document scans the whole context list, so
