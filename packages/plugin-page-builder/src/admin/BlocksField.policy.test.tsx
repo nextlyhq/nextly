@@ -39,7 +39,21 @@ let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
     error: null,
   };
 
-vi.mock("@nextlyhq/builder/shell", () => {
+// Spread the REAL module, then override. The list below is what this file needs
+// to control; everything else the shell exports arrives on its own.
+//
+// Enumerating instead made the mock a hand-kept mirror of one import statement:
+// it declared exactly the sixteen names `BlocksField` imports, so the moment
+// that file imports a seventeenth the mock answers `undefined` for it and the
+// render fails HERE — in a package whose diff is empty — while `builder`'s own
+// suite stays green, because nothing there is mocked.
+//
+// Spreading is safe for this specifier and was measured rather than assumed:
+// importing it opens no EventSource and needs no global the environment lacks.
+// It is NOT safe for every mock in this file — the `plugin-sdk/admin` one below
+// stays enumerated for that reason.
+vi.mock("@nextlyhq/builder/shell", async importOriginal => {
+  const actual = await importOriginal<Record<string, unknown>>();
   const record =
     (key: "inspector" | "canvas") =>
     (props: Record<string, unknown>): React.JSX.Element => {
@@ -54,6 +68,7 @@ vi.mock("@nextlyhq/builder/shell", () => {
     children?: React.ReactNode;
   }): React.JSX.Element => <>{children}</>;
   return {
+    ...actual,
     // Renders the inspector slot and its CHILDREN, because the canvas is a
     // child of the shell rather than one of its slots — a stub dropping them
     // would leave the canvas unrendered and its assertion passing on absence.
@@ -315,5 +330,39 @@ describe("what the token picker waits for", () => {
     openEditor();
 
     expect(seen.inspector?.tokens).toBeDefined();
+  });
+});
+
+describe("the shell mock", () => {
+  it("carries exports this file never named, so a new one cannot break it here", () => {
+    // The property the spread exists for, asserted directly rather than left to
+    // be noticed the next time it fails.
+    //
+    // Named exports are checked rather than a count, because a count agrees with
+    // any list of the same size: a spread that dropped `StyleInspectorPanel` and
+    // gained something else would match a total and still break the import this
+    // is protecting. `StyleInspectorPanel` is named first for being the likeliest
+    // next import — it is the surface a per-control provenance badge lives on.
+    return import("@nextlyhq/builder/shell").then(shell => {
+      for (const name of [
+        "StyleInspectorPanel",
+        "useShellIsActive",
+        "MAX_HISTORY",
+        "CANVAS_ROOT_CLASS",
+      ]) {
+        expect(shell, name).toHaveProperty(name);
+      }
+    });
+  });
+
+  it("still overrides the surfaces it records, so the spread did not undo them", () => {
+    // The other half, and the reason a spread cannot simply be trusted: it
+    // brings the REAL components with it, and an override that stopped winning
+    // would leave these tests rendering the live inspector while every
+    // assertion above went on reading a `seen` nothing writes to any more.
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.canvas).toBeDefined();
   });
 });
