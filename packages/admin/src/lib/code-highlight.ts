@@ -22,6 +22,9 @@ import { EditorView } from "@codemirror/view";
 import type { Tag } from "@lezer/highlight";
 import { tags as t } from "@lezer/highlight";
 
+import type { CodeConstruct } from "./code-palette";
+import { codeColor } from "./code-palette";
+
 /**
  * The palette, as data.
  *
@@ -31,28 +34,28 @@ import { tags as t } from "@lezer/highlight";
  */
 export const CODE_TAG_SPECS: readonly {
   tag: Tag | Tag[];
-  color: string;
+  construct: CodeConstruct;
   fontStyle?: string;
 }[] = [
   {
     tag: [t.comment, t.lineComment, t.blockComment, t.docComment],
-    color: "var(--nx-code-comment)",
+    construct: "comment",
     fontStyle: "italic",
   },
   {
     tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.operatorKeyword],
-    color: "var(--nx-code-keyword)",
+    construct: "keyword",
   },
   {
     // `boolean` and `constant` are number-coloured in rich-text-kit, and JSON's
     // `null` is the same kind of literal, so it travels with them rather than
     // with the keywords it parses beside.
     tag: [t.bool, t.null, t.atom, t.number, t.integer, t.float],
-    color: "var(--nx-code-number)",
+    construct: "number",
   },
   {
     tag: [t.string, t.special(t.string), t.regexp, t.character],
-    color: "var(--nx-code-string)",
+    construct: "string",
   },
   {
     tag: [
@@ -61,7 +64,7 @@ export const CODE_TAG_SPECS: readonly {
       t.function(t.variableName),
       t.function(t.propertyName),
     ],
-    color: "var(--nx-code-function)",
+    construct: "function",
   },
   {
     tag: [
@@ -71,7 +74,7 @@ export const CODE_TAG_SPECS: readonly {
       t.logicOperator,
       t.definitionOperator,
     ],
-    color: "var(--nx-code-operator)",
+    construct: "operator",
   },
   {
     tag: [
@@ -82,7 +85,7 @@ export const CODE_TAG_SPECS: readonly {
       t.paren,
       t.squareBracket,
     ],
-    color: "var(--nx-code-punctuation)",
+    construct: "punctuation",
   },
   {
     // `className` and `typeName` ride with the variables because rich-text-kit
@@ -95,29 +98,41 @@ export const CODE_TAG_SPECS: readonly {
       t.className,
       t.typeName,
     ],
-    color: "var(--nx-code-variable)",
+    construct: "variable",
   },
   {
     // Comment-coloured, as rich-text-kit colours `namespace`: it qualifies the
     // name beside it rather than being the name, so it reads quieter.
     tag: [t.namespace],
-    color: "var(--nx-code-comment)",
+    construct: "comment",
   },
   {
     // Markup only -- an element name and the brackets around it, which is what
     // Prism's `tag` means too.
     tag: [t.tagName, t.angleBracket],
-    color: "var(--nx-code-tag)",
+    construct: "tag",
   },
-  { tag: [t.deleted], color: "var(--nx-code-deleted)" },
-  { tag: [t.inserted], color: "var(--nx-code-inserted)" },
-  // Not a code colour: a parse error is a fault, and the admin already has one
-  // token for that meaning.
-  { tag: [t.invalid], color: "var(--nx-destructive)" },
+  { tag: [t.deleted], construct: "deleted" },
+  { tag: [t.inserted], construct: "inserted" },
 ];
 
-/** The tag palette, as a CodeMirror highlighter. */
-export const nextlyHighlightStyle = HighlightStyle.define([...CODE_TAG_SPECS]);
+/**
+ * The tag palette, as a CodeMirror highlighter.
+ *
+ * Colours are resolved from the shared construct table at build time, so this
+ * file records which lezer tags mean which construct and nothing about what a
+ * construct is worth.
+ */
+export const nextlyHighlightStyle = HighlightStyle.define([
+  ...CODE_TAG_SPECS.map(spec => ({
+    tag: spec.tag,
+    color: codeColor(spec.construct),
+    ...(spec.fontStyle === undefined ? {} : { fontStyle: spec.fontStyle }),
+  })),
+  // A parse error is a fault rather than a construct, so it reads from the
+  // admin's error token instead of the code palette.
+  { tag: t.invalid, color: "var(--nx-destructive)" },
+]);
 
 /**
  * Registered WITHOUT `fallback`, which is what makes it win.
@@ -217,7 +232,7 @@ export function nextlyEditorChrome({
     // Without a colour here it falls back to the editor's foreground and reads
     // as a different character from its own twin two lines down. Unscoped, so
     // it still holds while the editor is not focused.
-    ".cm-matchingBracket": { color: "var(--nx-code-punctuation)" },
+    ".cm-matchingBracket": { color: codeColor("punctuation") },
     ".cm-nonmatchingBracket": { color: "var(--nx-destructive)" },
     // The fills are scoped exactly as `bracketMatching`'s own base theme scopes
     // them. It ships a hardcoded teal under `&.cm-focused`, and a bare
@@ -241,6 +256,57 @@ export function nextlyEditorChrome({
     "&.cm-focused .cm-cursor": {
       borderLeftColor: "var(--nx-foreground)",
     },
+    // The base theme keys thirteen surfaces off `EditorView.darkTheme`, which
+    // only a bundled theme sets -- so under `theme="none"` every one of them
+    // stays on its light rule. Selection is the one people notice; the search
+    // panel, the autocomplete popup and lint tooltips are the rest, and
+    // `basicSetup` turns all three on.
+    //
+    // Enumerated rather than answered by setting the facet, because setting it
+    // needs the resolved mode and would put back the branch this module exists
+    // to remove. The list is closed rather than a guess: it is every `&light` /
+    // `&dark` selector the base theme declares.
+    ".cm-panels": {
+      backgroundColor: "var(--nx-popover)",
+      color: "var(--nx-popover-foreground)",
+    },
+    ".cm-panels-top": { borderBottom: "1px solid var(--nx-border)" },
+    ".cm-panels-bottom": { borderTop: "1px solid var(--nx-border)" },
+    ".cm-textfield": {
+      backgroundColor: "var(--nx-background)",
+      color: "var(--nx-foreground)",
+      border: "1px solid var(--nx-input)",
+      borderRadius: "var(--radius-sm)",
+    },
+    ".cm-button": {
+      backgroundColor: "var(--nx-secondary)",
+      color: "var(--nx-secondary-foreground)",
+      backgroundImage: "none",
+      border: "1px solid var(--nx-border)",
+      borderRadius: "var(--radius-sm)",
+    },
+    ".cm-tooltip": {
+      backgroundColor: "var(--nx-popover)",
+      color: "var(--nx-popover-foreground)",
+      border: "1px solid var(--nx-border)",
+      borderRadius: "var(--radius-md)",
+    },
+    ".cm-tooltip .cm-tooltip-arrow:before": {
+      borderTopColor: "var(--nx-border)",
+      borderBottomColor: "var(--nx-border)",
+    },
+    ".cm-tooltip .cm-tooltip-arrow:after": {
+      borderTopColor: "var(--nx-popover)",
+      borderBottomColor: "var(--nx-popover)",
+    },
+    ".cm-tooltip-section:not(:first-child)": {
+      borderTop: "1px solid var(--nx-border)",
+    },
+    ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+      backgroundColor: "var(--nx-accent)",
+      color: "var(--nx-accent-foreground)",
+    },
+    ".cm-specialChar": { color: "var(--nx-destructive)" },
     "&.cm-focused": {
       // A ring rather than the base theme's hardcoded dotted outline, which is
       // off-token. It cannot be dropped: the wrappers these editors sit in draw

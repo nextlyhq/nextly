@@ -1,19 +1,21 @@
 /**
- * The code palette is data, and two defects it guards against both render as a
- * plausible colour rather than as an error.
+ * The construct table is the palette, and the defects it can still carry all
+ * render as a plausible colour rather than as an error.
  *
- * A literal colour is the first: it looks right in whichever mode it was picked
- * for, renders identically in the other, and never enters the contrast audit in
- * `packages/ui/src/styles/contrast`.
+ * A token declared in only ONE theme block is the quietest of them. The
+ * surviving declaration keeps the editor rendering, so nothing looks broken --
+ * the other mode simply inherits a colour chosen against the wrong background.
+ * Both blocks are parsed separately for that reason; collapsing them into one
+ * set is exactly how the half-declared case passes.
  *
- * A token declared in only ONE mode is the second, and it is the quieter one.
- * The surviving declaration keeps the editor rendering, so nothing looks broken
- * -- the other mode simply inherits a colour chosen against the wrong
- * background. Both blocks are therefore parsed separately and each is required
- * to carry every token the palette reads; collapsing them into one set is how
- * the half-declared case passes.
+ * What is NOT tested here any more is agreement between the two highlighting
+ * engines. It used to be, by reading both mappings and comparing them, and that
+ * test is gone because `code-palette.ts` made the question unaskable: Prism and
+ * lezer now read the same table, so there are no longer two answers to compare.
+ * The guard that replaces it is narrower and harder to slip past -- that
+ * nothing bypasses the table.
  *
- * The theme file is parsed rather than mirrored here. A hand-kept list of token
+ * The theme file is parsed rather than mirrored. A hand-kept list of token
  * names would be a second implementation of the palette, agreeing with it on
  * the day it was written and drifting silently afterwards.
  */
@@ -21,11 +23,10 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Tag } from "@lezer/highlight";
-import { tags as t } from "@lezer/highlight";
 import { describe, expect, it } from "vitest";
 
 import { CODE_TAG_SPECS } from "../code-highlight";
+import { CODE_CONSTRUCTS } from "../code-palette";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const THEME = resolve(here, "../../../../ui/src/styles/theme.css");
@@ -36,8 +37,8 @@ const RICH_TEXT_KIT = resolve(
 
 /**
  * The body of a top-level block, matched by counting braces rather than by
- * reaching for the next `}`. A nested rule inside the block would end the
- * naive match early and silently shorten the set being checked.
+ * reaching for the next `}`. A nested rule inside the block would end the naive
+ * match early and silently shorten the set being checked.
  */
 function blockBody(css: string, selector: string): string {
   const start = css.indexOf(`${selector} {`);
@@ -45,9 +46,7 @@ function blockBody(css: string, selector: string): string {
   let depth = 0;
   for (let i = css.indexOf("{", start); i < css.length; i++) {
     if (css[i] === "{") depth++;
-    else if (css[i] === "}" && --depth === 0) {
-      return css.slice(start, i);
-    }
+    else if (css[i] === "}" && --depth === 0) return css.slice(start, i);
   }
   return "";
 }
@@ -62,61 +61,12 @@ function codeTokensIn(selector: string): Set<string> {
   return found;
 }
 
-/** Every token the tag specs read. */
+/** Every token the palette can put on screen. */
 function consumedTokens(): Set<string> {
-  const found = new Set<string>();
-  for (const spec of CODE_TAG_SPECS) {
-    const match = /var\((--nx-[a-z-]+)\)/.exec(spec.color);
-    if (match) found.add(match[1]);
-  }
-  return found;
+  return new Set(Object.values(CODE_CONSTRUCTS).map(entry => entry.token));
 }
 
-/** The token this palette gives one lezer tag, by identity. */
-function tokenForTag(tag: Tag): string | undefined {
-  const spec = CODE_TAG_SPECS.find(s =>
-    (Array.isArray(s.tag) ? s.tag : [s.tag]).includes(tag)
-  );
-  return spec ? /var\((--nx-[a-z-]+)\)/.exec(spec.color)?.[1] : undefined;
-}
-
-/** The token rich-text-kit gives one Prism token name. */
-function tokenForPrism(name: string): string | undefined {
-  const kit = readFileSync(RICH_TEXT_KIT, "utf8");
-  const match = new RegExp(
-    `^\\s*"?${name}"?:\\s*"text-code-([a-z-]+)`,
-    "m"
-  ).exec(kit);
-  return match ? `--nx-code-${match[1]}` : undefined;
-}
-
-/**
- * Constructs both engines name, and must therefore colour alike.
- *
- * Only the ones that genuinely correspond: Prism's `property` and lezer's
- * `propertyName` are the same thing, while Prism has no counterpart for
- * `t.separator` and pairing them would be inventing agreement rather than
- * checking it.
- */
-const SHARED_CONSTRUCTS: [string, Tag][] = [
-  ["comment", t.comment],
-  ["keyword", t.keyword],
-  ["string", t.string],
-  ["number", t.number],
-  ["boolean", t.bool],
-  ["operator", t.operator],
-  ["punctuation", t.punctuation],
-  ["regex", t.regexp],
-  ["tag", t.tagName],
-  ["class-name", t.className],
-  ["namespace", t.namespace],
-  ["variable", t.variableName],
-  ["property", t.propertyName],
-  ["deleted", t.deleted],
-  ["inserted", t.inserted],
-];
-
-describe("code-highlight", () => {
+describe("code-palette", () => {
   it("reads the theme blocks it is measured against", () => {
     // Every assertion below is satisfied by an empty palette, so each would
     // pass against a selector that no longer matches. This is the control that
@@ -125,11 +75,19 @@ describe("code-highlight", () => {
     expect(codeTokensIn(".dark").size).toBeGreaterThan(0);
   });
 
-  it("names a colour only through a token, never a literal", () => {
-    const literals = CODE_TAG_SPECS.filter(
-      spec => !/^var\(--nx-[a-z-]+\)$/.test(spec.color)
-    );
-    expect(literals.map(spec => spec.color)).toEqual([]);
+  it("spells each construct the same in both namespaces", () => {
+    // `--nx-code-string` and `text-code-string` are one name in two
+    // vocabularies. Editing either alone gives a construct whose CSS colour and
+    // whose utility class point at different tokens, and every other assertion
+    // here would still pass.
+    const mismatched = Object.entries(CODE_CONSTRUCTS)
+      .filter(
+        ([, entry]) =>
+          entry.token.replace("--nx-code-", "") !==
+          entry.className.replace("text-code-", "")
+      )
+      .map(([name]) => name);
+    expect(mismatched).toEqual([]);
   });
 
   it.each([":root", ".dark"])("declares every token it reads in %s", sel => {
@@ -142,8 +100,8 @@ describe("code-highlight", () => {
 
   it("leaves no declared code token unreachable", () => {
     // A token nobody reads is a palette entry that cannot reach the screen.
-    // `--nx-code-bg` and `--nx-code-fg` are chrome rather than tag colours, so
-    // `nextlyEditorChrome` consumes them instead of a tag spec.
+    // `--nx-code-bg` and `--nx-code-fg` are chrome rather than construct
+    // colours, so `nextlyEditorChrome` consumes them instead of the table.
     const chrome = new Set(["--nx-code-bg", "--nx-code-fg"]);
     const consumed = consumedTokens();
     const unreachable = [...codeTokensIn(":root")].filter(
@@ -152,35 +110,35 @@ describe("code-highlight", () => {
     expect(unreachable).toEqual([]);
   });
 
+  it("routes the rich-text palette through the table", () => {
+    // The guard that replaces the old cross-engine comparison. Deriving both
+    // engines from one table only holds while both actually read it, and a
+    // literal `text-code-*` written back into the Lexical theme would restore
+    // the divergence silently -- it renders correctly on the day it is written.
+    const kit = readFileSync(RICH_TEXT_KIT, "utf8");
+    const literals = [...kit.matchAll(/"(text-code-[a-z-]+)/g)].map(m => m[1]);
+    // `text-code-fg` is the code BLOCK's own foreground, not a construct, so it
+    // is not in the table and is expected to appear literally.
+    expect(literals.filter(cls => cls !== "text-code-fg")).toEqual([]);
+  });
+
+  it("reads the rich-text file it is checking", () => {
+    // Same control as the theme one: a moved path makes the assertion above
+    // pass against an empty string, certifying a file it never opened.
+    expect(readFileSync(RICH_TEXT_KIT, "utf8")).toContain("codeHighlight");
+  });
+
+  it("names only constructs the table defines", () => {
+    const unknown = CODE_TAG_SPECS.filter(
+      spec => !(spec.construct in CODE_CONSTRUCTS)
+    ).map(spec => spec.construct);
+    expect(unknown).toEqual([]);
+  });
+
   it("gives every spec at least one tag", () => {
     const empty = CODE_TAG_SPECS.filter(
       spec => (Array.isArray(spec.tag) ? spec.tag.length : 1) === 0
     );
     expect(empty).toEqual([]);
-  });
-
-  it("reads the rich-text mapping it is compared against", () => {
-    // Same control as above, for the other file: a renamed export or a moved
-    // path would make every pairing below resolve to undefined on both sides
-    // and agree perfectly.
-    const resolved = SHARED_CONSTRUCTS.filter(
-      ([prism]) => tokenForPrism(prism) !== undefined
-    );
-    expect(resolved.length).toBe(SHARED_CONSTRUCTS.length);
-  });
-
-  it("colours a shared construct the same as the rich-text editor does", () => {
-    // Derived rather than restated: this reads both mappings and compares them,
-    // so it cannot itself drift from either. Two engines colouring a class name
-    // differently is invisible in review -- each looks right beside its own
-    // editor.
-    const disagreements = SHARED_CONSTRUCTS.filter(
-      ([prism, tag]) => tokenForTag(tag) !== tokenForPrism(prism)
-    ).map(([prism, tag]) => ({
-      construct: prism,
-      codeMirror: tokenForTag(tag),
-      richText: tokenForPrism(prism),
-    }));
-    expect(disagreements).toEqual([]);
   });
 });
