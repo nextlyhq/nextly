@@ -430,3 +430,54 @@ describe("a reverted value reaches the field", () => {
     expect(nameField("color.ink")).toHaveProperty("value", "color.ink");
   });
 });
+
+describe("no tokens to show, and why", () => {
+  it("says a read is in flight while it is", () => {
+    render(
+      <TokensPanel tokens={undefined} onChange={vi.fn()} absence="pending" />
+    );
+    expect(screen.getByText(/Reading this site/)).toBeDefined();
+  });
+
+  it("says a FAILED read failed, rather than describing it as still coming", () => {
+    // A 403 or an exhausted retry leaves the same `undefined`, and a panel
+    // that reports it as loading describes a state the site is not in and
+    // gives the author nothing to act on.
+    render(
+      <TokensPanel tokens={undefined} onChange={vi.fn()} absence="failed" />
+    );
+    expect(screen.queryByText(/Reading this site/)).toBeNull();
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("could not be read");
+  });
+});
+
+describe("pinning a dark value to what light already gives", () => {
+  it("commits it, rather than discarding it as unchanged", () => {
+    // `color.ink` has no dark value, so dark DISPLAYS the light one. Typing
+    // that same value is a real edit — it fixes dark in place before light is
+    // changed later — and comparing against the display discards exactly it.
+    const onChange = mount(TOKENS);
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    const field = valueField("color.ink");
+    expect(field).toHaveProperty("value", "#111111");
+
+    fireEvent.change(field, { target: { value: "#111111" } });
+    fireEvent.blur(field);
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0]?.[0] as SiteTokenSet;
+    expect(next.tokens[0]?.values.dark).toBe("#111111");
+    expect(next.tokens[0]?.values.light).toBe("#111111");
+  });
+
+  it("still says nothing when a mode's OWN value is retyped unchanged", () => {
+    // The control. Without it, a panel that committed on every blur would pass
+    // the assertion above.
+    const onChange = mount(TOKENS);
+    const field = valueField("color.ink");
+    fireEvent.change(field, { target: { value: "#111111" } });
+    fireEvent.blur(field);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});

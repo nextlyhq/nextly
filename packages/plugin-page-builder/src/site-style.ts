@@ -169,6 +169,49 @@ export function tokenOverrideOf(
  * something no storage anywhere agrees with. `null` means nothing has been
  * stored by this session and the read's own answer is the truth.
  */
+/** What a studio should do once a save has answered. */
+export interface TokenSaveOutcome {
+  /** What to show, or `undefined` to leave the panel exactly as it is. */
+  readonly tokens?: SiteTokenSet | null;
+  /** What to say: a message, `null` to clear one, `undefined` to leave it. */
+  readonly issue?: string | null;
+}
+
+/**
+ * What a save's answer MEANS, apart from wiring it into any state.
+ *
+ * Both branches turn on one question — is this answer still about what the
+ * author is looking at — and that is why they are decided together rather than
+ * beside each other. Saves serialise, their answers need not arrive in order,
+ * and an answer for a superseded edit must neither roll the newer one back nor
+ * speak about it. Deciding the value and the message under separate rules is
+ * how a studio ends up announcing that a set it did save was not saved.
+ *
+ * `undefined` for either field means LEAVE IT, which is a third answer beside
+ * "set this" and "clear this": an obsolete refusal has nothing to say about a
+ * panel that has moved on.
+ */
+export function tokenSaveOutcome(
+  saved: boolean,
+  issues: Readonly<Record<string, string>>,
+  attempted: SiteTokenSet,
+  latest: SiteTokenSet | null,
+  persisted: SiteTokenSet | null
+): TokenSaveOutcome {
+  const current = latest === attempted;
+  if (saved) {
+    // A refusal for an EARLIER edit can arrive after a later one has already
+    // cleared the message, so a success has to clear it again — otherwise the
+    // studio goes on reporting a set it did save as unsaved.
+    return current ? { issue: null } : {};
+  }
+  if (!current) return {};
+  return {
+    tokens: tokensAfterRefusal(latest, attempted, persisted),
+    issue: Object.values(issues)[0] ?? "That change was not saved.",
+  };
+}
+
 export function tokensAfterRefusal(
   current: SiteTokenSet | null,
   refused: SiteTokenSet,

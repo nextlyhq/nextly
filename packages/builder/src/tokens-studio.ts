@@ -128,6 +128,16 @@ export interface TokenRow {
   readonly kind: TokenKind;
   /** The value for the mode being shown, falling back to light. */
   readonly value: string;
+  /**
+   * What this MODE itself holds, or `undefined` when it holds nothing.
+   *
+   * Distinct from {@link value}, which is what to display and therefore falls
+   * back. An editor comparing a typed value against the display cannot tell
+   * "unchanged" from "pinned to the same value the fallback was giving" — and
+   * the second is a real edit, the one that fixes a dark value in place before
+   * the light one is changed later.
+   */
+  readonly stored: string | undefined;
   /** Whether the shown value belongs to this mode or is inherited from light. */
   readonly inherited: boolean;
   /**
@@ -173,6 +183,7 @@ function rowOf(
   return {
     at,
     key,
+    stored: own,
     identity: tokenIdentity(token),
     name: token.name,
     kind: token.kind,

@@ -91,6 +91,15 @@ export interface TokensPanelProps {
   issue?: string;
   /** Whether the canvas is currently showing dark values. */
   prefersDark?: boolean;
+  /**
+   * Why there are no tokens to show, when there are none.
+   *
+   * `undefined` tokens has two causes and they need different words: a read
+   * still in flight will finish, and a refused or failed one will not. Told
+   * apart because a panel that says "reading…" forever after a 403 describes a
+   * state the site is not in and gives the author nothing to do about it.
+   */
+  absence?: "pending" | "failed";
 }
 
 /**
@@ -105,6 +114,7 @@ export function TokensPanel({
   onChange,
   supplied,
   issue,
+  absence = "pending",
   prefersDark = false,
 }: TokensPanelProps): React.JSX.Element {
   const [mode, setMode] = React.useState<TokenMode>(
@@ -114,8 +124,18 @@ export function TokensPanel({
 
   if (tokens === undefined) {
     return (
-      <div className="nx-tokens" data-empty="loading">
-        <p className="nx-inspector__note">Reading this site&rsquo;s tokens…</p>
+      <div
+        className="nx-tokens"
+        data-empty={absence === "failed" ? "failed" : "loading"}
+      >
+        <p
+          className="nx-inspector__note"
+          role={absence === "failed" ? "alert" : undefined}
+        >
+          {absence === "failed"
+            ? "This site\u2019s tokens could not be read, so none can be shown or changed. Reload to try again."
+            : "Reading this site\u2019s tokens\u2026"}
+        </p>
       </div>
     );
   }
@@ -320,7 +340,14 @@ function TokenEntry({
           aria-describedby={said.length > 0 ? noteId : undefined}
           onBlur={event => {
             const next = event.target.value;
-            if (next !== row.value) {
+            /*
+             * Compared against what this MODE actually holds, not against what
+             * the row displays. In dark, a token with no dark value displays
+             * the light one — so typing that same value is a real edit, the one
+             * that PINS dark before light is changed later, and comparing
+             * against the display would discard exactly it.
+             */
+            if (next !== row.stored) {
               onChange(setTokenValue(tokens, row.at, mode, next));
             }
           }}

@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveSiteStyle,
   tokenOverrideOf,
+  tokenSaveOutcome,
   tokensAfterRefusal,
 } from "./site-style";
 
@@ -244,5 +245,38 @@ describe("vendor extensions are not lost by a save about something else", () => 
     expect(
       tokenOverrideOf({ tokens: [one] }, { tokens: [two] }).tokens
     ).toEqual([two]);
+  });
+});
+
+describe("what a save's answer means", () => {
+  const a: SiteTokenSet = { tokens: [ink] };
+  const b: SiteTokenSet = { tokens: [brand] };
+  const stored: SiteTokenSet = { tokens: [] };
+
+  it("clears the message when the edit it answered is still on screen", () => {
+    expect(tokenSaveOutcome(true, {}, a, a, stored)).toEqual({ issue: null });
+  });
+
+  it("says NOTHING about a success for a superseded edit", () => {
+    // Leaving both fields alone is a third answer beside set and clear.
+    expect(tokenSaveOutcome(true, {}, a, b, stored)).toEqual({});
+  });
+
+  it("rolls back and speaks when a refusal is still current", () => {
+    const out = tokenSaveOutcome(false, { tokens: "no" }, a, a, stored);
+    expect(out.tokens).toBe(stored);
+    expect(out.issue).toBe("no");
+  });
+
+  it("neither rolls back NOR speaks for a superseded refusal", () => {
+    // The sequence that made the studio announce a set it had saved as
+    // unsaved: an invalid edit, a correcting edit, then the first refusal.
+    expect(tokenSaveOutcome(false, { tokens: "no" }, a, b, stored)).toEqual({});
+  });
+
+  it("falls back to its own words when the validator named none", () => {
+    expect(tokenSaveOutcome(false, {}, a, a, stored).issue).toBe(
+      "That change was not saved."
+    );
   });
 });
