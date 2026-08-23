@@ -13,9 +13,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_BREAKPOINT_ID_LENGTH,
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
+  MAX_TOKEN_NAME_LENGTH,
   MAX_VALUE_LENGTH,
 } from "@nextlyhq/blocks-engine";
 
@@ -50,6 +52,27 @@ function inputs(over: Partial<SharedStyleInputs> = {}): SharedStyleInputs {
 }
 
 describe("the stamp", () => {
+  it("keeps every emittable string shorter than the length it truncates at", () => {
+    // The walk keeps at most `MAX_VALUE_LENGTH` characters of any string it
+    // reads, and carries no notion of WHERE it is — which is the property that
+    // stops it becoming a second reading of the envelope. Soundness therefore
+    // rests on one relationship rather than on the walk: no string the compiler
+    // can emit may be longer than the walk keeps, or two inputs agreeing to the
+    // cut and differing after it stamp alike and compile apart.
+    //
+    // Asserted between the CONSTANTS rather than by exercising a name of each
+    // length, because the relationship is what has to hold. A test that fed one
+    // oversized string through would pass just as well after someone raised a
+    // bound past `MAX_VALUE_LENGTH`, which is the change that breaks this.
+    for (const bound of [
+      MAX_NAMED_CLASS_NAME_LENGTH,
+      MAX_BREAKPOINT_ID_LENGTH,
+      MAX_TOKEN_NAME_LENGTH,
+    ]) {
+      expect(bound).toBeLessThanOrEqual(MAX_VALUE_LENGTH);
+    }
+  });
+
   it("is stable for the same inputs", () => {
     // Nothing else here means anything if this does not hold: a stamp that
     // varied run to run would recompile every page on every render.

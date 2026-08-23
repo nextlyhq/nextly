@@ -309,6 +309,7 @@ export {
   emitFontFaces,
   emitTokenBlocks,
   isTokenName,
+  MAX_TOKEN_NAME_LENGTH,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package
   // pins it, and one that cannot reach these has no way to do that except to

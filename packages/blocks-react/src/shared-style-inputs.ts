@@ -254,10 +254,25 @@ function leafText(value: unknown): string {
       // when it is shorter, so the ordinary case pays nothing.
       //
       // Applied to every string rather than to declaration values alone: the
-      // walk carries no notion of where it is, and every other string that
-      // reaches it is already bounded more tightly — a class id and slug at
-      // `MAX_NAMED_CLASS_NAME_LENGTH`, a breakpoint id at
-      // `MAX_BREAKPOINT_ID_LENGTH`, the token prefix by `safeTokenPrefix`.
+      // walk carries no notion of where it is, which is what keeps it from
+      // becoming a second reading of the envelope.
+      //
+      // That is sound only because no string the compiler emits can exceed the
+      // longest one this keeps. It is a claim about the COMPILER, not about the
+      // positions a string is reachable from — stated that way because the
+      // enumerated form of it was wrong: the list of positions read class id
+      // and slug, breakpoint id and token prefix, and omitted the `$token` of a
+      // reference, which `scalarText` writes into a `var()` in full. Until
+      // `MAX_TOKEN_NAME_LENGTH` bounded it, two names agreeing to the truncation
+      // point and differing after stamped alike and compiled differently, and
+      // the stored sheet was reused for the wrong one indefinitely.
+      //
+      // So the invariant is the general one, and it is about this walk rather
+      // than about the compiler at large: any string reaching HERE must be
+      // bounded at or under `MAX_VALUE_LENGTH`, or the stamp stops
+      // distinguishing two inputs that compile differently. The label's other
+      // fields are carried whole and are not subject to it — an unbounded one
+      // there costs allocation, not correctness.
       return JSON.stringify(value.slice(0, MAX_VALUE_LENGTH + 1));
     case "number":
     case "boolean":

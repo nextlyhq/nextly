@@ -18,6 +18,7 @@ import {
   emitFontFaces,
   emitTokenBlocks,
   isTokenName,
+  MAX_TOKEN_NAME_LENGTH,
   renameSiteToken,
   tokenIdentity,
   tokenValueFetches,
@@ -331,6 +332,73 @@ describe("the token name grammar", () => {
       "/styles"
     );
     expect(reference.declarations).toEqual([]);
+  });
+
+  it("refuses a name longer than the cap, on both sides of the reference", () => {
+    // The grammar bounds the ALPHABET and not the length, so without a cap a
+    // name of megabytes of valid characters is scanned in full on every compile
+    // and copied into a `var()` on every rule referencing it.
+    //
+    // Both sides are asserted because the whole value of one grammar is that the
+    // table and the reference agree: a table that refused an overlong name while
+    // a reference still emitted it would write `var(--site-...)` against a custom
+    // property nothing defines, and report nothing.
+    const overlong = "a".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+    expect(isTokenName(overlong)).toBe(false);
+
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [{ name: overlong, kind: "color", values: { light: "#000" } }],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+
+    const reference = compileStyleValues(
+      { color: { $token: overlong } },
+      "/styles"
+    );
+    expect(reference.declarations).toEqual([]);
+  });
+
+  it("emits nothing for two different overlong names, so they cannot compile apart", () => {
+    // This is the property the page-artifact stamp depends on. That stamp keeps
+    // at most `MAX_VALUE_LENGTH` characters of any string it reads, which is
+    // sound only while no string the compiler EMITS can be longer. A token name
+    // is the one that could: it reaches CSS in full through `tokenCustomProperty`.
+    //
+    // So the pair matters, not the single case. Two names agreeing to the
+    // stamp's truncation point and differing after it once produced different
+    // CSS under one identifier, and the stored sheet was then reused for the
+    // wrong one indefinitely. Under the cap both emit nothing, so identical
+    // output is the honest answer rather than a collision.
+    const shared = "a".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+    const first = `${shared}b`;
+    const second = `${shared}c`;
+
+    const cssFor = (name: string) =>
+      emitTokenBlocks(
+        { tokens: [{ name, kind: "color", values: { light: "#000" } }] },
+        SCOPE
+      ).css;
+
+    expect(cssFor(first)).toBe(cssFor(second));
+    expect(cssFor(first)).toBe("");
+  });
+
+  it("accepts a name exactly at the cap", () => {
+    // A cap that took the boundary with it would be a different rule from the
+    // one documented, and the off-by-one is invisible in any test that only
+    // supplies a name well clear of it.
+    const atCap = "a".repeat(MAX_TOKEN_NAME_LENGTH);
+    expect(atCap.length).toBe(MAX_TOKEN_NAME_LENGTH);
+    expect(isTokenName(atCap)).toBe(true);
+
+    const reference = compileStyleValues(
+      { color: { $token: atCap } },
+      "/styles"
+    );
+    expect(reference.declarations).not.toEqual([]);
   });
 
   it("keeps accepting the names the default set uses", () => {

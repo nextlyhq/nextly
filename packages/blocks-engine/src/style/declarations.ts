@@ -71,15 +71,40 @@ export interface CompiledDeclarations {
 const TOKEN_NAME_RE = /^[a-z0-9]+(?:[-.][a-z0-9]+)*$/;
 
 /**
+ * The longest name this engine will write as a token.
+ *
+ * The grammar above bounds the ALPHABET and not the length, so a name of
+ * megabytes of otherwise-valid characters satisfies it, is scanned in full by
+ * the regex on every compile, and is copied into a `var()` on every rule that
+ * references it. `MAX_NAMED_CLASS_NAME_LENGTH` exists for exactly this reason
+ * one file over; a token name reaches CSS the same way and had no equivalent.
+ *
+ * Deliberately NOT the 128 that bounds a class name, because the two are
+ * produced by different mechanisms. A class slug is typed by a person. A token
+ * name is composed — `readToken` joins a design-token file's nested group path
+ * with dots, so its length is set by how deeply an imported file nests rather
+ * than by anything anyone types. Real token paths run 30-65 characters
+ * (`md.sys.color.on-surface-variant`); 256 sits an order of magnitude above
+ * that, so no realistic import meets it, while still bounding both the scan and
+ * the copy. Inheriting the class-name number would have applied a limit
+ * calibrated for hand-typed input to a value nesting depth produces.
+ */
+export const MAX_TOKEN_NAME_LENGTH = 256;
+
+/**
  * Whether a name may be written as a token, on either side of the reference.
  *
  * One grammar for the table and for the `$token` that reads it. Two would
  * disagree the moment either moved, and the disagreement has no symptom to
  * follow: a table accepting `Color.Primary` while a reference refuses it leaves
  * a token that exists, resolves to nothing, and reports no reason.
+ *
+ * Length BEFORE the pattern, so the cheap test is what rejects an oversized
+ * name: run the other way round, the regex scans the whole string first and the
+ * cap bounds nothing it was added to bound.
  */
 export function isTokenName(name: string): boolean {
-  return TOKEN_NAME_RE.test(name);
+  return name.length <= MAX_TOKEN_NAME_LENGTH && TOKEN_NAME_RE.test(name);
 }
 
 /** The default custom-property prefix for site tokens. */

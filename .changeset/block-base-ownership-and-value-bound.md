@@ -43,3 +43,14 @@ declaration, so two of them produce identical CSS — carrying both in full
 invalidated a byte-identical stored stylesheet over a suffix nothing reads, and
 put an arbitrarily large allocation into every cache check. `MAX_VALUE_LENGTH`
 is exported so a writer can honour the same number.
+
+A design token's name is now bounded at `MAX_TOKEN_NAME_LENGTH`, on both sides
+of a reference. The name grammar constrained the alphabet and not the length, so
+a name of megabytes of otherwise-valid characters was scanned in full by the
+pattern on every compile and copied into a `var()` on every rule that used it.
+Bounding it also makes the stamp above sound for every string it reads rather
+than for most of them: a token name reaches CSS through `scalarText`, so two
+names agreeing up to the truncation point and differing after it compiled apart
+under one identifier, and the stored sheet was then reused for the wrong one.
+The cap is deliberately larger than the one on a class name, because a token
+name is composed from a design-token file's nesting depth rather than typed.
