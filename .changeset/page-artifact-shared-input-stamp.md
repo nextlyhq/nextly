@@ -42,5 +42,7 @@ matches. The page rendered, partly unstyled, with no error anywhere.
 
 `PageStyles` gains `sharedInputsId`, a digest of those three inputs, compared on
 every render and treated as a repair cause when it disagrees. Artifacts written
-before this field existed carry no stamp and recompile once against a render
-that states its inputs.
+before this field existed carry no stamp and are recompiled against any render
+that states its inputs. The resolver RETURNS the stamped result and does not
+write it, so whether that is paid once or on every request depends on whether
+the caller persists or caches what it gets back.

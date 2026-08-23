@@ -380,7 +380,14 @@ describe("a stored stylesheet records the policy that compiled it", () => {
       <PageRenderer
         document={styledDocument("https://player.allowed.test/a.png")}
         blocks={createBlockResolver(coreBlocks)}
-        styles={stale}
+        // Stamped for the SHARED inputs, so the only thing that can refuse this
+        // artifact is the policy. Left unstamped, the shared-input branch
+        // recompiles it first and this test passes with the policy check
+        // deleted — it would assert nothing about the policy at all.
+        styles={{
+          ...stale,
+          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+        }}
         styleContext={{ breakpoints: { viewport: [], container: [] } }}
         hostPolicy={{ remotePatterns: ALLOWED }}
       />
@@ -520,7 +527,12 @@ describe("a caller's own fetch predicate", () => {
       <PageRenderer
         document={doc}
         blocks={createBlockResolver(coreBlocks)}
-        styles={stored}
+        // Stamped for the shared inputs, for the reason the sibling refusal
+        // test gives: only the unidentified PREDICATE may be what refuses this.
+        styles={{
+          ...stored,
+          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+        }}
         styleContext={{
           breakpoints: { viewport: [], container: [] },
           mayFetchUrl: () => true,

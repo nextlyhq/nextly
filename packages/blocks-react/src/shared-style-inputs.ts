@@ -55,7 +55,11 @@
  *
  * @module shared-style-inputs
  */
-import { MAX_NAMED_CLASSES, hashId } from "@nextlyhq/blocks-engine";
+import {
+  MAX_NAMED_CLASSES,
+  hashId,
+  orderedNamedClasses,
+} from "@nextlyhq/blocks-engine";
 import type {
   BreakpointSet,
   StyleCompileContext,
@@ -115,9 +119,21 @@ export const UNIDENTIFIED_SHARED_INPUTS = "unidentified-shared-inputs";
  * it would recompile every page on the site when someone renames "Tablet" to
  * "Medium", which is a cost with no correctness behind it.
  *
- * Order is preserved rather than sorted. Breakpoints are emitted in array order
- * and at one specificity the cascade IS source order, so two sets holding the
- * same breakpoints in a different order are genuinely different inputs.
+ * Order is preserved rather than canonicalised, and unlike the class library
+ * that is deliberate rather than an oversight.
+ *
+ * The compiler sorts each axis by descending `maxWidth`, so a reorder of
+ * DISTINCT widths changes nothing it emits and this stamp moves for no reason —
+ * a cost, paid as one site-wide recompile after a harmless settings rewrite.
+ * Reproducing that sort here would remove the cost and is refused for a
+ * different reason: the comparator is a local inside `compilePageCss` and not
+ * exported, so a copy could drift from the ordering that decides the output.
+ *
+ * And it could not be a blanket sort in any case. The comparator returns 0 for
+ * equal widths and `Array.prototype.sort` is stable, so two breakpoints sharing
+ * a `maxWidth` keep their STORED order and genuinely emit differently. An
+ * order-independent stamp would miss that, which is the silent direction; this
+ * one over-invalidates instead, which is only expensive.
  */
 function breakpointParts(set: BreakpointSet | undefined): unknown {
   const axis = (defs: BreakpointSet["viewport"] | undefined) =>
@@ -151,6 +167,36 @@ function breakpointParts(set: BreakpointSet | undefined): unknown {
  * A walk here would be a second reading of the style envelope beside the
  * compiler's own, and the two would drift the first time either learned a field.
  */
+/**
+ * How much of one class's style envelope the stamp will read.
+ *
+ * The envelope is arbitrary persisted JSON, and this runs on every render ahead
+ * of the compiler's own bounded scan — so an oversized or deeply nested value
+ * under an unknown state would allocate here first, on a path the compiler
+ * deliberately never descends. The length travels with the truncation, so an
+ * envelope that GROWS past the bound still moves the stamp; two that differ only
+ * beyond it at the same length do not, which is the residual and is bounded by
+ * this constant rather than by what was stored.
+ */
+const MAX_ENVELOPE_CHARS = 4096;
+
+/** One class's styles, serialized without letting a corrupt value take the render. */
+function styleEnvelope(styles: unknown): unknown {
+  let text: string;
+  try {
+    text = JSON.stringify(styles ?? null) ?? "null";
+  } catch {
+    // A circular or otherwise unserialisable envelope. The compiler tolerates a
+    // corrupt entry and warns; throwing here would take down every page on the
+    // site before it ever ran, which is the one outcome worse than a stale
+    // sheet. A constant is safe because such an envelope cannot compile either.
+    return "unserialisable";
+  }
+  return text.length <= MAX_ENVELOPE_CHARS
+    ? text
+    : [text.length, text.slice(0, MAX_ENVELOPE_CHARS)];
+}
+
 function classParts(entry: unknown): unknown {
   // A malformed entry is reduced rather than dereferenced. This library is one
   // site-settings record read on every page render, and it arrives whether or
@@ -166,7 +212,7 @@ function classParts(entry: unknown): unknown {
     entry.id,
     entry.slug,
     entry.orderIndex,
-    entry.styles ?? null,
+    styleEnvelope(entry.styles),
   ] as unknown;
 }
 
@@ -195,7 +241,13 @@ export function sharedStyleInputsLabel(inputs: SharedStyleInputs): string {
     ENCODING,
     breakpointParts(inputs.breakpoints),
     inputs.tokenPrefix ?? null,
-    library.slice(0, MAX_NAMED_CLASSES).map(classParts),
+    // Ordered by the ENGINE'S own comparator rather than as stored, because the
+    // compiler sorts the library before emitting it — so two storage orders of
+    // the same classes produce identical CSS and must produce identical stamps.
+    // Imported rather than restated: a comparator copied here would drift from
+    // the one that decides the output, and the drift would be silent in both
+    // directions.
+    orderedNamedClasses(library.slice(0, MAX_NAMED_CLASSES)).map(classParts),
     // The block-type defaults, which the renderer resolves beside the other
     // three and the compiler emits into this very sheet. Keyed by type, so
     // `JSON.stringify` of the record is stable only if the keys are — hence the

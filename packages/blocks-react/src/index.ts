@@ -94,6 +94,23 @@ export {
 export type { PageStyles, ResolveStyleOptions } from "./styles";
 
 /**
+ * Exported for exactly the reason `fetchPolicyLabel` above is.
+ *
+ * `toPageStyles` is part of this entry, so a write path outside the package
+ * turns a compile into a storable artifact with it. Without a way to compute
+ * the shared-input identity, every artifact that path writes is unstamped —
+ * and an unstamped artifact is refused by every context-bearing read, so the
+ * site recompiles its CSS on every render for ever. The stamp a writer needs
+ * is the one a reader derives, so there is one function rather than two.
+ *
+ * `SharedStyleInputs` travels with it because the argument is a narrowing of a
+ * compile context, and a caller assembling one by hand needs to see which
+ * fields decide the answer.
+ */
+export { sharedStyleInputsId } from "./shared-style-inputs";
+export type { SharedStyleInputs } from "./shared-style-inputs";
+
+/**
  * Exported because `resolvePageStyles` has a precondition a caller could not otherwise meet.
  *
  * That helper expects the document it is handed to be the one that will RENDER. Called with a raw

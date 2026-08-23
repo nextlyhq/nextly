@@ -30,6 +30,7 @@ import * as placeholderModule from "./placeholder";
 import * as prepareModule from "./prepare-document";
 import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
+import * as sharedStyleInputsModule from "./shared-style-inputs";
 import * as stylesModule from "./styles";
 import * as visibilityModule from "./visibility";
 import * as rootEntry from "./index";
@@ -94,6 +95,15 @@ const SOURCE_MODULES: ReadonlyArray<{
     internal: [],
   },
   { name: "resolver", module: resolverModule, internal: [] },
+  {
+    name: "shared-style-inputs",
+    module: sharedStyleInputsModule,
+    // The label and the sentinel are this package's own. A writer needs only
+    // the identity — `sharedStyleInputsId` — and the pre-hash label exists to
+    // explain an unexpected recompile from inside, not to be compared by a
+    // consumer who would then be holding a second opinion about staleness.
+    internal: ["sharedStyleInputsLabel", "UNIDENTIFIED_SHARED_INPUTS"],
+  },
   {
     name: "styles",
     module: stylesModule,
@@ -237,6 +247,7 @@ describe("the root entry", () => {
       "pruneHiddenNodes",
       "registeredBlocks",
       "resolvePageStyles",
+      "sharedStyleInputsId",
       "styleTextForInjection",
       "toPageStyles",
     ]);

@@ -85,8 +85,12 @@ describe("the stamp", () => {
     });
 
     it("a breakpoint ORDER, with the same breakpoints in it", () => {
-      // Breakpoints are emitted in array order and at one specificity the
-      // cascade is source order, so a reorder is a different sheet.
+      // OVER-invalidation, asserted deliberately rather than as a property of
+      // the output. The compiler sorts each axis by descending `maxWidth`, so
+      // reordering distinct widths emits the same CSS — this stamp moves anyway
+      // because it preserves stored order, and it preserves stored order
+      // because equal widths tie and a stable sort keeps them as stored. Losing
+      // the tie case is silent; paying a recompile here is not.
       const moved = inputs({
         breakpoints: {
           viewport: [
@@ -213,6 +217,25 @@ describe("the stamp", () => {
       expect(sharedStyleInputsId(absent)).not.toBe(sharedStyleInputsId(nulled));
     });
 
+    it("two breakpoints sharing a bound, swapped", () => {
+      // The case that forbids canonicalising breakpoint order. The comparator
+      // returns 0 for equal widths and the sort is stable, so these two emit in
+      // whichever order they were stored — a real difference in output that an
+      // order-independent stamp would miss.
+      const one = { id: "a", label: "A", maxWidth: 768 };
+      const two = { id: "b", label: "B", maxWidth: 768 };
+
+      expect(
+        sharedStyleInputsId(
+          inputs({ breakpoints: { viewport: [one, two], container: [] } })
+        )
+      ).not.toBe(
+        sharedStyleInputsId(
+          inputs({ breakpoints: { viewport: [two, one], container: [] } })
+        )
+      );
+    });
+
     it("a class being ADDED, even one the page never references", () => {
       // The whole library is emitted into every page, so a new class is a
       // change to every stored sheet.
@@ -235,6 +258,29 @@ describe("the stamp", () => {
   });
 
   describe("holds still for what does not reach CSS", () => {
+    it("a class library stored in a DIFFERENT order", () => {
+      // The compiler sorts the library by `orderIndex` then id before emitting
+      // it, so two storage orders of the same classes produce identical CSS. A
+      // stamp that moved here would invalidate every page artifact on the site
+      // after a settings rewrite that changed nothing.
+      const a = {
+        id: "c1",
+        slug: "hero",
+        orderIndex: 0,
+        styles: { base: { base: { color: "#111111" } } },
+      };
+      const b = {
+        id: "c2",
+        slug: "card",
+        orderIndex: 1,
+        styles: { base: { base: { color: "#333333" } } },
+      };
+
+      expect(sharedStyleInputsId(inputs({ namedClasses: [a, b] }))).toBe(
+        sharedStyleInputsId(inputs({ namedClasses: [b, a] }))
+      );
+    });
+
     it("a breakpoint's LABEL", () => {
       // The author's word for the breakpoint. The at-rule is built from
       // `maxWidth` alone, so moving this would recompile every page on the site
@@ -279,6 +325,39 @@ describe("what a corrupt or hostile settings row costs", () => {
     const two = inputs({ namedClasses: [null, null] as never });
 
     expect(sharedStyleInputsId(one)).not.toBe(sharedStyleInputsId(two));
+  });
+
+  it("does not throw on an envelope that cannot be serialized", () => {
+    // A circular value in persisted settings. The compiler tolerates a corrupt
+    // entry and warns; throwing from the stamp would take down every page on
+    // the site BEFORE the forgiving compiler ever ran.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() =>
+      sharedStyleInputsId(
+        inputs({
+          namedClasses: [
+            { id: "c1", slug: "hero", orderIndex: 0, styles: circular },
+          ] as never,
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it("still moves when an oversized envelope GROWS", () => {
+    // Truncation must not make two different libraries stamp alike just because
+    // both exceed the bound: the length travels with the truncated text.
+    const big = (n: number) => ({
+      id: "c1",
+      slug: "hero",
+      orderIndex: 0,
+      styles: { base: { base: { content: "x".repeat(n) } } },
+    });
+
+    expect(sharedStyleInputsId(inputs({ namedClasses: [big(9000)] }))).not.toBe(
+      sharedStyleInputsId(inputs({ namedClasses: [big(9001)] }))
+    );
   });
 
   it("reads no further than the compiler does", () => {
