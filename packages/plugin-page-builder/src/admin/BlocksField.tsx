@@ -53,6 +53,7 @@ import {
   LayersPanel,
   OnboardingChecklist,
   SelectionBreadcrumb,
+  SpacingOverlay,
   useBuilderChecklist,
   useCanvasDrag,
   useEditorState,
@@ -687,6 +688,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   that is in the middle of moving.
                 */}
                   <BlockToolbar
+                    editor={editor}
+                    hidden={drag.draggingId !== null}
+                  />
+                  {/*
+                  Suppressed for the same reason and by the same signal. The
+                  bands report a layout that is mid-change during a drag, so
+                  every value on them is about to be wrong.
+                */}
+                  <SpacingOverlay
                     editor={editor}
                     hidden={drag.draggingId !== null}
                   />

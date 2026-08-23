@@ -79,6 +79,7 @@ vi.mock("@nextlyhq/builder/shell", () => {
     LayersPanel: nothing,
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
+    SpacingOverlay: nothing,
     useBuilderChecklist: () => ({
       visible: false,
       steps: [],

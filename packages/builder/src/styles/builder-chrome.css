@@ -880,3 +880,90 @@
   color: var(--nx-builder-text);
   cursor: pointer;
 }
+
+/**
+ * The selected block's spacing, drawn over the page it applies to.
+ *
+ * Margin amber and padding green, which is the box-model palette browser
+ * developer tools have used for years — an author arrives already knowing which
+ * band is which, and a different pairing would cost that for nothing.
+ *
+ * BASE tokens rather than the `--nx-builder-*` set above. Those are declared on
+ * `.nx-builder-chrome`, and the canvas is mounted without the shell in the
+ * harness a browser drives it through, so a builder token would resolve to
+ * nothing exactly where the overlay is under test. The drop indicator reaches
+ * for `--nx-primary` for the same reason.
+ */
+.nx-spacing-overlay {
+  position: absolute;
+  inset: 0;
+  /*
+   * Under the drop indicator and the toolbar, both of which say what is about to
+   * happen; this only describes what already is.
+   */
+  z-index: 1;
+  /*
+   * Never a pointer target. The bands cover the block they measure — the margin
+   * ones cover its neighbours too — so a hit-test that could land here would
+   * make the selected block unclickable, and the author would meet that as a
+   * canvas that stops responding once anything is selected.
+   */
+  pointer-events: none;
+}
+
+.nx-spacing-overlay__band {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nx-spacing-overlay__band[data-box="margin"] {
+  background-color: color-mix(in srgb, var(--nx-chart-4) 22%, transparent);
+}
+
+.nx-spacing-overlay__band[data-box="padding"] {
+  background-color: color-mix(in srgb, var(--nx-chart-3) 22%, transparent);
+}
+
+/*
+ * A negative margin is hatched rather than filled.
+ *
+ * It lies INSIDE the border edge, over the same pixels a padding band occupies,
+ * because that is where the space it removes is. A flat fill there reads as
+ * ordinary space and says the opposite of what is happening; a hatch reads as
+ * the element being pulled over its neighbour, which it is.
+ */
+.nx-spacing-overlay__band[data-box="margin"][data-negative] {
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--nx-chart-4) 34%, transparent) 0 3px,
+    transparent 3px 7px
+  );
+}
+
+/**
+ * The value, on a chip rather than drawn straight onto the band.
+ *
+ * The band is translucent and whatever the author put on the page shows through
+ * it, so bare text lands on arbitrary content and is legible only by luck. The
+ * chip is opaque, which makes the number readable over any page at either theme.
+ *
+ * It is NOT clipped to the band. A four-pixel margin cannot contain a label, and
+ * the case where the value is hardest to guess from looking is exactly the case
+ * where the space is too small to hold it — so the chip overflows and stays
+ * centred on the band it names.
+ */
+.nx-spacing-overlay__value {
+  padding: 0 3px;
+  border-radius: 2px;
+  background-color: var(--nx-background);
+  color: var(--nx-foreground);
+  /* The smallest size already in this sheet, rather than a fourth one. */
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  /* So a column of values does not jitter as digits change under a drag. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

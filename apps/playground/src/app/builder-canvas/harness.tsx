@@ -10,6 +10,7 @@ import { registrySlotSource } from "@nextlyhq/builder";
 import {
   Canvas,
   DropIndicator,
+  SpacingOverlay,
   useCanvasDrag,
   useEditorState,
 } from "@nextlyhq/builder/shell";
@@ -129,7 +130,17 @@ export function BuilderCanvasHarness() {
         selectedIds={editor.selection.ids}
         onSelect={editor.select}
         dragHandlers={drag.handlers}
-        overlay={<DropIndicator target={drag.target} />}
+        /*
+         * Both overlays, because the spacing bands are only measurable where the
+         * canvas is laid out for real. jsdom reports every element as zero-sized,
+         * so the geometry this draws has no other place it can be certified.
+         */
+        overlay={
+          <>
+            <DropIndicator target={drag.target} />
+            <SpacingOverlay editor={editor} hidden={drag.draggingId !== null} />
+          </>
+        }
       />
     </div>
   );

@@ -42,7 +42,6 @@
  * @module block-toolbar
  */
 
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   ArrowDown,
   ArrowUp,
@@ -53,7 +52,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
+import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasContentRect } from "./geometry-dom";
@@ -87,32 +86,6 @@ export interface BlockToolbarProps {
    * hidden bar would still be in the tab order.
    */
   hidden?: boolean;
-}
-
-/**
- * The selected block's element, found by comparing ids rather than by selector.
- *
- * A node id reaches this from stored data, and interpolating it into
- * `querySelector` makes any character CSS treats specially either throw or,
- * worse, match something else. The canvas resolves the same question the same
- * way for the same reason.
- *
- * Deliberately NOT the `data-nx-selected` marker the canvas writes. That marker
- * is applied in a passive effect, and this measurement runs in a layout effect
- * of a DESCENDANT — so on the render where the selection changes, the marker is
- * still on the previously selected element. The bar would spend one frame
- * measuring the wrong block, which is visible as a jump.
- */
-function selectedElement(root: HTMLElement, id: string): Element | null {
-  let found: Element | null = null;
-  // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
-  // that declares its iterator, and this package compiles without one.
-  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    if (found === null && element.getAttribute(NODE_ID_ATTRIBUTE) === id) {
-      found = element;
-    }
-  });
-  return found;
 }
 
 export function BlockToolbar({
@@ -188,7 +161,7 @@ export function BlockToolbar({
      */
     const rects: Rect[] = [];
     for (const id of selectedIds) {
-      const element = selectedElement(root, id);
+      const element = nodeElement(root, id);
       if (element !== null) rects.push(canvasContentRect(element, root));
     }
     const block = unionRect(rects);
@@ -247,7 +220,7 @@ export function BlockToolbar({
      * happens while an image loads or a webfont swaps.
      */
     for (const id of selectedIds) {
-      const block = selectedElement(root, id);
+      const block = nodeElement(root, id);
       if (block !== null) observer.observe(block);
     }
     observer.observe(root);
