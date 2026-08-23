@@ -499,6 +499,16 @@ export function breakpointContexts(
   return contexts;
 }
 
+/**
+ * The longest page scope this compiler will write into a selector.
+ *
+ * A scope keeps two documents rendered into one DOM apart, so it prefixes every
+ * rule the page emits — an oversized one is therefore copied once per rule
+ * rather than once per sheet. Generous against anything a host would pass: a
+ * scope is an element id or a short generated token.
+ */
+export const MAX_SCOPE_LENGTH = 128;
+
 /** The breakpoint id meaning "no media query" in a stored style envelope. */
 export const BASE_BREAKPOINT = "base";
 
@@ -531,7 +541,15 @@ function scopeSelector(
   // NOT split a class: a renderer attaching `region\u00a0one` attaches one
   // valid class, so rejecting it here would drop the scope for a document whose
   // scope was fine and send it back to the selector every other document shares.
-  if (scope === "" || /[ \t\n\f\r]/.test(scope)) {
+  // Bounded as well as shaped. The scope is a caller's string and every rule
+  // this compiler writes carries it, so an oversized one is copied into the
+  // sheet once per rule — and it is the last emitted string with no cap, which
+  // `EMITTABLE_STRING_BOUNDS` is only honest about while none remain.
+  if (
+    scope === "" ||
+    scope.length > MAX_SCOPE_LENGTH ||
+    /[ \t\n\f\r]/.test(scope)
+  ) {
     warnings.push({
       path: "/scope",
       code: "invalid-scope",

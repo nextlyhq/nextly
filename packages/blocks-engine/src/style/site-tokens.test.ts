@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import * as publicEntry from "../index";
-import { compileStyleValues } from "./declarations";
+import { compileStyleValues, safeTokenPrefix } from "./declarations";
 import type { SiteToken } from "./site-tokens";
 import {
   checkTokenKind,
@@ -1085,5 +1085,23 @@ describe("renaming a token whose identity the rules have made unusable", () => {
       "color.primary"
     );
     expect(renamed.id).toBe("color.brand");
+  });
+});
+
+describe("a stored prefix that is not a string", () => {
+  it("falls back with a warning rather than aborting the compile", () => {
+    // Persisted settings are JSON, so `null` reaches here as a value rather
+    // than as the absence the signature suggests — and this function's whole
+    // purpose is that one bad setting costs the tokens, not the page.
+    expect(safeTokenPrefix(null as never).prefix).toBe("--site-");
+    expect(safeTokenPrefix(null as never).warning).toBeDefined();
+  });
+
+  it("still returns the default for an ABSENT prefix, with no warning", () => {
+    // The control: absence is not a malformed setting, so it must not report
+    // one. Without this, a build that warned on everything would satisfy the
+    // case above.
+    expect(safeTokenPrefix(undefined).prefix).toBe("--site-");
+    expect(safeTokenPrefix(undefined).warning).toBeUndefined();
   });
 });

@@ -813,9 +813,13 @@ export type TokenNamingProblem =
 /**
  * Why a LABEL cannot be used, or nothing.
  *
- * A label is what an author reads. It is not written into CSS, so no length cap
- * applies — but the DTCG exporter turns each of its dot-separated parts into a
- * nested group, so its DEPTH is bounded.
+ * A label is what an author reads. It never becomes a custom property, so the
+ * emission cap does not reach it — that belongs to the identity.
+ *
+ * It does reach an exported file, though, and that is why it carries rules at
+ * all: the DTCG exporter splits it on dots and makes each part a key, so its
+ * grammar decides what those keys may contain and its DEPTH decides how far the
+ * reader has to descend to find the token underneath them.
  */
 export function labelProblem(name: unknown): TokenNamingProblem | undefined {
   // Persisted settings reach here unvalidated, and `RegExp.test` COERCES: a

@@ -10,7 +10,11 @@ import { DEFAULT_LIMITS } from "../limits";
 import { validate } from "../validation";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
-import { compilePageCss, MAX_SCANNED_KEYS } from "./compile-page";
+import {
+  compilePageCss,
+  MAX_SCANNED_KEYS,
+  MAX_SCOPE_LENGTH,
+} from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import {
   nodeClassName,
@@ -1657,5 +1661,30 @@ describe("the node walk is bounded by what it reads", () => {
     ];
     const out = compilePageCss(doc(nodes), CTX);
     expect(out.css).not.toContain("#f00");
+  });
+});
+
+describe("the page scope", () => {
+  // The scope prefixes every rule the page emits, so an oversized one is copied
+  // once per rule rather than once per sheet — and it was the last emitted
+  // string with no cap, which is what `EMITTABLE_STRING_BOUNDS` promises there
+  // are none of.
+  it("is refused past its bound, so the sheet is unscoped rather than enormous", () => {
+    const out = css(doc([node("n1", { base: { base: { color: "#111" } } })]), {
+      ...CTX,
+      scope: "s".repeat(MAX_SCOPE_LENGTH + 1),
+    });
+    expect(out).not.toContain("s".repeat(MAX_SCOPE_LENGTH + 1));
+  });
+
+  it("still writes a scope AT the bound, so the refusal is not blanket", () => {
+    // The control. A compiler that dropped every scope would satisfy the case
+    // above and silently unscope every page.
+    const atBound = "s".repeat(MAX_SCOPE_LENGTH);
+    const out = css(doc([node("n1", { base: { base: { color: "#111" } } })]), {
+      ...CTX,
+      scope: atBound,
+    });
+    expect(out).toContain(atBound);
   });
 });

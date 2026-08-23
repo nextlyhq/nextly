@@ -31,6 +31,7 @@
  */
 import { MAX_BLOCK_TYPE_LENGTH, MAX_BREAKPOINT_ID_LENGTH } from "../document";
 
+import { MAX_SCOPE_LENGTH } from "./compile-page";
 import { MAX_VALUE_LENGTH } from "./css-value";
 import { MAX_TOKEN_NAME_LENGTH, MAX_TOKEN_PREFIX_LENGTH } from "./declarations";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./named-class";
@@ -71,4 +72,5 @@ export const EMITTABLE_STRING_BOUNDS: readonly EmittableStringBound[] =
       what: "a custom-property prefix",
       max: MAX_TOKEN_PREFIX_LENGTH,
     }),
+    Object.freeze({ what: "a page scope", max: MAX_SCOPE_LENGTH }),
   ]);

@@ -128,3 +128,11 @@ that assumed a string — one malformed settings entry aborted every page compil
 
 The design-token reader bounds nesting before descending rather than at the
 leaf, so a deeply nested file is refused instead of exhausting the stack.
+
+A page scope is bounded and listed too — it prefixes every rule a page emits, so
+an oversized one is copied once per rule, and it was the last emitted string
+with no cap.
+
+`safeTokenPrefix` takes what actually reaches it. A persisted `null` is not the
+absent value its old signature described, and reading a length off it aborted
+the compile the fallback exists to keep going.

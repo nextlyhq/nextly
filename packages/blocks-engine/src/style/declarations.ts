@@ -183,14 +183,19 @@ export const MAX_TOKEN_NAME_SEGMENTS = 32;
  * be used. Reports rather than throwing, in keeping with everything else here:
  * one bad setting should cost the tokens, not the page.
  */
-export function safeTokenPrefix(prefix: string | undefined): {
+export function safeTokenPrefix(prefix: unknown): {
   prefix: string;
   warning?: string;
 } {
   if (prefix === undefined) return { prefix: DEFAULT_TOKEN_PREFIX };
-  // Length before the pattern, so the cheap test is what rejects an oversized
-  // value rather than the regex scanning it in full first.
+  // TYPE before length before pattern, and the parameter is `unknown` because
+  // that is what actually arrives: this reads a persisted site setting, so a
+  // stored `null` is not the absent value handled above, and reading `.length`
+  // off it aborts the compile this function exists to keep going. Length then
+  // precedes the pattern so the cheap test rejects an oversized value rather
+  // than the regex scanning it in full first.
   if (
+    typeof prefix !== "string" ||
     prefix.length > MAX_TOKEN_PREFIX_LENGTH ||
     !TOKEN_PREFIX_RE.test(prefix)
   ) {
