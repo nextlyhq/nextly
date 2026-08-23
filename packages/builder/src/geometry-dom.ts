@@ -357,6 +357,24 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
  * same reason: an engine may serialize a geometric identity with a residue
  * instead of normalizing it away. It is far below any displacement a person
  * could author or see.
+ *
+ * PER AXIS RATHER THAN PER EDGE, which is a deliberate bound and not an
+ * oversight. A transform is applied about `transform-origin`, so an origin
+ * anchored to one side leaves that side's edge stationary and moves only the
+ * far one — under `transform-origin: top` and `scaleY(0.5)`, measured, the top
+ * edge does not move at all and its margin stays perfectly describable.
+ *
+ * That state is not reachable here. `transform` is a catalog property and
+ * `transform-origin` is NOT, so every transform this system can author is
+ * applied about the initial `50% 50%` — and measured under that origin,
+ * `scaleY(0.5)` moves the top edge as well as the bottom, which is exactly what
+ * an axis answers. Per edge would additionally have to read and resolve the
+ * origin and the untransformed box on every measure, paying for a case the
+ * catalog cannot produce.
+ *
+ * Should `transform-origin` ever join the catalog, this becomes conservative
+ * rather than wrong: an anchored edge keeps its band today and would lose it,
+ * which is the safe direction to be imprecise in.
  */
 function axesMovedBy(own: DOMMatrix | null): { x: boolean; y: boolean } {
   if (own === null) return { ...NOT_MOVED };
