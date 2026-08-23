@@ -372,6 +372,82 @@
 }
 
 /*
+ * A measurement and its unit read as one control, so they sit on one line with
+ * the field taking the space the unit does not. Without this both are block
+ * elements at full width and the unit menu lands under the input as a second
+ * row, which reads as two separate controls for one value.
+ */
+.nx-style-inspector__numeric {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nx-style-inspector__numeric > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * Sized to its content rather than shared evenly with the field: a unit is two
+ * or three characters and the quantity is what an author edits, so an even
+ * split would take space from the half that needs it.
+ *
+ * Named on the control rather than found by position. A positional selector
+ * has to be read against how many children the row happens to have, and most
+ * rows draw NO unit menu — every colour, URL, free-CSS, unitless number and
+ * non-simple dimension — so one written for the trigger claimed the lone input
+ * instead and shrank ordinary inspector rows to their intrinsic width. A class
+ * cannot match the wrong element however the row is composed.
+ */
+.nx-style-inspector__unit {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 4.5rem;
+}
+
+/*
+ * Two states of one property, drawn as one segmented control rather than two
+ * buttons that happen to be adjacent: they share a border and split the width,
+ * so the pair reads as a single choice with one side taken.
+ */
+.nx-style-inspector__toggle {
+  display: flex;
+}
+
+.nx-style-inspector__toggle > button {
+  flex: 1 1 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nx-style-inspector__toggle > button:first-child {
+  border-start-start-radius: var(--radius-md);
+  border-end-start-radius: var(--radius-md);
+}
+
+.nx-style-inspector__toggle > button:last-child {
+  border-start-end-radius: var(--radius-md);
+  border-end-end-radius: var(--radius-md);
+  /* The shared edge is drawn once, by the first button. */
+  border-inline-start-width: 0;
+}
+
+/*
+ * The taken side is filled rather than merely outlined. `aria-pressed` is the
+ * state a screen reader reads, so styling from that attribute keeps what is
+ * seen and what is announced reading off one value.
+ */
+.nx-style-inspector__toggle > button[aria-pressed="true"] {
+  background: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+}
+
+/*
  * A prop the panel cannot draw is dimmed rather than hidden — present, and
  * visibly not one of the things an author can change here.
  */
