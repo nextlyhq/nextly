@@ -278,8 +278,14 @@ function TokenTransfer({
    *
    * Marked rather than cancelled: a `File` read cannot be aborted, so what is
    * available is refusing to act on its answer.
+   *
+   * LAYOUT-timed, for the same reason the latest-set ref is assigned in render.
+   * A passive cleanup runs after the unmount commit, so a read settling in that
+   * gap passes the sequence guard and calls back into a panel that is already
+   * gone — the window this cleanup exists to close, left open by the mechanism
+   * meant to close it. A layout cleanup is synchronous with the unmount.
    */
-  React.useEffect(
+  React.useLayoutEffect(
     () => () => {
       reads.current = -1;
     },
@@ -330,7 +336,9 @@ function TokenTransfer({
   };
 
   const send = (made: ExportResult): void => {
-    download(made);
+    // Nothing to download is not a file worth handing over. An empty artefact
+    // means the export could not be written, and the reason is in its report.
+    if (made.text !== "") download(made);
     /*
      * A clean export says nothing and CLEARS nothing. Exporting is the common
      * next step after an import, and the import's report is the only list

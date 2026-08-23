@@ -102,7 +102,10 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
       skipped: [],
     };
   }
-  const skipped = read.issues.map(issue => issue.message);
+  const skipped = [
+    ...read.issues.map(issue => issue.message),
+    ...discarded(parsed),
+  ];
   if (read.tokens.length === 0) {
     return {
       ok: false,
@@ -124,6 +127,54 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
 }
 
 /**
+ * Entries the reader walked past without a word.
+ *
+ * The engine's walk descends into every child whose key does not begin with
+ * `$`, and simply CONTINUES when that child is not an object — it is neither a
+ * group to descend into nor a token to read. Nothing is reported, so a document
+ * shaped like `{ good: <token>, lost: 42 }` imports one token and says nothing
+ * about the other: part of the source file gone, from a feature whose whole
+ * purpose is naming what was lost.
+ *
+ * Detected here rather than in the engine because that is a change to a shared
+ * package this task does not own — and because the question this asks is
+ * narrow: not "is this a valid token", which is the engine's to answer and
+ * would be a second implementation of it, but "is this shaped like anything at
+ * all". A number where a group or a token belongs is neither, whatever the
+ * rules for tokens turn out to be.
+ *
+ * Walked with an explicit stack rather than by recursion, for the reason the
+ * conversion is caught above: a deep document must not put this on the stack
+ * too.
+ */
+function discarded(root: unknown): string[] {
+  const lost: string[] = [];
+  const stack: { node: unknown; path: string[] }[] = [{ node: root, path: [] }];
+  while (stack.length > 0) {
+    const here = stack.pop();
+    if (here === undefined) continue;
+    if (!isRecord(here.node)) continue;
+    for (const [key, value] of Object.entries(here.node)) {
+      if (key.startsWith("$")) continue;
+      const path = [...here.path, key];
+      if (isRecord(value)) {
+        stack.push({ node: value, path });
+        continue;
+      }
+      lost.push(
+        `"${path.join(".")}" is neither a token nor a group of them, so it was skipped.`
+      );
+    }
+  }
+  return lost;
+}
+
+/** An object with named keys, which is what a group and a token both are. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
  * The table with `incoming` layered over it, matched on identity.
  *
  * Order is preserved for what was already there, and new tokens are appended,
@@ -136,6 +187,7 @@ function mergeById(
 ): { tokens: SiteTokenSet; landed: number; refused: string[] } {
   const refused: string[] = [];
   const wanted = oneEach(incoming, refused);
+
   /*
    * Conflicts are judged against the table as it WOULD be with everything
    * applied, not against a destination mutated entry by entry.
@@ -147,11 +199,51 @@ function mergeById(
    * tool emits them whenever someone reorganises a palette — and half-applying
    * one is worse than refusing it, because the half that lands is a rename the
    * author did not ask for on its own.
+   *
+   * Judged REPEATEDLY, because a refusal can free what it was blocking: a token
+   * whose only clash is with another incoming token that must itself be refused
+   * is perfectly importable once that one is gone. One pass would discard it for
+   * a conflict that does not survive the pass. Each round removes at least one
+   * token, so this terminates in at most as many rounds as the file has tokens,
+   * and in practice in one.
    */
-  const blocked = clashingIn(applyAll(into.tokens, wanted), wanted, refused);
-  const taken = new Map(
-    [...wanted].filter(([identity]) => !blocked.has(identity))
-  );
+  const taken = new Map(wanted);
+  /*
+   * TWO passes, and the order between them is the whole point.
+   *
+   * First remove what clashes with a token this file does not touch. Those
+   * refusals are forced — the destination is not going to move — and removing
+   * them can free tokens that were only blocked THROUGH them: a file bringing
+   * `{id:"foo.bar", name:"taken"}` and `{id:"foo-bar", name:"usable"}` has the
+   * first refused for its name, and the second shares a custom property only
+   * with that first one, so it is importable the moment the first is gone. One
+   * pass would discard it for a conflict that does not survive the pass.
+   *
+   * Then remove whatever still clashes, which by then is only tokens clashing
+   * with EACH OTHER. A file holding two tokens that are one token here is a
+   * file that contradicts itself, and there is no ground to prefer either, so
+   * both are refused and both are named.
+   *
+   * Two passes suffice rather than a loop: removing tokens only ever shrinks
+   * the table, so nothing new can clash after the first pass.
+   */
+  for (const identity of clashingIn(
+    applyAll(into.tokens, taken),
+    taken,
+    refused,
+    "forced"
+  )) {
+    taken.delete(identity);
+  }
+  for (const identity of clashingIn(
+    applyAll(into.tokens, taken),
+    taken,
+    refused,
+    "mutual"
+  )) {
+    taken.delete(identity);
+  }
+
   return {
     tokens: { ...into, tokens: applyAll(into.tokens, taken) },
     landed: taken.size,
@@ -185,16 +277,35 @@ function oneEach(
   return wanted;
 }
 
-/** The destination with every wanted token applied, replacing or appending. */
+/**
+ * The destination with every wanted token applied, replacing or appending.
+ *
+ * The destination is indexed ONCE rather than searched per incoming token. A
+ * scan inside the loop makes the whole import quadratic, and it runs on the
+ * main thread while the studio is open: measured at roughly 1.3 seconds for
+ * five thousand tokens, 4.7 for ten thousand and 18 for twenty thousand, with
+ * the editor unresponsive throughout. A design system that large is unusual and
+ * a generated one is not.
+ */
 function applyAll(
   base: readonly SiteToken[],
   wanted: ReadonlyMap<string, SiteToken>
 ): SiteToken[] {
   const tokens = [...base];
+  const at = new Map<string, number>();
+  tokens.forEach((token, index) => {
+    // First wins, matching the emitter: where a table already holds two entries
+    // under one identity, a replacement lands on the one that would be written.
+    if (!at.has(tokenIdentity(token))) at.set(tokenIdentity(token), index);
+  });
   for (const [identity, token] of wanted) {
-    const at = tokens.findIndex(held => tokenIdentity(held) === identity);
-    if (at === -1) tokens.push(token);
-    else tokens[at] = token;
+    const index = at.get(identity);
+    if (index === undefined) {
+      at.set(identity, tokens.length);
+      tokens.push(token);
+    } else {
+      tokens[index] = token;
+    }
   }
   return tokens;
 }
@@ -218,13 +329,15 @@ function applyAll(
 function clashingIn(
   proposed: readonly SiteToken[],
   wanted: ReadonlyMap<string, SiteToken>,
-  refused: string[]
+  refused: string[],
+  against: "forced" | "mutual"
 ): Set<string> {
   return new Set([
     ...sharingAKey(
       proposed,
       wanted,
       refused,
+      against,
       token => token.name,
       (token, name) =>
         `"${name}" is already the name of a different token on this site, so it was not imported. Rename one of them and try again.`
@@ -233,6 +346,7 @@ function clashingIn(
       proposed,
       wanted,
       refused,
+      against,
       // The prefix is the same string in front of every property, so it can
       // neither create a collision nor prevent one — the same reason the
       // studio's own collision check composes without it.
@@ -255,6 +369,7 @@ function sharingAKey(
   proposed: readonly SiteToken[],
   wanted: ReadonlyMap<string, SiteToken>,
   refused: string[],
+  against: "forced" | "mutual",
   keyOf: (token: SiteToken) => string,
   say: (token: SiteToken, key: string) => string
 ): Set<string> {
@@ -264,6 +379,11 @@ function sharingAKey(
   const blocked = new Set<string>();
   for (const [key, sharing] of held) {
     if (sharing.length < 2) continue;
+    // Whether this clash involves a token the file does not touch. If it does,
+    // the refusal is forced; if it does not, the incoming tokens are only
+    // clashing with each other and may still be freed by an earlier removal.
+    const untouched = sharing.some(token => !wanted.has(tokenIdentity(token)));
+    if (against === "forced" && !untouched) continue;
     for (const token of sharing) {
       const identity = tokenIdentity(token);
       // Only INCOMING tokens are blocked. A clash the destination already had
@@ -308,11 +428,38 @@ export interface ExportResult {
  */
 export function exportDtcg(tokens: SiteTokenSet): ExportResult {
   const { document, issues } = tokensToDtcg(tokens);
+  const skipped = issues.map(issue => issue.message);
+  let text: string;
+  try {
+    text = `${JSON.stringify(document, null, 2)}\n`;
+  } catch {
+    /*
+     * `SiteToken.extensions` is `Record<string, unknown>` and carries vendor
+     * data untouched, which is what the format asks for — and a site's own
+     * TypeScript config can put a `bigint`, a cycle or a throwing `toJSON` in
+     * there. `tokensToDtcg` copies it faithfully and `JSON.stringify` then
+     * throws, out of a click handler, so nothing downloads and nothing is
+     * said.
+     *
+     * Answered with an empty artefact and a reason rather than a throw: the
+     * caller downloads what it is given, so a file that cannot be written has
+     * to arrive here as a report.
+     */
+    return {
+      text: "",
+      filename: "tokens.json",
+      mime: "application/json",
+      skipped: [
+        ...skipped,
+        "This site's tokens carry vendor data that cannot be written to a file — a value JSON has no form for, such as a very large number or a structure that refers to itself. Nothing was exported.",
+      ],
+    };
+  }
   return {
-    text: `${JSON.stringify(document, null, 2)}\n`,
+    text,
     filename: "tokens.json",
     mime: "application/json",
-    skipped: issues.map(issue => issue.message),
+    skipped,
   };
 }
 

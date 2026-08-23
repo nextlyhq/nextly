@@ -729,6 +729,15 @@ describe("bringing a token file in", () => {
     expect(screen.getByRole("status").textContent).toContain("cubicBezier");
   });
 
+  /*
+   * NOT SEPARATED HERE either, and for the same reason as the render-versus-
+   * effect note above: whether the unmount invalidation is layout-timed or
+   * passive. `unmount` runs inside `act`, which flushes passive effects, so the
+   * commit-to-passive-cleanup window never opens and both forms pass —
+   * measured. It is layout-timed on the reasoning that a passive cleanup runs
+   * after the unmount commit, which is precisely the gap it exists to close.
+   */
+
   it("a read that lands after the panel is GONE changes nothing", async () => {
     // The shell renders one left panel at a time and keys them, so switching
     // to Layers while a large file is being read unmounts this — and the

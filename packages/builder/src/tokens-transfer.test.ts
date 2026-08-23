@@ -363,6 +363,105 @@ describe("what goes in", () => {
     }
   });
 
+  it("keeps a token whose only clash was with one that had to be refused", () => {
+    // The dependent case. `foo.bar` must fail on its name against a token this
+    // file does not touch; `foo-bar` shares a custom property only with
+    // `foo.bar`, so it is importable the moment that one is gone. Judged in a
+    // single pass it is discarded for a conflict that does not survive.
+    const site: SiteTokenSet = {
+      tokens: [{ name: "taken", kind: "color", values: { light: "#111111" } }],
+    };
+    const file = exported({
+      tokens: [
+        {
+          id: "foo.bar",
+          name: "taken",
+          kind: "color",
+          values: { light: "#222222" },
+        },
+        {
+          id: "foo-bar",
+          name: "usable",
+          kind: "color",
+          values: { light: "#333333" },
+        },
+      ],
+    });
+    const result = importDtcg(file, site);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.imported).toBe(1);
+    expect(result.tokens.tokens.map(t => t.name)).toEqual(["taken", "usable"]);
+    expect(result.skipped.join(" ")).toContain(
+      "already the name of a different token"
+    );
+    // And the result the engine sees is clean.
+    expect(emitTokenBlocks(result.tokens, ":root").issues).toEqual([]);
+  });
+
+  it("refuses BOTH when a file contradicts only itself", () => {
+    // The control for the pass above. Two incoming tokens that are one token
+    // here, neither clashing with the site — there is no ground to prefer
+    // either, so both are refused and both are named.
+    const file = exported({
+      tokens: [
+        { id: "a.b", name: "one", kind: "color", values: { light: "#111111" } },
+        { id: "a-b", name: "two", kind: "color", values: { light: "#222222" } },
+      ],
+    });
+    const result = importDtcg(file, { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.imported).toBe(0);
+    expect(result.skipped.join(" ")).toContain("both become");
+  });
+
+  it("reports an export it could not WRITE rather than throwing", () => {
+    // `extensions` carries vendor data untouched, as the format requires, and
+    // a site's own config can put a value in there that JSON has no form for.
+    // Thrown from a click handler, nothing downloads and nothing is said.
+    const cyclic: Record<string, unknown> = {};
+    cyclic["self"] = cyclic;
+    const made = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111" },
+          extensions: { vendor: cyclic },
+        },
+      ],
+    });
+    expect(made.text).toBe("");
+    expect(made.skipped.join(" ")).toContain("cannot be written to a file");
+  });
+
+  it("names an entry that is neither a token nor a group", () => {
+    // The engine's walk descends into every non-`$` child and simply continues
+    // when it is not an object — nothing reported. Part of the source file is
+    // gone, from a feature whose whole purpose is naming what was lost.
+    const document = JSON.parse(exported(SITE)) as Record<string, unknown>;
+    document["lost"] = 42;
+    (document["nested"] as unknown) = { deeper: "also lost" };
+
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.imported).toBe(3);
+    const said = result.skipped.join(" ");
+    expect(said).toContain('"lost" is neither a token nor a group');
+    expect(said).toContain('"nested.deeper" is neither a token nor a group');
+  });
+
+  it("says nothing about a well-formed document", () => {
+    // The control: a detector that named everything would satisfy the test
+    // above without distinguishing anything.
+    const result = importDtcg(exported(SITE), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skipped).toEqual([]);
+  });
+
   it("REFUSES a document nested past what the reader can walk", () => {
     // The conversion recurses, so a few thousand groups — tens of kilobytes of
     // file — exhausts the stack. A `RangeError` is not something a caller can
