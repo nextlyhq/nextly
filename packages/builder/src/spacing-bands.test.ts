@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Rect } from "./geometry";
 import {
   sameBands,
+  spacingApplies,
   spacingBands,
   type EdgeLengths,
   type SpacingBand,
@@ -377,4 +378,46 @@ describe("comparing two band lists", () => {
      */
     expect(sameBands([one()], [one(over)])).toBe(false);
   });
+});
+
+describe("which spacing a generated box can have", () => {
+  it.each([
+    "table-row-group",
+    "table-header-group",
+    "table-footer-group",
+    "table-row",
+    "table-column-group",
+    "table-column",
+    "ruby-base",
+    "ruby-text",
+    "ruby-base-container",
+    "ruby-text-container",
+  ])("gives %s neither margin nor padding", display => {
+    /*
+     * CSS applies neither to an internal table or ruby box, but
+     * `getComputedStyle` still answers with whatever the author declared — so
+     * reading it unconditionally draws bands for space that does not exist and
+     * cannot be made to exist by changing the value.
+     */
+    expect(spacingApplies(display)).toEqual({ margin: false, padding: false });
+  });
+
+  it("gives table-cell padding but not margin", () => {
+    // The one internal table box padding applies to, and the common case an
+    // author actually sets. Collapsing it into the group above would blank the
+    // padding of every table cell on the page.
+    expect(spacingApplies("table-cell")).toEqual({
+      margin: false,
+      padding: true,
+    });
+  });
+
+  it.each(["block", "flex", "grid", "inline-block", "table", "table-caption"])(
+    "gives %s both",
+    display => {
+      // `table-caption` is here deliberately: it is NOT an internal table box,
+      // and its margins apply normally.
+      expect(spacingApplies(display)).toEqual({ margin: true, padding: true });
+    }
+  );
 });

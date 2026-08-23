@@ -279,14 +279,28 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
  * RTL.
  *
  * `clientWidth` excludes both the border and the gutter while `offsetWidth`
- * excludes neither, so their difference beyond the borders IS the gutter. Both
- * are integer-rounded, hence the half-pixel threshold: a real scrollbar is
- * around fifteen pixels and sub-pixel layout noise is never that.
+ * excludes neither, so their difference beyond the borders IS the gutter.
+ *
+ * THE THRESHOLD IS A ROUNDING BOUND, not a guess. Both readings are integer
+ * rounded INDEPENDENTLY while the border subtracted from them is exact and may
+ * be fractional, so the residue on a container with no scrollbar at all can
+ * reach a whole pixel — half from each — and a fractional border on a high-DPI
+ * display is enough to produce it. Two pixels clears that bound with room, and
+ * clears nothing real: the narrowest scrollbar a platform draws is `thin`, which
+ * is eight pixels at its slimmest, and a classic one is around fifteen.
  *
  * Reported rather than corrected. The caller declines a block whose padding
  * geometry cannot be represented, which is one rule it already applies to
  * several other shapes.
  */
+/**
+ * The most two independently rounded readings can differ by, plus a margin.
+ *
+ * Half a pixel each, so a whole pixel of residue is reachable with no scrollbar
+ * present; two leaves room without reaching any real scrollbar width.
+ */
+const ROUNDING_BOUND_PX = 2;
+
 export function hasScrollbarGutter(
   element: Element,
   borders: { x: number; y: number }
@@ -310,5 +324,5 @@ export function hasScrollbarGutter(
 
   const gutterX = element.offsetWidth - element.clientWidth - borders.x;
   const gutterY = element.offsetHeight - element.clientHeight - borders.y;
-  return gutterX > 0.5 || gutterY > 0.5;
+  return gutterX > ROUNDING_BOUND_PX || gutterY > ROUNDING_BOUND_PX;
 }

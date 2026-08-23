@@ -922,8 +922,18 @@
    *
    * `clip` rather than `hidden`: both contain the overflow, and `hidden` makes
    * the element a scroll container, which is the thing being avoided.
+   *
+   * `overflow-clip-margin` is what keeps the clip from being the wrong answer for
+   * a band that legitimately sits OUTSIDE the root. The first block's top margin
+   * can collapse through the page wrapper and the canvas — neither establishes a
+   * formatting context — so the block's border box starts at the root's top edge
+   * and its margin band is placed at a negative offset. A bare clip would remove
+   * that band while the gap it names is plainly visible. The allowance paints it
+   * without making it scrollable, which is the whole point: an extended clip
+   * region contributes no scrollable overflow.
    */
   overflow: clip;
+  overflow-clip-margin: 2rem;
 }
 
 .nx-spacing-overlay__band {

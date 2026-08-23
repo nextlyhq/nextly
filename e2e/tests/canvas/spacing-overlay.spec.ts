@@ -489,6 +489,129 @@ test.describe("spacing values on the canvas", () => {
     await expect(page.locator(BAND)).toHaveCount(0);
   });
 
+  test("bands catch up when a CSS transition finishes", async ({ page }) => {
+    /*
+     * `transition` is a catalog property, and a transition emits nothing an
+     * observer sees: the frames resize nothing and mutate nothing.
+     *
+     * TRANSFORM rather than margin, and that choice is what makes this separate.
+     * A transitioning margin grows the page, so the canvas root resizes on every
+     * frame and its own observer does the work — measured, by removing the
+     * completion listeners and watching a margin version of this test stay green.
+     * A transform changes no layout at all, so nothing resizes and nothing
+     * mutates after the style is set, and the only route to the final geometry is
+     * the completion event.
+     *
+     * The mutation that starts it measures at frame zero, where the computed
+     * transform is still `none` and the bands are full size. Arriving at half can
+     * only come from `transitionend`.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.click();
+
+    const before = await page.locator(band("padding", "bottom")).boundingBox();
+    if (before === null)
+      throw new Error("no padding band before the transition");
+    expect(Math.abs(before.height - PADDING_BOTTOM)).toBeLessThan(TOLERANCE);
+
+    await block.evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.transformOrigin = "top left";
+      el.style.transition = "transform 400ms linear";
+      el.style.transform = "scale(0.5)";
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const box = await page
+            .locator(band("padding", "bottom"))
+            .boundingBox();
+          return box === null ? null : Math.round(box.height);
+        },
+        { timeout: 5000 }
+      )
+      .toBeLessThan(PADDING_BOTTOM / 2 + 5);
+
+    // The label never moved: the author still typed 120.
+    await expect(page.locator(band("padding", "bottom"))).toHaveText(
+      String(PADDING_BOTTOM)
+    );
+  });
+
+  test("a scroll container with NO scrollbar still draws its bands", async ({
+    page,
+  }) => {
+    /*
+     * A REGRESSION GUARD, and not a separating test — stated so it is not read as
+     * coverage of the threshold itself.
+     *
+     * It pins that an ordinary scroll container is not refused. It does NOT
+     * exercise the rounding residue the two-pixel bound exists for: that needs
+     * `offsetWidth` and `clientWidth` to round apart, and measured on this
+     * platform a `0.333px` border computes to `1px` — Chrome snaps border widths
+     * to device pixels — leaving a residue of exactly zero. Setting the bound to
+     * `0.001` leaves this test green, which is the honest statement of what it
+     * covers. The bound is derived from the arithmetic instead: half a pixel of
+     * rounding from each reading against an exact border, so a whole pixel is
+     * reachable with no scrollbar present.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+
+    await block.evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.overflow = "auto";
+      el.style.scrollbarGutter = "auto";
+    });
+    await block.click();
+
+    await expect(page.locator(band("padding", "bottom"))).toHaveText(
+      String(PADDING_BOTTOM)
+    );
+  });
+
+  test("still draws a top margin that collapsed out of the canvas", async ({
+    page,
+  }) => {
+    /*
+     * Neither `.nx-pb-page` nor `.nx-canvas` establishes a formatting context, so
+     * the first block's top margin collapses THROUGH both and out of the canvas.
+     * Measured: setting `margin-top: 40px` on the first block moves the canvas
+     * root down by 40 while the block's offset inside it stays 0 — the border box
+     * starts at the root's top edge and the margin band belongs above it.
+     *
+     * What this asserts is that the overlay still DRAWS it, at a negative offset,
+     * rather than dropping a band it cannot place inside the layer. Whether those
+     * pixels paint is the stylesheet's half — `overflow: clip` with an
+     * `overflow-clip-margin` allowance, which paints outside the layer without
+     * contributing to the scroll extent — and a layout assertion cannot see paint,
+     * so this does not claim to cover it.
+     */
+    await page.goto(ROUTE);
+    const first = page.locator('[data-nx-node="hx-heading"]');
+    await expect(first).toBeVisible();
+
+    await first.evaluate(node => {
+      (node as HTMLElement).style.marginTop = "40px";
+    });
+    await first.click();
+
+    const layerBox = await page.locator(".nx-spacing-overlay").boundingBox();
+    const bandBox = await page.locator(band("margin", "top")).boundingBox();
+    if (layerBox === null || bandBox === null) {
+      throw new Error("no overlay layer or top margin band");
+    }
+
+    await expect(page.locator(band("margin", "top"))).toHaveText("40");
+    expect(Math.abs(bandBox.height - 40)).toBeLessThan(TOLERANCE);
+    // Above the layer's own top edge, which is the escaped-margin case.
+    expect(bandBox.y).toBeLessThan(layerBox.y);
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {

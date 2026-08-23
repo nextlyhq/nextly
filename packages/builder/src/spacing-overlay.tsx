@@ -70,6 +70,7 @@ import {
 } from "./geometry-dom";
 import {
   sameBands,
+  spacingApplies,
   spacingBands,
   type EdgeLengths,
   type SpacingBand,
@@ -137,6 +138,9 @@ function boxesOf(style: CSSStyleDeclaration): {
     },
   };
 }
+
+/** Four zero edges, for a box CSS gives no margin or no padding. */
+const NO_EDGES: EdgeLengths = { top: 0, right: 0, bottom: 0, left: 0 };
 
 /** One array identity for every empty result, so React can bail out of a render. */
 const NO_BANDS: readonly SpacingBand[] = [];
@@ -232,7 +236,20 @@ export function SpacingOverlay({
       return;
     }
 
-    const boxes = boxesOf(style);
+    /*
+     * Zeroed where the generated box cannot have them. `display: table-row` and
+     * the internal ruby boxes take no margin, and everything internal to a table
+     * except a cell takes no padding — but the computed style still answers with
+     * whatever the author declared, so reading it unconditionally draws bands
+     * for space that does not exist.
+     */
+    const applies = spacingApplies(style.display);
+    const measured = boxesOf(style);
+    const boxes = {
+      borderWidths: measured.borderWidths,
+      margin: applies.margin ? measured.margin : NO_EDGES,
+      padding: applies.padding ? measured.padding : NO_EDGES,
+    };
     const borders = {
       x: boxes.borderWidths.left + boxes.borderWidths.right,
       y: boxes.borderWidths.top + boxes.borderWidths.bottom,
@@ -349,9 +366,26 @@ export function SpacingOverlay({
       characterData: true,
     });
 
+    /*
+     * A transition moves geometry over time and emits nothing an observer sees:
+     * `transition` is a catalog property, a transform or margin animating past
+     * its first frame resizes nothing, and no DOM mutation accompanies the
+     * frames. The completion events are what the browser does offer, and they
+     * bubble, so one listener on the root covers every block.
+     *
+     * This corrects the FINAL geometry rather than following the animation.
+     * Tracking the frames between would mean measuring on every one, which costs
+     * more than a band being briefly behind a transition the author is watching.
+     */
+    const settled = (): void => measure();
+    root.addEventListener("transitionend", settled);
+    root.addEventListener("transitioncancel", settled);
+
     return () => {
       sizes?.disconnect();
       styles?.disconnect();
+      root.removeEventListener("transitionend", settled);
+      root.removeEventListener("transitioncancel", settled);
     };
     /*
      * `document` re-subscribes, and dropping it strands the observer on a

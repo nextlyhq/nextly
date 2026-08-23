@@ -329,3 +329,51 @@ export function sameBands(
     );
   });
 }
+
+/**
+ * Boxes that CSS gives no margin, whatever the computed style reports.
+ *
+ * `getComputedStyle` answers with the declared computed length for a property
+ * that does not apply to the generated box, so an author who sets a margin on a
+ * `table-row` gets a number back from a box that has none. Drawing it names
+ * space that does not exist and cannot be made to exist by changing the value.
+ *
+ * The internal table boxes and the internal ruby boxes, both of which the
+ * catalog's `display` keyword list ships. `table-caption` is deliberately absent
+ * — it is not an internal table box and its margins apply normally.
+ */
+const MARGINLESS: ReadonlySet<string> = new Set([
+  "table-row-group",
+  "table-header-group",
+  "table-footer-group",
+  "table-row",
+  "table-cell",
+  "table-column-group",
+  "table-column",
+  "ruby-base",
+  "ruby-text",
+  "ruby-base-container",
+  "ruby-text-container",
+]);
+
+/**
+ * Boxes that CSS gives no padding.
+ *
+ * The same set MINUS `table-cell`, which is the one internal table box padding
+ * does apply to — and the distinction is the point, because a cell's padding is
+ * the common case an author actually sets.
+ */
+const PADDINGLESS: ReadonlySet<string> = new Set(
+  [...MARGINLESS].filter(display => display !== "table-cell")
+);
+
+/** Which spacing a generated box of this display type can actually have. */
+export function spacingApplies(display: string): {
+  margin: boolean;
+  padding: boolean;
+} {
+  return {
+    margin: !MARGINLESS.has(display),
+    padding: !PADDINGLESS.has(display),
+  };
+}
