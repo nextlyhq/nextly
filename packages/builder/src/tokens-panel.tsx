@@ -248,15 +248,33 @@ function TokenTransfer({
    * callback was created with.
    */
   const current = React.useRef(tokens);
-  React.useEffect(() => {
-    current.current = tokens;
-  }, [tokens]);
+  // Assigned during RENDER rather than from an effect. An effect runs after
+  // commit, so a read resolving between the commit of an edit and the effect
+  // that records it would still merge into the previous set — the window this
+  // ref exists to close, left open by the mechanism meant to close it. A ref is
+  // a mutable box rather than state, so writing the newest value this component
+  // has been given is idempotent and observed by nothing.
+  current.current = tokens;
+
+  /*
+   * Which read is the current one.
+   *
+   * Two files can be in flight at once — an author picks one, then picks
+   * another before the first answers — and their answers need not arrive in
+   * order. Without this, a slow rejection lands after a fast success and
+   * reports failure for an import that was applied and persisted. Same rule the
+   * save path follows: an answer for a superseded operation says nothing.
+   */
+  const reads = React.useRef(0);
 
   const read = async (file: File): Promise<void> => {
+    const mine = reads.current + 1;
+    reads.current = mine;
     let text: string;
     try {
       text = await file.text();
     } catch {
+      if (mine !== reads.current) return;
       /*
        * The file could not be READ at all — removed between choosing and
        * opening, a permission refusal, a failing disk. Distinct from a file
@@ -272,6 +290,7 @@ function TokenTransfer({
       });
       return;
     }
+    if (mine !== reads.current) return;
     const result = importDtcg(text, current.current);
     if (!result.ok) {
       setReport({

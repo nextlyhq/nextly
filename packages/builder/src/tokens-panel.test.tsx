@@ -638,6 +638,60 @@ describe("bringing a token file in", () => {
     );
   });
 
+  /*
+   * NOT SEPARATED HERE, and said rather than left as a silent gap: whether the
+   * latest-set ref is assigned during RENDER or from an effect. The window is
+   * real — an effect runs after commit, so a read resolving between the commit
+   * of an edit and the effect that records it reads the previous set — but this
+   * harness cannot open it: `rerender` runs inside `act`, which flushes effects
+   * before returning, so both forms pass. Measured: moving the assignment back
+   * into an effect fails nothing.
+   *
+   * The assignment is therefore in render on reasoning rather than on a failing
+   * test, and the reasoning is that an effect cannot close a window that opens
+   * before effects run.
+   */
+
+  it("an OLDER read does not overwrite a newer one's report", async () => {
+    // Two files in flight, answering out of order. Without a sequence guard a
+    // slow rejection lands after a fast success and reports failure for an
+    // import that was applied and persisted.
+    const onChange = vi.fn();
+    let rejectFirst: ((reason: Error) => void) | undefined;
+    const slow = new File(["x"], "a.json", { type: "application/json" });
+    Object.defineProperty(slow, "text", {
+      value: () =>
+        new Promise<string>((_, reject) => {
+          rejectFirst = reject;
+        }),
+    });
+
+    render(<TokensPanel tokens={TOKENS} onChange={onChange} />);
+    const input = screen.getByLabelText("Import");
+
+    fireEvent.change(input, { target: { files: [slow] } });
+    // The author picks a second, good file before the first answers.
+    fireEvent.change(input, { target: { files: [fileOf(FILE)] } });
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+    expect(screen.getByRole("status").textContent).toContain(
+      "Imported 1 token"
+    );
+
+    // Now the FIRST read fails, late.
+    rejectFirst?.(new Error("EACCES"));
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+
+    // The success still stands: the older answer said nothing.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Imported 1 token"
+    );
+  });
+
   it("keeps the report until it is dismissed", async () => {
     mount(TOKENS);
     await chooseFile(FILE);
