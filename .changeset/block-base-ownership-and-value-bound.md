@@ -74,3 +74,14 @@ The shared-input stamp's encoding is bumped, and its contract now covers what
 the COMPILER emits as well as what the stamp serializes. A stamp keys on inputs,
 so it cannot see the compiler treating unchanged inputs differently — a stored
 stylesheet would otherwise be served for a compile that no longer produces it.
+
+A custom-property prefix is bounded too, and the block-name cap now reaches the
+generated block manifest and its published JSON Schema. Without the second,
+`nextly generate` accepts a declaration `registerBlocks` refuses at boot, which
+is the opposite of what an artifact describing a plugin's declaration is for.
+The manifest restates the cap rather than importing it, as it already does for
+the block-version bound, and the engine-parity test holds the two equal.
+
+`isBlockType` and its cap are also exported from `@nextlyhq/blocks-engine/format`,
+so a generator reading the document format from the lightweight entry can apply
+the same rule instead of deciding independently what a node type may be.

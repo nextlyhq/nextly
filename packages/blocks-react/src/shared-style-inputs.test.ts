@@ -685,10 +685,10 @@ describe("what a corrupt or hostile settings row costs", () => {
     // The case a truncating bound could not see: these differ only far past any
     // prefix a cut would keep, and the compiler emits different CSS for them.
     //
-    // Sized UNDER `MAX_VALUE_LENGTH` on purpose, and this fixture was wrong
-    // before — it used 9000 characters, which the engine refuses outright before
-    // parsing, so both variants emitted nothing and the premise in its own
-    // comment was false. A value the compiler will not read cannot demonstrate
+    // Sized UNDER `MAX_VALUE_LENGTH`, which is what makes the case real: the
+    // engine refuses a longer value outright before parsing, so two variants of
+    // one would both emit nothing and agree for a reason that has nothing to do
+    // with the walk. A value the compiler will not read cannot demonstrate
     // sensitivity to a change inside it.
     const big = (tail: string) => ({
       id: "c1",

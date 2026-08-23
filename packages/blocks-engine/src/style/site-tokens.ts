@@ -63,6 +63,7 @@ import {
 } from "./css-value";
 import {
   MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_PREFIX_LENGTH,
   isTokenName,
   safeTokenPrefix,
   tokenCustomProperty,
@@ -235,7 +236,7 @@ function tokenIssue(
  * everything after it is CSS the site never wrote. `x:1}body{color` is the
  * whole attack.
  */
-export { isTokenName, MAX_TOKEN_NAME_LENGTH };
+export { isTokenName, MAX_TOKEN_NAME_LENGTH, MAX_TOKEN_PREFIX_LENGTH };
 
 /**
  * A font descriptor that goes inside a quoted CSS string, made safe to put

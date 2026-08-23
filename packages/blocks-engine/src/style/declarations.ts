@@ -130,6 +130,20 @@ const RESERVED_TOKEN_PREFIXES = ["--nx-", "--tw-"] as const;
 const TOKEN_PREFIX_RE = /^--[a-z0-9-]*$/;
 
 /**
+ * The longest custom-property prefix this engine will write.
+ *
+ * The pattern above constrains the alphabet and not the length, and the prefix
+ * is copied into every token definition and every `var()` that reads one — so
+ * one oversized stored value is written once per token and once per reference,
+ * on every compile.
+ *
+ * Small because a prefix is small: `--site-` is seven characters and a vendor
+ * prefix is not much more. Set well clear of that and still far below anything
+ * a person would type by accident, so the cap is only met by data already wrong.
+ */
+export const MAX_TOKEN_PREFIX_LENGTH = 64;
+
+/**
  * The prefix to write tokens under, or the default when the supplied one cannot
  * be used. Reports rather than throwing, in keeping with everything else here:
  * one bad setting should cost the tokens, not the page.
@@ -139,7 +153,12 @@ export function safeTokenPrefix(prefix: string | undefined): {
   warning?: string;
 } {
   if (prefix === undefined) return { prefix: DEFAULT_TOKEN_PREFIX };
-  if (!TOKEN_PREFIX_RE.test(prefix)) {
+  // Length before the pattern, so the cheap test is what rejects an oversized
+  // value rather than the regex scanning it in full first.
+  if (
+    prefix.length > MAX_TOKEN_PREFIX_LENGTH ||
+    !TOKEN_PREFIX_RE.test(prefix)
+  ) {
     return {
       prefix: DEFAULT_TOKEN_PREFIX,
       warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. A prefix starts with "--" and holds only lowercase letters, digits and dashes.`,

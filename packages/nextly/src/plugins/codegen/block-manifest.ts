@@ -92,6 +92,21 @@ const ALLOW_ENTRY_RE = new RegExp(
 export const MAX_DECLARED_BLOCK_VERSION = 1001;
 
 /**
+ * The longest block name a declaration may carry.
+ *
+ * The patterns below constrain the alphabet and not the length, so a name of
+ * megabytes of otherwise-valid characters satisfies them, is scanned in full on
+ * every generation, and is written into the manifest and its JSON Schema.
+ *
+ * Restated rather than imported for the reason {@link MAX_DECLARED_BLOCK_VERSION}
+ * is, and held to the engine's value by the same parity test. Without it
+ * `nextly generate` accepts a declaration that `registerBlocks` refuses at boot,
+ * which is the divergence an artifact describing what a plugin declared exists
+ * to prevent.
+ */
+export const MAX_DECLARED_BLOCK_NAME_LENGTH = 128;
+
+/**
  * Names the engine keeps for itself. A document node of this type is a
  * component instance rather than a block, so a block answering to it would
  * shadow the one type the renderer resolves without the registry.
@@ -170,7 +185,10 @@ export const blockManifestEntrySchema = z
      * published JSON Schema states it too, rather than leaving an outside
      * reader to discover it by having a manifest rejected somewhere else.
      */
-    name: z.string().regex(DECLARABLE_BLOCK_NAME_PATTERN),
+    name: z
+      .string()
+      .max(MAX_DECLARED_BLOCK_NAME_LENGTH)
+      .regex(DECLARABLE_BLOCK_NAME_PATTERN),
     /**
      * The block's own schema version, stamped onto every node of its type.
      *
@@ -226,7 +244,14 @@ export const blockManifestEntrySchema = z
         z.string(),
         z
           .object({
-            allow: z.array(z.string().regex(ALLOW_ENTRY_RE)).optional(),
+            allow: z
+              .array(
+                z
+                  .string()
+                  .max(MAX_DECLARED_BLOCK_NAME_LENGTH)
+                  .regex(ALLOW_ENTRY_RE)
+              )
+              .optional(),
           })
           .loose()
       )
@@ -239,7 +264,12 @@ export const blockManifestEntrySchema = z
      * where a block may be placed. A malformed value here does not degrade, it forbids, so the
      * shape is pinned at the boundary rather than trusted from whoever wrote the file.
      */
-    parent: z.array(z.string().regex(BLOCK_NAME_RE)).min(1).optional(),
+    parent: z
+      .array(
+        z.string().max(MAX_DECLARED_BLOCK_NAME_LENGTH).regex(BLOCK_NAME_RE)
+      )
+      .min(1)
+      .optional(),
   })
   .strict();
 
@@ -533,9 +563,12 @@ function declaredBlocks(value: unknown, source: string): DeclaredBlock[] {
         `Plugin "${source}" declared a block at index ${index} with no name.`
       );
     }
-    if (!BLOCK_NAME_PATTERN.test(definition.name)) {
+    if (
+      definition.name.length > MAX_DECLARED_BLOCK_NAME_LENGTH ||
+      !BLOCK_NAME_PATTERN.test(definition.name)
+    ) {
       throw invalidDeclaration(
-        `Plugin "${source}" declared a block named "${definition.name}" at index ${index}; a block name is a namespaced slug like "core/heading".`
+        `Plugin "${source}" declared a block named "${definition.name}" at index ${index}; a block name is a namespaced slug like "core/heading", at most ${MAX_DECLARED_BLOCK_NAME_LENGTH} characters.`
       );
     }
     if (RESERVED_BLOCK_NAMES.includes(definition.name)) {

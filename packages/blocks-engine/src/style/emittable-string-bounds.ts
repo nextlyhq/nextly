@@ -31,7 +31,7 @@
  */
 import { MAX_BLOCK_TYPE_LENGTH, MAX_BREAKPOINT_ID_LENGTH } from "../document";
 
-import { MAX_TOKEN_NAME_LENGTH } from "./declarations";
+import { MAX_TOKEN_NAME_LENGTH, MAX_TOKEN_PREFIX_LENGTH } from "./declarations";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./named-class";
 
 /** One bounded string the compiler can write, named so a failure says which. */
@@ -54,4 +54,5 @@ export const EMITTABLE_STRING_BOUNDS: readonly EmittableStringBound[] =
     { what: "a breakpoint id", max: MAX_BREAKPOINT_ID_LENGTH },
     { what: "a design token name", max: MAX_TOKEN_NAME_LENGTH },
     { what: "a block type", max: MAX_BLOCK_TYPE_LENGTH },
+    { what: "a custom-property prefix", max: MAX_TOKEN_PREFIX_LENGTH },
   ]);

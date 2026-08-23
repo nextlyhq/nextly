@@ -26,13 +26,16 @@ import {
   clearBlocks,
   COMPONENT_INSTANCE_TYPE,
   registerBlocks,
+  MAX_BLOCK_TYPE_LENGTH,
   MAX_BLOCK_VERSION,
 } from "@nextlyhq/blocks-engine";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { definePlugin, type PluginDefinition } from "../../plugin-context";
 import {
+  blockManifestJsonSchema,
   buildBlockManifest,
+  MAX_DECLARED_BLOCK_NAME_LENGTH,
   MAX_DECLARED_BLOCK_VERSION,
   PAGE_BUILDER_PLUGIN,
 } from "../block-manifest";
@@ -44,6 +47,130 @@ afterEach(() => {
 describe("the manifest's block-version bound", () => {
   it("is the bound the engine enforces at registration", () => {
     expect(MAX_DECLARED_BLOCK_VERSION).toBe(MAX_BLOCK_VERSION);
+  });
+});
+
+describe("the manifest's block-name bound", () => {
+  it("is the bound the engine enforces at registration", () => {
+    // The value is restated in this package rather than imported, so nothing but
+    // this holds the two equal. Comparing the numbers is the weaker half; the
+    // pair below exercises both sides on one input, which is what catches the
+    // two agreeing on a length while disagreeing on where it applies.
+    expect(MAX_DECLARED_BLOCK_NAME_LENGTH).toBe(MAX_BLOCK_TYPE_LENGTH);
+  });
+
+  const named = (name: string) => ({
+    name,
+    version: 1,
+    description: "A block.",
+    example: { props: {} },
+    render: () => null,
+  });
+
+  const atCap = `acme/${"a".repeat(MAX_DECLARED_BLOCK_NAME_LENGTH - "acme/".length)}`;
+  const overCap = `acme/${"a".repeat(MAX_DECLARED_BLOCK_NAME_LENGTH - "acme/".length + 1)}`;
+
+  it("straddles the cap, so the pair below means what it says", () => {
+    expect(atCap).toHaveLength(MAX_DECLARED_BLOCK_NAME_LENGTH);
+    expect(overCap).toHaveLength(MAX_DECLARED_BLOCK_NAME_LENGTH + 1);
+  });
+
+  it("both accept a name at the cap", () => {
+    // The positive control on BOTH sides. Without it a pair that refused every
+    // name would agree perfectly and satisfy the refusal check below.
+    expect(() =>
+      registerBlocks([named(atCap)] as never, { source: "acme" })
+    ).not.toThrow();
+    clearBlocks();
+    const manifest = buildBlockManifest([
+      consumer(),
+      declaring([named(atCap)]),
+    ]);
+    expect(manifest.blocks[0]?.name).toBe(atCap);
+  });
+
+  it("publishes the cap in the JSON Schema, not only inside this package", () => {
+    // The schema is handed to outside readers, and a bound enforced here but
+    // absent from it leaves the published contract weaker than the one this
+    // package applies: anyone validating a manifest against the artifact we give
+    // them would accept a name we refuse.
+    //
+    // Covered separately from the refusal below because the two are enforced by
+    // different mechanisms on one call — the schema and an imperative gate — so
+    // a single "does it throw" assertion is satisfied by either and cannot see
+    // one of them go.
+    // Read at the PATHS the bound applies to, not anywhere in the document.
+    // Three fields carry a block name, so searching the serialized schema for
+    // the number is satisfied by any one of them still having it — the check
+    // passes with the bound removed from the other two.
+    const schema = blockManifestJsonSchema();
+    const at = (path: readonly string[]): unknown =>
+      path.reduce<unknown>(
+        (node, key) =>
+          node && typeof node === "object"
+            ? (node as Record<string, unknown>)[key]
+            : undefined,
+        schema
+      );
+
+    const carriers = [
+      ["properties", "blocks", "items", "properties", "name"],
+      ["properties", "blocks", "items", "properties", "parent", "items"],
+      [
+        "properties",
+        "blocks",
+        "items",
+        "properties",
+        "slots",
+        "additionalProperties",
+        "properties",
+        "allow",
+        "items",
+      ],
+    ] as const;
+
+    for (const path of carriers) {
+      expect(at(path), path.join(".")).toMatchObject({
+        maxLength: MAX_DECLARED_BLOCK_NAME_LENGTH,
+      });
+    }
+  });
+
+  it("names the cap when it refuses, so the message is actionable", () => {
+    // The declaration gate's own contribution. The schema refuses this name too,
+    // so a throw alone cannot show which ran — and the two produce different
+    // errors, so the DETAIL is the discriminator as well as the half a plugin
+    // author reads.
+    //
+    // Read from `errors[0]`, not from `.message`: a validation error's top-level
+    // message is the generic "Validation failed." for every instance, so an
+    // assertion against it passes for any validation failure whatsoever.
+    let detail: { code?: string; message?: string } | undefined;
+    try {
+      buildBlockManifest([consumer(), declaring([named(overCap)])]);
+    } catch (error) {
+      detail = (
+        error as {
+          publicData?: { errors?: { code?: string; message?: string }[] };
+        }
+      ).publicData?.errors?.[0];
+    }
+    expect(detail?.code).toBe("INVALID_BLOCK_DECLARATION");
+    expect(detail?.message).toContain(String(MAX_DECLARED_BLOCK_NAME_LENGTH));
+    expect(detail?.message).toContain(overCap);
+  });
+
+  it("neither accepts a name past it, so generation cannot run ahead of boot", () => {
+    // The failure that matters: `nextly generate` succeeding for a declaration
+    // `registerBlocks` refuses leaves a manifest describing a plugin that cannot
+    // start, which is the opposite of what the artifact is for.
+    expect(() =>
+      registerBlocks([named(overCap)] as never, { source: "acme" })
+    ).toThrow();
+    clearBlocks();
+    expect(() =>
+      buildBlockManifest([consumer(), declaring([named(overCap)])])
+    ).toThrow();
   });
 });
 
