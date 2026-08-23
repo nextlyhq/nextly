@@ -95,7 +95,8 @@ survivors are now chosen from that prefix; nothing legitimate reaches it, since
 the declared limit is seven.
 
 `breakpointContexts` also drops a definition whose id is longer than the new
-`MAX_BREAKPOINT_ID_LENGTH`. The per-axis limit bounded how MANY definitions are
+`MAX_BREAKPOINT_ID_LENGTH`, which is exported beside the per-axis cap so a store
+validating on write can refuse what the compiler will not read. The per-axis limit bounded how MANY definitions are
 read and said nothing about their size, and an id is a lookup key every reader
 of the normalised axis carries — so one enormous stored value was copied on
 every render that asked which breakpoints a site defines. Dropped rather than

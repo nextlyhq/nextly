@@ -17,6 +17,13 @@ export {
   COMPONENT_INSTANCE_TYPE,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
+  // Public for exactly the reason the per-axis cap is. A definition whose id is
+  // longer than this is DROPPED by `breakpointContexts`, so a store that
+  // accepted one would satisfy the published `BreakpointDef` type and then lose
+  // every style keyed to that id, reported only as an unknown breakpoint. A
+  // writer cannot honour a rule it cannot read, and a copy of the number in
+  // another package is a second statement that goes stale silently.
+  MAX_BREAKPOINT_ID_LENGTH,
   // Public alongside the per-axis cap: a store validating a class library on
   // write must refuse what the compiler will not read, and a copy of this
   // number in another package is a second statement that goes stale silently.
