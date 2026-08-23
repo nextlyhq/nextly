@@ -82,7 +82,25 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
     };
   }
 
-  const read = dtcgToTokens(parsed);
+  let read: ReturnType<typeof dtcgToTokens>;
+  try {
+    read = dtcgToTokens(parsed);
+  } catch {
+    /*
+     * The conversion walks the document recursively, so a deeply nested one —
+     * a few thousand groups, which is tens of kilobytes of file — exhausts the
+     * stack. A `RangeError` is not something a caller can act on, and this is
+     * the import BOUNDARY: everything past it is a panel that would let the
+     * rejection escape into a discarded promise, showing nothing and stopping
+     * silently. Turned into the refusal every other failure here returns.
+     */
+    return {
+      ok: false,
+      error:
+        "That file is nested too deeply to read. A design-token file groups its tokens a few levels deep; this one goes thousands.",
+      skipped: [],
+    };
+  }
   const skipped = read.issues.map(issue => issue.message);
   if (read.tokens.length === 0) {
     return {
@@ -100,7 +118,7 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
     // two entries carrying one identity — and only the last of them lands, so
     // counting the file's entries would claim an arrival that did not happen.
     imported: merged.landed,
-    skipped: [...skipped, ...merged.collapsed],
+    skipped: [...skipped, ...merged.refused],
   };
 }
 
@@ -114,9 +132,10 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
 function mergeById(
   into: SiteTokenSet,
   incoming: readonly SiteToken[]
-): { tokens: SiteTokenSet; landed: number; collapsed: string[] } {
+): { tokens: SiteTokenSet; landed: number; refused: string[] } {
+  const refused: string[] = [];
+
   const byIdentity = new Map<string, SiteToken>();
-  const collapsed: string[] = [];
   for (const token of incoming) {
     const identity = tokenIdentity(token);
     const first = byIdentity.get(identity);
@@ -126,25 +145,43 @@ function mergeById(
     // silence: two tokens going in and one arriving is precisely the kind of
     // loss this whole feature exists to make visible.
     if (first !== undefined) {
-      collapsed.push(
+      refused.push(
         `"${first.name}" and "${token.name}" are one token in that file — both carry the identity "${identity}" — so only "${token.name}" was taken.`
       );
     }
     byIdentity.set(identity, token);
   }
-  const landed = byIdentity.size;
 
-  const kept = into.tokens.map(token => {
-    const replacement = byIdentity.get(tokenIdentity(token));
-    if (replacement === undefined) return token;
-    byIdentity.delete(tokenIdentity(token));
-    return replacement;
-  });
-  return {
-    tokens: { ...into, tokens: [...kept, ...byIdentity.values()] },
-    landed,
-    collapsed,
-  };
+  const tokens = [...into.tokens];
+  let landed = 0;
+  for (const token of byIdentity.values()) {
+    const identity = tokenIdentity(token);
+    const at = tokens.findIndex(held => tokenIdentity(held) === identity);
+    /*
+     * A NAME belongs to one token. The studio refuses a duplicate label
+     * outright, so admitting one here would import a state the editor cannot
+     * create and cannot repair — and the export would then place both at one
+     * DTCG path and drop one, making the round trip lossy in a way nothing
+     * announced.
+     *
+     * Checked against every token but the one being replaced, because a file
+     * renaming a token it also owns is not a clash with itself.
+     */
+    const clash = tokens.find(
+      (held, index) => index !== at && held.name === token.name
+    );
+    if (clash !== undefined) {
+      refused.push(
+        `"${token.name}" is already the name of a different token on this site, so it was not imported. Rename one of them and try again.`
+      );
+      continue;
+    }
+    if (at === -1) tokens.push(token);
+    else tokens[at] = token;
+    landed += 1;
+  }
+
+  return { tokens: { ...into, tokens }, landed, refused };
 }
 
 /** A file this site can hand to another tool, and what it could not carry. */

@@ -312,15 +312,22 @@ function TokenTransfer({
 
   const send = (made: ExportResult): void => {
     download(made);
-    setReport(
-      made.skipped.length === 0
-        ? null
-        : {
-            tone: "done",
-            headline: `Saved ${made.filename}.`,
-            detail: made.skipped,
-          }
-    );
+    /*
+     * A clean export says nothing and CLEARS nothing. Exporting is the common
+     * next step after an import, and the import's report is the only list
+     * naming what the source file could not carry — wiping it because a later
+     * action had no news of its own destroys the one thing the author still
+     * needed, and does it without them dismissing anything.
+     *
+     * The file arriving is the confirmation that an export worked. A report is
+     * for what the author could not otherwise see.
+     */
+    if (made.skipped.length === 0) return;
+    setReport({
+      tone: "done",
+      headline: `Saved ${made.filename}.`,
+      detail: made.skipped,
+    });
   };
 
   return (

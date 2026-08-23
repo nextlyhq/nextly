@@ -205,6 +205,75 @@ describe("what goes in", () => {
     expect(result.skipped.join(" ")).toContain("color.shared");
   });
 
+  it("refuses a token whose NAME another token here already owns", () => {
+    // The studio forbids a duplicate label outright, so admitting one would
+    // import a state the editor cannot create and cannot repair — and the
+    // export would then place both at one DTCG path and drop one, making the
+    // round trip lossy with nothing announcing it.
+    const file = exported({
+      tokens: [
+        {
+          id: "other.id",
+          name: "brand.main",
+          kind: "color",
+          values: { light: "#e11d48" },
+        },
+      ],
+    });
+    const result = importDtcg(file, SITE);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The site is untouched, and the refusal is named.
+    expect(result.tokens.tokens.map(t => t.name)).toEqual([
+      "color.ink",
+      "brand.main",
+      "space.4",
+    ]);
+    expect(result.imported).toBe(0);
+    expect(result.skipped.join(" ")).toContain(
+      "already the name of a different token"
+    );
+  });
+
+  it("still lets a file rename a token it OWNS", () => {
+    // The control. Checking the name against every token including the one
+    // being replaced would refuse every rename — a file is not clashing with
+    // itself.
+    const file = exported({
+      tokens: [
+        {
+          id: "color.primary",
+          name: "brand.hero",
+          kind: "color",
+          values: { light: "#e11d48" },
+        },
+      ],
+    });
+    const result = importDtcg(file, SITE);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.imported).toBe(1);
+    expect(result.tokens.tokens.map(t => t.name)).toEqual([
+      "color.ink",
+      "brand.hero",
+      "space.4",
+    ]);
+  });
+
+  it("REFUSES a document nested past what the reader can walk", () => {
+    // The conversion recurses, so a few thousand groups — tens of kilobytes of
+    // file — exhausts the stack. A `RangeError` is not something a caller can
+    // act on, and past this boundary the panel would let it escape into a
+    // discarded promise: nothing shown, import silently stopped.
+    let node: Record<string, unknown> = { $type: "color", $value: "#111111" };
+    for (let level = 0; level < 4000; level += 1) node = { group: node };
+
+    const result = importDtcg(JSON.stringify(node), SITE);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("nested too deeply");
+  });
+
   it("tells a corrupt file from the wrong file", () => {
     // Different failures with different repairs: one is truncated, the other
     // is a file that was never a token document. One message covering both

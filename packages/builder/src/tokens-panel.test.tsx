@@ -710,6 +710,25 @@ describe("bringing a token file in", () => {
     );
   });
 
+  it("a clean export does not wipe an import's report", async () => {
+    // Exporting is the common next step after an import, and the import's
+    // report is the only list naming what the source file could not carry.
+    // Clearing it because a later action had no news of its own destroys the
+    // one thing the author still needed — without them dismissing anything.
+    const withUnusable = JSON.parse(FILE) as Record<string, unknown>;
+    withUnusable["motion"] = {
+      ease: { $type: "cubicBezier", $value: [0.4, 0, 0.2, 1] },
+    };
+    mount(TOKENS);
+    await chooseFile(JSON.stringify(withUnusable));
+    expect(screen.getByRole("status").textContent).toContain("cubicBezier");
+
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+
+    // The list the author still needs is still there.
+    expect(screen.getByRole("status").textContent).toContain("cubicBezier");
+  });
+
   it("keeps the report until it is dismissed", async () => {
     mount(TOKENS);
     await chooseFile(FILE);
