@@ -169,7 +169,9 @@ function render_with(all: unknown) {
 describe("a colour leaf draws a colour control", () => {
   it("offers a swatch beside the field, where before there was only a field", () => {
     mount(styles("#3b82f6"));
-    // The gap C-5 fills: this leaf used to fall through to a plain text field.
+    // A colour leaf used to fall through to a plain text field, so the swatch
+    // beside it is the regression this holds: the control is a colour surface
+    // rather than a string box that happens to hold a colour.
     expect(swatch("Colour for Color")).toBeDefined();
     expect(screen.getByRole("textbox", { name: "Color" })).toHaveProperty(
       "value",
