@@ -84,28 +84,6 @@ describe("the stamp", () => {
       );
     });
 
-    it("a breakpoint ORDER, with the same breakpoints in it", () => {
-      // OVER-invalidation, asserted deliberately rather than as a property of
-      // the output. The compiler sorts each axis by descending `maxWidth`, so
-      // reordering distinct widths emits the same CSS — this stamp moves anyway
-      // because it preserves stored order, and it preserves stored order
-      // because equal widths tie and a stable sort keeps them as stored. Losing
-      // the tie case is silent; paying a recompile here is not.
-      const moved = inputs({
-        breakpoints: {
-          viewport: [
-            { id: "md", label: "Medium", maxWidth: 768 },
-            { id: "base", label: "Base" },
-          ],
-          container: [],
-        },
-      });
-
-      expect(sharedStyleInputsId(moved)).not.toBe(
-        sharedStyleInputsId(inputs())
-      );
-    });
-
     it("the token prefix", () => {
       // Renders into every `var(--<prefix><name>)` the sheet references.
       expect(sharedStyleInputsId(inputs({ tokenPrefix: "--acme-" }))).not.toBe(
@@ -258,6 +236,94 @@ describe("the stamp", () => {
   });
 
   describe("holds still for what does not reach CSS", () => {
+    it("a breakpoint ORDER, with distinct bounds", () => {
+      // The compiler sorts each axis by descending `maxWidth` before it emits,
+      // so two storage orders of the same distinct widths produce the same CSS.
+      // Read through the engine's own normalisation, which is what makes this
+      // hold; a stamp taken over the stored axes moves here and recompiles every
+      // page on the site for a settings rewrite that changed nothing.
+      //
+      // Distinct is the whole condition. Equal bounds tie, a stable sort keeps
+      // them as stored, and the assertion below for that case is the one this
+      // must not be widened into.
+      const moved = inputs({
+        breakpoints: {
+          viewport: [
+            { id: "md", label: "Medium", maxWidth: 768 },
+            { id: "base", label: "Base" },
+          ],
+          container: [],
+        },
+      });
+
+      expect(sharedStyleInputsId(moved)).toBe(sharedStyleInputsId(inputs()));
+    });
+
+    it("a breakpoint the compiler DISCARDS", () => {
+      // A viewport definition with no bound emits no at-rule at all, so
+      // `breakpointContexts` drops it rather than letting it override the real
+      // base at every width. Nothing about the sheet changes, and an artifact
+      // must not be thrown away over it.
+      const withJunk = inputs({
+        breakpoints: {
+          viewport: [
+            { id: "base", label: "Base" },
+            { id: "md", label: "Medium", maxWidth: 768 },
+            { id: "junk", label: "Junk" },
+          ],
+          container: [],
+        },
+      });
+
+      expect(sharedStyleInputsId(withJunk)).toBe(sharedStyleInputsId(inputs()));
+    });
+
+    it("a bound the compiler refuses as unusable", () => {
+      // Zero and below are dropped for being unmatchable rather than kept as a
+      // query that can never fire, so this too reaches no stylesheet.
+      const unusable = inputs({
+        breakpoints: {
+          viewport: [
+            { id: "base", label: "Base" },
+            { id: "md", label: "Medium", maxWidth: 768 },
+            { id: "neg", label: "Negative", maxWidth: -1 },
+          ],
+          container: [],
+        },
+      });
+
+      expect(sharedStyleInputsId(unusable)).toBe(sharedStyleInputsId(inputs()));
+    });
+
+    it("every definition past the per-axis cap", () => {
+      // The cap exists because every style envelope in the document scans the
+      // whole context list, so a corrupt settings row costs the render once per
+      // node. Definitions past it reach no stylesheet — and reading them here
+      // would restore, in the stamp, the unbounded scan the cap prevents.
+      const axis = (count: number) => [
+        { id: "base", label: "Base" },
+        ...Array.from({ length: count }, (_, i) => ({
+          id: `b${i}`,
+          label: `B${i}`,
+          // DESCENDING, so every extra definition is narrower than the ones
+          // before it and sorts to the end of the widest-first order the cap
+          // slices. Appending WIDER ones would displace the survivors instead,
+          // which is a real change of output and not what this asserts.
+          maxWidth: 1000 - i,
+        })),
+      ];
+
+      expect(
+        sharedStyleInputsId(
+          inputs({ breakpoints: { viewport: axis(20), container: [] } })
+        )
+      ).toBe(
+        sharedStyleInputsId(
+          inputs({ breakpoints: { viewport: axis(30), container: [] } })
+        )
+      );
+    });
+
     it("a class library stored in a DIFFERENT order", () => {
       // The compiler sorts the library by `orderIndex` then id before emitting
       // it, so two storage orders of the same classes produce identical CSS. A
@@ -345,6 +411,94 @@ describe("what a corrupt or hostile settings row costs", () => {
     ).not.toThrow();
   });
 
+  it("keeps two UNREADABLE envelopes apart when their CSS differs", () => {
+    // The half that a `try`/`catch` returning one constant cannot do, and the
+    // reason the reading is total instead. `compilePageCss` iterates the states
+    // it knows and never descends into one it does not, so a cycle parked under
+    // an unrecognised key costs a warning and nothing else — both of these
+    // compile, and they emit DIFFERENT colours. Collapsing them to one identity
+    // reuses the red sheet after the site turned blue, forever and silently.
+    const envelope = (color: string) => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      return {
+        id: "c1",
+        slug: "hero",
+        orderIndex: 0,
+        styles: { junk: circular, base: { base: { color } } },
+      };
+    };
+
+    expect(
+      sharedStyleInputsId(inputs({ namedClasses: [envelope("red")] as never }))
+    ).not.toBe(
+      sharedStyleInputsId(inputs({ namedClasses: [envelope("blue")] as never }))
+    );
+  });
+
+  it("does not throw on a circular BLOCK BASE", () => {
+    // Block defaults are style envelopes of the same shape, arriving from a
+    // block package's declaration or a stored site record, and the compiler
+    // forgives one exactly as it forgives a class's. A stamp that threw here
+    // would take the page down before compilation ever ran.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() =>
+      sharedStyleInputsId(
+        inputs({ blockBases: { "core/text": circular } as never })
+      )
+    ).not.toThrow();
+  });
+
+  it("still notices a change beside a circular BLOCK BASE", () => {
+    // Surviving the value is not enough: the readable part of the same base has
+    // to keep reaching the stamp, or every block default behind one corrupt key
+    // becomes invisible to it.
+    const base = (color: string) => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      return { junk: circular, base: { base: { color } } };
+    };
+
+    expect(
+      sharedStyleInputsId(
+        inputs({ blockBases: { "core/text": base("red") } as never })
+      )
+    ).not.toBe(
+      sharedStyleInputsId(
+        inputs({ blockBases: { "core/text": base("blue") } as never })
+      )
+    );
+  });
+
+  it("keeps a value it cannot descend into apart from one it can", () => {
+    // A Map is not a structure the compiler writes from — `isPlainRecord`
+    // refuses it and the state is reported rather than emitted — so two Maps
+    // produce identical CSS and reading their contents here would invalidate
+    // artifacts over a difference no stylesheet can show. What must NOT collapse
+    // is a Map against a plain record, which does emit.
+    const mapped = (entries: [string, string][]) => ({
+      id: "c1",
+      slug: "hero",
+      orderIndex: 0,
+      styles: { base: new Map(entries) },
+    });
+
+    expect(
+      sharedStyleInputsId(
+        inputs({ namedClasses: [mapped([["a", "1"]])] as never })
+      )
+    ).toBe(
+      sharedStyleInputsId(
+        inputs({ namedClasses: [mapped([["b", "2"]])] as never })
+      )
+    );
+    expect(
+      sharedStyleInputsId(inputs({ namedClasses: [mapped([])] as never }))
+    ).not.toBe(sharedStyleInputsId(inputs()));
+  });
+
   it("notices a change DEEP inside an oversized envelope", () => {
     // The case a truncating bound could not see. These two serialize to the
     // same length and differ only far past any prefix a cut would keep, while
@@ -378,6 +532,116 @@ describe("what a corrupt or hostile settings row costs", () => {
       sharedStyleInputsId(
         inputs({ namedClasses: [...atCap, entry(MAX_NAMED_CLASSES)] })
       )
+    );
+  });
+});
+
+describe("the reading a style envelope is reduced by", () => {
+  /** The same class, differing only in the one value under test. */
+  const withValue = (value: unknown) =>
+    inputs({
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "hero",
+          orderIndex: 0,
+          styles: { base: { base: { width: value } } },
+        },
+      ] as never,
+    });
+  const stampFor = (value: unknown) => sharedStyleInputsId(withValue(value));
+
+  it("keeps an ABSENT value apart from a stored null", () => {
+    // The compiler keeps them apart, so this must: `undefined` at a breakpoint
+    // is a node saying nothing about it and stays silent, while a stored `null`
+    // is a malformed value it reports and writes nothing for. Collapsing them
+    // reuses a sheet across the edit that introduced the corruption.
+    expect(stampFor(undefined)).not.toBe(stampFor(null));
+  });
+
+  it("keeps the three numbers a JSON writer flattens apart", () => {
+    // `JSON.stringify` writes `null` for NaN and for both infinities, so a
+    // reading built on it stamps four distinct stored values identically.
+    const seen = new Set([
+      stampFor(Number.NaN),
+      stampFor(Number.POSITIVE_INFINITY),
+      stampFor(Number.NEGATIVE_INFINITY),
+      stampFor(null),
+    ]);
+
+    expect(seen.size).toBe(4);
+  });
+
+  it("keeps a bigint apart from the number that prints the same", () => {
+    // And does not throw on it, which `JSON.stringify` does — taking the render
+    // down over a value the compiler would merely refuse to write.
+    expect(stampFor(BigInt(1))).not.toBe(stampFor(1));
+  });
+
+  it("survives a value that is neither data nor a structure", () => {
+    // A function or a symbol reaches no stylesheet, but it must not throw on the
+    // way past and must not read as the absence of a value either.
+    expect(stampFor(() => "x")).not.toBe(stampFor(undefined));
+    expect(stampFor(Symbol("x"))).not.toBe(stampFor(undefined));
+  });
+
+  it("survives a property whose getter throws", () => {
+    // Confined to the member: everything beside it still reaches the stamp, so
+    // one hostile accessor costs its own precision rather than the page.
+    const hostile = {
+      base: { base: { color: "red" } },
+      get boom(): unknown {
+        throw new Error("no");
+      },
+    };
+    const other = {
+      base: { base: { color: "blue" } },
+      get boom(): unknown {
+        throw new Error("no");
+      },
+    };
+
+    expect(() => stampFor(hostile)).not.toThrow();
+    expect(stampFor(hostile)).not.toBe(stampFor(other));
+  });
+
+  it("bottoms out rather than overflowing on a deeply nested value", () => {
+    // A settings record nesting itself thousands deep would exhaust the stack
+    // during the walk and take down every page on the site. It is read to a
+    // fixed depth instead — far past the four levels the compiler itself reads,
+    // so nothing it can emit is lost to the bound.
+    const deep = (levels: number): unknown => {
+      let value: unknown = "leaf";
+      for (let i = 0; i < levels; i += 1) value = { next: value };
+      return value;
+    };
+
+    expect(() => stampFor(deep(50_000))).not.toThrow();
+    // Same shape, different depth, both far past the bound: what distinguishes
+    // them lies below it, and neither can reach CSS.
+    expect(stampFor(deep(50_000))).toBe(stampFor(deep(60_000)));
+  });
+
+  it("still reads a difference that sits ABOVE the depth bound", () => {
+    // The half the bound must not cost. A truncation that started too shallow
+    // would be the truncation defect again, one level down.
+    const nest = (leaf: string): unknown => ({
+      base: { base: { color: leaf } },
+    });
+
+    expect(stampFor(nest("red"))).not.toBe(stampFor(nest("blue")));
+  });
+
+  it("does not read one shared object as a cycle", () => {
+    // The reason the walk tracks the ANCESTOR path rather than everything seen.
+    // A library that reuses one style object across two positions is ordinary,
+    // and marking the second reference would blind the stamp to changes in it.
+    const shared = { color: "red" };
+    const twice: Record<string, unknown> = { a: shared, b: shared };
+    const changed = { color: "blue" };
+
+    expect(stampFor(twice)).not.toBe(
+      stampFor({ a: changed, b: changed } as Record<string, unknown>)
     );
   });
 });

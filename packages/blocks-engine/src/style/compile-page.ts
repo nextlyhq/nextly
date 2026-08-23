@@ -276,7 +276,7 @@ const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
 };
 
 /** One breakpoint to emit under, with the at-rule it needs. */
-interface BreakpointContext {
+export interface BreakpointContext {
   id: string;
   atRule?: string;
   /** Which axis this belongs to; visibility bands are computed per axis. */
@@ -294,8 +294,23 @@ interface BreakpointContext {
  * narrower breakpoint overrides it, so a narrower one has to come later to win.
  * Container rules follow viewport rules so that an element asked to respond to
  * its own box wins over the same value keyed to the window.
+ *
+ * Public because it is the only answer to "which breakpoints does this site
+ * actually emit under". A stored settings axis is not that answer: definitions
+ * whose bound is missing, unusable or duplicated are dropped here, the rest are
+ * sorted and capped, and each survivor carries the at-rule text itself. Anything
+ * keyed on the emitted stylesheet — a cache stamp, most of all — has to read
+ * this rather than the raw set, because two axes that differ only in what this
+ * function discards produce byte-identical CSS.
  */
-function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
+export function breakpointContexts(
+  // Widened past what the compiler's own caller holds, because the answer is
+  // read by anything keyed on what this site's breakpoints ARE, and those
+  // readers hold the stored settings record rather than a validated context.
+  // The body already treats the argument as untrusted, so an absent set answers
+  // with the base context alone rather than being a case to guard at each call.
+  set: BreakpointSet | undefined
+): BreakpointContext[] {
   // The base context carries no upper bound and no at-rule, but it still needs
   // to be bounded from below when a narrower breakpoint shows a node again:
   // without that, hiding at base emits an unconditional rule that a later

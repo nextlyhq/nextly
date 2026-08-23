@@ -262,7 +262,16 @@ export type {
   StyleIssueBudget,
   StyleUnionVariantOptions,
 } from "./style/validate-style-value";
-export { compilePageCss, BASE_BREAKPOINT } from "./style/compile-page";
+export {
+  compilePageCss,
+  BASE_BREAKPOINT,
+  // The normalised breakpoints, for a reader keyed on what the compiler emits
+  // rather than on what was stored. Exported rather than restated because a
+  // second copy of the dropping, sorting and capping rules would drift from the
+  // one that decides the output, and would drift silently in both directions.
+  breakpointContexts,
+} from "./style/compile-page";
+export type { BreakpointContext } from "./style/compile-page";
 // The one rule for how a document-global CSS name wears its scope. Public
 // because more than one place has to produce it and they must agree exactly:
 // the compiler namespaces the names it emits, the custom-CSS sanitizer

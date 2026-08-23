@@ -149,7 +149,7 @@ export function toPageStyles(
  * A context that already carries `blockBases` is left alone — an explicit
  * choice by the caller outranks what can be derived here.
  */
-function blockBasesFor(
+export function blockBasesFor(
   document: BlockDocument,
   blocks: BlockResolver
 ): Record<string, NodeStyles> {

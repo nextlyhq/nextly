@@ -146,6 +146,15 @@ const SOURCE_MODULES: ReadonlyArray<{
     // `preparePageForRead` rather than assembling the verdict itself.
     internal: [
       "UNIDENTIFIED_FETCH_POLICY",
+      // `blockBasesFor` is the ONE reading of "which block types does this tree
+      // draw defaults from". `resolvePageStyles` derives it from the tree it is
+      // handed, which is already narrowed by the read-time passes; `page-renderer`
+      // holds the wider tree the stored artifact was compiled from and states the
+      // answer for it, so a covered drop does not move the identity and refuse
+      // the very artifact that drop was licensed to keep. Two derivations of it
+      // would disagree exactly there. It crosses a module boundary inside this
+      // package; a consumer states its own through `styleContext.blockBases`.
+      "blockBasesFor",
       "drawlessTestFor",
       "effectiveCompile",
       "gatedEntriesCoverRemovedNodes",

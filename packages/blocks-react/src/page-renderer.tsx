@@ -24,6 +24,7 @@ import {
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
   drawlessTestFor,
+  blockBasesFor,
   effectiveCompile,
   gatedEntriesCoverRemovedNodes,
   gatedMapCoversPrunedNodes,
@@ -526,8 +527,39 @@ export function PageRenderer({
   // Every site-level input BOTH compiles read, resolved once. See
   // `sharedStyleInputs` for why one resolution rather than one per consumer.
   const shared = sharedStyleInputs(styleContext, siteInput);
-  const pageStyleContext =
-    styleContext === undefined ? undefined : { ...styleContext, ...shared };
+  // The block-type defaults for the tree the ARTIFACT describes, which is this
+  // document before any read-time decision narrows it. Two of those decisions —
+  // a gated drop and a drawless drop — are covered by the artifact and licensed
+  // to keep it, and both can remove the last node of a type. Derived from the
+  // narrowed tree, that type's defaults would vanish from the identity, and the
+  // artifact whose reuse those passes exist to permit would be refused instead
+  // and recompiled on every uncached request.
+  //
+  // Stated here rather than left to `resolvePageStyles` to derive, because what
+  // it derives from is the tree it is handed, and this is the only place that
+  // still holds the wider one. A caller that named its own defaults keeps them.
+  const pageShared =
+    shared.blockBases === undefined
+      ? { ...shared, blockBases: blockBasesFor(doc, resolver) }
+      : shared;
+  // Present whenever the render knows this site's breakpoints, whether they came
+  // from a compile context or from `siteStyles`. Taking only the context leaves
+  // the documented normal path — a route that supplies a stored artifact and the
+  // site's styles, and compiles nothing itself — with no identity to compare a
+  // stamp against and no inputs to recompile from, so a stored sheet is reused
+  // however far the site's classes, prefix or breakpoints have moved since.
+  //
+  // Breakpoints are the condition because they are the one field a compile
+  // cannot proceed without, and because it is already the condition this render
+  // uses to decide whether a site sheet can be built at all. A render that knows
+  // them can compile both sheets; one that does not can compile neither, and
+  // there the stored artifact is all there is.
+  const pageStyleContext: StyleCompileContext | undefined =
+    styleContext !== undefined
+      ? { ...styleContext, ...pageShared }
+      : pageShared.breakpoints === undefined
+        ? undefined
+        : { ...pageShared, breakpoints: pageShared.breakpoints };
 
   const {
     context: compileContext,
