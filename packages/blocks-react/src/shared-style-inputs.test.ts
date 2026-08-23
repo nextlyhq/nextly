@@ -345,19 +345,20 @@ describe("what a corrupt or hostile settings row costs", () => {
     ).not.toThrow();
   });
 
-  it("still moves when an oversized envelope GROWS", () => {
-    // Truncation must not make two different libraries stamp alike just because
-    // both exceed the bound: the length travels with the truncated text.
-    const big = (n: number) => ({
+  it("notices a change DEEP inside an oversized envelope", () => {
+    // The case a truncating bound could not see. These two serialize to the
+    // same length and differ only far past any prefix a cut would keep, while
+    // the compiler emits different CSS for them.
+    const big = (tail: string) => ({
       id: "c1",
       slug: "hero",
       orderIndex: 0,
-      styles: { base: { base: { content: "x".repeat(n) } } },
+      styles: { base: { base: { content: "x".repeat(9000) + tail } } },
     });
 
-    expect(sharedStyleInputsId(inputs({ namedClasses: [big(9000)] }))).not.toBe(
-      sharedStyleInputsId(inputs({ namedClasses: [big(9001)] }))
-    );
+    expect(
+      sharedStyleInputsId(inputs({ namedClasses: [big("aaa")] }))
+    ).not.toBe(sharedStyleInputsId(inputs({ namedClasses: [big("bbb")] })));
   });
 
   it("reads no further than the compiler does", () => {

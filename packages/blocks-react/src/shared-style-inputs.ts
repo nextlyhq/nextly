@@ -168,33 +168,34 @@ function breakpointParts(set: BreakpointSet | undefined): unknown {
  * compiler's own, and the two would drift the first time either learned a field.
  */
 /**
- * How much of one class's style envelope the stamp will read.
+ * One class's styles, reduced to a digest of their whole serialization.
  *
- * The envelope is arbitrary persisted JSON, and this runs on every render ahead
- * of the compiler's own bounded scan — so an oversized or deeply nested value
- * under an unknown state would allocate here first, on a path the compiler
- * deliberately never descends. The length travels with the truncation, so an
- * envelope that GROWS past the bound still moves the stamp; two that differ only
- * beyond it at the same length do not, which is the residual and is bounded by
- * this constant rather than by what was stored.
+ * DIGESTED rather than carried, because the label holds one entry per class and
+ * a library runs to `MAX_NAMED_CLASSES`: carrying the envelopes would build a
+ * string the size of the site's whole class configuration on every render, and
+ * then hash that.
+ *
+ * Digested rather than TRUNCATED, which is what this did first and was strictly
+ * worse. Truncating the serialized text bounds the label but not the work —
+ * `JSON.stringify` has already materialised the entire string before anything
+ * can slice it — so it paid the allocation anyway and gave up sensitivity for
+ * it: two envelopes differing only past the cut, at the same length, stamped
+ * alike while the compiler emitted different CSS. Hashing bounds the label the
+ * same way and every character reaches the digest.
+ *
+ * The guard stays. This library is one settings record read on every render and
+ * arrives unvalidated, so a circular value must cost this entry's precision
+ * rather than the render: `compilePageCss` skips a corrupt entry with a warning,
+ * and throwing here would take down every page on the site before it ran.
  */
-const MAX_ENVELOPE_CHARS = 4096;
-
-/** One class's styles, serialized without letting a corrupt value take the render. */
 function styleEnvelope(styles: unknown): unknown {
-  let text: string;
   try {
-    text = JSON.stringify(styles ?? null) ?? "null";
+    return hashId(JSON.stringify(styles ?? null) ?? "null");
   } catch {
-    // A circular or otherwise unserialisable envelope. The compiler tolerates a
-    // corrupt entry and warns; throwing here would take down every page on the
-    // site before it ever ran, which is the one outcome worse than a stale
-    // sheet. A constant is safe because such an envelope cannot compile either.
+    // Unserialisable — circular, or a value with a throwing `toJSON`. A constant
+    // is safe because such an envelope cannot compile either.
     return "unserialisable";
   }
-  return text.length <= MAX_ENVELOPE_CHARS
-    ? text
-    : [text.length, text.slice(0, MAX_ENVELOPE_CHARS)];
 }
 
 function classParts(entry: unknown): unknown {
