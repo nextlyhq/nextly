@@ -96,14 +96,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The encoding this module produces, carried inside every stamp.
+ * The generation of the input-to-CSS mapping this stamp identifies.
  *
- * A later change to what is serialized, or to how, makes old stamps describe a
- * different question — and comparing them would silently reuse artifacts nobody
- * re-judged. Bumping this invalidates them instead, which costs one recompile
- * each and is the safe direction.
+ * A stamp answers "would this compile to the same stylesheet". Two things decide
+ * that answer, and BOTH belong here:
+ *
+ * - what this module serializes, and how. A change makes old stamps describe a
+ *   different question, so comparing them reuses artifacts nobody re-judged.
+ * - what the COMPILER emits from that serialization. A stamp keys on inputs, so
+ *   it cannot see the compiler treating the same inputs differently — a value
+ *   the compiler starts refusing, a rule it stops writing, a selector it spells
+ *   another way. The inputs are unchanged, the stamp matches, and the stored
+ *   sheet is served for a compile that would no longer produce it.
+ *
+ * The second is the one with no other guard: nothing else in an artifact records
+ * which compiler wrote it. So bump this whenever a release changes what the
+ * compiler emits for inputs it already accepted, not only when this file
+ * changes. It costs one recompile per artifact, which is the safe direction —
+ * the unbumped alternative is a stale stylesheet served indefinitely, silently.
  */
-const ENCODING = "v1";
+const ENCODING = "v2";
 
 /**
  * The identity of shared inputs that decline to identify themselves.
@@ -258,23 +270,20 @@ function leafText(value: unknown): string {
       // becoming a second reading of the envelope.
       //
       // That is sound only because no string the compiler emits can exceed the
-      // longest one this keeps. It is a claim about the COMPILER, and the
-      // engine states it as data: `EMITTABLE_STRING_BOUNDS` lists every bound
-      // on a string it can write, and `shared-style-inputs.test.ts` asserts
-      // each is at or under `MAX_VALUE_LENGTH`.
+      // longest one this keeps. It is a claim about the COMPILER rather than
+      // about the positions a string is reachable from, and the engine states it
+      // as data: `EMITTABLE_STRING_BOUNDS` lists every bound on a string it can
+      // write, and `shared-style-inputs.test.ts` asserts each is at or under
+      // `MAX_VALUE_LENGTH`.
       //
-      // Read from that list rather than restated here, because the restated
-      // form was wrong TWICE. The first enumeration gave class id and slug,
-      // breakpoint id and token prefix, and missed the `$token` of a reference.
-      // The second, written to repair the first, missed a block type. Both
-      // failures were the same one: a copy of a set, kept beside the prose it
-      // justifies, drifts from the set the moment either moves — and the member
-      // that drifts out is the one carrying the defect, because a member nobody
-      // forgot is a member nobody had to bound.
+      // Read from that list rather than named here, so a bound added to the
+      // compiler is covered without this file or its test being edited. A list
+      // restated at the consumer is a copy of the producer's set with nothing
+      // keeping the two in step.
       //
-      // The label's other fields are carried whole and are not subject to any
-      // of this. An unbounded string there costs allocation, not correctness,
-      // which is why `TOKEN_PREFIX_RE` being unbounded is not a stamp defect.
+      // The label's other fields are carried whole and are subject to none of
+      // this: an unbounded string there costs allocation, not correctness,
+      // because it is never truncated and so can never make two inputs agree.
       return JSON.stringify(value.slice(0, MAX_VALUE_LENGTH + 1));
     case "number":
     case "boolean":

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "../document";
 import {
+  MAX_BLOCK_TYPE_LENGTH,
   MAX_BREAKPOINTS_PER_AXIS,
   MAX_BREAKPOINT_ID_LENGTH,
 } from "../document";
@@ -9,11 +10,7 @@ import { DEFAULT_LIMITS } from "../limits";
 import { validate } from "../validation";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
-import {
-  compilePageCss,
-  MAX_BLOCK_TYPE_LENGTH,
-  MAX_SCANNED_KEYS,
-} from "./compile-page";
+import { compilePageCss, MAX_SCANNED_KEYS } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import {
   nodeClassName,

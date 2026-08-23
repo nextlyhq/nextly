@@ -62,3 +62,15 @@ data rather than as prose. A consumer that digests compiler inputs has to keep
 enough of each string to tell two apart whenever they compile differently, and
 the list of which strings those are had been kept twice as a comment — short by
 one both times.
+
+Registration, document validation and compilation now share one block-type
+predicate, `isBlockType`, exported from the document model. The three carried
+identical copies of the grammar, so a bound added to one accepted a name the
+others rejected: a block could register and validate while the compiler omitted
+its declared defaults, rendering without the look it declares and reporting
+nothing.
+
+The shared-input stamp's encoding is bumped, and its contract now covers what
+the COMPILER emits as well as what the stamp serializes. A stamp keys on inputs,
+so it cannot see the compiler treating unchanged inputs differently — a stored
+stylesheet would otherwise be served for a compile that no longer produces it.

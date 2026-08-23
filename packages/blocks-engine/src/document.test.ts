@@ -150,6 +150,7 @@ describe("the bounds a writer must honour are reachable from the entry", () => {
   it("exposes every limit that discards input rather than reporting it", () => {
     const bounds: Record<string, unknown> = {
       MAX_BREAKPOINTS_PER_AXIS: entry.MAX_BREAKPOINTS_PER_AXIS,
+      MAX_BLOCK_TYPE_LENGTH: entry.MAX_BLOCK_TYPE_LENGTH,
       MAX_BREAKPOINT_ID_LENGTH: entry.MAX_BREAKPOINT_ID_LENGTH,
       MAX_NAMED_CLASSES: entry.MAX_NAMED_CLASSES,
       MAX_NAMED_CLASS_NAME_LENGTH: entry.MAX_NAMED_CLASS_NAME_LENGTH,
@@ -162,5 +163,54 @@ describe("the bounds a writer must honour are reachable from the entry", () => {
         "number"
       );
     }
+  });
+});
+
+describe("the block-type predicate", () => {
+  // Three gates decide whether a string is a block type: registration
+  // (`isBlockName`), document validation (`isNodeType`) and compilation. One
+  // accepting what another rejects is not a cosmetic inconsistency — a block
+  // that registers and validates while the compiler omits its defaults renders
+  // without the look it declared, and nothing reports why.
+  //
+  // They agree by construction, because each calls this one function. The test
+  // is here for the change that reintroduces a second implementation: that is
+  // how the three came to hold identical copies of one grammar, and a copy
+  // agrees on the day it is written.
+  const cases: [string, string, boolean][] = [
+    ["a namespaced slug", "core/heading", true],
+    [
+      "a slug at the cap",
+      `core/${"a".repeat(entry.MAX_BLOCK_TYPE_LENGTH - 5)}`,
+      true,
+    ],
+    [
+      "a slug one past the cap",
+      `core/${"a".repeat(entry.MAX_BLOCK_TYPE_LENGTH - 4)}`,
+      false,
+    ],
+    ["no namespace", "heading", false],
+    ["a trailing slash", "core/columns/", false],
+    ["uppercase", "Core/Heading", false],
+  ];
+
+  it.each(cases)(
+    "agrees across all three gates on %s",
+    (_what, value, want) => {
+      expect(entry.isBlockType(value), "isBlockType").toBe(want);
+      expect(entry.isNodeType(value), "isNodeType").toBe(want);
+      expect(entry.isBlockName(value), "isBlockName").toBe(want);
+    }
+  );
+
+  it("puts the cap where the boundary cases say it is", () => {
+    // The pair above only means something if the two lengths really straddle
+    // the cap, which is a property of the fixtures rather than of the code.
+    expect(`core/${"a".repeat(entry.MAX_BLOCK_TYPE_LENGTH - 5)}`).toHaveLength(
+      entry.MAX_BLOCK_TYPE_LENGTH
+    );
+    expect(`core/${"a".repeat(entry.MAX_BLOCK_TYPE_LENGTH - 4)}`).toHaveLength(
+      entry.MAX_BLOCK_TYPE_LENGTH + 1
+    );
   });
 });

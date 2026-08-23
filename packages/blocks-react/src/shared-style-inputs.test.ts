@@ -868,8 +868,16 @@ describe("the label the stamp is taken over", () => {
   });
 
   it("carries its encoding version, so a later change invalidates rather than matches", () => {
-    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v1");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v1:[0-9a-z]+$/);
+    // Pinned to a LITERAL rather than compared against the constant, which is
+    // the point of the test: reading the constant would agree with whatever it
+    // says and assert only that a string was copied. Written out, a bump cannot
+    // happen without someone editing this line and deciding it should.
+    //
+    // Both surfaces, because they can disagree — the label is what the stamp is
+    // taken over, so a version reaching one and not the other would key
+    // artifacts on a value the label never carried.
+    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v2");
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v2:[0-9a-z]+$/);
   });
 
   it("omits the label a breakpoint carries", () => {
