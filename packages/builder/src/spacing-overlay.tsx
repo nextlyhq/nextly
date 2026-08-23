@@ -44,7 +44,7 @@ import * as React from "react";
 
 import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
 import type { EditorState } from "./editor-state";
-import { canvasContentRect } from "./geometry-dom";
+import { canvasContentRect, hasLayoutBox, renderedScale } from "./geometry-dom";
 import {
   spacingBands,
   type EdgeLengths,
@@ -148,6 +148,19 @@ export function SpacingOverlay({
       return;
     }
     /*
+     * A selected block that generates no box has nothing to draw around.
+     *
+     * `display: none` and `display: contents` are both catalog values and both
+     * remain selectable through the Layers panel, which addresses nodes by id.
+     * Their computed margin and padding stay whatever the author set while every
+     * rectangle reads zero, so without this the bands appear at the canvas
+     * origin describing space that is nowhere on screen.
+     */
+    if (!hasLayoutBox(block)) {
+      setBands([]);
+      return;
+    }
+    /*
      * The element's own view rather than the ambient `window`, so a canvas
      * rendered into another document is measured against the styles that
      * actually apply to it rather than against this one's.
@@ -169,15 +182,12 @@ export function SpacingOverlay({
         margin: boxes.margin,
         padding: boxes.padding,
         /*
-         * The canvas is drawn at its natural size, so the rectangle above and
-         * the lengths beside it are in the same units.
-         *
-         * Stated rather than assumed: `canvasContentRect` reports POST-transform
-         * pixels and a computed length is unscaled, so the day the canvas gains
-         * a zoom this argument is what has to carry it — and every band would
-         * otherwise be wrong by exactly that factor with nothing failing.
+         * MEASURED from the element rather than assumed to be 1. `transform` is
+         * a catalog property, so a scaled block makes the rectangle above and
+         * the lengths beside it disagree — and asking the element carries any
+         * scaled ancestor with it, which parsing its own transform would miss.
          */
-        scale: 1,
+        scale: renderedScale(block),
       })
     );
   }, [selectedId]);
@@ -194,10 +204,18 @@ export function SpacingOverlay({
   }, [measure, hidden, document]);
 
   /*
-   * Re-measure when the block changes size for a reason no render reports — an
-   * image finishing, a webfont swapping, the panels being resized around the
-   * canvas. Without this the bands describe the size the block had while it was
-   * still loading, which is the state most pages spend their first second in.
+   * Re-measure when the layout moves for a reason no render reports — an image
+   * finishing, a webfont swapping, the panels being resized around the canvas.
+   *
+   * BOTH the block and the canvas root are watched, and the root is not
+   * redundant. A `ResizeObserver` reports a size change, never a position one,
+   * so a sibling ABOVE the selection finishing its own load moves the block
+   * without resizing it and the block's own entry never fires. The root sizes to
+   * its content, so that same reflow changes the root's height — which is the
+   * observable event standing in for "something moved".
+   *
+   * The overlay itself cannot drive that loop: it is `position: absolute` filling
+   * the root, so what it draws never contributes to the root's size.
    */
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
@@ -209,10 +227,18 @@ export function SpacingOverlay({
     // path above still measures.
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => measure());
+    observer.observe(root);
     const block = nodeElement(root, selectedId);
     if (block !== null) observer.observe(block);
     return () => observer.disconnect();
-  }, [measure, hidden, selectedId]);
+    /*
+     * `document` re-subscribes, and dropping it strands the observer on a
+     * DETACHED element. An edit replaces the rendered tree while the selection
+     * survives, so the id resolves to a NEW element and this effect — keyed on
+     * the selection alone — would keep watching the old one. Its later resizes
+     * fire nothing, and the bands stay at the size the block had before the edit.
+     */
+  }, [measure, hidden, selectedId, document]);
 
   return (
     <div

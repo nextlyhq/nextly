@@ -142,3 +142,54 @@ export function containerEdges(root: HTMLElement): {
   const box = root.getBoundingClientRect();
   return { top: box.top, bottom: box.bottom };
 }
+
+/**
+ * Whether an element generates a layout box at all.
+ *
+ * `display: none` and `display: contents` are both catalog values, and an
+ * element carrying either can still be SELECTED — the Layers panel addresses
+ * nodes by id and does not require them to be visible. Neither generates a box,
+ * so every rectangle read from one is the zero rectangle, while its computed
+ * margin and padding stay whatever the author set. Chrome positioned from that
+ * pair lands at the canvas origin describing spacing that is nowhere on screen.
+ *
+ * `getClientRects` is the direct question rather than a proxy: a zero-sized
+ * rectangle is also what a genuinely empty block reports, and `core/spacer`
+ * legitimately has one. An element that generates no box returns no rectangles
+ * at all, which is the property that separates the two.
+ *
+ * Here because this module is the one place allowed to read a rectangle from the
+ * DOM, and a sibling guard enforces it by name.
+ */
+export function hasLayoutBox(element: Element): boolean {
+  return element.getClientRects().length > 0;
+}
+
+/**
+ * How much larger an element RENDERS than it was laid out, per axis.
+ *
+ * `transform` is a catalog property, so an author can scale a block. Everything
+ * measured through `getBoundingClientRect` is then post-transform while every
+ * length from `getComputedStyle` stays in unscaled CSS pixels, and anything
+ * combining the two is wrong by exactly this factor.
+ *
+ * Derived by COMPARING the two rather than by parsing a transform: `offsetWidth`
+ * is the untransformed border-box width and the bounding rectangle is the drawn
+ * one, so their ratio carries the whole ancestor chain's scaling with it. A
+ * parser would see only the element's own `transform` and would miss a scaled
+ * parent entirely.
+ *
+ * Returns `1` on an axis with no layout extent, where the ratio is `0/0` and
+ * there is nothing to scale. Note what this does NOT represent: a rotation or a
+ * skew inflates the bounding box without being a scale, so the ratio is larger
+ * than any real factor. Axis-aligned chrome cannot describe a rotated element in
+ * any case, which is a limit of the drawing rather than of this measurement.
+ */
+export function renderedScale(element: Element): { x: number; y: number } {
+  if (!(element instanceof HTMLElement)) return { x: 1, y: 1 };
+  const box = element.getBoundingClientRect();
+  return {
+    x: element.offsetWidth > 0 ? box.width / element.offsetWidth : 1,
+    y: element.offsetHeight > 0 ? box.height / element.offsetHeight : 1,
+  };
+}

@@ -25,7 +25,7 @@ import { cleanup, render } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Canvas } from "./canvas";
+import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { SpacingOverlay } from "./spacing-overlay";
 
@@ -33,6 +33,7 @@ afterEach(() => {
   cleanup();
   clearBlocks();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function register() {
@@ -109,17 +110,65 @@ function stubComputedStyle(byNodeId: Record<string, Record<string, string>>) {
   }) as typeof window.getComputedStyle);
 }
 
-function mount(editor: EditorState, hidden = false) {
+/**
+ * Give every element a layout box, which jsdom does not.
+ *
+ * The overlay refuses to draw for an element that generates none — `display:
+ * none` and `display: contents` both reach it — and jsdom reports NO client
+ * rectangles for anything, so without this every test here would assert against
+ * the refusal rather than against the overlay. Assigning layout in a test is the
+ * same allowance `geometry-ownership.test.ts` documents for itself.
+ */
+function stubLayoutBoxes(present: boolean) {
+  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(() => {
+    const rects = present ? [new DOMRect(0, 0, 100, 50)] : [];
+    return Object.assign(rects, {
+      item: (index: number) => rects[index] ?? null,
+    }) as unknown as DOMRectList;
+  });
+}
+
+function mount(editor: EditorState, hidden = false, laidOut = true) {
+  stubLayoutBoxes(laidOut);
   register();
   return render(
     <Canvas
-      document={DOCUMENT}
+      document={editor.document}
       siteStyles={{ css: "", classes: {} } as never}
       selectedId={editor.selectedId}
       selectedIds={editor.selection.ids}
       overlay={<SpacingOverlay editor={editor} hidden={hidden} />}
     />
   );
+}
+
+/**
+ * A stand-in for `ResizeObserver`, which jsdom does not implement.
+ *
+ * These tests assert the SUBSCRIPTION rather than the redraw: what goes wrong is
+ * that the overlay stops being told, and whether it is told is the observable
+ * half. jsdom never reflows, so no fixture here can produce the resize the real
+ * observer would report.
+ */
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = [];
+  readonly observed: Element[] = [];
+  disconnected = false;
+  constructor(_callback: ResizeObserverCallback) {
+    FakeResizeObserver.instances.push(this);
+  }
+  observe(target: Element): void {
+    this.observed.push(target);
+  }
+  unobserve(): void {}
+  disconnect(): void {
+    this.disconnected = true;
+  }
+}
+
+function withFakeResizeObserver() {
+  FakeResizeObserver.instances = [];
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
 }
 
 function labels(container: HTMLElement): string[] {
@@ -183,6 +232,20 @@ describe("which values it reports", () => {
     expect(labels(container)).toEqual(["16"]);
   });
 
+  it("draws nothing for a block that generates no layout box", () => {
+    /*
+     * `display: none` and `display: contents` are catalog values and stay
+     * selectable through the Layers panel. Their computed margin survives while
+     * every rectangle reads zero, so the bands would otherwise appear at the
+     * canvas origin naming space that is nowhere on screen. The identical
+     * fixture WITH a layout box is asserted above, which is what makes this
+     * emptiness mean the guard fired rather than the fixture being inert.
+     */
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"), false, false);
+    expect(bandSides(container)).toEqual([]);
+  });
+
   it("reports nothing for a block whose computed spacing is all zero", () => {
     stubComputedStyle({ a: {} });
     const { container } = mount(editorOf("a"));
@@ -216,5 +279,57 @@ describe("accessibility", () => {
     const { container } = mount(editorOf("a"));
     const layer = container.querySelector(".nx-spacing-overlay");
     expect(layer?.getAttribute("aria-hidden")).toBe("true");
+  });
+});
+
+describe("what it stays subscribed to", () => {
+  it("watches the canvas ROOT as well as the selected block", () => {
+    /*
+     * A `ResizeObserver` reports a size change and never a position one, so a
+     * sibling above the selection finishing its load moves the block without
+     * resizing it and the block's own entry never fires. The root sizes to its
+     * content, which makes that reflow observable.
+     */
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+
+    const observer = FakeResizeObserver.instances.at(-1);
+    const root = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    const block = container.querySelector('[data-nx-node="a"]');
+    expect(observer?.observed).toContain(root);
+    expect(observer?.observed).toContain(block);
+  });
+
+  it("re-subscribes when the document changes under an unchanged selection", () => {
+    /*
+     * An edit replaces the rendered tree while the selection survives, so the id
+     * resolves to a NEW element. An effect keyed on the selection alone keeps
+     * watching the detached old one, and every later resize of the real block
+     * reports to nobody.
+     */
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const first = editorOf("a");
+    const { rerender } = mount(first);
+    const before = FakeResizeObserver.instances.at(-1);
+
+    const edited = {
+      ...DOCUMENT,
+      nodes: [...(DOCUMENT.nodes as unknown[])],
+    } as unknown as BlockDocument;
+    const next = { ...first, document: edited } as unknown as EditorState;
+    rerender(
+      <Canvas
+        document={edited}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="a"
+        selectedIds={["a"]}
+        overlay={<SpacingOverlay editor={next} />}
+      />
+    );
+
+    expect(before?.disconnected).toBe(true);
+    expect(FakeResizeObserver.instances.length).toBeGreaterThan(1);
   });
 });

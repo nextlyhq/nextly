@@ -26,7 +26,7 @@ function bandsFor(over: Partial<SpacingGeometry>): readonly SpacingBand[] {
     borderWidths: NONE,
     margin: NONE,
     padding: NONE,
-    scale: 1,
+    scale: { x: 1, y: 1 },
     ...over,
   });
 }
@@ -234,7 +234,10 @@ describe("scale", () => {
    * set sixteen pixels, and a canvas drawn at half size has not changed that.
    */
   it("scales a band's extent", () => {
-    const bands = bandsFor({ margin: { ...NONE, top: 20 }, scale: 0.5 });
+    const bands = bandsFor({
+      margin: { ...NONE, top: 20 },
+      scale: { x: 0.5, y: 0.5 },
+    });
     expect(band(bands, "margin", "top")?.rect).toEqual({
       x: 100,
       y: 190,
@@ -244,7 +247,10 @@ describe("scale", () => {
   });
 
   it("leaves the LABEL in unscaled CSS pixels", () => {
-    const bands = bandsFor({ margin: { ...NONE, top: 20 }, scale: 0.5 });
+    const bands = bandsFor({
+      margin: { ...NONE, top: 20 },
+      scale: { x: 0.5, y: 0.5 },
+    });
     expect(band(bands, "margin", "top")?.label).toBe("20");
   });
 
@@ -252,7 +258,7 @@ describe("scale", () => {
     const bands = bandsFor({
       borderWidths: { top: 4, right: 4, bottom: 4, left: 4 },
       padding: { ...NONE, top: 10 },
-      scale: 2,
+      scale: { x: 2, y: 2 },
     });
     expect(band(bands, "padding", "top")?.rect).toEqual({
       x: 108,
@@ -262,12 +268,40 @@ describe("scale", () => {
     });
   });
 
+  it("scales each edge by the axis it runs along", () => {
+    /*
+     * `transform: scale(2, 0.5)` is one legal value, and a single factor is
+     * necessarily wrong on one of the two axes. A vertical margin follows the
+     * vertical scale and a horizontal one the horizontal scale.
+     */
+    const bands = bandsFor({
+      margin: { top: 20, right: 20, bottom: 0, left: 0 },
+      scale: { x: 2, y: 0.5 },
+    });
+    expect(band(bands, "margin", "top")?.rect.height).toBe(10);
+    expect(band(bands, "margin", "right")?.rect.width).toBe(40);
+  });
+
+  it("reports the same LABEL on both axes however they are scaled", () => {
+    // The author typed twenty on each side. Nothing about drawing the block at
+    // a different size changed what they typed.
+    const bands = bandsFor({
+      margin: { top: 20, right: 20, bottom: 0, left: 0 },
+      scale: { x: 2, y: 0.5 },
+    });
+    expect(band(bands, "margin", "top")?.label).toBe("20");
+    expect(band(bands, "margin", "right")?.label).toBe("20");
+  });
+
   it("is not satisfied by ignoring the argument", () => {
     // The control for the three above, which an implementation that dropped
     // `scale` entirely would pass at 1. At any other scale the extent has to
     // differ from the unscaled one.
     const plain = bandsFor({ margin: { ...NONE, top: 20 } });
-    const scaled = bandsFor({ margin: { ...NONE, top: 20 }, scale: 0.5 });
+    const scaled = bandsFor({
+      margin: { ...NONE, top: 20 },
+      scale: { x: 0.5, y: 0.5 },
+    });
     expect(scaled[0]?.rect.height).not.toBe(plain[0]?.rect.height);
   });
 });

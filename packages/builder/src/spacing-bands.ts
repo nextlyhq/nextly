@@ -13,16 +13,21 @@
  * ## Two coordinate spaces meet here, and they are not the same space
  *
  * `border` arrives from `canvasContentRect`, which reads `getBoundingClientRect`
- * — a POST-transform measurement, so a canvas drawn at half size reports half
+ * — a POST-transform measurement, so an element drawn at half size reports half
  * the pixels. The edge lengths arrive from `getComputedStyle`, which reports
- * UNSCALED CSS pixels and knows nothing about a transform above it.
+ * UNSCALED CSS pixels and knows nothing about a transform on the element or on
+ * anything above it.
  *
- * `scale` is what reconciles them, and it is required rather than defaulted for
- * that reason. The two spaces coincide exactly while the canvas is drawn at 1:1,
- * which is every case today — so a default would be correct, silently, until the
- * day it was not, and nothing here would fail. A caller has to say which scale
- * its rectangle was measured at, and the label keeps reporting the CSS value the
- * author typed rather than the scaled one they can see.
+ * `scale` is what reconciles them, and it is required rather than defaulted
+ * because the mismatch is reachable TODAY: `transform` is a catalog property, so
+ * an author can scale a block and every band would otherwise be wrong by exactly
+ * that factor with nothing failing. It is per-axis because `scale(2, 0.5)` is
+ * one value, and a single factor would be right on one axis and wrong on the
+ * other.
+ *
+ * The LABEL never moves with it. The author typed sixteen pixels; drawing the
+ * block at half size did not change what they typed, and a band reading `8`
+ * would name a value that appears nowhere in their document.
  *
  * @module spacing-bands
  */
@@ -67,16 +72,27 @@ export interface SpacingBand {
   readonly negative: boolean;
 }
 
+/**
+ * How much bigger the measured rectangle is than the layout it came from.
+ *
+ * Per-axis because a transform scales the two independently. `{ x: 1, y: 1 }`
+ * for an untransformed element, which is the ordinary case.
+ */
+export interface Scale {
+  readonly x: number;
+  readonly y: number;
+}
+
 /** Everything the placement needs, and nothing that has to be read from a DOM. */
 export interface SpacingGeometry {
-  /** The node's border box, in canvas content coordinates. */
+  /** The node's border box, in canvas content coordinates, post-transform. */
   readonly border: Rect;
   /** Border widths, needed because padding is measured from the padding box. */
   readonly borderWidths: EdgeLengths;
   readonly margin: EdgeLengths;
   readonly padding: EdgeLengths;
-  /** The scale `border` was measured at; `1` while the canvas is drawn 1:1. */
-  readonly scale: number;
+  /** The scale `border` was measured at. See the module docblock. */
+  readonly scale: Scale;
 }
 
 const SIDES: readonly SpacingSide[] = ["top", "right", "bottom", "left"];
@@ -118,8 +134,21 @@ export function spacingBands(
   geometry: SpacingGeometry
 ): readonly SpacingBand[] {
   const { border, scale } = geometry;
-  const scaled = (value: number): number => value * scale;
+  /*
+   * Each edge scales by the axis it runs along: a left margin is a horizontal
+   * distance and a top margin a vertical one. Scaling both by one factor is
+   * right only while the transform is uniform, and `scale(2, 0.5)` is a single
+   * legal value that makes it wrong on one axis.
+   */
+  const scaled = (edges: EdgeLengths): EdgeLengths => ({
+    top: edges.top * scale.y,
+    right: edges.right * scale.x,
+    bottom: edges.bottom * scale.y,
+    left: edges.left * scale.x,
+  });
 
+  const margin = scaled(geometry.margin);
+  const padding = scaled(geometry.padding);
   const bands: SpacingBand[] = [];
 
   for (const side of SIDES) {
@@ -129,7 +158,7 @@ export function spacingBands(
     bands.push({
       box: "margin",
       side,
-      rect: marginRect(border, side, scaled(value)),
+      rect: marginRect(border, side, margin[side]),
       label,
       negative: value < 0,
     });
@@ -141,12 +170,7 @@ export function spacingBands(
    * costs the same, so there is no branch for it — a block that does carry a
    * border would otherwise draw every padding band offset by its width.
    */
-  const inner = inset(border, {
-    top: scaled(geometry.borderWidths.top),
-    right: scaled(geometry.borderWidths.right),
-    bottom: scaled(geometry.borderWidths.bottom),
-    left: scaled(geometry.borderWidths.left),
-  });
+  const inner = inset(border, scaled(geometry.borderWidths));
 
   for (const side of SIDES) {
     const value = geometry.padding[side];
@@ -155,12 +179,7 @@ export function spacingBands(
     bands.push({
       box: "padding",
       side,
-      rect: paddingRect(inner, side, {
-        top: scaled(geometry.padding.top),
-        right: scaled(geometry.padding.right),
-        bottom: scaled(geometry.padding.bottom),
-        left: scaled(geometry.padding.left),
-      }),
+      rect: paddingRect(inner, side, padding),
       label,
       negative: false,
     });

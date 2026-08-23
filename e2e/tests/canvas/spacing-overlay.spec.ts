@@ -165,6 +165,73 @@ test.describe("spacing values on the canvas", () => {
     expect(Math.abs(bandBox.y - blockBottom)).toBeLessThan(TOLERANCE);
   });
 
+  test("a scaled block gets scaled BANDS and an unscaled LABEL", async ({
+    page,
+  }) => {
+    /*
+     * `transform` is a catalog property, so this is reachable by an author today
+     * rather than a hypothetical about a future canvas zoom.
+     *
+     * The two halves pull apart under a transform and only one of them moves.
+     * `getBoundingClientRect` reports the DRAWN box, so a block at half size has
+     * half the padding on screen and the band has to match it. `getComputedStyle`
+     * reports unscaled CSS pixels, and that is what the author typed — a band
+     * reading `60` would name a value that appears nowhere in their document.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+
+    await block.evaluate(node => {
+      (node as HTMLElement).style.transform = "scale(0.5)";
+      (node as HTMLElement).style.transformOrigin = "top left";
+    });
+    await block.click();
+
+    const bandBox = await page.locator(band("padding", "bottom")).boundingBox();
+    if (bandBox === null) throw new Error("the padding band has no box");
+
+    expect(Math.abs(bandBox.height - PADDING_BOTTOM / 2)).toBeLessThan(
+      TOLERANCE
+    );
+    await expect(page.locator(band("padding", "bottom"))).toHaveText(
+      String(PADDING_BOTTOM)
+    );
+  });
+
+  test("a block with no layout box draws no bands at all", async ({ page }) => {
+    /*
+     * `display: none` keeps the element in the DOM and keeps its computed margin,
+     * while every rectangle it reports reads zero. Without a guard the bands land
+     * at the canvas origin naming space that is nowhere on screen — and the
+     * author reaches this by selecting a hidden node in the Layers panel.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+
+    // Selected FIRST, so the bands demonstrably exist and their later absence is
+    // the guard firing rather than a selection that never took.
+    await block.click();
+    await expect(page.locator(band("padding", "bottom"))).toHaveCount(1);
+
+    /*
+     * Hidden WITHOUT touching the selection, so the block under test is still
+     * the one the overlay answers for. Clicking elsewhere would empty the bands
+     * for the unrelated reason that the new selection has no padding, and the
+     * assertion would pass against the guard being absent.
+     *
+     * Losing its box is a size change, so the block's own ResizeObserver entry
+     * is what drives the re-measure — no extra nudge needed.
+     */
+    await block.evaluate(node => {
+      (node as HTMLElement).style.display = "none";
+    });
+
+    await expect(page.locator(`${BAND}[data-box="padding"]`)).toHaveCount(0);
+    await expect(page.locator(BAND)).toHaveCount(0);
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {
