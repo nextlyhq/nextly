@@ -220,6 +220,9 @@ export interface RenderedScale {
 
 const IDENTITY_SCALE: RenderedScale = { x: 1, y: 1, describable: true };
 
+/** Below this, an off-diagonal matrix term is serialization noise, not a rotation. */
+const AXIS_ALIGNED_TOLERANCE = 1e-9;
+
 export function renderedScale(element: Element, root: Element): RenderedScale {
   const view = element.ownerDocument.defaultView;
   // Absent in jsdom, which lays nothing out and so has no transform to compose.
@@ -253,13 +256,26 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
    * translations and axis-aligned scales, non-zero the moment a rotation or a
    * skew enters.
    *
+   * Compared against a TOLERANCE rather than to zero exactly. A transform that is
+   * geometrically the identity can be written as one that is not —
+   * `rotate(360deg)`, `rotate(1turn)` — and an engine is free to serialize the
+   * sine residue rather than normalize it away. Measured in Chromium, both of
+   * those come back exactly zero, so this guards an engine that behaves
+   * differently rather than a failure anyone has seen here.
+   *
+   * The bound rejects nothing real: the off-diagonal term of a thousandth of a
+   * degree of rotation is about 1.7e-5, four orders of magnitude above it.
+   *
    * `is2D` is a separate question and a 2D check does not imply it. A
    * `perspective(500px) rotateY(30deg)` projects the box as a trapezoid whose
    * scale varies across it, and the flattened matrix can still show zero
    * off-diagonal terms with positive `a` and `d` — describable by those tests
    * and describable by nothing that draws rectangles.
    */
-  const axisAligned = matrix.is2D && matrix.b === 0 && matrix.c === 0;
+  const axisAligned =
+    matrix.is2D &&
+    Math.abs(matrix.b) < AXIS_ALIGNED_TOLERANCE &&
+    Math.abs(matrix.c) < AXIS_ALIGNED_TOLERANCE;
   return {
     x: matrix.a,
     y: matrix.d,
@@ -346,6 +362,12 @@ export function hasScrollbarGutter(
  * that clipping applies to the bands and the page alike, so it produces no
  * mismatch; only a clip between the block and the root does.
  */
+/** A computed border width in pixels, or zero when the browser reports no number. */
+function edgeWidth(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export function clippedByAncestor(element: Element, root: Element): boolean {
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
@@ -359,7 +381,20 @@ export function clippedByAncestor(element: Element, root: Element): boolean {
     const style = view.getComputedStyle(node);
     if (style.overflowX === "visible" && style.overflowY === "visible")
       continue;
-    const clip = node.getBoundingClientRect();
+    /*
+     * Overflow clips at the PADDING edge, and `getBoundingClientRect` reports the
+     * BORDER box. On a container with a border the two differ by its width, so a
+     * child pulled into the border by a negative margin or a transform is
+     * visibly cut while a border-box comparison reports it contained — measured,
+     * a 20px border puts the border box at 217 and the clip edge at 237.
+     */
+    const outer = node.getBoundingClientRect();
+    const clip = {
+      top: outer.top + edgeWidth(style.borderTopWidth),
+      left: outer.left + edgeWidth(style.borderLeftWidth),
+      bottom: outer.bottom - edgeWidth(style.borderBottomWidth),
+      right: outer.right - edgeWidth(style.borderRightWidth),
+    };
     // Half a pixel, because both rectangles are fractional and a block laid out
     // flush against its container's edge is not clipped by rounding.
     const slack = 0.5;
@@ -373,4 +408,28 @@ export function clippedByAncestor(element: Element, root: Element): boolean {
     }
   }
   return false;
+}
+
+/**
+ * The canvas root an element sits inside, as an `HTMLElement` of its OWN realm.
+ *
+ * `instanceof HTMLElement` compares against the constructor of the realm doing
+ * the asking. A host that mounts the canvas into a same-origin iframe through a
+ * portal gets a root built by that iframe's realm, and the check fails for a
+ * perfectly good element — so chrome would return early and draw nothing,
+ * silently, on exactly the iframe canvas `geometry.ts` documents.
+ *
+ * Here rather than at each caller because two of them ask the same question, and
+ * the realm-safe spelling is the kind of detail that gets written correctly once
+ * and copied wrongly afterwards.
+ */
+export function canvasRootFrom(
+  element: Element,
+  rootClass: string
+): HTMLElement | null {
+  const root = element.closest(`.${rootClass}`);
+  if (root === null) return null;
+  const realm = root.ownerDocument.defaultView;
+  if (realm === null) return null;
+  return root instanceof realm.HTMLElement ? root : null;
 }

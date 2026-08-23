@@ -158,7 +158,7 @@ export function spacingBands(
     bands.push({
       box: "margin",
       side,
-      rect: marginRect(border, side, margin[side]),
+      rect: marginRect(border, side, margin),
       label,
       negative: value < 0,
     });
@@ -207,30 +207,55 @@ function inset(rect: Rect, by: EdgeLengths): Rect {
  * toward its neighbour means. Drawing a negative margin outward would put the
  * band exactly where the space it removes is not.
  *
- * Top and bottom span the full width and left and right span the full height,
- * so the four meet at the corners rather than leaving them blank. The overlap
- * that produces is a corner drawn twice at the same colour, which is invisible.
+ * See {@link marginRect} for how the four meet at the corners.
  */
-function marginRect(border: Rect, side: SpacingSide, value: number): Rect {
+function marginRect(
+  border: Rect,
+  side: SpacingSide,
+  margin: EdgeLengths
+): Rect {
+  const value = margin[side];
   const extent = Math.abs(value);
   const outward = value >= 0;
+  /*
+   * Top and bottom span the whole MARGIN box, not the border box.
+   *
+   * Spanning the border box leaves the outer corners painted by nothing: with a
+   * top and a left margin, the rectangle above-and-left of the border box
+   * belongs to the margin area and no band reached it. Extending the horizontal
+   * bands over the vertical margins assigns each corner exactly once — left and
+   * right still span the border height, so nothing is painted twice and no
+   * translucent overlap darkens a corner.
+   *
+   * Only OUTWARD neighbours extend it. A negative margin makes the margin box
+   * smaller on that side, so there is no corner out there to fill.
+   */
+  const leftOut = Math.max(0, margin.left);
+  const rightOut = Math.max(0, margin.right);
   switch (side) {
     case "top":
-      return {
-        x: border.x,
-        y: outward ? border.y - extent : border.y,
-        width: border.width,
-        height: extent,
-      };
+      return outward
+        ? {
+            x: border.x - leftOut,
+            y: border.y - extent,
+            width: border.width + leftOut + rightOut,
+            height: extent,
+          }
+        : { x: border.x, y: border.y, width: border.width, height: extent };
     case "bottom":
-      return {
-        x: border.x,
-        y: outward
-          ? border.y + border.height
-          : border.y + border.height - extent,
-        width: border.width,
-        height: extent,
-      };
+      return outward
+        ? {
+            x: border.x - leftOut,
+            y: border.y + border.height,
+            width: border.width + leftOut + rightOut,
+            height: extent,
+          }
+        : {
+            x: border.x,
+            y: border.y + border.height - extent,
+            width: border.width,
+            height: extent,
+          };
     case "left":
       return {
         x: outward ? border.x - extent : border.x,
@@ -367,14 +392,84 @@ const PADDINGLESS: ReadonlySet<string> = new Set(
   [...MARGINLESS].filter(display => display !== "table-cell")
 );
 
-/** Which spacing a generated box of this display type can actually have. */
-export function spacingApplies(display: string): {
-  margin: boolean;
-  padding: boolean;
-} {
+/** Whether each physical side of one box can carry spacing at all. */
+export interface EdgeApplicability {
+  readonly top: boolean;
+  readonly right: boolean;
+  readonly bottom: boolean;
+  readonly left: boolean;
+}
+
+const ALL_SIDES: EdgeApplicability = {
+  top: true,
+  right: true,
+  bottom: true,
+  left: true,
+};
+const NO_SIDES: EdgeApplicability = {
+  top: false,
+  right: false,
+  bottom: false,
+  left: false,
+};
+
+/**
+ * Whether the writing mode puts the BLOCK axis vertically on screen.
+ *
+ * `horizontal-tb` and anything unrecognised count as horizontal, which is the
+ * initial value and the overwhelming case; every `vertical-*` and `sideways-*`
+ * mode turns the block axis sideways.
+ */
+function blockAxisIsVertical(writingMode: string): boolean {
+  return (
+    !writingMode.startsWith("vertical") && !writingMode.startsWith("sideways")
+  );
+}
+
+/**
+ * Which spacing a generated box of this display type can actually have.
+ *
+ * PER SIDE rather than per box, because `display: inline` is not all-or-nothing:
+ * a non-replaced inline box takes its INLINE-axis margins and ignores its
+ * BLOCK-axis ones entirely, while `getComputedStyle` reports whatever the author
+ * declared on all four. A blanket answer draws top and bottom bands for space an
+ * inline box does not create.
+ *
+ * Which physical sides those are depends on the writing mode: the block axis is
+ * vertical in `horizontal-tb` and horizontal in every `vertical-*` mode. Padding
+ * is left alone — an inline box's block-axis padding does not affect layout, but
+ * it DOES render, and this overlay reports what renders.
+ */
+export function spacingApplies(
+  display: string,
+  writingMode: string
+): { margin: EdgeApplicability; padding: EdgeApplicability } {
+  const padding = PADDINGLESS.has(display) ? NO_SIDES : ALL_SIDES;
+  if (MARGINLESS.has(display)) return { margin: NO_SIDES, padding };
+  if (display !== "inline") return { margin: ALL_SIDES, padding };
+
+  const acrossBlock = blockAxisIsVertical(writingMode);
   return {
-    margin: !MARGINLESS.has(display),
-    padding: !PADDINGLESS.has(display),
+    margin: {
+      top: !acrossBlock,
+      bottom: !acrossBlock,
+      left: acrossBlock,
+      right: acrossBlock,
+    },
+    padding,
+  };
+}
+
+/** Zero the edges a generated box cannot have, keeping the ones it can. */
+export function applicableEdges(
+  edges: EdgeLengths,
+  applies: EdgeApplicability
+): EdgeLengths {
+  return {
+    top: applies.top ? edges.top : 0,
+    right: applies.right ? edges.right : 0,
+    bottom: applies.bottom ? edges.bottom : 0,
+    left: applies.left ? edges.left : 0,
   };
 }
 

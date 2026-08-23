@@ -63,6 +63,7 @@ import { CANVAS_ROOT_CLASS, nodeElement, nodeElements } from "./canvas";
 import type { EditorState } from "./editor-state";
 import {
   canvasContentRect,
+  canvasRootFrom,
   clippedByAncestor,
   hasScrollbarGutter,
   layoutFragments,
@@ -70,6 +71,7 @@ import {
   type RenderedScale,
 } from "./geometry-dom";
 import {
+  applicableEdges,
   overlayEscape,
   sameBands,
   spacingApplies,
@@ -150,9 +152,6 @@ function boxesOf(style: CSSStyleDeclaration): {
  * with room and keeps the clip allowance small.
  */
 const CHIP_OVERFLOW_PX = 24;
-
-/** Four zero edges, for a box CSS gives no margin or no padding. */
-const NO_EDGES: EdgeLengths = { top: 0, right: 0, bottom: 0, left: 0 };
 
 /** One array identity for every empty result, so React can bail out of a render. */
 const NO_BANDS: readonly SpacingBand[] = [];
@@ -249,8 +248,10 @@ export function SpacingOverlay({
       apply(NO_BANDS);
       return;
     }
-    const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) {
+    // Resolved through `canvasRootFrom`, which answers in the ROOT's own realm —
+    // see there for why `instanceof HTMLElement` is the wrong question.
+    const root = canvasRootFrom(element, CANVAS_ROOT_CLASS);
+    if (root === null) {
       apply(NO_BANDS);
       return;
     }
@@ -277,12 +278,12 @@ export function SpacingOverlay({
      * whatever the author declared, so reading it unconditionally draws bands
      * for space that does not exist.
      */
-    const applies = spacingApplies(style.display);
+    const applies = spacingApplies(style.display, style.writingMode);
     const measured = boxesOf(style);
     const boxes = {
       borderWidths: measured.borderWidths,
-      margin: applies.margin ? measured.margin : NO_EDGES,
-      padding: applies.padding ? measured.padding : NO_EDGES,
+      margin: applicableEdges(measured.margin, applies.margin),
+      padding: applicableEdges(measured.padding, applies.padding),
     };
     const borders = {
       x: boxes.borderWidths.left + boxes.borderWidths.right,
@@ -359,8 +360,9 @@ export function SpacingOverlay({
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
     const element = layer.current;
-    const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) return;
+    const root =
+      element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
+    if (root === null) return;
     /*
      * Each observer is guarded separately, and that is not tidiness. They answer
      * different questions — sizes changed, and the DOM changed — so a runtime

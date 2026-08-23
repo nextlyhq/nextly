@@ -121,6 +121,50 @@ describe("where a margin band lands", () => {
     });
   });
 
+  it("fills the outer CORNERS when two adjacent margins are set", () => {
+    /*
+     * Two adjacent margins leave a rectangle diagonally outside the border box
+     * that belongs to the margin area. Spanning only the border box paints
+     * nothing there, so the highlighted region is smaller than the margin box
+     * and the overlay under-reports the space it exists to show.
+     *
+     * The horizontal bands take it: top and bottom span the whole margin box
+     * while left and right span the border height, so each corner is assigned
+     * exactly once and no translucent band is drawn over another.
+     */
+    const bands = bandsFor({
+      margin: { top: 20, right: 8, bottom: 0, left: 12 },
+    });
+    expect(band(bands, "margin", "top")?.rect).toEqual({
+      x: 88, // border.x - left margin
+      y: 180,
+      width: 320, // border.width + left + right
+      height: 20,
+    });
+    // The vertical band is unchanged, which is what keeps the corner single.
+    expect(band(bands, "margin", "left")?.rect).toEqual({
+      x: 88,
+      y: 200,
+      width: 12,
+      height: 150,
+    });
+  });
+
+  it("does not widen a band for a NEGATIVE neighbour", () => {
+    // A negative margin makes the margin box SMALLER on that side, so there is
+    // no corner out there to fill and extending toward it would paint outside
+    // the margin area entirely.
+    const bands = bandsFor({
+      margin: { top: 20, right: 0, bottom: 0, left: -12 },
+    });
+    expect(band(bands, "margin", "top")?.rect).toEqual({
+      x: 100,
+      y: 180,
+      width: 300,
+      height: 20,
+    });
+  });
+
   it("puts a NEGATIVE margin inside the border edge, not outside it", () => {
     /*
      * The separating property. A negative margin pulls the element toward its
@@ -382,6 +426,9 @@ describe("comparing two band lists", () => {
 });
 
 describe("which spacing a generated box can have", () => {
+  const ALL = { top: true, right: true, bottom: true, left: true };
+  const NONE = { top: false, right: false, bottom: false, left: false };
+
   it.each([
     "table-row-group",
     "table-header-group",
@@ -400,25 +447,60 @@ describe("which spacing a generated box can have", () => {
      * reading it unconditionally draws bands for space that does not exist and
      * cannot be made to exist by changing the value.
      */
-    expect(spacingApplies(display)).toEqual({ margin: false, padding: false });
+    expect(spacingApplies(display, "horizontal-tb")).toEqual({
+      margin: NONE,
+      padding: NONE,
+    });
   });
 
   it("gives table-cell padding but not margin", () => {
     // The one internal table box padding applies to, and the common case an
     // author actually sets. Collapsing it into the group above would blank the
     // padding of every table cell on the page.
-    expect(spacingApplies("table-cell")).toEqual({
-      margin: false,
-      padding: true,
+    expect(spacingApplies("table-cell", "horizontal-tb")).toEqual({
+      margin: NONE,
+      padding: ALL,
     });
   });
 
   it.each(["block", "flex", "grid", "inline-block", "table", "table-caption"])(
-    "gives %s both",
+    "gives %s every side of both",
     display => {
       // `table-caption` is here deliberately: it is NOT an internal table box,
       // and its margins apply normally.
-      expect(spacingApplies(display)).toEqual({ margin: true, padding: true });
+      expect(spacingApplies(display, "horizontal-tb")).toEqual({
+        margin: ALL,
+        padding: ALL,
+      });
+    }
+  );
+
+  it("drops an inline box's BLOCK-axis margins and keeps the inline ones", () => {
+    /*
+     * A non-replaced inline box ignores its block-axis margins entirely while
+     * `getComputedStyle` reports whatever was declared, so a blanket answer
+     * draws bands for space the box does not create. Its padding is left alone:
+     * block-axis padding on an inline box does not affect layout but DOES
+     * render, and this overlay reports what renders.
+     */
+    expect(spacingApplies("inline", "horizontal-tb")).toEqual({
+      margin: { top: false, bottom: false, left: true, right: true },
+      padding: ALL,
+    });
+  });
+
+  it.each(["vertical-rl", "vertical-lr", "sideways-rl"])(
+    "follows the writing mode: %s puts the block axis sideways",
+    writingMode => {
+      // Which PHYSICAL sides the block axis lands on is a function of the
+      // writing mode, so a physical answer hard-coded to `horizontal-tb` is
+      // wrong on exactly the documents that need it most.
+      expect(spacingApplies("inline", writingMode).margin).toEqual({
+        top: true,
+        bottom: true,
+        left: false,
+        right: false,
+      });
     }
   );
 });

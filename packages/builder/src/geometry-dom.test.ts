@@ -21,6 +21,7 @@ import {
   canvasContentPoint,
   canvasContentRect,
   frameInsetOf,
+  canvasRootFrom,
 } from "./geometry-dom";
 
 /**
@@ -192,5 +193,51 @@ describe("canvasContentPoint", () => {
       x: rect.x,
       y: rect.y,
     });
+  });
+});
+
+describe("finding the canvas root across realms", () => {
+  it("finds the root in the ordinary same-realm case", () => {
+    const root = document.createElement("div");
+    root.className = "nx-canvas";
+    const child = document.createElement("p");
+    root.appendChild(child);
+    document.body.appendChild(root);
+
+    expect(canvasRootFrom(child, "nx-canvas")).toBe(root);
+    root.remove();
+  });
+
+  it("returns null when nothing above the element is a canvas root", () => {
+    const lone = document.createElement("p");
+    document.body.appendChild(lone);
+    expect(canvasRootFrom(lone, "nx-canvas")).toBeNull();
+    lone.remove();
+  });
+
+  it("accepts a root built by ANOTHER realm", () => {
+    /*
+     * The separating case. `instanceof HTMLElement` compares against the
+     * constructor of the realm doing the asking, so a root created inside an
+     * iframe is not an instance of THIS realm's `HTMLElement` — and chrome
+     * checking it that way returns early and draws nothing on a perfectly good
+     * canvas. The control below is the same object failing that naive check.
+     */
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("the iframe has no document");
+
+    const root = inner.createElement("div");
+    root.className = "nx-canvas";
+    const child = inner.createElement("p");
+    root.appendChild(child);
+    inner.body.appendChild(root);
+
+    // The naive check fails on it — which is what the helper exists to survive.
+    expect(root instanceof HTMLElement).toBe(false);
+    expect(canvasRootFrom(child, "nx-canvas")).toBe(root);
+
+    frame.remove();
   });
 });

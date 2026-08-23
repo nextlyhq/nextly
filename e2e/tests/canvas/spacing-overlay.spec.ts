@@ -718,6 +718,51 @@ test.describe("spacing values on the canvas", () => {
     await expect(page.locator(BAND)).toHaveCount(0);
   });
 
+  test("a BORDERED clipping ancestor clips at its padding edge", async ({
+    page,
+  }) => {
+    /*
+     * Overflow clips at the PADDING edge while `getBoundingClientRect` reports
+     * the BORDER box, so on a bordered container the two differ by its width —
+     * measured, a 20px border puts the border box at 217 and the clip edge at
+     * 237. A child pulled into that border is visibly cut while a border-box
+     * comparison reports it contained, and the bands paint over the cut region.
+     *
+     * The control comes first: the same bordered container that does NOT cut
+     * still draws, so the emptiness afterwards is the padding edge being used
+     * rather than any border at all refusing the block.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.border = "20px solid transparent";
+    });
+    await target.click();
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    /*
+     * Pulled UP into the border by a negative margin. The child is now above the
+     * padding edge and below the border-box top, so it is genuinely cut — and a
+     * border-box comparison would still call it contained.
+     */
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginTop = "-15px";
+    });
+
+    await expect(page.locator(BAND)).toHaveCount(0);
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {
