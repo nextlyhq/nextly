@@ -23,6 +23,8 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { signPreviewToken } from "../auth/preview/preview-token";
 import { buildUserContext } from "../auth/user-context";
 import { container } from "../di";
+import type { NextlyServiceConfig } from "../di/register";
+import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
@@ -148,11 +150,31 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
     { generation, ...(ttlSeconds === undefined ? {} : { ttlSeconds }) }
   );
 
-  // The token, not a full URL. Where a preview route is mounted is the app's
-  // decision, and guessing it here would produce a link that 404s on any app
-  // that mounted it elsewhere.
+  // The finished URL as well as the token.
+  //
+  // Both halves are visible from here and from nowhere else. The site URL lives
+  // in settings, which the `editor` and `author` presets cannot read; the mount
+  // lives in the application's config, which the browser cannot see at all. So
+  // the admin had no way to build this correctly and assumed a default, which
+  // is why an application that mounted the route elsewhere handed its reviewers
+  // a link that answered 404.
+  //
+  // `null` when no site URL is set, never a relative URL: a relative one would
+  // be resolved against whatever origin the admin is served from, which is not
+  // the site. The token is still returned, because it is what the link is —
+  // withholding it would break preview outright on a site that never set a
+  // URL, rather than degrading the one thing that needs the host.
+  const settings = await (await settingsService()).getSettings();
+  const url =
+    settings.siteUrl === null
+      ? null
+      : `${settings.siteUrl.replace(/\/+$/, "")}${resolvePreviewRoute(
+          container.get<NextlyServiceConfig>("config")?.preview
+        )}?token=${encodeURIComponent(token)}`;
+
   return respondMutation("Preview link created", {
     token,
+    url,
     expiresAt: expiresAt.toISOString(),
   });
 });

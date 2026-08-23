@@ -60,6 +60,7 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
+import type { PreviewConfig } from "../domains/preview/route-config";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearFieldTypes,
@@ -237,6 +238,15 @@ export interface NextlyServiceConfig {
 
   /** Optional base path for collection file operations. */
   basePath?: string;
+
+  /**
+   * Draft-preview wiring.
+   *
+   * Carried here so the minting endpoint can read where this application
+   * mounted its preview route, which is the half of a shareable link the admin
+   * cannot see from the browser.
+   */
+  preview?: PreviewConfig;
 
   /** Optional directory for dynamic collection schemas. */
   schemasDir?: string;

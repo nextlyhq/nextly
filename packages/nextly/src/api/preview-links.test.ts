@@ -14,10 +14,14 @@ vi.mock("./route-auth", () => ({
   requireRoutePermission: vi.fn(),
 }));
 
-const { getEntry, canUpdateEntry } = vi.hoisted(() => ({
+const { getEntry, canUpdateEntry, getSettings } = vi.hoisted(() => ({
   getEntry: vi.fn(),
   canUpdateEntry: vi.fn(),
+  getSettings: vi.fn(),
 }));
+
+/** The application's `preview` config for the test in hand. */
+let previewConfig: { route?: string } | undefined;
 
 vi.mock("../init", () => ({
   getCachedNextly: vi.fn().mockResolvedValue({}),
@@ -90,9 +94,95 @@ beforeEach(() => {
   });
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
-  (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
-    getPreviewTokenGeneration: getGeneration,
-    revokeAllPreviewTokens: revokeAll,
+  getSettings.mockResolvedValue({ siteUrl: "https://site.example" });
+  previewConfig = undefined;
+  // Key-aware, because assembling the link needs BOTH the settings service and
+  // the application config, and a mock answering the same object for every key
+  // cannot tell them apart.
+  (container.get as ReturnType<typeof vi.fn>).mockImplementation(
+    (key: string) => {
+      if (key === "config") return { preview: previewConfig };
+      return {
+        getPreviewTokenGeneration: getGeneration,
+        revokeAllPreviewTokens: revokeAll,
+        getSettings,
+      };
+    }
+  );
+});
+
+/** The mutation envelope's payload, narrowed once rather than at every use. */
+function item(body: { item?: unknown }): Record<string, unknown> {
+  return body.item as Record<string, unknown>;
+}
+
+describe("mintPreviewLink: the link it hands back", () => {
+  it("returns an absolute url built from the site url and the default mount", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).toMatch(
+      /^https:\/\/site\.example\/api\/preview\?token=/
+    );
+  });
+
+  it("honours a configured preview.route", async () => {
+    previewConfig = { route: "/next/preview" };
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).toMatch(
+      /^https:\/\/site\.example\/next\/preview\?token=/
+    );
+  });
+
+  it("does not double the separator when the site url carries a trailing slash", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "https://site.example/" });
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).not.toContain("//api/preview");
+  });
+
+  it("carries the token in the url it returns", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).toContain(
+      `token=${encodeURIComponent(item(body).token as string)}`
+    );
+  });
+
+  it("still returns the token and expiry", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(typeof item(body).token).toBe("string");
+    expect(typeof item(body).expiresAt).toBe("string");
+  });
+
+  // The admin cannot recover from this: the `editor` and `author` presets
+  // cannot read settings at all, so a RELATIVE url would be resolved against
+  // the admin's own origin — confidently wrong, and the exact guess the
+  // four-state preview resolver exists elsewhere to prevent.
+  it("returns a null url when no site url is configured", async () => {
+    getSettings.mockResolvedValue({ siteUrl: null });
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).toBeNull();
+    // The token is still minted: the link is usable by anyone who can build the
+    // URL, and refusing here would break preview on a site that never set one.
+    expect(typeof item(body).token).toBe("string");
   });
 });
 
@@ -343,16 +433,17 @@ describe("mintPreviewLink", () => {
     });
   });
 
-  it("returns a token rather than a url", async () => {
-    // Where the preview route is mounted is the app's decision; a url guessed
-    // here would 404 on any app that mounted it elsewhere.
+  it("answers with the canonical envelope and nothing else", async () => {
     const body = await json(
       await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
     );
+
     // The canonical mutation envelope, so a direct-API caller reads `.item`.
     expect(Object.keys(body).sort()).toEqual(["item", "message"]);
     const item = body.item as Record<string, unknown>;
-    expect(Object.keys(item).sort()).toEqual(["expiresAt", "token"]);
+    expect(Object.keys(item).sort()).toEqual(["expiresAt", "token", "url"]);
+    // The token is a credential, not an address: it carries no host of its own,
+    // and the `url` beside it is what puts one in front.
     expect(String(item.token)).not.toContain("http");
   });
 

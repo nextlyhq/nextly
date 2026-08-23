@@ -1,53 +1,116 @@
 /**
- * Preview link assembly.
+ * What the hook copies.
  *
- * The URL is built by hand from three pieces the admin does not control
- * together — a configured site URL, a route the user's own app mounted, and a
- * signed token — so the joins are where it breaks.
+ * It copies what the server returned, unchanged. The URL used to be assembled
+ * here from a hardcoded route and a site URL read out of general settings —
+ * neither of which the browser can know: the mount is a route file inside the
+ * application, and `settings` is a system resource the `editor` and `author`
+ * presets cannot read, which are exactly the roles that share preview links.
+ *
+ * These replace the `buildPreviewUrl` tests, which asserted that assembly.
+ * There is no longer a URL built in the browser to test.
  */
-import { describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderHook, waitFor } from "@testing-library/react";
+import { createElement, type ReactElement, type ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DEFAULT_PREVIEW_ROUTE, buildPreviewUrl } from "../usePreviewLink";
+const { toast, mint } = vi.hoisted(() => ({
+  toast: {
+    success: vi.fn(),
+    info: vi.fn((_message: string, _options?: unknown) => "toast-id"),
+    error: vi.fn(),
+    dismiss: vi.fn(),
+  },
+  mint: vi.fn(),
+}));
 
-describe("buildPreviewUrl", () => {
-  it("uses the conventional route when the app has not moved it", () => {
-    expect(buildPreviewUrl({ token: "abc" })).toBe(
-      `${DEFAULT_PREVIEW_ROUTE}?token=abc`
-    );
+vi.mock("@admin/components/ui", () => ({ toast }));
+vi.mock("@admin/services/previewLinkApi", () => ({
+  previewLinkApi: { mint: (...args: unknown[]) => mint(...args) },
+}));
+
+const { usePreviewLink } = await import("../usePreviewLink");
+
+const TOKEN = "a".repeat(280);
+const URL_FROM_SERVER = `https://site.example/next/preview?token=${TOKEN}`;
+
+function makeWrapper(): (props: { children: ReactNode }) => ReactElement {
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
+  return ({ children }) =>
+    createElement(QueryClientProvider, { client }, children);
+}
+
+async function run(): Promise<{ isError: boolean }> {
+  const { result } = renderHook(
+    () => usePreviewLink({ collection: "posts", entryId: "7" }),
+    { wrapper: makeWrapper() }
+  );
+
+  result.current.mutate();
+  await waitFor(() =>
+    expect(result.current.isSuccess || result.current.isError).toBe(true)
+  );
+  return { isError: result.current.isError };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
+
+describe("usePreviewLink", () => {
+  it("copies the url the server returned, unmodified", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    mint.mockResolvedValue({
+      token: TOKEN,
+      url: URL_FROM_SERVER,
+      expiresAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    await run();
+
+    // Byte-identical. Any transformation here is the browser re-deciding
+    // something the server already settled with information the browser lacks.
+    expect(writeText).toHaveBeenCalledWith(URL_FROM_SERVER);
   });
 
-  it("returns a relative link when no site url is configured", () => {
-    // Correct when the admin and the site share an origin, which is the
-    // default deployment, and useless when they do not — so the caller
-    // supplies a site url rather than this guessing an origin.
-    expect(buildPreviewUrl({ token: "abc" }).startsWith("/")).toBe(true);
+  it("mints per click rather than reusing a cached link", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    mint.mockResolvedValue({
+      token: TOKEN,
+      url: URL_FROM_SERVER,
+      expiresAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    await run();
+
+    expect(mint).toHaveBeenCalledWith({ collection: "posts", entryId: "7" });
   });
 
-  it("joins a site url without doubling the slash", () => {
-    // A trailing slash on a configured site url is common enough that not
-    // handling it would produce `https://site.com//api/preview`.
-    for (const siteUrl of ["https://site.com", "https://site.com/"]) {
-      expect(buildPreviewUrl({ token: "abc", siteUrl })).toBe(
-        `https://site.com${DEFAULT_PREVIEW_ROUTE}?token=abc`
-      );
-    }
-  });
+  // The server answers `null` when no site URL is configured, because it cannot
+  // name a host. The admin must NOT put its own origin in front of the path:
+  // the admin may be served from somewhere the site is not, and a link to the
+  // wrong host looks like a working one.
+  it("reports the missing site url instead of substituting its own origin", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    mint.mockResolvedValue({
+      token: TOKEN,
+      url: null,
+      expiresAt: "2026-09-01T00:00:00.000Z",
+    });
 
-  it("honours an app that mounted the route elsewhere", () => {
-    expect(
-      buildPreviewUrl({
-        token: "abc",
-        siteUrl: "https://site.com",
-        previewRoute: "/preview",
-      })
-    ).toBe("https://site.com/preview?token=abc");
-  });
+    const { isError } = await run();
 
-  it("encodes the token rather than interpolating it raw", () => {
-    // A token is base64url and safe today. Assembling a query value by hand is
-    // exactly where that assumption stops being true later.
-    expect(buildPreviewUrl({ token: "a+b/c=d&e" })).toBe(
-      `${DEFAULT_PREVIEW_ROUTE}?token=a%2Bb%2Fc%3Dd%26e`
+    expect(isError).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("site URL")
     );
   });
 });

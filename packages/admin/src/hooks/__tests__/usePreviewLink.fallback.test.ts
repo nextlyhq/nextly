@@ -44,7 +44,11 @@ function makeWrapper(): (props: { children: ReactNode }) => ReactElement {
 
 /** Runs the hook once with a clipboard that answers as told. */
 async function mintWith(writeText: () => Promise<void>): Promise<void> {
-  mint.mockResolvedValue({ token: TOKEN });
+  mint.mockResolvedValue({
+    token: TOKEN,
+    url: `https://site.example/api/preview?token=${TOKEN}`,
+    expiresAt: "2026-09-01T00:00:00.000Z",
+  });
   vi.stubGlobal("navigator", { clipboard: { writeText } });
 
   const { result } = renderHook(

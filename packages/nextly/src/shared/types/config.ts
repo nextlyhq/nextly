@@ -26,6 +26,7 @@ import type {
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
+import type { PreviewConfig } from "../../domains/preview/route-config";
 import { resolveWebhookRetentionConfig } from "../../domains/webhooks/retention-config";
 import type {
   ResolvedWebhookRetentionConfig,
@@ -645,6 +646,15 @@ export interface NextlyConfig {
   admin?: AdminConfig;
 
   /**
+   * Draft-preview wiring.
+   *
+   * Declares where this application mounts `createPreviewRoute`, so the server
+   * can assemble a shareable preview link instead of the admin guessing a path
+   * it has no way to learn.
+   */
+  preview?: PreviewConfig;
+
+  /**
    * Multilingual content configuration. Omit to keep the CMS single-language.
    * See docs/superpowers/specs/2026-07-08-multilingual-i18n-design.md.
    */
@@ -765,6 +775,9 @@ export interface SanitizedNextlyConfig {
 
   /** Admin UI customization config. */
   admin?: AdminConfig;
+
+  /** Draft-preview wiring. */
+  preview?: PreviewConfig;
 
   /** Normalized multilingual content configuration (undefined when i18n is off). */
   localization?: SanitizedLocalizationConfig;
