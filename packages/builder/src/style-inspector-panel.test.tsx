@@ -998,3 +998,263 @@ describe("naming a value the panel cannot edit", () => {
     );
   });
 });
+
+describe("the numeric affordances a simple measurement earns", () => {
+  const withPadding = (value: string): NodeStyles =>
+    ({
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: value } } },
+    }) as NodeStyles;
+
+  it("steps a measurement with the arrow keys, keeping its unit", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+
+    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+      kind: "update",
+      id: "a",
+      patch: {
+        styles: {
+          base: { [BASE_BREAKPOINT]: { padding: { blockStart: "13px" } } },
+        },
+      },
+    });
+  });
+
+  it("steps by ten with Shift, which is what every comparable editor does", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
+
+    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+      patch: {
+        styles: {
+          base: { [BASE_BREAKPOINT]: { padding: { blockStart: "2px" } } },
+        },
+      },
+    });
+  });
+
+  it("LEAVES a value it cannot decompose entirely alone", () => {
+    // The property the whole design exists for. A field that modelled the value
+    // as a number and a unit would answer this keystroke with `0px` and destroy
+    // an expression the author spent real effort on — silently, because the
+    // result is a perfectly valid declaration.
+    const editor = mount(
+      { spacing: true },
+      withPadding("clamp(1rem, 2vw, 3rem)")
+    );
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(field).toHaveProperty("value", "clamp(1rem, 2vw, 3rem)");
+  });
+
+  it("declines a step the property would reject, rather than writing and being refused", () => {
+    // `padding` takes no negative measurement, so stepping `0px` down has no
+    // legal answer. The distinction the assertions draw is between DECLINING
+    // and writing something the validator then rejects: both leave the document
+    // untouched, so `apply` alone cannot tell them apart. A rejected write also
+    // raises the refusal message beside the field, so its ABSENCE is what says
+    // the step never happened — the author gets a key that quietly does
+    // nothing, not an error for a value they never typed.
+    const editor = mount({ spacing: true }, withPadding("0px"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.keyDown(field, { key: "ArrowDown" });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(field).toHaveProperty("value", "0px");
+  });
+
+  it("offers a unit menu only where the value is one measurement", () => {
+    mount({ spacing: true }, withPadding("12px"));
+    expect(
+      fieldsOf("padding").getByLabelText("Unit for Padding block start")
+    ).toBeDefined();
+
+    cleanup();
+    clearBlocks();
+    mount({ spacing: true }, withPadding("auto"));
+    // A menu rendered over `auto` could only offer no-ops, and a control that
+    // silently does nothing is worse than one that is not drawn.
+    expect(
+      fieldsOf("padding").queryByLabelText("Unit for Padding block start")
+    ).toBeNull();
+  });
+
+  it("names each side's unit menu for that side, not for the property", () => {
+    // A composite draws one menu per side. Named from the property alone, all
+    // four would announce "Unit for Padding" and a screen-reader user could not
+    // tell which side a menu edits, so the distinctness is asserted by naming
+    // two of them rather than by matching one string.
+    mount({ spacing: true }, {
+      base: {
+        [BASE_BREAKPOINT]: {
+          padding: { blockStart: "12px", blockEnd: "4px" },
+        },
+      },
+    } as NodeStyles);
+    const padding = fieldsOf("padding");
+
+    expect(
+      padding.getByLabelText("Unit for Padding block start")
+    ).toBeDefined();
+    expect(padding.getByLabelText("Unit for Padding block end")).toBeDefined();
+  });
+
+  it("keeps a stored unit the menu does not offer, rather than showing an empty one", () => {
+    // `ch` is a valid length this build does not put in the menu. A controlled
+    // select with no matching item renders a BLANK trigger over a value that is
+    // doing something, so the stored unit is carried as its own item.
+    mount({ spacing: true }, withPadding("12ch"));
+
+    expect(
+      fieldsOf("padding").getByLabelText("Unit for Padding block start")
+    ).toHaveProperty("textContent", "ch");
+  });
+
+  it("leaves scientific notation to the plain field", () => {
+    // `1e-3rem` is a legal value with no decimal count that both preserves it
+    // and survives a step: composing one back rounds it to `0`. Declining is
+    // what keeps it intact, so neither affordance is offered.
+    const editor = mount({ spacing: true }, withPadding("1e-3rem"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(field).toHaveProperty("value", "1e-3rem");
+    expect(
+      fieldsOf("padding").queryByLabelText("Unit for Padding block start")
+    ).toBeNull();
+  });
+});
+
+describe("what the arrow keys do and do not claim", () => {
+  const withPadding = (value: string): NodeStyles =>
+    ({
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: value } } },
+    }) as NodeStyles;
+
+  it("steps the DRAFT an author is mid-edit on, not the stored value", () => {
+    // A text input has no numeric fallback, so declining here would leave the
+    // arrow doing nothing precisely while the field is being used — and reading
+    // `stored` instead would step from a value the author has already moved on
+    // from, discarding what they typed.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "20px" } });
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+
+    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+      patch: {
+        styles: {
+          base: { [BASE_BREAKPOINT]: { padding: { blockStart: "21px" } } },
+        },
+      },
+    });
+    // One op, not a commit of the draft followed by a step of the result.
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(field).toHaveProperty("value", "21px");
+  });
+
+  it("leaves an arrow to the IME while a composition is in progress", () => {
+    // An IME uses the arrows to move through conversion candidates. Stepping
+    // there edits the style AND suppresses the candidate move, so the author
+    // loses the keystroke twice over. The shortcut manager states the same rule.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.keyDown(field, { key: "ArrowUp", isComposing: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it.each(["altKey", "ctrlKey", "metaKey"])(
+    "leaves %s+Arrow to the platform",
+    modifier => {
+      // These chords are OS, browser and assistive-navigation shortcuts.
+      // Claiming one mutates a style and adds an undo entry from a keystroke
+      // the author aimed somewhere else entirely.
+      const editor = mount({ spacing: true }, withPadding("12px"));
+      const field = fieldsOf("padding").getByLabelText("Block start");
+
+      fireEvent.keyDown(field, { key: "ArrowUp", [modifier]: true });
+
+      expect(editor.apply).not.toHaveBeenCalled();
+    }
+  );
+
+  it("swaps the unit on the quantity the AUTHOR is looking at", () => {
+    // Two controls edit one value. With the draft private to the text field,
+    // the menu read `stored` instead — so typing `20` over `12px` and then
+    // picking `rem` committed `12rem`, silently discarding the 20 on screen.
+    // `20` alone is refused on blur (padding takes no unitless number), which
+    // is exactly why the stale value was still there to be composed from.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const padding = fieldsOf("padding");
+    const field = padding.getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "20" } });
+    fireEvent.blur(field);
+    fireEvent.click(padding.getByLabelText("Unit for Padding block start"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+
+    const written = editor.apply.mock.calls.at(-1)?.[0] as {
+      patch?: {
+        styles?: Record<string, Record<string, Record<string, unknown>>>;
+      };
+    };
+    const side = written.patch?.styles?.base?.[BASE_BREAKPOINT]?.padding as
+      | { blockStart?: unknown }
+      | undefined;
+    expect(side?.blockStart).toBe("20rem");
+  });
+
+  it("points a refusal at the unit menu as well as the field", () => {
+    // A unit change can be refused, and the message explaining it is rendered
+    // once for the whole field. A screen-reader user who returns to the MENU is
+    // otherwise sitting on the control that failed with nothing saying so.
+    // `-5px` is refused because `padding` takes no negative measurement, and it
+    // is still A MEASUREMENT — which matters, because the menu follows the
+    // draft. A refusal that leaves unparseable text behind removes the menu
+    // legitimately, so it could not carry a description at all.
+    mount({ spacing: true }, withPadding("12px"));
+    const padding = fieldsOf("padding");
+    const field = padding.getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "-5px" } });
+    fireEvent.blur(field);
+
+    // Asserted unconditionally. Guarding this on the menu being present would
+    // pass in the world where it is absent — which is the world the assertion
+    // is supposed to rule out — so the menu is required first and described
+    // second.
+    const unit = padding.getByLabelText("Unit for Padding block start");
+    const description = field.getAttribute("aria-describedby");
+    expect(description).not.toBeNull();
+    expect(unit.getAttribute("aria-describedby")).toBe(description);
+    expect(unit.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("declines precision the formatter cannot round, rather than throwing", () => {
+    // The engine accepts more fractional digits than `toFixed` takes, so
+    // composing one would raise a RangeError in the middle of a keystroke.
+    const editor = mount(
+      { spacing: true },
+      withPadding(`0.${"1".repeat(101)}px`)
+    );
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    expect(() => fireEvent.keyDown(field, { key: "ArrowUp" })).not.toThrow();
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+});

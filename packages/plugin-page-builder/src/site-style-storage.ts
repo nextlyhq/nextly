@@ -98,7 +98,7 @@ export function siteStyleSingle(policy: SectionPolicy = {}) {
         validate: refusing(raw => checkStoredTokens(raw, policy)),
         admin: {
           description:
-            'A token set: { tokens: [{ name, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves.',
+            'A token set: { tokens: [{ id?, name, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity.',
         },
       }),
       json({

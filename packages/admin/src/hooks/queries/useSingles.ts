@@ -577,10 +577,39 @@ export function useSingleSchema(
  * }
  * ```
  */
-export function useUpdateSingleDocument(slug: string, locale?: string) {
+export function useUpdateSingleDocument(
+  slug: string,
+  locale?: string,
+  options?: {
+    /**
+     * Serialize this mutation against others sharing the id.
+     *
+     * TanStack runs mutations in parallel by default, each with a unique scope.
+     * Several surfaces owning different fields of ONE document is the case that
+     * wants otherwise: two saves in flight against the same record interleave
+     * their success handlers, so a cache update from the first can land after
+     * the second and show a document neither surface is looking at. Giving them
+     * one scope id makes the second wait for the first.
+     *
+     * Absent by default, because a document edited by one form has nothing to
+     * serialize against and would only pay the wait.
+     */
+    scopeId?: string;
+  }
+) {
   const queryClient = useQueryClient();
 
+  // `Error`, not `ApiError`, because not every rejection is one. `fetcher`
+  // awaits `fetch` without wrapping it, so an offline, DNS or CORS failure
+  // rejects with the native `TypeError` carrying no `status` — and the narrower
+  // type would promise every consumer a number that is absent on exactly the
+  // failures a retry or a reporter most needs to tell apart. `isApiError` and
+  // `validationIssues` recover the refusal payload where there is one, and they
+  // CHECK for it rather than asserting it.
   return useMutation<SingleDocument, Error, Record<string, unknown>>({
+    ...(options?.scopeId === undefined
+      ? {}
+      : { scope: { id: options.scopeId } }),
     // i18n: route the save to the editor's active language so translatable values land on that
     // locale's companion row (shared columns still update). Omitted for non-localized singles.
     mutationFn: async (data: Record<string, unknown>) => {

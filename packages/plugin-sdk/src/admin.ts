@@ -271,6 +271,55 @@ export {
  * the value reaches anonymous callers and must hold nothing secret.
  */
 export { usePluginClientConfig } from "@nextlyhq/admin";
+
+/**
+ * @experimental Read and write a Single this plugin owns, through the same
+ * client the admin's own Single form uses.
+ *
+ * `useSingleDocument(slug)` is a TanStack Query hook whose cache key already
+ * carries the locale and the draft overlay; `useUpdateSingleDocument(slug)` is
+ * the matching mutation. A plugin fetching its own Single some other way would
+ * be a second answer to how that one document caches and when it invalidates,
+ * and the two would disagree the first time either learned something — which is
+ * the failure a plugin surface cannot see, because each half looks correct.
+ *
+ * A write is PARTIAL: the fields named are the fields changed, and every other
+ * field of the document is left as it was. Measured across SQLite, Postgres and
+ * MySQL. So several surfaces owning different fields of one Single can each
+ * send only their own and never clobber one another.
+ *
+ * A refused write REJECTS. The service answers `{ success: false }`,
+ * `unwrapServiceResult` turns that into a throw, the route answers non-2xx, and
+ * the fetcher raises an `ApiError` — so `mutateAsync` rejects rather than
+ * resolving with an envelope to inspect. Handle it: an unhandled rejection is
+ * what a plugin gets for awaiting the mutation and reading the result.
+ *
+ * The reason is on the error rather than in a return value, so it is reached
+ * with `validationIssues(reason)`: the per-field complaints the refusal
+ * carries, each `{ path, code, message }`, keyed by `path` — the document field
+ * that was refused — which is what lets a surface put the message on the
+ * section that produced it. Note `path`, not `field`: the service-level
+ * envelope spells it the other way, and that envelope is not what survives the
+ * transport.
+ *
+ * Read it with the guards rather than a cast, because the mutation's error is
+ * typed `Error` and that is not a narrowing this SDK could honestly avoid. Not
+ * every rejection is an `ApiError`: a request that fails before a response
+ * exists — offline, DNS, CORS — rejects with the native error and carries no
+ * `status` and no payload. `isApiError` separates the two, and
+ * `validationIssues` answers with an empty array for everything that is not a
+ * validation failure, so a surface keying issues by field needs no branch for
+ * the transport case.
+ */
+export {
+  useSingleDocument,
+  useUpdateSingleDocument,
+  isApiError,
+  validationIssues,
+  type SingleDocument,
+  type ApiError,
+  type ValidationIssue,
+} from "@nextlyhq/admin";
 export type {
   FieldTypePickerProps,
   FieldDefaultValueInputProps,
