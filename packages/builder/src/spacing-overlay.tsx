@@ -72,6 +72,7 @@ import {
 } from "./geometry-dom";
 import {
   applicableEdges,
+  NO_SIDES,
   overlayEscape,
   sameBands,
   spacingApplies,
@@ -332,17 +333,38 @@ export function SpacingOverlay({
       style.writingMode,
       isReplaced(block)
     );
+    const scale = renderedScale(block, root);
+    /*
+     * MARGINS ARE DROPPED FOR A BLOCK CARRYING ITS OWN TRANSFORM, and this is
+     * not a scale correction — no factor rescues it.
+     *
+     * A transform does not affect layout. An ANCESTOR's transform scales the
+     * subtree it lays out, gaps included, so a margin inside one really does
+     * render smaller and `scale` is right to apply it. The block's OWN
+     * transform moves only its rendering, while the space its margin reserves
+     * stays where the untransformed box left it.
+     *
+     * Measured on a 100px block with `margin-bottom: 20px`: under `scale(0.5)`
+     * the gap between the rendered border edge and the next sibling is 70px,
+     * under `scale(2)` it is −80px and under `translateY(40px)` it is −20px.
+     * The negatives are the case that settles it — the block is drawn OVER the
+     * neighbour its margin is holding away, so there is no rectangle beside the
+     * border edge that describes the margin at all.
+     *
+     * Padding is untouched: it lies INSIDE the transform and renders scaled
+     * with the box, so those bands stay correct and keep being drawn.
+     */
+    const marginApplies = scale.selfTransformed ? NO_SIDES : applies.margin;
     const measured = boxesOf(style);
     const boxes = {
       borderWidths: measured.borderWidths,
-      margin: applicableEdges(measured.margin, applies.margin),
+      margin: applicableEdges(measured.margin, marginApplies),
       padding: applicableEdges(measured.padding, applies.padding),
     };
     const borders = {
       x: boxes.borderWidths.left + boxes.borderWidths.right,
       y: boxes.borderWidths.top + boxes.borderWidths.bottom,
     };
-    const scale = renderedScale(block, root);
     if (
       !describable(
         layoutFragments(block),

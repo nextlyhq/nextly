@@ -523,7 +523,16 @@ const ALL_SIDES: EdgeApplicability = {
   bottom: true,
   left: true,
 };
-const NO_SIDES: EdgeApplicability = {
+/**
+ * No side carries spacing that can be drawn.
+ *
+ * Exported because applicability is decided in two places for two different
+ * reasons, and both must express "none" the same way: this module decides what
+ * a generated box CAN have, and the DOM edge decides what it can be DRAWN for —
+ * a margin under the element's own transform exists in CSS and is not where any
+ * band could be put.
+ */
+export const NO_SIDES: EdgeApplicability = {
   top: false,
   right: false,
   bottom: false,

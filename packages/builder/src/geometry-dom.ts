@@ -216,9 +216,40 @@ export interface RenderedScale {
   readonly y: number;
   /** False for a rotation, a skew, a reflection, or a collapse to zero. */
   readonly describable: boolean;
+  /**
+   * Whether the ELEMENT ITSELF carries a transform, as opposed to inheriting one.
+   *
+   * Separated because the two do opposite things to a margin. **A transform does
+   * not affect layout.** An ancestor's transform scales the whole subtree it
+   * lays out, gaps included, so a margin inside it really does render smaller.
+   * The element's OWN transform moves only its rendering: the space its margin
+   * reserves stays where the untransformed box put it.
+   *
+   * Measured on a 100px block with `margin-bottom: 20px`, reading the gap
+   * between the rendered border edge and the next sibling:
+   *
+   * | transform on the block | rendered gap |
+   * | --- | --- |
+   * | none | 20 |
+   * | `scale(0.5)` | 70 |
+   * | `scale(2)` | −80 |
+   * | `translateY(40px)` | −20 |
+   *
+   * The last two are NEGATIVE — the block is drawn over the neighbour its
+   * margin is meant to be holding away. So this is not a scale correction: no
+   * factor applied to `20` produces those numbers, because the margin is not
+   * where the rendered box is at all. It is reported so the caller can decline
+   * the margin bands, which is what the spacing overlay does.
+   */
+  readonly selfTransformed: boolean;
 }
 
-const IDENTITY_SCALE: RenderedScale = { x: 1, y: 1, describable: true };
+const IDENTITY_SCALE: RenderedScale = {
+  x: 1,
+  y: 1,
+  describable: true,
+  selfTransformed: false,
+};
 
 /** Below this, an off-diagonal matrix term is serialization noise, not a rotation. */
 const AXIS_ALIGNED_TOLERANCE = 1e-9;
@@ -241,6 +272,7 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
    * transform here would apply it a second time — the bands would be scaled by
    * its square while the page was scaled by it once.
    */
+  let selfTransformed = false;
   for (
     let node: Element | null = element;
     node !== null && node !== root;
@@ -248,6 +280,9 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
   ) {
     const declared = view.getComputedStyle(node).transform;
     if (declared === "" || declared === "none") continue;
+    // Recorded on the way past rather than read in a second walk, so the two
+    // answers cannot disagree about which transforms were seen.
+    if (node === element) selfTransformed = true;
     matrix = new view.DOMMatrix(declared).multiply(matrix);
   }
 
@@ -280,6 +315,7 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
     x: matrix.a,
     y: matrix.d,
     describable: axisAligned && matrix.a > 0 && matrix.d > 0,
+    selfTransformed,
   };
 }
 
