@@ -23,10 +23,11 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { tags } from "@lezer/highlight";
+import type { Tag } from "@lezer/highlight";
+import { tags, tags as t } from "@lezer/highlight";
 import { describe, expect, it } from "vitest";
 
-import { CODE_TAG_SPECS } from "../code-highlight";
+import { CODE_TAG_SPECS, nextlyHighlightStyle } from "../code-highlight";
 import { CODE_CONSTRUCTS } from "../code-palette";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -62,9 +63,22 @@ function codeTokensIn(selector: string): Set<string> {
   return found;
 }
 
-/** Every token the palette can put on screen. */
+/**
+ * The chrome's own tokens.
+ *
+ * Consumed by `nextlyEditorChrome` rather than by the construct table, which is
+ * why they are named here rather than derived. They still have to be declared
+ * in BOTH blocks: losing `--nx-code-fg` from `.dark` leaves code inheriting a
+ * foreground picked for a white page.
+ */
+const CHROME_TOKENS = ["--nx-code-bg", "--nx-code-fg"];
+
+/** Every token that can reach the screen, from the table or from the chrome. */
 function consumedTokens(): Set<string> {
-  return new Set(Object.values(CODE_CONSTRUCTS).map(entry => entry.token));
+  return new Set([
+    ...Object.values(CODE_CONSTRUCTS).map(entry => entry.token),
+    ...CHROME_TOKENS,
+  ]);
 }
 
 describe("code-palette", () => {
@@ -103,10 +117,9 @@ describe("code-palette", () => {
     // A token nobody reads is a palette entry that cannot reach the screen.
     // `--nx-code-bg` and `--nx-code-fg` are chrome rather than construct
     // colours, so `nextlyEditorChrome` consumes them instead of the table.
-    const chrome = new Set(["--nx-code-bg", "--nx-code-fg"]);
     const consumed = consumedTokens();
     const unreachable = [...codeTokensIn(":root")].filter(
-      token => !chrome.has(token) && !consumed.has(token)
+      token => !consumed.has(token)
     );
     expect(unreachable).toEqual([]);
   });
@@ -179,40 +192,44 @@ const DELIBERATELY_UNSTYLED: Record<string, string> = {
   // Diff state with no token of its own; `deleted` and `inserted` carry the
   // two cases this admin actually renders.
   changed: "no token; deleted and inserted cover the rendered cases",
-  // Styled in `nextlyHighlightStyle` directly rather than through the palette:
-  // a parse error is a fault, and reads from the admin's error token.
-  invalid: "styled outside the palette, from --nx-destructive",
 };
 
 describe("tag coverage", () => {
   it("styles every standard tag, or says why not", () => {
-    const covered = new Set(
-      CODE_TAG_SPECS.flatMap(spec =>
-        Array.isArray(spec.tag) ? spec.tag : [spec.tag]
-      )
-    );
+    // Asked of the BUILT highlighter rather than of `CODE_TAG_SPECS`, because
+    // the specs are the input and the highlighter is what CodeMirror consults.
+    // The two can disagree -- `t.invalid` is styled by an entry that never
+    // appears in the table -- and reading the input would call that tag
+    // unstyled while the editor colours it correctly.
     const unaccounted = Object.entries(tags)
       .filter(([, tag]) => typeof tag !== "function")
       .filter(
         ([name, tag]) =>
-          !covered.has(tag as never) && !(name in DELIBERATELY_UNSTYLED)
+          nextlyHighlightStyle.style([tag as Tag]) === null &&
+          !(name in DELIBERATELY_UNSTYLED)
       )
       .map(([name]) => name);
     expect(unaccounted).toEqual([]);
   });
 
   it("keeps the unstyled list honest", () => {
-    // An entry that IS styled should not also claim to be deliberately skipped:
-    // the reason would be false and the next reader would trust it.
-    const covered = new Set(
-      CODE_TAG_SPECS.flatMap(spec =>
-        Array.isArray(spec.tag) ? spec.tag : [spec.tag]
-      )
-    );
+    // An entry that IS styled must not also claim to be deliberately skipped:
+    // the reason would be false, and the next reader would trust it.
     const contradictory = Object.keys(DELIBERATELY_UNSTYLED).filter(name => {
       const tag = (tags as Record<string, unknown>)[name];
-      return tag !== undefined && covered.has(tag as never);
+      return (
+        tag !== undefined && nextlyHighlightStyle.style([tag as Tag]) !== null
+      );
     });
     expect(contradictory).toEqual([]);
+  });
+
+  it("styles a parse error from the admin's error token", () => {
+    // `t.invalid` is styled by an entry outside the construct table, so nothing
+    // in the table's own checks reaches it. Without this, deleting that entry
+    // leaves every other assertion green.
+    expect(nextlyHighlightStyle.style([t.invalid])).not.toBeNull();
+    const rule = nextlyHighlightStyle.module?.getRules() ?? "";
+    expect(rule).toContain("--nx-destructive");
   });
 });
