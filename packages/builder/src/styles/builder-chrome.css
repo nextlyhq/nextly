@@ -1298,3 +1298,88 @@
   color: var(--nx-muted-foreground);
   white-space: nowrap;
 }
+
+/*
+ * Import and export, under the studio's heading.
+ *
+ * The file input is styled away and its LABEL is the control: a button that
+ * forwards a click to a hidden input is a second mechanism for one affordance,
+ * and the one that breaks first is the keyboard. Styling the label keeps the
+ * input as the thing that is focused, activated and announced.
+ */
+.nx-tokens__transfer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nx-tokens__import {
+  display: inline-flex;
+  align-items: center;
+  height: var(--nx-control-height-md);
+  padding-inline: 1rem;
+  font-size: var(--text-sm);
+  color: var(--nx-foreground);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.nx-tokens__import:hover {
+  background: var(--nx-muted);
+}
+
+/*
+ * Off-screen rather than `display: none`, which removes it from the
+ * accessibility tree and from the tab order along with it.
+ */
+.nx-tokens__import input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.nx-tokens__import:focus-within {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+/*
+ * What a transfer carried and what it left behind. Persistent rather than a
+ * toast: the list names tokens the author has to go and look at, and a message
+ * that disappears while they are reading it is a message they cannot act on.
+ */
+.nx-tokens__report {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+}
+
+.nx-tokens__report[data-tone="refused"] {
+  color: var(--nx-destructive);
+  border-color: var(--nx-destructive);
+}
+
+.nx-tokens__report p {
+  margin: 0;
+  font-weight: 600;
+}
+
+.nx-tokens__report ul {
+  margin: 0;
+  padding-inline-start: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}

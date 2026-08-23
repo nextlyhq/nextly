@@ -64,6 +64,12 @@ import {
   tokenRowsFor,
   type TokenRow,
 } from "./tokens-studio";
+import {
+  exportCss,
+  exportDtcg,
+  importDtcg,
+  type ExportResult,
+} from "./tokens-transfer";
 
 export interface TokensPanelProps {
   /**
@@ -151,6 +157,7 @@ export function TokensPanel({
         <h2 className="nx-tokens__title">Tokens</h2>
         <ModeSwitch mode={mode} onMode={setMode} />
       </div>
+      <TokenTransfer tokens={tokens} onChange={onChange} />
       {issue === undefined ? null : (
         /*
          * A save that did not happen. `role="alert"` because it reports on an
@@ -187,6 +194,176 @@ export function TokensPanel({
       </Tabs>
     </div>
   );
+}
+
+/**
+ * Bringing a token file in, and taking one out.
+ *
+ * ## In: a file, not a paste
+ *
+ * A design-token document is something a TOOL produced — Figma, Style
+ * Dictionary — and lives on disk as a file. Asking for a paste would make the
+ * author open it, select it and copy it first, for no gain. The one other
+ * import in this product takes a paste, and rightly: it imports a list of
+ * options somebody may have in a spreadsheet or an email, which is a different
+ * artefact.
+ *
+ * ## Out: two files, because two audiences read them
+ *
+ * The token document goes back to a design tool and round-trips exactly. The
+ * CSS is what a visitor's stylesheet contains, for someone wiring these values
+ * into something this system does not render — and it is compiled by the same
+ * function the site sheet is, so it cannot describe a site that does not exist.
+ *
+ * ## The report is not chrome
+ *
+ * Both directions can carry less than they were given, and both say what they
+ * left behind. That report IS the feature: a designer handed a file with three
+ * tokens missing has no way to know otherwise, and the ones that go missing are
+ * the interesting ones. So it is shown until dismissed rather than flashed.
+ */
+function TokenTransfer({
+  tokens,
+  onChange,
+}: {
+  tokens: SiteTokenSet;
+  onChange: (tokens: SiteTokenSet) => void;
+}): React.JSX.Element {
+  const id = React.useId();
+  const [report, setReport] = React.useState<{
+    tone: "done" | "refused";
+    headline: string;
+    detail: readonly string[];
+  } | null>(null);
+
+  const read = async (file: File): Promise<void> => {
+    const result = importDtcg(await file.text(), tokens);
+    if (!result.ok) {
+      setReport({
+        tone: "refused",
+        headline: result.error,
+        detail: result.skipped,
+      });
+      return;
+    }
+    setReport({
+      tone: "done",
+      headline: `Imported ${String(result.imported)} ${
+        result.imported === 1 ? "token" : "tokens"
+      }.`,
+      detail: result.skipped,
+    });
+    onChange(result.tokens);
+  };
+
+  const send = (made: ExportResult): void => {
+    download(made);
+    setReport(
+      made.skipped.length === 0
+        ? null
+        : {
+            tone: "done",
+            headline: `Saved ${made.filename}.`,
+            detail: made.skipped,
+          }
+    );
+  };
+
+  return (
+    <div className="nx-tokens__transfer">
+      <label className="nx-tokens__import" htmlFor={`${id}-file`}>
+        Import
+        {/*
+          The input is the control; the label is what is seen. A button that
+          forwards a click to a hidden input is a second mechanism for one
+          affordance, and the one that breaks first is the keyboard.
+        */}
+        <input
+          id={`${id}-file`}
+          type="file"
+          accept="application/json,.json,.tokens.json"
+          onChange={event => {
+            const file = event.target.files?.[0];
+            // Cleared so choosing the SAME file twice fires again — after a
+            // refusal an author edits the file and picks it back, and an input
+            // holding the old value reports nothing.
+            event.target.value = "";
+            if (file !== undefined) void read(file);
+          }}
+        />
+      </label>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => send(exportDtcg(tokens))}
+      >
+        Export JSON
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => send(exportCss(tokens))}
+      >
+        Export CSS
+      </Button>
+      {report === null ? null : (
+        <TransferReport report={report} onDismiss={() => setReport(null)} />
+      )}
+    </div>
+  );
+}
+
+/** What an import or an export carried, and what it did not. */
+function TransferReport({
+  report,
+  onDismiss,
+}: {
+  report: {
+    tone: "done" | "refused";
+    headline: string;
+    detail: readonly string[];
+  };
+  onDismiss: () => void;
+}): React.JSX.Element {
+  return (
+    <div
+      className="nx-tokens__report"
+      data-tone={report.tone}
+      role={report.tone === "refused" ? "alert" : "status"}
+    >
+      <p>{report.headline}</p>
+      {report.detail.length === 0 ? null : (
+        <ul>
+          {report.detail.map(line => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
+      <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
+        Dismiss
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Hand a generated file to the browser.
+ *
+ * An object URL rather than a data URL: a token document can run to tens of
+ * kilobytes, and a data URL of that size is refused outright by some browsers
+ * and truncated by others. Revoked immediately — the click has already happened
+ * by the time the handler returns, and leaving it alive holds the whole file in
+ * memory until the tab closes.
+ */
+function download(made: ExportResult): void {
+  const url = URL.createObjectURL(new Blob([made.text], { type: made.mime }));
+  const link = window.document.createElement("a");
+  link.href = url;
+  link.download = made.filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 /**

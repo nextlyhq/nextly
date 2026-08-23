@@ -481,3 +481,101 @@ describe("pinning a dark value to what light already gives", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe("bringing a token file in", () => {
+  /** A DTCG document holding one colour this site does not have. */
+  const FILE = JSON.stringify({
+    color: {
+      brand: {
+        $type: "color",
+        $value: "#f59e0b",
+        $extensions: {
+          "com.nextlyhq.nextly": {
+            css: { light: "#f59e0b" },
+            kind: "color",
+          },
+        },
+      },
+    },
+  });
+
+  /** A `File` whose `text()` resolves, which jsdom does not provide. */
+  function fileOf(contents: string): File {
+    const file = new File([contents], "tokens.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(file, "text", {
+      value: () => Promise.resolve(contents),
+    });
+    return file;
+  }
+
+  const chooseFile = async (contents: string): Promise<void> => {
+    const input = screen.getByLabelText("Import");
+    fireEvent.change(input, { target: { files: [fileOf(contents)] } });
+    // The read is asynchronous, so the assertion has to wait for it.
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+  };
+
+  it("MERGES the file into what the site already has", async () => {
+    const onChange = mount(TOKENS);
+    await chooseFile(FILE);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0]?.[0] as SiteTokenSet;
+    // Everything that was there is still there, and the file was added.
+    expect(next.tokens.map(t => t.name)).toEqual([
+      "color.ink",
+      "brand.main",
+      "color.brand",
+    ]);
+  });
+
+  it("says how many arrived", async () => {
+    mount(TOKENS);
+    await chooseFile(FILE);
+    expect(screen.getByRole("status").textContent).toContain(
+      "Imported 1 token"
+    );
+  });
+
+  it("NAMES what it could not carry, rather than reporting success alone", async () => {
+    // The report is the feature: a designer handed a file with tokens missing
+    // has no other way to know, and the missing ones are the interesting ones.
+    const withUnusable = JSON.parse(FILE) as Record<string, unknown>;
+    withUnusable["motion"] = {
+      ease: { $type: "cubicBezier", $value: [0.4, 0, 0.2, 1] },
+    };
+    mount(TOKENS);
+    await chooseFile(JSON.stringify(withUnusable));
+    const said = screen.getByRole("status").textContent ?? "";
+    expect(said).toContain("Imported 1 token");
+    expect(said).toContain("cubicBezier");
+  });
+
+  it("refuses a file that is not JSON, and changes nothing", async () => {
+    const onChange = mount(TOKENS);
+    await chooseFile("{ not json");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("not valid JSON");
+  });
+
+  /*
+   * NOT TESTED HERE, deliberately: that clearing the input lets the same file
+   * be chosen twice. jsdom reports `value` as "" for a file input whether or
+   * not a file was chosen — measured — so an assertion on it passes with the
+   * clearing removed and proves nothing. The behaviour is real in a browser,
+   * where an unchanged value fires no change event and an author who fixed
+   * their file and picked it back would see nothing happen. It is covered by
+   * the comment at the call site rather than by a green test that cannot fail.
+   */
+
+  it("keeps the report until it is dismissed", async () => {
+    mount(TOKENS);
+    await chooseFile(FILE);
+    expect(screen.queryByRole("status")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
