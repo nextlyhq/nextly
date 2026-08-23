@@ -18,6 +18,10 @@ import {
 
 import type { DocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
+import {
+  UNIDENTIFIED_SHARED_INPUTS,
+  sharedStyleInputsId,
+} from "./shared-style-inputs";
 import { pruneNodes } from "./visibility";
 
 /**
@@ -55,6 +59,27 @@ export interface PageStyles {
    * written before this field existed was.
    */
   fetchPolicyId?: string;
+  /**
+   * Which SHARED style inputs this CSS was compiled against, when they were
+   * knowable.
+   *
+   * The same argument as `fetchPolicyId`, for the three inputs it does not
+   * cover: the site's breakpoints, its token prefix and its named-class
+   * library. All three are site-level, every page compiles against them, and
+   * each renders directly into the stored sheet — breakpoints as the at-rules,
+   * the prefix inside every `var()`, and a class's slug as the selector itself.
+   * Move one and this artifact references at-rules, properties and selectors
+   * the newly compiled site sheet no longer declares, which CSS reports by
+   * silently dropping the declaration.
+   *
+   * A digest rather than the inputs, because a class library reaches thousands
+   * of entries and this is stored on every page.
+   *
+   * Absent means UNTRUSTED, not "compiled against none" — the two are
+   * indistinguishable from the artifact alone, and the reading that trusts it
+   * is the one that serves a stale sheet forever.
+   */
+  sharedInputsId?: string;
   /** Node id to generated class name. */
   classes: Record<string, string>;
   /**
@@ -90,12 +115,15 @@ export function toPageStyles(
   compiled: CompiledPageCss,
   scope?: string,
   /** The policy the compile ran under, recorded so a later read can check it. */
-  fetchPolicyId?: string
+  fetchPolicyId?: string,
+  /** The shared inputs the compile ran against, recorded for the same reason. */
+  sharedInputsId?: string
 ): PageStyles {
   const styles: PageStyles = {
     css: compiled.css,
     classes: Object.fromEntries(compiled.classes),
     ...(fetchPolicyId === undefined ? {} : { fetchPolicyId }),
+    ...(sharedInputsId === undefined ? {} : { sharedInputsId }),
   };
   // Carried through because THIS is the shape that gets stored: a compiler that
   // splits the sheet and a writer that drops half of it leave the gated rules
@@ -653,6 +681,15 @@ export interface EffectiveCompile {
   /** The policy label to compare a stored sheet's stamp against. */
   fetchPolicyId: string | undefined;
   /**
+   * The shared-input digest to compare a stored sheet's stamp against.
+   *
+   * Derived here for the same reason the policy label is: this is the one
+   * reconciliation every entry point runs, and a second derivation elsewhere
+   * would decide a different answer for the same render — which is the shape
+   * that produces one sheet trusting an artifact another refuses.
+   */
+  sharedInputsId: string | undefined;
+  /**
    * The host-fetch predicate in force for this render — the caller's own when
    * they supplied one, otherwise the one derived from the pattern list.
    *
@@ -717,10 +754,21 @@ export function effectiveCompile(args: {
     (patterns === undefined
       ? undefined
       : (url: string) => isFetchableUrl(url, patterns));
+  // Taken from the caller's context, which is the only place the shared inputs
+  // appear. With no context there is nothing to compile against and nothing to
+  // stamp — and no artifact can be trusted either, because absence reads as
+  // untrusted at the comparison below rather than as "compiled against none".
+  const sharedInputsId = sharedStyleInputsId(args.styleContext);
   if (args.styleContext === undefined)
-    return { context: undefined, fetchPolicyId, mayFetchUrl: derived };
+    return {
+      context: undefined,
+      fetchPolicyId,
+      sharedInputsId,
+      mayFetchUrl: derived,
+    };
   return {
     mayFetchUrl: derived,
+    sharedInputsId,
     context: {
       ...args.styleContext,
       limits: args.limits ?? args.styleContext.limits ?? DEFAULT_LIMITS,
@@ -748,6 +796,13 @@ export interface ResolveStyleOptions {
    * under other rules and cannot be trusted for this render.
    */
   fetchPolicyId?: string;
+  /**
+   * The shared-input digest this render is judged by, from `effectiveCompile`.
+   *
+   * Taken from there rather than derived here, so the sheet a page reuses and
+   * the sheet it would compile are decided by one answer.
+   */
+  sharedInputsId?: string;
 }
 
 export function resolvePageStyles(
@@ -824,11 +879,24 @@ export function resolvePageStyles(
     (styles.fetchPolicyId !== options.fetchPolicyId ||
       styles.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY);
 
+  // The same test for the site-level inputs, and it refuses an ABSENT stamp for
+  // the same reason the policy one refuses its sentinel: absence is equally the
+  // honest stamp for a compile that had no shared inputs at all, so treating it
+  // as a match would reuse a sheet compiled against a library, a prefix and a
+  // breakpoint set that nothing here has seen. Every artifact written before
+  // this field existed is unstamped, so each recompiles once and is then
+  // stamped — which is the whole migration.
+  const compiledAgainstOtherInputs =
+    styles !== undefined &&
+    (styles.sharedInputsId !== options.sharedInputsId ||
+      styles.sharedInputsId === UNIDENTIFIED_SHARED_INPUTS);
+
   if (
     styles &&
     !repairedDocument &&
     !compiledFromAnotherTree &&
-    !compiledUnderAnotherPolicy
+    !compiledUnderAnotherPolicy &&
+    !compiledAgainstOtherInputs
   ) {
     const normalized = normalizeStoredStyles(styles, document);
     // A refused artifact had its classes rebuilt, so the gated rules — written
@@ -842,7 +910,8 @@ export function resolvePageStyles(
     styles &&
     (repairedDocument ||
       compiledFromAnotherTree ||
-      compiledUnderAnotherPolicy) &&
+      compiledUnderAnotherPolicy ||
+      compiledAgainstOtherInputs) &&
     styleContext === undefined
   ) {
     return { ...normalizeStoredStyles(styles, document).styles, css: "" };
@@ -871,7 +940,8 @@ export function resolvePageStyles(
     return toPageStyles(
       compilePageCss(document, context),
       context.scope,
-      options.fetchPolicyId
+      options.fetchPolicyId,
+      options.sharedInputsId
     );
   }
   return {
