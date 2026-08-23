@@ -63,6 +63,7 @@ import {
 } from "./css-value";
 import {
   MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
   MAX_TOKEN_PREFIX_LENGTH,
   isAuthorableTokenName,
   isTokenName,
@@ -241,6 +242,7 @@ export {
   isAuthorableTokenName,
   isTokenName,
   MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
   MAX_TOKEN_PREFIX_LENGTH,
 };
 
@@ -789,7 +791,8 @@ export function emitFontFaces(faces: readonly FontFaceDef[]): {
  */
 export type TokenNamingProblem =
   | { field: "name" | "id"; reason: "grammar" }
-  | { field: "name" | "id"; reason: "length"; length: number };
+  | { field: "name" | "id"; reason: "length"; length: number }
+  | { field: "name"; reason: "depth"; segments: number };
 
 export function tokenNamingProblem(token: {
   name: string;
@@ -804,6 +807,19 @@ export function tokenNamingProblem(token: {
   }
   if (token.id !== undefined && !isAuthorableTokenName(token.id)) {
     return { field: "id", reason: "grammar" };
+  }
+  // A name is dot-separated by grammar, and its SEGMENTS are structure rather
+  // than characters: the DTCG exporter turns each one into a nested group, and
+  // the reader walks those groups recursively. A label deep enough therefore
+  // produces a file this package cannot read back, which is the round trip the
+  // exporter exists to keep. Bounded here rather than at the exporter because
+  // the segment count is a property of the name, so every reader of a name gets
+  // the same answer — and bounded separately from LENGTH because depth is what
+  // breaks, and capping the label's length again is what a renamed token's
+  // identity exists to avoid.
+  const segments = token.name.split(".").length;
+  if (segments > MAX_TOKEN_NAME_SEGMENTS) {
+    return { field: "name", reason: "depth", segments };
   }
   const identity = tokenIdentity(token as SiteToken);
   if (identity.length > MAX_TOKEN_NAME_LENGTH) {
@@ -820,6 +836,9 @@ export function tokenNamingProblem(token: {
 function tokenNamingRefusal(token: SiteToken): string | undefined {
   const problem = tokenNamingProblem(token);
   if (problem === undefined) return undefined;
+  if (problem.reason === "depth") {
+    return `"${token.name}" is ${problem.segments} names deep, so it was not written. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
+  }
   if (problem.reason === "length") {
     return `"${token.name}" is written under ${problem.length} characters, so it was not written. The ${problem.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
   }

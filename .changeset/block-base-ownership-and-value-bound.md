@@ -96,3 +96,15 @@ Both DTCG gates follow the same identity rule as the emitter, through one shared
 answer rather than a third copy of it. Without that, a renamed token with a long
 label was silently dropped from an export and refused on the way back in, while
 Nextly went on rendering it.
+
+A token name's DEPTH is bounded as well as its length. The DTCG exporter writes
+one nested group per dot-separated segment and the reader walks those groups, so
+a label deep enough produced a file this package could not read back — an
+exporter emitting a document that fails its own round trip. Bounded separately
+from length because depth is the property that breaks, and a renamed token's
+label is deliberately free of the length cap.
+
+The builder's rename gate follows the same rule, so the editor no longer refuses
+a label the engine accepts, and `EMITTABLE_STRING_BOUNDS` lists the literal
+style value — the largest bound of the set, and the one whose omission let a
+consumer verify every listed bound and still choose a limit below it.

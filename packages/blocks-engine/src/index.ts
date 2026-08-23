@@ -312,7 +312,9 @@ export {
   emitTokenBlocks,
   isAuthorableTokenName,
   isTokenName,
+  tokenNamingProblem,
   MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
   MAX_TOKEN_PREFIX_LENGTH,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package

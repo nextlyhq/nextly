@@ -39,7 +39,8 @@
 import {
   TOKEN_KINDS,
   emitTokenBlocks,
-  isTokenName,
+  MAX_TOKEN_NAME_SEGMENTS,
+  tokenNamingProblem,
   renameSiteToken,
   tokenCustomProperty,
   tokenIdentity,
@@ -238,7 +239,7 @@ function collisionFor(
 /**
  * Why this name cannot be used, or `undefined`.
  *
- * The GRAMMAR is the engine's `isTokenName`, which is the same rule a stored
+ * The GRAMMAR is the engine's own rule, which is the same one a stored
  * `$token` reference is held to — so a table cannot hold a name that no
  * reference could spell. Checked before the edit rather than after, because the
  * emitter's answer to a bad name is to drop the token silently.
@@ -250,8 +251,17 @@ export function tokenNameIssue(
 ): string | undefined {
   const trimmed = name.trim();
   if (trimmed === "") return "A token needs a name.";
-  if (!isTokenName(trimmed)) {
+  // The grammar, and the depth that keeps a name round-trippable — but NOT the
+  // emission cap. Renaming pins the previous name as the token's id, so the new
+  // label is not what the token is written under and the engine accepts it at
+  // every gate. Refusing it here would be the editor forbidding what the engine
+  // supports, which reads to an author as a rule nobody can find.
+  const problem = tokenNamingProblem({ name: trimmed });
+  if (problem?.reason === "grammar") {
     return 'A name is dot-separated words of letters, digits and dashes, like "color.primary".';
+  }
+  if (problem?.reason === "depth") {
+    return `A name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
   }
   const taken = (tokens?.tokens ?? []).some(
     (token, index) => index !== at && token.name === trimmed

@@ -31,6 +31,7 @@
  */
 import { MAX_BLOCK_TYPE_LENGTH, MAX_BREAKPOINT_ID_LENGTH } from "../document";
 
+import { MAX_VALUE_LENGTH } from "./css-value";
 import { MAX_TOKEN_NAME_LENGTH, MAX_TOKEN_PREFIX_LENGTH } from "./declarations";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./named-class";
 
@@ -55,6 +56,10 @@ export interface EmittableStringBound {
  */
 export const EMITTABLE_STRING_BOUNDS: readonly EmittableStringBound[] =
   Object.freeze([
+    // The literal style value, and the largest bound here. A consumer choosing a
+    // truncation limit reads the whole set, so omitting the biggest lets it
+    // verify every listed bound and still cut below one the compiler emits.
+    Object.freeze({ what: "a literal style value", max: MAX_VALUE_LENGTH }),
     Object.freeze({
       what: "a named class id or slug",
       max: MAX_NAMED_CLASS_NAME_LENGTH,

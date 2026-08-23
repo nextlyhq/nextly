@@ -10,7 +10,11 @@ import { describe, expect, it } from "vitest";
 import type { DtcgNode } from "./dtcg";
 import { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./dtcg";
 import type { SiteToken } from "./site-tokens";
-import { MAX_TOKEN_NAME_LENGTH, renameSiteToken } from "./site-tokens";
+import {
+  MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
+  renameSiteToken,
+} from "./site-tokens";
 
 const tokens = (list: SiteToken[]) => ({ tokens: list });
 
@@ -876,5 +880,52 @@ describe("a renamed token's long label", () => {
       ],
     });
     expect(issues.length).toBeGreaterThan(0);
+  });
+});
+
+describe("a label deep enough to break the reader", () => {
+  // The exporter writes one nested group per dot-separated segment and the
+  // reader walks those groups, so a deep label produces a file this package
+  // cannot read back. An exporter emitting a document that fails its own round
+  // trip is the shape this module exists to prevent, and a renamed token's
+  // label is free of the LENGTH cap — so depth needs its own bound.
+  const deepLabel = Array.from(
+    { length: MAX_TOKEN_NAME_SEGMENTS + 1 },
+    () => "a"
+  ).join(".");
+
+  it("is refused at export rather than written", () => {
+    const { issues } = tokensToDtcg({
+      tokens: [
+        {
+          id: "short.id",
+          name: deepLabel,
+          kind: "color",
+          values: { light: "#000000" },
+        },
+      ],
+    });
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("still exports a label at the depth bound, so the refusal is not blanket", () => {
+    // The control. Without it a gate refusing every renamed token would satisfy
+    // the case above and look correct.
+    const atBound = Array.from(
+      { length: MAX_TOKEN_NAME_SEGMENTS },
+      () => "a"
+    ).join(".");
+    const { document, issues } = tokensToDtcg({
+      tokens: [
+        {
+          id: "short.id",
+          name: atBound,
+          kind: "color",
+          values: { light: "#000000" },
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(dtcgToTokens(document).tokens).toHaveLength(1);
   });
 });

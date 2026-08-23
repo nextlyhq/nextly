@@ -165,6 +165,20 @@ const TOKEN_PREFIX_RE = /^--[a-z0-9-]*$/;
 export const MAX_TOKEN_PREFIX_LENGTH = 64;
 
 /**
+ * The most dot-separated parts a token name may hold.
+ *
+ * A name's segments are structure rather than characters: the DTCG exporter
+ * writes one nested group per segment, and the reader walks those groups
+ * recursively, so a deep enough name produces a file this package cannot read
+ * back. Bounded separately from the length cap because depth is what breaks
+ * there, and because a renamed token's label is deliberately free of the length
+ * cap — it is not emitted.
+ *
+ * Well above any real token path: `md.sys.color.on-surface-variant` is five.
+ */
+export const MAX_TOKEN_NAME_SEGMENTS = 32;
+
+/**
  * The prefix to write tokens under, or the default when the supplied one cannot
  * be used. Reports rather than throwing, in keeping with everything else here:
  * one bad setting should cost the tokens, not the page.
