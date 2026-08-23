@@ -267,7 +267,30 @@ function emittableTokens(set: SiteTokenSet): readonly SiteToken[] {
  * acceptance can depend on the set's own prefix.
  */
 function emits(set: SiteTokenSet, token: SiteToken): boolean {
-  return emitTokenBlocks({ ...set, tokens: [token] }, ":root").css !== "";
+  const alone = emitTokenBlocks({ tokens: [token] }, ":root");
+  // Nothing WRITTEN means refused outright. Nothing SAID means the engine had
+  // no objection to what was written, which is a different and equally
+  // necessary question: a token whose value contradicts its kind — `16px` on a
+  // colour — is emitted deliberately, with a warning, because refusing it would
+  // cost the author the token on a verdict the engine is not certain enough to
+  // act on. The browser then drops the declaration where it is USED, so a
+  // picker offering it hands over a reference that does nothing.
+  //
+  // Read as issues rather than by asking `checkTokenKind`, which the engine
+  // does not export, and rather than by matching the message text, which would
+  // be a copy of wording nobody promised to keep.
+  //
+  // The set's prefix is deliberately not passed. It cannot decide any of these
+  // rules, and supplying an unusable one would add an issue about the SET to
+  // every token in it — turning one bad prefix into an empty picker.
+  //
+  // Measured: every refusal the emitter makes today also reports an issue, so
+  // the emptiness check is currently implied by the silence one and removing it
+  // moves no test. Kept because it is the DIRECT question — did anything get
+  // written — asked of a value already in hand, and because a future silent
+  // skip in that package would otherwise arrive here as an accepted token that
+  // emits nothing.
+  return alone.css !== "" && alone.issues.length === 0;
 }
 
 /**

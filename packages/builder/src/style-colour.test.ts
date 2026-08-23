@@ -667,6 +667,23 @@ describe("the emitter decides which tokens are offered", () => {
     expect(names).not.toContain("color.bad");
   });
 
+  it("withholds a token whose value CONTRADICTS its declared kind", () => {
+    // The engine emits this one deliberately, with a warning, because refusing
+    // it would cost the author the token on a verdict it is not certain enough
+    // to act on. The browser then drops `color: var(...)` where the token is
+    // used — so a picker offering it hands over a reference that does nothing.
+    // A filter reading only the declared kind cannot see this.
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "color.ok", kind: "color", values: { light: "#111111" } },
+        { name: "color.wrong", kind: "color", values: { light: "16px" } },
+      ],
+    };
+    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    expect(names).toContain("color.ok");
+    expect(names).not.toContain("color.wrong");
+  });
+
   it("withholds a token with no usable light value", () => {
     const set = {
       tokens: [
