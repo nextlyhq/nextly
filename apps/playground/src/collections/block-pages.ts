@@ -20,6 +20,22 @@ export const BlockPages = defineCollection({
   // Draft/Published lifecycle. The route reads with the default `published`
   // scope, so an unpublished row must 404 rather than render.
   status: true,
+  // Where a block page previews. Without this the collection resolves to
+  // `notConfigured`, and a preview link minted for one of its drafts has
+  // nowhere to send the reviewer — it verifies, then refuses, which is
+  // indistinguishable from an expired link.
+  //
+  // `/blocks/` because that is where this collection's route is mounted, in
+  // `src/app/blocks/[[...slug]]/page.tsx`. The mount is the application's
+  // choice, so the path is stated here rather than guessed anywhere else.
+  admin: {
+    preview: {
+      url: entry =>
+        typeof entry.slug === "string" && entry.slug !== ""
+          ? `/blocks/${entry.slug}`
+          : null,
+    },
+  },
   fields: [
     text({ name: "title", required: true }),
     text({ name: "slug", required: true, unique: true }),

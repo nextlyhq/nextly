@@ -79,9 +79,23 @@ export async function resolvePreviewRedirect(
   // A link outlives what it points at: an entry can be deleted between minting
   // and clicking, and that is a refusal rather than a fault.
   if (entry === null) return null;
-  if (siteUrl === null) return null;
 
   const resolution = resolvePreviewUrl({ preview, entry, siteUrl });
+
+  // `noSiteUrl` is ACCEPTED here, and it is the case that matters most: having
+  // no site URL is the default state of a fresh install.
+  //
+  // That state hides the admin's preview BUTTON for a good reason — the admin
+  // may be served from another origin, so it has no host to put in front of a
+  // path and the only one within reach is its own, which is confidently wrong.
+  // This resolver is not in that position. It answers a route already running
+  // ON the site, and returns a site-relative path the browser resolves against
+  // the origin it is standing on. Refusing here would make preview depend on a
+  // settings field it never reads.
+  if (resolution.status === "noSiteUrl") {
+    return siteRelativePath(resolution.path);
+  }
+
   if (resolution.status !== "resolved") return null;
 
   // The origin is COMPARED against the site's, never stripped from the URL.
@@ -92,6 +106,10 @@ export async function resolvePreviewRedirect(
   // approve — so the guard would run, pass, and have been handed a value that
   // already destroyed the evidence it exists to judge. Comparing first means
   // the only URL that survives is one already on the site's own origin.
+  //
+  // With no site URL configured there is no origin to compare against at all,
+  // which is why the branch above checks the path's SHAPE instead.
+  if (siteUrl === null) return null;
   try {
     const target = new URL(resolution.url);
     const site = new URL(siteUrl);
@@ -100,6 +118,33 @@ export async function resolvePreviewRedirect(
   } catch {
     // An unparseable site URL or target. Both are configuration a visitor
     // cannot act on, and both refuse the same way everything else here does.
+    return null;
+  }
+}
+
+/**
+ * A path that cannot leave this origin, or `null`.
+ *
+ * Used only where no site URL exists to compare an origin against. A leading
+ * slash is not sufficient on its own: `//host` and `/\host` both reach another
+ * origin, because a special scheme normalises a backslash to a slash. Both
+ * arrive here rather than being caught earlier, since neither parses as an
+ * absolute URL either.
+ *
+ * The parser is asked rather than the list of spellings restated, so this
+ * cannot fall behind what a browser accepts. The base is a sentinel that
+ * appears in no output: anything still pointing at it after resolution stayed
+ * on the current origin, and anything that moved away named a host.
+ */
+const RESOLUTION_BASE = "https://preview.invalid";
+
+function siteRelativePath(path: string): string | null {
+  if (!path.startsWith("/")) return null;
+  try {
+    const resolved = new URL(path, RESOLUTION_BASE);
+    if (resolved.origin !== RESOLUTION_BASE) return null;
+    return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  } catch {
     return null;
   }
 }

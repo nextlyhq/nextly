@@ -76,10 +76,39 @@ describe("resolvePreviewRedirect", () => {
     expect(await resolvePreviewRedirect(SCOPE, d)).toBeNull();
   });
 
-  // Distinct from every case above, because a guess IS available here and is
-  // wrong: without a site URL the only origin in reach is the admin's own.
-  it("returns null when no site URL is configured", async () => {
+  // No site URL is the DEFAULT state of a fresh install, and it must not break
+  // preview. The admin needs an absolute URL because it may be served from
+  // another origin entirely; this route is already ON the site, so a relative
+  // path is all it ever needed. Refusing here would mean preview never works
+  // until someone happens to fill in a settings field it does not depend on.
+  it("still resolves a path when no site URL is configured", async () => {
     const d = deps({ loadSiteUrl: vi.fn().mockResolvedValue(null) });
+
+    expect(await resolvePreviewRedirect(SCOPE, d)).toBe("/about");
+  });
+
+  // With no site URL there is no origin to compare against, so the site-relative
+  // shape has to be checked directly. A protocol-relative `//host` is a URL to
+  // another origin wearing a path's clothes, and it reaches this branch because
+  // it does not parse as absolute either.
+  it("refuses a protocol-relative path when no site URL is configured", async () => {
+    const d = deps({
+      loadSiteUrl: vi.fn().mockResolvedValue(null),
+      loadDeclaration: vi
+        .fn()
+        .mockResolvedValue({ url: () => "//elsewhere.example/x" }),
+    });
+
+    expect(await resolvePreviewRedirect(SCOPE, d)).toBeNull();
+  });
+
+  it("refuses a backslash-prefixed path when no site URL is configured", async () => {
+    const d = deps({
+      loadSiteUrl: vi.fn().mockResolvedValue(null),
+      loadDeclaration: vi
+        .fn()
+        .mockResolvedValue({ url: () => String.raw`/\elsewhere.example` }),
+    });
 
     expect(await resolvePreviewRedirect(SCOPE, d)).toBeNull();
   });
