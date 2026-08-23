@@ -214,6 +214,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "pluginAdminSlug (value)",
   "pluginField (value)",
   "secret (value)",
+  "slugToStaticParam (value)",
   "text (value)",
   "textarea (value)",
   "upload (value)",

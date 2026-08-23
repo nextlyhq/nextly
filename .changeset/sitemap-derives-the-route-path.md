@@ -70,9 +70,14 @@ exist in this repository, so declaring a mount is not a claim that its root is r
 that does serve its root maps it with `urlFor`. Omitting a URL costs a listing; advertising one that
 404s costs indexing.
 
-`basePath` also rejects `.` and `..` segments, including their percent-encoded spellings: a dot
-segment is removed by URL resolution before the request is sent, so `/docs/../admin` would mount at
-`/admin` and carry every entry under it somewhere the caller never named.
+`basePath` also rejects `.` and `..` segments, including their percent-encoded spellings, and a
+backslash: a dot segment is removed by URL resolution before the request is sent, so
+`/docs/../admin` would mount at `/admin` and carry every entry under it somewhere the caller
+never named, and `\` separates segments to the URL parser on an http(s) origin, which would
+walk the same escape past a check that splits only on `/`. Repeated slashes are COLLAPSED
+rather than refused, because `//docs` has one possible meaning and left alone it is read as
+protocol-relative — `//docs/a` resolves to host `docs`, off-origin, and the whole collection
+drops out of the sitemap with nothing said.
 
 The plugin's declared core-compat floor rises from `>=0.0.2-alpha.21` to `>=0.0.2-alpha.55`, the
 first core that exports `slugToStaticParam`. On an earlier core the new import fails at module load

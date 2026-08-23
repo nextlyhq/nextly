@@ -144,6 +144,18 @@ describe("defaultUrlForEntry", () => {
     );
   });
 
+  it("collapses repeated slashes so a mount cannot go protocol-relative", () => {
+    // `//docs` is not a path: `new URL("//docs/a", "https://x.com")` resolves to
+    // https://docs/a — a different HOST — which the origin check then drops,
+    // silently emptying the collection. Collapsed rather than refused because
+    // there is only one thing `//docs` can mean.
+    expect(defaultUrlForEntry({ slug: "a" }, "pages", "//docs")).toBe(
+      "/docs/a"
+    );
+    expect(defaultUrlForEntry({ slug: "a" }, "pages", "///x")).toBe("/x/a");
+    expect(defaultUrlForEntry({ slug: "a" }, "pages", "/a//b")).toBe("/a/b/a");
+  });
+
   it("skips an empty slug under every mount, declared or not", () => {
     // Whether a mount's own root is served depends on the bracket count of the
     // route file — `[...slug]` matches no segments and 404s there, `[[...slug]]`

@@ -190,7 +190,20 @@ function normalizeBasePath(basePath: string): string {
     );
   }
   const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withLeading.replace(/\/+$/, "");
+  // Repeated slashes are COLLAPSED rather than refused, which is the one place
+  // this normalizes URL shape instead of rejecting it — and the exception is
+  // earned by what a leading pair does. `//docs` is not a path: URL resolution
+  // reads it as protocol-relative, so `//docs/a` against `https://x.com`
+  // resolves to `https://docs/a`, a different HOST, which the origin check then
+  // drops. The whole collection leaves the sitemap and nothing says why.
+  //
+  // Refusing would report it, but `//docs` has exactly one thing its author can
+  // have meant, and the route normalizes the same way for its own slugs
+  // (`slugToStaticParam` collapses before deciding). Guessing is only wrong when
+  // more than one reading is available — which is why a query, a fragment, a
+  // backslash and a dot segment are still refused: each of those changes where
+  // the URL points, and no collapse recovers the intent.
+  return withLeading.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
 }
 
 /**
