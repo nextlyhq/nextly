@@ -37,6 +37,23 @@
  * block each describes. The primary is the one the inspector answers for, so the
  * two surfaces agree about whose value is on screen.
  *
+ * ## When it re-measures, and the one case it cannot see
+ *
+ * A re-measure happens when the selection changes, when the document changes,
+ * when the selected block resizes, and when the canvas root resizes. Between
+ * them those cover an edit, an image or webfont arriving, the panels moving, and
+ * a breakpoint changing — a breakpoint is driven by the canvas's own width, so
+ * the root's resize is the event that reports it.
+ *
+ * What is NOT covered is a spacing change driven purely by a CSS STATE: a
+ * `:hover` or `:focus-visible` rule altering a margin repaints without mutating
+ * the DOM and without resizing anything, so there is no event for an observer to
+ * receive — a `MutationObserver` sees nothing either, because nothing mutates.
+ * Reaching it would mean re-measuring on pointer traffic across the canvas or
+ * polling every frame, and both cost more than the staleness they remove. Stated
+ * here rather than left to be discovered: while the pointer rests on a block
+ * whose hover rule moves it, the bands describe its resting state.
+ *
  * @module spacing-overlay
  */
 
