@@ -1,5 +1,8 @@
-import { defineCollection, text } from "nextly/config";
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import type { HookContext } from "nextly";
+import { defineCollection, json, text } from "nextly/config";
 
+import { classIdsUsedBy } from "../class-usage";
 import { blocks } from "../fields/blocksHelper";
 /**
  * There is no page-level custom CSS field.
@@ -58,8 +61,70 @@ export function pagesCollection() {
       // builder arm: a page already holding a block document keeps rendering
       // rather than reading as empty against a field with a new name.
       blocks({ name: "content", label: "Page Builder" }),
+      // Which named classes this page's document references, derived from the
+      // document rather than authored. It answers "how many places is this
+      // class used" for the class library, where an author needs the number
+      // BEFORE renaming or deleting rather than after.
+      //
+      // Derived and stored rather than computed on demand: a class is
+      // referenced by id from inside each page's document, so counting live
+      // means opening every page of the site on every read. Stored, the count
+      // is an aggregate over this one small field.
+      //
+      // On the PAGE rather than in a per-class tally, because this shape is
+      // idempotent: writing it again produces the same list, so a save that was
+      // missed costs nothing once the page is touched again and one applied
+      // twice costs nothing at all. A per-class counter maintained by increment
+      // and decrement is permanently wrong after a single miss, and the number
+      // gives no sign of it.
+      //
+      // Hidden because it is bookkeeping, not content: an author neither writes
+      // it nor needs to read it, and a field they can edit is one that can
+      // disagree with the document it describes.
+      json({
+        name: "usedClasses",
+        label: "Referenced classes",
+        admin: {
+          hidden: true,
+          description:
+            "Derived from this page's blocks: the ids of every named class it references. Maintained automatically; editing it cannot change what the page renders.",
+        },
+      }),
     ],
     status: true,
     admin: { useAsTitle: "title" },
+
+    hooks: {
+      // Kept DERIVED on every write, beside the field it maintains, so the two
+      // cannot drift into different files and different opinions.
+      //
+      // `beforeChange` rather than an `after*` phase, and the reason is that
+      // the record lives on this row: written before, it is part of the SAME
+      // write as the document it describes, so there is no window in which a
+      // page is saved and its record is not. An `after*` phase would need a
+      // second write, which can fail on its own and leave exactly that window
+      // open — and a stale record is the failure mode this whole design is
+      // arranged to avoid, because a confidently wrong count is worse than a
+      // slow one.
+      //
+      // Safe on a `before*` phase only because `classIdsUsedBy` is TOTAL: it
+      // reads persisted data nothing is guaranteed to have validated, and it
+      // answers rather than throwing for every malformed shape that reaches
+      // storage. That property is tested, not assumed — if it is ever weakened,
+      // this hook stops being safe here and belongs on `afterChange` with the
+      // second write and the window that comes with it.
+      beforeChange: [
+        (context: HookContext) => {
+          const { data } = context;
+          if (!isPlainRecord(data)) return data;
+          // Only when the document itself is part of this write. A patch that
+          // touches the title alone must leave the record as it is rather than
+          // deriving an empty list from a `content` this write never carried.
+          if (!("content" in data)) return data;
+          data.usedClasses = classIdsUsedBy(data.content);
+          return data;
+        },
+      ],
+    },
   });
 }
