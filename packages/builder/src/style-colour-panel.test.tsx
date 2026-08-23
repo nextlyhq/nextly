@@ -147,12 +147,14 @@ const swatch = (name: string): HTMLElement =>
   screen.getByRole("button", { name });
 
 /**
- * Let a deferred write land.
+ * Let Radix arm the listener that makes a dismissal possible.
  *
- * The picker's close does not write during the dismissal — it schedules, so a
- * discrete choice arriving in the same interaction can cancel it. A test
- * asserting synchronously after a close therefore sees nothing yet, which is
- * the behaviour rather than a failure.
+ * Not a wait for the write, which happens synchronously inside the close. Radix
+ * attaches its outside-pointerdown listener inside a `setTimeout`, so until
+ * that has run NOTHING can dismiss the popover — and a test that opens the
+ * picker and immediately acts outside it asserts against a popover that never
+ * closed, passing for a reason unrelated to what it names. Measured: three such
+ * tests were green while the close path had never run.
  */
 const settle = (): Promise<void> =>
   new Promise(resolve => {

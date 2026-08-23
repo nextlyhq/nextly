@@ -1366,11 +1366,11 @@ function ColourField({
   /*
    * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
    *
-   * Dropping the pending value is the whole of it. A write scheduled by the
-   * dismissal this control caused reads that same value when it runs, so
-   * clearing it leaves the scheduled call with nothing to write — cancelling
-   * the timer as well was measured to change no outcome, and a second
-   * expression for one rule is what drifts.
+   * Dropping the pending value is the whole of it. Pressing this control also
+   * dismisses the picker, and the close reads `pending.current` to decide what
+   * the gesture produced — so clearing it first leaves that close with nothing
+   * to write, and the discrete choice is the only edit. One rule expressed
+   * once: a second expression of it is what drifts.
    */
   const commitInstead = (value: StyleValue | null): void => {
     pending.current = null;

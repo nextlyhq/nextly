@@ -240,7 +240,16 @@ function emittableTokens(
   const seen = new Set<string>();
   const emittable: SiteToken[] = [];
   for (const token of set.tokens) {
-    if (!emits(token, mode)) continue;
+    // The REFUSAL decides who takes the property, because it is the emitter's
+    // own rule for the same question: the engine skips a refused token before
+    // it reaches the collision check, and writes an accepted one even when its
+    // kind is wrong. Asking the kind here instead would drop a token the engine
+    // wrote, hand its property to the token the engine REFUSED as a collision,
+    // and offer that one — painted with its own colour, resolving to the
+    // other's. Measured: `color.primary-dark` holding `16px` and
+    // `color-primary.dark` holding `#123456` compose one property, the engine
+    // writes `16px`, and the picker offered `#123456`.
+    if (!written(token)) continue;
     // Which of two ACCEPTED tokens actually gets the property is the one thing
     // the emitter cannot be asked, because both are individually fine and only
     // their order decides. `tokenCustomProperty` composes the key, so the
@@ -252,57 +261,65 @@ function emittableTokens(
     const property = tokenCustomProperty(tokenIdentity(token), "");
     if (seen.has(property)) continue;
     seen.add(property);
+    // Asked only once the property is claimed. A kind mismatch is mode-local
+    // and does NOT stop the engine writing the declaration, so it withholds the
+    // token from this picker without releasing the property to anything else.
+    if (!kindMatches(token, mode)) continue;
     emittable.push(token);
   }
   return emittable;
 }
 
 /**
- * Whether the canvas will declare a custom property for this token.
+ * Whether the emitter writes anything at all for this token.
  *
- * ASKED, by emitting the token and seeing what comes out, rather than by
- * restating the emitter's rules here where they would drift from it.
+ * The REFUSALS, and the reason they are a separate question from the kind
+ * check: an unusable name or id, a missing or non-string light value, a value
+ * that is not safe CSS, a value that would make the page fetch a file. Each is
+ * scanned across BOTH mode values and skips the whole token, so a dark `url(…)`
+ * leaves the light value with no custom property either.
  *
- * Asked TWICE, because the emitter reaches two kinds of verdict and they have
- * different scopes. A refusal — an unusable name or id, a missing or non-string
- * light value, a value that is not safe CSS, a value that would make the page
- * fetch a file — costs the token in EVERY mode: the emitter scans both values
- * and skips the whole token, so a dark `url(…)` leaves the light value
- * undeclared too. A kind mismatch is the opposite: it is reported and the value
- * is written anyway, so it costs only the mode whose value is wrong.
+ * ASKED, by emitting the token and seeing whether anything came out, rather
+ * than by restating that list here where it would drift from the engine's. The
+ * OUTPUT is read rather than the issue list, because a future refusal that
+ * forgot to report would otherwise arrive as an accepted token declaring
+ * nothing.
  *
- * Judging the whole token by its active value alone would miss the first kind,
- * and offer a preset whose reference resolves to nothing. Judging it by both
- * values would apply the second kind too widely, and withhold a token whose
- * light value is a perfectly good colour.
+ * The set's prefix is deliberately not passed. It cannot decide any of these
+ * rules, and supplying an unusable one would add an issue about the SET to
+ * every token in it — turning one bad prefix into an empty picker.
  */
-function emits(token: SiteToken, mode: TokenMode): boolean {
-  // The refusals, asked of the WHOLE token. Nothing WRITTEN is the emitter's
-  // own verdict, read from its output rather than from its commentary: a future
-  // refusal that forgot to report would otherwise arrive here as an accepted
-  // token that declares nothing.
-  //
-  // The set's prefix is deliberately not passed. It cannot decide any of these
-  // rules, and supplying an unusable one would add an issue about the SET to
-  // every token in it — turning one bad prefix into an empty picker.
-  if (emitTokenBlocks({ tokens: [token] }, ":root").css === "") return false;
+function written(token: SiteToken): boolean {
+  return emitTokenBlocks({ tokens: [token] }, ":root").css !== "";
+}
 
-  // The kind mismatch, asked of the ACTIVE value alone. Every other objection
-  // was ruled out above, so anything said about a token carrying only this one
-  // value is that check — which is why the question can be asked without
-  // matching the message text, wording nobody promised to keep, and without
-  // `checkTokenKind`, which the engine does not export.
-  //
-  // It matters because the browser drops the declaration where the token is
-  // USED, not where it is defined: a colour token holding `16px` is written,
-  // resolves, and does nothing, so a picker offering it hands over a reference
-  // with no symptom to follow.
+/**
+ * Whether the value this mode resolves is the kind the token claims.
+ *
+ * The other verdict the emitter reaches, and the one with the narrower scope.
+ * A mismatch is reported and the value written ANYWAY — deliberately, because
+ * refusing it would cost the author the token on a judgement the engine is not
+ * certain enough to act on — so it costs only the mode whose value is wrong,
+ * and never the token's claim on its custom property.
+ *
+ * It still withholds the token here, because the browser drops the declaration
+ * where the token is USED rather than where it is defined: a colour token
+ * holding `16px` is written, resolves, and does nothing, so a picker offering
+ * it hands over a reference with no symptom to follow.
+ *
+ * Asked by emitting the active value alone and reading the silence. Every other
+ * objection belongs to {@link written}, which runs first — and the emptiness
+ * check is kept even so, cheap and over a value already in hand, so that a
+ * caller reaching here in the other order gets a wrong answer rather than a
+ * confident misattribution.
+ */
+function kindMatches(token: SiteToken, mode: TokenMode): boolean {
   const active = token.values[mode] ?? token.values.light;
   const alone = emitTokenBlocks(
     { tokens: [{ ...token, values: { light: active } }] },
     ":root"
   );
-  return alone.issues.length === 0;
+  return alone.css !== "" && alone.issues.length === 0;
 }
 
 /**

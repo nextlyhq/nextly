@@ -740,6 +740,45 @@ describe("the emitter decides which tokens are offered", () => {
     );
   });
 
+  it("does not hand a claimed property to the token the engine REFUSED", () => {
+    // The two verdicts have different scopes, and the ORDER they are asked in
+    // decides who owns a contested property. The engine skips a refused token
+    // before the collision check and writes an accepted one even when its kind
+    // is wrong — so a kind-mismatched token still takes the property, and the
+    // token colliding with it is refused.
+    //
+    // Asking the kind first inverts that: the mismatched token is dropped here,
+    // the refused one inherits the property, and the picker offers it painted
+    // with its OWN colour while the page resolves the other's value.
+    const set: SiteTokenSet = {
+      // Both compose "--site-color-primary-dark"; only the spelling differs.
+      tokens: [
+        {
+          name: "color.primary-dark",
+          kind: "color",
+          values: { light: "16px" },
+        },
+        {
+          name: "color-primary.dark",
+          kind: "color",
+          values: { light: "#123456" },
+        },
+      ],
+    };
+
+    // Ground truth from the emitter: the FIRST token takes the property, with
+    // the value that does nothing, and the second is refused outright.
+    const emitted = emitTokenBlocks(set, ":root");
+    expect(emitted.css).toContain("--site-color-primary-dark:16px");
+    expect(emitted.css).not.toContain("#123456");
+
+    // So neither is choosable: one resolves to nothing, and the other is not
+    // declared at all.
+    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    expect(names).not.toContain("color-primary.dark");
+    expect(names).not.toContain("color.primary-dark");
+  });
+
   it("withholds a token with no usable light value", () => {
     const set = {
       tokens: [
