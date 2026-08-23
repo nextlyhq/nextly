@@ -620,6 +620,23 @@ describe("what stands between a contrast pair", () => {
     );
   });
 
+  it("names an inset shadow, which paints over the background", () => {
+    // Black text on white under an opaque black inset shadow renders black on
+    // black and reported 21:1. Counted whether or not the value says `inset`:
+    // a `cssValue` leaf is validated for syntax only, so nothing here decides
+    // what a shadow means.
+    expect(
+      contrastObscuredBy(prop =>
+        prop === "boxShadow" ? "inset 0 0 0 99px #000" : undefined
+      )
+    ).toBe("boxShadow");
+    expect(
+      contrastObscuredBy(prop =>
+        prop === "boxShadow" ? "0 1px 2px #0003" : undefined
+      )
+    ).toBe("boxShadow");
+  });
+
   it("names nothing when the pair is drawn plainly", () => {
     expect(contrastObscuredBy(none)).toBeUndefined();
     // And is not fooled by an unrelated property being set.

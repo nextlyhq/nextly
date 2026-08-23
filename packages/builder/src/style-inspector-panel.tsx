@@ -1359,6 +1359,10 @@ function ColourField({
   // in state because the unmount flush below reads it from a cleanup that runs
   // once, where the closed-over `draft` would be the value at first render.
   const pending = React.useRef<string | null>(null);
+  // The clear beside a token reference. It sits OUTSIDE the popover, so pressing
+  // it dismisses the picker and then commits — two writes for one intent unless
+  // the close knows the press belongs to it.
+  const clear = React.useRef<HTMLButtonElement | null>(null);
   /*
    * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
    *
@@ -1373,42 +1377,23 @@ function ColourField({
     onCommit(value);
   };
   /*
-   * The gesture, written a beat after the picker closes rather than during it.
+   * The gesture, written when the picker closes.
    *
-   * Deferred because CLOSING and CHOOSING can be one interaction. The controls
-   * that supersede a gesture — the token presets, the clear — sit outside the
-   * popover, so pressing one dismisses it first: the close wrote the picker's
-   * literal and the choice then replaced it, two history entries where one undo
-   * returns an intermediate colour the author never picked.
+   * Synchronous, because an author can leave the editor entirely in the same
+   * interaction that dismisses this popover: the page builder hands the current
+   * document to its host form and unmounts, and a write scheduled for after
+   * that lands on an editor nobody is reading any more. The gesture is simply
+   * gone from the document handed over.
    *
-   * Deferring rather than hooking the dismissal is what makes that hold for
-   * EVERY cause. Radix dismisses on `pointerdown`, `focusin`, `keydown`,
-   * `click`, `pointerup`, `mousedown` and `mouseup`, so a control clearing the
-   * gesture on pointer-down covered a mouse and missed a keyboard — where focus
-   * reaches the button first and the activation follows. Enumerating that list
-   * here would be a copy of someone else's, kept in step by hand.
-   *
-   * A timeout rather than a microtask: a dismissal and the activation that
-   * caused it are separate tasks, so a microtask would still run between them.
+   * Which is why the supersede below is decided by WHERE the interaction went
+   * rather than by giving a later handler time to cancel a scheduled write. A
+   * timer bought that cancellation and paid for it with this race.
    */
   const commitDraft = (): void => {
-    if (pending.current === null) return;
-    cancelWrite();
-    scheduled.current = window.setTimeout(flush, 0);
-  };
-  /** Write whatever the picker produced and has not had written yet. */
-  const flush = (): void => {
-    scheduled.current = null;
     const unwritten = pending.current;
     pending.current = null;
     if (unwritten === null) return;
-    if (write.current(unwritten) === "unchanged") reset();
-  };
-  const scheduled = React.useRef<number | null>(null);
-  const cancelWrite = (): void => {
-    if (scheduled.current === null) return;
-    window.clearTimeout(scheduled.current);
-    scheduled.current = null;
+    if (onCommit(unwritten) === "unchanged") reset();
   };
   // The current writer, held so the teardown below depends on nothing. A
   // teardown listing `onCommit` would re-run its cleanup on every render that
@@ -1430,7 +1415,6 @@ function ColourField({
    */
   React.useEffect(
     () => () => {
-      cancelWrite();
       const unwritten = pending.current;
       pending.current = null;
       if (unwritten !== null) write.current(unwritten);
@@ -1495,6 +1479,11 @@ function ColourField({
           }}
           // Committed when the picker CLOSES, which is where the gesture ends.
           onClosed={commitDraft}
+          commitsItself={target =>
+            clear.current !== null &&
+            target instanceof Node &&
+            clear.current.contains(target)
+          }
           // A preset is one discrete choice rather than a gesture, so it
           // commits immediately, exactly as the select and toggle controls do.
           onToken={identity => commitInstead({ $token: identity })}
@@ -1520,6 +1509,7 @@ function ColourField({
           />
         ) : (
           <TokenName
+            buttonRef={clear}
             identity={reference}
             token={colourTokenFor(reference, tokens, mode)}
             actionName={actionName}
@@ -1555,6 +1545,7 @@ function ColourPicker({
   unrepresented,
   onColour,
   onClosed,
+  commitsItself,
   onToken,
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
@@ -1571,10 +1562,32 @@ function ColourPicker({
   onColour: (hex: string) => void;
   /** The picker closed, which is where a gesture ends and a write belongs. */
   onClosed: () => void;
+  /**
+   * Whether an interaction outside the popover will write for itself.
+   *
+   * Asked before the dismissal is turned into a write, so a control that both
+   * closes this picker and commits something of its own does not produce two
+   * edits for one intent. `onInteractOutside` is the single callback Radix
+   * fires for EVERY cause it dismisses on — pointer, focus and the rest — which
+   * is why the question is asked here rather than by hooking the causes one at
+   * a time and missing whichever is added next.
+   */
+  commitsItself: (target: EventTarget | null) => boolean;
   onToken: (identity: string) => void;
 }): React.JSX.Element {
+  // Whether the dismissal in progress belongs to a control that writes for
+  // itself. Read once by the close below and reset there, so it cannot leak
+  // into the next open.
+  const superseded = React.useRef(false);
   return (
-    <Popover onOpenChange={open => !open && onClosed()}>
+    <Popover
+      onOpenChange={open => {
+        if (open) return;
+        const own = superseded.current;
+        superseded.current = false;
+        if (!own) onClosed();
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -1594,7 +1607,12 @@ function ColourPicker({
           data-empty={shown === undefined ? "" : undefined}
         />
       </PopoverTrigger>
-      <PopoverContent className="nx-style-inspector__picker">
+      <PopoverContent
+        className="nx-style-inspector__picker"
+        onInteractOutside={event => {
+          superseded.current = commitsItself(event.target);
+        }}
+      >
         {unrepresented ? (
           <p className="nx-inspector__note">
             This value cannot be shown on the picker. Choosing here replaces it.
@@ -1644,11 +1662,14 @@ function ColourPicker({
  * rather than an empty space.
  */
 function TokenName({
+  buttonRef,
   identity,
   token,
   actionName,
   onClear,
 }: {
+  /** Handed up so the picker can tell its own clear from any other dismissal. */
+  buttonRef: React.RefObject<HTMLButtonElement | null>;
   /** What the document stores, and the fallback when nothing resolves it. */
   identity: string;
   /** The site's token of that identity, when it defines one. */
@@ -1662,6 +1683,7 @@ function TokenName({
         {token?.name ?? identity}
       </span>
       <button
+        ref={buttonRef}
         type="button"
         onClick={onClear}
         aria-label={`Clear ${actionName}`}

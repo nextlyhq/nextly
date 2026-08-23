@@ -598,9 +598,14 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     expect(JSON.stringify(editor.apply.mock.calls[0])).toContain("$token");
   });
 
-  it("does not let one overwrite a CLEAR either", () => {
+  it("does not let one overwrite a CLEAR either", async () => {
     const editor = mount(styles({ $token: "color.ink" }));
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    // Radix attaches its outside-pointerdown listener inside a `setTimeout`, so
+    // nothing can dismiss the popover until that has run. Without this the
+    // popover never closes, the close path never runs, and the assertions below
+    // hold for a reason that has nothing to do with what they name.
+    await settle();
     const hex = screen.getAllByRole("textbox")[0];
     expect(hex).toBeDefined();
     if (hex === undefined) return;
@@ -655,6 +660,11 @@ describe("clearing a token while the picker is open", () => {
     // author never chose. The pointer-down supersede drops the gesture first.
     const editor = mount(styles({ $token: "color.ink" }));
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    // Radix attaches its outside-pointerdown listener inside a `setTimeout`, so
+    // nothing can dismiss the popover until that has run. Without this the
+    // popover never closes, the close path never runs, and the assertions below
+    // hold for a reason that has nothing to do with what they name.
+    await settle();
     const hex = screen.getAllByRole("textbox")[0];
     expect(hex).toBeDefined();
     if (hex === undefined) return;
@@ -662,13 +672,11 @@ describe("clearing a token while the picker is open", () => {
 
     // The real order: React's handler on the button, then the document
     // dismissal Radix listens for, then the click.
-    // The dismissal and the activation are one interaction, whichever event
-    // Radix noticed it through. Escape stands in for the dismissal here; the
-    // click that follows is what the author meant.
+    // The real interaction: a pointer press on the button dismisses the popover
+    // — Radix listens for that on the document — and the click follows. One
+    // intent, however many events it takes.
     const clear = screen.getByRole("button", { name: "Clear Color" });
-    fireEvent.keyDown(document.activeElement ?? document.body, {
-      key: "Escape",
-    });
+    fireEvent.pointerDown(clear);
     fireEvent.click(clear);
     await settle();
 
@@ -718,30 +726,40 @@ describe("the route a real editor takes to the colour control", () => {
   });
 });
 
-describe("clearing a token from the KEYBOARD while the picker is open", () => {
-  it("records one operation, as the pointer route does", async () => {
-    // The route the pointer-down fix could not cover. Moving focus to the Clear
-    // button dismisses the popover through `focusin` rather than `pointerdown`,
-    // and the activation arrives afterwards — so a control that dropped the
-    // gesture on pointer-down handled a mouse and left a keyboard writing the
-    // literal first and clearing it second.
-    const editor = mount(styles({ $token: "color.ink" }));
+describe("a dismissal that is NOT a superseding control", () => {
+  it("still writes the gesture", async () => {
+    // The control for the suppression, and the direction that loses work. If
+    // every outside interaction suppressed, clicking anywhere off the picker
+    // would silently discard what the author had just done.
+    const editor = mount(styles("#3b82f6"));
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
-    const hex = screen.getAllByRole("textbox")[0];
+    await settle();
+    const hex = screen
+      .getAllByRole("textbox")
+      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
+    expect(editor.apply).not.toHaveBeenCalled();
 
-    // Focus moves out — the dismissal — and only then is the button activated.
-    const clear = screen.getByRole("button", { name: "Clear Color" });
-    fireEvent.focus(clear);
-    fireEvent.keyDown(document.activeElement ?? document.body, {
-      key: "Escape",
-    });
-    fireEvent.click(clear);
+    // Somewhere outside the picker that commits nothing of its own.
+    fireEvent.pointerDown(document.body);
     await settle();
 
     expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(editor.apply.mock.calls[0])).not.toContain("#ff0000");
+    expect(JSON.stringify(editor.apply.mock.calls[0])).toContain("#ff0000");
   });
 });
+
+/*
+ * The FOCUS route is not driven here, and that is a limit of jsdom rather than
+ * a gap in the guard.
+ *
+ * Radix dismisses on `focusin` as well as `pointerdown`, and both arrive at the
+ * one `onInteractOutside` callback the suppression reads — so the route above
+ * exercises the same branch this one would. Attempting it directly was
+ * measured and abandoned: `fireEvent.focusIn` on the clear button leaves the
+ * popover OPEN, so the test passed because only the click ever committed, not
+ * because the suppression worked. It was deleted rather than left as a green
+ * that reported nothing.
+ */

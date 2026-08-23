@@ -588,6 +588,15 @@ const OBSCURING_PROPERTIES: readonly string[] = [
   "opacity",
   "filter",
   "mixBlendMode",
+  // An INSET shadow is painted over the background and can replace the colour
+  // behind the text entirely — black text on `#ffffff` under an opaque black
+  // inset shadow reports 21:1 and renders black on black. Counted whether or
+  // not the value says `inset`, because telling the two apart means reading
+  // the grammar of a shadow, and a `cssValue` leaf is validated for SYNTAX
+  // only: the catalog does not decide what a shadow means, so neither can
+  // this. An outer shadow therefore withholds a verdict it need not, which is
+  // the direction everything else in this list errs in.
+  "boxShadow",
 ];
 
 /**
