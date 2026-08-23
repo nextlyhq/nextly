@@ -159,7 +159,20 @@ export function tokenIdentity(token: SiteToken): string {
  * froze, so an identity is pinned once and never again.
  */
 export function renameSiteToken(token: SiteToken, name: string): SiteToken {
-  return { ...token, id: tokenIdentity(token), name };
+  const current = tokenIdentity(token);
+  // An identity this engine cannot write is not resolving for anything, so
+  // carrying it forward pins a token permanently unusable: the rename is
+  // accepted, the label changes, and the token still emits nothing with no
+  // remaining way to repair it.
+  //
+  // Re-pinning is safe in exactly that case and only there. A WORKING identity
+  // must never move, because every stored `$token` reads it — which is what
+  // this function exists to protect. One that cannot be emitted has no such
+  // references to lose, so the new name becomes the identity instead.
+  if (tokenNamingProblem({ name: current }) !== undefined) {
+    return { ...token, id: undefined, name };
+  }
+  return { ...token, id: current, name };
 }
 
 /** One file a font face can be loaded from. */
@@ -792,7 +805,9 @@ export function emitFontFaces(faces: readonly FontFaceDef[]): {
 export type TokenNamingProblem =
   | { field: "name" | "id"; reason: "grammar" }
   | { field: "name" | "id"; reason: "length"; length: number }
-  | { field: "name"; reason: "depth"; segments: number };
+  // No count: the scan stops once the answer is known, so any number it could
+  // carry would be the bound rather than the label's real depth.
+  | { field: "name"; reason: "depth" };
 
 export function tokenNamingProblem(token: {
   name: string;
@@ -817,9 +832,20 @@ export function tokenNamingProblem(token: {
   // the same answer — and bounded separately from LENGTH because depth is what
   // breaks, and capping the label's length again is what a renamed token's
   // identity exists to avoid.
-  const segments = token.name.split(".").length;
+  // Counted rather than split. `split(".")` materialises every segment of a
+  // label that is deliberately free of the length cap, so an oversized one is
+  // allocated in full on every compile only to be refused — and the count stops
+  // as soon as the answer is known.
+  let segments = 1;
+  for (
+    let at = 0;
+    at < token.name.length && segments <= MAX_TOKEN_NAME_SEGMENTS;
+    at++
+  ) {
+    if (token.name[at] === ".") segments++;
+  }
   if (segments > MAX_TOKEN_NAME_SEGMENTS) {
-    return { field: "name", reason: "depth", segments };
+    return { field: "name", reason: "depth" };
   }
   const identity = tokenIdentity(token as SiteToken);
   if (identity.length > MAX_TOKEN_NAME_LENGTH) {
@@ -837,7 +863,7 @@ function tokenNamingRefusal(token: SiteToken): string | undefined {
   const problem = tokenNamingProblem(token);
   if (problem === undefined) return undefined;
   if (problem.reason === "depth") {
-    return `"${token.name}" is ${problem.segments} names deep, so it was not written. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
+    return `"${token.name}" is nested too deeply, so it was not written. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
   }
   if (problem.reason === "length") {
     return `"${token.name}" is written under ${problem.length} characters, so it was not written. The ${problem.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;

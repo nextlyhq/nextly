@@ -1004,3 +1004,36 @@ describe("a token's stable identity", () => {
     expect(issues.some(i => i.message.includes("id"))).toBe(true);
   });
 });
+
+describe("renaming a token whose identity the rules have made unusable", () => {
+  // The upgrade path. A site stored before the cap existed can hold a token
+  // with no id and an overlong name, so its identity is now unemittable and the
+  // token has stopped rendering. Carrying that identity through a rename pins
+  // it forever: the editor accepts the new label and the token still emits
+  // nothing, with no remaining way to repair it from the UI.
+  const overlong = "a".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+
+  it("re-pins the identity to the new name, so the token can be repaired", () => {
+    const renamed = renameSiteToken(
+      { name: overlong, kind: "color", values: { light: "#000" } },
+      "color.primary"
+    );
+    expect(renamed.id).toBeUndefined();
+
+    const { css, issues } = emitTokenBlocks({ tokens: [renamed] }, SCOPE);
+    expect(issues).toEqual([]);
+    expect(css).toContain("color-primary");
+  });
+
+  it("still never moves a WORKING identity, which is what rename protects", () => {
+    // The control, and the property that matters more than the repair: every
+    // stored `$token` reads the identity, so moving one that resolves is the
+    // defect this function exists to prevent. Without this, a rename that
+    // always re-pinned would satisfy the case above and silently break renames.
+    const renamed = renameSiteToken(
+      { name: "color.brand", kind: "color", values: { light: "#000" } },
+      "color.primary"
+    );
+    expect(renamed.id).toBe("color.brand");
+  });
+});

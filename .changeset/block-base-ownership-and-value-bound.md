@@ -108,3 +108,10 @@ The builder's rename gate follows the same rule, so the editor no longer refuses
 a label the engine accepts, and `EMITTABLE_STRING_BOUNDS` lists the literal
 style value — the largest bound of the set, and the one whose omission let a
 consumer verify every listed bound and still choose a limit below it.
+
+Renaming a token whose identity the new rules cannot emit re-pins the identity
+to the new name rather than carrying the unusable one forward. A site stored
+before these bounds existed can hold such a token, and carrying its identity
+through a rename left it permanently unrenderable with no way to repair it from
+the editor. A WORKING identity still never moves, which is what rename exists to
+protect.
