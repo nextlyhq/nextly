@@ -61,9 +61,11 @@
 
 import {
   checkContrast,
+  isTokenName,
   isTokenRef,
   parseColor,
   STYLE_CATALOG,
+  tokenCustomProperty,
   tokenIdentity,
   type ContrastResult,
   type Rgb,
@@ -164,9 +166,44 @@ export function colourTokensFor(
   mode: TokenMode = "light"
 ): readonly ColourToken[] {
   if (tokens === undefined) return [];
-  return tokens.tokens
+  return emittableTokens(tokens)
     .filter(token => leaf.tokenKinds.includes(token.kind))
     .map(token => colourTokenOf(token, mode));
+}
+
+/**
+ * The tokens the canvas will actually declare a custom property for.
+ *
+ * `emitTokenBlocks` DROPS two kinds of token, and a picker that offered them
+ * would let an author store a reference to a property nothing declares — which
+ * invalidates the declaration rather than reporting, so the style is simply
+ * absent and the page still renders. That is the failure this whole control
+ * exists around, reached through the token list instead of through the name.
+ *
+ * Both rules are applied with the ENGINE's own primitives rather than restated:
+ * `isTokenName` decides whether a name can become a property, and
+ * `tokenCustomProperty` composes the property that two identities can collide
+ * on. Only the ORDER is repeated — first one wins — which is a single line and
+ * the one thing the engine does not export a way to ask.
+ *
+ * The prefix is deliberately omitted from the collision key. A prefix is the
+ * same string in front of every property, so it cannot make two identities
+ * collide or stop them colliding; asking for the site's real prefix would need
+ * `resolveTokenPrefix`, which the engine keeps private.
+ */
+function emittableTokens(set: SiteTokenSet): readonly SiteToken[] {
+  const seen = new Set<string>();
+  const emittable: SiteToken[] = [];
+  for (const token of set.tokens) {
+    // The NAME, matching the engine: it checks the name and then composes the
+    // property from the identity.
+    if (!isTokenName(token.name)) continue;
+    const property = tokenCustomProperty(tokenIdentity(token), "");
+    if (seen.has(property)) continue;
+    seen.add(property);
+    emittable.push(token);
+  }
+  return emittable;
 }
 
 /**
@@ -460,6 +497,46 @@ export function contrastOf(
   // background, which is a colour this does know.
   if (back.a < 1) return undefined;
   return checkContrast(fg, hexOf(back));
+}
+
+/**
+ * Catalog properties whose value changes what colour actually reaches the eye.
+ *
+ * A contrast figure is about two colours drawn on top of each other. Each of
+ * these puts something else between them or over them: a background image or
+ * gradient covers the background colour, `opacity` and `filter` change both,
+ * and `mixBlendMode` makes the result depend on what is underneath the node
+ * entirely. A ratio computed from the two colour properties alone is then a
+ * number about a rendering that does not happen — black text on `#ffffff` with
+ * an opaque black gradient over it reports 21:1 and renders black on black.
+ *
+ * A list rather than a catalog-derived set, and the honest reason is that the
+ * catalog does not record this: nothing marks a property as pixel-altering, so
+ * there is no structural question to ask. It is therefore a floor rather than a
+ * proof — a property added later that also obscures will not appear here until
+ * someone adds it — and it errs toward WITHHOLDING, which is the safe direction
+ * for a figure an author acts on.
+ */
+const OBSCURING_PROPERTIES: readonly string[] = [
+  "background",
+  "backgroundGradient",
+  "opacity",
+  "filter",
+  "mixBlendMode",
+];
+
+/**
+ * The property standing between this pair, or `undefined` when none is set.
+ *
+ * Takes a READER rather than the stored values, so the caller keeps ownership
+ * of which node, state and breakpoint is being asked about — the same address
+ * the control is reading its own value at — and this stays a pure question
+ * about a set of property names.
+ */
+export function contrastObscuredBy(
+  valueAt: (property: string) => StyleValue | undefined
+): string | undefined {
+  return OBSCURING_PROPERTIES.find(property => valueAt(property) !== undefined);
 }
 
 /**

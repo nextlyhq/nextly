@@ -22,6 +22,7 @@ import {
   colourShowable,
   colourTokenFor,
   colourTokensFor,
+  contrastObscuredBy,
   contrastOf,
   contrastPartnerOf,
   contrastRatioText,
@@ -509,5 +510,80 @@ describe("which mode a token resolves in", () => {
     const bg = { $token: "color.primary" };
     expect(contrastOf(fg, bg, media, "light")?.passesBodyText).toBe(true);
     expect(contrastOf(fg, bg, media, "dark")?.passesBodyText).toBe(false);
+  });
+});
+
+describe("only tokens the canvas will declare are offered", () => {
+  it("withholds a token whose NAME cannot become a custom property", () => {
+    // `emitTokenBlocks` drops it and names the issue, so a reference stored
+    // from the picker would point at a property nothing declares — the style
+    // vanishes and the page still renders.
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "color.ok", kind: "color", values: { light: "#111111" } },
+        { name: "color primary!", kind: "color", values: { light: "#222222" } },
+      ],
+    };
+    expect(colourTokensFor(COLOR, set).map(t => t.name)).toEqual(["color.ok"]);
+  });
+
+  it("withholds the SECOND of two identities that collide on one property", () => {
+    // `color.primary-dark` and `color-primary.dark` both become
+    // `--site-color-primary-dark`. The engine emits the first and refuses the
+    // second rather than letting one resolve to the other's value.
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.primary-dark",
+          kind: "color",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color-primary.dark",
+          kind: "color",
+          values: { light: "#222222" },
+        },
+      ],
+    };
+    const offered = colourTokensFor(COLOR, set);
+    expect(offered.map(t => t.name)).toEqual(["color.primary-dark"]);
+  });
+
+  it("offers a set with no collisions untouched", () => {
+    // The positive control: the filter must remove those two shapes and
+    // nothing else, or every picker would come back empty.
+    expect(colourTokensFor(COLOR, TOKENS).length).toBe(3);
+  });
+});
+
+describe("what stands between a contrast pair", () => {
+  const none = () => undefined;
+
+  it("names a property that puts something over the colours", () => {
+    // Black text on `#ffffff` with an opaque black gradient over it reports
+    // 21:1 and renders black on black.
+    expect(
+      contrastObscuredBy(p => (p === "backgroundGradient" ? "x" : undefined))
+    ).toBe("backgroundGradient");
+    expect(contrastObscuredBy(p => (p === "opacity" ? 0.5 : undefined))).toBe(
+      "opacity"
+    );
+    expect(
+      contrastObscuredBy(p => (p === "filter" ? "blur(2px)" : undefined))
+    ).toBe("filter");
+    expect(
+      contrastObscuredBy(p => (p === "mixBlendMode" ? "multiply" : undefined))
+    ).toBe("mixBlendMode");
+    expect(contrastObscuredBy(p => (p === "background" ? {} : undefined))).toBe(
+      "background"
+    );
+  });
+
+  it("names nothing when the pair is drawn plainly", () => {
+    expect(contrastObscuredBy(none)).toBeUndefined();
+    // And is not fooled by an unrelated property being set.
+    expect(
+      contrastObscuredBy(p => (p === "padding" ? "4px" : undefined))
+    ).toBeUndefined();
   });
 });

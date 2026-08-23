@@ -70,6 +70,7 @@ import {
   colourTokenFor,
   colourTokensFor,
   contrastAtLeaf,
+  contrastObscuredBy,
   contrastPartnerOf,
   contrastRatioText,
   type ColourToken,
@@ -663,6 +664,11 @@ function StyleControlField({
   const styles = findNode(editor.document.nodes, nodeId)?.styles;
   const stored = readStyleValue(styles, address);
   const pairedColour = partnerColour(control.leaf, styles, address);
+  // Asked at the SAME address the control reads its own value at, so a gradient
+  // set at another breakpoint does not withhold a verdict that is correct here.
+  const obscuredBy = contrastObscuredBy(property =>
+    readStyleValue(styles, { ...address, property, path: [] })
+  );
   const actionName = actionNameFor(propertyLabel, label);
   const [issue, setIssue] = React.useState<string | null>(null);
 
@@ -714,6 +720,7 @@ function StyleControlField({
         tokens={tokens}
         prefersDark={prefersDark}
         pairedColour={pairedColour}
+        obscuredBy={obscuredBy}
         describedBy={describedBy}
         onCommit={commit}
       />
@@ -744,6 +751,7 @@ function ControlValue({
   tokens,
   prefersDark,
   pairedColour,
+  obscuredBy,
   describedBy,
   onCommit,
 }: {
@@ -758,6 +766,11 @@ function ControlValue({
   prefersDark: boolean;
   /** The other half of this control's contrast pair, when its leaf has one. */
   pairedColour: StyleValue | undefined;
+  /**
+   * A property on this node that puts something between the pair, or
+   * `undefined` when none does. A verdict is withheld while one is set.
+   */
+  obscuredBy: string | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -802,6 +815,7 @@ function ControlValue({
         tokens={tokens}
         prefersDark={prefersDark}
         pairedColour={pairedColour}
+        obscuredBy={obscuredBy}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -1200,6 +1214,80 @@ function partnerColour(
 }
 
 /**
+ * Every id describing one control, or `undefined` when nothing does.
+ *
+ * A refusal message and a contrast verdict are both descriptions and neither
+ * replaces the other: a control pointed only at the refusal never announces the
+ * verdict, and one pointed only at the verdict drops the reason its last value
+ * was refused. Joined here so the two cannot be traded off at a call site.
+ *
+ * Note what this deliberately does NOT decide: whether the control is INVALID.
+ * A passing 21:1 contrast note is supplementary text, and a control inferring
+ * invalidity from having a description announced a perfectly good colour as an
+ * error.
+ */
+function describedByAll(
+  refusal: string | undefined,
+  verdict: string | undefined
+): string | undefined {
+  return (
+    [refusal, verdict].filter(part => part !== undefined).join(" ") || undefined
+  );
+}
+
+/**
+ * Whether opening the picker here would REPLACE something the author has.
+ *
+ * True when the surface cannot show the stored value and there is a stored
+ * value to lose — a reference, or non-empty text. The picker then starts at its
+ * fallback rather than at the value, so the first movement writes something
+ * unrelated to what was there, and the author is owed a warning first.
+ *
+ * The reference has to be tested explicitly: `storedText` answers `""` for one,
+ * so a predicate reading the draft alone missed every token — including the two
+ * that most need the warning, a token the site no longer defines and one whose
+ * value this package cannot resolve.
+ */
+function wouldReplace(
+  shown: string | undefined,
+  reference: string | null,
+  draft: string
+): boolean {
+  if (shown !== undefined) return false;
+  return reference !== null || draft !== "";
+}
+
+/**
+ * The text a control is editing, over the value the document holds.
+ *
+ * One implementation for both fields that need it. A draft is not just local
+ * state: it has to be REPLACED whenever the stored value moves underneath — an
+ * undo, an edit applied from elsewhere — or the control goes on showing a value
+ * the document no longer has, and the remount key changes with the SELECTION,
+ * which neither of those changes.
+ *
+ * `edited` is the same comparison every caller was making to decide whether a
+ * commit is worth attempting, so it is answered here rather than at each.
+ */
+function useDraft(stored: StyleValue | undefined): {
+  draft: string;
+  setDraft: (value: string) => void;
+  edited: boolean;
+  reset: () => void;
+} {
+  const [draft, setDraft] = React.useState(() => storedText(stored));
+  React.useEffect(() => {
+    setDraft(storedText(stored));
+  }, [stored]);
+  return {
+    draft,
+    setDraft,
+    edited: draft !== storedText(stored),
+    reset: () => setDraft(storedText(stored)),
+  };
+}
+
+/**
  * The hex a picker opens on when the stored value cannot be decomposed.
  *
  * Black, and it is never WRITTEN by being shown: the picker reports a colour
@@ -1241,6 +1329,7 @@ function ColourField({
   tokens,
   prefersDark,
   pairedColour,
+  obscuredBy,
   describedBy,
   onCommit,
 }: {
@@ -1252,17 +1341,18 @@ function ColourField({
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
   pairedColour: StyleValue | undefined;
+  /**
+   * A property on this node that puts something between the pair, or
+   * `undefined` when none does. A verdict is withheld while one is set.
+   */
+  obscuredBy: string | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const noteId = React.useId();
-  // The draft lives here for the reason it does in `NumericField`: two controls
-  // edit one value, so a draft private to the text field would leave the swatch
-  // painting a superseded one.
-  const [draft, setDraft] = React.useState(() => storedText(stored));
-  React.useEffect(() => {
-    setDraft(storedText(stored));
-  }, [stored]);
+  // Lifted out of the text field because two controls edit one value: a draft
+  // private to the field would leave the swatch painting a superseded one.
+  const { draft, setDraft, edited, reset } = useDraft(stored);
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const mode = activeTokenMode(tokens, prefersDark);
@@ -1270,36 +1360,34 @@ function ColourField({
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
   const commitDraft = (): void => {
-    if (draft === storedText(stored)) return;
-    if (onCommit(draft) === "unchanged") setDraft(storedText(stored));
+    if (!edited) return;
+    if (onCommit(draft) === "unchanged") reset();
   };
   // What the surface is currently SHOWING: the draft while a literal is being
   // typed, so the swatch follows the field, and the stored value for a
   // reference, which no field is editing. Named once and resolved once, rather
   // than resolved in each branch — two calls to the same resolver is the shape
   // that drifts.
-  const showing = reference === null ? draft : stored;
+  // Once the draft has MOVED, it is what the surface shows — including over a
+  // stored token. Pinned to `stored` for a reference, the picker was handed the
+  // token's own hex again on every render, and its prop-sync effect reset the
+  // surface to it: the controls snapped back mid-drag and a token could not be
+  // replaced with a literal by using the picker at all.
+  const showing = reference === null || edited ? draft : stored;
   const shown = colourHexOf(showing, tokens, mode);
   // Measured from what the surface is SHOWING, which is the same value the
   // swatch is painted from. Reading `stored` instead left the verdict describing
   // the old colour for the whole of a picker gesture — stale exactly while an
   // author is choosing, which is when a contrast readout is for — and put the
   // swatch and the figure beside it on two different colours.
-  const contrast = contrastAtLeaf(
-    control.leaf,
-    showing,
-    pairedColour,
-    tokens,
-    mode
+  const contrast =
+    obscuredBy === undefined
+      ? contrastAtLeaf(control.leaf, showing, pairedColour, tokens, mode)
+      : undefined;
+  const describes = describedByAll(
+    describedBy,
+    contrast === undefined ? undefined : noteId
   );
-  // Both descriptions, not one. A control pointed only at the refusal message
-  // never announces the contrast verdict, and one pointed only at the verdict
-  // drops the reason its last value was refused — so a screen-reader user gets
-  // whichever happens to be listed and no way to reach the other.
-  const describes =
-    [describedBy, contrast === undefined ? undefined : noteId]
-      .filter(part => part !== undefined)
-      .join(" ") || undefined;
 
   return (
     <>
@@ -1318,15 +1406,7 @@ function ColourField({
           actionName={actionName}
           describedBy={describes}
           invalid={describedBy !== undefined}
-          // A warning wherever there is something to LOSE, which is a stored
-          // reference or non-empty text. Tested on the draft alone this missed
-          // every reference — `storedText` answers `""` for one — so opening
-          // the picker on a token the site no longer defines, or one holding
-          // `var(...)`, started its controls at black and the first movement
-          // replaced the reference with a near-black literal, unwarned.
-          unrepresented={
-            shown === undefined && (reference !== null || draft !== "")
-          }
+          unrepresented={wouldReplace(shown, reference, draft)}
           // The draft moves with the pointer and the DOCUMENT does not. A drag
           // across the saturation surface fires `onColorChange` on every
           // pointer event, and committing each one writes an editor op each
@@ -1740,13 +1820,7 @@ function NumericField({
   // author who types `20` over `12px` and then picks `rem` had the blur refuse
   // the unitless draft, leaving `12px` stored — and the menu composed from
   // THAT, committing `12rem` and discarding the 20 they were looking at.
-  const [draft, setDraft] = React.useState(() => storedText(stored));
-  // The stored value wins whenever it changes underneath — an undo, an edit
-  // applied from elsewhere. Without this both controls go on showing a value
-  // the document no longer has.
-  React.useEffect(() => {
-    setDraft(storedText(stored));
-  }, [stored]);
+  const { draft, setDraft } = useDraft(stored);
   // Read from the DRAFT, so the menu offers units for the quantity on screen
   // and swaps the unit on that quantity rather than on a superseded one.
   const measurement = measurementOfText(draft);

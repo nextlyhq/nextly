@@ -145,6 +145,11 @@ function styles(color?: unknown, backgroundColor?: unknown): NodeStyles {
 const swatch = (name: string): HTMLElement =>
   screen.getByRole("button", { name });
 
+/** Mount over a whole `NodeStyles` envelope, for properties `styles()` omits. */
+function render_with(all: unknown) {
+  return mount(all as NodeStyles);
+}
+
 describe("a colour leaf draws a colour control", () => {
   it("offers a swatch beside the field, where before there was only a field", () => {
     mount(styles("#3b82f6"));
@@ -455,5 +460,61 @@ describe("opening the picker on a reference it cannot show", () => {
     mount(styles({ $token: "color.ink" }));
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
     expect(screen.queryByText(/cannot be shown on the picker/)).toBeNull();
+  });
+});
+
+describe("a verdict is withheld while something else decides the pixels", () => {
+  it("reports nothing when a gradient covers the background colour", () => {
+    // Black text on white with an opaque black gradient over it reports 21:1
+    // and renders black on black. The two colour properties are no longer what
+    // reaches the eye, so there is no honest figure to give.
+    render_with({
+      base: {
+        base: {
+          color: "#000000",
+          backgroundColor: "#ffffff",
+          backgroundGradient: "linear-gradient(#000, #000)",
+        },
+      },
+    });
+    expect(screen.queryByText(/Contrast/)).toBeNull();
+  });
+
+  it("reports the pair when nothing stands between them", () => {
+    // The positive control: the same pair without the gradient is measured, so
+    // the silence above is the gradient rather than the pair being unreadable.
+    render_with({
+      base: { base: { color: "#000000", backgroundColor: "#ffffff" } },
+    });
+    expect(screen.getAllByText(/Contrast 21\.0:1/).length).toBeGreaterThan(0);
+  });
+});
+
+describe("the picker can replace a stored token with a literal", () => {
+  it("follows the draft once a token-reference picker has been moved", () => {
+    // Pinned to the stored token, `ColorPicker` was handed the token's own hex
+    // again on every render and its prop-sync effect reset the surface to it —
+    // the controls snapped back mid-drag and a token could not be replaced with
+    // a literal through the picker at all.
+    mount(styles({ $token: "color.ink" }));
+    // Before any movement the surface shows the token's colour.
+    expect(
+      screen
+        .getByRole("button", { name: "Colour for Color" })
+        .style.getPropertyValue("--nx-swatch")
+    ).toBe("#111111");
+
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    const hex = screen.getAllByRole("textbox")[0];
+    expect(hex).toBeDefined();
+    if (hex === undefined) return;
+    fireEvent.change(hex, { target: { value: "#ff0000" } });
+
+    // The swatch now follows the draft rather than snapping back to the token.
+    expect(
+      screen
+        .getByRole("button", { name: "Colour for Color" })
+        .style.getPropertyValue("--nx-swatch")
+    ).toBe("#ff0000");
   });
 });
