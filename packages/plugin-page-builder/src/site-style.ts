@@ -110,6 +110,196 @@ export function resolveSiteStyle(
 }
 
 /**
+ * The stored tier that, merged under the site's config defaults, gives this set.
+ *
+ * The INVERSE of the token half of {@link resolveSiteStyle}, and the reason a
+ * studio cannot save what it was handed. `useSiteStyle` answers with the config
+ * defaults and the stored tier already merged, because that is what the canvas
+ * has to compile — so an editor that saved its whole working set would copy
+ * every config-supplied token into the database on the author's first edit.
+ * From then on the site's own code could not change those values: the accidental
+ * overrides would mask them, silently, and only for sites that supply defaults.
+ *
+ * So only what actually DIFFERS is stored: a token the config never supplied,
+ * or one whose value the author has changed. The prefix and the dark-mode
+ * strategy follow the same rule.
+ *
+ * What this deliberately cannot express is REMOVING a config-supplied token.
+ * Absence from the stored tier means "no override", so the default merges
+ * straight back on the next read. The studio does not offer removal for those
+ * rows rather than offering one that quietly undoes itself.
+ */
+export function tokenOverrideOf(
+  defaults: SiteTokenSet | undefined,
+  edited: SiteTokenSet
+): SiteTokenSet {
+  const supplied = new Map(
+    (defaults?.tokens ?? []).map(token => [tokenIdentity(token), token])
+  );
+  const tokens = edited.tokens.filter(token => {
+    const base = supplied.get(tokenIdentity(token));
+    return base === undefined || !sameSiteToken(base, token);
+  });
+  return {
+    tokens,
+    ...(edited.prefix === undefined || edited.prefix === defaults?.prefix
+      ? {}
+      : { prefix: edited.prefix }),
+    ...(edited.darkMode === undefined || edited.darkMode === defaults?.darkMode
+      ? {}
+      : { darkMode: edited.darkMode }),
+  };
+}
+
+/**
+ * What a studio should show once a REFUSED save has answered.
+ *
+ * Saves serialise but their answers do not have to arrive in order, and an
+ * author can type two edits before the first one comes back. Rolling back
+ * unconditionally then discards the newer edit — and if the newer save
+ * succeeds, the panel goes on showing the older set while storage holds the
+ * newer one, with nothing to reconcile them.
+ *
+ * So a rollback only applies while the refused edit is still what is on screen.
+ * Anything typed since has its own save in flight and is the one that decides.
+ *
+ * It falls back to the last set a save is KNOWN to have stored, rather than to
+ * whatever was on screen beforehand: after an earlier refusal, that is itself a
+ * value the site never accepted, so restoring it would show the author
+ * something no storage anywhere agrees with. `null` means nothing has been
+ * stored by this session and the read's own answer is the truth.
+ */
+/** What a studio should do once a save has answered. */
+export interface TokenSaveOutcome {
+  /** What to show, or `undefined` to leave the panel exactly as it is. */
+  readonly tokens?: SiteTokenSet | null;
+  /** What to say: a message, `null` to clear one, `undefined` to leave it. */
+  readonly issue?: string | null;
+}
+
+/**
+ * What a save's answer MEANS, apart from wiring it into any state.
+ *
+ * Both branches turn on one question — is this answer still about what the
+ * author is looking at — and that is why they are decided together rather than
+ * beside each other. Saves serialise, their answers need not arrive in order,
+ * and an answer for a superseded edit must neither roll the newer one back nor
+ * speak about it. Deciding the value and the message under separate rules is
+ * how a studio ends up announcing that a set it did save was not saved.
+ *
+ * `undefined` for either field means LEAVE IT, which is a third answer beside
+ * "set this" and "clear this": an obsolete refusal has nothing to say about a
+ * panel that has moved on.
+ */
+export function tokenSaveOutcome(
+  saved: boolean,
+  issues: Readonly<Record<string, string>>,
+  attempted: SiteTokenSet,
+  latest: SiteTokenSet | null,
+  persisted: SiteTokenSet | null
+): TokenSaveOutcome {
+  const current = latest === attempted;
+  if (saved) {
+    // A refusal for an EARLIER edit can arrive after a later one has already
+    // cleared the message, so a success has to clear it again — otherwise the
+    // studio goes on reporting a set it did save as unsaved.
+    return current ? { issue: null } : {};
+  }
+  if (!current) return {};
+  return {
+    tokens: tokensAfterRefusal(latest, attempted, persisted),
+    issue: Object.values(issues)[0] ?? "That change was not saved.",
+  };
+}
+
+export function tokensAfterRefusal(
+  current: SiteTokenSet | null,
+  refused: SiteTokenSet,
+  persisted: SiteTokenSet | null
+): SiteTokenSet | null {
+  return current === refused ? persisted : current;
+}
+
+/**
+ * Whether two tokens say the same thing.
+ *
+ * Field by field rather than by serialising both, because key order is not
+ * meaning: a token that round-tripped through storage can carry its fields in
+ * a different order and would compare as changed, so every edit anywhere would
+ * store every config token — the failure this comparison exists to prevent.
+ */
+function sameSiteToken(a: SiteToken, b: SiteToken): boolean {
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.kind === b.kind &&
+    a.description === b.description &&
+    a.values.light === b.values.light &&
+    a.values.dark === b.values.dark &&
+    // `extensions` is vendor data from Figma, Style Dictionary or whatever else
+    // wrote the token, and DTCG requires a tool to preserve what it does not
+    // understand. Left out of this comparison, a stored override differing ONLY
+    // in extensions reads as identical to the config default — so the next edit
+    // anywhere in the table filters it out of the payload and the vendor data is
+    // gone, silently, from a save the author made about a different token.
+    sameJsonValue(a.extensions, b.extensions)
+  );
+}
+
+/**
+ * Whether two values decoded from JSON say the same thing.
+ *
+ * Structural rather than `JSON.stringify`, because key order is not meaning and
+ * a token that round-tripped through storage can carry its fields in another
+ * order — the same reason the token comparison above is field by field. Written
+ * for `extensions`, whose shape is by definition unknown: it is whatever
+ * another tool wrote, so there is no set of fields to enumerate.
+ */
+function sameJsonValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) return sameJsonArray(a, b);
+  if (isJsonRecord(a) && isJsonRecord(b)) return sameJsonRecord(a, b);
+  // Two primitives that were not `===` above, or one of each kind. Neither is
+  // worth descending into.
+  return false;
+}
+
+/**
+ * Two arrays, element by element and in order.
+ *
+ * Asked apart from the record case because order MATTERS here and does not
+ * there, which is the whole difference between the two — and an equality that
+ * decided both in one branch would be one edit from applying the wrong rule.
+ * An array beside a non-array is not equal, which is why both sides are tested
+ * rather than only the one that got us here.
+ */
+function sameJsonArray(a: unknown, b: unknown): boolean {
+  return (
+    Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((item, index) => sameJsonValue(item, b[index]))
+  );
+}
+
+/** Two records: the same own keys, and the same value under each. */
+function sameJsonRecord(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>
+): boolean {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every(key => Object.hasOwn(b, key) && sameJsonValue(a[key], b[key]))
+  );
+}
+
+/** An object with named keys, as JSON produces. Arrays are handled apart. */
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
  * A style whose keys are only the DEFINED sections.
  *
  * An `undefined` property and an absent one mean the same thing to a reader,

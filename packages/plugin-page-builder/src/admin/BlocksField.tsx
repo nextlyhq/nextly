@@ -34,6 +34,7 @@
  */
 
 import {
+  resolveSiteTokens,
   hasBlock,
   registerBlocks,
   registryNestingSource,
@@ -52,6 +53,7 @@ import {
   InsertPanel,
   InspectorPanel,
   LayersPanel,
+  TokensPanel,
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
@@ -78,12 +80,18 @@ import {
 
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
-import { siteBreakpoints, siteSheet, type SiteStyleData } from "../site-style";
+import {
+  tokenOverrideOf,
+  tokenSaveOutcome,
+  siteBreakpoints,
+  siteSheet,
+  type SiteStyleData,
+} from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
-import { useSiteStyle } from "./site-style-client";
+import { useSaveSiteStyle, useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
 
 export interface BlocksFieldProps<
@@ -117,14 +125,14 @@ export interface BlocksFieldProps<
 /**
  * Every left panel the editor can fill today.
  *
- * The inserter and the layers tree; the rest are not built. The shell draws all
- * seven regardless and disables the ones nothing fills, so the rail describes
- * the editor's shape while never opening a region with nothing in it. Listing a
- * panel here that renders nothing would reserve space and shrink the canvas to
- * show it, which is why this grows one entry at a time rather than being
- * declared ahead of the panels.
+ * The inserter, the layers tree and the tokens studio; the rest are not built.
+ * The shell draws all seven regardless and disables the ones nothing fills, so
+ * the rail describes the editor's shape while never opening a region with
+ * nothing in it. Listing a panel here that renders nothing would reserve space
+ * and shrink the canvas to show it, which is why this grows one entry at a time
+ * rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["insert", "layers"] as const;
+const AVAILABLE_PANELS = ["insert", "layers", "tokens"] as const;
 
 /**
  * With an entry-fields panel to fill, `settings` joins them.
@@ -358,6 +366,109 @@ function offerableTokens(
   // none of them — and `undefined` already means something else to the control:
   // that the question was never asked.
   return style?.tokens ?? { tokens: [] };
+}
+
+/**
+ * The tokens studio, and the state that belongs to it rather than to the editor.
+ *
+ * Its own component because the token set an author is part-way through editing
+ * is the STUDIO's business: the editor around it owns a document, and a panel's
+ * unsaved half-state living in that editor is state with no reader outside one
+ * branch of one render.
+ *
+ * Saved as it is edited rather than behind a save button. A token is site-wide,
+ * so the canvas behind this panel is the preview — an unsaved edit would show
+ * the author a page no visitor would see, with no other surface on which to
+ * notice the difference.
+ */
+function TokensStudio({
+  merged,
+  supplied,
+  pending,
+}: {
+  /** The site's tokens as the canvas compiles them: config under stored. */
+  merged: SiteTokenSet | undefined;
+  /** What the site's own code supplies, which the stored tier layers over. */
+  supplied: SiteTokenSet | undefined;
+  /** Whether the read is still in flight, as against having failed. */
+  pending: boolean;
+}): React.JSX.Element {
+  const { save } = useSaveSiteStyle();
+  /*
+   * What the CANVAS resolves, which is what the studio has to show and edit.
+   *
+   * `resolveSiteTokens` layers the engine's own defaults — `color.primary`,
+   * `color.text`, `space.4` and the rest — under whatever the site states, and
+   * the renderer compiles with it. Without that step here, the studio reports
+   * every category empty on a site that states no tokens of its own, while the
+   * page it is previewing is actively using them and the colour picker beside
+   * it offers them. They could then be neither seen nor overridden: adding a
+   * token and renaming it to a default's label does not reach one, because the
+   * rename freezes the new token's own identity.
+   *
+   * The baseline for the override is resolved for the same reason. Storing what
+   * differs from the CONFIG alone would write every engine default into the
+   * database on the first edit — the same fault as saving the merged set, one
+   * tier further down.
+   */
+  const editable = merged === undefined ? undefined : resolveSiteTokens(merged);
+  const baseline = resolveSiteTokens(supplied);
+  /*
+   * The studio's own latest set, and the authority while it is open.
+   *
+   * `useSiteStyle` answers from a query refetched only after a save lands, so
+   * two edits made before that — two blurs, two removals, a double Add — would
+   * both compose against the SAME snapshot and the second would overwrite the
+   * first. Nothing would report it: the mutation serialises the payloads and
+   * neither fails. Composing against this means every edit builds on the last.
+   */
+  const [edits, setEdits] = useState<SiteTokenSet | null>(null);
+  const [issue, setIssue] = useState<string | undefined>(undefined);
+  /*
+   * The last set a save is KNOWN to have stored, and what a refused edit falls
+   * back to — not "whatever was on screen before it", which after an earlier
+   * refusal is itself a value the site never accepted.
+   */
+  const persisted = useRef<SiteTokenSet | null>(null);
+  /* The most recent edit handed to a save, and the one question both branches
+   * of an answer ask: is this still about what the author is looking at? */
+  const latest = useRef<SiteTokenSet | null>(null);
+
+  const commit = (next: SiteTokenSet): void => {
+    setEdits(next);
+    setIssue(undefined);
+    latest.current = next;
+    void save(
+      "tokens",
+      /*
+       * Only what DIFFERS from the site's own defaults. `merged` is what the
+       * canvas compiles, so saving it whole would copy every config token into
+       * the database on the first edit and mask the site's code from then on.
+       */
+      tokenOverrideOf(baseline, next)
+    ).then(result => {
+      const outcome = tokenSaveOutcome(
+        result.saved,
+        result.issues,
+        next,
+        latest.current,
+        persisted.current
+      );
+      if (result.saved) persisted.current = next;
+      if (outcome.tokens !== undefined) setEdits(outcome.tokens);
+      if (outcome.issue !== undefined) setIssue(outcome.issue ?? undefined);
+    });
+  };
+
+  return (
+    <TokensPanel
+      tokens={edits ?? editable}
+      supplied={baseline}
+      issue={issue}
+      absence={pending ? "pending" : "failed"}
+      onChange={commit}
+    />
+  );
 }
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
@@ -648,6 +759,19 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             );
           }
           if (panel === "layers") return <LayersPanel editor={editor} />;
+          if (panel === "tokens") {
+            return (
+              <TokensStudio
+                merged={offerableTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                supplied={configSiteStyle?.tokens}
+                pending={siteStylePending}
+              />
+            );
+          }
           /*
            * The entry's own fields — SEO, relations, whatever this collection
            * declares — which the takeover removed from the page behind this
