@@ -85,7 +85,8 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
-`TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`),
+`TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
+`PageShell`, `Bleed`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
 `useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
 
@@ -187,6 +188,24 @@ none. `FormActions` never computes its `dirty` flag; the page passes it down fro
 form state that already tracks it, so `@nextlyhq/ui` never depends on
 `react-hook-form`. No first-party plugin exercises either yet, so both stay on the
 experimental list above.
+
+`PageShell` (with `PageShellProps`) and `Bleed` (with `BleedProps`) own the page's
+horizontal inset and its measure, spent as GRID COLUMNS rather than as padding. The
+distinction is the reason they exist rather than being a styling preference: padding
+cannot be cancelled by a descendant, so under the previous arrangement a block that
+needed to run edge-to-edge had to be rendered OUTSIDE the wrapper imposing the measure —
+and two wrappers that each applied an inset silently added theirs together. As columns
+there is one declaration of the inset, double-padding is unrepresentable, and `Bleed`
+turns full-bleed from an accident into a declaration.
+
+`Bleed` is valid only as a DIRECT child of `PageShell`, because the `full-start` and
+`full-end` lines are named on the shell's own grid and are in scope nowhere else. Nested
+deeper it renders a plain block and the `grid-column` is inert — which looks finished and
+is not full-bleed — so the constraint is pinned by test rather than left to the reader.
+
+`PageShell` deliberately applies no horizontal padding of its own; a `px-*` utility on it
+would be the second declaration this design exists to remove. Neither is exercised by a
+first-party plugin yet, so both stay on the experimental list above.
 
 ## Peer dependency policy
 
