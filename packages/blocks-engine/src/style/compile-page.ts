@@ -385,7 +385,23 @@ export function breakpointContexts(
     // than paid once, and a byte-bounded document could still stall a render.
     // The widest are kept, and values keyed to the rest are reported stale like
     // any other id this site does not define.
+    //
+    // Bounded BEFORE the sort, which is what makes that limit bound the WORK and
+    // not merely the output. `MAX_BREAKPOINTS_PER_AXIS` is applied to the result,
+    // so a stored axis of a million definitions is still filtered and sorted in
+    // full on the way to keeping seven — and anything keyed on what this returns
+    // pays that on every render, including one whose stylesheet is reusable.
+    // The same reasoning `isUsableNamedClass` states for putting a length test
+    // ahead of its pattern test: a cheap rejection has to come first for the cap
+    // to bound anything.
+    //
+    // It costs a behaviour change on input this size, and that is the trade
+    // rather than an oversight: past this many definitions the widest seven are
+    // chosen from a prefix rather than from the whole axis. Nothing legitimate
+    // reaches it — the declared limit is seven — and `MAX_SCANNED_KEYS` is this
+    // engine's existing answer to how much of one stored record it reads at all.
     return usable
+      .slice(0, MAX_SCANNED_KEYS)
       .sort(widthDescending)
       .filter(def => {
         if (claimed.has(def.id)) return false;

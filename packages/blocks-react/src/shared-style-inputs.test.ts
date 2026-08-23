@@ -12,7 +12,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { MAX_NAMED_CLASSES, MAX_SCANNED_KEYS } from "@nextlyhq/blocks-engine";
+import {
+  MAX_NAMED_CLASSES,
+  MAX_NAMED_CLASS_NAME_LENGTH,
+  MAX_SCANNED_KEYS,
+} from "@nextlyhq/blocks-engine";
 
 import {
   UNIDENTIFIED_SHARED_INPUTS,
@@ -509,6 +513,55 @@ describe("what a corrupt or hostile settings row costs", () => {
     expect(
       sharedStyleInputsId(inputs({ namedClasses: [mapped([])] as never }))
     ).not.toBe(sharedStyleInputsId(inputs()));
+  });
+
+  it("reads a class NAME no further than the compiler does", () => {
+    // `isUsableNamedClass` tests length before pattern, so a name past the limit
+    // takes its whole class out of the stylesheet without ever being scanned —
+    // and `orderedNamedClassPositions` compares only the first limit+1
+    // characters for the same reason. Copying the raw string here would put it
+    // in this label and then in the outer one, on every render, for a class that
+    // emits nothing.
+    //
+    // Sound because nothing past that character can reach CSS: both of these are
+    // rejected by length, so both compile to the same nothing.
+    const named = (name: string) =>
+      inputs({
+        namedClasses: [
+          {
+            id: "c1",
+            slug: name,
+            orderIndex: 0,
+            styles: { base: { base: { color: "#111111" } } },
+          },
+        ],
+      });
+    const over = "x".repeat(MAX_NAMED_CLASS_NAME_LENGTH + 1);
+
+    expect(sharedStyleInputsId(named(`${over}aaa`))).toBe(
+      sharedStyleInputsId(named(`${over}bbb`))
+    );
+  });
+
+  it("CONTROL: still separates two names the compiler would ACCEPT", () => {
+    // The half a blanket truncation would fail. A name at the limit is usable,
+    // its slug becomes the selector, and a change to its last character changes
+    // the sheet — so the bound must not reach it.
+    const atLimit = (last: string) =>
+      inputs({
+        namedClasses: [
+          {
+            id: "c1",
+            slug: "x".repeat(MAX_NAMED_CLASS_NAME_LENGTH - 1) + last,
+            orderIndex: 0,
+            styles: { base: { base: { color: "#111111" } } },
+          },
+        ],
+      });
+
+    expect(sharedStyleInputsId(atLimit("a"))).not.toBe(
+      sharedStyleInputsId(atLimit("b"))
+    );
   });
 
   it("refuses to IDENTIFY inputs holding a record wider than the compiler reads", () => {

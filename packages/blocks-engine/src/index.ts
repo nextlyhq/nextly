@@ -389,6 +389,11 @@ export {
   isUsableNamedClass,
   namedClassName,
   orderedNamedClasses,
+  // How long a class id or slug may be before the compiler discards the class.
+  // Exported so a reader that walks the same library bounds its reads where the
+  // compiler bounds its own, rather than copying megabytes of a name the
+  // compiler rejected by length before it looked at anything else.
+  MAX_NAMED_CLASS_NAME_LENGTH,
   // Which classes a library actually RESOLVES to, ordering and claim rules
   // included. The compiler writes exactly this list and the renderer is handed
   // exactly this list, so a caller that needs to tell an author whether the

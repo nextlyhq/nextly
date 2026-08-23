@@ -69,8 +69,16 @@ synthesizes from `siteStyles`. The shared sheet has always honoured it, the
 page sheet is emitted after, and a page compiled under weaker rules would
 publish a request the sheet beside it was refused.
 
-`@nextlyhq/blocks-engine` exports `breakpointContexts`, `safeTokenPrefix` and
-`MAX_SCANNED_KEYS`: the compiler's own normalised breakpoints, the prefix tokens
+`breakpointContexts` now bounds a stored axis BEFORE it sorts. The per-axis
+limit bounded its output and not its work, so an axis of a million definitions
+was filtered and sorted in full on the way to keeping seven — paid by every
+reader keyed on which breakpoints a site emits under, including one whose
+stylesheet is reusable. Past `MAX_SCANNED_KEYS` definitions on one axis the
+survivors are now chosen from a prefix; nothing legitimate reaches that, since
+the declared limit is seven.
+
+`@nextlyhq/blocks-engine` exports `breakpointContexts`, `safeTokenPrefix`,
+`MAX_SCANNED_KEYS` and `MAX_NAMED_CLASS_NAME_LENGTH`: the compiler's own normalised breakpoints, the prefix tokens
 are really written under, and the width past which a stored record is not read.
 Anything keyed on what a stylesheet contains reads these rather than the stored
 settings, which change without the output changing.

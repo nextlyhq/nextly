@@ -57,6 +57,7 @@
  */
 import {
   MAX_NAMED_CLASSES,
+  MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
   breakpointContexts,
   hashId,
@@ -363,6 +364,27 @@ function styleEnvelope(styles: unknown, reading: Reading): string {
  * legible enough to answer WHICH class moved — which is the question it exists
  * to answer — and they are safe to carry raw because the reading above is total.
  */
+/**
+ * A class id or slug, read no further than the compiler reads it.
+ *
+ * The engine bounds both, twice and deliberately: `isUsableNamedClass` tests
+ * LENGTH before pattern, so a slug of megabytes is rejected without being
+ * scanned, and `orderedNamedClassPositions` compares only the first
+ * `MAX_NAMED_CLASS_NAME_LENGTH + 1` characters for the same reason. Reading the
+ * raw string here would copy it into this label and then again into the outer
+ * one, on every render, for a class the compiler discards by length before it
+ * looks at anything else.
+ *
+ * One character past the limit, which is the same slice the engine takes: it is
+ * what separates a name at the limit from one over it, and a name over it takes
+ * its whole class out of the stylesheet — so nothing beyond that character can
+ * reach CSS, and two oversized names sharing a prefix compile identically.
+ */
+function boundedName(value: unknown, reading: Reading): string {
+  if (typeof value !== "string") return structural(value, reading);
+  return structural(value.slice(0, MAX_NAMED_CLASS_NAME_LENGTH + 1), reading);
+}
+
 function classParts(entry: unknown, reading: Reading): unknown {
   // A malformed entry is reduced rather than dereferenced. This library is one
   // site-settings record read on every page render, and it arrives whether or
@@ -376,8 +398,8 @@ function classParts(entry: unknown, reading: Reading): unknown {
   // one: dropping it would let a library gain a bad row and stamp identically.
   if (!isRecord(entry)) return structural(entry, reading);
   return [
-    structural(entry.id, reading),
-    structural(entry.slug, reading),
+    boundedName(entry.id, reading),
+    boundedName(entry.slug, reading),
     structural(entry.orderIndex, reading),
     styleEnvelope(entry.styles, reading),
   ] as unknown;
@@ -428,6 +450,11 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // restore the unbounded per-render scan the compiler's cap exists to
     // prevent. Read rather than restated, for the reason the class ordering is:
     // a second copy of those rules drifts from the one that decides the output.
+    //
+    // That the scan is bounded is the ENGINE'S property, not one arranged here:
+    // `breakpointContexts` slices the stored axis before it sorts, so this call
+    // costs what compilation costs. Reading it and calling that bounded would
+    // otherwise be a claim about a function this file does not own.
     breakpointContexts(inputs.breakpoints),
     // The prefix tokens are actually WRITTEN under, not the one that was stored.
     // `safeTokenPrefix` maps unset, malformed and reserved prefixes alike to the

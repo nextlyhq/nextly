@@ -6,7 +6,7 @@ import { DEFAULT_LIMITS } from "../limits";
 import { validate } from "../validation";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
-import { compilePageCss } from "./compile-page";
+import { compilePageCss, MAX_SCANNED_KEYS } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import {
   nodeClassName,
@@ -1196,6 +1196,47 @@ describe("settings the compiler cannot use are dropped, not obeyed", () => {
     );
     const emitted = [...out.css.matchAll(/max-width: \d+px/g)];
     expect(emitted.length).toBeLessThanOrEqual(MAX_BREAKPOINTS_PER_AXIS);
+  });
+
+  it("reads no further along an axis than MAX_SCANNED_KEYS before sorting", () => {
+    // The per-axis cap bounds the OUTPUT; this bounds the work. Every reader
+    // keyed on which breakpoints a site emits under calls this on each render,
+    // including one whose stylesheet is reusable, so a stored axis of a million
+    // definitions would be filtered and sorted in full on the way to keeping
+    // seven.
+    //
+    // Asserted through what SURVIVES rather than by timing: the widest
+    // definition sits past the bound, so a reading that sorted the whole axis
+    // would emit it and this one does not. Nothing legitimate is affected — the
+    // declared limit is seven — and the trade is that past this many stored
+    // definitions the survivors are chosen from a prefix.
+    const axis = [
+      ...Array.from({ length: MAX_SCANNED_KEYS }, (_, i) => ({
+        id: `b${i}`,
+        label: `B${i}`,
+        maxWidth: 100 + i,
+      })),
+      { id: "widest", label: "Widest", maxWidth: 9999 },
+    ];
+    const out = compilePageCss(
+      doc([node("n1", { base: { widest: { color: "red" } } })]),
+      { breakpoints: { viewport: axis, container: [] } }
+    );
+
+    expect(out.css).not.toContain("max-width: 9999px");
+    // The control: the same definition INSIDE the bound is emitted, so the
+    // absence above is the bound rather than the fixture failing to reach the
+    // mechanism.
+    const within = compilePageCss(
+      doc([node("n1", { base: { widest: { color: "red" } } })]),
+      {
+        breakpoints: {
+          viewport: [{ id: "widest", label: "Widest", maxWidth: 9999 }],
+          container: [],
+        },
+      }
+    );
+    expect(within.css).toContain("max-width: 9999px");
   });
 
   it("says so when a stored visibility value is not a boolean", () => {
