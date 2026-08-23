@@ -10,7 +10,11 @@
  *
  * @module site-style-override.test
  */
-import type { SiteToken, SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  resolveSiteTokens,
+  type SiteToken,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -278,5 +282,63 @@ describe("what a save's answer means", () => {
     expect(tokenSaveOutcome(false, {}, a, a, stored).issue).toBe(
       "That change was not saved."
     );
+  });
+});
+
+describe("the engine's own defaults are editable without being stored wholesale", () => {
+  /*
+   * `resolveSiteTokens` layers `color.primary`, `color.text`, `space.4` and the
+   * rest under whatever a site states, and the renderer compiles with it — so a
+   * page on a site that states no tokens is still USING them. A studio showing
+   * only the stated tier reports every category empty while the picker beside
+   * it offers those very tokens, and they can then be neither seen nor
+   * overridden.
+   */
+  const baseline = resolveSiteTokens(undefined);
+
+  it("has something to show on a site that states no tokens of its own", () => {
+    expect(baseline.tokens.length).toBeGreaterThan(0);
+    expect(baseline.tokens.map(t => t.name)).toContain("color.primary");
+  });
+
+  it("stores NOTHING when the author has changed no default", () => {
+    // Deriving the override against the config alone would write every engine
+    // default into the database on the first edit — the merged-set fault, one
+    // tier further down.
+    expect(tokenOverrideOf(baseline, baseline).tokens).toEqual([]);
+  });
+
+  it("stores only the default the author actually changed", () => {
+    const edited = {
+      tokens: baseline.tokens.map(token =>
+        token.name === "color.primary"
+          ? { ...token, values: { light: "#ff0000" } }
+          : token
+      ),
+    };
+    const override = tokenOverrideOf(baseline, edited);
+    expect(override.tokens.map(t => t.name)).toEqual(["color.primary"]);
+    expect(override.tokens[0]?.values.light).toBe("#ff0000");
+  });
+
+  it("survives the round trip the renderer actually performs", () => {
+    // The property that makes it sound: store the override, resolve it back
+    // the way the canvas does, and the author sees what they left.
+    const edited = {
+      tokens: baseline.tokens.map(token =>
+        token.name === "color.text"
+          ? { ...token, values: { light: "#0a0a0a" } }
+          : token
+      ),
+    };
+    const stored = tokenOverrideOf(baseline, edited);
+    const resolved = resolveSiteTokens(stored);
+    expect(
+      resolved.tokens.find(t => t.name === "color.text")?.values.light
+    ).toBe("#0a0a0a");
+    // And nothing else moved.
+    expect(
+      resolved.tokens.find(t => t.name === "color.primary")?.values.light
+    ).toBe(baseline.tokens.find(t => t.name === "color.primary")?.values.light);
   });
 });

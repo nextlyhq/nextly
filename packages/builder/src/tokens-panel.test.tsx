@@ -281,7 +281,7 @@ describe("a token the site's own code supplies", () => {
     expect(
       screen.queryByRole("button", { name: "Remove color.ink" })
     ).toBeNull();
-    expect(screen.getAllByText("From site config").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Default").length).toBeGreaterThan(0);
   });
 
   it("still offers to remove a token the config never supplied", () => {

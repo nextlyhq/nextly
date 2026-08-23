@@ -34,6 +34,7 @@
  */
 
 import {
+  resolveSiteTokens,
   hasBlock,
   registerBlocks,
   registryNestingSource,
@@ -394,6 +395,25 @@ function TokensStudio({
 }): React.JSX.Element {
   const { save } = useSaveSiteStyle();
   /*
+   * What the CANVAS resolves, which is what the studio has to show and edit.
+   *
+   * `resolveSiteTokens` layers the engine's own defaults — `color.primary`,
+   * `color.text`, `space.4` and the rest — under whatever the site states, and
+   * the renderer compiles with it. Without that step here, the studio reports
+   * every category empty on a site that states no tokens of its own, while the
+   * page it is previewing is actively using them and the colour picker beside
+   * it offers them. They could then be neither seen nor overridden: adding a
+   * token and renaming it to a default's label does not reach one, because the
+   * rename freezes the new token's own identity.
+   *
+   * The baseline for the override is resolved for the same reason. Storing what
+   * differs from the CONFIG alone would write every engine default into the
+   * database on the first edit — the same fault as saving the merged set, one
+   * tier further down.
+   */
+  const editable = merged === undefined ? undefined : resolveSiteTokens(merged);
+  const baseline = resolveSiteTokens(supplied);
+  /*
    * The studio's own latest set, and the authority while it is open.
    *
    * `useSiteStyle` answers from a query refetched only after a save lands, so
@@ -425,7 +445,7 @@ function TokensStudio({
        * canvas compiles, so saving it whole would copy every config token into
        * the database on the first edit and mask the site's code from then on.
        */
-      tokenOverrideOf(supplied, next)
+      tokenOverrideOf(baseline, next)
     ).then(result => {
       const outcome = tokenSaveOutcome(
         result.saved,
@@ -442,8 +462,8 @@ function TokensStudio({
 
   return (
     <TokensPanel
-      tokens={edits ?? merged}
-      supplied={supplied}
+      tokens={edits ?? editable}
+      supplied={baseline}
       issue={issue}
       absence={pending ? "pending" : "failed"}
       onChange={commit}

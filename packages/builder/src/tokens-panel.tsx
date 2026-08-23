@@ -78,13 +78,18 @@ export interface TokensPanelProps {
   /** An edit. The host owns the document and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
   /**
-   * The tokens the SITE'S CODE supplies, which the stored ones layer over.
+   * The tokens something ELSE supplies, which the stored ones layer over.
    *
    * Needed because these two are not equally editable. A supplied token can be
    * overridden and reset, and cannot be removed: absence from the stored tier
    * means "no override", so a removal would merge straight back on the next
    * read. Offering a Remove that quietly undoes itself is worse than not
    * offering one.
+   *
+   * Two sources arrive as one set — the site's own config, and the ENGINE's
+   * defaults that `resolveSiteTokens` layers under everything. They behave
+   * identically here, so the row says "Default" rather than naming a source
+   * this panel cannot tell apart.
    */
   supplied?: SiteTokenSet;
   /** What the last save said, when it failed. Nothing while it is succeeding. */
@@ -456,7 +461,7 @@ function TokenActions({
          * means by undoing their edit.
          */
         <>
-          <span className="nx-tokens__origin">From site config</span>
+          <span className="nx-tokens__origin">Default</span>
           {differs(row, from, mode) ? (
             <Button
               type="button"
