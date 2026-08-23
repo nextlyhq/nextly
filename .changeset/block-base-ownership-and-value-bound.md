@@ -115,3 +115,16 @@ before these bounds existed can hold such a token, and carrying its identity
 through a rename left it permanently unrenderable with no way to repair it from
 the editor. A WORKING identity still never moves, which is what rename exists to
 protect.
+
+A label and an identity are asked different questions by different functions
+rather than one function reading a string whose role the caller decides. Depth
+belongs to a label, because only a label becomes nested design-token groups;
+the emission cap belongs to an identity, because only an identity becomes a
+custom property. Conflating them cleared working identities on rename.
+
+Both fields are checked for being strings before the grammar runs, since
+`RegExp.test` coerces and a stored number satisfied it before reaching a place
+that assumed a string — one malformed settings entry aborted every page compile.
+
+The design-token reader bounds nesting before descending rather than at the
+leaf, so a deeply nested file is refused instead of exhausting the stack.

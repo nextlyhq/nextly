@@ -39,6 +39,7 @@
 import {
   TOKEN_KINDS,
   emitTokenBlocks,
+  MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   tokenNamingProblem,
   renameSiteToken,
@@ -256,12 +257,26 @@ export function tokenNameIssue(
   // label is not what the token is written under and the engine accepts it at
   // every gate. Refusing it here would be the editor forbidding what the engine
   // supports, which reads to an author as a rule nobody can find.
-  const problem = tokenNamingProblem({ name: trimmed });
+  // Asked of the token the rename would PRODUCE, not of the label alone. A
+  // rename keeps a working identity pinned, so a long label is fine — but where
+  // the current identity is one the engine cannot write, the rename re-pins to
+  // this label and it becomes the identity, which the emission cap does reach.
+  // Validating the label alone accepts an edit that still leaves the token
+  // dropped from CSS, which is the repair appearing to succeed and not.
+  const existing = tokens?.tokens?.[at];
+  const proposed =
+    existing === undefined
+      ? { name: trimmed }
+      : renameSiteToken(existing, trimmed);
+  const problem = tokenNamingProblem(proposed);
   if (problem?.reason === "grammar") {
     return 'A name is dot-separated words of letters, digits and dashes, like "color.primary".';
   }
   if (problem?.reason === "depth") {
     return `A name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
+  }
+  if (problem?.reason === "length") {
+    return `A name is at most ${MAX_TOKEN_NAME_LENGTH} characters when it is what the token is written under.`;
   }
   const taken = (tokens?.tokens ?? []).some(
     (token, index) => index !== at && token.name === trimmed

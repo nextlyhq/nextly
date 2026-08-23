@@ -19,6 +19,7 @@ import {
   emitTokenBlocks,
   isTokenName,
   MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
   renameSiteToken,
   tokenIdentity,
   tokenValueFetches,
@@ -1023,6 +1024,55 @@ describe("renaming a token whose identity the rules have made unusable", () => {
     const { css, issues } = emitTokenBlocks({ tokens: [renamed] }, SCOPE);
     expect(issues).toEqual([]);
     expect(css).toContain("color-primary");
+  });
+
+  it("keeps a working DEEP identity pinned, because depth is a label rule", () => {
+    // An identity never becomes DTCG groups — only a label does — so the depth
+    // bound does not reach it. A legacy id with more parts than a label may
+    // carry is still emittable, and clearing it on rename would move an
+    // identity every stored reference reads.
+    const deepId = Array.from(
+      { length: MAX_TOKEN_NAME_SEGMENTS + 1 },
+      () => "a"
+    ).join(".");
+    expect(deepId.length).toBeLessThanOrEqual(MAX_TOKEN_NAME_LENGTH);
+
+    const renamed = renameSiteToken(
+      {
+        id: deepId,
+        name: "old.label",
+        kind: "color",
+        values: { light: "#000" },
+      },
+      "color.primary"
+    );
+    expect(renamed.id).toBe(deepId);
+  });
+
+  it("refuses a token whose id is not a string, rather than throwing", () => {
+    // Persisted settings arrive unvalidated and `RegExp.test` coerces, so a
+    // stored number satisfies the grammar and then travels on as a number —
+    // reaching a place that assumes a string and taking the whole compile with
+    // it. One malformed settings entry must cost its own token, not the page.
+    // The ID specifically, because that is what becomes the custom property: a
+    // non-string name travels only into a message, while a non-string id
+    // reaches the composer and throws there. A fixture with both wrong is
+    // caught by the identity guard and says nothing about which one ran.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            id: 123,
+            name: "color.primary",
+            kind: "color",
+            values: { light: "#000" },
+          } as never,
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues.length).toBeGreaterThan(0);
   });
 
   it("still never moves a WORKING identity, which is what rename protects", () => {

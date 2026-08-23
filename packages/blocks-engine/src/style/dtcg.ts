@@ -66,6 +66,7 @@ import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import {
   isAuthorableTokenName,
   MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
   tokenNamingProblem,
   tokenValueFetches,
 } from "./site-tokens";
@@ -189,7 +190,7 @@ function exportableValue(
     issues.push(
       issue(
         naming.reason === "length"
-          ? `"${token.name}" is written under ${naming.length} characters, so it was not exported. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
+          ? `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was not exported. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
           : naming.field === "name"
             ? `"${token.name}" is not a token name, so it was not exported.`
             : `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
@@ -605,6 +606,20 @@ function read(
       if (token !== undefined) tokens.push(token);
       continue;
     }
+    // Bounded BEFORE descending. A group path becomes a token's dot-separated
+    // name, so the depth rule is the same one — but applying it at the leaf is
+    // too late: this walk reaches the leaf by recursing, so a document nested
+    // deeply enough exhausts the stack before any leaf is read. A file arrives
+    // from outside this package, so that is untrusted input deciding how deep
+    // this recursion goes.
+    if (here.length > MAX_TOKEN_NAME_SEGMENTS) {
+      issues.push(
+        issue(
+          `"${here.slice(0, 4).join(".")}..." is nested more than ${MAX_TOKEN_NAME_SEGMENTS} groups deep, so it and everything under it was skipped.`
+        )
+      );
+      continue;
+    }
     read(child, here, groupType, tokens, issues);
   }
 }
@@ -684,7 +699,7 @@ function readToken(
     issues.push(
       issue(
         naming.reason === "length"
-          ? `"${name}" is written under ${naming.length} characters, so it was skipped. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
+          ? `"${name}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was skipped. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
           : `"${name}" has a ${naming.field} that is not a usable token name, so it was skipped.`
       )
     );

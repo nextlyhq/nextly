@@ -121,8 +121,8 @@ const ENCODING = "v2";
  * The identity of shared inputs that decline to identify themselves.
  *
  * Deliberately not valid digest output: every stamp this module produces is
- * `v1:` followed by hex, and this contains neither, so no stored stamp can
- * equal it. That makes "compiled when the inputs were unknowable" mean
+ * the encoding above followed by `:` and a base-36 digest, and this contains
+ * neither separator nor digest, so no stored stamp can equal it. That makes "compiled when the inputs were unknowable" mean
  * recompile every time.
  *
  * The asymmetry that forces a sentinel rather than absence is the one

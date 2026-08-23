@@ -169,7 +169,10 @@ export function renameSiteToken(token: SiteToken, name: string): SiteToken {
   // must never move, because every stored `$token` reads it — which is what
   // this function exists to protect. One that cannot be emitted has no such
   // references to lose, so the new name becomes the identity instead.
-  if (tokenNamingProblem({ name: current }) !== undefined) {
+  if (
+    identityProblem(current, token.id === undefined ? "name" : "id") !==
+    undefined
+  ) {
     return { ...token, id: undefined, name };
   }
   return { ...token, id: current, name };
@@ -804,58 +807,76 @@ export function emitFontFaces(faces: readonly FontFaceDef[]): {
  */
 export type TokenNamingProblem =
   | { field: "name" | "id"; reason: "grammar" }
-  | { field: "name" | "id"; reason: "length"; length: number }
-  // No count: the scan stops once the answer is known, so any number it could
-  // carry would be the bound rather than the label's real depth.
+  | { field: "name" | "id"; reason: "length" }
   | { field: "name"; reason: "depth" };
 
-export function tokenNamingProblem(token: {
-  name: string;
-  id?: string | undefined;
-}): TokenNamingProblem | undefined {
-  // Grammar on both. A name holding `}` closes the rule an emitter opened and
-  // everything after it is CSS the site never wrote; an id reaches the same
-  // selector by the same route. Asked per field so a caller can name the one an
-  // author has to repair — "rename it" fixes nothing for a bad id.
-  if (!isAuthorableTokenName(token.name)) {
-    return { field: "name", reason: "grammar" };
+/**
+ * Why a LABEL cannot be used, or nothing.
+ *
+ * A label is what an author reads. It is not written into CSS, so no length cap
+ * applies — but the DTCG exporter turns each of its dot-separated parts into a
+ * nested group, so its DEPTH is bounded.
+ */
+export function labelProblem(name: unknown): TokenNamingProblem | undefined {
+  // Persisted settings reach here unvalidated, and `RegExp.test` COERCES: a
+  // stored `123` becomes "123" and satisfies the grammar, after which the value
+  // travels on as a number and throws where a string was assumed.
+  if (typeof name !== "string") return { field: "name", reason: "grammar" };
+  if (!isAuthorableTokenName(name)) return { field: "name", reason: "grammar" };
+  // Counted in place: a label carries no length cap, so splitting it
+  // materialises every part of an oversized one only to refuse it.
+  let parts = 1;
+  for (let at = 0; at < name.length && parts <= MAX_TOKEN_NAME_SEGMENTS; at++) {
+    if (name[at] === ".") parts++;
   }
-  if (token.id !== undefined && !isAuthorableTokenName(token.id)) {
-    return { field: "id", reason: "grammar" };
-  }
-  // A name is dot-separated by grammar, and its SEGMENTS are structure rather
-  // than characters: the DTCG exporter turns each one into a nested group, and
-  // the reader walks those groups recursively. A label deep enough therefore
-  // produces a file this package cannot read back, which is the round trip the
-  // exporter exists to keep. Bounded here rather than at the exporter because
-  // the segment count is a property of the name, so every reader of a name gets
-  // the same answer — and bounded separately from LENGTH because depth is what
-  // breaks, and capping the label's length again is what a renamed token's
-  // identity exists to avoid.
-  // Counted rather than split. `split(".")` materialises every segment of a
-  // label that is deliberately free of the length cap, so an oversized one is
-  // allocated in full on every compile only to be refused — and the count stops
-  // as soon as the answer is known.
-  let segments = 1;
-  for (
-    let at = 0;
-    at < token.name.length && segments <= MAX_TOKEN_NAME_SEGMENTS;
-    at++
-  ) {
-    if (token.name[at] === ".") segments++;
-  }
-  if (segments > MAX_TOKEN_NAME_SEGMENTS) {
+  if (parts > MAX_TOKEN_NAME_SEGMENTS)
     return { field: "name", reason: "depth" };
-  }
-  const identity = tokenIdentity(token as SiteToken);
-  if (identity.length > MAX_TOKEN_NAME_LENGTH) {
-    return {
-      field: token.id === undefined ? "name" : "id",
-      reason: "length",
-      length: identity.length,
-    };
-  }
   return undefined;
+}
+
+/**
+ * Why an IDENTITY cannot be used, or nothing.
+ *
+ * An identity is what a token is WRITTEN under — it becomes the custom property
+ * and every stored reference reads it — so the emission cap applies. Depth does
+ * not: an identity never becomes DTCG groups, and refusing one for its depth is
+ * what clears a working id and breaks every reference to it.
+ *
+ * Separate from {@link labelProblem} rather than a flag on it, because the two
+ * subjects take different rules and a caller holding a bare string cannot be
+ * relied on to say which it has.
+ */
+export function identityProblem(
+  identity: unknown,
+  field: "name" | "id"
+): TokenNamingProblem | undefined {
+  if (typeof identity !== "string") return { field, reason: "grammar" };
+  if (!isAuthorableTokenName(identity)) return { field, reason: "grammar" };
+  if (identity.length > MAX_TOKEN_NAME_LENGTH)
+    return { field, reason: "length" };
+  return undefined;
+}
+
+/**
+ * Why a token cannot be written, or nothing.
+ *
+ * Composed from the two rules above so each applies to its own subject: the
+ * label is checked as a label, the identity as an identity. A token with an id
+ * is checked as both, because the id is the identity and the name is the label.
+ */
+export function tokenNamingProblem(token: {
+  name: unknown;
+  id?: unknown;
+}): TokenNamingProblem | undefined {
+  const label = labelProblem(token.name);
+  if (label !== undefined) return label;
+  if (token.id !== undefined) {
+    const stated = identityProblem(token.id, "id");
+    if (stated !== undefined) return stated;
+    return undefined;
+  }
+  // With no id the label IS the identity, so it meets the emission cap too.
+  return identityProblem(token.name, "name");
 }
 
 /** The emitter's wording for {@link tokenNamingProblem}. */
@@ -863,10 +884,10 @@ function tokenNamingRefusal(token: SiteToken): string | undefined {
   const problem = tokenNamingProblem(token);
   if (problem === undefined) return undefined;
   if (problem.reason === "depth") {
-    return `"${token.name}" is nested too deeply, so it was not written. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
+    return `"${String(token.name)}" is nested too deeply, so it was not written. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
   }
   if (problem.reason === "length") {
-    return `"${token.name}" is written under ${problem.length} characters, so it was not written. The ${problem.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
+    return `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was not written. The ${problem.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
   }
   return problem.field === "name"
     ? `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`
