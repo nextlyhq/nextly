@@ -377,9 +377,9 @@ function resolvedColourOf(
  * ONE function for the swatch, the picker seed and the contrast readout, rather
  * than one named for each. They are three uses of a single question — what hex
  * is this value — and giving each its own function would be three expressions
- * that agree today: the shape that produced six of the twenty-four findings on
- * the control that came before this one. A use that genuinely diverges gets its
- * own function THEN, when there is a difference to express.
+ * that agree today and drift apart silently, because each looks correct on its
+ * own. A use that genuinely diverges gets its own function THEN, when there is
+ * a difference to express.
  *
  * Composed as hex from the channels rather than passed through as written, and
  * that is what makes the module note's rule hold by construction rather than by

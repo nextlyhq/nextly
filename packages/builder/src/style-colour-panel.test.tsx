@@ -557,10 +557,10 @@ describe("a picker gesture survives the field being replaced", () => {
 
 describe("a discrete choice supersedes an unfinished gesture", () => {
   it("does not let a pending literal overwrite a token chosen after it", () => {
-    // Choosing a preset does not close the popover, so the pending gesture
-    // survives it. Unflushed correctly, the unmount write then lands the older
-    // hex on top of the token the author just picked — the reference silently
-    // becoming a literal.
+    // Choosing a preset does not close the popover, so the control is still
+    // holding an unfinished gesture when the author leaves. Unless that gesture
+    // is dropped as the preset commits, the unmount write lands the older hex
+    // on top of the token just picked and the reference becomes a literal.
     const editor = mount(styles("#3b82f6"));
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
 
@@ -595,5 +595,37 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     expect(editor.apply).toHaveBeenCalledTimes(1);
     cleanup();
     expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a superseded gesture stays superseded even when the choice is refused", () => {
+  it("does not write the older literal after a REFUSED token commit", () => {
+    // The close path is separate from the unmount one. A token commit that the
+    // store refuses — a document at its byte limit, say — leaves the picker's
+    // earlier literal sitting in the draft, and a close that decided from the
+    // draft wrote that literal even though choosing the token was meant to
+    // replace it. Both paths now read the one pending value.
+    const editor = mount(styles("#3b82f6"));
+    // Every write is refused: `apply` answering null is the store declining.
+    editor.apply.mockReturnValue(null);
+
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    const hex = screen
+      .getAllByRole("textbox")
+      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
+    expect(hex).toBeDefined();
+    if (hex === undefined) return;
+    fireEvent.change(hex, { target: { value: "#ff0000" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "color.ink" }));
+    const afterToken = editor.apply.mock.calls.length;
+    expect(afterToken).toBe(1);
+    expect(JSON.stringify(editor.apply.mock.calls[0])).toContain("$token");
+
+    // Closing must not resurrect the literal the token choice replaced.
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    expect(editor.apply.mock.calls.length).toBe(afterToken);
   });
 });

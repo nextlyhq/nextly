@@ -1374,10 +1374,21 @@ function ColourField({
     pending.current = null;
     onCommit(value);
   };
+  /*
+   * The gesture, written once, when the picker closes.
+   *
+   * Reads the SAME pending value the unmount flush and `commitInstead` do, so
+   * the three cannot disagree about whether there is anything to write. Deciding
+   * from `edited` instead let a superseded gesture through: a token commit that
+   * was REFUSED — a document at its byte limit, say — cleared the pending value
+   * and left the older literal in the draft, and closing the popover then wrote
+   * that literal even though choosing the token was meant to replace it.
+   */
   const commitDraft = (): void => {
+    const unwritten = pending.current;
     pending.current = null;
-    if (!edited) return;
-    if (onCommit(draft) === "unchanged") reset();
+    if (unwritten === null) return;
+    if (onCommit(unwritten) === "unchanged") reset();
   };
   /*
    * Flush an unwritten gesture when this field goes away.
