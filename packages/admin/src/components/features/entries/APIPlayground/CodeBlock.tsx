@@ -22,6 +22,7 @@ import { EditorView } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { useEffect, useMemo, useState } from "react";
 
+import { useTheme } from "@admin/context/providers/ThemeProvider";
 import {
   nextlyEditorChrome,
   nextlyHighlighting,
@@ -56,6 +57,11 @@ export function CodeBlock({
   language,
   showGutter = false,
 }: CodeBlockProps) {
+  // Not a colour: every colour here is a token. This is the boolean the
+  // CodeMirror packages read to choose between their OWN light and dark rules,
+  // which nothing sets under `theme="none"`.
+  const { resolvedTheme } = useTheme();
+
   // CodeMirror reaches for browser globals, so it renders after mount.
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => {
@@ -69,6 +75,7 @@ export function CodeBlock({
       nextlyHighlighting,
       nextlyEditorChrome({
         showGutter,
+        dark: resolvedTheme === "dark",
         padding: showGutter ? "16px 12px" : "16px 24px",
       }),
       // Nothing here is editable, so the affordances that say otherwise are
@@ -80,7 +87,7 @@ export function CodeBlock({
         ".cm-cursor": { display: "none" },
       }),
     ],
-    [language, showGutter]
+    [language, showGutter, resolvedTheme]
   );
 
   if (!isMounted) {
@@ -95,9 +102,11 @@ export function CodeBlock({
     <CodeMirror
       value={value}
       extensions={extensions}
-      // "none" rather than a resolved light/dark: the colours come from
+      // "none" rather than a resolved light/dark: the COLOURS come from
       // `--nx-code-*`, which the theme redeclares under `.dark`, so CSS settles
-      // the mode and a bundled palette here would only fight it.
+      // the mode and a bundled palette here would only fight it. The mode is
+      // still passed to the chrome, but as a flag the CodeMirror packages read
+      // to pick their own light/dark rules -- not as a colour decision.
       theme="none"
       editable={false}
       readOnly

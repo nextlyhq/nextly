@@ -25,6 +25,7 @@ import CodeMirror, { type ReactCodeMirrorProps } from "@uiw/react-codemirror";
 import type { CodeLanguage } from "nextly/config";
 import { useMemo } from "react";
 
+import { useTheme } from "@admin/context/providers/ThemeProvider";
 import {
   nextlyEditorChrome,
   nextlyHighlighting,
@@ -285,11 +286,17 @@ export function CodeMirrorEditor({
   placeholder,
   onCreateEditor,
 }: CodeMirrorEditorProps) {
+  // Not a colour: see `EditorChromeOptions.dark`.
+  const { resolvedTheme } = useTheme();
+
   const extensions = useMemo(
     () => [
       ...getLanguageExtensions(language),
       nextlyHighlighting,
-      nextlyEditorChrome({ fontSize: editorOptions.fontSize ?? 14 }),
+      nextlyEditorChrome({
+        fontSize: editorOptions.fontSize ?? 14,
+        dark: resolvedTheme === "dark",
+      }),
       // A caller may still pin a face — a code field whose content is meant to
       // be read in a particular one. Absent that, the shared chrome's
       // `--font-mono` stands, so the editor matches every other mono surface.
@@ -302,7 +309,7 @@ export function CodeMirrorEditor({
           ]
         : []),
     ],
-    [language, editorOptions.fontSize, editorOptions.fontFamily]
+    [language, editorOptions.fontSize, editorOptions.fontFamily, resolvedTheme]
   );
 
   return (
@@ -313,9 +320,11 @@ export function CodeMirrorEditor({
       height={maxHeight ? undefined : `${minHeight}px`}
       minHeight={`${minHeight}px`}
       maxHeight={maxHeight ? `${maxHeight}px` : undefined}
-      // "none" rather than a resolved light/dark: the colours come from
+      // "none" rather than a resolved light/dark: the COLOURS come from
       // `--nx-code-*`, which the theme redeclares under `.dark`, so CSS settles
-      // the mode and a bundled palette here would only fight it.
+      // the mode and a bundled palette here would only fight it. The mode is
+      // still passed to the chrome, but as a flag the CodeMirror packages read
+      // to pick their own light/dark rules -- not as a colour decision.
       theme="none"
       editable={!disabled && !readOnly}
       readOnly={disabled || readOnly}

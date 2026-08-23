@@ -34,8 +34,15 @@ import { codeColor } from "./code-palette";
  */
 export const CODE_TAG_SPECS: readonly {
   tag: Tag | Tag[];
-  construct: CodeConstruct;
+  /**
+   * Omitted where the tag is about WEIGHT rather than colour. Markdown's strong
+   * and emphasis carry no colour of their own -- they modify whatever they sit
+   * in -- and giving them one would repaint prose that was never coloured.
+   */
+  construct?: CodeConstruct;
   fontStyle?: string;
+  fontWeight?: string;
+  textDecoration?: string;
 }[] = [
   {
     tag: [t.comment, t.lineComment, t.blockComment, t.docComment],
@@ -114,6 +121,21 @@ export const CODE_TAG_SPECS: readonly {
   },
   { tag: [t.deleted], construct: "deleted" },
   { tag: [t.inserted], construct: "inserted" },
+  // Markup, which is what a Markdown code field is made of. These matter
+  // because this highlighter is registered WITHOUT `fallback`, so it is the
+  // only one in effect: a tag nobody lists here renders as plain text rather
+  // than falling through to CodeMirror's defaults. Before that change One Dark
+  // styled them, so leaving them out is a regression rather than a gap.
+  { tag: [t.heading], construct: "keyword", fontWeight: "600" },
+  { tag: [t.strong], fontWeight: "600" },
+  { tag: [t.emphasis], fontStyle: "italic" },
+  { tag: [t.strikethrough], textDecoration: "line-through" },
+  { tag: [t.link, t.url], construct: "function", textDecoration: "underline" },
+  // An escape is part of the string it interrupts, and reads as the thing that
+  // makes it not literal -- so it takes the escaping colour, not the string's.
+  { tag: [t.escape], construct: "operator" },
+  { tag: [t.labelName], construct: "variable" },
+  { tag: [t.meta, t.processingInstruction], construct: "comment" },
 ];
 
 /**
@@ -126,8 +148,14 @@ export const CODE_TAG_SPECS: readonly {
 export const nextlyHighlightStyle = HighlightStyle.define([
   ...CODE_TAG_SPECS.map(spec => ({
     tag: spec.tag,
-    color: codeColor(spec.construct),
+    ...(spec.construct === undefined
+      ? {}
+      : { color: codeColor(spec.construct) }),
     ...(spec.fontStyle === undefined ? {} : { fontStyle: spec.fontStyle }),
+    ...(spec.fontWeight === undefined ? {} : { fontWeight: spec.fontWeight }),
+    ...(spec.textDecoration === undefined
+      ? {}
+      : { textDecoration: spec.textDecoration }),
   })),
   // A parse error is a fault rather than a construct, so it reads from the
   // admin's error token instead of the code palette.
@@ -157,6 +185,22 @@ export interface EditorChromeOptions {
   padding?: string;
   /** Whether a gutter is shown, which changes only the inset the text needs. */
   showGutter?: boolean;
+  /**
+   * Whether the admin is currently dark.
+   *
+   * This is NOT a colour decision -- every colour below is a token, and tokens
+   * settle the mode themselves. It sets `EditorView.darkTheme`, the boolean the
+   * CodeMirror packages read to pick between their own `&light` and `&dark`
+   * rules. Nothing sets it when `theme="none"` is used, so all of them stay on
+   * their light rules inside a dark admin: 41 selectors across view, lint,
+   * autocomplete and search.
+   *
+   * Overriding them one at a time is patching by example across a surface this
+   * package does not own, and one that grows with every extension added.
+   * Setting the flag closes the class outright, and the token rules below still
+   * win wherever this admin wants its own colour rather than CodeMirror's grey.
+   */
+  dark?: boolean;
 }
 
 /**
@@ -172,149 +216,181 @@ export function nextlyEditorChrome({
   fontSize = 12,
   padding,
   showGutter = false,
+  dark = false,
 }: EditorChromeOptions = {}) {
-  return EditorView.theme({
-    "&": {
-      fontSize: `${fontSize}px`,
-      backgroundColor: "transparent",
-      color: "var(--nx-code-fg)",
-    },
-    ".cm-scroller": {
-      // The theme's mono stack, so code renders in the same face as every other
-      // mono surface in the admin. The fallback covers a host that has not
-      // loaded the theme.
-      fontFamily: "var(--font-mono, ui-monospace, monospace)",
-      ...(padding === undefined ? {} : { padding }),
-    },
-    ".cm-content": {
-      caretColor: "var(--nx-foreground)",
-    },
-    ".cm-gutters": {
-      borderRight:
-        "1px solid color-mix(in srgb, var(--nx-border) 50%, transparent)",
-      backgroundColor: "color-mix(in srgb, var(--nx-muted) 30%, transparent)",
-      color: "color-mix(in srgb, var(--nx-muted-foreground) 50%, transparent)",
-      padding: showGutter ? "0 4px" : "0",
-    },
-    ".cm-activeLine": {
-      backgroundColor: "color-mix(in srgb, var(--nx-accent) 10%, transparent)",
-    },
-    ".cm-activeLineGutter": {
-      backgroundColor: "var(--nx-accent)",
-    },
-    ".cm-selectionMatch": {
-      backgroundColor: "color-mix(in srgb, var(--nx-primary) 20%, transparent)",
-    },
-    // Selection is the one decoration `theme="none"` leaves actively wrong
-    // rather than merely unstyled. The base theme picks between its `&light`
-    // and `&dark` rules from `EditorView.darkTheme`, which only a bundled theme
-    // sets -- so without one it stays light, and its pale fill lands under the
-    // light-on-dark token colours in a dark admin.
-    //
-    // Answered with a token instead of by setting the facet: one rule then
-    // serves both modes, which is the same reason there is one highlight style
-    // rather than two.
-    "::selection": {
-      backgroundColor: "color-mix(in srgb, var(--nx-primary) 30%, transparent)",
-    },
-    ".cm-selectionBackground": {
-      backgroundColor: "color-mix(in srgb, var(--nx-primary) 25%, transparent)",
-    },
-    // The base theme raises its own specificity for the focused case, so this
-    // has to match that shape to win rather than relying on precedence alone.
-    "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
-      {
-        backgroundColor:
-          "color-mix(in srgb, var(--nx-primary) 35%, transparent)",
+  return [
+    EditorView.darkTheme.of(dark),
+    EditorView.theme({
+      "&": {
+        fontSize: `${fontSize}px`,
+        backgroundColor: "transparent",
+        color: "var(--nx-code-fg)",
       },
-    // Bracket matching replaces the token span rather than decorating it, so
-    // the bracket under the caret arrives with no highlight class of its own.
-    // Without a colour here it falls back to the editor's foreground and reads
-    // as a different character from its own twin two lines down. Unscoped, so
-    // it still holds while the editor is not focused.
-    ".cm-matchingBracket": { color: codeColor("punctuation") },
-    ".cm-nonmatchingBracket": { color: "var(--nx-destructive)" },
-    // The fills are scoped exactly as `bracketMatching`'s own base theme scopes
-    // them. It ships a hardcoded teal under `&.cm-focused`, and a bare
-    // `.cm-matchingBracket` here loses to it on specificity however much
-    // precedence this theme has over a base one.
-    "&.cm-focused .cm-matchingBracket": {
-      backgroundColor: "color-mix(in srgb, var(--nx-primary) 22%, transparent)",
-      outline:
-        "1px solid color-mix(in srgb, var(--nx-primary) 45%, transparent)",
-    },
-    "&.cm-focused .cm-nonmatchingBracket": {
-      backgroundColor:
-        "color-mix(in srgb, var(--nx-destructive) 18%, transparent)",
-    },
-    ".cm-searchMatch": {
-      backgroundColor: "color-mix(in srgb, var(--nx-warning) 30%, transparent)",
-    },
-    ".cm-searchMatch.cm-searchMatch-selected": {
-      backgroundColor: "color-mix(in srgb, var(--nx-warning) 50%, transparent)",
-    },
-    "&.cm-focused .cm-cursor": {
-      borderLeftColor: "var(--nx-foreground)",
-    },
-    // The base theme keys thirteen surfaces off `EditorView.darkTheme`, which
-    // only a bundled theme sets -- so under `theme="none"` every one of them
-    // stays on its light rule. Selection is the one people notice; the search
-    // panel, the autocomplete popup and lint tooltips are the rest, and
-    // `basicSetup` turns all three on.
-    //
-    // Enumerated rather than answered by setting the facet, because setting it
-    // needs the resolved mode and would put back the branch this module exists
-    // to remove. The list is closed rather than a guess: it is every `&light` /
-    // `&dark` selector the base theme declares.
-    ".cm-panels": {
-      backgroundColor: "var(--nx-popover)",
-      color: "var(--nx-popover-foreground)",
-    },
-    ".cm-panels-top": { borderBottom: "1px solid var(--nx-border)" },
-    ".cm-panels-bottom": { borderTop: "1px solid var(--nx-border)" },
-    ".cm-textfield": {
-      backgroundColor: "var(--nx-background)",
-      color: "var(--nx-foreground)",
-      border: "1px solid var(--nx-input)",
-      borderRadius: "var(--radius-sm)",
-    },
-    ".cm-button": {
-      backgroundColor: "var(--nx-secondary)",
-      color: "var(--nx-secondary-foreground)",
-      backgroundImage: "none",
-      border: "1px solid var(--nx-border)",
-      borderRadius: "var(--radius-sm)",
-    },
-    ".cm-tooltip": {
-      backgroundColor: "var(--nx-popover)",
-      color: "var(--nx-popover-foreground)",
-      border: "1px solid var(--nx-border)",
-      borderRadius: "var(--radius-md)",
-    },
-    ".cm-tooltip .cm-tooltip-arrow:before": {
-      borderTopColor: "var(--nx-border)",
-      borderBottomColor: "var(--nx-border)",
-    },
-    ".cm-tooltip .cm-tooltip-arrow:after": {
-      borderTopColor: "var(--nx-popover)",
-      borderBottomColor: "var(--nx-popover)",
-    },
-    ".cm-tooltip-section:not(:first-child)": {
-      borderTop: "1px solid var(--nx-border)",
-    },
-    ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
-      backgroundColor: "var(--nx-accent)",
-      color: "var(--nx-accent-foreground)",
-    },
-    ".cm-specialChar": { color: "var(--nx-destructive)" },
-    "&.cm-focused": {
-      // A ring rather than the base theme's hardcoded dotted outline, which is
-      // off-token. It cannot be dropped: the wrappers these editors sit in draw
-      // a static border and none of them carries a `focus-within` treatment, so
-      // removing this leaves a keyboard user nothing but the caret to say which
-      // control they are in.
-      outline: "2px solid var(--nx-ring)",
-      outlineOffset: "-2px",
-    },
-  });
+      ".cm-scroller": {
+        // The theme's mono stack, so code renders in the same face as every other
+        // mono surface in the admin. The fallback covers a host that has not
+        // loaded the theme.
+        fontFamily: "var(--font-mono, ui-monospace, monospace)",
+        ...(padding === undefined ? {} : { padding }),
+      },
+      ".cm-content": {
+        caretColor: "var(--nx-foreground)",
+      },
+      ".cm-gutters": {
+        borderRight:
+          "1px solid color-mix(in srgb, var(--nx-border) 50%, transparent)",
+        backgroundColor: "color-mix(in srgb, var(--nx-muted) 30%, transparent)",
+        color:
+          "color-mix(in srgb, var(--nx-muted-foreground) 50%, transparent)",
+        padding: showGutter ? "0 4px" : "0",
+      },
+      ".cm-activeLine": {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-accent) 10%, transparent)",
+      },
+      ".cm-activeLineGutter": {
+        backgroundColor: "var(--nx-accent)",
+      },
+      ".cm-selectionMatch": {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-primary) 20%, transparent)",
+      },
+      // Selection is the one decoration `theme="none"` leaves actively wrong
+      // rather than merely unstyled. The base theme picks between its `&light`
+      // and `&dark` rules from `EditorView.darkTheme`, which only a bundled theme
+      // sets -- so without one it stays light, and its pale fill lands under the
+      // light-on-dark token colours in a dark admin.
+      //
+      // Answered with a token instead of by setting the facet: one rule then
+      // serves both modes, which is the same reason there is one highlight style
+      // rather than two.
+      "::selection": {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-primary) 30%, transparent)",
+      },
+      ".cm-selectionBackground": {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-primary) 25%, transparent)",
+      },
+      // The base theme raises its own specificity for the focused case, so this
+      // has to match that shape to win rather than relying on precedence alone.
+      "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
+        {
+          backgroundColor:
+            "color-mix(in srgb, var(--nx-primary) 35%, transparent)",
+        },
+      // Bracket matching replaces the token span rather than decorating it, so
+      // the bracket under the caret arrives with no highlight class of its own.
+      // Without a colour here it falls back to the editor's foreground and reads
+      // as a different character from its own twin two lines down. Unscoped, so
+      // it still holds while the editor is not focused.
+      ".cm-matchingBracket": { color: codeColor("punctuation") },
+      ".cm-nonmatchingBracket": { color: "var(--nx-destructive)" },
+      // The fills are scoped exactly as `bracketMatching`'s own base theme scopes
+      // them. It ships a hardcoded teal under `&.cm-focused`, and a bare
+      // `.cm-matchingBracket` here loses to it on specificity however much
+      // precedence this theme has over a base one.
+      "&.cm-focused .cm-matchingBracket": {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-primary) 22%, transparent)",
+        outline:
+          "1px solid color-mix(in srgb, var(--nx-primary) 45%, transparent)",
+      },
+      "&.cm-focused .cm-nonmatchingBracket": {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-destructive) 18%, transparent)",
+      },
+      ".cm-searchMatch": {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-warning) 30%, transparent)",
+      },
+      ".cm-searchMatch.cm-searchMatch-selected": {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-warning) 50%, transparent)",
+      },
+      "&.cm-focused .cm-cursor": {
+        borderLeftColor: "var(--nx-foreground)",
+      },
+      // The base theme keys thirteen surfaces off `EditorView.darkTheme`, which
+      // only a bundled theme sets -- so under `theme="none"` every one of them
+      // stays on its light rule. Selection is the one people notice; the search
+      // panel, the autocomplete popup and lint tooltips are the rest, and
+      // `basicSetup` turns all three on.
+      //
+      // Enumerated rather than answered by setting the facet, because setting it
+      // needs the resolved mode and would put back the branch this module exists
+      // to remove. The list is closed rather than a guess: it is every `&light` /
+      // `&dark` selector the base theme declares.
+      ".cm-panels": {
+        backgroundColor: "var(--nx-popover)",
+        color: "var(--nx-popover-foreground)",
+      },
+      ".cm-panels-top": { borderBottom: "1px solid var(--nx-border)" },
+      ".cm-panels-bottom": { borderTop: "1px solid var(--nx-border)" },
+      ".cm-textfield": {
+        backgroundColor: "var(--nx-background)",
+        color: "var(--nx-foreground)",
+        border: "1px solid var(--nx-input)",
+        borderRadius: "var(--radius-sm)",
+      },
+      ".cm-button": {
+        backgroundColor: "var(--nx-secondary)",
+        color: "var(--nx-secondary-foreground)",
+        backgroundImage: "none",
+        border: "1px solid var(--nx-border)",
+        borderRadius: "var(--radius-sm)",
+      },
+      ".cm-tooltip": {
+        backgroundColor: "var(--nx-popover)",
+        color: "var(--nx-popover-foreground)",
+        border: "1px solid var(--nx-border)",
+        borderRadius: "var(--radius-md)",
+      },
+      ".cm-tooltip .cm-tooltip-arrow:before": {
+        borderTopColor: "var(--nx-border)",
+        borderBottomColor: "var(--nx-border)",
+      },
+      ".cm-tooltip .cm-tooltip-arrow:after": {
+        borderTopColor: "var(--nx-popover)",
+        borderBottomColor: "var(--nx-popover)",
+      },
+      ".cm-tooltip-section:not(:first-child)": {
+        borderTop: "1px solid var(--nx-border)",
+      },
+      ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+        backgroundColor: "var(--nx-accent)",
+        color: "var(--nx-accent-foreground)",
+      },
+      ".cm-specialChar": { color: "var(--nx-destructive)" },
+      "&.cm-focused": {
+        // A ring rather than the base theme's hardcoded dotted outline, which is
+        // off-token. It cannot be dropped: the wrappers these editors sit in draw
+        // a static border and none of them carries a `focus-within` treatment, so
+        // removing this leaves a keyboard user nothing but the caret to say which
+        // control they are in.
+        outline: "2px solid var(--nx-ring)",
+        outlineOffset: "-2px",
+      },
+      // `@codemirror/language` carries 19 hardcoded colours and NOT ONE
+      // light/dark pair, so the flag above cannot reach these: the fold
+      // placeholder is pale in every mode. Same for the drop cursor, which the
+      // view package draws in the foreground colour and which therefore
+      // disappears against a dark background.
+      ".cm-foldPlaceholder": {
+        backgroundColor: "var(--nx-muted)",
+        color: "var(--nx-muted-foreground)",
+        border: "1px solid var(--nx-border)",
+        borderRadius: "var(--radius-sm)",
+        padding: "0 4px",
+      },
+      ".cm-dropCursor": { borderLeftColor: "var(--nx-primary)" },
+      // The lint panel marks its selected row with a fill rather than a colour,
+      // and an unfocused list keeps that fill -- so the row has to carry a
+      // foreground that works on it.
+      ".cm-panel.cm-panel-lint ul [aria-selected]": {
+        backgroundColor: "var(--nx-accent)",
+        color: "var(--nx-accent-foreground)",
+      },
+    }),
+  ];
 }

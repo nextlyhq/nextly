@@ -129,10 +129,27 @@ describe("code-palette", () => {
   });
 
   it("names only constructs the table defines", () => {
+    // A spec may legitimately carry no construct -- markup weight and
+    // decoration modify whatever they sit in rather than recolouring it.
     const unknown = CODE_TAG_SPECS.filter(
-      spec => !(spec.construct in CODE_CONSTRUCTS)
+      spec =>
+        spec.construct !== undefined && !(spec.construct in CODE_CONSTRUCTS)
     ).map(spec => spec.construct);
     expect(unknown).toEqual([]);
+  });
+
+  it("gives every spec something to do", () => {
+    // A spec with neither a construct nor a decoration silences its tags
+    // outright, because this highlighter runs without a fallback: the tag is
+    // claimed and then styled with nothing.
+    const inert = CODE_TAG_SPECS.filter(
+      spec =>
+        spec.construct === undefined &&
+        spec.fontStyle === undefined &&
+        spec.fontWeight === undefined &&
+        spec.textDecoration === undefined
+    );
+    expect(inert).toEqual([]);
   });
 
   it("gives every spec at least one tag", () => {
