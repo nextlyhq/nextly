@@ -515,6 +515,48 @@ describe("what a corrupt or hostile settings row costs", () => {
     ).not.toBe(sharedStyleInputsId(inputs()));
   });
 
+  it("holds still for a change under a state the compiler cannot emit", () => {
+    // `compilePageCss` iterates STYLE_STATES and never reaches a key outside it,
+    // so an unrecognised state costs a warning naming the key and nothing more.
+    // Two envelopes differing only there compile to the same CSS, and rejecting
+    // every stored artifact over it is a recompile bought with nothing.
+    const withJunk = (junk: unknown) =>
+      inputs({
+        namedClasses: [
+          {
+            id: "c1",
+            slug: "hero",
+            orderIndex: 0,
+            styles: { junk, base: { base: { color: "#111111" } } },
+          },
+        ] as never,
+      });
+
+    expect(sharedStyleInputsId(withJunk("one"))).toBe(
+      sharedStyleInputsId(withJunk({ deeply: { nested: "two" } }))
+    );
+  });
+
+  it("CONTROL: still moves for a change under a state it CAN emit", () => {
+    // The half a blanket projection would fail. `hover` is a real state and its
+    // declarations are written into the sheet, so a change there must move.
+    const hovered = (colour: string) =>
+      inputs({
+        namedClasses: [
+          {
+            id: "c1",
+            slug: "hero",
+            orderIndex: 0,
+            styles: { hover: { base: { color: colour } } },
+          },
+        ] as never,
+      });
+
+    expect(sharedStyleInputsId(hovered("#111111"))).not.toBe(
+      sharedStyleInputsId(hovered("#222222"))
+    );
+  });
+
   it("reads a class NAME no further than the compiler does", () => {
     // `isUsableNamedClass` tests length before pattern, so a name past the limit
     // takes its whole class out of the stylesheet without ever being scanned —
@@ -573,6 +615,10 @@ describe("what a corrupt or hostile settings row costs", () => {
     // reaches a state or a breakpoint BY NAME, so a key sorted past any cut is
     // still emitted. Declining to identify the inputs recompiles every render,
     // which is expensive and correct, on a row nothing legitimate produces.
+    // UNDER a known state, which is where the bound has anything to guard: the
+    // envelope's own keys are projected to the four states the compiler emits
+    // from, so an oversized record can only arrive below that — as a breakpoint
+    // map or a declaration record, both of which the compiler reaches by name.
     const wide: Record<string, unknown> = {};
     for (let i = 0; i < MAX_SCANNED_KEYS + 1; i += 1) wide[`k${i}`] = i;
 
@@ -580,7 +626,7 @@ describe("what a corrupt or hostile settings row costs", () => {
       sharedStyleInputsId(
         inputs({
           namedClasses: [
-            { id: "c1", slug: "hero", orderIndex: 0, styles: wide },
+            { id: "c1", slug: "hero", orderIndex: 0, styles: { base: wide } },
           ] as never,
         })
       )
@@ -596,7 +642,12 @@ describe("what a corrupt or hostile settings row costs", () => {
       const record: Record<string, unknown> = {};
       for (let i = 0; i < MAX_SCANNED_KEYS - 1; i += 1) record[`k${i}`] = i;
       record.color = last;
-      return { id: "c1", slug: "hero", orderIndex: 0, styles: record };
+      return {
+        id: "c1",
+        slug: "hero",
+        orderIndex: 0,
+        styles: { base: record },
+      };
     };
     const one = sharedStyleInputsId(
       inputs({ namedClasses: [atWidth(1)] as never })

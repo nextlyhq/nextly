@@ -69,6 +69,21 @@ synthesizes from `siteStyles`. The shared sheet has always honoured it, the
 page sheet is emitted after, and a page compiled under weaker rules would
 publish a request the sheet beside it was refused.
 
+A class or block-base envelope is read only under the states the compiler emits
+from. `compilePageCss` iterates `STYLE_STATES` and never reaches a key outside
+it, so two envelopes differing only under an unrecognised state compile to the
+same CSS — reading the whole object rejected every stored artifact over a
+difference no stylesheet can show. The state list is imported rather than
+restated, so it follows the engine rather than drifting from it.
+
+Block defaults are narrowed to the types a page draws in ONE place, the
+resolver, so the exported entry point and the renderer cannot answer
+differently. `resolvePageStyles` gains `storedDocument` for the caller that
+pruned before calling it: the documented flow is prune-then-resolve, and two of
+those prunes are licensed to KEEP the stored artifact, so an identity derived
+from what survived would drop a type whose last node such a prune removed and
+refuse the very sheet it was allowed in order to reuse.
+
 `breakpointContexts` now bounds a stored axis BEFORE it sorts. The per-axis
 limit bounded its output and not its work, so an axis of a million definitions
 was filtered and sorted in full on the way to keeping seven — paid by every

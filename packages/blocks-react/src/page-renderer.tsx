@@ -24,7 +24,6 @@ import {
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
   drawlessTestFor,
-  blockBasesFor,
   effectiveCompile,
   gatedEntriesCoverRemovedNodes,
   gatedMapCoversPrunedNodes,
@@ -528,27 +527,7 @@ export function PageRenderer({
   // Every site-level input BOTH compiles read, resolved once. See
   // `sharedStyleInputs` for why one resolution rather than one per consumer.
   const shared = sharedStyleInputs(styleContext, siteInput);
-  // The block-type defaults for the tree the ARTIFACT describes, which is this
-  // document before any read-time decision narrows it. Two of those decisions —
-  // a gated drop and a drawless drop — are covered by the artifact and licensed
-  // to keep it, and both can remove the last node of a type. Derived from the
-  // narrowed tree, that type's defaults would vanish from the identity, and the
-  // artifact whose reuse those passes exist to permit would be refused instead
-  // and recompiled on every uncached request.
-  //
-  // Stated here rather than left to `resolvePageStyles` to derive, because what
-  // it derives from is the tree it is handed, and this is the only place that
-  // still holds the wider one.
-  //
-  // A stated record is NARROWED by the same walk rather than taken whole. The
-  // compiler reads a base only for a type the document uses, so a site library
-  // carrying every installed block emits nothing for the rest — and taking it
-  // whole would move the identity, and recompile a byte-identical page sheet,
-  // whenever a default changed for a type this page does not hold.
-  const pageShared = {
-    ...shared,
-    blockBases: blockBasesFor(doc, resolver, shared.blockBases),
-  };
+  const pageShared = shared;
   // Present whenever the render knows this site's breakpoints, whether they came
   // from a compile context or from `siteStyles`. Taking only the context leaves
   // the documented normal path — a route that supplies a stored artifact and the
@@ -608,7 +587,16 @@ export function PageRenderer({
     compileContext,
     resolver,
     repairedDocument,
-    { fetchPolicyId }
+    {
+      fetchPolicyId,
+      // The tree the stored artifact describes. This render prunes before it
+      // resolves — a gated drop and a drawless drop are both covered by the
+      // artifact and licensed to keep it — and both can remove the last node of
+      // a type, so anything derived from `styleInput` for the identity would
+      // drop that type's defaults and refuse the artifact those passes exist to
+      // preserve. This is the only place that still holds the wider tree.
+      storedDocument: doc,
+    }
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 

@@ -218,3 +218,53 @@ describe("a stored sheet against the site's shared inputs", () => {
     expect(styles.css).toContain("color: teal");
   });
 });
+
+describe("the exported resolver, handed a site-wide block library", () => {
+  // The renderer is not the only door. `resolvePageStyles` is exported and
+  // `preparePageForRead` calls it, so a consumer that puts the site's whole
+  // `blockBases` on its context reaches the identity through a path the
+  // renderer's own narrowing never touches.
+  const base = (colour: string) => ({ base: { base: { color: colour } } });
+
+  const contextWithLibrary = (unusedColour: string): StyleCompileContext => ({
+    ...context(),
+    blockBases: {
+      "test/text": base("#010101"),
+      // Installed and absent from this document, so `compilePageCss` reads no
+      // base for it and emits nothing from it.
+      "test/never-used": base(unusedColour),
+    },
+  });
+
+  const stampWith = (unusedColour: string) =>
+    resolvePageStyles(
+      doc(),
+      undefined,
+      contextWithLibrary(unusedColour),
+      blocks,
+      false,
+      {}
+    ).sharedInputsId;
+
+  it("does not move when a default changes for a type the page never draws", () => {
+    expect(stampWith("#040404")).toBe(stampWith("#eeeeee"));
+  });
+
+  it("CONTROL: still moves when a default changes for a type it DOES draw", () => {
+    // The separating property. A resolver that dropped every stated base — or
+    // one that stopped reading them at all — would satisfy the assertion above
+    // while going blind to the change that actually reaches the sheet.
+    const drawn = (colour: string): StyleCompileContext => ({
+      ...context(),
+      blockBases: { "test/text": base(colour) },
+    });
+
+    expect(
+      resolvePageStyles(doc(), undefined, drawn("#010101"), blocks, false, {})
+        .sharedInputsId
+    ).not.toBe(
+      resolvePageStyles(doc(), undefined, drawn("#020202"), blocks, false, {})
+        .sharedInputsId
+    );
+  });
+});

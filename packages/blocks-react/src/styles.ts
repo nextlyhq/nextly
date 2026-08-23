@@ -199,14 +199,29 @@ function compileContextFor(
   styleContext: StyleCompileContext | undefined,
   document: BlockDocument,
   blocks: BlockResolver,
-  drawsNothing: (node: BlockNode) => boolean
+  drawsNothing: (node: BlockNode) => boolean,
+  storedDocument: BlockDocument | undefined
 ): StyleCompileContext | undefined {
   if (styleContext === undefined) return undefined;
   return {
     ...styleContext,
-    ...(styleContext.blockBases === undefined
-      ? { blockBases: blockBasesFor(document, blocks) }
-      : {}),
+    // Derived when the caller stated none, NARROWED when it stated a record —
+    // one call, because it is one question. `compilePageCss` reads a base only
+    // for a type the document uses, so a site library carrying every installed
+    // block emits nothing for the rest, and carrying those into the identity
+    // rejects a byte-identical sheet whenever a default moves for a block this
+    // page does not hold.
+    //
+    // Over the tree the ARTIFACT describes, which is not always the one being
+    // compiled: a caller that pruned first still holds a sheet compiled from the
+    // wider tree, and narrowing to what survived would drop a type whose last
+    // node a covered prune removed — refusing the artifact that prune existed to
+    // keep.
+    blockBases: blockBasesFor(
+      storedDocument ?? document,
+      blocks,
+      styleContext.blockBases
+    ),
     drawsNothing,
   };
 }
@@ -825,6 +840,21 @@ export interface ResolveStyleOptions {
    * under other rules and cannot be trusted for this render.
    */
   fetchPolicyId?: string;
+  /**
+   * The tree the STORED artifact describes, when the caller narrowed the
+   * document before calling this.
+   *
+   * The documented direct-caller flow is prune-then-resolve, so `document` here
+   * is often already smaller than the tree the artifact was compiled from — and
+   * two of those prunes are LICENSED to keep the artifact rather than to refuse
+   * it. Anything derived from the tree for the artifact's identity has to be
+   * derived from this one instead, or a covered prune moves that identity and
+   * rejects the very sheet it was allowed in order to reuse.
+   *
+   * Absent means the two are the same tree, which is the case for every caller
+   * that has not pruned.
+   */
+  storedDocument?: BlockDocument;
 }
 
 export function resolvePageStyles(
@@ -854,11 +884,11 @@ export function resolvePageStyles(
    */
   repairedDocument = false,
   /**
-   * The host-fetch policy in force for THIS render, as an opaque label.
+   * What this render knows that the positional arguments cannot carry.
    *
-   * An object rather than a sixth positional: five is already where a call
-   * stops reading by position, and the next thing added in line would sit
-   * beside a boolean with only its type to separate them.
+   * An object rather than more positionals: five is already where a call stops
+   * reading by position, and the next thing added in line would sit beside a
+   * boolean with only its type to separate them.
    */
   options: ResolveStyleOptions = {}
 ): PageStyles {
@@ -870,7 +900,8 @@ export function resolvePageStyles(
     styleContext,
     document,
     blocks,
-    drawsNothing
+    drawsNothing,
+    options.storedDocument
   );
   const sharedInputsId = sharedStyleInputsId(compileContext);
 

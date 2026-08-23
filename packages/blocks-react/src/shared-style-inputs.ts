@@ -64,6 +64,7 @@ import {
   isPlainRecord,
   orderedNamedClasses,
   safeTokenPrefix,
+  STYLE_STATES,
 } from "@nextlyhq/blocks-engine";
 import type { StyleCompileContext } from "@nextlyhq/blocks-engine";
 
@@ -349,7 +350,44 @@ function structural(value: unknown, reading: Reading): string {
  * reaches the digest.
  */
 function styleEnvelope(styles: unknown, reading: Reading): string {
-  return hashId(structural(styles, reading));
+  return hashId(structural(emittableStates(styles), reading));
+}
+
+/**
+ * One envelope reduced to the states the compiler can emit from.
+ *
+ * `compilePageCss` iterates `STYLE_STATES` and never reaches a key outside it —
+ * an unrecognised one costs a warning naming the key and nothing else. So two
+ * envelopes differing only under `styles.junk` compile to the same CSS, and
+ * reading the whole object rejected every stored artifact over a difference no
+ * stylesheet can show.
+ *
+ * The list is IMPORTED rather than restated, which is what makes this a
+ * projection rather than a second reading of the envelope: if the engine learns
+ * a state, this follows without being edited. That is the same argument the
+ * class ordering and the breakpoints already make, and it is the reason this
+ * file would otherwise have refused to walk the envelope at all.
+ *
+ * It reaches ONE level. A property the catalog does not recognise is emitted by
+ * nothing either, and is not excluded here — knowing which properties those are
+ * needs the catalog and, for a value, the compile this identity exists to avoid.
+ * The residue is over-invalidation, which costs a recompile and cannot show a
+ * stale page.
+ */
+function emittableStates(styles: unknown): unknown {
+  if (!isPlainRecord(styles)) return styles;
+  try {
+    const emitted: Record<string, unknown> = {};
+    for (const state of STYLE_STATES) {
+      const value = styles[state];
+      if (value !== undefined) emitted[state] = value;
+    }
+    return emitted;
+  } catch {
+    // A state whose getter throws. The whole envelope goes to the walk instead,
+    // which confines the failure to the member rather than losing the rest.
+    return styles;
+  }
 }
 
 /**
