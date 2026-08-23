@@ -1362,47 +1362,54 @@ function ColourField({
   /*
    * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
    *
-   * Choosing a preset or clearing does not close the popover, so without
-   * dropping the pending gesture the unmount flush below would write the older
-   * literal over the choice just made — an author picks a token and the token
-   * is silently replaced by the hex they had been dragging past.
-   *
-   * One function for both, because "this supersedes the gesture" is one rule
-   * and two copies of it is one edit away from covering only one path.
+   * Dropping the pending value is the whole of it. A write scheduled by the
+   * dismissal this control caused reads that same value when it runs, so
+   * clearing it leaves the scheduled call with nothing to write — cancelling
+   * the timer as well was measured to change no outcome, and a second
+   * expression for one rule is what drifts.
    */
   const commitInstead = (value: StyleValue | null): void => {
     pending.current = null;
     onCommit(value);
   };
   /*
-   * The gesture, written once, when the picker closes.
+   * The gesture, written a beat after the picker closes rather than during it.
    *
-   * Reads the SAME pending value the unmount flush and `commitInstead` do, so
-   * the three cannot disagree about whether there is anything to write. Deciding
-   * from `edited` instead let a superseded gesture through: a token commit that
-   * was REFUSED — a document at its byte limit, say — cleared the pending value
-   * and left the older literal in the draft, and closing the popover then wrote
-   * that literal even though choosing the token was meant to replace it.
+   * Deferred because CLOSING and CHOOSING can be one interaction. The controls
+   * that supersede a gesture — the token presets, the clear — sit outside the
+   * popover, so pressing one dismisses it first: the close wrote the picker's
+   * literal and the choice then replaced it, two history entries where one undo
+   * returns an intermediate colour the author never picked.
+   *
+   * Deferring rather than hooking the dismissal is what makes that hold for
+   * EVERY cause. Radix dismisses on `pointerdown`, `focusin`, `keydown`,
+   * `click`, `pointerup`, `mousedown` and `mouseup`, so a control clearing the
+   * gesture on pointer-down covered a mouse and missed a keyboard — where focus
+   * reaches the button first and the activation follows. Enumerating that list
+   * here would be a copy of someone else's, kept in step by hand.
+   *
+   * A timeout rather than a microtask: a dismissal and the activation that
+   * caused it are separate tasks, so a microtask would still run between them.
    */
   const commitDraft = (): void => {
+    if (pending.current === null) return;
+    cancelWrite();
+    scheduled.current = window.setTimeout(flush, 0);
+  };
+  /** Write whatever the picker produced and has not had written yet. */
+  const flush = (): void => {
+    scheduled.current = null;
     const unwritten = pending.current;
     pending.current = null;
     if (unwritten === null) return;
-    if (onCommit(unwritten) === "unchanged") reset();
+    if (write.current(unwritten) === "unchanged") reset();
   };
-  /*
-   * Flush an unwritten gesture when this field goes away.
-   *
-   * The popover commits on close, and a close is not the only way an author
-   * leaves: selecting another block in the canvas iframe cannot reach the
-   * popover's outside-dismiss handler, and the selection change remounts this
-   * field — which does not fire `onOpenChange`. Without this the adjustment,
-   * and the whole gesture behind it, is discarded silently.
-   *
-   * Written through a ref and an empty dependency list so it runs exactly once,
-   * at teardown. `onCommit` reads the node from the store at call time, so a
-   * write from here lands on the current document rather than a captured one.
-   */
+  const scheduled = React.useRef<number | null>(null);
+  const cancelWrite = (): void => {
+    if (scheduled.current === null) return;
+    window.clearTimeout(scheduled.current);
+    scheduled.current = null;
+  };
   // The current writer, held so the teardown below depends on nothing. A
   // teardown listing `onCommit` would re-run its cleanup on every render that
   // gives the field a new callback — which is every render — and flush a
@@ -1411,9 +1418,21 @@ function ColourField({
   React.useEffect(() => {
     write.current = onCommit;
   });
+  /*
+   * Write an unfinished gesture when this field goes away, and do it NOW.
+   *
+   * Two ways to leave without closing the popover: selecting another block in
+   * the canvas iframe cannot reach the outside-dismiss handler, and the
+   * selection change remounts this field without firing `onOpenChange`. A
+   * scheduled write would not survive either, so the timer is cancelled and the
+   * value written synchronously rather than left to a callback whose component
+   * has gone.
+   */
   React.useEffect(
     () => () => {
+      cancelWrite();
       const unwritten = pending.current;
+      pending.current = null;
       if (unwritten !== null) write.current(unwritten);
     },
     []
@@ -1504,9 +1523,6 @@ function ColourField({
             identity={reference}
             token={colourTokenFor(reference, tokens, mode)}
             actionName={actionName}
-            onSupersede={() => {
-              pending.current = null;
-            }}
             onClear={() => commitInstead(null)}
           />
         )}
@@ -1631,7 +1647,6 @@ function TokenName({
   identity,
   token,
   actionName,
-  onSupersede,
   onClear,
 }: {
   /** What the document stores, and the fallback when nothing resolves it. */
@@ -1639,19 +1654,6 @@ function TokenName({
   /** The site's token of that identity, when it defines one. */
   token: ColourToken | undefined;
   actionName: string;
-  /**
-   * The clear has begun, before anything around it can react to the pointer.
-   *
-   * Separate from {@link onClear} because of WHEN it runs rather than what it
-   * does. This button sits outside the picker'"'"'s popover, so pressing it is an
-   * outside interaction: Radix dismisses on a `pointerdown` listener attached
-   * to the document, and React'"'"'s handlers are attached to the root container
-   * inside it — so this fires first, and the surrounding control can drop an
-   * unfinished gesture before the dismissal commits it. Without that the close
-   * writes the picker'"'"'s literal and the clear removes it, two history entries
-   * where one undo returns an intermediate value the author never chose.
-   */
-  onSupersede: () => void;
   onClear: () => void;
 }): React.JSX.Element {
   return (
@@ -1661,7 +1663,6 @@ function TokenName({
       </span>
       <button
         type="button"
-        onPointerDown={onSupersede}
         onClick={onClear}
         aria-label={`Clear ${actionName}`}
       >

@@ -146,6 +146,19 @@ function styles(color?: unknown, backgroundColor?: unknown): NodeStyles {
 const swatch = (name: string): HTMLElement =>
   screen.getByRole("button", { name });
 
+/**
+ * Let a deferred write land.
+ *
+ * The picker's close does not write during the dismissal — it schedules, so a
+ * discrete choice arriving in the same interaction can cancel it. A test
+ * asserting synchronously after a close therefore sees nothing yet, which is
+ * the behaviour rather than a failure.
+ */
+const settle = (): Promise<void> =>
+  new Promise(resolve => {
+    setTimeout(resolve, 0);
+  });
+
 /** Mount over a whole `NodeStyles` envelope, for properties `styles()` omits. */
 function render_with(all: unknown) {
   return mount(all as NodeStyles);
@@ -371,7 +384,7 @@ describe("the contrast verdict is reachable from the control it describes", () =
 });
 
 describe("a picker gesture is ONE editor operation", () => {
-  it("does not write while the picker is being moved, and writes once on close", () => {
+  it("does not write while the picker is being moved, and writes once on close", async () => {
     // The UI picker fires `onColorChange` on every pointer event, so committing
     // each one turns a single drag into dozens of undo entries — and
     // `MAX_HISTORY` is 100, so one drag can evict unrelated earlier edits and
@@ -399,6 +412,7 @@ describe("a picker gesture is ONE editor operation", () => {
     fireEvent.keyDown(document.activeElement ?? document.body, {
       key: "Escape",
     });
+    await settle();
     expect(editor.apply).toHaveBeenCalledTimes(1);
   });
 });
@@ -600,7 +614,7 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
 });
 
 describe("a superseded gesture stays superseded even when the choice is refused", () => {
-  it("does not write the older literal after a REFUSED token commit", () => {
+  it("does not write the older literal after a REFUSED token commit", async () => {
     // The close path is separate from the unmount one. A token commit that the
     // store refuses — a document at its byte limit, say — leaves the picker's
     // earlier literal sitting in the draft, and a close that decided from the
@@ -627,12 +641,13 @@ describe("a superseded gesture stays superseded even when the choice is refused"
     fireEvent.keyDown(document.activeElement ?? document.body, {
       key: "Escape",
     });
+    await settle();
     expect(editor.apply.mock.calls.length).toBe(afterToken);
   });
 });
 
 describe("clearing a token while the picker is open", () => {
-  it("records ONE operation, and it is the clear", () => {
+  it("records ONE operation, and it is the clear", async () => {
     // The Clear button sits outside the popover, so pressing it is an outside
     // interaction: Radix dismisses on a document `pointerdown`, which closes the
     // picker and commits its gesture, and only then does the click clear. That
@@ -647,12 +662,15 @@ describe("clearing a token while the picker is open", () => {
 
     // The real order: React's handler on the button, then the document
     // dismissal Radix listens for, then the click.
+    // The dismissal and the activation are one interaction, whichever event
+    // Radix noticed it through. Escape stands in for the dismissal here; the
+    // click that follows is what the author meant.
     const clear = screen.getByRole("button", { name: "Clear Color" });
-    fireEvent.pointerDown(clear);
     fireEvent.keyDown(document.activeElement ?? document.body, {
       key: "Escape",
     });
     fireEvent.click(clear);
+    await settle();
 
     expect(editor.apply).toHaveBeenCalledTimes(1);
     // A clear removes the entry rather than writing one.
@@ -697,5 +715,33 @@ describe("the route a real editor takes to the colour control", () => {
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
     // The site's own token, reachable only if the set travelled the whole way.
     expect(screen.getByRole("button", { name: "color.ink" })).toBeDefined();
+  });
+});
+
+describe("clearing a token from the KEYBOARD while the picker is open", () => {
+  it("records one operation, as the pointer route does", async () => {
+    // The route the pointer-down fix could not cover. Moving focus to the Clear
+    // button dismisses the popover through `focusin` rather than `pointerdown`,
+    // and the activation arrives afterwards — so a control that dropped the
+    // gesture on pointer-down handled a mouse and left a keyboard writing the
+    // literal first and clearing it second.
+    const editor = mount(styles({ $token: "color.ink" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    const hex = screen.getAllByRole("textbox")[0];
+    expect(hex).toBeDefined();
+    if (hex === undefined) return;
+    fireEvent.change(hex, { target: { value: "#ff0000" } });
+
+    // Focus moves out — the dismissal — and only then is the button activated.
+    const clear = screen.getByRole("button", { name: "Clear Color" });
+    fireEvent.focus(clear);
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    fireEvent.click(clear);
+    await settle();
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.apply.mock.calls[0])).not.toContain("#ff0000");
   });
 });
