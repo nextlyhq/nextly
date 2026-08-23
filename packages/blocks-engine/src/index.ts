@@ -238,6 +238,10 @@ export {
   // trimming with the language's own function normalises spellings the engine
   // then refuses — or worse, converts one into a value it accepts.
   trimCssWhitespace,
+  // The longest style value the compiler reads: anything past it is refused
+  // before parsing, so a writer honours it and a reader keyed on what the sheet
+  // contains stops reading where the compiler does.
+  MAX_VALUE_LENGTH,
 } from "./style/css-value";
 export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";

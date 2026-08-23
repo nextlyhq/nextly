@@ -16,6 +16,7 @@ import {
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
+  MAX_VALUE_LENGTH,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -659,20 +660,49 @@ describe("what a corrupt or hostile settings row costs", () => {
     );
   });
 
-  it("notices a change DEEP inside an oversized envelope", () => {
-    // The case a truncating bound could not see. These two serialize to the
-    // same length and differ only far past any prefix a cut would keep, while
-    // the compiler emits different CSS for them.
+  it("notices a change DEEP inside a large envelope the compiler still reads", () => {
+    // The case a truncating bound could not see: these differ only far past any
+    // prefix a cut would keep, and the compiler emits different CSS for them.
+    //
+    // Sized UNDER `MAX_VALUE_LENGTH` on purpose, and this fixture was wrong
+    // before — it used 9000 characters, which the engine refuses outright before
+    // parsing, so both variants emitted nothing and the premise in its own
+    // comment was false. A value the compiler will not read cannot demonstrate
+    // sensitivity to a change inside it.
     const big = (tail: string) => ({
       id: "c1",
       slug: "hero",
       orderIndex: 0,
-      styles: { base: { base: { content: "x".repeat(9000) + tail } } },
+      styles: {
+        base: {
+          base: { content: "x".repeat(MAX_VALUE_LENGTH - 100) + tail },
+        },
+      },
     });
 
     expect(
       sharedStyleInputsId(inputs({ namedClasses: [big("aaa")] }))
     ).not.toBe(sharedStyleInputsId(inputs({ namedClasses: [big("bbb")] })));
+  });
+
+  it("holds still for two values the compiler refuses as too long", () => {
+    // The other side of the same bound. Past `MAX_VALUE_LENGTH` the engine
+    // rejects the value before parsing and emits no declaration, so two of them
+    // produce identical CSS — and carrying both in full invalidated a
+    // byte-identical sheet over a suffix nothing reads, with an arbitrarily
+    // large allocation on every cache check.
+    const rejected = (tail: string) => ({
+      id: "c1",
+      slug: "hero",
+      orderIndex: 0,
+      styles: {
+        base: { base: { content: "x".repeat(MAX_VALUE_LENGTH + 1) + tail } },
+      },
+    });
+
+    expect(
+      sharedStyleInputsId(inputs({ namedClasses: [rejected("aaa")] }))
+    ).toBe(sharedStyleInputsId(inputs({ namedClasses: [rejected("bbb")] })));
   });
 
   it("reads no further than the compiler does", () => {

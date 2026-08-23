@@ -98,6 +98,20 @@ the declared limit is seven.
 `MAX_BREAKPOINT_ID_LENGTH`, which is exported beside the per-axis cap so a store
 validating on write can refuse what the compiler will not read.
 
+A style value longer than `MAX_VALUE_LENGTH` is read no further than the
+compiler reads it. The engine refuses such a value before parsing and emits no
+declaration, so two of them produce identical CSS — carrying both in full
+invalidated a byte-identical sheet over a suffix nothing reads, and put an
+arbitrarily large allocation into every cache check. `MAX_VALUE_LENGTH` is
+exported for the reason the other bounds are.
+
+`blockBasesFor` narrows a stated record by OWN properties only, matching the
+boundary `compilePageCss` draws with `Object.hasOwn`. A record reached through
+`Object.create` or a polluted prototype answered the lookup with an inherited
+value, and copying it made it an own property of the narrowed record — turning
+data the compiler deliberately ignores into a rule it emits, against a selector
+built from the node type.
+
 `validate()` now derives which breakpoint ids a site defines from that same
 normalisation instead of scanning the stored axes. The two disagreed about the
 same document: a definition the compiler drops — an unusable bound, a viewport

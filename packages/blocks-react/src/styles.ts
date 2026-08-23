@@ -168,7 +168,17 @@ export function blockBasesFor(
     const baseStyles =
       stated === undefined
         ? blocks.get(node.type)?.baseStyles
-        : stated[node.type];
+        : // OWN properties only, because that is the boundary `compilePageCss`
+          // draws: it emits a base for a used type only when
+          // `Object.hasOwn(bases, type)` succeeds. A record reached through
+          // `Object.create` or a polluted prototype answers this lookup with an
+          // inherited value, and copying it here would make it an own property
+          // of the narrowed record — turning data the compiler deliberately
+          // ignores into a rule it emits, against a selector built from the node
+          // type.
+          Object.hasOwn(stated, node.type)
+          ? stated[node.type]
+          : undefined;
     if (baseStyles !== undefined) bases[node.type] = baseStyles;
   });
   return bases;

@@ -154,6 +154,7 @@ describe("the bounds a writer must honour are reachable from the entry", () => {
       MAX_NAMED_CLASSES: entry.MAX_NAMED_CLASSES,
       MAX_NAMED_CLASS_NAME_LENGTH: entry.MAX_NAMED_CLASS_NAME_LENGTH,
       MAX_SCANNED_KEYS: entry.MAX_SCANNED_KEYS,
+      MAX_VALUE_LENGTH: entry.MAX_VALUE_LENGTH,
     };
 
     for (const [name, value] of Object.entries(bounds)) {
