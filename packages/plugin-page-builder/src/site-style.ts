@@ -152,6 +152,32 @@ export function tokenOverrideOf(
 }
 
 /**
+ * What a studio should show once a REFUSED save has answered.
+ *
+ * Saves serialise but their answers do not have to arrive in order, and an
+ * author can type two edits before the first one comes back. Rolling back
+ * unconditionally then discards the newer edit — and if the newer save
+ * succeeds, the panel goes on showing the older set while storage holds the
+ * newer one, with nothing to reconcile them.
+ *
+ * So a rollback only applies while the refused edit is still what is on screen.
+ * Anything typed since has its own save in flight and is the one that decides.
+ *
+ * It falls back to the last set a save is KNOWN to have stored, rather than to
+ * whatever was on screen beforehand: after an earlier refusal, that is itself a
+ * value the site never accepted, so restoring it would show the author
+ * something no storage anywhere agrees with. `null` means nothing has been
+ * stored by this session and the read's own answer is the truth.
+ */
+export function tokensAfterRefusal(
+  current: SiteTokenSet | null,
+  refused: SiteTokenSet,
+  persisted: SiteTokenSet | null
+): SiteTokenSet | null {
+  return current === refused ? persisted : current;
+}
+
+/**
  * Whether two tokens say the same thing.
  *
  * Field by field rather than by serialising both, because key order is not

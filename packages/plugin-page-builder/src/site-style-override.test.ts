@@ -13,7 +13,11 @@
 import type { SiteToken, SiteTokenSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { resolveSiteStyle, tokenOverrideOf } from "./site-style";
+import {
+  resolveSiteStyle,
+  tokenOverrideOf,
+  tokensAfterRefusal,
+} from "./site-style";
 
 const ink: SiteToken = {
   name: "color.ink",
@@ -130,5 +134,36 @@ describe("only what differs from the site's own defaults is stored", () => {
     // would satisfy the first test perfectly.
     const edited = { tokens: [ink, brand] };
     expect(tokenOverrideOf(undefined, edited).tokens.length).toBe(2);
+  });
+});
+
+describe("what a refused save leaves on screen", () => {
+  const a: SiteTokenSet = { tokens: [ink] };
+  const b: SiteTokenSet = { tokens: [brand] };
+  const stored: SiteTokenSet = { tokens: [] };
+
+  it("rolls back when the refused edit is still what is on screen", () => {
+    expect(tokensAfterRefusal(a, a, stored)).toBe(stored);
+  });
+
+  it("does NOT roll back over a newer edit", () => {
+    // Saves serialise but their answers need not arrive in order. Rolling back
+    // unconditionally discards the newer edit — and if the newer save then
+    // succeeds, the panel shows the older set while storage holds the newer,
+    // with nothing left to reconcile them.
+    expect(tokensAfterRefusal(b, a, stored)).toBe(b);
+  });
+
+  it("falls back to what was STORED, not to what was on screen before", () => {
+    // After an earlier refusal, the previous on-screen value is itself one the
+    // site never accepted, so restoring it would show the author something no
+    // storage anywhere agrees with.
+    expect(tokensAfterRefusal(a, a, stored)).toBe(stored);
+    expect(tokensAfterRefusal(a, a, null)).toBeNull();
+  });
+
+  it("defers to the read when this session has stored nothing", () => {
+    // `null` means no local shadow, so the query's own answer is the truth.
+    expect(tokensAfterRefusal(a, a, null)).toBeNull();
   });
 });

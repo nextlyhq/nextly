@@ -81,6 +81,7 @@ import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
 import {
   tokenOverrideOf,
+  tokensAfterRefusal,
   siteBreakpoints,
   siteSheet,
   type SiteStyleData,
@@ -479,6 +480,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const [tokenEdits, setTokenEdits] = useState<SiteTokenSet | null>(null);
   /* What the last save said, when it refused. */
   const [tokenIssue, setTokenIssue] = useState<string | undefined>(undefined);
+  /*
+   * The last set a save is KNOWN to have stored, and what a refused edit falls
+   * back to. Not "whatever was on screen before it": after an earlier refusal
+   * that is itself a value the site never accepted, so restoring it would show
+   * the author something no storage anywhere agrees with. A ref rather than
+   * state because nothing renders from it.
+   */
+  const persistedTokens = useRef<SiteTokenSet | null>(null);
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -693,7 +702,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                    * visitor would see, with no other surface on which to
                    * notice the difference.
                    */
-                  const before = tokenEdits ?? merged ?? null;
                   setTokenEdits(next);
                   setTokenIssue(undefined);
                   void saveSiteStyle(
@@ -706,7 +714,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                      */
                     tokenOverrideOf(configSiteStyle?.tokens, next)
                   ).then(result => {
-                    if (result.saved) return;
+                    if (result.saved) {
+                      persistedTokens.current = next;
+                      return;
+                    }
                     /*
                      * A refused save leaves the panel showing what the author
                      * typed while the site still holds the old value — so the
@@ -714,8 +725,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                      * Discarding this promise makes a validation failure, a
                      * missing permission and a dropped network all look
                      * exactly like success.
+                     *
+                     * Rolled back only while this edit is still what is on
+                     * screen: an author can type again before an answer
+                     * arrives, and that later edit has its own save in flight.
                      */
-                    setTokenEdits(before);
+                    setTokenEdits(current =>
+                      tokensAfterRefusal(current, next, persistedTokens.current)
+                    );
                     setTokenIssue(
                       Object.values(result.issues ?? {})[0] ??
                         "That change was not saved."
