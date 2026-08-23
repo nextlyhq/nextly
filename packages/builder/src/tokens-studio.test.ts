@@ -14,6 +14,7 @@
  */
 import {
   compileSiteSheet,
+  emitTokenBlocks,
   tokenIdentity,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -103,7 +104,7 @@ describe("what each tab shows", () => {
 
 describe("renaming a token keeps every reference resolving", () => {
   it("FREEZES the identity at the name it had", () => {
-    const next = renameToken(TOKENS, "color.ink", "text.body");
+    const next = renameToken(TOKENS, 0, "text.body");
     const token = next.tokens.find(t => t.name === "text.body");
     expect(token).toBeDefined();
     // The label moved; the identity is pinned at the original name.
@@ -117,7 +118,7 @@ describe("renaming a token keeps every reference resolving", () => {
     const before = declared(TOKENS);
     expect(before).toContain("--site-color-ink");
 
-    const after = declared(renameToken(TOKENS, "color.ink", "text.body"));
+    const after = declared(renameToken(TOKENS, 0, "text.body"));
     expect(after).toContain("--site-color-ink");
     // And it did NOT start emitting the label instead.
     expect(after).not.toContain("--site-text-body");
@@ -127,22 +128,22 @@ describe("renaming a token keeps every reference resolving", () => {
     // The second rename must read the id the first froze, not re-pin to the
     // interim name — otherwise a token renamed twice loses its references on
     // the second edit rather than the first.
-    const once = renameToken(TOKENS, "color.ink", "text.body");
-    const twice = renameToken(once, "color.ink", "copy.default");
+    const once = renameToken(TOKENS, 0, "text.body");
+    const twice = renameToken(once, 0, "copy.default");
     const token = twice.tokens.find(t => t.name === "copy.default");
     expect(tokenIdentity(token as never)).toBe("color.ink");
     expect(declared(twice)).toContain("--site-color-ink");
   });
 
   it("renames a token that ALREADY has a frozen identity without moving it", () => {
-    const next = renameToken(TOKENS, "color.primary", "brand.primary");
+    const next = renameToken(TOKENS, 1, "brand.primary");
     const token = next.tokens.find(t => t.name === "brand.primary");
     expect(tokenIdentity(token as never)).toBe("color.primary");
     expect(declared(next)).toContain("--site-color-primary");
   });
 
-  it("leaves the set alone for an identity it does not hold", () => {
-    expect(renameToken(TOKENS, "nope", "x")).toEqual(TOKENS);
+  it("leaves the set alone for a position it does not hold", () => {
+    expect(renameToken(TOKENS, 99, "x")).toEqual(TOKENS);
   });
 });
 
@@ -151,32 +152,32 @@ describe("which names are refused", () => {
     // Held to the ENGINE's grammar, which is what a stored `$token` is held to
     // — a table accepting a name references cannot name would hold tokens that
     // exist and resolve to nothing.
-    expect(tokenNameIssue(TOKENS, "color.ink", "has spaces")).toBeDefined();
-    expect(tokenNameIssue(TOKENS, "color.ink", "x:1}body{color")).toBeDefined();
+    expect(tokenNameIssue(TOKENS, 0, "has spaces")).toBeDefined();
+    expect(tokenNameIssue(TOKENS, 0, "x:1}body{color")).toBeDefined();
   });
 
   it("refuses an empty name", () => {
-    expect(tokenNameIssue(TOKENS, "color.ink", "   ")).toBeDefined();
+    expect(tokenNameIssue(TOKENS, 0, "   ")).toBeDefined();
   });
 
   it("refuses a name another token already reads under", () => {
-    expect(tokenNameIssue(TOKENS, "color.ink", "brand.main")).toBeDefined();
+    expect(tokenNameIssue(TOKENS, 0, "brand.main")).toBeDefined();
   });
 
   it("allows a token to keep its own name", () => {
     // Comparing by name alone would report every token as colliding with
     // itself the moment its own field is validated.
-    expect(tokenNameIssue(TOKENS, "color.ink", "color.ink")).toBeUndefined();
+    expect(tokenNameIssue(TOKENS, 0, "color.ink")).toBeUndefined();
   });
 
   it("allows a good new name", () => {
-    expect(tokenNameIssue(TOKENS, "color.ink", "text.body")).toBeUndefined();
+    expect(tokenNameIssue(TOKENS, 0, "text.body")).toBeUndefined();
   });
 });
 
 describe("editing a value", () => {
   it("writes one mode without disturbing the other", () => {
-    const next = setTokenValue(TOKENS, "color.primary", "dark", "#1e3a8a");
+    const next = setTokenValue(TOKENS, 1, "dark", "#1e3a8a");
     const token = next.tokens.find(t => t.name === "brand.main");
     expect(token?.values.dark).toBe("#1e3a8a");
     // Light is what a reader with no mode set resolves; losing it would make
@@ -187,14 +188,14 @@ describe("editing a value", () => {
   it("clears a dark value so it FOLLOWS light again", () => {
     // Distinct from copying light into dark, which looks identical and is a
     // different document: an explicit dark value stops tracking later edits.
-    const next = clearDarkValue(TOKENS, "color.primary");
+    const next = clearDarkValue(TOKENS, 1);
     const token = next.tokens.find(t => t.name === "brand.main");
     expect(token?.values.dark).toBeUndefined();
     expect(token?.values.light).toBe("#3b82f6");
   });
 
   it("reports what the engine says about a value that contradicts its kind", () => {
-    const next = setTokenValue(TOKENS, "color.ink", "light", "16px");
+    const next = setTokenValue(TOKENS, 0, "light", "16px");
     const row = tokenRowsFor(next, "color").find(
       r => r.identity === "color.ink"
     );
@@ -210,12 +211,7 @@ describe("editing a value", () => {
   });
 
   it("reports a value that would make the page fetch a file", () => {
-    const next = setTokenValue(
-      TOKENS,
-      "color.ink",
-      "light",
-      "url(https://e.test/a.png)"
-    );
+    const next = setTokenValue(TOKENS, 0, "light", "url(https://e.test/a.png)");
     const row = tokenRowsFor(next, "color").find(
       r => r.identity === "color.ink"
     );
@@ -250,13 +246,15 @@ describe("two tokens that collide on one custom property", () => {
 
 describe("adding a token", () => {
   it("appends a valid token the engine will write", () => {
-    const { tokens: next, identity } = addToken(TOKENS, "color");
-    const row = tokenRowsFor(next, "color").find(r => r.identity === identity);
+    const { tokens: next, at } = addToken(TOKENS, "color");
+    const row = tokenRowsFor(next, "color").find(r => r.at === at);
     expect(row).toBeDefined();
     // Seeded rather than empty: an empty value is refused by the emitter, so a
     // token created empty would arrive already broken.
     expect(row?.issues).toEqual([]);
-    expect(declared(next)).toContain(`--site-${identity.replace(/\./g, "-")}`);
+    expect(declared(next)).toContain(
+      `--site-${(row?.identity ?? "").replace(/\./g, "-")}`
+    );
   });
 
   it("gives every kind a seed its own emitter accepts", () => {
@@ -265,8 +263,8 @@ describe("adding a token", () => {
     for (const kind of Object.keys(
       TOKEN_KIND_LABELS
     ) as (keyof typeof TOKEN_KIND_LABELS)[]) {
-      const { tokens: next, identity } = addToken({ tokens: [] }, kind);
-      const row = tokenRowsFor(next, kind).find(r => r.identity === identity);
+      const { tokens: next, at } = addToken({ tokens: [] }, kind);
+      const row = tokenRowsFor(next, kind).find(r => r.at === at);
       expect(row?.issues, `${kind} seed`).toEqual([]);
     }
   });
@@ -274,21 +272,23 @@ describe("adding a token", () => {
   it("does not reuse a name, nor an identity a rename left behind", () => {
     // A renamed token keeps its old name as its IDENTITY, so a new token
     // taking that name would collide on the custom property.
-    const renamed = renameToken(TOKENS, "color.ink", "text.body");
-    const { identity } = addToken(renamed, "color");
-    expect(identity).not.toBe("color.ink");
-    expect(identity).not.toBe("text.body");
+    const renamed = renameToken(TOKENS, 0, "text.body");
+    const { tokens: next, at } = addToken(renamed, "color");
+    const name = next.tokens[at]?.name;
+    expect(name).not.toBe("color.ink");
+    expect(name).not.toBe("text.body");
   });
 
   it("starts from nothing when the site has no table yet", () => {
-    const { tokens: next } = addToken(undefined, "color");
+    const { tokens: next, at } = addToken(undefined, "color");
     expect(next.tokens.length).toBe(1);
+    expect(at).toBe(0);
   });
 });
 
 describe("removing a token", () => {
   it("takes it out and leaves the rest", () => {
-    const next = removeToken(TOKENS, "color.ink");
+    const next = removeToken(TOKENS, 0);
     expect(next.tokens.map(t => t.name)).toEqual(["brand.main", "space.4"]);
   });
 
@@ -297,15 +297,100 @@ describe("removing a token", () => {
     // token compiles a `var()` nothing declares, so the declaration is dropped
     // and the style is absent with no error anywhere.
     expect(declared(TOKENS)).toContain("--site-color-ink");
-    expect(declared(removeToken(TOKENS, "color.ink"))).not.toContain(
-      "--site-color-ink"
-    );
+    expect(declared(removeToken(TOKENS, 0))).not.toContain("--site-color-ink");
   });
 
   it("removes by IDENTITY, not by the label", () => {
     // Removing `brand.main` by name would miss it, because what identifies it
     // is `color.primary`.
-    const next = removeToken(TOKENS, "color.primary");
+    const next = removeToken(TOKENS, 1);
     expect(next.tokens.map(t => t.name)).toEqual(["color.ink", "space.4"]);
+  });
+});
+
+describe("two entries that share one identity are addressed apart", () => {
+  /**
+   * A set a legacy or imported document can really hold. The read path keeps
+   * BOTH so the engine's complaint about the collision is visible on the row
+   * that has it — which is the whole point, since this is the state the studio
+   * exists to help an author repair.
+   */
+  const twinned: SiteTokenSet = {
+    tokens: [
+      { name: "color.dup", kind: "color", values: { light: "#111111" } },
+      { name: "color.dup", kind: "color", values: { light: "#222222" } },
+    ],
+  };
+
+  it("shows both rows, with the collision named on the second", () => {
+    const rows = tokenRowsFor(twinned, "color");
+    expect(rows.map(r => r.at)).toEqual([0, 1]);
+    expect(rows[0]?.issues).toEqual([]);
+    expect(rows[1]?.issues.join(" ")).toContain("both become");
+  });
+
+  it("edits the row the author is on, not the first one that matches", () => {
+    // Addressed by identity, every edit to the second row would land on the
+    // first — so the collision could never be repaired from the row that has
+    // it, and an author would watch the wrong value change.
+    const next = setTokenValue(twinned, 1, "light", "#333333");
+    expect(next.tokens[0]?.values.light).toBe("#111111");
+    expect(next.tokens[1]?.values.light).toBe("#333333");
+  });
+
+  it("renames only the row the author is on", () => {
+    const next = renameToken(twinned, 1, "color.other");
+    expect(next.tokens[0]?.name).toBe("color.dup");
+    expect(next.tokens[1]?.name).toBe("color.other");
+  });
+
+  it("removes ONE of them, not both", () => {
+    // Filtering on the identity takes both, which is the opposite of what
+    // repairing a collision means.
+    const next = removeToken(twinned, 1);
+    expect(next.tokens.length).toBe(1);
+    expect(next.tokens[0]?.values.light).toBe("#111111");
+  });
+
+  it("does not report a name collision against the row being edited", () => {
+    // Row 1 keeping its own name is not a clash with itself; row 1 taking
+    // row 0's name is.
+    expect(tokenNameIssue(twinned, 1, "color.dup")).toBeDefined();
+    expect(tokenNameIssue(twinned, 0, "color.dup")).toBeDefined();
+    expect(tokenNameIssue(twinned, 1, "color.fresh")).toBeUndefined();
+  });
+});
+
+describe("a generated name is free as a CUSTOM PROPERTY, not as a string", () => {
+  it("skips a candidate whose property another spelling already took", () => {
+    // `color-2` and `color.2` are different strings and both become
+    // `--site-color-2`. A raw-name check hands back `color.2` and the emitter
+    // refuses it the moment it is written.
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "color", kind: "color", values: { light: "#111111" } },
+        { name: "color-2", kind: "color", values: { light: "#222222" } },
+      ],
+    };
+    const { tokens: next, at } = addToken(set, "color");
+    const added = next.tokens[at];
+    expect(added).toBeDefined();
+    // Whatever it chose, the ENGINE has to accept the whole set.
+    expect(emitTokenBlocks(next, ":root").issues).toEqual([]);
+    expect(added?.name).not.toBe("color.2");
+  });
+});
+
+describe("the seed for a custom token survives being USED", () => {
+  it("substitutes into a declaration rather than invalidating it", () => {
+    // A CSS-wide keyword passes the emitter and is written without complaint,
+    // then behaves as the guaranteed-invalid value at SUBSTITUTION — so
+    // `var(--site-custom)` would invalidate the declaration reading it. The
+    // emitter cannot see that, so asserting it is happy proves nothing.
+    const { tokens: next, at } = addToken({ tokens: [] }, "custom");
+    const seeded = next.tokens[at]?.values.light ?? "";
+    expect(seeded).not.toBe("");
+    const CSS_WIDE = ["initial", "inherit", "unset", "revert", "revert-layer"];
+    expect(CSS_WIDE).not.toContain(seeded.trim().toLowerCase());
   });
 });

@@ -110,6 +110,67 @@ export function resolveSiteStyle(
 }
 
 /**
+ * The stored tier that, merged under the site's config defaults, gives this set.
+ *
+ * The INVERSE of the token half of {@link resolveSiteStyle}, and the reason a
+ * studio cannot save what it was handed. `useSiteStyle` answers with the config
+ * defaults and the stored tier already merged, because that is what the canvas
+ * has to compile — so an editor that saved its whole working set would copy
+ * every config-supplied token into the database on the author's first edit.
+ * From then on the site's own code could not change those values: the accidental
+ * overrides would mask them, silently, and only for sites that supply defaults.
+ *
+ * So only what actually DIFFERS is stored: a token the config never supplied,
+ * or one whose value the author has changed. The prefix and the dark-mode
+ * strategy follow the same rule.
+ *
+ * What this deliberately cannot express is REMOVING a config-supplied token.
+ * Absence from the stored tier means "no override", so the default merges
+ * straight back on the next read. The studio does not offer removal for those
+ * rows rather than offering one that quietly undoes itself.
+ */
+export function tokenOverrideOf(
+  defaults: SiteTokenSet | undefined,
+  edited: SiteTokenSet
+): SiteTokenSet {
+  const supplied = new Map(
+    (defaults?.tokens ?? []).map(token => [tokenIdentity(token), token])
+  );
+  const tokens = edited.tokens.filter(token => {
+    const base = supplied.get(tokenIdentity(token));
+    return base === undefined || !sameSiteToken(base, token);
+  });
+  return {
+    tokens,
+    ...(edited.prefix === undefined || edited.prefix === defaults?.prefix
+      ? {}
+      : { prefix: edited.prefix }),
+    ...(edited.darkMode === undefined || edited.darkMode === defaults?.darkMode
+      ? {}
+      : { darkMode: edited.darkMode }),
+  };
+}
+
+/**
+ * Whether two tokens say the same thing.
+ *
+ * Field by field rather than by serialising both, because key order is not
+ * meaning: a token that round-tripped through storage can carry its fields in
+ * a different order and would compare as changed, so every edit anywhere would
+ * store every config token — the failure this comparison exists to prevent.
+ */
+function sameSiteToken(a: SiteToken, b: SiteToken): boolean {
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.kind === b.kind &&
+    a.description === b.description &&
+    a.values.light === b.values.light &&
+    a.values.dark === b.values.dark
+  );
+}
+
+/**
  * A style whose keys are only the DEFINED sections.
  *
  * An `undefined` property and an absent one mean the same thing to a reader,

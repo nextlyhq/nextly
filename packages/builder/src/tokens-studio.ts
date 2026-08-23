@@ -84,11 +84,27 @@ const TOKEN_KIND_SEEDS: Readonly<Record<TokenKind, string>> = {
   number: "0",
   shadow: "0 0 0 rgba(0, 0, 0, 0)",
   duration: "0ms",
-  custom: "initial",
+  // NOT a CSS-wide keyword. `initial` passes the emitter and is written without
+  // complaint, and then behaves as the guaranteed-invalid value at SUBSTITUTION
+  // — so `var(--site-custom)` invalidates the declaration reading it instead of
+  // resolving to the word. A seed has to survive the whole road to the page,
+  // not only the write.
+  custom: "0",
 };
 
 /** One token as the studio draws it. */
 export interface TokenRow {
+  /**
+   * WHERE this token sits in the stored list, and the handle every edit uses.
+   *
+   * Not the identity, which is the obvious choice and is wrong: a legacy or
+   * imported set can hold two entries with the SAME identity, and the read path
+   * keeps both deliberately so the engine's complaint about the collision is
+   * visible on the row that has it. Addressed by identity, every edit to the
+   * second row would resolve to the first — so the one state the studio exists
+   * to help an author repair would be the one state it cannot address.
+   */
+  readonly at: number;
   /** What references STORE. Never changes once a token has been renamed. */
   readonly identity: string;
   /** What the author reads and edits. */
@@ -115,19 +131,24 @@ export function tokenRowsFor(
   mode: TokenMode = "light"
 ): readonly TokenRow[] {
   const all = tokens?.tokens ?? [];
+  // Indexed against the WHOLE list before filtering, so `at` addresses the
+  // stored position rather than a position within this tab.
   return all
-    .filter(token => token.kind === kind)
-    .map(token => rowOf(token, all, mode));
+    .map((token, at) => ({ token, at }))
+    .filter(entry => entry.token.kind === kind)
+    .map(entry => rowOf(entry.token, entry.at, all, mode));
 }
 
 function rowOf(
   token: SiteToken,
+  at: number,
   among: readonly SiteToken[],
   mode: TokenMode
 ): TokenRow {
   const own = token.values[mode];
   const collision = collisionFor(token, among);
   return {
+    at,
     identity: tokenIdentity(token),
     name: token.name,
     kind: token.kind,
@@ -189,7 +210,7 @@ function collisionFor(
  */
 export function tokenNameIssue(
   tokens: SiteTokenSet | undefined,
-  identity: string,
+  at: number,
   name: string
 ): string | undefined {
   const trimmed = name.trim();
@@ -198,19 +219,9 @@ export function tokenNameIssue(
     return 'A name is dot-separated words of letters, digits and dashes, like "color.primary".';
   }
   const taken = (tokens?.tokens ?? []).some(
-    token => tokenIdentity(token) !== identity && token.name === trimmed
+    (token, index) => index !== at && token.name === trimmed
   );
   return taken ? `Another token is already called "${trimmed}".` : undefined;
-}
-
-/** Find a token by the identity a row carries. */
-function indexOfIdentity(
-  tokens: SiteTokenSet | undefined,
-  identity: string
-): number {
-  return (tokens?.tokens ?? []).findIndex(
-    token => tokenIdentity(token) === identity
-  );
 }
 
 /** Replace one token in the set, leaving every other entry untouched. */
@@ -234,13 +245,12 @@ function withToken(
  */
 export function renameToken(
   tokens: SiteTokenSet,
-  identity: string,
+  at: number,
   name: string
 ): SiteTokenSet {
-  const index = indexOfIdentity(tokens, identity);
-  const token = tokens.tokens[index];
+  const token = tokens.tokens[at];
   if (token === undefined) return tokens;
-  return withToken(tokens, index, renameSiteToken(token, name.trim()));
+  return withToken(tokens, at, renameSiteToken(token, name.trim()));
 }
 
 /**
@@ -251,14 +261,13 @@ export function renameToken(
  */
 export function setTokenValue(
   tokens: SiteTokenSet,
-  identity: string,
+  at: number,
   mode: TokenMode,
   value: string
 ): SiteTokenSet {
-  const index = indexOfIdentity(tokens, identity);
-  const token = tokens.tokens[index];
+  const token = tokens.tokens[at];
   if (token === undefined) return tokens;
-  return withToken(tokens, index, {
+  return withToken(tokens, at, {
     ...token,
     values: { ...token.values, [mode]: value },
   });
@@ -272,27 +281,26 @@ export function setTokenValue(
  * later edits to light, so the two drift apart the next time anyone changes the
  * light one.
  */
-export function clearDarkValue(
-  tokens: SiteTokenSet,
-  identity: string
-): SiteTokenSet {
-  const index = indexOfIdentity(tokens, identity);
-  const token = tokens.tokens[index];
+export function clearDarkValue(tokens: SiteTokenSet, at: number): SiteTokenSet {
+  const token = tokens.tokens[at];
   if (token === undefined) return tokens;
-  return withToken(tokens, index, {
+  return withToken(tokens, at, {
     ...token,
     values: { light: token.values.light },
   });
 }
 
-/** The set without this token. Any reference to it stops resolving. */
-export function removeToken(
-  tokens: SiteTokenSet,
-  identity: string
-): SiteTokenSet {
+/**
+ * The set without the token at this position. Any reference stops resolving.
+ *
+ * By POSITION rather than by identity, so removing one of two entries that
+ * share an identity removes exactly one. Filtering on the identity would take
+ * both, which is the opposite of what an author repairing a collision means.
+ */
+export function removeToken(tokens: SiteTokenSet, at: number): SiteTokenSet {
   return {
     ...tokens,
-    tokens: tokens.tokens.filter(token => tokenIdentity(token) !== identity),
+    tokens: tokens.tokens.filter((_, index) => index !== at),
   };
 }
 
@@ -305,24 +313,31 @@ export function removeToken(
  * token taking that name would collide on the custom property.
  */
 function freeName(tokens: SiteTokenSet | undefined, kind: TokenKind): string {
+  // Compared as composed CUSTOM PROPERTIES, which is the real uniqueness
+  // boundary — `color-2` and `color.2` are different strings and both become
+  // `--site-color-2`, so a raw-name check hands back a name the emitter will
+  // refuse the moment it is written. Names are folded in alongside identities
+  // because a name is what a later rename freezes into one.
   const used = new Set<string>();
   for (const token of tokens?.tokens ?? []) {
-    used.add(token.name);
-    used.add(tokenIdentity(token));
+    used.add(tokenCustomProperty(token.name, ""));
+    used.add(tokenCustomProperty(tokenIdentity(token), ""));
   }
+  const free = (candidate: string): boolean =>
+    !used.has(tokenCustomProperty(candidate, ""));
   const base = kind === "custom" ? "custom" : kind.toLowerCase();
-  if (!used.has(base)) return base;
+  if (free(base)) return base;
   for (let n = 2; ; n += 1) {
     const candidate = `${base}.${n}`;
-    if (!used.has(candidate)) return candidate;
+    if (free(candidate)) return candidate;
   }
 }
 
 /**
- * The set with a new token of this kind appended, and its identity.
+ * The set with a new token of this kind appended, and where it landed.
  *
- * The identity comes back because the panel has to put the new row into edit
- * mode, and finding it by name afterwards would break the moment two tokens
+ * The position comes back because the panel has to address the new row, and
+ * finding it afterwards by name or identity would break the moment two tokens
  * share one — which is a state this table can legitimately be in.
  *
  * Created with NO `id`, so its identity is its name until the first rename
@@ -332,7 +347,7 @@ function freeName(tokens: SiteTokenSet | undefined, kind: TokenKind): string {
 export function addToken(
   tokens: SiteTokenSet | undefined,
   kind: TokenKind
-): { tokens: SiteTokenSet; identity: string } {
+): { tokens: SiteTokenSet; at: number } {
   const name = freeName(tokens, kind);
   const token: SiteToken = {
     name,
@@ -342,7 +357,7 @@ export function addToken(
   const base = tokens ?? { tokens: [] };
   return {
     tokens: { ...base, tokens: [...base.tokens, token] },
-    identity: name,
+    at: base.tokens.length,
   };
 }
 

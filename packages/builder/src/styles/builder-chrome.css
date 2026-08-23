@@ -1250,3 +1250,10 @@
   line-height: 1.4;
   color: var(--nx-destructive);
 }
+
+/* Where a token comes from, when the site's own code supplies it. */
+.nx-tokens__origin {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  white-space: nowrap;
+}

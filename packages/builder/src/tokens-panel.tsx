@@ -35,6 +35,8 @@
  */
 import {
   TOKEN_KINDS,
+  tokenIdentity,
+  type SiteToken,
   type SiteTokenSet,
   type TokenKind,
   type TokenMode,
@@ -75,6 +77,18 @@ export interface TokensPanelProps {
   tokens: SiteTokenSet | undefined;
   /** An edit. The host owns the document and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
+  /**
+   * The tokens the SITE'S CODE supplies, which the stored ones layer over.
+   *
+   * Needed because these two are not equally editable. A supplied token can be
+   * overridden and reset, and cannot be removed: absence from the stored tier
+   * means "no override", so a removal would merge straight back on the next
+   * read. Offering a Remove that quietly undoes itself is worse than not
+   * offering one.
+   */
+  supplied?: SiteTokenSet;
+  /** What the last save said, when it failed. Nothing while it is succeeding. */
+  issue?: string;
   /** Whether the canvas is currently showing dark values. */
   prefersDark?: boolean;
 }
@@ -89,6 +103,8 @@ export interface TokensPanelProps {
 export function TokensPanel({
   tokens,
   onChange,
+  supplied,
+  issue,
   prefersDark = false,
 }: TokensPanelProps): React.JSX.Element {
   const [mode, setMode] = React.useState<TokenMode>(
@@ -110,6 +126,17 @@ export function TokensPanel({
         <h2 className="nx-tokens__title">Tokens</h2>
         <ModeSwitch mode={mode} onMode={setMode} />
       </div>
+      {issue === undefined ? null : (
+        /*
+         * A save that did not happen. `role="alert"` because it reports on an
+         * action the author has already taken and believes is done — the table
+         * still shows what they typed, and without this the only signal that
+         * the site was never changed is the canvas failing to move.
+         */
+        <p className="nx-tokens__issue" role="alert">
+          {issue}
+        </p>
+      )}
       <Tabs defaultValue="color" className="nx-tokens__tabs">
         <TabsList>
           {TOKEN_KINDS.map(kind => (
@@ -126,6 +153,7 @@ export function TokensPanel({
             <TokenList
               kind={kind}
               tokens={tokens}
+              supplied={supplied}
               mode={mode}
               onChange={onChange}
             />
@@ -171,11 +199,13 @@ function ModeSwitch({
 function TokenList({
   kind,
   tokens,
+  supplied,
   mode,
   onChange,
 }: {
   kind: TokenKind;
   tokens: SiteTokenSet;
+  supplied: SiteTokenSet | undefined;
   mode: TokenMode;
   onChange: (tokens: SiteTokenSet) => void;
 }): React.JSX.Element {
@@ -189,10 +219,11 @@ function TokenList({
       ) : (
         <ul>
           {rows.map(row => (
-            <li key={row.identity}>
+            <li key={row.at}>
               <TokenEntry
                 row={row}
                 tokens={tokens}
+                from={suppliedTokenFor(supplied, row.identity)}
                 mode={mode}
                 onChange={onChange}
               />
@@ -223,11 +254,14 @@ function TokenList({
 function TokenEntry({
   row,
   tokens,
+  from,
   mode,
   onChange,
 }: {
   row: TokenRow;
   tokens: SiteTokenSet;
+  /** The site config's own version of this token, when it supplies one. */
+  from: SiteToken | undefined;
   mode: TokenMode;
   onChange: (tokens: SiteTokenSet) => void;
 }): React.JSX.Element {
@@ -240,10 +274,9 @@ function TokenEntry({
       setNameIssue(null);
       return;
     }
-    const refusal = tokenNameIssue(tokens, row.identity, next);
+    const refusal = tokenNameIssue(tokens, row.at, next);
     setNameIssue(refusal ?? null);
-    if (refusal === undefined)
-      onChange(renameToken(tokens, row.identity, next));
+    if (refusal === undefined) onChange(renameToken(tokens, row.at, next));
   };
 
   const said = [...(nameIssue === null ? [] : [nameIssue]), ...row.issues];
@@ -261,7 +294,7 @@ function TokenEntry({
           defaultValue={row.name}
           // Keyed by identity so a rename does not remount the row, and a
           // reorder does not carry one row's draft into another's field.
-          key={`${row.identity}-name`}
+          key={`${row.at}-name`}
           aria-invalid={nameIssue === null ? undefined : true}
           aria-describedby={said.length > 0 ? noteId : undefined}
           onBlur={event => commitName(event.target.value)}
@@ -273,18 +306,24 @@ function TokenEntry({
           id={`${id}-value`}
           className="nx-tokens__value"
           defaultValue={row.value}
-          key={`${row.identity}-value-${mode}`}
+          key={`${row.at}-value-${mode}`}
           data-inherited={row.inherited ? "" : undefined}
           aria-describedby={said.length > 0 ? noteId : undefined}
           onBlur={event => {
             const next = event.target.value;
             if (next !== row.value) {
-              onChange(setTokenValue(tokens, row.identity, mode, next));
+              onChange(setTokenValue(tokens, row.at, mode, next));
             }
           }}
         />
       </div>
-      <TokenActions row={row} tokens={tokens} mode={mode} onChange={onChange} />
+      <TokenActions
+        row={row}
+        tokens={tokens}
+        from={from}
+        mode={mode}
+        onChange={onChange}
+      />
       {said.length > 0 ? (
         <p className="nx-tokens__issue" id={noteId} role="status">
           {said.join(" ")}
@@ -304,11 +343,13 @@ function TokenEntry({
 function TokenActions({
   row,
   tokens,
+  from,
   mode,
   onChange,
 }: {
   row: TokenRow;
   tokens: SiteTokenSet;
+  from: SiteToken | undefined;
   mode: TokenMode;
   onChange: (tokens: SiteTokenSet) => void;
 }): React.JSX.Element {
@@ -331,7 +372,7 @@ function TokenActions({
           type="button"
           variant="destructive"
           size="sm"
-          onClick={() => onChange(removeToken(tokens, row.identity))}
+          onClick={() => onChange(removeToken(tokens, row.at))}
         >
           Remove
         </Button>
@@ -354,21 +395,75 @@ function TokenActions({
           type="button"
           variant="ghost"
           size="sm"
-          onClick={() => onChange(clearDarkValue(tokens, row.identity))}
+          onClick={() => onChange(clearDarkValue(tokens, row.at))}
         >
           Match light
         </Button>
       ) : null}
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        aria-label={`Remove ${row.name}`}
-        onClick={() => setConfirming(true)}
-      >
-        Remove
-      </Button>
+      {from === undefined ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={`Remove ${row.name}`}
+          onClick={() => setConfirming(true)}
+        >
+          Remove
+        </Button>
+      ) : (
+        /*
+         * A token the site's code supplies. It cannot be REMOVED here: the
+         * stored tier expresses overrides, and absence from it means "no
+         * override", so a removal would merge straight back on the next read.
+         * Reset is the honest counterpart — it drops the override and lets the
+         * site's own value through again, which is what an author actually
+         * means by undoing their edit.
+         */
+        <>
+          <span className="nx-tokens__origin">From site config</span>
+          {differs(row, from, mode) ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={`Reset ${row.name}`}
+              onClick={() => onChange(resetToken(tokens, row.at, from))}
+            >
+              Reset
+            </Button>
+          ) : null}
+        </>
+      )}
     </div>
+  );
+}
+
+/** Whether the author has changed this token away from the site's own value. */
+function differs(row: TokenRow, from: SiteToken, mode: TokenMode): boolean {
+  return (
+    row.name !== from.name ||
+    row.value !== (from.values[mode] ?? from.values.light)
+  );
+}
+
+/** The site's own token back in place of the author's override. */
+function resetToken(
+  tokens: SiteTokenSet,
+  at: number,
+  from: SiteToken
+): SiteTokenSet {
+  const next = [...tokens.tokens];
+  next[at] = from;
+  return { ...tokens, tokens: next };
+}
+
+/** The site config's own version of a token, matched the way the merge does. */
+function suppliedTokenFor(
+  supplied: SiteTokenSet | undefined,
+  identity: string
+): SiteToken | undefined {
+  return (supplied?.tokens ?? []).find(
+    token => tokenIdentity(token) === identity
   );
 }
 

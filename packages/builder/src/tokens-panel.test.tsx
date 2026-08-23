@@ -257,3 +257,93 @@ describe("adding a token", () => {
     expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).tokens.length).toBe(1);
   });
 });
+
+describe("a token the site's own code supplies", () => {
+  const SUPPLIED: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+    ],
+  };
+
+  function mountWith(tokens: SiteTokenSet, supplied: SiteTokenSet) {
+    const onChange = vi.fn();
+    render(
+      <TokensPanel tokens={tokens} supplied={supplied} onChange={onChange} />
+    );
+    return onChange;
+  }
+
+  it("does NOT offer to remove it", () => {
+    // The stored tier expresses overrides, and absence from it means "no
+    // override" — so a removal would merge straight back on the next read. An
+    // action that quietly undoes itself is worse than no action.
+    mountWith(TOKENS, SUPPLIED);
+    expect(
+      screen.queryByRole("button", { name: "Remove color.ink" })
+    ).toBeNull();
+    expect(screen.getAllByText("From site config").length).toBeGreaterThan(0);
+  });
+
+  it("still offers to remove a token the config never supplied", () => {
+    // The control. Without it, a panel that removed every Remove button would
+    // pass the assertion above.
+    mountWith(TOKENS, SUPPLIED);
+    expect(
+      screen.queryByRole("button", { name: "Remove brand.main" })
+    ).not.toBeNull();
+  });
+
+  it("offers RESET once the author has changed it, and not before", () => {
+    mountWith(TOKENS, SUPPLIED);
+    expect(
+      screen.queryByRole("button", { name: "Reset color.ink" })
+    ).toBeNull();
+
+    cleanup();
+    const overridden: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
+        ...TOKENS.tokens.slice(1),
+      ],
+    };
+    mountWith(overridden, SUPPLIED);
+    expect(
+      screen.queryByRole("button", { name: "Reset color.ink" })
+    ).not.toBeNull();
+  });
+
+  it("reset puts the site's own value back", () => {
+    const overridden: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
+        ...TOKENS.tokens.slice(1),
+      ],
+    };
+    const onChange = mountWith(overridden, SUPPLIED);
+    fireEvent.click(screen.getByRole("button", { name: "Reset color.ink" }));
+    const next = onChange.mock.calls[0]?.[0] as SiteTokenSet;
+    expect(next.tokens[0]?.values.light).toBe("#111111");
+  });
+});
+
+describe("a save that did not happen", () => {
+  it("says so, out loud", () => {
+    // Without this the panel goes on showing what the author typed while the
+    // site holds the old value, so a validation failure, a missing permission
+    // and a dropped network all look exactly like success.
+    render(
+      <TokensPanel
+        tokens={TOKENS}
+        onChange={vi.fn()}
+        issue="You do not have permission to change site styles."
+      />
+    );
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("permission");
+  });
+
+  it("says nothing while saves are succeeding", () => {
+    mount(TOKENS);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});

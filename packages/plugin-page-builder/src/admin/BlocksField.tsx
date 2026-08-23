@@ -79,7 +79,12 @@ import {
 
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
-import { siteBreakpoints, siteSheet, type SiteStyleData } from "../site-style";
+import {
+  tokenOverrideOf,
+  siteBreakpoints,
+  siteSheet,
+  type SiteStyleData,
+} from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
@@ -461,6 +466,19 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * would clobber whatever the others had saved since it last read.
    */
   const { save: saveSiteStyle } = useSaveSiteStyle();
+  /*
+   * The studio's own latest set, and the authority while it is open.
+   *
+   * `useSiteStyle` answers from a query that is only refetched after a save
+   * lands, so two edits made before that — two blurs, two removals, a double
+   * Add — would both compose against the SAME snapshot and the second would
+   * overwrite the first. Nothing would report it: the mutation serialises the
+   * two payloads and neither fails. Composing against this instead means every
+   * edit builds on the one before it.
+   */
+  const [tokenEdits, setTokenEdits] = useState<SiteTokenSet | null>(null);
+  /* What the last save said, when it refused. */
+  const [tokenIssue, setTokenIssue] = useState<string | undefined>(undefined);
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -657,21 +675,53 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           }
           if (panel === "layers") return <LayersPanel editor={editor} />;
           if (panel === "tokens") {
+            const merged = offerableTokens(
+              canvasSiteStyle,
+              siteStylePending,
+              siteStyleError
+            );
             return (
               <TokensPanel
-                tokens={offerableTokens(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                /*
-                 * Saved as it is edited rather than behind a save button. A
-                 * token is site-wide, so the canvas behind this panel is the
-                 * preview — an unsaved edit would show the author a page that
-                 * no visitor would see, and there is no other surface on which
-                 * to notice the difference.
-                 */
-                onChange={next => void saveSiteStyle("tokens", next)}
+                tokens={tokenEdits ?? merged}
+                supplied={configSiteStyle?.tokens}
+                issue={tokenIssue}
+                onChange={next => {
+                  /*
+                   * Saved as it is edited rather than behind a save button. A
+                   * token is site-wide, so the canvas behind this panel is the
+                   * preview — an unsaved edit would show the author a page no
+                   * visitor would see, with no other surface on which to
+                   * notice the difference.
+                   */
+                  const before = tokenEdits ?? merged ?? null;
+                  setTokenEdits(next);
+                  setTokenIssue(undefined);
+                  void saveSiteStyle(
+                    "tokens",
+                    /*
+                     * Only what DIFFERS from the site's own defaults. The set
+                     * above is the merged one the canvas compiles, so saving it
+                     * whole would copy every config token into the database on
+                     * the first edit and mask the site's code from then on.
+                     */
+                    tokenOverrideOf(configSiteStyle?.tokens, next)
+                  ).then(result => {
+                    if (result.saved) return;
+                    /*
+                     * A refused save leaves the panel showing what the author
+                     * typed while the site still holds the old value — so the
+                     * edit is put back and the refusal is said out loud.
+                     * Discarding this promise makes a validation failure, a
+                     * missing permission and a dropped network all look
+                     * exactly like success.
+                     */
+                    setTokenEdits(before);
+                    setTokenIssue(
+                      Object.values(result.issues ?? {})[0] ??
+                        "That change was not saved."
+                    );
+                  });
+                }}
               />
             );
           }
