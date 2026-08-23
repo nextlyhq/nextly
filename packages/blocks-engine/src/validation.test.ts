@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { DOCUMENT_KINDS } from "./document";
+import {
+  DOCUMENT_FORMAT_VERSION,
+  DOCUMENT_KINDS,
+  MAX_BREAKPOINT_ID_LENGTH,
+} from "./document";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import { DEFAULT_LIMITS, documentBytes } from "./limits";
 import {
@@ -15,6 +19,7 @@ import {
 } from "./validation.fixtures";
 import type { NestingSource } from "./nesting";
 import type { BlockTypeLookup } from "./validation";
+import { compilePageCss } from "./style/compile-page";
 import { measureBytes } from "./measure-bytes";
 import { ISSUE_CODES, validate, validateDocument } from "./validation";
 
@@ -2714,5 +2719,85 @@ describe("an unstorable document does not have its values parsed", () => {
     // shape long before its style values matter. The exposure that closes is
     // the parsing of whatever the getter returns, not the single invocation.
     expect(reads).toBeGreaterThan(0);
+  });
+});
+
+describe("validate and compile agree on which breakpoints a site defines", () => {
+  // The validate-then-compile contract. A caller runs `validate()` and, seeing
+  // no issue, stores the document; the compiler then drops a definition
+  // validation counted as known, and every style keyed to it compiles to nothing
+  // — reported as an unknown breakpoint by a pass the author never ran.
+  //
+  // Asserted as a PAIR each time, because either half alone can be satisfied by
+  // the wrong thing: an issue from validation proves nothing if the compiler
+  // emits the CSS anyway, and missing CSS proves nothing if validation warned.
+  const styled = (breakpointId: string, breakpoints: BreakpointSet) => ({
+    document: {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          styles: { base: { [breakpointId]: { color: "red" } } },
+        } as BlockNode,
+      ],
+    } satisfies BlockDocument,
+    breakpoints,
+  });
+
+  const agrees = (breakpointId: string, breakpoints: BreakpointSet) => {
+    const { document } = styled(breakpointId, breakpoints);
+    const issues = validate(document, { breakpoints, mode: "forgiving" });
+    const compiled = compilePageCss(document, { breakpoints });
+    return {
+      validationSaw: issues.some(issue => issue.code === "unknown-breakpoint"),
+      compilerSaw: compiled.warnings.some(
+        issue => issue.code === "unknown-breakpoint"
+      ),
+      emitted: compiled.css.includes("color: red"),
+    };
+  };
+
+  it("agrees about an id longer than the compiler will read", () => {
+    const huge = "b".repeat(MAX_BREAKPOINT_ID_LENGTH + 1);
+    const seen = agrees(huge, {
+      viewport: [{ id: huge, label: "Huge", maxWidth: 700 }],
+      container: [],
+    });
+
+    expect(seen.compilerSaw).toBe(true);
+    expect(seen.validationSaw).toBe(true);
+    expect(seen.emitted).toBe(false);
+  });
+
+  it("agrees about a viewport definition carrying no bound", () => {
+    // Older than the length rule and the same divergence: the compiler drops an
+    // unbounded viewport definition because it would emit no at-rule at all, and
+    // the scan counted it as a breakpoint this site defines.
+    const seen = agrees("unbounded", {
+      viewport: [{ id: "unbounded", label: "Unbounded" }],
+      container: [],
+    });
+
+    expect(seen.compilerSaw).toBe(true);
+    expect(seen.validationSaw).toBe(true);
+  });
+
+  it("agrees that BASE is defined even when the stored set names it nowhere", () => {
+    // The opposite direction, which the scan also got wrong. The compiler always
+    // carries the base context, so a style keyed to `base` compiles — and a
+    // validation deriving its known ids from the stored definitions alone would
+    // report a value that is perfectly good.
+    const seen = agrees("base", {
+      viewport: [{ id: "md", label: "Medium", maxWidth: 768 }],
+      container: [],
+    });
+
+    expect(seen.compilerSaw).toBe(false);
+    expect(seen.validationSaw).toBe(false);
+    expect(seen.emitted).toBe(true);
   });
 });

@@ -96,7 +96,16 @@ the declared limit is seven.
 
 `breakpointContexts` also drops a definition whose id is longer than the new
 `MAX_BREAKPOINT_ID_LENGTH`, which is exported beside the per-axis cap so a store
-validating on write can refuse what the compiler will not read. The per-axis limit bounded how MANY definitions are
+validating on write can refuse what the compiler will not read.
+
+`validate()` now derives which breakpoint ids a site defines from that same
+normalisation instead of scanning the stored axes. The two disagreed about the
+same document: a definition the compiler drops — an unusable bound, a viewport
+entry with no bound, a duplicate past the first, one past the per-axis cap, or
+an over-long id — was counted as known by validation, so styles keyed to it
+validated with no issue and then compiled to nothing. It corrects the opposite
+case too: `base` is always defined, even when the stored set names no base
+definition, which the scan alone reported as unknown. The per-axis limit bounded how MANY definitions are
 read and said nothing about their size, and an id is a lookup key every reader
 of the normalised axis carries — so one enormous stored value was copied on
 every render that asked which breakpoints a site defines. Dropped rather than

@@ -28,6 +28,7 @@ import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
+import { breakpointContexts } from "./style/compile-page";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
 import {
   canResolveName,
@@ -686,7 +687,21 @@ function collectBreakpointIds(
   };
   scanAxis("viewport");
   scanAxis("container");
-  return ids;
+  // REPORTED above, DERIVED here. The scan exists to tell an author about a
+  // duplicate id; which ids this site actually defines is a different question,
+  // and the compiler is the only thing that answers it. Returning the scanned
+  // set made validation and compilation disagree about the same document: a
+  // definition the compiler drops — an unusable bound, a viewport entry with no
+  // bound at all, a duplicate past the first, one past the per-axis cap, or an
+  // id longer than it will read — was counted as known here, so styles keyed to
+  // it validated with no issue and then compiled to nothing, reported only as an
+  // unknown breakpoint by a pass the author never ran.
+  //
+  // It also answers the opposite case: `breakpointContexts` always carries the
+  // base context, so styles keyed to `base` are known even when the stored set
+  // names no base definition — which the scan alone got wrong in the direction
+  // of reporting a value that compiles perfectly well.
+  return new Set(breakpointContexts(breakpoints).map(context => context.id));
 }
 
 /**
