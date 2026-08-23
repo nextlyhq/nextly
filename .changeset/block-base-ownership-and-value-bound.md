@@ -54,3 +54,11 @@ names agreeing up to the truncation point and differing after it compiled apart
 under one identifier, and the stored sheet was then reused for the wrong one.
 The cap is deliberately larger than the one on a class name, because a token
 name is composed from a design-token file's nesting depth rather than typed.
+
+A block type is bounded at `MAX_BLOCK_TYPE_LENGTH` before its grammar runs, for
+the same reason and by the same measure. The engine now also exports
+`EMITTABLE_STRING_BOUNDS`: every bound on a string it can write into CSS, as
+data rather than as prose. A consumer that digests compiler inputs has to keep
+enough of each string to tell two apart whenever they compile differently, and
+the list of which strings those are had been kept twice as a comment — short by
+one both times.

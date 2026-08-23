@@ -510,6 +510,21 @@ export const BASE_BREAKPOINT = "base";
 const BLOCK_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
+ * The longest block type this engine will write into a selector.
+ *
+ * The grammar above constrains the ALPHABET and not the length, so a type of
+ * megabytes of otherwise-valid characters satisfies it, is scanned in full on
+ * every compile, and is copied into a selector for every rule the type's
+ * defaults produce. The same reason `MAX_NAMED_CLASS_NAME_LENGTH` and
+ * `MAX_TOKEN_NAME_LENGTH` exist.
+ *
+ * Generous against a namespaced slug a person types (`core/section`), for the
+ * same reason those two are: the cap is only ever reached by data that is
+ * already wrong, so it should not be near anything legitimate.
+ */
+export const MAX_BLOCK_TYPE_LENGTH = 128;
+
+/**
  * The scope written as a class selector, or nothing when it cannot be one.
  *
  * A scope is what keeps two documents rendered into one DOM apart, and node
@@ -1209,7 +1224,7 @@ export function compilePageCss(
     // rather than escaped into something safe: a type that is not a namespaced
     // slug is not a type this engine can style, and quietly renaming it would
     // emit a class no renderer will ever put on an element.
-    if (!BLOCK_TYPE_RE.test(type)) {
+    if (type.length > MAX_BLOCK_TYPE_LENGTH || !BLOCK_TYPE_RE.test(type)) {
       pushBoundedWarning(warningAllowance, warnings, {
         path: pointer("/blockBases", type),
         code: "invalid-node-type",

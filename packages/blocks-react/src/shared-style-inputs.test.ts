@@ -13,11 +13,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_BREAKPOINT_ID_LENGTH,
+  EMITTABLE_STRING_BOUNDS,
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
-  MAX_TOKEN_NAME_LENGTH,
   MAX_VALUE_LENGTH,
 } from "@nextlyhq/blocks-engine";
 
@@ -60,16 +59,15 @@ describe("the stamp", () => {
     // can emit may be longer than the walk keeps, or two inputs agreeing to the
     // cut and differing after it stamp alike and compile apart.
     //
-    // Asserted between the CONSTANTS rather than by exercising a name of each
-    // length, because the relationship is what has to hold. A test that fed one
-    // oversized string through would pass just as well after someone raised a
-    // bound past `MAX_VALUE_LENGTH`, which is the change that breaks this.
-    for (const bound of [
-      MAX_NAMED_CLASS_NAME_LENGTH,
-      MAX_BREAKPOINT_ID_LENGTH,
-      MAX_TOKEN_NAME_LENGTH,
-    ]) {
-      expect(bound).toBeLessThanOrEqual(MAX_VALUE_LENGTH);
+    // Read from the ENGINE'S own list rather than named here. A copy of that
+    // set was written twice as prose and was short by one both times, and a
+    // copy in a test is the same copy with a green tick on it: it would assert
+    // over the members someone remembered while the member they forgot is
+    // exactly the one carrying the defect. Reading the array means a bound
+    // added to the compiler is covered here without this file being touched.
+    expect(EMITTABLE_STRING_BOUNDS.length).toBeGreaterThan(0);
+    for (const bound of EMITTABLE_STRING_BOUNDS) {
+      expect(bound.max, bound.what).toBeLessThanOrEqual(MAX_VALUE_LENGTH);
     }
   });
 

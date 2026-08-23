@@ -258,21 +258,23 @@ function leafText(value: unknown): string {
       // becoming a second reading of the envelope.
       //
       // That is sound only because no string the compiler emits can exceed the
-      // longest one this keeps. It is a claim about the COMPILER, not about the
-      // positions a string is reachable from — stated that way because the
-      // enumerated form of it was wrong: the list of positions read class id
-      // and slug, breakpoint id and token prefix, and omitted the `$token` of a
-      // reference, which `scalarText` writes into a `var()` in full. Until
-      // `MAX_TOKEN_NAME_LENGTH` bounded it, two names agreeing to the truncation
-      // point and differing after stamped alike and compiled differently, and
-      // the stored sheet was reused for the wrong one indefinitely.
+      // longest one this keeps. It is a claim about the COMPILER, and the
+      // engine states it as data: `EMITTABLE_STRING_BOUNDS` lists every bound
+      // on a string it can write, and `shared-style-inputs.test.ts` asserts
+      // each is at or under `MAX_VALUE_LENGTH`.
       //
-      // So the invariant is the general one, and it is about this walk rather
-      // than about the compiler at large: any string reaching HERE must be
-      // bounded at or under `MAX_VALUE_LENGTH`, or the stamp stops
-      // distinguishing two inputs that compile differently. The label's other
-      // fields are carried whole and are not subject to it — an unbounded one
-      // there costs allocation, not correctness.
+      // Read from that list rather than restated here, because the restated
+      // form was wrong TWICE. The first enumeration gave class id and slug,
+      // breakpoint id and token prefix, and missed the `$token` of a reference.
+      // The second, written to repair the first, missed a block type. Both
+      // failures were the same one: a copy of a set, kept beside the prose it
+      // justifies, drifts from the set the moment either moves — and the member
+      // that drifts out is the one carrying the defect, because a member nobody
+      // forgot is a member nobody had to bound.
+      //
+      // The label's other fields are carried whole and are not subject to any
+      // of this. An unbounded string there costs allocation, not correctness,
+      // which is why `TOKEN_PREFIX_RE` being unbounded is not a stamp defect.
       return JSON.stringify(value.slice(0, MAX_VALUE_LENGTH + 1));
     case "number":
     case "boolean":

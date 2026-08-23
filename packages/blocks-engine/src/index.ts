@@ -421,6 +421,15 @@ export type { BreakpointAxis } from "./style/breakpoint-axes";
 
 // Where each emitted declaration came from, for an editor that has to tell an author which of
 // several tiers they are looking at. Produced only when `StyleCompileContext.trace` asks for it.
+// Every bound on a string the compiler can emit, as DATA. A consumer that
+// digests these inputs has to keep enough of each string to tell two apart
+// whenever they compile differently, and a hand-kept list of which strings
+// those are has been short by one twice.
+export {
+  EMITTABLE_STRING_BOUNDS,
+  MAX_BLOCK_TYPE_LENGTH,
+} from "./style/emittable-string-bounds";
+export type { EmittableStringBound } from "./style/emittable-string-bounds";
 export type { StyleOrigin, StyleTraceEntry } from "./style/style-trace";
 export type { StyleQuery, StyleSubject } from "./style/style-origin";
 
