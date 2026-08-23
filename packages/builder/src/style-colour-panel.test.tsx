@@ -396,3 +396,64 @@ describe("a picker gesture is ONE editor operation", () => {
     expect(editor.apply).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("the contrast readout keeps up with the picker", () => {
+  it("measures what the field is SHOWING, not what the document holds", () => {
+    // The readout deferred to `stored` while the draft moved, so throughout a
+    // picker gesture the verdict described the old colour — stale exactly while
+    // an author is choosing, which is when a contrast readout is for. It also
+    // put the swatch and the figure beside it on two different colours.
+    mount(styles("#000000", "#ffffff"));
+    expect(screen.getAllByText(/Contrast 21\.0:1/).length).toBeGreaterThan(0);
+
+    // Type a low-contrast colour without committing it.
+    fireEvent.change(screen.getByRole("textbox", { name: "Color" }), {
+      target: { value: "#f0f0f0" },
+    });
+
+    // The verdict follows immediately, and the old one is gone.
+    expect(screen.queryByText(/Contrast 21\.0:1/)).toBeNull();
+    expect(
+      screen.getAllByText(/below AA for body text/).length
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("a contrast verdict is not a complaint", () => {
+  it("does NOT mark a valid colour invalid just for describing it", () => {
+    // The field is described by the contrast note, and a field that inferred
+    // invalidity from having a description announced a perfectly good colour
+    // with a passing 21:1 result as invalid.
+    mount(styles("#000000", "#ffffff"));
+    const field = screen.getByRole("textbox", { name: "Color" });
+    // Described...
+    expect(field.getAttribute("aria-describedby")).toBeTruthy();
+    // ...and still valid.
+    expect(field.getAttribute("aria-invalid")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Colour for Color" })
+        .getAttribute("aria-invalid")
+    ).toBeNull();
+  });
+});
+
+describe("opening the picker on a reference it cannot show", () => {
+  it("warns before a movement would replace the reference", () => {
+    // `storedText` answers "" for a reference, so a predicate reading the draft
+    // alone missed every one of them. Opening the picker on a token the site no
+    // longer defines starts its controls at black, and the first adjustment
+    // replaces the reference with an unrelated near-black literal.
+    mount(styles({ $token: "color.missing" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    expect(screen.getByText(/cannot be shown on the picker/)).toBeDefined();
+  });
+
+  it("stays quiet for a reference it CAN show", () => {
+    // The positive control: the warning must be about being unresolvable, not
+    // about being a reference.
+    mount(styles({ $token: "color.ink" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    expect(screen.queryByText(/cannot be shown on the picker/)).toBeNull();
+  });
+});

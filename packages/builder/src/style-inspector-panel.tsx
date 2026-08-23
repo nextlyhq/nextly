@@ -64,6 +64,7 @@ import * as React from "react";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
 import {
+  activeTokenMode,
   colourHexOf,
   colourShowable,
   colourTokenFor,
@@ -157,6 +158,7 @@ export function StyleInspectorPanel({
   const [chosenForms, setChosenForms] = React.useState<Record<string, number>>(
     {}
   );
+  const prefersDark = usePrefersDark();
 
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
@@ -247,12 +249,51 @@ export function StyleInspectorPanel({
             editor={editor}
             policy={policy}
             tokens={tokens}
+            prefersDark={prefersDark}
             onChooseForm={chooseForm}
           />
         ))}
       </Accordion>
     </div>
   );
+}
+
+/**
+ * Whether the viewer's system asks for a dark colour scheme.
+ *
+ * Read because a site on the `media` dark-mode strategy has its dark token
+ * block wrapped in `@media (prefers-color-scheme:dark)`, so the canvas switches
+ * with the system and nothing tells the panel. Resolving every token to its
+ * light value regardless would paint swatches and report ratios for colours the
+ * canvas is not showing.
+ *
+ * Starts `false` and subscribes after mount, so a server render and the first
+ * client render agree — React discards a subtree whose two renders disagree,
+ * which would take the whole Style tab with it. A viewer already in dark mode
+ * sees one frame of light-mode swatches; the alternative is a hydration
+ * mismatch, which is worse and harder to see.
+ */
+function usePrefersDark(): boolean {
+  const [prefersDark, setPrefersDark] = React.useState(false);
+  React.useEffect(() => {
+    // Detected by CALLABILITY, not by presence. `"matchMedia" in window` is
+    // true under jsdom while the value is not a function, so the property test
+    // passes and the call throws — measured, and it took 85 tests down. A
+    // capability check has to ask the question the caller will ask.
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    ) {
+      return;
+    }
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    setPrefersDark(query.matches);
+    const listen = (event: MediaQueryListEvent): void =>
+      setPrefersDark(event.matches);
+    query.addEventListener("change", listen);
+    return () => query.removeEventListener("change", listen);
+  }, []);
+  return prefersDark;
 }
 
 /** One catalog group, as a section that opens onto its properties. */
@@ -264,6 +305,7 @@ function StyleSectionItem({
   editor,
   policy,
   tokens,
+  prefersDark,
   onChooseForm,
 }: {
   section: StyleSection;
@@ -273,6 +315,7 @@ function StyleSectionItem({
   editor: EditorState;
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   // How many of this section's properties this node sets HERE, so an author can
@@ -305,6 +348,7 @@ function StyleSectionItem({
               editor={editor}
               policy={policy}
               tokens={tokens}
+              prefersDark={prefersDark}
               onChooseForm={onChooseForm}
             />
           ))}
@@ -330,6 +374,7 @@ function StylePropertyFields({
   editor,
   policy,
   tokens,
+  prefersDark,
   onChooseForm,
 }: {
   property: InspectedStyleProperty;
@@ -339,6 +384,7 @@ function StylePropertyFields({
   editor: EditorState;
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   const many = property.controls.length > 1;
@@ -417,6 +463,7 @@ function StylePropertyFields({
           editor={editor}
           policy={policy}
           tokens={tokens}
+          prefersDark={prefersDark}
         />
       ))}
     </div>
@@ -565,6 +612,7 @@ function StyleControlField({
   editor,
   policy,
   tokens,
+  prefersDark,
 }: {
   control: StyleControl;
   label: string;
@@ -596,6 +644,7 @@ function StyleControlField({
   editor: EditorState;
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
 }): React.JSX.Element {
   const id = React.useId();
   // The message's own id, so the control can point at it. A `role="alert"`
@@ -663,6 +712,7 @@ function StyleControlField({
         actionName={actionName}
         clearOnly={clearOnly}
         tokens={tokens}
+        prefersDark={prefersDark}
         pairedColour={pairedColour}
         describedBy={describedBy}
         onCommit={commit}
@@ -692,6 +742,7 @@ function ControlValue({
   actionName,
   clearOnly,
   tokens,
+  prefersDark,
   pairedColour,
   describedBy,
   onCommit,
@@ -703,6 +754,8 @@ function ControlValue({
   actionName: string;
   clearOnly: boolean;
   tokens: SiteTokenSet | undefined;
+  /** Whether the viewer's system asks for dark, for a site on the media strategy. */
+  prefersDark: boolean;
   /** The other half of this control's contrast pair, when its leaf has one. */
   pairedColour: StyleValue | undefined;
   describedBy: string | undefined;
@@ -747,6 +800,7 @@ function ControlValue({
         stored={stored}
         actionName={actionName}
         tokens={tokens}
+        prefersDark={prefersDark}
         pairedColour={pairedColour}
         describedBy={describedBy}
         onCommit={onCommit}
@@ -1185,6 +1239,7 @@ function ColourField({
   stored,
   actionName,
   tokens,
+  prefersDark,
   pairedColour,
   describedBy,
   onCommit,
@@ -1195,6 +1250,7 @@ function ColourField({
   stored: StyleValue | undefined;
   actionName: string;
   tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
   pairedColour: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
@@ -1209,7 +1265,8 @@ function ColourField({
   }, [stored]);
 
   const reference = isTokenRef(stored) ? stored.$token : null;
-  const choices = colourTokensFor(control.leaf, tokens);
+  const mode = activeTokenMode(tokens, prefersDark);
+  const choices = colourTokensFor(control.leaf, tokens, mode);
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
   const commitDraft = (): void => {
@@ -1222,8 +1279,19 @@ function ColourField({
   // than resolved in each branch — two calls to the same resolver is the shape
   // that drifts.
   const showing = reference === null ? draft : stored;
-  const shown = colourHexOf(showing, tokens);
-  const contrast = contrastAtLeaf(control.leaf, stored, pairedColour, tokens);
+  const shown = colourHexOf(showing, tokens, mode);
+  // Measured from what the surface is SHOWING, which is the same value the
+  // swatch is painted from. Reading `stored` instead left the verdict describing
+  // the old colour for the whole of a picker gesture — stale exactly while an
+  // author is choosing, which is when a contrast readout is for — and put the
+  // swatch and the figure beside it on two different colours.
+  const contrast = contrastAtLeaf(
+    control.leaf,
+    showing,
+    pairedColour,
+    tokens,
+    mode
+  );
   // Both descriptions, not one. A control pointed only at the refusal message
   // never announces the contrast verdict, and one pointed only at the verdict
   // drops the reason its last value was refused — so a screen-reader user gets
@@ -1249,11 +1317,16 @@ function ColourField({
           choices={choices}
           actionName={actionName}
           describedBy={describes}
-          // A warning is only worth showing where there is something to lose:
-          // an empty field has nothing, and a value the picker CAN show needs
-          // no notice. A reference falls out of the first test on its own,
-          // since it is displayed by name and never as draft text.
-          unrepresented={shown === undefined && draft !== ""}
+          invalid={describedBy !== undefined}
+          // A warning wherever there is something to LOSE, which is a stored
+          // reference or non-empty text. Tested on the draft alone this missed
+          // every reference — `storedText` answers `""` for one — so opening
+          // the picker on a token the site no longer defines, or one holding
+          // `var(...)`, started its controls at black and the first movement
+          // replaced the reference with a near-black literal, unwarned.
+          unrepresented={
+            shown === undefined && (reference !== null || draft !== "")
+          }
           // The draft moves with the pointer and the DOCUMENT does not. A drag
           // across the saturation surface fires `onColorChange` on every
           // pointer event, and committing each one writes an editor op each
@@ -1283,12 +1356,15 @@ function ColourField({
             draft={draft}
             setDraft={setDraft}
             describedBy={describes}
+            // The REFUSAL alone. `describes` also carries the contrast verdict,
+            // which is supplementary text and never a complaint.
+            invalid={describedBy !== undefined}
             onCommit={onCommit}
           />
         ) : (
           <TokenName
             identity={reference}
-            token={colourTokenFor(reference, tokens)}
+            token={colourTokenFor(reference, tokens, mode)}
             actionName={actionName}
             onClear={() => onCommit(null)}
           />
@@ -1318,6 +1394,7 @@ function ColourPicker({
   choices,
   actionName,
   describedBy,
+  invalid,
   unrepresented,
   onColour,
   onClosed,
@@ -1327,7 +1404,10 @@ function ColourPicker({
   shown: string | undefined;
   choices: readonly ColourToken[];
   actionName: string;
+  /** Everything describing the control: a refusal, a contrast verdict, or both. */
   describedBy: string | undefined;
+  /** Whether the last value was refused. A contrast verdict is not a refusal. */
+  invalid: boolean;
   /** Whether the stored value is one the picker cannot show. */
   unrepresented: boolean;
   /** The picker moved. Fires on every pointer event during a drag. */
@@ -1344,6 +1424,7 @@ function ColourPicker({
           className="nx-style-inspector__swatch"
           aria-label={`Colour for ${actionName}`}
           aria-describedby={describedBy}
+          aria-invalid={invalid ? true : undefined}
           // Painted through a custom property rather than `background-color`
           // directly, so the chequerboard beneath a translucent colour stays
           // visible through it. `undefined` leaves the class's own "nothing
@@ -1701,6 +1782,7 @@ function NumericField({
         draft={draft}
         setDraft={setDraft}
         describedBy={describedBy}
+        invalid={describedBy !== undefined}
         onCommit={onCommit}
         onStep={(draft, delta) => {
           const next = steppedValue(control.leaf, draft, delta);
@@ -1772,6 +1854,7 @@ function TextField({
   draft,
   setDraft,
   describedBy,
+  invalid,
   onCommit,
   onStep,
 }: {
@@ -1788,8 +1871,18 @@ function TextField({
    */
   draft: string;
   setDraft: (value: string) => void;
-  /** The id of the message explaining a refusal, and what marks this invalid. */
+  /**
+   * Everything describing this field: a refusal message, a contrast verdict, or
+   * both.
+   *
+   * Separate from {@link invalid}, and that separation is the point. A
+   * description is not a complaint — a passing 21:1 contrast note is
+   * supplementary text — so a field that inferred invalidity from having a
+   * description would announce a perfectly good colour as invalid.
+   */
   describedBy: string | undefined;
+  /** Whether the LAST value was refused, which is the only thing that invalidates. */
+  invalid: boolean;
   onCommit: (value: StyleValue | null) => CommitOutcome;
   /**
    * Applies one arrow-key step to the text currently shown, answering the text
@@ -1827,7 +1920,7 @@ function TextField({
       value={draft}
       placeholder={placeholderFor(control)}
       aria-describedby={describedBy}
-      aria-invalid={describedBy === undefined ? undefined : true}
+      aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
       // keystroke would make one undo remove one character.
       onChange={event => setDraft(event.target.value)}

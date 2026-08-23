@@ -69,6 +69,7 @@ import {
   type Rgb,
   type SiteToken,
   type SiteTokenSet,
+  type TokenMode,
   type StyleLeaf,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
@@ -113,6 +114,30 @@ export interface ColourToken {
 }
 
 /**
+ * Which mode's value a token resolves to on the canvas right now.
+ *
+ * `emitTokenBlocks` writes a second block for every token carrying a dark
+ * value, and WHEN it applies is the site's strategy: `media` wraps it in
+ * `@media (prefers-color-scheme:dark)`, so a viewer whose system prefers dark
+ * sees the dark value with nothing else having to happen. A control resolving
+ * `values.light` regardless would then paint a swatch and report a ratio for a
+ * colour the canvas is not showing — the one failure this module exists to
+ * prevent, reached through the mode rather than through the notation.
+ *
+ * `attribute` — the default — answers `light`, and that is a STATED LIMIT
+ * rather than a claim. The dark block is written under
+ * `[data-nx-theme="dark"]`, which the HOST sets on an ancestor of its choosing;
+ * nothing tells this panel whether it did. Reading the DOM to find out would
+ * make a pure projection depend on where the canvas happens to be mounted.
+ */
+export function activeTokenMode(
+  tokens: SiteTokenSet | undefined,
+  prefersDark: boolean
+): TokenMode {
+  return tokens?.darkMode === "media" && prefersDark ? "dark" : "light";
+}
+
+/**
  * The tokens a colour control may offer at this leaf.
  *
  * Both halves of the filter are the ENGINE's answer rather than this module's.
@@ -135,12 +160,13 @@ export interface ColourToken {
  */
 export function colourTokensFor(
   leaf: StyleLeaf,
-  tokens: SiteTokenSet | undefined
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode = "light"
 ): readonly ColourToken[] {
   if (tokens === undefined) return [];
   return tokens.tokens
     .filter(token => leaf.tokenKinds.includes(token.kind))
-    .map(colourTokenOf);
+    .map(token => colourTokenOf(token, mode));
 }
 
 /**
@@ -151,17 +177,21 @@ export function colourTokensFor(
  * NAME, which compiles to a custom property nothing declares and loses the
  * style with no symptom.
  */
-function colourTokenOf(token: SiteToken): ColourToken {
+function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
+  // `light` is required and `dark` is not, so a token defined only for light
+  // resolves to it in either mode — which is what the canvas does too: no dark
+  // declaration is emitted for it, so the light one goes on applying.
+  const colour = token.values[mode] ?? token.values.light;
   return {
     identity: tokenIdentity(token),
     name: token.name,
-    colour: token.values.light,
+    colour,
     // Resolved with NO table, which is what stops this recursing: a token whose
     // value is itself a reference would otherwise re-enter the lookup that is
     // building this record. Without a table a reference resolves to nothing and
     // the swatch is simply unpainted, which is the honest answer for a value
     // this package cannot follow.
-    swatch: colourHexOf(token.values.light, undefined),
+    swatch: colourHexOf(colour, undefined),
   };
 }
 
@@ -180,11 +210,12 @@ function colourTokenOf(token: SiteToken): ColourToken {
  */
 export function colourTokenFor(
   identity: string,
-  tokens: SiteTokenSet | undefined
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode = "light"
 ): ColourToken | undefined {
   if (tokens === undefined) return undefined;
   const token = tokens.tokens.find(entry => tokenIdentity(entry) === identity);
-  return token === undefined ? undefined : colourTokenOf(token);
+  return token === undefined ? undefined : colourTokenOf(token, mode);
 }
 
 /**
@@ -204,9 +235,10 @@ export function colourTokenFor(
  */
 function colourChannelsOf(
   value: StyleValue | undefined,
-  tokens: SiteTokenSet | undefined
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode
 ): Rgb | undefined {
-  const literal = resolvedColourOf(value, tokens);
+  const literal = resolvedColourOf(value, tokens, mode);
   return literal === undefined ? undefined : parseColor(literal);
 }
 
@@ -224,13 +256,16 @@ function colourChannelsOf(
  */
 function resolvedColourOf(
   value: StyleValue | undefined,
-  tokens: SiteTokenSet | undefined
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode
 ): string | undefined {
   if (typeof value === "string") return value;
   // The ENGINE's own test for a reference, which is also what
   // {@link colourShowable} routes on — so what counts as a token here and what
   // the panel sends to a colour control cannot drift apart.
-  if (isTokenRef(value)) return colourTokenFor(value.$token, tokens)?.colour;
+  if (isTokenRef(value)) {
+    return colourTokenFor(value.$token, tokens, mode)?.colour;
+  }
   return undefined;
 }
 
@@ -252,9 +287,10 @@ function resolvedColourOf(
  */
 export function colourHexOf(
   value: StyleValue | undefined,
-  tokens: SiteTokenSet | undefined
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode = "light"
 ): string | undefined {
-  const channels = colourChannelsOf(value, tokens);
+  const channels = colourChannelsOf(value, tokens, mode);
   return channels === undefined ? undefined : hexOf(channels);
 }
 
@@ -399,15 +435,16 @@ export function emitsContrastPartner(
 export function contrastOf(
   foreground: StyleValue | undefined,
   background: StyleValue | undefined,
-  tokens: SiteTokenSet | undefined
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode = "light"
 ): ContrastResult | undefined {
   // Through the same function the swatch is painted from, so a pair the panel
   // drew two swatches for is a pair this can measure — and a value that shows
   // no swatch shows no figure. Asking `parseColor` separately here would be a
   // second answer to what a value resolves to, and the two would disagree first
   // on tokens, where one of them consults the table and the other does not.
-  const fg = colourHexOf(foreground, tokens);
-  const back = colourChannelsOf(background, tokens);
+  const fg = colourHexOf(foreground, tokens, mode);
+  const back = colourChannelsOf(background, tokens, mode);
   if (fg === undefined || back === undefined) return undefined;
   // A TRANSLUCENT background has no contrast this can compute, because what
   // shows through it is not known here. `checkContrast` composites the
@@ -439,13 +476,14 @@ export function contrastAtLeaf(
   leaf: StyleLeaf,
   own: StyleValue | undefined,
   partner: StyleValue | undefined,
-  tokens: SiteTokenSet | undefined
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode = "light"
 ): ContrastResult | undefined {
   const role = contrastRoleOf(leaf);
   if (role === undefined) return undefined;
   return role === "background"
-    ? contrastOf(partner, own, tokens)
-    : contrastOf(own, partner, tokens);
+    ? contrastOf(partner, own, tokens, mode)
+    : contrastOf(own, partner, tokens, mode);
 }
 
 /**

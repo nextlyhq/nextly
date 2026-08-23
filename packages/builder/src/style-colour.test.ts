@@ -17,6 +17,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  activeTokenMode,
   colourHexOf,
   colourShowable,
   colourTokenFor,
@@ -452,5 +453,61 @@ describe("a translucent background withholds the verdict", () => {
 
   it("refuses an alpha hex background as readily as an rgba() one", () => {
     expect(contrastOf("#ffffff", "#00000080", TOKENS)).toBeUndefined();
+  });
+});
+
+describe("which mode a token resolves in", () => {
+  const media: SiteTokenSet = { ...TOKENS, darkMode: "media" };
+  const attribute: SiteTokenSet = { ...TOKENS, darkMode: "attribute" };
+
+  it("follows the system only where the site said to", () => {
+    // `emitTokenBlocks` wraps the dark block in
+    // `@media (prefers-color-scheme:dark)` for the media strategy, so the
+    // canvas switches with the system and nothing tells the panel.
+    expect(activeTokenMode(media, true)).toBe("dark");
+    expect(activeTokenMode(media, false)).toBe("light");
+  });
+
+  it("stays light on the attribute strategy, which the panel cannot observe", () => {
+    // The dark block is written under `[data-nx-theme="dark"]`, set by the HOST
+    // on an ancestor of its choosing. A stated limit, not a claim.
+    expect(activeTokenMode(attribute, true)).toBe("light");
+    // And the default, when a site names no strategy at all.
+    expect(activeTokenMode(TOKENS, true)).toBe("light");
+    expect(activeTokenMode(undefined, true)).toBe("light");
+  });
+
+  it("resolves a reference to the value the canvas is actually showing", () => {
+    // The separating case: this token differs between modes, so a resolution
+    // pinned to light would paint a swatch the canvas contradicts.
+    const ref = { $token: "color.primary" };
+    expect(colourHexOf(ref, media, "light")).toBe("#ffffff");
+    expect(colourHexOf(ref, media, "dark")).toBe("#000000");
+  });
+
+  it("falls back to light for a token defined only for light", () => {
+    // Which is what the canvas does too: no dark declaration is emitted for it,
+    // so the light one goes on applying.
+    const ink = TOKENS.tokens.find(token => token.name === "color.ink");
+    expect(ink?.values.dark).toBeUndefined();
+    expect(colourHexOf({ $token: "color.ink" }, media, "dark")).toBe("#111111");
+  });
+
+  it("paints preset swatches in the same mode", () => {
+    const dark = colourTokensFor(COLOR, media, "dark").find(
+      token => token.name === "brand.main"
+    );
+    expect(dark?.colour).toBe("#000000");
+    expect(dark?.swatch).toBe("#000000");
+  });
+
+  it("measures contrast in that mode too", () => {
+    // Light: #111111 on #ffffff, high. Dark: #111111 on #000000, low. A readout
+    // pinned to light would report a passing pair while the canvas shows a
+    // failing one.
+    const fg = { $token: "color.ink" };
+    const bg = { $token: "color.primary" };
+    expect(contrastOf(fg, bg, media, "light")?.passesBodyText).toBe(true);
+    expect(contrastOf(fg, bg, media, "dark")?.passesBodyText).toBe(false);
   });
 });
