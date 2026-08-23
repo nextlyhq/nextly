@@ -571,6 +571,73 @@ describe("bringing a token file in", () => {
    * the comment at the call site rather than by a green test that cannot fail.
    */
 
+  it("merges into the set as it is NOW, not as it was when the read began", async () => {
+    // Reading a file is asynchronous and an author can edit while it is in
+    // flight. Merging into the set this render closed over discards that edit
+    // and persists the stale result — an edit made, seen, and silently undone
+    // by an import that was already running.
+    const onChange = vi.fn();
+    let resolveRead: ((text: string) => void) | undefined;
+    const slow = new File([FILE], "tokens.json", { type: "application/json" });
+    Object.defineProperty(slow, "text", {
+      value: () =>
+        new Promise<string>(resolve => {
+          resolveRead = resolve;
+        }),
+    });
+
+    const { rerender } = render(
+      <TokensPanel tokens={TOKENS} onChange={onChange} />
+    );
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [slow] },
+    });
+
+    // The author edits while the read is still out, and the host re-renders
+    // the panel with the newer set.
+    const edited: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
+        ...TOKENS.tokens.slice(1),
+      ],
+    };
+    rerender(<TokensPanel tokens={edited} onChange={onChange} />);
+
+    resolveRead?.(FILE);
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+
+    const merged = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    // The edit survived the import.
+    expect(merged.tokens.find(t => t.name === "color.ink")?.values.light).toBe(
+      "#ff0000"
+    );
+    // And the file still arrived.
+    expect(merged.tokens.map(t => t.name)).toContain("color.brand");
+  });
+
+  it("reports a file it could not READ, rather than doing nothing quietly", async () => {
+    // Removed between choosing and opening, a permission refusal, a failing
+    // disk. Without a guard the rejection escapes into the `void` at the call
+    // site and the import does nothing while saying nothing.
+    const onChange = mount(TOKENS);
+    const broken = new File(["x"], "tokens.json", { type: "application/json" });
+    Object.defineProperty(broken, "text", {
+      value: () => Promise.reject(new Error("EACCES")),
+    });
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [broken] },
+    });
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be read"
+    );
+  });
+
   it("keeps the report until it is dismissed", async () => {
     mount(TOKENS);
     await chooseFile(FILE);

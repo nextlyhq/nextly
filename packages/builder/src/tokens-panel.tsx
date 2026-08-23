@@ -236,8 +236,43 @@ function TokenTransfer({
     detail: readonly string[];
   } | null>(null);
 
+  /*
+   * The set as it is NOW, read after the file comes back rather than captured
+   * before it goes out.
+   *
+   * Reading a file is asynchronous, and an author can edit a token while it is
+   * in flight. Merging into the set this render closed over would then discard
+   * that edit and persist the stale result — an edit made, seen, and silently
+   * undone by an import that was already running. A ref rather than a
+   * dependency because the read must see the latest value, not the value the
+   * callback was created with.
+   */
+  const current = React.useRef(tokens);
+  React.useEffect(() => {
+    current.current = tokens;
+  }, [tokens]);
+
   const read = async (file: File): Promise<void> => {
-    const result = importDtcg(await file.text(), tokens);
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      /*
+       * The file could not be READ at all — removed between choosing and
+       * opening, a permission refusal, a failing disk. Distinct from a file
+       * that read fine and held nothing usable, and reported rather than
+       * swallowed: without this the promise rejects into the `void` at the
+       * call site and the import does nothing while saying nothing.
+       */
+      setReport({
+        tone: "refused",
+        headline:
+          "That file could not be read. It may have been moved or renamed since you chose it.",
+        detail: [],
+      });
+      return;
+    }
+    const result = importDtcg(text, current.current);
     if (!result.ok) {
       setReport({
         tone: "refused",
