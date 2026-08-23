@@ -63,11 +63,13 @@ import {
   checkContrast,
   emitTokenBlocks,
   isTokenRef,
+  locateNode,
   parseColor,
   resolveSiteTokens,
   STYLE_CATALOG,
   tokenCustomProperty,
   tokenIdentity,
+  type BlockNode,
   type ContrastResult,
   type Rgb,
   type NodeStyles,
@@ -655,6 +657,29 @@ const OBSCURING_PROPERTIES: readonly string[] = [
 ];
 
 /**
+ * The obscuring properties whose effect reaches every DESCENDANT.
+ *
+ * A subset, because most of the list above is local: an ancestor's background
+ * or gradient is painted BEHIND this node and stops mattering the moment this
+ * node paints an opaque one of its own, and a shadow is drawn within the box
+ * that declares it. These three are different — `opacity` and `filter`
+ * composite the whole rendered subtree, and `mixBlendMode` makes it depend on
+ * whatever lies beneath the ancestor — so both of the colours a control is
+ * comparing arrive at the eye altered, and the ratio between the two stored
+ * values describes a rendering that does not happen.
+ *
+ * Split from the list rather than reusing it whole, because applying the local
+ * entries to ancestors would withhold a verdict for a background nothing can
+ * see, on almost every page: a section with a background colour is the ordinary
+ * case, and every control inside it would go quiet.
+ */
+const SUBTREE_OBSCURING_PROPERTIES: readonly string[] = [
+  "opacity",
+  "filter",
+  "mixBlendMode",
+];
+
+/**
  * The property standing between this pair, or `undefined` when none is set.
  *
  * Takes a READER rather than the stored values, so the caller keeps ownership
@@ -693,18 +718,70 @@ export function contrastObscuredBy(
 export function contrastObscuredIn(
   styles: NodeStyles | undefined
 ): string | undefined {
+  return obscuringAnywhereIn(styles, OBSCURING_PROPERTIES);
+}
+
+/**
+ * Any of `properties` set at any address on one node, or `undefined`.
+ *
+ * The sweep both callers need, written once: the node's own verdict asks it
+ * over the whole list, and the ancestor walk asks it over the propagating
+ * subset. Two copies differing only in which list they close over is the shape
+ * that drifts, and the drift would be silent in the failing-open direction.
+ */
+function obscuringAnywhereIn(
+  styles: NodeStyles | undefined,
+  properties: readonly string[]
+): string | undefined {
   if (styles === undefined) return undefined;
   for (const breakpoints of Object.values(styles)) {
     if (breakpoints === undefined) continue;
     for (const values of Object.values(breakpoints)) {
       if (values === undefined) continue;
-      const found = contrastObscuredBy(property =>
-        Object.hasOwn(values, property) ? values[property] : undefined
+      const found = properties.find(property =>
+        Object.hasOwn(values, property) ? values[property] !== undefined : false
       );
       if (found !== undefined) return found;
     }
   }
   return undefined;
+}
+
+/**
+ * An ANCESTOR putting something over this node's pair, or `undefined`.
+ *
+ * The node's own styles are not the whole rendering. `opacity`, `filter` and
+ * `mixBlendMode` on any ancestor composite this node along with everything else
+ * inside it, so black text on white beneath a parent at `opacity: 0.1` still
+ * measures 21:1 here and reaches the eye at a small fraction of it. That is the
+ * guard failing OPEN — reporting a figure that is wrong rather than withholding
+ * one — which is the single direction the rest of this file refuses to fail in.
+ *
+ * Walks by repeated {@link locateNode} rather than by a second traversal of the
+ * tree. Children live in named slots rather than one list, so a hand-written
+ * walk would be a second implementation of the engine's own descent, and the
+ * copy that drifts here goes quiet about an ancestor instead of reporting.
+ */
+export function contrastObscuredAbove(
+  nodes: readonly BlockNode[],
+  nodeId: string
+): string | undefined {
+  // The ids already visited. A document holding a cycle would otherwise spin
+  // here forever, and this costs a set membership over values in hand — the
+  // guard is cheap precisely because it never has to look anything up.
+  const seen = new Set<string>([nodeId]);
+  let current = nodeId;
+  for (;;) {
+    const parent = locateNode(nodes as BlockNode[], current)?.parent;
+    if (parent === undefined || seen.has(parent.id)) return undefined;
+    seen.add(parent.id);
+    const found = obscuringAnywhereIn(
+      parent.styles,
+      SUBTREE_OBSCURING_PROPERTIES
+    );
+    if (found !== undefined) return found;
+    current = parent.id;
+  }
 }
 
 /**

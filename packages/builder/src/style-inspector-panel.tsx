@@ -70,6 +70,7 @@ import {
   colourTokenFor,
   colourTokensFor,
   contrastAtLeaf,
+  contrastObscuredAbove,
   contrastObscuredIn,
   contrastPartnerOf,
   contrastRatioText,
@@ -664,7 +665,13 @@ function StyleControlField({
   const styles = findNode(editor.document.nodes, nodeId)?.styles;
   const stored = readStyleValue(styles, address);
   const pairedColour = partnerColour(control.leaf, styles, address);
-  const obscuredBy = contrastObscuredIn(styles);
+  // This node's own styles first, then every ancestor's. An ancestor's
+  // `opacity`, `filter` or `mixBlendMode` composites this node along with the
+  // rest of the subtree, so both colours reach the eye altered and the ratio
+  // between the two stored values describes a rendering that does not happen.
+  const obscuredBy =
+    contrastObscuredIn(styles) ??
+    contrastObscuredAbove(editor.document.nodes, nodeId);
   const actionName = actionNameFor(propertyLabel, label);
   const [issue, setIssue] = React.useState<string | null>(null);
 

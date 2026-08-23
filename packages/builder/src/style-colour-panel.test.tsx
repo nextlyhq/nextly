@@ -767,3 +767,53 @@ describe("a dismissal that is NOT a superseding control", () => {
  * because the suppression worked. It was deleted rather than left as a green
  * that reported nothing.
  */
+
+describe("an ancestor's effects reach the readout", () => {
+  /** Mount the Style tab over a node nested inside a styled wrapper. */
+  function mountNested(wrapper: unknown) {
+    register();
+    const document_: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: wrapper,
+          slots: {
+            children: [
+              {
+                id: "a",
+                type: "acme/box",
+                version: 1,
+                props: {},
+                styles: styles("#000000", "#ffffff"),
+              },
+            ],
+          },
+        },
+      ] as unknown as BlockNode[],
+    } as BlockDocument;
+    const editor = editorFor(document_);
+    render(<StyleInspectorPanel editor={editor} tokens={TOKENS} />);
+    return editor;
+  }
+
+  it("reports the ratio when nothing above the node alters it", () => {
+    // The control. Without it the assertion below passes for any panel that
+    // never shows a readout at all.
+    mountNested(undefined);
+    expect(screen.getAllByText(/Contrast 21\.0:1/).length).toBeGreaterThan(0);
+  });
+
+  it("withholds it when a PARENT fades the whole subtree", () => {
+    // Black on white measures 21:1 from the node's own styles alone, and
+    // reaches the eye at a fraction of that. A readout scoped to the selected
+    // node reports the figure and is wrong — the one direction this guard
+    // must not fail in.
+    mountNested({ base: { base: { opacity: "0.1" } } });
+    expect(screen.queryByText(/Contrast/)).toBeNull();
+  });
+});

@@ -11,6 +11,7 @@
 import {
   STYLE_CATALOG,
   emitTokenBlocks,
+  type BlockNode,
   type NodeStyles,
   type ContrastResult,
   type SiteTokenSet,
@@ -20,6 +21,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeTokenMode,
+  contrastObscuredAbove,
   colourHexOf,
   colourShowable,
   colourTokenFor,
@@ -822,5 +824,63 @@ describe("what obscures a pair anywhere on the node", () => {
     } as unknown as NodeStyles;
     expect(contrastObscuredIn(styles)).toBeUndefined();
     expect(contrastObscuredIn(undefined)).toBeUndefined();
+  });
+});
+
+describe("what an ancestor puts over a pair", () => {
+  /** A parent holding `styles`, wrapping one child in a slot. */
+  const treeWith = (parentStyles: unknown, depth = 1): BlockNode[] => {
+    let node = { id: "leaf", type: "acme/box", version: 1, props: {} };
+    for (let level = 0; level < depth; level += 1) {
+      node = {
+        id: `wrap${level}`,
+        type: "acme/box",
+        version: 1,
+        props: {},
+        // Only the OUTERMOST wrapper carries the styles, so a walk that stops
+        // at the immediate parent fails the deep case.
+        ...(level === depth - 1 ? { styles: parentStyles } : {}),
+        slots: { children: [node] },
+      } as never;
+    }
+    return [node] as unknown as BlockNode[];
+  };
+
+  it("names an ancestor's opacity, which composites the whole subtree", () => {
+    // The failing-open case: the leaf's own styles are spotless, so a
+    // node-scoped look reports 21:1 for text the parent has faded to a tenth.
+    const nodes = treeWith({ base: { base: { opacity: "0.1" } } });
+    expect(contrastObscuredAbove(nodes, "leaf")).toBe("opacity");
+  });
+
+  it("keeps walking past a clean parent to a grandparent", () => {
+    const nodes = treeWith({ base: { base: { filter: "blur(2px)" } } }, 3);
+    expect(contrastObscuredAbove(nodes, "leaf")).toBe("filter");
+  });
+
+  it("names a blend mode, whose result depends on what is under the ancestor", () => {
+    const nodes = treeWith({ base: { base: { mixBlendMode: "multiply" } } });
+    expect(contrastObscuredAbove(nodes, "leaf")).toBe("mixBlendMode");
+  });
+
+  it("IGNORES an ancestor background, which an opaque child paints over", () => {
+    // The reason the ancestor list is a subset. A section with a background
+    // colour is the ordinary case, and treating it as obscuring would silence
+    // the readout for every control on the page.
+    const nodes = treeWith({
+      base: { base: { background: "#ff0000", boxShadow: "0 0 2px #000" } },
+    });
+    expect(contrastObscuredAbove(nodes, "leaf")).toBeUndefined();
+  });
+
+  it("sees an ancestor rule set only at a hover state or a breakpoint", () => {
+    const nodes = treeWith({ hover: { md: { opacity: "0.2" } } });
+    expect(contrastObscuredAbove(nodes, "leaf")).toBe("opacity");
+  });
+
+  it("answers undefined at the top level, and for an id not in the tree", () => {
+    const nodes = treeWith({ base: { base: { opacity: "0.1" } } });
+    expect(contrastObscuredAbove(nodes, "wrap0")).toBeUndefined();
+    expect(contrastObscuredAbove(nodes, "absent")).toBeUndefined();
   });
 });
