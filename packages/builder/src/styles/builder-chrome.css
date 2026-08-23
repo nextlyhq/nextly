@@ -407,6 +407,93 @@
 }
 
 /*
+ * A colour row: the swatch that opens the picker, then whatever holds the value.
+ *
+ * Laid out like the numeric row and named as its own class for the reason that
+ * one records — the second child is an input for a literal and a name plus a
+ * Clear button for a token reference, so a positional rule would size two
+ * different things.
+ */
+.nx-style-inspector__colour {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nx-style-inspector__colour > :nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * The swatch, over a chequerboard so a translucent colour reads as translucent
+ * rather than as a lighter opaque one.
+ *
+ * The colour arrives as `--nx-swatch` rather than as `background-color` so it
+ * can be layered over that chequerboard in one declaration. A swatch with no
+ * colour set paints nothing and shows the chequerboard alone, which is the
+ * honest appearance for a value this panel cannot resolve.
+ *
+ * design-lint-ok: the chequerboard greys are the standard rendering of "no
+ * colour here" and must not move with the theme, exactly as the picker's own
+ * are.
+ */
+.nx-style-inspector__swatch {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  cursor: pointer;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background-image:
+    linear-gradient(
+      var(--nx-swatch, transparent),
+      var(--nx-swatch, transparent)
+    ),
+    repeating-conic-gradient(#c8c8c8 0% 25%, #ffffff 0% 50%); /* design-lint-ok: the chequerboard is the standard rendering of "no colour", and must not move with the theme — the same fixed greys ui's own ColorPicker uses */
+  background-size:
+    100% 100%,
+    0.5rem 0.5rem;
+}
+
+.nx-style-inspector__swatch:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+/* The token's name, beside the swatch, where a literal would show its field. */
+.nx-style-inspector__colour-token {
+  overflow: hidden;
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The contrast readout, under the row it describes.
+ *
+ * Coloured by VERDICT rather than by ratio, so the three thresholds the
+ * specification names are what the eye reads — and a failing pair is not made
+ * to look like an error the panel refused, because it is a warning about a
+ * value that is stored and valid.
+ */
+.nx-style-inspector__contrast {
+  margin: 0.25rem 0 0;
+  font-size: 0.75rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-style-inspector__contrast[data-level="fail"] {
+  color: var(--nx-destructive);
+}
+
+/* Sized to the picker rather than to the trigger it hangs from. */
+.nx-style-inspector__picker {
+  width: auto;
+}
+
+/*
  * Two states of one property, drawn as one segmented control rather than two
  * buttons that happen to be adjacent: they share a border and split the width,
  * so the pair reads as a single choice with one side taken.
@@ -539,7 +626,7 @@
   margin: 0;
   padding: 0.375rem 0.5rem;
   border: 1px solid var(--nx-border);
-  border-radius: var(--nx-radius-sm, 0.25rem);
+  border-radius: var(--radius-sm);
   font-size: 0.8125rem;
   background: var(--nx-muted);
 }

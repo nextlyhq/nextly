@@ -26,6 +26,7 @@
 import {
   findNode,
   type BreakpointId,
+  type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -82,6 +83,15 @@ export interface InspectorPanelProps {
   styleState?: StyleState;
   /** The breakpoint the Style tab edits. The unconditional one by default. */
   breakpoint?: BreakpointId;
+  /**
+   * The site's design tokens, forwarded to the Style tab's colour controls.
+   *
+   * Carried rather than defaulted, as `policy` is: omitting it means the
+   * question was never asked, not that the site defines none. See
+   * {@link StyleInspectorPanelProps.tokens} for why `policy.tokens` cannot
+   * serve this.
+   */
+  tokens?: SiteTokenSet;
 }
 
 /**
@@ -101,6 +111,7 @@ export function InspectorPanel({
   policy,
   styleState,
   breakpoint,
+  tokens,
 }: InspectorPanelProps): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
@@ -229,6 +240,7 @@ export function InspectorPanel({
             policy={policy}
             state={styleState}
             breakpoint={breakpoint}
+            tokens={tokens}
           />
         </TabsContent>
       </Tabs>

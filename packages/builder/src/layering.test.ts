@@ -82,6 +82,17 @@ const ALLOWED_RUNTIME_IMPORTS = [
   // The `cn` helper only. A separate subpath because the root barrel carries a
   // `"use client"` banner and this one is plain string joining.
   "@nextlyhq/ui/utils",
+  // Colour conversion only, and a separate subpath for the same reason `utils`
+  // is: `ui` publishes it away from the root barrel precisely because it is
+  // arithmetic on numbers with no React in it, so importing it does not pull a
+  // client boundary into a pure module.
+  //
+  // It is the writing half of hex, and the engine owns the reading half — so
+  // this entry is what keeps `style-colour.ts` from growing a hex composer of
+  // its own. Note what it deliberately does NOT admit: `ui/styles/contrast` is
+  // a different subpath, is not listed here, and is not published at all;
+  // `style-colour-boundary.test.ts` is the guard that says why.
+  "@nextlyhq/ui/color",
   // The `/admin` subpath ONLY, and not the SDK root. The root re-exports runtime
   // values from `nextly` (`export { definePlugin } from "nextly"`), which that
   // package's build leaves external, so importing it loads the CMS runtime this

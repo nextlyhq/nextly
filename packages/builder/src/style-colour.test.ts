@@ -1,0 +1,375 @@
+/**
+ * What a colour affordance may do with a stored value, and — mostly — what it
+ * may not.
+ *
+ * The leaves come from `STYLE_CATALOG` rather than being written here, for the
+ * reason `style-numeric.test.ts` gives: a hand-made leaf asserting
+ * `tokenKinds: ["color"]` would pass against a hardcoded rule in the module
+ * just as happily as against the catalog being asked, and those are the two
+ * implementations that have to be told apart.
+ */
+import {
+  STYLE_CATALOG,
+  type ContrastResult,
+  type SiteTokenSet,
+  type StyleLeaf,
+} from "@nextlyhq/blocks-engine";
+import { describe, expect, it } from "vitest";
+
+import {
+  colourHexOf,
+  colourTokenFor,
+  colourTokensFor,
+  contrastOf,
+  contrastPartnerOf,
+  contrastRatioText,
+  contrastRoleOf,
+  emitsContrastPartner,
+} from "./style-colour";
+
+/** One catalog entry, as the array actually stores them. */
+interface CatalogEntry {
+  readonly property: string;
+  readonly shape: Record<string, unknown>;
+}
+
+const entry = (property: string): CatalogEntry => {
+  const found = (STYLE_CATALOG as unknown as readonly CatalogEntry[]).find(
+    candidate => candidate.property === property
+  );
+  if (found === undefined) throw new Error(`no catalog entry for ${property}`);
+  return found;
+};
+
+const leaf = (property: string): StyleLeaf =>
+  entry(property).shape as unknown as StyleLeaf;
+
+/** The leaf at one field of an object-shaped property. */
+const field = (property: string, name: string): StyleLeaf => {
+  const fields = entry(property).shape.fields as Record<string, StyleLeaf>;
+  const found = fields[name];
+  if (found === undefined) throw new Error(`${property} has no ${name} field`);
+  return found;
+};
+
+const COLOR = leaf("color");
+const LINK_COLOR = leaf("linkColor");
+const LINK_COLOR_HOVER = leaf("linkColorHover");
+const BACKGROUND_COLOR = leaf("backgroundColor");
+const BORDER_COLOR = field("border", "color");
+/** A leaf that is not a colour at all, and admits no colour token. */
+const OPACITY = leaf("opacity");
+
+/**
+ * A site whose second token has been RENAMED, so its identity and its name
+ * differ.
+ *
+ * That divergence is the only state in which storing the wrong one of the two
+ * has a symptom, so a fixture where every id equals its name would let the
+ * defect this module exists to prevent pass every assertion below.
+ */
+const TOKENS: SiteTokenSet = {
+  tokens: [
+    { name: "color.ink", kind: "color", values: { light: "#111111" } },
+    {
+      id: "color.primary",
+      name: "brand.main",
+      kind: "color",
+      values: { light: "#ffffff", dark: "#000000" },
+    },
+    { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+  ],
+};
+
+describe("which tokens a colour control offers", () => {
+  it("offers the site's colour tokens and withholds the others", () => {
+    const offered = colourTokensFor(COLOR, TOKENS);
+    expect(offered.map(token => token.name)).toEqual([
+      "color.ink",
+      "brand.main",
+    ]);
+    // The positive control for the filter: the site DOES define a token of
+    // another kind, so an empty exclusion list would show here.
+    expect(TOKENS.tokens.some(token => token.kind === "dimension")).toBe(true);
+  });
+
+  it("offers nothing at a leaf whose catalog entry admits no colour token", () => {
+    // Asked of the leaf rather than of its kind: `opacity` is a number leaf and
+    // the reason it offers no colour token is that the CATALOG gives it no
+    // colour in `tokenKinds`, which is the fact a control must read.
+    expect(OPACITY.tokenKinds).not.toContain("color");
+    expect(colourTokensFor(OPACITY, TOKENS)).toEqual([]);
+  });
+
+  it("offers nothing when the host supplied no table", () => {
+    expect(colourTokensFor(COLOR, undefined)).toEqual([]);
+  });
+
+  it("carries the IDENTITY to store and the NAME to read, which differ", () => {
+    // The load-bearing assertion of this file. A stored `{ $token }` holds the
+    // identity, because `emitTokenBlocks` writes each custom property from
+    // `tokenIdentity` while the compiler composes `var(...)` from the stored
+    // string verbatim. Offering the NAME would store a reference to a property
+    // nothing declares — the style vanishes and the page still renders.
+    const renamed = colourTokensFor(COLOR, TOKENS).find(
+      token => token.name === "brand.main"
+    );
+    expect(renamed).toBeDefined();
+    expect(renamed?.identity).toBe("color.primary");
+    expect(renamed?.identity).not.toBe(renamed?.name);
+  });
+
+  it("falls back to the name as identity for a token that has no id", () => {
+    // The continuity half of the same rule, and what every token stored before
+    // `id` existed relies on.
+    const original = colourTokensFor(COLOR, TOKENS).find(
+      token => token.name === "color.ink"
+    );
+    expect(original?.identity).toBe("color.ink");
+  });
+});
+
+describe("resolving a stored reference back to its token", () => {
+  it("finds a renamed token by the identity a document stores", () => {
+    const found = colourTokenFor("color.primary", TOKENS);
+    expect(found?.name).toBe("brand.main");
+    expect(found?.colour).toBe("#ffffff");
+  });
+
+  it("does NOT find it by the name an author now reads", () => {
+    // The separating case. A lookup keyed on the name would answer here, and
+    // would answer nothing for the identity above — reversing which references
+    // resolve.
+    expect(colourTokenFor("brand.main", TOKENS)).toBeUndefined();
+  });
+
+  it("answers undefined for a token this site does not define", () => {
+    expect(colourTokenFor("color.nothing", TOKENS)).toBeUndefined();
+  });
+});
+
+describe("the hex a stored colour denotes", () => {
+  it("reads the notations the engine's contrast parser reads", () => {
+    expect(colourHexOf("#3b82f6", TOKENS)).toBe("#3b82f6");
+    expect(colourHexOf("rgb(59 130 246)", TOKENS)).toBe("#3b82f6");
+    expect(colourHexOf("rgba(59, 130, 246, 0.5)", TOKENS)).toBe("#3b82f680");
+  });
+
+  it("expands a short hex the way CSS does", () => {
+    expect(colourHexOf("#fff", TOKENS)).toBe("#ffffff");
+  });
+
+  it("keeps channels on the ENGINE's scale rather than the picker's", () => {
+    // The separating test for the one place two `Rgb` types meet. The engine's
+    // channels are 0-255 and `@nextlyhq/ui`'s are [0, 1], and `toHex` CLAMPS —
+    // so handing it the engine's shape does not throw or warn, it silently
+    // answers `#ffffff` for every colour but black. These three channels are
+    // each above 1 and below 4, which is the range where the two scales are
+    // furthest apart in effect.
+    expect(colourHexOf("rgb(1 2 3)", TOKENS)).toBe("#010203");
+    expect(colourHexOf("rgb(1 2 3)", TOKENS)).not.toBe("#ffffff");
+  });
+
+  it("resolves a token reference through the site's table", () => {
+    expect(colourHexOf({ $token: "color.ink" }, TOKENS)).toBe("#111111");
+    // By identity, so a renamed token still paints.
+    expect(colourHexOf({ $token: "color.primary" }, TOKENS)).toBe("#ffffff");
+  });
+
+  it("answers undefined for a reference the site does not define", () => {
+    expect(colourHexOf({ $token: "color.nothing" }, TOKENS)).toBeUndefined();
+    expect(colourHexOf({ $token: "color.ink" }, undefined)).toBeUndefined();
+  });
+
+  it("REFUSES every value that means resolve-this-somewhere-else", () => {
+    // These are the values a swatch must not be painted with: each is a valid
+    // colour the engine accepts, and each resolves against the surface it is
+    // drawn on — so painted in the inspector they would show the author a
+    // colour their page does not have.
+    expect(colourHexOf("var(--site-color-primary)", TOKENS)).toBeUndefined();
+    expect(colourHexOf("currentcolor", TOKENS)).toBeUndefined();
+    expect(colourHexOf("inherit", TOKENS)).toBeUndefined();
+    expect(colourHexOf("initial", TOKENS)).toBeUndefined();
+    expect(colourHexOf("unset", TOKENS)).toBeUndefined();
+  });
+
+  it("refuses the notations the engine's parser declines, rather than guessing", () => {
+    // Valid CSS colours that `parseColor` deliberately does not read. The
+    // control keeps its text field for them and rewrites nothing.
+    expect(colourHexOf("red", TOKENS)).toBeUndefined();
+    expect(colourHexOf("oklch(0.7 0.1 200)", TOKENS)).toBeUndefined();
+    expect(
+      colourHexOf("color-mix(in srgb, red, blue)", TOKENS)
+    ).toBeUndefined();
+    expect(colourHexOf("hsl(210 90% 60%)", TOKENS)).toBeUndefined();
+  });
+
+  it("refuses a value that is not a colour at all", () => {
+    expect(colourHexOf(undefined, TOKENS)).toBeUndefined();
+    expect(colourHexOf(16, TOKENS)).toBeUndefined();
+    expect(colourHexOf("16px", TOKENS)).toBeUndefined();
+    // An object at a scalar position, from an import or the API. Refused rather
+    // than coerced: offering to edit it would offer to replace it.
+    expect(colourHexOf({ value: "#fff" } as never, TOKENS)).toBeUndefined();
+    // A token key holding something that is not a name.
+    expect(colourHexOf({ $token: 4 } as never, TOKENS)).toBeUndefined();
+  });
+});
+
+describe("which side of a contrast pair a leaf sits on", () => {
+  it("reads the CSS property, so the link colours are covered unnamed", () => {
+    // The property under test is that the role is DERIVED. `linkColor` and
+    // `linkColorHover` are separate catalog keys that both write `color`, and a
+    // rule listing catalog keys would have to name them; this covers them
+    // because it reads what they emit.
+    expect(LINK_COLOR.cssProperty).toBe("color");
+    expect(LINK_COLOR_HOVER.cssProperty).toBe("color");
+    expect(contrastRoleOf(COLOR)).toBe("foreground");
+    expect(contrastRoleOf(LINK_COLOR)).toBe("foreground");
+    expect(contrastRoleOf(LINK_COLOR_HOVER)).toBe("foreground");
+  });
+
+  it("names the background", () => {
+    expect(contrastRoleOf(BACKGROUND_COLOR)).toBe("background");
+  });
+
+  it("puts a border on neither side", () => {
+    // A border is a colour leaf and still has no place in a text-contrast pair:
+    // reporting it against the block's background would answer a question
+    // nobody asked, against a threshold that does not apply.
+    expect(BORDER_COLOR.kind).toBe("color");
+    expect(contrastRoleOf(BORDER_COLOR)).toBeUndefined();
+  });
+
+  it("puts a leaf that is not a colour on neither side", () => {
+    expect(contrastRoleOf(OPACITY)).toBeUndefined();
+  });
+});
+
+describe("which property holds the other half of the pair", () => {
+  it("finds the partner in the catalog rather than naming it", () => {
+    expect(contrastPartnerOf(COLOR)).toBe("backgroundColor");
+    expect(contrastPartnerOf(BACKGROUND_COLOR)).toBe("color");
+  });
+
+  it("pairs a link colour against the block's own background", () => {
+    expect(contrastPartnerOf(LINK_COLOR)).toBe("backgroundColor");
+    expect(contrastPartnerOf(LINK_COLOR_HOVER)).toBe("backgroundColor");
+  });
+
+  it("refuses a leaf that styles a DESCENDANT as a partner", () => {
+    // Asserted on the PREDICATE rather than through `contrastPartnerOf`, and
+    // the reason is worth recording: `color` precedes `linkColor` in
+    // `STYLE_CATALOG`, so the search returns "color" by array order whether or
+    // not the selector is read. Measured — deleting the descendant rule and
+    // re-running this file changed nothing at all. Through the search, this
+    // property has NO coverage; here it has some.
+    expect(LINK_COLOR.descendant).toBeDefined();
+    expect(LINK_COLOR_HOVER.descendant).toBeDefined();
+    expect(emitsContrastPartner(LINK_COLOR, "color")).toBe(false);
+    expect(emitsContrastPartner(LINK_COLOR_HOVER, "color")).toBe(false);
+    // The positive control: the same call on the block's own colour accepts,
+    // so the `false` above is the selector being read rather than the predicate
+    // refusing everything.
+    expect(emitsContrastPartner(COLOR, "color")).toBe(true);
+    expect(emitsContrastPartner(BACKGROUND_COLOR, "background-color")).toBe(
+      true
+    );
+  });
+
+  it("refuses a leaf that emits a different property, or is not a colour", () => {
+    expect(emitsContrastPartner(COLOR, "background-color")).toBe(false);
+    expect(emitsContrastPartner(OPACITY, "color")).toBe(false);
+  });
+
+  it("gives a leaf outside the pairing no partner", () => {
+    expect(contrastPartnerOf(BORDER_COLOR)).toBeUndefined();
+    expect(contrastPartnerOf(OPACITY)).toBeUndefined();
+  });
+});
+
+describe("the contrast a pair reports", () => {
+  it("reports the specification's own extreme", () => {
+    // Black on white is 21:1 exactly, which is a value WCAG states rather than
+    // one this repository chose — so it separates a correct implementation from
+    // a plausible one.
+    const result = contrastOf("#000000", "#ffffff", TOKENS);
+    expect(result?.ratio).toBeCloseTo(21, 5);
+    expect(result?.level).toBe("AAA");
+    expect(result?.passesBodyText).toBe(true);
+  });
+
+  it("measures a pair written as tokens, by resolving both sides first", () => {
+    // The improvement over checking literals only, and the reason resolution
+    // happens before the engine is asked: in a design system the ordinary pair
+    // is two token references, and declining those would leave the readout
+    // silent exactly where it is most wanted.
+    const result = contrastOf(
+      { $token: "color.ink" },
+      { $token: "color.primary" },
+      TOKENS
+    );
+    // `#111111` on `#ffffff`.
+    expect(result?.ratio).toBeGreaterThan(18);
+    expect(result?.passesBodyText).toBe(true);
+  });
+
+  it("reports a failing pair as failing", () => {
+    const result = contrastOf("#777777", "#888888", TOKENS);
+    expect(result?.level).toBe("fail");
+    expect(result?.passesBodyText).toBe(false);
+  });
+
+  it("answers undefined when EITHER side cannot be read", () => {
+    // Not a default, and not an approximation. A ratio computed from a colour
+    // that was misread is a number an author will act on.
+    expect(contrastOf("var(--brand)", "#ffffff", TOKENS)).toBeUndefined();
+    expect(contrastOf("#000000", "var(--brand)", TOKENS)).toBeUndefined();
+    expect(contrastOf("#000000", undefined, TOKENS)).toBeUndefined();
+    expect(contrastOf(undefined, "#ffffff", TOKENS)).toBeUndefined();
+    // A named colour is a colour the engine accepts and this cannot measure.
+    expect(contrastOf("red", "#ffffff", TOKENS)).toBeUndefined();
+  });
+
+  it("agrees with the swatch about which values are readable", () => {
+    // The two must not disagree: a value the panel painted a swatch for and
+    // then reported no figure about — or the reverse — reads as a broken
+    // control. They share `colourHexOf`, and this is what would fail if a
+    // second resolution were introduced.
+    for (const value of [
+      "#3b82f6",
+      "rgb(1 2 3)",
+      "red",
+      "var(--x)",
+      "currentcolor",
+      { $token: "color.primary" },
+      { $token: "color.nothing" },
+    ]) {
+      const readable = colourHexOf(value, TOKENS) !== undefined;
+      const measured = contrastOf(value, "#ffffff", TOKENS) !== undefined;
+      expect(measured).toBe(readable);
+    }
+  });
+});
+
+describe("how a ratio reads", () => {
+  it("reports one decimal place, as the thresholds are written", () => {
+    const result = contrastOf("#000000", "#ffffff", TOKENS);
+    expect(result).toBeDefined();
+    if (result !== undefined) expect(contrastRatioText(result)).toBe("21.0:1");
+  });
+
+  it("rounds the DISPLAY without moving the verdict", () => {
+    // A ratio just under the body-text threshold displays as the threshold and
+    // still reports as failing. That pair looks contradictory and is the honest
+    // reading: the rule is on the ratio, not on its rendering. Constructed
+    // rather than searched for, so the case is stated rather than hoped for.
+    const near: ContrastResult = {
+      ratio: 4.49,
+      level: "AA-large",
+      passesBodyText: false,
+    };
+    expect(contrastRatioText(near)).toBe("4.5:1");
+    expect(near.passesBodyText).toBe(false);
+  });
+});
