@@ -347,3 +347,86 @@ describe("a save that did not happen", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+describe("removing a row does not carry state onto its successor", () => {
+  const THREE: SiteTokenSet = {
+    tokens: [
+      { name: "color.a", kind: "color", values: { light: "#111111" } },
+      { name: "color.b", kind: "color", values: { light: "#222222" } },
+      { name: "color.c", kind: "color", values: { light: "#333333" } },
+    ],
+  };
+
+  it("shows each survivor its OWN value after an earlier row goes", () => {
+    // Keyed by position, deleting `color.a` shifts every following row and
+    // React reuses the deleted row's component for `color.b` — so the
+    // uncontrolled inputs keep the removed token's text.
+    const { rerender } = render(
+      <TokensPanel tokens={THREE} onChange={vi.fn()} />
+    );
+    const after: SiteTokenSet = { tokens: THREE.tokens.slice(1) };
+    rerender(<TokensPanel tokens={after} onChange={vi.fn()} />);
+
+    expect(valueField("color.b")).toHaveProperty("value", "#222222");
+    expect(valueField("color.c")).toHaveProperty("value", "#333333");
+    expect(screen.queryByLabelText("Name of color.a")).toBeNull();
+  });
+
+  it("does not leave a successor in removal confirmation", () => {
+    // The sharper half: the confirm state belongs to the row component, so a
+    // reused component hands the next token a live "Remove" button it never
+    // asked for — one click from removing the wrong token.
+    const { rerender } = render(
+      <TokensPanel tokens={THREE} onChange={vi.fn()} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove color.a" }));
+    expect(screen.getByText(/loses that style/)).toBeDefined();
+
+    const after: SiteTokenSet = { tokens: THREE.tokens.slice(1) };
+    rerender(<TokensPanel tokens={after} onChange={vi.fn()} />);
+    expect(screen.queryByText(/loses that style/)).toBeNull();
+  });
+});
+
+describe("a reverted value reaches the field", () => {
+  it("shows the restored value after a refused save puts it back", () => {
+    // The inputs are uncontrolled, so a prop change alone does not move them:
+    // the panel would go on showing an override that storage and the canvas no
+    // longer hold, with the author believing it was saved.
+    const { rerender } = render(
+      <TokensPanel tokens={TOKENS} onChange={vi.fn()} />
+    );
+    const typed: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
+        ...TOKENS.tokens.slice(1),
+      ],
+    };
+    rerender(<TokensPanel tokens={typed} onChange={vi.fn()} />);
+    expect(valueField("color.ink")).toHaveProperty("value", "#ff0000");
+
+    // Refused: the host puts the persisted set back.
+    rerender(<TokensPanel tokens={TOKENS} onChange={vi.fn()} />);
+    expect(valueField("color.ink")).toHaveProperty("value", "#111111");
+  });
+
+  it("shows the restored NAME too", () => {
+    const renamed: SiteTokenSet = {
+      tokens: [
+        {
+          id: "color.ink",
+          name: "text.body",
+          kind: "color",
+          values: { light: "#111111" },
+        },
+        ...TOKENS.tokens.slice(1),
+      ],
+    };
+    const { rerender } = render(
+      <TokensPanel tokens={renamed} onChange={vi.fn()} />
+    );
+    expect(nameField("text.body")).toHaveProperty("value", "text.body");
+    rerender(<TokensPanel tokens={TOKENS} onChange={vi.fn()} />);
+    expect(nameField("color.ink")).toHaveProperty("value", "color.ink");
+  });
+});

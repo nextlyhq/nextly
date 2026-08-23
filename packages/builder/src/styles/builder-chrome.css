@@ -428,6 +428,30 @@
 }
 
 /*
+ * The chequerboard every swatch is painted over, defined ONCE.
+ *
+ * A colour surface needs something behind it that says "nothing here", and that
+ * something has to read as absence rather than as a colour — which is what the
+ * chequerboard is for, and why a translucent swatch shows it through.
+ *
+ * Fixed greys rather than theme tokens, and deliberately: the pattern is the
+ * standard rendering of "no colour" and stops meaning that if it moves with the
+ * theme, since a themed chequerboard is just another colour behind the swatch.
+ * `@nextlyhq/ui`'s own ColorPicker makes the identical call for the identical
+ * visual. Stated once here so the exemption is one decision rather than one per
+ * swatch, and so a second surface cannot drift from the first.
+ */
+:root {
+  /*
+   * On ONE line, and held there: the design linter scans by line, so a wrapped
+   * value would put the colours on a different line from the exemption that
+   * covers them and the rule would be reported despite being marked.
+   */
+  /* prettier-ignore */
+  --nx-checkerboard: repeating-conic-gradient(#c8c8c8 0% 25%, #ffffff 0% 50%); /* design-lint-ok: the chequerboard is the standard rendering of "no colour" and must not move with the theme — the same fixed greys ui's own ColorPicker uses */
+}
+
+/*
  * The swatch, over a chequerboard so a translucent colour reads as translucent
  * rather than as a lighter opaque one.
  *
@@ -436,9 +460,9 @@
  * colour set paints nothing and shows the chequerboard alone, which is the
  * honest appearance for a value this panel cannot resolve.
  *
- * design-lint-ok: the chequerboard greys are the standard rendering of "no
- * colour here" and must not move with the theme, exactly as the picker's own
- * are.
+ * The chequerboard itself is `--nx-checkerboard`, declared once above, so the
+ * decision to keep it off the theme is made in one place rather than restated
+ * by every swatch that shows it.
  */
 .nx-style-inspector__swatch {
   /*
@@ -457,8 +481,7 @@
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
   background-image:
-    linear-gradient(var(--nx-swatch), var(--nx-swatch)),
-    repeating-conic-gradient(#c8c8c8 0% 25%, #ffffff 0% 50%); /* design-lint-ok: the chequerboard is the standard rendering of "no colour", and must not move with the theme — the same fixed greys ui's own ColorPicker uses */
+    linear-gradient(var(--nx-swatch), var(--nx-swatch)), var(--nx-checkerboard);
   background-size:
     100% 100%,
     0.5rem 0.5rem;
@@ -1225,8 +1248,7 @@
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
   background-image:
-    linear-gradient(var(--nx-swatch), var(--nx-swatch)),
-    repeating-conic-gradient(#c8c8c8 0% 25%, #ffffff 0% 50%); /* design-lint-ok: the chequerboard is the standard rendering of "no colour", and must not move with the theme — the same fixed greys ui's own ColorPicker uses */
+    linear-gradient(var(--nx-swatch), var(--nx-swatch)), var(--nx-checkerboard);
   background-size:
     100% 100%,
     0.375rem 0.375rem;

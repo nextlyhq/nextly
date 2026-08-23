@@ -167,3 +167,82 @@ describe("what a refused save leaves on screen", () => {
     expect(tokensAfterRefusal(a, a, null)).toBeNull();
   });
 });
+
+describe("vendor extensions are not lost by a save about something else", () => {
+  it("treats a token differing ONLY in extensions as changed", () => {
+    // DTCG requires a tool to preserve extension data it does not understand.
+    // Left out of the comparison, a stored override differing only in
+    // extensions reads as identical to the config default — so the next edit
+    // anywhere in the table filters it out of the payload and the vendor data
+    // is gone, from a save the author made about a different token.
+    const base: SiteToken = {
+      name: "color.ink",
+      kind: "color",
+      values: { light: "#111111" },
+    };
+    const withExtensions: SiteToken = {
+      ...base,
+      extensions: { "com.figma": { variableId: "VariableID:1:2" } },
+    };
+    const override = tokenOverrideOf(
+      { tokens: [base] },
+      { tokens: [withExtensions] }
+    );
+    expect(override.tokens).toEqual([withExtensions]);
+  });
+
+  it("still treats identical extensions as unchanged, whatever the key order", () => {
+    // The control, and the reason the comparison is structural rather than
+    // serialised: a token that round-tripped through storage can carry its
+    // extension keys in another order, and calling that changed would store
+    // every config token on every edit.
+    const extensions = { a: { x: 1, y: [1, 2] }, b: "s" };
+    const reordered = { b: "s", a: { y: [1, 2], x: 1 } };
+    const one: SiteToken = {
+      name: "color.ink",
+      kind: "color",
+      values: { light: "#111111" },
+      extensions,
+    };
+    const two: SiteToken = { ...one, extensions: reordered };
+    expect(
+      tokenOverrideOf({ tokens: [one] }, { tokens: [two] }).tokens
+    ).toEqual([]);
+  });
+
+  it("tells an array from a record, and a length from a length", () => {
+    // Order matters in an array and not in a record, which is the whole reason
+    // they are decided apart — an equality applying one rule to both would be
+    // wrong in one direction or the other.
+    const of = (extensions: Record<string, unknown>): SiteToken => ({
+      name: "color.ink",
+      kind: "color",
+      values: { light: "#111111" },
+      extensions,
+    });
+    const differ = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      tokenOverrideOf({ tokens: [of(a)] }, { tokens: [of(b)] }).tokens.length;
+
+    expect(differ({ v: [1, 2] }, { v: [2, 1] })).toBe(1);
+    expect(differ({ v: [1, 2] }, { v: [1, 2, 3] })).toBe(1);
+    expect(differ({ v: [1, 2] }, { v: { 0: 1, 1: 2 } })).toBe(1);
+    expect(differ({ v: 1 }, { v: "1" })).toBe(1);
+    expect(differ({ v: null }, { v: {} })).toBe(1);
+    expect(differ({ v: { a: 1 } }, { v: { a: 1, b: 2 } })).toBe(1);
+    // And the same content, however it is spelled, is still the same.
+    expect(differ({ v: [1, { a: 2 }] }, { v: [1, { a: 2 }] })).toBe(0);
+  });
+
+  it("sees a difference nested inside the extension data", () => {
+    const one: SiteToken = {
+      name: "color.ink",
+      kind: "color",
+      values: { light: "#111111" },
+      extensions: { a: { deep: [1, 2, 3] } },
+    };
+    const two: SiteToken = { ...one, extensions: { a: { deep: [1, 2, 4] } } };
+    expect(
+      tokenOverrideOf({ tokens: [one] }, { tokens: [two] }).tokens
+    ).toEqual([two]);
+  });
+});

@@ -105,6 +105,22 @@ export interface TokenRow {
    * to help an author repair would be the one state it cannot address.
    */
   readonly at: number;
+  /**
+   * A React key that survives a removal elsewhere in the list.
+   *
+   * The position cannot be one: deleting any non-tail token shifts every
+   * following `at`, so React reuses the deleted row's component for its
+   * successor and the uncontrolled fields and the confirm state come with it —
+   * a successor showing the deleted token's values, still in removal
+   * confirmation, one click from removing the wrong token.
+   *
+   * The identity cannot be one either, for the reason `at` exists: two entries
+   * can share one. So the key is the identity plus which occurrence of it this
+   * is, which is unique always and stable under any removal that is not of the
+   * same identity — and when it IS, remounting is the correct answer, because
+   * the row's meaning has changed.
+   */
+  readonly key: string;
   /** What references STORE. Never changes once a token has been renamed. */
   readonly identity: string;
   /** What the author reads and edits. */
@@ -133,15 +149,22 @@ export function tokenRowsFor(
   const all = tokens?.tokens ?? [];
   // Indexed against the WHOLE list before filtering, so `at` addresses the
   // stored position rather than a position within this tab.
+  const seen = new Map<string, number>();
   return all
-    .map((token, at) => ({ token, at }))
+    .map((token, at) => {
+      const identity = tokenIdentity(token);
+      const nth = seen.get(identity) ?? 0;
+      seen.set(identity, nth + 1);
+      return { token, at, key: nth === 0 ? identity : `${identity}#${nth}` };
+    })
     .filter(entry => entry.token.kind === kind)
-    .map(entry => rowOf(entry.token, entry.at, all, mode));
+    .map(entry => rowOf(entry.token, entry.at, entry.key, all, mode));
 }
 
 function rowOf(
   token: SiteToken,
   at: number,
+  key: string,
   among: readonly SiteToken[],
   mode: TokenMode
 ): TokenRow {
@@ -149,6 +172,7 @@ function rowOf(
   const collision = collisionFor(token, among);
   return {
     at,
+    key,
     identity: tokenIdentity(token),
     name: token.name,
     kind: token.kind,

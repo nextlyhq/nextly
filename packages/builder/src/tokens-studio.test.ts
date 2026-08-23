@@ -394,3 +394,47 @@ describe("the seed for a custom token survives being USED", () => {
     expect(CSS_WIDE).not.toContain(seeded.trim().toLowerCase());
   });
 });
+
+describe("a row key that survives a removal elsewhere in the list", () => {
+  const set: SiteTokenSet = {
+    tokens: [
+      { name: "color.a", kind: "color", values: { light: "#111111" } },
+      { name: "color.b", kind: "color", values: { light: "#222222" } },
+      { name: "color.c", kind: "color", values: { light: "#333333" } },
+    ],
+  };
+
+  it("keeps a survivor's key when an EARLIER row is removed", () => {
+    // The position cannot be the key: deleting a non-tail token shifts every
+    // following `at`, so React reuses the deleted row's component for its
+    // successor — carrying the uncontrolled fields and the confirm state onto
+    // a different token.
+    const before = tokenRowsFor(set, "color");
+    const after = tokenRowsFor(removeToken(set, 0), "color");
+    expect(before.map(r => r.at)).toEqual([0, 1, 2]);
+    expect(after.map(r => r.at)).toEqual([0, 1]);
+    // The positions shifted; the keys did not.
+    expect(after.map(r => r.key)).toEqual(before.slice(1).map(r => r.key));
+  });
+
+  it("is unique when two entries share an identity", () => {
+    // The reason the identity alone cannot be the key either.
+    const twinned: SiteTokenSet = {
+      tokens: [
+        { name: "color.dup", kind: "color", values: { light: "#111111" } },
+        { name: "color.dup", kind: "color", values: { light: "#222222" } },
+      ],
+    };
+    const keys = tokenRowsFor(twinned, "color").map(r => r.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("does not change when a row is renamed", () => {
+    // A rename freezes the identity, so the key rides that rather than the
+    // label — a row must not remount because its name was edited.
+    const renamed = renameToken(set, 1, "color.renamed");
+    expect(tokenRowsFor(renamed, "color")[1]?.key).toBe(
+      tokenRowsFor(set, "color")[1]?.key
+    );
+  });
+});

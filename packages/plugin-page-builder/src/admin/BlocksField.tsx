@@ -488,6 +488,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * state because nothing renders from it.
    */
   const persistedTokens = useRef<SiteTokenSet | null>(null);
+  /*
+   * The most recent edit handed to a save, and the one question both branches
+   * below ask: is this answer still about what the author is looking at? An
+   * answer for a superseded edit must neither roll the newer one back nor
+   * announce a refusal the newer save has already made irrelevant.
+   */
+  const latestTokenEdit = useRef<SiteTokenSet | null>(null);
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -704,6 +711,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                    */
                   setTokenEdits(next);
                   setTokenIssue(undefined);
+                  latestTokenEdit.current = next;
                   void saveSiteStyle(
                     "tokens",
                     /*
@@ -714,8 +722,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                      */
                     tokenOverrideOf(configSiteStyle?.tokens, next)
                   ).then(result => {
+                    const current = latestTokenEdit.current;
                     if (result.saved) {
                       persistedTokens.current = next;
+                      /*
+                       * A refusal for an EARLIER edit can arrive after a later
+                       * one has already cleared the message, so the studio
+                       * would go on announcing that a set it did save was not
+                       * saved, until the author happened to edit again.
+                       */
+                      if (current === next) setTokenIssue(undefined);
                       return;
                     }
                     /*
@@ -730,7 +746,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                      * screen: an author can type again before an answer
                      * arrives, and that later edit has its own save in flight.
                      */
-                    setTokenEdits(current =>
+                    if (current !== next) return;
+                    setTokenEdits(
                       tokensAfterRefusal(current, next, persistedTokens.current)
                     );
                     setTokenIssue(

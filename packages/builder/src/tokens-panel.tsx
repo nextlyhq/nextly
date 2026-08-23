@@ -219,7 +219,7 @@ function TokenList({
       ) : (
         <ul>
           {rows.map(row => (
-            <li key={row.at}>
+            <li key={row.key}>
               <TokenEntry
                 row={row}
                 tokens={tokens}
@@ -294,7 +294,16 @@ function TokenEntry({
           defaultValue={row.name}
           // Keyed by identity so a rename does not remount the row, and a
           // reorder does not carry one row's draft into another's field.
-          key={`${row.at}-name`}
+          /*
+           * The NAME as well as the row, because a refused save and Reset both
+           * replace the token through props — and an uncontrolled input keeps
+           * whatever the author typed, so the panel would go on showing an
+           * override that storage and the canvas no longer hold. Typing does
+           * not change props, so this is stable while the author is editing
+           * and changes exactly when the value they are editing is replaced
+           * underneath them.
+           */
+          key={`${row.key}-name-${row.name}`}
           aria-invalid={nameIssue === null ? undefined : true}
           aria-describedby={said.length > 0 ? noteId : undefined}
           onBlur={event => commitName(event.target.value)}
@@ -306,7 +315,7 @@ function TokenEntry({
           id={`${id}-value`}
           className="nx-tokens__value"
           defaultValue={row.value}
-          key={`${row.at}-value-${mode}`}
+          key={`${row.key}-value-${mode}-${row.value}`}
           data-inherited={row.inherited ? "" : undefined}
           aria-describedby={said.length > 0 ? noteId : undefined}
           onBlur={event => {
