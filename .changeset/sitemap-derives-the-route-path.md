@@ -56,12 +56,15 @@ passed through, because `/docs?lang=en` reaches URL resolution as a query and wo
 entry at a location the route never serves — a misconfiguration is better as an error than as a
 sitemap of subtly wrong URLs.
 
-`@nextlyhq/plugin-sdk` gains `slugToStaticParam` as an `@experimental` export, and the sitemap takes
-it from there rather than reaching into `nextly/runtime`. The SDK is the stability boundary, and a
+`@nextlyhq/plugin-sdk/routing` is a new `@experimental` subpath exporting `slugToStaticParam`, and
+the sitemap takes it from there rather than reaching into `nextly/runtime`. The SDK is the stability boundary, and a
 first-party plugin is the worked example third parties copy, so importing core directly would have
-published the shortcut as the pattern. It costs nothing at the boundary: `nextly` is declared
-external in the SDK's build, so the entry grows by one re-export line and the route's module graph
-stays in the consumer's own `nextly` install.
+published the shortcut as the pattern. A SUBPATH rather than a root export: `export … from
+"nextly/runtime"` is a static ESM edge, so putting it on the root would make a consumer importing
+only `definePlugin` instantiate that barrel — which transitively reaches around 124 modules and
+3.9 MB, including `fs`, `async_hooks` and `crypto`, and can break a browser or isomorphic bundle.
+Behind a subpath the cost is paid by callers that want routing and by nobody else, which is the same
+reason `/blocks` is separate. The SDK root entry is byte-for-byte the size it was before.
 
 An empty slug is now skipped under every mount, declared or not. Whether a mount's own root is
 served depends on the route file — a required `[...slug]` catch-all matches no segments and 404s
@@ -74,10 +77,12 @@ that does serve its root maps it with `urlFor`. Omitting a URL costs a listing; 
 backslash: a dot segment is removed by URL resolution before the request is sent, so
 `/docs/../admin` would mount at `/admin` and carry every entry under it somewhere the caller
 never named, and `\` separates segments to the URL parser on an http(s) origin, which would
-walk the same escape past a check that splits only on `/`. Repeated slashes are COLLAPSED
-rather than refused, because `//docs` has one possible meaning and left alone it is read as
-protocol-relative — `//docs/a` resolves to host `docs`, off-origin, and the whole collection
-drops out of the sitemap with nothing said.
+walk the same escape past a check that splits only on `/`. A LEADING `//` is refused rather than collapsed: it is
+authority syntax, so `//docs/a` resolves to host `docs` and the collection silently leaves the
+sitemap — but collapsing it to `/docs` would trade that omission for a silent redirection onto the
+site's own origin, and `//cdn.example/blog` plainly means a host. Neither reading can be dismissed,
+so neither is guessed at. A URL carrying a scheme is refused for the same reason. Only an INTERNAL
+doubled separator is collapsed, which carries no such ambiguity.
 
 Control characters are refused for the same reason a query is: URL parsing DELETES a tab, carriage
 return or newline rather than encoding it, so `/docs` plus a newline plus `admin` reaches the origin

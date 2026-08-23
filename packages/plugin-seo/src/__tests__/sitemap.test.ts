@@ -166,16 +166,35 @@ describe("defaultUrlForEntry", () => {
     ).toThrow(/must not contain control characters/);
   });
 
-  it("collapses repeated slashes so a mount cannot go protocol-relative", () => {
-    // `//docs` is not a path: `new URL("//docs/a", "https://x.com")` resolves to
-    // https://docs/a — a different HOST — which the origin check then drops,
-    // silently emptying the collection. Collapsed rather than refused because
-    // there is only one thing `//docs` can mean.
-    expect(defaultUrlForEntry({ slug: "a" }, "pages", "//docs")).toBe(
-      "/docs/a"
+  it("refuses a protocol-relative or absolute mount rather than rewriting it", () => {
+    // `//host/path` is authority syntax, and URL resolution reads it as a HOST:
+    // `//docs/a` against https://x.com resolves to https://docs/a, off-origin,
+    // which the origin check silently drops. Collapsing it to `/docs` instead
+    // would trade that silent omission for a silent redirection onto the site's
+    // own origin — `//cdn.example/blog` plainly means a host, so neither reading
+    // can be dismissed and neither is guessed at.
+    expect(() => defaultUrlForEntry({ slug: "a" }, "pages", "//docs")).toThrow(
+      /not a protocol-relative URL/
     );
-    expect(defaultUrlForEntry({ slug: "a" }, "pages", "///x")).toBe("/x/a");
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "//cdn.example/blog")
+    ).toThrow(/not a protocol-relative URL/);
+    // A full URL is a whole location, not a prefix. Left alone the leading-slash
+    // and collapse steps would emit `/https:/cdn.example/blog`, a path naming a
+    // scheme on the site's own origin.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "https://cdn.example/blog")
+    ).toThrow(/not a URL with a scheme/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "http://x/y")
+    ).toThrow(/not a URL with a scheme/);
+  });
+
+  it("collapses an INTERNAL doubled separator, which carries no ambiguity", () => {
+    // No scheme and no authority — just a doubled separator, which the route
+    // normalizes the same way for its own slugs.
     expect(defaultUrlForEntry({ slug: "a" }, "pages", "/a//b")).toBe("/a/b/a");
+    expect(defaultUrlForEntry({ slug: "a" }, "pages", "/x///y")).toBe("/x/y/a");
   });
 
   it("skips an empty slug under every mount, declared or not", () => {

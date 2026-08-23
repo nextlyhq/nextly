@@ -19,10 +19,15 @@
 // first-party plugin is the worked example third parties copy — reaching past it
 // into `nextly/runtime` would publish that shortcut as the pattern.
 //
+// The `/routing` SUBPATH rather than the SDK root, because a root re-export is a
+// static edge every SDK consumer would instantiate, and the barrel behind this
+// helper reaches the server graph. Confined here, it is paid by callers that
+// want routing and by nobody else.
+//
 // It keeps this module framework-agnostic either way: the routing entry reaches
 // `next/navigation` and `next/cache` through a lazy `createRequire` precisely so
 // importing it never loads `next`, so the package's zero-`next` guarantee holds.
-import { slugToStaticParam } from "@nextlyhq/plugin-sdk";
+import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
 
 /**
  * The minimal `listEntries` the sitemap builder calls — a structural slice of
@@ -142,52 +147,65 @@ export interface SitemapOptions {
 }
 
 /**
- * Normalize a caller-supplied mount point into a prefix that concatenates
- * cleanly: no trailing slash, a leading slash unless it is empty.
+ * Refuse a mount that is not a path prefix.
  *
- * `""` is meaningful and distinct from absent — it is a collection mounted at
- * the site ROOT, which is how the page builder serves its pages.
+ * Split from the shaping below because these are two questions, not one: this
+ * decides whether the caller supplied a mount at all, and `normalizeBasePath`
+ * decides what a valid one looks like concatenated. Every rejection here shares
+ * one property — the value would otherwise reach URL resolution and come back
+ * meaning somewhere else, with no error and a plausible-looking `<loc>`.
  */
-function normalizeBasePath(basePath: string): string {
-  const trimmed = basePath.trim();
-  if (trimmed === "" || trimmed === "/") return "";
-  // A mount is a PATH PREFIX, and anything carrying URL structure is not one.
-  // Left alone, `/docs?lang=en` reaches URL resolution as a query rather than as
-  // two path segments and the entry is advertised at a location the route never
-  // serves — the same silent disagreement this module exists to remove. Refused
-  // rather than encoded, so a misconfiguration is a startup error instead of a
-  // sitemap full of subtly wrong URLs. `baseUrl` is validated the same way.
+function assertPathPrefix(basePath: string, trimmed: string): void {
+  // `/docs?lang=en` reaches URL resolution as a query rather than as two path
+  // segments, so the entry is advertised at a location the route never serves.
+  // Refused rather than encoded, so a misconfiguration is a startup error
+  // instead of a sitemap full of subtly wrong URLs. `baseUrl` is checked alike.
   if (/[?#]/.test(trimmed)) {
     throw new Error(
       `sitemap: basePath must be a path prefix with no query or fragment, got: ${basePath}`
     );
   }
-  // A backslash is a PATH SEPARATOR to the URL parser on an http(s) origin, not
-  // an ordinary character, so `/docs\..\admin` is one segment to a reader that
-  // splits on "/" and three to the thing that resolves the URL — and the dot
-  // segments below would be looked straight past. Refused rather than folded to
-  // "/", because a backslash in a mount is a mistake either way and silently
-  // rewriting a caller's path is how the two answers diverge again.
+  // A whole location, not a prefix. Left alone the shaping below would turn
+  // `https://cdn.example/blog` into `/https:/cdn.example/blog` — a path naming a
+  // scheme, on the site's own origin. Checked BEFORE that shaping, because the
+  // collapse is what makes the mistake unrecognisable afterwards.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) {
+    throw new Error(
+      `sitemap: basePath must be a path prefix, not a URL with a scheme, got: ${basePath}`
+    );
+  }
+  // `//host/path` is authority syntax: `//docs/a` against https://x.com resolves
+  // to host `docs`, off-origin, and the whole collection silently leaves the
+  // sitemap. Collapsing it to `/docs` instead would trade that omission for a
+  // silent redirection onto the site's own origin — and `//cdn.example/blog`
+  // plainly means a host. Neither reading can be dismissed, so neither is
+  // guessed at. An INTERNAL doubled separator carries no such ambiguity and is
+  // collapsed below.
+  if (/^\/\//.test(trimmed)) {
+    throw new Error(
+      `sitemap: basePath must be a path prefix, not a protocol-relative URL, got: ${basePath}`
+    );
+  }
+  // A backslash is a PATH SEPARATOR to the URL parser on an http(s) origin, so
+  // `/docs\..\admin` is one segment to a reader that splits on "/" and three to
+  // the thing that resolves the URL — walking the dot-segment refusal below
+  // straight past. Refused rather than folded to "/", because rewriting a
+  // caller's path silently is how the two answers diverge again.
   if (trimmed.includes("\\")) {
     throw new Error(
       `sitemap: basePath must not contain a backslash, got: ${basePath}`
     );
   }
   // A tab, carriage return or newline is DELETED by URL parsing rather than
-  // encoded, so `/docs\nadmin` reaches the origin as `/docsadmin` — a mount the
-  // caller never wrote, advertised without complaint. `.trim()` above removes
-  // them only at the ends; an embedded one survives.
+  // encoded, so `/docs` + newline + `admin` reaches the origin as `/docsadmin`.
+  // Trimming removes them only at the ends; an embedded one survives.
   //
-  // Refused as a RANGE rather than as those three characters, because the list
-  // is someone else's spelling of the problem: the rest of the C0 controls are
-  // percent-encoded instead of stripped, which is visible rather than silent but
-  // still names a mount nobody configured. No control character belongs in a
-  // path prefix, so the range is both the simpler rule and the complete one.
-  //
-  // Tested by CODE POINT rather than by a character class, so this file carries
-  // no literal control characters of its own. A regex holding a raw tab renders
-  // as an ordinary space to everyone who edits it afterwards -- and makes the
-  // whole source read as binary to `grep`, which silently prints nothing.
+  // Refused as a RANGE rather than as those three, because the rest of the C0
+  // controls are percent-encoded instead of stripped — visible rather than
+  // silent, but still a mount nobody configured. Tested by CODE POINT so this
+  // file carries no literal control character: one in a regex renders as an
+  // ordinary space to the next reader, and makes the whole source read as binary
+  // to `grep`, which then prints nothing and looks like a clean search.
   const hasControl = [...trimmed].some(ch => {
     const code = ch.codePointAt(0) ?? 0;
     return code <= 0x1f || code === 0x7f;
@@ -197,36 +215,31 @@ function normalizeBasePath(basePath: string): string {
       `sitemap: basePath must not contain control characters, got: ${JSON.stringify(basePath)}`
     );
   }
-  // A dot segment does not stay where it is written. URL resolution removes it
-  // before the request is sent, so `/docs/../admin` mounts at `/admin` — the
-  // prefix escapes itself and can land on a reserved root, and every entry under
-  // it is then advertised somewhere the caller never named.
-  //
-  // Percent-encoded forms count: the URL standard decodes `%2e` to `.` for
-  // exactly this purpose, so `%2e%2e` resolves away too and a check that read
-  // only literal dots would pass the spelling written to evade it. Decided on
-  // the SEGMENTS rather than by searching the string, so a legitimate name that
-  // merely contains dots — `v1.2`, `file.tar.gz` — is untouched.
+  // A dot segment does not stay where it is written: URL resolution removes it
+  // before the request is sent, so `/docs/../admin` mounts at `/admin`. Percent
+  // spellings decode to the same thing, and the decision is made on SEGMENTS so
+  // a name that merely contains dots — `v1.2` — is untouched.
   const decoded = trimmed.replace(/%2e/gi, ".");
   if (decoded.split("/").some(seg => seg === "." || seg === "..")) {
     throw new Error(
       `sitemap: basePath must not contain "." or ".." segments, got: ${basePath}`
     );
   }
+}
+
+/**
+ * Shape a valid mount into a prefix that concatenates cleanly: no trailing
+ * slash, a leading slash unless it is empty.
+ *
+ * `""` is meaningful and distinct from absent — it is a collection mounted at
+ * the site ROOT, which is how the page builder serves its pages.
+ */
+function normalizeBasePath(basePath: string): string {
+  const trimmed = basePath.trim();
+  if (trimmed === "" || trimmed === "/") return "";
+  assertPathPrefix(basePath, trimmed);
   const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  // Repeated slashes are COLLAPSED rather than refused, which is the one place
-  // this normalizes URL shape instead of rejecting it — and the exception is
-  // earned by what a leading pair does. `//docs` is not a path: URL resolution
-  // reads it as protocol-relative, so `//docs/a` against `https://x.com`
-  // resolves to `https://docs/a`, a different HOST, which the origin check then
-  // drops. The whole collection leaves the sitemap and nothing says why.
-  //
-  // Refusing would report it, but `//docs` has exactly one thing its author can
-  // have meant, and the route normalizes the same way for its own slugs
-  // (`slugToStaticParam` collapses before deciding). Guessing is only wrong when
-  // more than one reading is available — which is why a query, a fragment, a
-  // backslash and a dot segment are still refused: each of those changes where
-  // the URL points, and no collapse recovers the intent.
+  // Only INTERNAL repeats reach here; a leading pair was refused above.
   return withLeading.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
 }
 
