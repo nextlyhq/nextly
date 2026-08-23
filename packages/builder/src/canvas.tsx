@@ -150,6 +150,26 @@ export function nodeElement(root: HTMLElement, id: string): Element | null {
   return found;
 }
 
+/**
+ * Every element the renderer marked as a node, in document order.
+ *
+ * Beside {@link nodeElement} because both answer from the same marker, and a
+ * caller that needs all of them should not walk the tree with its own selector.
+ *
+ * Chrome drawn INSIDE the canvas root carries no node marker, so it is excluded
+ * by construction rather than by a filter that would have to be kept in step
+ * with whatever chrome arrives next.
+ */
+export function nodeElements(root: HTMLElement): readonly Element[] {
+  const found: Element[] = [];
+  // `forEach` for the reason given in `nodeElement`: a `NodeList` is only
+  // iterable under a lib this package does not compile with.
+  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+    found.push(element);
+  });
+  return found;
+}
+
 export interface CanvasProps {
   /** The document being edited. */
   document: BlockDocument;

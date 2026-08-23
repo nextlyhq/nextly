@@ -59,7 +59,7 @@
 
 import * as React from "react";
 
-import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
+import { CANVAS_ROOT_CLASS, nodeElement, nodeElements } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { canvasContentRect, hasLayoutBox, renderedScale } from "./geometry-dom";
 import {
@@ -188,6 +188,23 @@ export function SpacingOverlay({
       return;
     }
 
+    /*
+     * A block whose rendered box cannot be described by axis-aligned bands gets
+     * none. A rotation or skew has no left edge to pin a band to; a mirrored
+     * block renders its left margin on the RIGHT; and a `scale(0)` collapses
+     * every band to nothing while the value chips, which are deliberately
+     * unclipped so a thin band stays readable, would pile up at the transform
+     * origin over an invisible block.
+     *
+     * All four are one property — the representation does not fit — so they are
+     * refused in one place rather than patched one at a time.
+     */
+    const scale = renderedScale(block, root);
+    if (!scale.describable) {
+      setBands([]);
+      return;
+    }
+
     const boxes = boxesOf(style);
     setBands(
       spacingBands({
@@ -198,13 +215,9 @@ export function SpacingOverlay({
         borderWidths: boxes.borderWidths,
         margin: boxes.margin,
         padding: boxes.padding,
-        /*
-         * MEASURED from the element rather than assumed to be 1. `transform` is
-         * a catalog property, so a scaled block makes the rectangle above and
-         * the lengths beside it disagree — and asking the element carries any
-         * scaled ancestor with it, which parsing its own transform would miss.
-         */
-        scale: renderedScale(block),
+        // Composed from the real transform between the block and the root, so
+        // a scaled ancestor counts and no rounded layout value is involved.
+        scale: { x: scale.x, y: scale.y },
       })
     );
   }, [selectedId]);
@@ -224,15 +237,21 @@ export function SpacingOverlay({
    * Re-measure when the layout moves for a reason no render reports — an image
    * finishing, a webfont swapping, the panels being resized around the canvas.
    *
-   * BOTH the block and the canvas root are watched, and the root is not
-   * redundant. A `ResizeObserver` reports a size change, never a position one,
-   * so a sibling ABOVE the selection finishing its own load moves the block
-   * without resizing it and the block's own entry never fires. The root sizes to
-   * its content, so that same reflow changes the root's height — which is the
-   * observable event standing in for "something moved".
+   * EVERY rendered node is observed, not just the selected one, because what
+   * moves a block is another block changing size. A `ResizeObserver` reports a
+   * size change and never a position one, so the selected block's own entry
+   * stays silent while a sibling above it grows and pushes it down.
    *
-   * The overlay itself cannot drive that loop: it is `position: absolute` filling
-   * the root, so what it draws never contributes to the root's size.
+   * Watching the canvas root does not stand in for this. The root is
+   * `min-height: 100%`, so on a page shorter than the viewport it holds that
+   * height and reports nothing however much the content inside it reflows — the
+   * case where the bands would sit furthest from the block they name. The root
+   * is still observed, for the resize the nodes cannot report: the panels moving
+   * around the canvas, which changes the frame without changing any node.
+   *
+   * The overlay cannot drive its own loop: it is `position: absolute` filling the
+   * root and carries no node marker, so nothing it draws is observed here or
+   * contributes to the root's size.
    */
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
@@ -245,14 +264,13 @@ export function SpacingOverlay({
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => measure());
     observer.observe(root);
-    const block = nodeElement(root, selectedId);
-    if (block !== null) observer.observe(block);
+    for (const node of nodeElements(root)) observer.observe(node);
     return () => observer.disconnect();
     /*
      * `document` re-subscribes, and dropping it strands the observer on a
      * DETACHED element. An edit replaces the rendered tree while the selection
-     * survives, so the id resolves to a NEW element and this effect — keyed on
-     * the selection alone — would keep watching the old one. Its later resizes
+     * survives, so every id resolves to a NEW element and this effect — keyed on
+     * the selection alone — would keep watching the old ones. Their later resizes
      * fire nothing, and the bands stay at the size the block had before the edit.
      */
   }, [measure, hidden, selectedId, document]);

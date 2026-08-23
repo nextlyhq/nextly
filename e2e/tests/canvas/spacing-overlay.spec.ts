@@ -232,6 +232,153 @@ test.describe("spacing values on the canvas", () => {
     await expect(page.locator(BAND)).toHaveCount(0);
   });
 
+  test("bands FOLLOW the block when the ROOT's size does not change", async ({
+    page,
+  }) => {
+    /*
+     * The position-only reflow, asserted as a REDRAW and with a fixture that can
+     * tell the two implementations apart.
+     *
+     * A sibling above the selection is grown and a sibling BELOW it shrunk by the
+     * same amount, in one evaluation so the layout settles once. The selected
+     * block moves down; the page's total height does not change; and
+     * `.nx-canvas` is `min-height: 100%` sizing to that content, so the ROOT
+     * emits no `ResizeObserver` entry at all.
+     *
+     * That is what makes this a separating test rather than another green. Growing
+     * a sibling ALONE also moves the block, but it changes the page height too, so
+     * the root reports it and an overlay watching only the root passes — measured,
+     * by removing the per-node observation and watching this test stay green. The
+     * unselected sibling that changed is the only element with anything to report,
+     * so it has to be the one observed.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.click();
+
+    const before = await page.locator(band("margin", "bottom")).boundingBox();
+    const rootBefore = await page.locator(".nx-canvas").boundingBox();
+    if (before === null || rootBefore === null) {
+      throw new Error("no margin band or canvas root before the reflow");
+    }
+
+    const SHIFT = 200;
+    await page.evaluate(shift => {
+      const above = document.querySelector(
+        '[data-nx-node="hx-heading"]'
+      ) as HTMLElement;
+      const below = document.querySelector(
+        '[data-nx-node="hx-spacer"]'
+      ) as HTMLElement;
+      above.style.height = `${above.getBoundingClientRect().height + shift}px`;
+      below.style.height = `${below.getBoundingClientRect().height - shift}px`;
+    }, SHIFT);
+
+    await expect
+      .poll(async () => {
+        const box = await page.locator(band("margin", "bottom")).boundingBox();
+        return box === null ? null : Math.round(box.y - before.y);
+      })
+      .toBeGreaterThan(SHIFT - 5);
+
+    // The control for the claim above: the root really did not resize, so the
+    // redraw cannot be credited to the root's own entry.
+    const rootAfter = await page.locator(".nx-canvas").boundingBox();
+    expect(Math.abs((rootAfter?.height ?? 0) - rootBefore.height)).toBeLessThan(
+      TOLERANCE
+    );
+  });
+
+  test("a fractional untransformed box is NOT treated as scaled", async ({
+    page,
+  }) => {
+    /*
+     * The rounding defect, as a separating test rather than a claim that the new
+     * code cannot have it.
+     *
+     * `offsetHeight` is integer-rounded and a bounding rectangle is not, so
+     * deriving the scale from their ratio makes a block of fractional height
+     * report a scale it does not have — worst at small sizes, where the rounding
+     * is a large fraction of the value. Measured on this fixture: `offsetHeight`
+     * reports `1` against a drawn height of `0.594`, so the ratio reads `0.594`
+     * and the seeded `24px` margin band is drawn near `14px` on a block nobody
+     * transformed.
+     *
+     * Composing the real transform has no rounded input: `transform: none` is the
+     * identity whatever size the block happens to be.
+     *
+     * `height`, `minHeight` and `padding` are all catalog properties, so the
+     * shape being set up here is one an author can author.
+     */
+    await page.goto(ROUTE);
+    const spacer = page.locator('[data-nx-node="hx-spacer"]');
+    await expect(spacer).toBeVisible();
+
+    await spacer.evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = "0.6px";
+      el.style.minHeight = "0";
+      el.style.padding = "0";
+    });
+    await spacer.click();
+
+    const bandBox = await page.locator(band("margin", "bottom")).boundingBox();
+    if (bandBox === null) throw new Error("no margin band on the spacer");
+
+    // The seeded gap, undistorted. The ratio implementation lands near 14.3.
+    expect(Math.abs(bandBox.height - MARGIN_BOTTOM)).toBeLessThan(TOLERANCE);
+  });
+
+  test.describe("a box axis-aligned bands cannot describe", () => {
+    /*
+     * One rule, not three patches. A band is an axis-aligned rectangle pinned to
+     * a physical side, and that representation has no meaning for a rotated,
+     * skewed or MIRRORED box — a mirrored block renders its left margin on the
+     * right — nor for one collapsed to nothing, where the unclipped value chips
+     * would pile up at the transform origin over an invisible block.
+     */
+    for (const [name, transform] of [
+      ["collapsed by scale(0)", "scale(0)"],
+      ["mirrored by scaleX(-1)", "scaleX(-1)"],
+      ["rotated", "rotate(30deg)"],
+      ["skewed", "skewX(20deg)"],
+    ] as const) {
+      test(`draws nothing for a block ${name}`, async ({ page }) => {
+        await page.goto(ROUTE);
+        const block = page.locator(`[data-nx-node="${PADDED}"]`);
+        await expect(block).toBeVisible();
+
+        /*
+         * Selected while it is still clickable, and asserted — the POSITIVE
+         * CONTROL, so the emptiness at the end is the refusal rather than a
+         * selection that never took. `scale(0)` in particular leaves nothing to
+         * click, so selecting afterwards is not available for every case here.
+         */
+        await block.click();
+        await expect(page.locator(BAND)).not.toHaveCount(0);
+
+        await block.evaluate((node, value) => {
+          (node as HTMLElement).style.transform = value;
+        }, transform);
+
+        /*
+         * A transform changes no LAYOUT size, so it emits no `ResizeObserver`
+         * entry of its own. Growing a sibling does, which re-measures the
+         * selection and re-evaluates the refusal — the same path an author takes,
+         * since editing a transform in the inspector changes the document and
+         * re-measures on that.
+         */
+        await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+          const el = node as HTMLElement;
+          el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+        });
+
+        await expect(page.locator(BAND)).toHaveCount(0);
+      });
+    }
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {

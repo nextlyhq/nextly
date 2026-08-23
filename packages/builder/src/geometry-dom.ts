@@ -166,30 +166,81 @@ export function hasLayoutBox(element: Element): boolean {
 }
 
 /**
- * How much larger an element RENDERS than it was laid out, per axis.
+ * The cumulative transform between an element and the canvas root, reduced to
+ * the two things axis-aligned chrome can use.
  *
- * `transform` is a catalog property, so an author can scale a block. Everything
- * measured through `getBoundingClientRect` is then post-transform while every
- * length from `getComputedStyle` stays in unscaled CSS pixels, and anything
- * combining the two is wrong by exactly this factor.
+ * `transform` is a catalog property taking a free-form CSS value, so an author
+ * can scale, rotate, skew or MIRROR a block. Everything measured through
+ * `getBoundingClientRect` is post-transform while every length from
+ * `getComputedStyle` stays in unscaled CSS pixels, and anything combining the
+ * two is wrong by whatever sits between them.
  *
- * Derived by COMPARING the two rather than by parsing a transform: `offsetWidth`
- * is the untransformed border-box width and the bounding rectangle is the drawn
- * one, so their ratio carries the whole ancestor chain's scaling with it. A
- * parser would see only the element's own `transform` and would miss a scaled
- * parent entirely.
+ * ## Read from the matrix rather than inferred from a ratio
  *
- * Returns `1` on an axis with no layout extent, where the ratio is `0/0` and
- * there is nothing to scale. Note what this does NOT represent: a rotation or a
- * skew inflates the bounding box without being a scale, so the ratio is larger
- * than any real factor. Axis-aligned chrome cannot describe a rotated element in
- * any case, which is a limit of the drawing rather than of this measurement.
+ * Comparing the drawn box against `offsetWidth` looks equivalent and is not, in
+ * three ways that all read as ordinary code:
+ *
+ * - `offsetWidth` is INTEGER-ROUNDED and a bounding rectangle is not, so an
+ *   untransformed block of fractional width reports a scale it does not have —
+ *   worst at exactly the small sizes where a band is hardest to judge by eye.
+ * - A bounding rectangle is never negative, so `scaleX(-1)` divides out to an
+ *   ordinary positive factor and the mirroring vanishes from the answer.
+ * - A rotation or skew inflates the bounding box, so the ratio reports a scale
+ *   that describes no axis at all.
+ *
+ * The matrix has none of those: it is exact, it is signed, and its off-diagonal
+ * terms are what a rotation or skew shows up in.
+ *
+ * ## `describable` is a refusal, not a detail
+ *
+ * A band is an axis-aligned rectangle pinned to a physical side. That
+ * representation has no meaning for a rotated, skewed or mirrored box — a left
+ * margin on a mirrored element renders on the RIGHT — and no choice of scale
+ * factor rescues it. So the answer carries whether the question is askable, and
+ * chrome that cannot draw the truth draws nothing rather than something
+ * confident and wrong.
+ *
+ * Composed up to the ROOT rather than read off the element, because a scaled
+ * ancestor moves and resizes its descendants while their own transform stays
+ * `none`.
  */
-export function renderedScale(element: Element): { x: number; y: number } {
-  if (!(element instanceof HTMLElement)) return { x: 1, y: 1 };
-  const box = element.getBoundingClientRect();
+export interface RenderedScale {
+  readonly x: number;
+  readonly y: number;
+  /** False for a rotation, a skew, a reflection, or a collapse to zero. */
+  readonly describable: boolean;
+}
+
+const IDENTITY_SCALE: RenderedScale = { x: 1, y: 1, describable: true };
+
+export function renderedScale(element: Element, root: Element): RenderedScale {
+  const view = element.ownerDocument.defaultView;
+  // Absent in jsdom, which lays nothing out and so has no transform to compose.
+  // Identity is the honest answer there: nothing is scaled because nothing is
+  // laid out, and every caller still measures.
+  if (view === null || typeof view.DOMMatrix === "undefined") {
+    return IDENTITY_SCALE;
+  }
+
+  let matrix = new view.DOMMatrix();
+  for (
+    let node: Element | null = element;
+    node !== null && node !== root.parentElement;
+    node = node.parentElement
+  ) {
+    const declared = view.getComputedStyle(node).transform;
+    if (declared === "" || declared === "none") continue;
+    matrix = new view.DOMMatrix(declared).multiply(matrix);
+    if (node === root) break;
+  }
+
+  // `b` and `c` are the off-diagonal terms: zero for any composition of
+  // translations and axis-aligned scales, non-zero the moment a rotation or a
+  // skew enters.
+  const axisAligned = matrix.b === 0 && matrix.c === 0;
   return {
-    x: element.offsetWidth > 0 ? box.width / element.offsetWidth : 1,
-    y: element.offsetHeight > 0 ? box.height / element.offsetHeight : 1,
+    x: matrix.a,
+    y: matrix.d,
+    describable: axisAligned && matrix.a > 0 && matrix.d > 0,
   };
 }

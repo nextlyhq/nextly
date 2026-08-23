@@ -283,22 +283,37 @@ describe("accessibility", () => {
 });
 
 describe("what it stays subscribed to", () => {
-  it("watches the canvas ROOT as well as the selected block", () => {
+  it("watches EVERY rendered node, not only the selected one", () => {
     /*
-     * A `ResizeObserver` reports a size change and never a position one, so a
-     * sibling above the selection finishing its load moves the block without
-     * resizing it and the block's own entry never fires. The root sizes to its
-     * content, which makes that reflow observable.
+     * A `ResizeObserver` reports a size change and never a position one, so the
+     * selected block's own entry stays silent while a sibling above it grows and
+     * pushes it down. The unselected sibling is the element that changed, so it
+     * is the one that has to be watched — block `b` here is never selected and
+     * must still be observed.
      */
     withFakeResizeObserver();
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
 
     const observer = FakeResizeObserver.instances.at(-1);
-    const root = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
-    const block = container.querySelector('[data-nx-node="a"]');
-    expect(observer?.observed).toContain(root);
-    expect(observer?.observed).toContain(block);
+    expect(observer?.observed).toContain(
+      container.querySelector('[data-nx-node="a"]')
+    );
+    expect(observer?.observed).toContain(
+      container.querySelector('[data-nx-node="b"]')
+    );
+  });
+
+  it("watches the canvas root, which no node reports for", () => {
+    // The panels resizing around the canvas changes the frame without changing
+    // any node, so the root is not redundant with the node list above.
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+
+    expect(FakeResizeObserver.instances.at(-1)?.observed).toContain(
+      container.querySelector(`.${CANVAS_ROOT_CLASS}`)
+    );
   });
 
   it("re-subscribes when the document changes under an unchanged selection", () => {
