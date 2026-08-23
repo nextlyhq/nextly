@@ -763,6 +763,126 @@ test.describe("spacing values on the canvas", () => {
     await expect(page.locator(BAND)).toHaveCount(0);
   });
 
+  test("an ancestor clipping ONE axis does not refuse overflow on the other", async ({
+    page,
+  }) => {
+    /*
+     * `overflow` is a two-value catalog keyword, so the axes can clip
+     * differently — and `clip visible` is the only mixed pair that survives
+     * computation: measured in Chromium, pairing `visible` with `hidden`, `auto`
+     * or `scroll` resolves the `visible` side to `auto`, while `clip visible`
+     * stays exactly as written.
+     *
+     * A block overflowing only the axis that is still `visible` is not cut at
+     * all, and its overflow is rendered. Comparing all four edges whenever
+     * EITHER axis clips refuses it, and a refusal costs every band on the block.
+     *
+     * The control comes first and is the same geometry under `clip` on BOTH
+     * axes, where the refusal is correct — so the bands returning afterwards are
+     * the axis being respected rather than the block having stopped overflowing.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "clip";
+    });
+    // Selected while the container still shows it. Shrinking first would clip
+    // the target out of reach and the click would land on the page instead.
+    await target.click();
+
+    // CONTROL: a clipping ancestor that does not cut still draws.
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).style.height = "10px";
+    });
+
+    // CONTROL: clipped on BOTH axes, that same vertical overflow IS a cut.
+    await expect(page.locator(BAND)).toHaveCount(0);
+
+    await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "clip visible";
+      /*
+       * Asserted rather than assumed. If the engine collapsed this pair the way
+       * it collapses every other mixed pair, the fixture would be testing two
+       * fully-clipped containers and the bands would stay absent for a reason
+       * that has nothing to do with the axis rule.
+       */
+      const computed = getComputedStyle(section);
+      if (computed.overflowX !== "clip" || computed.overflowY !== "visible") {
+        throw new Error(
+          `expected clip/visible, got ${computed.overflowX}/${computed.overflowY}`
+        );
+      }
+    });
+
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
+
+  test("a SCALED bordered ancestor clips at its rendered padding edge", async ({
+    page,
+  }) => {
+    /*
+     * `getBoundingClientRect` reports post-transform pixels while a computed
+     * border width is unscaled CSS pixels, so the two are only comparable once
+     * the ancestor's own scale is applied. Under `scale(2)` a 20px border
+     * renders 40px thick, and insetting the rectangle by 20 puts the clip edge
+     * half way through the border — accepting a child the container visibly cuts
+     * and painting its bands over the hidden area.
+     *
+     * The margin is deliberately SMALL. At `-15px` the child clears the
+     * unscaled inset as well, so both implementations refuse it and the fixture
+     * separates nothing; `-5px` scales to ten rendered pixels and lands the
+     * child between the two answers — inside the rendered border, outside the
+     * unscaled one.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+    await target.click();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.border = "20px solid transparent";
+      // From the top left, so the border's rendered thickness is a plain
+      // doubling rather than a function of where the box happens to sit.
+      section.style.transformOrigin = "0 0";
+      section.style.transform = "scale(2)";
+    });
+
+    // CONTROL: the scaled bordered container that does NOT cut still draws, so
+    // the emptiness below is the clip edge moving rather than the transform or
+    // the border refusing the block outright.
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginTop = "-5px";
+    });
+
+    await expect(page.locator(BAND)).toHaveCount(0);
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {

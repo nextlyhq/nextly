@@ -321,9 +321,18 @@ export function hasScrollbarGutter(
   element: Element,
   borders: { x: number; y: number }
 ): boolean {
-  if (!(element instanceof HTMLElement)) return false;
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
+  /*
+   * The ELEMENT's realm, not the one asking — see `canvasRootFrom` for why the
+   * ambient `HTMLElement` is the wrong constructor to compare against.
+   *
+   * Getting it wrong here fails SILENTLY and in the unsafe direction. A canvas
+   * mounted into a same-origin iframe answers `false` before measuring
+   * anything, so the refusal below never fires and every scrolling block in
+   * that canvas draws its padding bands across the reserved scrollbar.
+   */
+  if (!(element instanceof view.HTMLElement)) return false;
 
   /*
    * Only a scroll container can reserve one, and asking anything else is not
@@ -346,8 +355,9 @@ export function hasScrollbarGutter(
 /**
  * Whether an ancestor between this element and the canvas root clips it.
  *
- * `overflow` is a catalog keyword taking `hidden`, `clip`, `scroll` or `auto`, so
- * an author can put a block inside a container that cuts part of it off. The
+ * `overflow` is a catalog keyword taking `hidden`, `clip`, `scroll` or `auto` —
+ * and taking TWO of them, so the axes can clip differently — so an author can
+ * put a block inside a container that cuts part of it off. The
  * element's own bounding rectangle is reported UNCLIPPED, and the overlay draws
  * as a sibling of the page rather than inside that container — so bands derived
  * from the full rectangle escape the ancestor's clip and paint over ground where
@@ -379,8 +389,21 @@ export function clippedByAncestor(element: Element, root: Element): boolean {
     node = node.parentElement
   ) {
     const style = view.getComputedStyle(node);
-    if (style.overflowX === "visible" && style.overflowY === "visible")
-      continue;
+    /*
+     * PER AXIS, because the two can differ and the catalog ships the shorthand
+     * that makes them differ: `overflow` takes two values, so `clip visible` is
+     * a declaration an author can store. Measured in Chromium it is also the
+     * ONLY mixed pair that survives computation — pairing `visible` with
+     * `hidden`, `auto` or `scroll` resolves the `visible` side to `auto`, while
+     * `clip visible` stays exactly as written.
+     *
+     * Asking whether EITHER axis clips and then comparing all four edges
+     * refuses a block that overflows only the axis still rendering it, and a
+     * refusal costs every band on the block.
+     */
+    const clipsX = style.overflowX !== "visible";
+    const clipsY = style.overflowY !== "visible";
+    if (!clipsX && !clipsY) continue;
     /*
      * Overflow clips at the PADDING edge, and `getBoundingClientRect` reports the
      * BORDER box. On a container with a border the two differ by its width, so a
@@ -389,21 +412,37 @@ export function clippedByAncestor(element: Element, root: Element): boolean {
      * a 20px border puts the border box at 217 and the clip edge at 237.
      */
     const outer = node.getBoundingClientRect();
+    /*
+     * Scaled, because the two readings are in different units: `outer` is
+     * post-transform and a computed border width is unscaled CSS pixels. Under
+     * `scale(2)` a 20px border renders 40px thick, so insetting by 20 puts the
+     * clip edge half way through the border and accepts a child the container
+     * visibly cuts — measured, the real padding edge sat at 40 while this
+     * arithmetic answered 20 and a child at exactly 20 was let through.
+     *
+     * `x` and `y` are used without consulting `describable` on purpose. A
+     * rotated, mirrored or collapsed ancestor makes the composition from the
+     * BLOCK to the root non-describable too — it passes through this same node —
+     * so the caller has already refused the overlay by the time such a factor
+     * could be read. Declining here as well would be a branch nothing reaches.
+     */
+    const scale = renderedScale(node, root);
     const clip = {
-      top: outer.top + edgeWidth(style.borderTopWidth),
-      left: outer.left + edgeWidth(style.borderLeftWidth),
-      bottom: outer.bottom - edgeWidth(style.borderBottomWidth),
-      right: outer.right - edgeWidth(style.borderRightWidth),
+      top: outer.top + edgeWidth(style.borderTopWidth) * scale.y,
+      left: outer.left + edgeWidth(style.borderLeftWidth) * scale.x,
+      bottom: outer.bottom - edgeWidth(style.borderBottomWidth) * scale.y,
+      right: outer.right - edgeWidth(style.borderRightWidth) * scale.x,
     };
     // Half a pixel, because both rectangles are fractional and a block laid out
     // flush against its container's edge is not clipped by rounding.
     const slack = 0.5;
-    if (
-      box.top < clip.top - slack ||
-      box.left < clip.left - slack ||
-      box.bottom > clip.bottom + slack ||
-      box.right > clip.right + slack
-    ) {
+    const cutVertically =
+      clipsY &&
+      (box.top < clip.top - slack || box.bottom > clip.bottom + slack);
+    const cutHorizontally =
+      clipsX &&
+      (box.left < clip.left - slack || box.right > clip.right + slack);
+    if (cutVertically || cutHorizontally) {
       return true;
     }
   }

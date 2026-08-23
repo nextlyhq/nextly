@@ -151,6 +151,8 @@ export function spacingBands(
   const padding = scaled(geometry.padding);
   const bands: SpacingBand[] = [];
 
+  const inward = inwardExtents(margin, border);
+
   for (const side of SIDES) {
     const value = geometry.margin[side];
     const label = labelFor(value);
@@ -158,7 +160,7 @@ export function spacingBands(
     bands.push({
       box: "margin",
       side,
-      rect: marginRect(border, side, margin),
+      rect: marginRect(border, side, margin, inward),
       label,
       negative: value < 0,
     });
@@ -199,6 +201,58 @@ function inset(rect: Rect, by: EdgeLengths): Rect {
 }
 
 /**
+ * How far each negative margin reaches INTO the border box.
+ *
+ * A negative margin has no bound in CSS: `margin-top: -100px` on a twenty-pixel
+ * block is legal, and pulling an element further than its own size is the usual
+ * way an overlap is authored. Drawn unbounded the band runs past the opposite
+ * edge and colours a neighbour's pixels as this block's margin — the one thing
+ * the overlay exists to answer, answered wrongly.
+ *
+ * Opposite sides are bounded TOGETHER, not one at a time. Clamping each to the
+ * border dimension on its own still lets a pair overlap in the middle, and the
+ * fills are translucent, so the contested strip darkens and reads as a third
+ * value that nobody wrote. Sharing the dimension in proportion keeps each side's
+ * band the larger of the two exactly when its margin is the larger, and lets
+ * them meet without either crossing.
+ *
+ * The bound moves the band, never the number: the label is taken from the
+ * authored value, so a margin clamped for want of room still reports what the
+ * author typed.
+ */
+function inwardExtents(margin: EdgeLengths, border: Rect): EdgeLengths {
+  const inwardPair = (
+    near: number,
+    far: number,
+    size: number
+  ): { near: number; far: number } => {
+    const total = near + far;
+    if (total <= size) return { near, far };
+    // `total` exceeds `size` and `size` is never negative, so `total` is
+    // positive here and the division is safe.
+    const share = size / total;
+    return { near: near * share, far: far * share };
+  };
+
+  const vertical = inwardPair(
+    Math.max(0, -margin.top),
+    Math.max(0, -margin.bottom),
+    border.height
+  );
+  const horizontal = inwardPair(
+    Math.max(0, -margin.left),
+    Math.max(0, -margin.right),
+    border.width
+  );
+  return {
+    top: vertical.near,
+    bottom: vertical.far,
+    left: horizontal.near,
+    right: horizontal.far,
+  };
+}
+
+/**
  * Where one margin band sits relative to the border box.
  *
  * A positive margin lies OUTSIDE the border edge, which is the case the box
@@ -207,70 +261,101 @@ function inset(rect: Rect, by: EdgeLengths): Rect {
  * toward its neighbour means. Drawing a negative margin outward would put the
  * band exactly where the space it removes is not.
  *
- * See {@link marginRect} for how the four meet at the corners.
+ * `inward` carries every side's bounded inward reach, not just this one's,
+ * because a band has to know where its neighbours stop — see
+ * {@link inwardExtents}.
+ *
+ * The two axes are separate functions rather than four arms of one switch: they
+ * follow DIFFERENT rules about the corners, and writing them together meant a
+ * reader had to hold both to be sure which applied.
  */
 function marginRect(
   border: Rect,
   side: SpacingSide,
-  margin: EdgeLengths
+  margin: EdgeLengths,
+  inward: EdgeLengths
 ): Rect {
   const value = margin[side];
-  const extent = Math.abs(value);
   const outward = value >= 0;
-  /*
-   * Top and bottom span the whole MARGIN box, not the border box.
-   *
-   * Spanning the border box leaves the outer corners painted by nothing: with a
-   * top and a left margin, the rectangle above-and-left of the border box
-   * belongs to the margin area and no band reached it. Extending the horizontal
-   * bands over the vertical margins assigns each corner exactly once — left and
-   * right still span the border height, so nothing is painted twice and no
-   * translucent overlap darkens a corner.
-   *
-   * Only OUTWARD neighbours extend it. A negative margin makes the margin box
-   * smaller on that side, so there is no corner out there to fill.
-   */
+  const extent = outward ? value : inward[side];
+  return side === "top" || side === "bottom"
+    ? horizontalMarginRect(border, side, { extent, outward, margin })
+    : verticalMarginRect(border, side, { extent, outward, inward });
+}
+
+/**
+ * The TOP or BOTTOM band, which runs across the box.
+ *
+ * Outward, it spans the whole MARGIN box rather than the border box. Spanning
+ * the border box leaves the outer corners painted by nothing: with a top and a
+ * left margin, the rectangle above-and-left of the border box belongs to the
+ * margin area and no band reached it. Extending the horizontal bands over the
+ * vertical margins assigns each corner exactly once — the side bands still stop
+ * at the border height, so nothing is painted twice and no translucent overlap
+ * darkens a corner.
+ *
+ * Only OUTWARD neighbours extend it. A negative margin makes the margin box
+ * smaller on that side, so there is no corner out there to fill.
+ */
+function horizontalMarginRect(
+  border: Rect,
+  side: "top" | "bottom",
+  {
+    extent,
+    outward,
+    margin,
+  }: { extent: number; outward: boolean; margin: EdgeLengths }
+): Rect {
   const leftOut = Math.max(0, margin.left);
   const rightOut = Math.max(0, margin.right);
-  switch (side) {
-    case "top":
-      return outward
-        ? {
-            x: border.x - leftOut,
-            y: border.y - extent,
-            width: border.width + leftOut + rightOut,
-            height: extent,
-          }
-        : { x: border.x, y: border.y, width: border.width, height: extent };
-    case "bottom":
-      return outward
-        ? {
-            x: border.x - leftOut,
-            y: border.y + border.height,
-            width: border.width + leftOut + rightOut,
-            height: extent,
-          }
-        : {
-            x: border.x,
-            y: border.y + border.height - extent,
-            width: border.width,
-            height: extent,
-          };
-    case "left":
-      return {
-        x: outward ? border.x - extent : border.x,
-        y: border.y,
-        width: extent,
-        height: border.height,
-      };
-    case "right":
-      return {
-        x: outward ? border.x + border.width : border.x + border.width - extent,
-        y: border.y,
-        width: extent,
-        height: border.height,
-      };
-  }
+  const span = outward
+    ? { x: border.x - leftOut, width: border.width + leftOut + rightOut }
+    : { x: border.x, width: border.width };
+
+  const top = border.y;
+  const bottom = border.y + border.height;
+  let y: number;
+  if (side === "top") y = outward ? top - extent : top;
+  else y = outward ? bottom : bottom - extent;
+
+  return { ...span, y, height: extent };
+}
+
+/**
+ * The LEFT or RIGHT band, which runs down the box.
+ *
+ * An INWARD one yields the corners to the horizontal bands, mirroring what
+ * {@link horizontalMarginRect} does outward: there the top and bottom bands
+ * span the margin box's full width and the side bands stop at the border
+ * height, so each corner is painted exactly once. Inward, the horizontal bands
+ * lie INSIDE the border box, and a side band spanning the full height would
+ * cross them — the fills are translucent, so the corner darkens and reads as a
+ * value nobody wrote.
+ *
+ * An outward side band needs no such inset: it sits beyond the border edge,
+ * where no inward band reaches.
+ */
+function verticalMarginRect(
+  border: Rect,
+  side: "left" | "right",
+  {
+    extent,
+    outward,
+    inward,
+  }: { extent: number; outward: boolean; inward: EdgeLengths }
+): Rect {
+  const y = outward ? border.y : border.y + inward.top;
+  const height = outward
+    ? border.height
+    : Math.max(0, border.height - inward.top - inward.bottom);
+
+  const left = border.x;
+  const right = border.x + border.width;
+  let x: number;
+  if (side === "left") x = outward ? left - extent : left;
+  else x = outward ? right : right - extent;
+
+  return { x, y, width: extent, height };
 }
 
 /**
@@ -439,14 +524,25 @@ function blockAxisIsVertical(writingMode: string): boolean {
  * vertical in `horizontal-tb` and horizontal in every `vertical-*` mode. Padding
  * is left alone — an inline box's block-axis padding does not affect layout, but
  * it DOES render, and this overlay reports what renders.
+ *
+ * `replaced` is the exception that makes the inline branch conditional, and it
+ * is not a detail of an obscure element: `core/image` renders a bare `<img>`
+ * whenever it has no caption, so the most ordinary image on a page IS an inline
+ * replaced root. A replaced box is sized by its own content rather than by the
+ * line, and its block-axis margins are part of what the line box has to make
+ * room for — measured in Chromium, fifty pixels above and below an inline
+ * `<img>` moves the following content by exactly a hundred, and the same
+ * declaration on a `<span>` moves it by nothing. It cannot be read off the
+ * computed style, which is why the caller passes it.
  */
 export function spacingApplies(
   display: string,
-  writingMode: string
+  writingMode: string,
+  replaced: boolean
 ): { margin: EdgeApplicability; padding: EdgeApplicability } {
   const padding = PADDINGLESS.has(display) ? NO_SIDES : ALL_SIDES;
   if (MARGINLESS.has(display)) return { margin: NO_SIDES, padding };
-  if (display !== "inline") return { margin: ALL_SIDES, padding };
+  if (display !== "inline" || replaced) return { margin: ALL_SIDES, padding };
 
   const acrossBlock = blockAxisIsVertical(writingMode);
   return {

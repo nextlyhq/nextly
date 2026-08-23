@@ -144,6 +144,55 @@ function boxesOf(style: CSSStyleDeclaration): {
 }
 
 /**
+ * Elements whose box is REPLACED by content the CSS box model does not lay out.
+ *
+ * Asked because a replaced inline box keeps its block-axis margins where a
+ * non-replaced one drops them, and nothing in the computed style says which
+ * kind a box is — `display` answers `inline` for both. It is the element type
+ * that decides, so the element type is what this asks.
+ *
+ * Every member was measured, not assumed: forced to `display: inline` and given
+ * a top and bottom margin, each one below moves the content after it by the
+ * full amount, and `span`, `div` and `math` move it by nothing. `math` is the
+ * surprise — MathML Core lays its box out like any other, so it is deliberately
+ * absent rather than forgotten.
+ *
+ * A replaced element that is not currently rendering anything — an `<audio>`
+ * with no controls, an `<embed>` with no type — generates no replaced box and
+ * takes no block-axis margin, and this still calls it replaced. That is the
+ * safer of the two errors: it draws a band for spacing the box takes the moment
+ * it has something to show, where the other omits spacing that is in effect
+ * right now.
+ */
+const REPLACED_TAGS: ReadonlySet<string> = new Set([
+  "img",
+  "iframe",
+  "embed",
+  "object",
+  "video",
+  "audio",
+  "canvas",
+  "svg",
+  "input",
+  "select",
+  "textarea",
+  "button",
+  "progress",
+  "meter",
+]);
+
+/** Whether this element's box is replaced. See {@link REPLACED_TAGS}. */
+export function isReplaced(element: Element): boolean {
+  /*
+   * `localName` rather than `tagName`, which upper-cases an HTML element's name
+   * but leaves an SVG one alone — so `<svg>` inside HTML answers `svg` to one
+   * and `svg` to the other while `<img>` answers `img` and `IMG`. Comparing the
+   * lower-cased local name is the spelling that holds for both.
+   */
+  return REPLACED_TAGS.has(element.localName.toLowerCase());
+}
+
+/**
  * How far a value chip can overflow the band it is centred on.
  *
  * Bounded by the chip's own size, which this package sets: `0.6875rem` text on a
@@ -278,7 +327,11 @@ export function SpacingOverlay({
      * whatever the author declared, so reading it unconditionally draws bands
      * for space that does not exist.
      */
-    const applies = spacingApplies(style.display, style.writingMode);
+    const applies = spacingApplies(
+      style.display,
+      style.writingMode,
+      isReplaced(block)
+    );
     const measured = boxesOf(style);
     const boxes = {
       borderWidths: measured.borderWidths,

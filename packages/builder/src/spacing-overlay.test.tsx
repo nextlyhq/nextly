@@ -47,6 +47,19 @@ function register() {
         example: { props: {} },
         render: () => React.createElement("p", null, "leaf"),
       },
+      {
+        /*
+         * A block whose ROOT is a replaced element, which `core/image` is
+         * whenever it has no caption. It renders an `<img>` rather than
+         * wrapping one, because what is being tested is the root's own
+         * replaced-ness — a wrapper would make the question about the wrapper.
+         */
+        name: "acme/replaced",
+        version: 1,
+        description: "A replaced leaf.",
+        example: { props: {} },
+        render: () => React.createElement("img", { alt: "" }),
+      },
     ] as never,
     { source: "spacing-overlay-test" }
   );
@@ -58,6 +71,7 @@ const DOCUMENT = {
   nodes: [
     { id: "a", type: "acme/leaf", version: 1, props: {} },
     { id: "b", type: "acme/leaf", version: 1, props: {} },
+    { id: "c", type: "acme/replaced", version: 1, props: {} },
   ],
 } as unknown as BlockDocument;
 
@@ -265,6 +279,42 @@ describe("which values it reports", () => {
     stubComputedStyle({ a: {} });
     const { container } = mount(editorOf("a"));
     expect(bandSides(container)).toEqual([]);
+  });
+
+  it("drops a NON-REPLACED inline root's block-axis margin", () => {
+    /*
+     * `spacing-bands.test.ts` decides what `spacingApplies` answers; what is
+     * only true here is that the overlay asks it about the ELEMENT it measured.
+     * A `<p>` at `display: inline` creates no block-axis margin, so reporting
+     * one would name space the author cannot see.
+     */
+    stubComputedStyle({
+      a: { display: "inline", writingMode: "horizontal-tb", marginTop: "16px" },
+    });
+    const { container } = mount(editorOf("a"));
+    expect(bandSides(container)).toEqual([]);
+  });
+
+  it("keeps a REPLACED inline root's block-axis margin", () => {
+    /*
+     * The captionless `core/image` case, and the pair that separates it from the
+     * test above: same display, same declared margin, different element. An
+     * overlay that read only the computed style cannot tell them apart, and it
+     * is the ordinary image on a page that loses its bands.
+     */
+    stubComputedStyle({
+      c: { display: "inline", writingMode: "horizontal-tb", marginTop: "16px" },
+    });
+    const { container } = mount(editorOf("c"));
+    // The fixture is only meaningful while the block's ROOT is the replaced
+    // element. A renderer that wrapped it would leave this test asserting the
+    // wrapper's applicability and quietly stop testing anything.
+    expect(
+      container
+        .querySelector(`.${CANVAS_ROOT_CLASS} [${NODE_ID_ATTRIBUTE}="c"]`)
+        ?.tagName.toLowerCase()
+    ).toBe("img");
+    expect(bandSides(container)).toEqual(["margin-top"]);
   });
 });
 

@@ -195,6 +195,105 @@ describe("where a margin band lands", () => {
       height: 40,
     });
   });
+
+  it("stops a negative margin LARGER than the block at the opposite edge", () => {
+    /*
+     * A negative margin has no bound in CSS and pulling an element further than
+     * its own size is the usual way an overlap is authored. Drawn unbounded,
+     * `-400` on a 150-tall block runs 250 pixels past the bottom edge and
+     * colours a neighbour's pixels as this block's margin.
+     *
+     * The existing fixtures above are all smaller than the border box, so they
+     * do not separate a clamped implementation from an unbounded one.
+     */
+    const bands = bandsFor({ margin: { ...NONE, top: -400 } });
+    expect(band(bands, "margin", "top")?.rect).toEqual({
+      x: 100,
+      y: 200,
+      width: 300,
+      height: 150,
+    });
+  });
+
+  it("reports the AUTHORED value on a band it had to clamp", () => {
+    // The bound moves the band, never the number. An author who wrote `-400`
+    // and reads `-150` off the canvas would go looking for a value that is not
+    // in the document.
+    const bands = bandsFor({ margin: { ...NONE, top: -400 } });
+    expect(band(bands, "margin", "top")?.label).toBe("-400");
+  });
+
+  it.each<[SpacingSide, Rect]>([
+    ["bottom", { x: 100, y: 200, width: 300, height: 150 }],
+    ["left", { x: 100, y: 200, width: 300, height: 150 }],
+    ["right", { x: 100, y: 200, width: 300, height: 150 }],
+  ])("stops an oversized negative %s margin too", (side, expected) => {
+    // Each side clamps against the dimension it runs along: top and bottom
+    // against the height, left and right against the width. A single clamp
+    // written against one dimension is wrong on the other axis, and this block
+    // is deliberately not square.
+    const bands = bandsFor({ margin: { ...NONE, [side]: -400 } });
+    expect(band(bands, "margin", side)?.rect).toEqual(expected);
+  });
+
+  it("shares the block between two negative sides that both overrun", () => {
+    /*
+     * Clamping each side to the border dimension ON ITS OWN still lets a pair
+     * overlap: `-200` and `-100` on a 150-tall block would each be cut to 150
+     * and cover the whole block twice. The fills are translucent, so the
+     * contested strip darkens and reads as a third value nobody wrote.
+     *
+     * Shared in proportion, the larger margin keeps the larger band — 200:100
+     * of 150 is 100 and 50 — and they meet at a single boundary.
+     */
+    const bands = bandsFor({
+      margin: { ...NONE, top: -200, bottom: -100 },
+    });
+    const top = band(bands, "margin", "top")?.rect;
+    const bottom = band(bands, "margin", "bottom")?.rect;
+    expect(top).toEqual({ x: 100, y: 200, width: 300, height: 100 });
+    expect(bottom).toEqual({ x: 100, y: 300, width: 300, height: 50 });
+    // Meeting exactly: no gap and no overlap.
+    expect((top?.y ?? 0) + (top?.height ?? 0)).toBe(bottom?.y);
+  });
+
+  it("steps an INWARD side band past the inward bands above and below it", () => {
+    /*
+     * The mirror of the outward rule. Outward, the top and bottom bands span the
+     * margin box's full width and the side bands stop at the border height, so
+     * each corner is painted exactly once. Inward, the horizontal bands lie
+     * inside the border box, so a side band spanning the full height would cross
+     * them and darken the corner.
+     */
+    const bands = bandsFor({
+      margin: { ...NONE, top: -40, left: -30 },
+    });
+    expect(band(bands, "margin", "top")?.rect).toEqual({
+      x: 100,
+      y: 200,
+      width: 300,
+      height: 40,
+    });
+    expect(band(bands, "margin", "left")?.rect).toEqual({
+      x: 100,
+      y: 240,
+      width: 30,
+      height: 110,
+    });
+  });
+
+  it("does NOT shorten an outward side band for an inward neighbour", () => {
+    // An outward side band sits beyond the border edge, where no inward band
+    // reaches — insetting it there would leave a strip of the margin area
+    // painted by nothing.
+    const bands = bandsFor({ margin: { ...NONE, top: -40, left: 20 } });
+    expect(band(bands, "margin", "left")?.rect).toEqual({
+      x: 80,
+      y: 200,
+      width: 20,
+      height: 150,
+    });
+  });
 });
 
 describe("where a padding band lands", () => {
@@ -447,7 +546,7 @@ describe("which spacing a generated box can have", () => {
      * reading it unconditionally draws bands for space that does not exist and
      * cannot be made to exist by changing the value.
      */
-    expect(spacingApplies(display, "horizontal-tb")).toEqual({
+    expect(spacingApplies(display, "horizontal-tb", false)).toEqual({
       margin: NONE,
       padding: NONE,
     });
@@ -457,7 +556,7 @@ describe("which spacing a generated box can have", () => {
     // The one internal table box padding applies to, and the common case an
     // author actually sets. Collapsing it into the group above would blank the
     // padding of every table cell on the page.
-    expect(spacingApplies("table-cell", "horizontal-tb")).toEqual({
+    expect(spacingApplies("table-cell", "horizontal-tb", false)).toEqual({
       margin: NONE,
       padding: ALL,
     });
@@ -468,14 +567,14 @@ describe("which spacing a generated box can have", () => {
     display => {
       // `table-caption` is here deliberately: it is NOT an internal table box,
       // and its margins apply normally.
-      expect(spacingApplies(display, "horizontal-tb")).toEqual({
+      expect(spacingApplies(display, "horizontal-tb", false)).toEqual({
         margin: ALL,
         padding: ALL,
       });
     }
   );
 
-  it("drops an inline box's BLOCK-axis margins and keeps the inline ones", () => {
+  it("drops a NON-REPLACED inline box's block-axis margins and keeps the inline ones", () => {
     /*
      * A non-replaced inline box ignores its block-axis margins entirely while
      * `getComputedStyle` reports whatever was declared, so a blanket answer
@@ -483,7 +582,7 @@ describe("which spacing a generated box can have", () => {
      * block-axis padding on an inline box does not affect layout but DOES
      * render, and this overlay reports what renders.
      */
-    expect(spacingApplies("inline", "horizontal-tb")).toEqual({
+    expect(spacingApplies("inline", "horizontal-tb", false)).toEqual({
       margin: { top: false, bottom: false, left: true, right: true },
       padding: ALL,
     });
@@ -495,7 +594,7 @@ describe("which spacing a generated box can have", () => {
       // Which PHYSICAL sides the block axis lands on is a function of the
       // writing mode, so a physical answer hard-coded to `horizontal-tb` is
       // wrong on exactly the documents that need it most.
-      expect(spacingApplies("inline", writingMode).margin).toEqual({
+      expect(spacingApplies("inline", writingMode, false).margin).toEqual({
         top: true,
         bottom: true,
         left: false,
@@ -503,6 +602,36 @@ describe("which spacing a generated box can have", () => {
       });
     }
   );
+
+  it("keeps a REPLACED inline box's block-axis margins", () => {
+    /*
+     * The captionless `core/image` case, which is the ordinary way an image is
+     * placed: the block's root is a bare `<img>` whose computed display is
+     * `inline`. A replaced box is sized by its own content, and the line box has
+     * to make room for its block-axis margins — measured in Chromium, fifty
+     * pixels above and below an inline `<img>` moves the following content by a
+     * hundred, where the same declaration on a `<span>` moves it by nothing.
+     *
+     * Compared against the non-replaced answer rather than asserted alone, so
+     * the pair is what separates them: an implementation that ignored
+     * `replaced` would satisfy either expectation on its own.
+     */
+    const replaced = spacingApplies("inline", "horizontal-tb", true);
+    const plain = spacingApplies("inline", "horizontal-tb", false);
+    expect(replaced.margin).toEqual(ALL);
+    expect(plain.margin).not.toEqual(ALL);
+    expect(replaced.padding).toEqual(ALL);
+  });
+
+  it("still gives a replaced box in a MARGINLESS display no margins", () => {
+    // Replaced-ness answers the inline question only. An author who sets
+    // `display: table-row` on an image gets a box CSS applies no margin to, and
+    // the replaced exception must not reach past the branch it belongs to.
+    expect(spacingApplies("table-row", "horizontal-tb", true)).toEqual({
+      margin: NONE,
+      padding: NONE,
+    });
+  });
 });
 
 describe("how far the overlay must be allowed to paint outside itself", () => {
