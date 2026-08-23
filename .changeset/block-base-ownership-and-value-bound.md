@@ -91,3 +91,8 @@ A token's identity is its id when it has one, so a renamed token emits under
 that id and its name reaches no stylesheet — capping the name would have deleted
 a working token from the site sheet the moment an author gave it a long label,
 and a rename is meant to cost nothing.
+
+Both DTCG gates follow the same identity rule as the emitter, through one shared
+answer rather than a third copy of it. Without that, a renamed token with a long
+label was silently dropped from an export and refused on the way back in, while
+Nextly went on rendering it.

@@ -63,7 +63,12 @@ import { parseColor } from "./contrast";
 import type { Rgb } from "./contrast";
 import { asciiLower, checkCssValue, decodeIdentifier } from "./css-value";
 import type { SiteToken, SiteTokenSet } from "./site-tokens";
-import { isTokenName, tokenValueFetches } from "./site-tokens";
+import {
+  isAuthorableTokenName,
+  MAX_TOKEN_NAME_LENGTH,
+  tokenNamingProblem,
+  tokenValueFetches,
+} from "./site-tokens";
 
 /** The key this vendor's data lives under, in the notation the format asks for. */
 export const NEXTLY_EXTENSION = "com.nextlyhq.nextly";
@@ -175,25 +180,28 @@ function exportableValue(
   token: SiteToken,
   issues: ValidationIssue[]
 ): { type: string; value: unknown } | undefined {
-  if (!isTokenName(token.name)) {
-    issues.push(
-      issue(`"${token.name}" is not a token name, so it was not exported.`)
-    );
-    return undefined;
-  }
-  // The id is held to the grammar too, and refused rather than written. Writing
-  // it produces a file this module's own importer refuses on the way back in —
-  // and it refuses the WHOLE token, because an id it cannot read is an identity
-  // it cannot honour. An exporter emitting a document that fails its own round
-  // trip is the one shape this module exists to prevent.
-  if (token.id !== undefined && !isTokenName(token.id)) {
+  const naming = tokenNamingProblem(token);
+  if (naming !== undefined) {
+    // One rule, phrased for this gate. The identity carries the cap and the
+    // display name carries only the grammar, so a renamed token with a long
+    // label exports normally — refusing it here would drop a working token from
+    // the file while Nextly went on rendering it.
     issues.push(
       issue(
-        `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
+        naming.reason === "length"
+          ? `"${token.name}" is written under ${naming.length} characters, so it was not exported. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
+          : naming.field === "name"
+            ? `"${token.name}" is not a token name, so it was not exported.`
+            : `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
       )
     );
     return undefined;
   }
+  // The id is covered by the same answer above, and refused rather than
+  // written: writing it produces a file this module's own importer refuses on
+  // the way back in — and it refuses the WHOLE token, because an id it cannot
+  // read is an identity it cannot honour. An exporter emitting a document that
+  // fails its own round trip is the one shape this module exists to prevent.
 
   const type = DTCG_TYPE[token.kind];
   const value = type === undefined ? undefined : toDtcgValue(token);
@@ -622,7 +630,11 @@ function readToken(
     return undefined;
   }
   const name = path.join(".");
-  if (!isTokenName(name)) {
+  // The grammar only, here. Whether this name is also the string the token is
+  // WRITTEN under depends on the id below, which has not been read yet — and a
+  // file may legitimately carry a long label for a token whose stated id is
+  // short. The cap is applied once the identity is known.
+  if (!isAuthorableTokenName(name)) {
     issues.push(
       issue(`"${name}" is not a usable token name, so it was skipped.`)
     );
@@ -649,7 +661,7 @@ function readToken(
   const stated = isPlainObject(own) ? own.id : undefined;
   if (
     stated !== undefined &&
-    !(typeof stated === "string" && isTokenName(stated))
+    !(typeof stated === "string" && isAuthorableTokenName(stated))
   ) {
     issues.push(
       issue(
@@ -662,6 +674,22 @@ function readToken(
   // is normalised away — `id === undefined` then means one thing everywhere in
   // the model rather than two spellings of it.
   const id = stated === name ? undefined : stated;
+
+  // The cap, now that the identity is settled. Held here rather than on either
+  // field alone because the identity is what a stylesheet is written under: a
+  // token whose stated id is short imports normally however long its label, and
+  // one with no id is capped by that label because the label IS the identity.
+  const naming = tokenNamingProblem({ name, id });
+  if (naming !== undefined) {
+    issues.push(
+      issue(
+        naming.reason === "length"
+          ? `"${name}" is written under ${naming.length} characters, so it was skipped. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
+          : `"${name}" has a ${naming.field} that is not a usable token name, so it was skipped.`
+      )
+    );
+    return undefined;
+  }
 
   // Both value paths below finish identically — same identity, same label, same
   // description, same carried extensions — and differ only in the kind and

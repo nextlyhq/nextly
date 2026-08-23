@@ -772,50 +772,62 @@ export function emitFontFaces(faces: readonly FontFaceDef[]): {
 }
 
 /**
- * Why a token cannot be written under the name it carries, or nothing.
+ * What is wrong with the name a token carries, or nothing.
  *
- * Three refusals with one subject — what this token is CALLED — so they answer
- * together rather than as separate branches inside the emitter, and each names
- * the field an author has to repair rather than reporting "invalid token".
+ * Answered once, for every gate that decides whether a token can be written —
+ * the emitter, the DTCG exporter and the DTCG importer all ask it, and each
+ * phrases its own message from the result. Returning the PROBLEM rather than a
+ * sentence is what lets them share the rule without sharing wording that would
+ * be wrong in two of the three.
  *
- * The split between grammar and length is the point. A token's identity is
- * `id ?? name`, so a renamed token emits under its id and its display name
- * reaches no stylesheet: the grammar applies to both, because either can become
- * the identity, while the EMISSION cap applies only to the one that actually
- * does. Capping the display name instead would drop a working token from the
- * sheet the moment an author gave it a long label.
+ * The split between grammar and length is the rule itself. A token's identity is
+ * `id ?? name`, so a renamed token is written under its id and its display name
+ * reaches no stylesheet and no exported file. Both fields meet the grammar,
+ * because either can BE the identity and either would reach a selector; only the
+ * identity meets the emission cap. Capping the display name instead drops a
+ * working token the moment an author gives it a long label.
  */
-function tokenNamingRefusal(token: SiteToken): string | undefined {
-  // Grammar first, and on both fields. A name holding `}` closes the rule the
-  // emitter opened and everything after it is CSS the site never wrote, and an
-  // id reaches the same selector by the same route.
+export type TokenNamingProblem =
+  | { field: "name" | "id"; reason: "grammar" }
+  | { field: "name" | "id"; reason: "length"; length: number };
+
+export function tokenNamingProblem(token: {
+  name: string;
+  id?: string | undefined;
+}): TokenNamingProblem | undefined {
+  // Grammar on both. A name holding `}` closes the rule an emitter opened and
+  // everything after it is CSS the site never wrote; an id reaches the same
+  // selector by the same route. Asked per field so a caller can name the one an
+  // author has to repair — "rename it" fixes nothing for a bad id.
   if (!isAuthorableTokenName(token.name)) {
-    return `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`;
+    return { field: "name", reason: "grammar" };
   }
   if (token.id !== undefined && !isAuthorableTokenName(token.id)) {
-    return `"${token.name}" has an id that is not a token name, so it was not written. An id is dot-separated words of letters, digits and dashes, like "color.primary".`;
+    return { field: "id", reason: "grammar" };
   }
-  // The cap, on the string `tokenCustomProperty` actually composes.
-  const identity = tokenIdentity(token);
+  const identity = tokenIdentity(token as SiteToken);
   if (identity.length > MAX_TOKEN_NAME_LENGTH) {
-    const field = token.id === undefined ? "name" : "id";
-    return `"${token.name}" emits under ${identity.length} characters, so it was not written. The ${field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
+    return {
+      field: token.id === undefined ? "name" : "id",
+      reason: "length",
+      length: identity.length,
+    };
   }
   return undefined;
 }
 
-/**
- * The custom-property blocks a site's tokens resolve in.
- *
- * Emitted onto a selector the caller supplies rather than `:root`, so a page's
- * tokens reach the page and stop there. Writing them at the document root would
- * make a site's values apply to a host's own markup, which is the collision
- * this styling layer spends its effort avoiding everywhere else.
- *
- * The dark block is only written when some token actually differs in dark. An
- * empty block is not free: it is a selector a host reads in devtools and takes
- * for a place where something should be happening.
- */
+/** The emitter's wording for {@link tokenNamingProblem}. */
+function tokenNamingRefusal(token: SiteToken): string | undefined {
+  const problem = tokenNamingProblem(token);
+  if (problem === undefined) return undefined;
+  if (problem.reason === "length") {
+    return `"${token.name}" is written under ${problem.length} characters, so it was not written. The ${problem.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
+  }
+  return problem.field === "name"
+    ? `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`
+    : `"${token.name}" has an id that is not a token name, so it was not written. An id is dot-separated words of letters, digits and dashes, like "color.primary".`;
+}
+
 export function emitTokenBlocks(
   set: SiteTokenSet,
   selector: string

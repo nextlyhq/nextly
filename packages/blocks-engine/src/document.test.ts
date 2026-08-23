@@ -173,10 +173,10 @@ describe("the block-type predicate", () => {
   // that registers and validates while the compiler omits its defaults renders
   // without the look it declared, and nothing reports why.
   //
-  // They agree by construction, because each calls this one function. The test
-  // is here for the change that reintroduces a second implementation: that is
-  // how the three came to hold identical copies of one grammar, and a copy
-  // agrees on the day it is written.
+  // They agree by construction, because each calls this one function, and the
+  // requirement is that they keep doing so. A second implementation of the
+  // grammar agrees with this one wherever it is exercised and diverges only at
+  // the edges, so the boundary cases below are what a divergence shows up in.
   const cases: [string, string, boolean][] = [
     ["a namespaced slug", "core/heading", true],
     [
