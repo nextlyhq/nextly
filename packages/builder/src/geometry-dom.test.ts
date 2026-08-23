@@ -21,6 +21,8 @@ import {
   canvasContentPoint,
   canvasContentRect,
   frameInsetOf,
+  canvasRootFrom,
+  hasScrollbarGutter,
 } from "./geometry-dom";
 
 /**
@@ -192,5 +194,119 @@ describe("canvasContentPoint", () => {
       x: rect.x,
       y: rect.y,
     });
+  });
+});
+
+describe("finding the canvas root across realms", () => {
+  it("finds the root in the ordinary same-realm case", () => {
+    const root = document.createElement("div");
+    root.className = "nx-canvas";
+    const child = document.createElement("p");
+    root.appendChild(child);
+    document.body.appendChild(root);
+
+    expect(canvasRootFrom(child, "nx-canvas")).toBe(root);
+    root.remove();
+  });
+
+  it("returns null when nothing above the element is a canvas root", () => {
+    const lone = document.createElement("p");
+    document.body.appendChild(lone);
+    expect(canvasRootFrom(lone, "nx-canvas")).toBeNull();
+    lone.remove();
+  });
+
+  it("accepts a root built by ANOTHER realm", () => {
+    /*
+     * The separating case. `instanceof HTMLElement` compares against the
+     * constructor of the realm doing the asking, so a root created inside an
+     * iframe is not an instance of THIS realm's `HTMLElement` — and chrome
+     * checking it that way returns early and draws nothing on a perfectly good
+     * canvas. The control below is the same object failing that naive check.
+     */
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("the iframe has no document");
+
+    const root = inner.createElement("div");
+    root.className = "nx-canvas";
+    const child = inner.createElement("p");
+    root.appendChild(child);
+    inner.body.appendChild(root);
+
+    // The naive check fails on it — which is what the helper exists to survive.
+    expect(root instanceof HTMLElement).toBe(false);
+    expect(canvasRootFrom(child, "nx-canvas")).toBe(root);
+
+    frame.remove();
+  });
+});
+
+describe("hasScrollbarGutter", () => {
+  /**
+   * A scroll container with a known gutter, in whichever realm is asked for.
+   *
+   * `offsetWidth` and `clientWidth` are DEFINED rather than styled, for the
+   * reason `frameWith` defines its borders: jsdom lays nothing out, so both read
+   * zero from real styles and the subtraction below would measure nothing.
+   *
+   * The LONGHANDS are set rather than the `overflow` shorthand, because jsdom
+   * does not expand it: after `style.overflow = "auto"`, its `getComputedStyle`
+   * answers `auto` for `overflow` and the empty string for `overflowX` and
+   * `overflowY` — so a fixture written the natural way reads as a container that
+   * does not scroll, and every assertion here would pass on an implementation
+   * that never measured anything.
+   */
+  function scroller(
+    doc: Document,
+    { offset, client }: { offset: number; client: number }
+  ): HTMLElement {
+    const element = doc.createElement("div");
+    element.style.overflowX = "auto";
+    element.style.overflowY = "auto";
+    doc.body.appendChild(element);
+    Object.defineProperty(element, "offsetWidth", { value: offset });
+    Object.defineProperty(element, "clientWidth", { value: client });
+    Object.defineProperty(element, "offsetHeight", { value: 100 });
+    Object.defineProperty(element, "clientHeight", { value: 100 });
+    return element;
+  }
+
+  it("reports a reserved gutter", () => {
+    // The control for the cross-realm case below: it pins the measurement as
+    // actually happening, so a function that returned `false` unconditionally
+    // would pass that one and fail this.
+    const element = scroller(document, { offset: 200, client: 185 });
+    expect(hasScrollbarGutter(element, { x: 0, y: 0 })).toBe(true);
+  });
+
+  it("reports no gutter on a container that reserves none", () => {
+    // The mirror control. Without it, an implementation answering `true` for
+    // every scroll container satisfies the two tests around this one.
+    const element = scroller(document, { offset: 200, client: 200 });
+    expect(hasScrollbarGutter(element, { x: 0, y: 0 })).toBe(false);
+  });
+
+  it("measures a scroll container built by ANOTHER realm", () => {
+    /*
+     * The separating case, and the one that fails silently in production: an
+     * `instanceof HTMLElement` against the asking realm rejects a perfectly good
+     * element from an iframe canvas BEFORE any measurement, so the gutter
+     * refusal never fires and the block draws its padding bands across the
+     * reserved scrollbar. The naive check is asserted below so the fixture
+     * cannot quietly stop being cross-realm.
+     */
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("the iframe has no document");
+
+    const element = scroller(inner, { offset: 200, client: 185 });
+
+    expect(element instanceof HTMLElement).toBe(false);
+    expect(hasScrollbarGutter(element, { x: 0, y: 0 })).toBe(true);
+
+    frame.remove();
   });
 });

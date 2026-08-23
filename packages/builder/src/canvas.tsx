@@ -122,6 +122,54 @@ export function nodeIdFromEvent(target: EventTarget | null): string | null {
   return owner.getAttribute(NODE_ID_ATTRIBUTE);
 }
 
+/**
+ * The element a node id was rendered as, or `null` when it is not on screen.
+ *
+ * The inverse of {@link nodeIdFromEvent}, and beside it because the two are one
+ * mapping read in two directions — separated, they become two answers to what a
+ * node id means in the DOM.
+ *
+ * Ids are COMPARED rather than interpolated into a selector. A node id reaches
+ * here from stored data, so any character CSS treats specially makes
+ * `querySelector` either throw or match something else entirely.
+ *
+ * Deliberately not the {@link SELECTED_ATTRIBUTE} marker. That marker is applied
+ * in a passive effect, so on the render where the selection changes it is still
+ * on the previously selected element, and any chrome measuring in a layout
+ * effect would spend a frame measuring the wrong block.
+ */
+export function nodeElement(root: HTMLElement, id: string): Element | null {
+  let found: Element | null = null;
+  // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
+  // that declares its iterator, and this package compiles without one.
+  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+    if (found === null && element.getAttribute(NODE_ID_ATTRIBUTE) === id) {
+      found = element;
+    }
+  });
+  return found;
+}
+
+/**
+ * Every element the renderer marked as a node, in document order.
+ *
+ * Beside {@link nodeElement} because both answer from the same marker, and a
+ * caller that needs all of them should not walk the tree with its own selector.
+ *
+ * Chrome drawn INSIDE the canvas root carries no node marker, so it is excluded
+ * by construction rather than by a filter that would have to be kept in step
+ * with whatever chrome arrives next.
+ */
+export function nodeElements(root: HTMLElement): readonly Element[] {
+  const found: Element[] = [];
+  // `forEach` for the reason given in `nodeElement`: a `NodeList` is only
+  // iterable under a lib this package does not compile with.
+  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+    found.push(element);
+  });
+  return found;
+}
+
 export interface CanvasProps {
   /** The document being edited. */
   document: BlockDocument;

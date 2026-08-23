@@ -144,6 +144,21 @@ export { BlockToolbar } from "./block-toolbar";
 export type { BlockToolbarProps } from "./block-toolbar";
 
 /**
+ * The selected block's margin and padding, drawn over the page.
+ *
+ * A canvas overlay like the drop indicator, and composed the same way — it goes
+ * in `Canvas`'s `overlay`, because it is positioned in the canvas's own content
+ * coordinates and the canvas root is what establishes them.
+ *
+ * It reads the RENDERED page rather than the stored style tier, so what it
+ * reports is what the author is looking at: the browser has already resolved the
+ * logical sides to physical ones, `auto` to a used value, percentages against
+ * the containing block, and the whole cascade to a winner.
+ */
+export { SpacingOverlay } from "./spacing-overlay";
+export type { SpacingOverlayProps } from "./spacing-overlay";
+
+/**
  * The editor's document state, published beside the canvas because it is a hook
  * and therefore client-only for the same reason the shell is.
  *
