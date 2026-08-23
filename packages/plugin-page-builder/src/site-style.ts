@@ -70,13 +70,19 @@ export interface SiteStyleData {
  * The granularity of "layered" differs by section, and each choice follows
  * from what a partial override would mean there:
  *
- * - **Tokens merge by NAME.** A site storing one brand colour must not lose
- *   the config's `content.width` — an unresolved custom property invalidates
- *   the declaration silently, so replacement fails invisibly. Same reasoning,
- *   same shape, as the engine's `resolveSiteTokens`, which this result is
- *   later handed to for the engine-defaults tier. `prefix` and `darkMode` are
- *   site-wide decisions, not per-token values, so the stored ones win when
- *   stated.
+ * - **Tokens merge by IDENTITY** — `id` when the token carries one, and the
+ *   name when it does not. Per entry rather than whole-set, because a site
+ *   storing one brand colour must not lose the config's `content.width`: an
+ *   unresolved custom property invalidates the declaration silently, so
+ *   replacement fails invisibly. The KEY is the identity rather than the name
+ *   because a tier overrides the token and not the label — a site that renamed
+ *   a config token holds it under the config token's identity with a name of
+ *   its own, and keying on the name would leave the config entry standing
+ *   beside it. Same key, for that reason, as the engine's `resolveSiteTokens`,
+ *   which this result is later handed to for the engine-defaults tier. For a
+ *   set where nothing carries an id this is exactly the name merge it has
+ *   always been. `prefix` and `darkMode` are site-wide decisions, not per-token
+ *   values, so the stored ones win when stated.
  * - **Classes merge by ID.** A document references a class by its id, so the
  *   id is the unit of override: a stored class replaces the config class with
  *   the same id and keeps every other one. Each entry keeps its own
