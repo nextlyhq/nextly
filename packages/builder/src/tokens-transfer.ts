@@ -92,11 +92,15 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
       skipped,
     };
   }
+  const merged = mergeById(into, read.tokens);
   return {
     ok: true,
-    tokens: mergeById(into, read.tokens),
-    imported: read.tokens.length,
-    skipped,
+    tokens: merged.tokens,
+    // What SURVIVED, not what the file held. A file can name one token twice —
+    // two entries carrying one identity — and only the last of them lands, so
+    // counting the file's entries would claim an arrival that did not happen.
+    imported: merged.landed,
+    skipped: [...skipped, ...merged.collapsed],
   };
 }
 
@@ -110,9 +114,25 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
 function mergeById(
   into: SiteTokenSet,
   incoming: readonly SiteToken[]
-): SiteTokenSet {
+): { tokens: SiteTokenSet; landed: number; collapsed: string[] } {
   const byIdentity = new Map<string, SiteToken>();
-  for (const token of incoming) byIdentity.set(tokenIdentity(token), token);
+  const collapsed: string[] = [];
+  for (const token of incoming) {
+    const identity = tokenIdentity(token);
+    const first = byIdentity.get(identity);
+    // A file can name one token twice. `dtcgToTokens` returns both, because
+    // two DTCG paths are two entries — but they compose one custom property
+    // here, so only the last can land. Reported rather than dropped in
+    // silence: two tokens going in and one arriving is precisely the kind of
+    // loss this whole feature exists to make visible.
+    if (first !== undefined) {
+      collapsed.push(
+        `"${first.name}" and "${token.name}" are one token in that file — both carry the identity "${identity}" — so only "${token.name}" was taken.`
+      );
+    }
+    byIdentity.set(identity, token);
+  }
+  const landed = byIdentity.size;
 
   const kept = into.tokens.map(token => {
     const replacement = byIdentity.get(tokenIdentity(token));
@@ -120,7 +140,11 @@ function mergeById(
     byIdentity.delete(tokenIdentity(token));
     return replacement;
   });
-  return { ...into, tokens: [...kept, ...byIdentity.values()] };
+  return {
+    tokens: { ...into, tokens: [...kept, ...byIdentity.values()] },
+    landed,
+    collapsed,
+  };
 }
 
 /** A file this site can hand to another tool, and what it could not carry. */

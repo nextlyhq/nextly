@@ -163,6 +163,48 @@ describe("what goes in", () => {
     expect(result.skipped.join(" ")).toContain("no token kind for");
   });
 
+  it("counts what LANDED, and names a token the file said twice", () => {
+    // Two DTCG paths carrying one identity are two entries to the format and
+    // one token here, because they compose a single custom property. Only the
+    // last can land. Counting the file's entries would claim an arrival that
+    // did not happen — two tokens in, one out, and a report saying two.
+    const twice = {
+      brand: {
+        one: {
+          $type: "color",
+          $value: "#111111",
+          $extensions: {
+            "com.nextlyhq.nextly": {
+              css: { light: "#111111" },
+              kind: "color",
+              id: "color.shared",
+            },
+          },
+        },
+        two: {
+          $type: "color",
+          $value: "#222222",
+          $extensions: {
+            "com.nextlyhq.nextly": {
+              css: { light: "#222222" },
+              kind: "color",
+              id: "color.shared",
+            },
+          },
+        },
+      },
+    };
+    const result = importDtcg(JSON.stringify(twice), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // One token arrived, not two.
+    expect(result.tokens.tokens.length).toBe(1);
+    expect(result.imported).toBe(1);
+    // And the loss is named rather than left for the author to notice.
+    expect(result.skipped.join(" ")).toContain("one token in that file");
+    expect(result.skipped.join(" ")).toContain("color.shared");
+  });
+
   it("tells a corrupt file from the wrong file", () => {
     // Different failures with different repairs: one is truncated, the other
     // is a file that was never a token document. One message covering both

@@ -13,7 +13,14 @@
  * @module tokens-panel.test
  */
 import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -510,12 +517,23 @@ describe("bringing a token file in", () => {
     return file;
   }
 
+  /**
+   * Choose a file and wait for the panel to have ANSWERED.
+   *
+   * Waits for the observable condition rather than for one turn of the event
+   * loop. A single tick is enough only when nothing else is competing for it:
+   * under a full suite or a loaded machine the read can settle after that tick
+   * and the assertion looks at a panel that has not reported yet. That is a
+   * test which passes on a fast machine and fails in CI, which is worse than
+   * one that fails everywhere.
+   */
   const chooseFile = async (contents: string): Promise<void> => {
     const input = screen.getByLabelText("Import");
     fireEvent.change(input, { target: { files: [fileOf(contents)] } });
-    // The read is asynchronous, so the assertion has to wait for it.
-    await new Promise(resolve => {
-      setTimeout(resolve, 0);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("status") ?? screen.queryByRole("alert")
+      ).not.toBeNull();
     });
   };
 
@@ -604,8 +622,10 @@ describe("bringing a token file in", () => {
     rerender(<TokensPanel tokens={edited} onChange={onChange} />);
 
     resolveRead?.(FILE);
-    await new Promise(resolve => {
-      setTimeout(resolve, 0);
+    // The observable condition, not a turn of the loop: the import has
+    // reported back.
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
     });
 
     const merged = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
@@ -629,13 +649,9 @@ describe("bringing a token file in", () => {
     fireEvent.change(screen.getByLabelText("Import"), {
       target: { files: [broken] },
     });
-    await new Promise(resolve => {
-      setTimeout(resolve, 0);
-    });
+    const said = await screen.findByRole("alert");
+    expect(said.textContent).toContain("could not be read");
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert").textContent).toContain(
-      "could not be read"
-    );
   });
 
   /*
@@ -672,17 +688,19 @@ describe("bringing a token file in", () => {
     fireEvent.change(input, { target: { files: [slow] } });
     // The author picks a second, good file before the first answers.
     fireEvent.change(input, { target: { files: [fileOf(FILE)] } });
-    await new Promise(resolve => {
-      setTimeout(resolve, 0);
-    });
-    expect(screen.getByRole("status").textContent).toContain(
-      "Imported 1 token"
-    );
+    const first = await screen.findByRole("status");
+    expect(first.textContent).toContain("Imported 1 token");
 
     // Now the FIRST read fails, late.
     rejectFirst?.(new Error("EACCES"));
-    await new Promise(resolve => {
-      setTimeout(resolve, 0);
+    // An ABSENCE is asserted below, so this has to give the late rejection
+    // every chance to speak rather than race it. `waitFor` retries until its
+    // body stops throwing, which is the wrong shape for a condition that must
+    // hold rather than arrive.
+    await act(async () => {
+      await new Promise(resolve => {
+        setTimeout(resolve, 0);
+      });
     });
 
     // The success still stands: the older answer said nothing.
