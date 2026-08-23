@@ -17,9 +17,9 @@
  *
  * So this compiles a page and a site sheet from the SAME token set the picker
  * offered, and requires the property the page references to be one the sheet
- * declares. It is not a browser — D-05.7 asks for that and this is not it — but
- * it is the whole road from the control's output to the bytes a visitor's
- * stylesheet would contain.
+ * declares. No browser is involved, so this does not show the declaration taking
+ * effect on a rendered page — but it is the whole road from the control's output
+ * to the bytes a visitor's stylesheet would contain.
  *
  * @module style-colour-roundtrip.test
  */

@@ -260,49 +260,49 @@ function emittableTokens(
 /**
  * Whether the canvas will declare a custom property for this token.
  *
- * ASKED, by emitting the token on its own and seeing whether anything came out.
- * `emitTokenBlocks` returns empty CSS when it wrote no light declaration, which
- * is exactly its own verdict — and it refuses for an unusable id, a missing or
- * non-string light value, a value that is not safe CSS, and a value that would
- * make the page fetch something, as well as for an unusable name.
+ * ASKED, by emitting the token and seeing what comes out, rather than by
+ * restating the emitter's rules here where they would drift from it.
  *
- * The whole SET is passed rather than a bare token, because a token's
- * acceptance can depend on the set's own prefix.
+ * Asked TWICE, because the emitter reaches two kinds of verdict and they have
+ * different scopes. A refusal — an unusable name or id, a missing or non-string
+ * light value, a value that is not safe CSS, a value that would make the page
+ * fetch a file — costs the token in EVERY mode: the emitter scans both values
+ * and skips the whole token, so a dark `url(…)` leaves the light value
+ * undeclared too. A kind mismatch is the opposite: it is reported and the value
+ * is written anyway, so it costs only the mode whose value is wrong.
+ *
+ * Judging the whole token by its active value alone would miss the first kind,
+ * and offer a preset whose reference resolves to nothing. Judging it by both
+ * values would apply the second kind too widely, and withhold a token whose
+ * light value is a perfectly good colour.
  */
 function emits(token: SiteToken, mode: TokenMode): boolean {
-  // Asked about a token carrying ONLY the value the canvas is currently
-  // showing. Emitting the whole token would report the other mode too, and a
-  // token whose light value is a colour and whose dark value is not renders
-  // perfectly well in light — rejecting it there would remove a token that
-  // works from the picker of an author who cannot see the problem.
+  // The refusals, asked of the WHOLE token. Nothing WRITTEN is the emitter's
+  // own verdict, read from its output rather than from its commentary: a future
+  // refusal that forgot to report would otherwise arrive here as an accepted
+  // token that declares nothing.
+  //
+  // The set's prefix is deliberately not passed. It cannot decide any of these
+  // rules, and supplying an unusable one would add an issue about the SET to
+  // every token in it — turning one bad prefix into an empty picker.
+  if (emitTokenBlocks({ tokens: [token] }, ":root").css === "") return false;
+
+  // The kind mismatch, asked of the ACTIVE value alone. Every other objection
+  // was ruled out above, so anything said about a token carrying only this one
+  // value is that check — which is why the question can be asked without
+  // matching the message text, wording nobody promised to keep, and without
+  // `checkTokenKind`, which the engine does not export.
+  //
+  // It matters because the browser drops the declaration where the token is
+  // USED, not where it is defined: a colour token holding `16px` is written,
+  // resolves, and does nothing, so a picker offering it hands over a reference
+  // with no symptom to follow.
   const active = token.values[mode] ?? token.values.light;
   const alone = emitTokenBlocks(
     { tokens: [{ ...token, values: { light: active } }] },
     ":root"
   );
-  // Nothing WRITTEN means refused outright. Nothing SAID means the engine had
-  // no objection to what it wrote, which is a different and equally necessary
-  // question: a value that contradicts its kind — `16px` on a colour — is
-  // emitted deliberately, with a warning, because refusing it would cost the
-  // author the token on a verdict the engine is not certain enough to act on.
-  // The browser then drops the declaration where it is USED, so a picker
-  // offering it hands over a reference that does nothing.
-  //
-  // Read as issues rather than by asking `checkTokenKind`, which the engine
-  // does not export, and rather than by matching the message text, which would
-  // be a copy of wording nobody promised to keep.
-  //
-  // The set's prefix is deliberately not passed. It cannot decide any of these
-  // rules, and supplying an unusable one would add an issue about the SET to
-  // every token in it — turning one bad prefix into an empty picker.
-  //
-  // Measured: every refusal the emitter makes today also reports an issue, so
-  // the emptiness check is currently implied by the silence one and removing it
-  // moves no test. Kept because it is the DIRECT question — did anything get
-  // written — asked of a value already in hand, and because a future silent
-  // skip in that package would otherwise arrive here as an accepted token that
-  // emits nothing.
-  return alone.css !== "" && alone.issues.length === 0;
+  return alone.issues.length === 0;
 }
 
 /**
@@ -554,9 +554,12 @@ export function emitsContrastPartner(
  * How a foreground fares against a background, or `undefined` when either
  * cannot be read.
  *
- * The verdict is the ENGINE's — `checkContrast` — per D-05.4. What this adds is
- * only the resolution step in front of it, so a pair written as tokens is
- * judged rather than declined: both sides go through
+ * The verdict is the ENGINE's — `checkContrast` — and is never recomputed here.
+ * A contrast ratio is a property of two colours rather than of this panel, and a
+ * second implementation would drift from the one the compiler and the validator
+ * already answer with, silently, because both spellings look correct. What this
+ * adds is only the resolution step in front of it, so a pair written as tokens
+ * is judged rather than declined: both sides go through
  * {@link colourChannelsOf} first, which is the same resolution the swatch used.
  *
  * `undefined` propagates rather than being softened, and the caller is expected

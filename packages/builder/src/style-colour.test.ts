@@ -10,6 +10,7 @@
  */
 import {
   STYLE_CATALOG,
+  emitTokenBlocks,
   type NodeStyles,
   type ContrastResult,
   type SiteTokenSet,
@@ -704,6 +705,38 @@ describe("the emitter decides which tokens are offered", () => {
     // And withheld in the mode where it really is broken.
     expect(colourTokensFor(COLOR, set, "dark").map(t => t.name)).not.toContain(
       "color.half"
+    );
+  });
+
+  it("WITHHOLDS one whose other mode is refused, which costs both modes", () => {
+    // The other half of the rule above, and the one that reverses it. A kind
+    // mismatch is mode-local: the emitter reports it and writes the value
+    // anyway, so a bad dark value leaves a good light one resolving. A refusal
+    // is not: the emitter scans BOTH values for anything unsafe or fetching and
+    // skips the whole token, so a dark `url(...)` leaves the light value with
+    // no custom property either. Scoping the whole question to the active mode
+    // therefore offers a preset whose reference resolves to nothing, in the
+    // very mode that looked fine.
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.fetches",
+          kind: "color",
+          values: { light: "#ffffff", dark: "url(https://example.com/a.png)" },
+        },
+      ],
+    };
+
+    // Ground truth from the emitter itself, so this asserts the engine's real
+    // behaviour rather than a belief about it: nothing is written for the token
+    // at all, in either mode.
+    expect(emitTokenBlocks(set, ":root").css).toBe("");
+
+    expect(colourTokensFor(COLOR, set, "light").map(t => t.name)).not.toContain(
+      "color.fetches"
+    );
+    expect(colourTokensFor(COLOR, set, "dark").map(t => t.name)).not.toContain(
+      "color.fetches"
     );
   });
 
