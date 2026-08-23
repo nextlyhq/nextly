@@ -37,6 +37,7 @@ import {
   type ContrastResult,
   type NodeStyles,
   type SiteTokenSet,
+  type TokenMode,
   type StyleLeaf,
   type StyleShape,
   type StyleState,
@@ -68,6 +69,7 @@ import {
   colourHexOf,
   colourShowable,
   colourTokenFor,
+  colourTokenLabel,
   colourTokensFor,
   contrastAtLeaf,
   contrastObscuredAbove,
@@ -1449,6 +1451,7 @@ function ColourField({
   // token's own hex again on every render, and its prop-sync effect reset the
   // surface to it: the controls snapped back mid-drag and a token could not be
   // replaced with a literal by using the picker at all.
+  const storedLabel = storedTokenLabel(reference, tokens, mode, choices);
   const showing = reference === null || edited ? draft : stored;
   const shown = colourHexOf(showing, tokens, mode);
   // Measured from what the surface is SHOWING, which is the same value the
@@ -1528,8 +1531,7 @@ function ColourField({
         ) : (
           <TokenName
             buttonRef={clear}
-            identity={reference}
-            token={colourTokenFor(reference, tokens, mode)}
+            label={storedLabel}
             actionName={actionName}
             onClear={() => commitInstead(null)}
           />
@@ -1649,7 +1651,11 @@ function ColourPicker({
             // every renamed token's swatch, and would collide between a renamed
             // token and a new one that took its old name.
             id: choice.identity,
-            label: choice.name,
+            // Qualified with the identity only where another offered token
+            // shares this name. Two presets under one label with equal or
+            // unresolvable colours are indistinguishable, and choosing either
+            // stores an identity the author could not have predicted.
+            label: colourTokenLabel(choice, choices),
             // The RESOLVED colour, never the token's raw value. A preset button
             // paints what it is handed, so a token holding `var(--brand)`,
             // `currentcolor` or a CSS-wide keyword would resolve against the
@@ -1671,6 +1677,32 @@ function ColourPicker({
 }
 
 /**
+ * What a STORED reference is called, for the row that displays it.
+ *
+ * Three answers to one question, which is why it is asked in one place: a
+ * reference the site still defines reads as that token's current name; one
+ * whose name another offered token shares is qualified with its identity, so
+ * the two rows cannot be confused; and one the site no longer defines at all
+ * reads as the raw identity the document holds. That last case is a warning
+ * rather than an error — the value goes on compiling — so showing the stored
+ * string is more use than showing an empty space.
+ *
+ * Separate from {@link colourTokenLabel} because that one answers about a token
+ * in hand, and this one has to find the token first, or account for there being
+ * none.
+ */
+function storedTokenLabel(
+  reference: string | null,
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode,
+  among: readonly ColourToken[]
+): string {
+  if (reference === null) return "";
+  const token = colourTokenFor(reference, tokens, mode);
+  return token === undefined ? reference : colourTokenLabel(token, among);
+}
+
+/**
  * A stored token, by the name an author reads, with the way to remove it.
  *
  * The name is resolved by the caller and the fallback is the stored identity,
@@ -1681,25 +1713,25 @@ function ColourPicker({
  */
 function TokenName({
   buttonRef,
-  identity,
-  token,
+  label,
   actionName,
   onClear,
 }: {
   /** Handed up so the picker can tell its own clear from any other dismissal. */
   buttonRef: React.RefObject<HTMLButtonElement | null>;
-  /** What the document stores, and the fallback when nothing resolves it. */
-  identity: string;
-  /** The site's token of that identity, when it defines one. */
-  token: ColourToken | undefined;
+  /**
+   * What to show: the token's current name, qualified with its identity where
+   * another offered token shares that name, and the identity alone when the
+   * site defines no token for it. Resolved by the caller, which is the only
+   * place that holds the list the collision would be against.
+   */
+  label: string;
   actionName: string;
   onClear: () => void;
 }): React.JSX.Element {
   return (
     <>
-      <span className="nx-style-inspector__colour-token">
-        {token?.name ?? identity}
-      </span>
+      <span className="nx-style-inspector__colour-token">{label}</span>
       <button
         ref={buttonRef}
         type="button"
@@ -1731,19 +1763,34 @@ function ContrastNote({
 }: {
   id: string;
   contrast: ContrastResult | undefined;
-}): React.JSX.Element | null {
-  if (contrast === undefined) return null;
+}): React.JSX.Element {
   return (
     <p
       className="nx-style-inspector__contrast"
       id={id}
-      data-level={contrast.level}
+      // Announced as it changes, because the verdict moves while focus is
+      // INSIDE the picker — on the saturation square, the hue strip, the alpha
+      // strip or the hex field — and none of those controls is described by
+      // this note. `aria-describedby` is read when a control receives focus, so
+      // a figure that changes during the interaction is never spoken. Polite
+      // rather than assertive: it coalesces while a drag is moving and speaks
+      // once the author pauses, which is when the number is wanted.
+      aria-live="polite"
+      // Mounted even with nothing to say. A live region announces CHANGES to
+      // its contents, so one that arrives with its text already in place is not
+      // a change and is silent — the state this note is in every time a colour
+      // first becomes measurable. Empty it occupies no space; `:empty` drops
+      // the margin rather than the box, because `display: none` would take it
+      // out of the accessibility tree and stop it announcing at all.
+      {...(contrast === undefined ? {} : { "data-level": contrast.level })}
     >
-      {`Contrast ${contrastRatioText(contrast)} — ${
-        contrast.passesBodyText
-          ? `passes AA for body text (${contrast.level})`
-          : "below AA for body text"
-      }`}
+      {contrast === undefined
+        ? ""
+        : `Contrast ${contrastRatioText(contrast)} — ${
+            contrast.passesBodyText
+              ? `passes AA for body text (${contrast.level})`
+              : "below AA for body text"
+          }`}
     </p>
   );
 }

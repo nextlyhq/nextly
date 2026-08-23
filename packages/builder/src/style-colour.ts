@@ -325,6 +325,37 @@ function kindMatches(token: SiteToken, mode: TokenMode): boolean {
 }
 
 /**
+ * What to CALL a token in a list where two of them may share a name.
+ *
+ * A rename FREEZES the old name as the identity and moves only the label, so
+ * nothing stops a second token taking the name the first one left — and both go
+ * on emitting, because they compose their properties from identities that still
+ * differ. Two choices then arrive with one label, and if their colours match or
+ * neither resolves to a swatch there is nothing at all to tell them apart. The
+ * author picks one and the document stores an identity they could not have
+ * predicted.
+ *
+ * Qualified only where the collision is REAL, so the ordinary list stays
+ * readable: a name unique among the tokens offered beside it is shown as the
+ * author wrote it, and the identity appears only when it is the sole thing that
+ * distinguishes two entries.
+ *
+ * Judged against the list the reader is actually looking at rather than the
+ * whole site, because that is where the ambiguity exists. A token qualified for
+ * a collision the reader cannot see would be explaining a distinction that is
+ * not on screen.
+ */
+export function colourTokenLabel(
+  token: ColourToken,
+  among: readonly ColourToken[]
+): string {
+  const shared = among.some(
+    other => other.name === token.name && other.identity !== token.identity
+  );
+  return shared ? `${token.name} (${token.identity})` : token.name;
+}
+
+/**
  * One site token in the forms a control needs it in.
  *
  * Shared by every reader rather than written at each, so the identity rule is

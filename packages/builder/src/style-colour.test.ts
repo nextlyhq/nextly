@@ -25,6 +25,7 @@ import {
   colourHexOf,
   colourShowable,
   colourTokenFor,
+  colourTokenLabel,
   colourTokensFor,
   contrastObscuredBy,
   contrastObscuredIn,
@@ -33,6 +34,7 @@ import {
   contrastRatioText,
   contrastRoleOf,
   emitsContrastPartner,
+  type ColourToken,
 } from "./style-colour";
 
 /** One catalog entry, as the array actually stores them. */
@@ -882,5 +884,46 @@ describe("what an ancestor puts over a pair", () => {
     const nodes = treeWith({ base: { base: { opacity: "0.1" } } });
     expect(contrastObscuredAbove(nodes, "wrap0")).toBeUndefined();
     expect(contrastObscuredAbove(nodes, "absent")).toBeUndefined();
+  });
+});
+
+describe("what a token is CALLED where two share a name", () => {
+  const of = (identity: string, name: string): ColourToken =>
+    ({
+      identity,
+      name,
+      kind: "color",
+      colour: "#000000",
+      swatch: "#000000",
+    }) as ColourToken;
+
+  it("shows the plain name when nothing else offered carries it", () => {
+    const list = [of("color.primary", "brand.main"), of("color.ink", "text")];
+    expect(colourTokenLabel(list[0] as ColourToken, list)).toBe("brand.main");
+  });
+
+  it("qualifies BOTH entries when two identities share one name", () => {
+    // Reachable because a rename freezes the old name as the identity and
+    // moves only the label, so a second token may take the name the first
+    // left. Both go on emitting — their identities still differ — so both are
+    // offered, under one label, and choosing either stores an identity the
+    // author could not have predicted.
+    const list = [
+      of("color.primary", "brand.main"),
+      of("brand.main", "brand.main"),
+    ];
+    expect(colourTokenLabel(list[0] as ColourToken, list)).toBe(
+      "brand.main (color.primary)"
+    );
+    expect(colourTokenLabel(list[1] as ColourToken, list)).toBe(
+      "brand.main (brand.main)"
+    );
+  });
+
+  it("does not qualify a token against ITSELF", () => {
+    // The same token appearing once must not read as a collision with its own
+    // entry, which an identity-blind comparison would produce.
+    const one = of("color.primary", "brand.main");
+    expect(colourTokenLabel(one, [one])).toBe("brand.main");
   });
 });

@@ -817,3 +817,76 @@ describe("an ancestor's effects reach the readout", () => {
     expect(screen.queryByText(/Contrast/)).toBeNull();
   });
 });
+
+describe("the readout announces itself while the picker moves", () => {
+  it("keeps the note in the document with nothing to say", () => {
+    // A live region only speaks when its contents CHANGE, so one that mounts
+    // with the verdict already in place is silent — which is every time a
+    // colour first becomes measurable. Rendering it empty is what makes the
+    // first verdict an announcement rather than an arrival.
+    render_with({ base: { base: { color: "#000000" } } });
+    const note = document.querySelector(".nx-style-inspector__contrast");
+    expect(note).not.toBeNull();
+    expect(note?.getAttribute("aria-live")).toBe("polite");
+    expect(note?.textContent).toBe("");
+  });
+
+  it("announces the verdict from the same region once a pair is readable", () => {
+    render_with({
+      base: { base: { color: "#000000", backgroundColor: "#ffffff" } },
+    });
+    const notes = Array.from(
+      document.querySelectorAll(".nx-style-inspector__contrast")
+    );
+    const spoken = notes.filter(note => note.textContent !== "");
+    expect(spoken.length).toBeGreaterThan(0);
+    for (const note of spoken) {
+      expect(note.getAttribute("aria-live")).toBe("polite");
+      expect(note.textContent).toContain("Contrast 21.0:1");
+    }
+  });
+});
+
+describe("two tokens under one name are told apart", () => {
+  it("qualifies the preset labels with the identity that differs", () => {
+    // A rename freezes the old name as the identity, so a second token can
+    // take the name the first left. Both emit and both are offered.
+    const clashing: SiteTokenSet = {
+      tokens: [
+        {
+          id: "color.primary",
+          name: "brand.main",
+          kind: "color",
+          values: { light: "#111111" },
+        },
+        { name: "brand.main", kind: "color", values: { light: "#111111" } },
+      ],
+    };
+    register();
+    const document_: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: styles("#3b82f6"),
+        },
+      ] as BlockNode[],
+    } as BlockDocument;
+    render(
+      <StyleInspectorPanel editor={editorFor(document_)} tokens={clashing} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+
+    // Identical colours, so the swatches themselves cannot tell them apart.
+    expect(
+      screen.queryByRole("button", { name: "brand.main (color.primary)" })
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "brand.main (brand.main)" })
+    ).not.toBeNull();
+  });
+});

@@ -491,6 +491,16 @@
   color: var(--nx-muted-foreground);
 }
 
+/*
+ * Nothing to say yet. The element stays in the document so it can announce a
+ * verdict that appears later — a live region only speaks when its contents
+ * CHANGE — and `display: none` would remove it from the accessibility tree
+ * instead. Dropping the margin is all that is needed to make it take no room.
+ */
+.nx-style-inspector__contrast:empty {
+  margin: 0;
+}
+
 .nx-style-inspector__contrast[data-level="fail"] {
   color: var(--nx-destructive);
 }
