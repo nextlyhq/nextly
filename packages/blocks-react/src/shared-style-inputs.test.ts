@@ -12,6 +12,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { MAX_NAMED_CLASSES } from "@nextlyhq/blocks-engine";
+
 import {
   UNIDENTIFIED_SHARED_INPUTS,
   sharedStyleInputsId,
@@ -172,6 +174,45 @@ describe("the stamp", () => {
       );
     });
 
+    it("a block type's defaults", () => {
+      // The compiler emits these into the PAGE sheet, and emits it after the
+      // site sheet — so a stale base rule here does not merely disagree with an
+      // updated one, it overrides it.
+      const moved = inputs({
+        blockBases: { "core/text": { base: { base: { color: "#222222" } } } },
+      });
+
+      expect(sharedStyleInputsId(moved)).not.toBe(
+        sharedStyleInputsId(inputs({ blockBases: {} }))
+      );
+    });
+
+    it("a container breakpoint losing its bound, which is not the same as null", () => {
+      // On a container axis an ABSENT `maxWidth` compiles to
+      // `@container (min-width: 0)` — the widest query — while a stored `null`
+      // is a different value entirely. Collapsing them would reuse a sheet
+      // whose container rules no longer match.
+      const absent = inputs({
+        breakpoints: {
+          viewport: [],
+          container: [{ id: "c", label: "C" }],
+        },
+      });
+      const nulled = inputs({
+        breakpoints: {
+          viewport: [],
+          container: [
+            { id: "c", label: "C", maxWidth: null } as never as {
+              id: string;
+              label: string;
+            },
+          ],
+        },
+      });
+
+      expect(sharedStyleInputsId(absent)).not.toBe(sharedStyleInputsId(nulled));
+    });
+
     it("a class being ADDED, even one the page never references", () => {
       // The whole library is emitted into every page, so a new class is a
       // change to every stored sheet.
@@ -214,6 +255,50 @@ describe("the stamp", () => {
         sharedStyleInputsId(inputs())
       );
     });
+  });
+});
+
+describe("what a corrupt or hostile settings row costs", () => {
+  it("reduces a malformed class entry rather than dereferencing it", () => {
+    // This library is one site-settings record read on every page render, and
+    // it arrives whether or not anything validated it. `compilePageCss` skips a
+    // corrupt entry with a warning; a stamp that threw on the same row would
+    // take down every page on the site instead of costing one class its rules.
+    const corrupt = inputs({
+      namedClasses: [null, undefined, "nope"] as never,
+    });
+
+    expect(() => sharedStyleInputsId(corrupt)).not.toThrow();
+  });
+
+  it("still notices a corrupt entry being ADDED", () => {
+    // Tolerating it must not mean ignoring it: an entry the compiler skips
+    // still changes the library, and reducing it to a hole keeps its position
+    // rather than dropping it.
+    const one = inputs({ namedClasses: [null] as never });
+    const two = inputs({ namedClasses: [null, null] as never });
+
+    expect(sharedStyleInputsId(one)).not.toBe(sharedStyleInputsId(two));
+  });
+
+  it("reads no further than the compiler does", () => {
+    // `compilePageCss` slices to MAX_NAMED_CLASSES before it copies, sorts or
+    // scans. Entries past that cap reach no stylesheet, so they must not move a
+    // stamp — and an oversized settings row must not restore here the unbounded
+    // work the compiler's cap exists to prevent.
+    const entry = (i: number) => ({
+      id: `c${i}`,
+      slug: `s${i}`,
+      orderIndex: i,
+      styles: {},
+    });
+    const atCap = Array.from({ length: MAX_NAMED_CLASSES }, (_, i) => entry(i));
+
+    expect(sharedStyleInputsId(inputs({ namedClasses: atCap }))).toBe(
+      sharedStyleInputsId(
+        inputs({ namedClasses: [...atCap, entry(MAX_NAMED_CLASSES)] })
+      )
+    );
   });
 });
 

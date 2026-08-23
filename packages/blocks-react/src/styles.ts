@@ -883,9 +883,14 @@ export function resolvePageStyles(
   // the same reason the policy one refuses its sentinel: absence is equally the
   // honest stamp for a compile that had no shared inputs at all, so treating it
   // as a match would reuse a sheet compiled against a library, a prefix and a
-  // breakpoint set that nothing here has seen. Every artifact written before
-  // this field existed is unstamped, so each recompiles once and is then
-  // stamped — which is the whole migration.
+  // breakpoint set that nothing here has seen.
+  //
+  // Every artifact written before this field existed is unstamped, so each is
+  // recompiled and the value returned carries the stamp. Whether that is paid
+  // ONCE is not this module's to promise: it returns a stamped value and does
+  // not write one, so the cost is once per artifact where a caller persists or
+  // caches the result, and once per request where nothing does. The correctness
+  // is the same either way; only the price differs.
   const compiledAgainstOtherInputs =
     styles !== undefined &&
     (styles.sharedInputsId !== options.sharedInputsId ||

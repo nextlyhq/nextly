@@ -28,6 +28,7 @@ import type { PageStyles } from "./styles";
 import { PageRenderer } from "./page-renderer";
 import { effectiveCompile, fetchPolicyLabel } from "./styles";
 import { createBlockResolver } from "./resolver";
+import { sharedStyleInputsId } from "./shared-style-inputs";
 import { coreBlocks } from "./blocks";
 
 const ALLOWED: readonly RemotePattern[] = [
@@ -129,6 +130,11 @@ function siteSheetMarkup(
     />
   );
 }
+
+/** The shared inputs both reuse cases render under. */
+const EMPTY_BREAKPOINTS = {
+  breakpoints: { viewport: [], container: [] },
+};
 
 describe("the one derived fetch predicate", () => {
   // Identity, not equivalence. Two closures over the same pattern list behave
@@ -390,6 +396,11 @@ describe("a stored stylesheet records the policy that compiled it", () => {
       ...stale,
       css: ".nx-n1{color:rebeccapurple}",
       fetchPolicyId: fetchPolicyLabel(ALLOWED),
+      // Stamped with the shared inputs too, because this asserts reuse and a
+      // sheet is reused only when EVERY stamp it carries still describes the
+      // render. Without this the artifact is refused for the shared inputs and
+      // the test would pass or fail for a reason other than the policy.
+      sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
     };
     const markup = renderToStaticMarkup(
       <PageRenderer
@@ -526,7 +537,11 @@ describe("a caller's own fetch predicate", () => {
       <PageRenderer
         document={doc}
         blocks={createBlockResolver(coreBlocks)}
-        styles={{ ...stored, fetchPolicyId: "mine-v3" }}
+        styles={{
+          ...stored,
+          fetchPolicyId: "mine-v3",
+          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+        }}
         styleContext={{
           breakpoints: { viewport: [], container: [] },
           mayFetchUrl: () => true,

@@ -3,7 +3,7 @@
  *
  * A stored page stylesheet is a cache of a compile, and a cache is sound only
  * when it is keyed on every input that compile used. `fetchPolicyId` keys one of
- * them. Three more are site-level, shared by every page, and can move underneath
+ * them. Four more are site-level, shared by every page, and can move underneath
  * a stored artifact with nothing noticing:
  *
  * - **breakpoints**, whose ids and bounds decide the at-rules every tier is
@@ -11,7 +11,10 @@
  * - **the token prefix**, which renders into every `var(--<prefix><name>)` the
  *   sheet references;
  * - **the named-class library**, whose slugs become the selectors themselves and
- *   whose styles ARE the rules a page carries for them.
+ *   whose styles ARE the rules a page carries for them;
+ * - **the block-type defaults**, which the compiler emits into this same page
+ *   sheet — and emits AFTER the site sheet, so a stale base rule here overrides
+ *   an updated one there rather than merely disagreeing with it.
  *
  * When one moves, the newly compiled site sheet and the stored page sheet stop
  * agreeing, and CSS fails silently in exactly the wrong direction: an unresolved
@@ -52,10 +55,9 @@
  *
  * @module shared-style-inputs
  */
-import { hashId } from "@nextlyhq/blocks-engine";
+import { MAX_NAMED_CLASSES, hashId } from "@nextlyhq/blocks-engine";
 import type {
   BreakpointSet,
-  NamedClass,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
@@ -68,8 +70,13 @@ import type {
  */
 export type SharedStyleInputs = Pick<
   StyleCompileContext,
-  "breakpoints" | "namedClasses" | "tokenPrefix"
+  "breakpoints" | "namedClasses" | "tokenPrefix" | "blockBases"
 >;
+
+/** A value the stamp may read fields from without dereferencing a non-object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 /**
  * The encoding this module produces, carried inside every stamp.
@@ -112,10 +119,24 @@ export const UNIDENTIFIED_SHARED_INPUTS = "unidentified-shared-inputs";
  * and at one specificity the cascade IS source order, so two sets holding the
  * same breakpoints in a different order are genuinely different inputs.
  */
-function breakpointParts(set: BreakpointSet): unknown {
-  const axis = (defs: BreakpointSet["viewport"]) =>
-    defs.map(def => [def.id, def.maxWidth ?? null]);
-  return [axis(set.viewport ?? []), axis(set.container ?? [])];
+function breakpointParts(set: BreakpointSet | undefined): unknown {
+  const axis = (defs: BreakpointSet["viewport"] | undefined) =>
+    // An OBJECT rather than a tuple, because the two spellings of "no bound"
+    // are not the same input and an array cannot keep them apart —
+    // `JSON.stringify([undefined])` is `[null]`. On a container axis an ABSENT
+    // `maxWidth` compiles to `@container (min-width: 0)`, the widest query,
+    // while a stored `null` is a different value the compiler does not treat
+    // that way. Omitting the key when it is absent and keeping it when it is
+    // null is the same distinction `fetchPolicyLabel` relies on.
+    (Array.isArray(defs) ? defs : []).map(def =>
+      isRecord(def)
+        ? {
+            id: def.id,
+            ...(def.maxWidth === undefined ? {} : { maxWidth: def.maxWidth }),
+          }
+        : null
+    );
+  return [axis(set?.viewport), axis(set?.container)];
 }
 
 /**
@@ -130,8 +151,23 @@ function breakpointParts(set: BreakpointSet): unknown {
  * A walk here would be a second reading of the style envelope beside the
  * compiler's own, and the two would drift the first time either learned a field.
  */
-function classParts(entry: NamedClass): unknown {
-  return [entry.id, entry.slug, entry.orderIndex, entry.styles ?? null];
+function classParts(entry: unknown): unknown {
+  // A malformed entry is reduced rather than dereferenced. This library is one
+  // site-settings record read on every page render, and it arrives whether or
+  // not anything validated it — `compilePageCss` treats a corrupt entry as
+  // untrusted and skips it with a warning rather than failing the render, and a
+  // stamp that threw on the same row would take down every page on the site
+  // instead of costing one class its styling.
+  //
+  // `null` rather than omission, so a corrupt entry still occupies its position:
+  // dropping it would let a library gain a bad row and stamp identically.
+  if (!isRecord(entry)) return null;
+  return [
+    entry.id,
+    entry.slug,
+    entry.orderIndex,
+    entry.styles ?? null,
+  ] as unknown;
 }
 
 /**
@@ -149,11 +185,25 @@ function classParts(entry: NamedClass): unknown {
  * compile to different custom-property names.
  */
 export function sharedStyleInputsLabel(inputs: SharedStyleInputs): string {
+  // Bounded exactly as the compiler bounds it. `compilePageCss` reads only the
+  // first `MAX_NAMED_CLASSES` entries, so entries past that cap reach no
+  // stylesheet and must not move a stamp — and an oversized settings row must
+  // not restore, here, the unbounded allocation the compiler's cap exists to
+  // prevent.
+  const library = Array.isArray(inputs.namedClasses) ? inputs.namedClasses : [];
   return JSON.stringify([
     ENCODING,
     breakpointParts(inputs.breakpoints),
     inputs.tokenPrefix ?? null,
-    (inputs.namedClasses ?? []).map(classParts),
+    library.slice(0, MAX_NAMED_CLASSES).map(classParts),
+    // The block-type defaults, which the renderer resolves beside the other
+    // three and the compiler emits into this very sheet. Keyed by type, so
+    // `JSON.stringify` of the record is stable only if the keys are — hence the
+    // sort, which is the one place order is imposed rather than preserved: a
+    // record has no meaningful order and two equal sets must not stamp apart.
+    Object.keys(inputs.blockBases ?? {})
+      .sort()
+      .map(type => [type, (inputs.blockBases ?? {})[type] ?? null]),
   ]);
 }
 
