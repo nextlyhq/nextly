@@ -422,6 +422,76 @@ describe("what goes in", () => {
     expect(result.skipped.join(" ")).toContain("both become");
   });
 
+  it("names an export whose vendor data will not SURVIVE being written", () => {
+    // The quiet case. `JSON.stringify` succeeds and drops things on the way —
+    // a `toJSON` returning undefined, a function, a symbol — so "did it throw"
+    // is not the question. What rides in `$extensions` includes this system's
+    // record of a token's stable identity, and losing it makes the file
+    // un-round-trippable: importing it back gives the token a new identity.
+    const made = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111" },
+          extensions: { vendor: { toJSON: () => undefined } } as never,
+        },
+      ],
+    });
+    // The file is still written — it is lossy, not impossible.
+    expect(made.text).not.toBe("");
+    expect(made.skipped.join(" ")).toContain(
+      "vendor data that a file cannot hold"
+    );
+    expect(made.skipped.join(" ")).toContain("different identity");
+  });
+
+  it("judges every kind of value a file can and cannot hold", () => {
+    // Each branch is a distinct way vendor data goes missing, and each is a
+    // real shape a plugin config can produce. Walked here so the rule is
+    // evidence rather than assertion.
+    const holds = (vendor: unknown): boolean =>
+      exportDtcg({
+        tokens: [
+          {
+            name: "color.ink",
+            kind: "color",
+            values: { light: "#111111" },
+            extensions: { vendor } as never,
+          },
+        ],
+      }).skipped.length === 0;
+
+    // A file can carry these as they stand.
+    for (const good of [
+      "s",
+      true,
+      false,
+      0,
+      -1.5,
+      null,
+      [],
+      {},
+      [1, "a"],
+      { a: { b: [true] } },
+    ]) {
+      expect(holds(good), JSON.stringify(good)).toBe(true);
+    }
+    // And these become something else, or nothing, on the way.
+    for (const bad of [
+      () => 1,
+      Symbol("s"),
+      undefined,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      { toJSON: () => 1 },
+      [() => 1],
+      { deep: { deeper: undefined } },
+    ]) {
+      expect(holds(bad), String(bad)).toBe(false);
+    }
+  });
+
   it("reports an export it could not WRITE rather than throwing", () => {
     // `extensions` carries vendor data untouched, as the format requires, and
     // a site's own config can put a value in there that JSON has no form for.
@@ -475,6 +545,56 @@ describe("what goes in", () => {
     if (!result.ok) return;
     expect(result.skipped.join(" ")).toContain("color.$root");
     expect(result.skipped.join(" ")).toContain("group's own token");
+  });
+
+  it("names a GROUP's metadata, which the reader keeps nothing of", () => {
+    // On a token these are read and carried. On a group they are not: the
+    // reader flattens a group's children and keeps nothing of the group, so a
+    // group's description and vendor data are gone from the next export.
+    const document = JSON.parse(exported(SITE)) as Record<string, unknown>;
+    const group = document["color"] as Record<string, unknown>;
+    group["$description"] = "The brand palette";
+    group["$extensions"] = { "com.figma": { collection: "Brand" } };
+
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const said = result.skipped.join(" ");
+    expect(said).toContain("color.$description");
+    expect(said).toContain("color.$extensions");
+    expect(said).toContain("belongs to a group");
+  });
+
+  it("says NOTHING about a token's own description and extensions", () => {
+    // The control, and the distinction the check turns on: a node holding
+    // `$value` is a token, and its metadata is read rather than discarded.
+    // Reporting it would name a loss that did not happen, on every file this
+    // system itself writes.
+    const result = importDtcg(exported(SITE), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("does not spread a wide document across the argument limit", () => {
+    // A shallow file with enough top-level entries: `push(...frontier)` passes
+    // every entry as an ARGUMENT and exceeds the engine's limit. Making the
+    // walk iterative to escape recursion depth and then spreading its frontier
+    // trades one stack overflow for another.
+    // Asserted as a SUCCESS rather than as "does not throw". The boundary now
+    // catches a `RangeError` and answers with a refusal, so not-throwing holds
+    // whether the walk works or blows up and is caught — measured: with the
+    // spread restored, this file is refused and `not.toThrow()` still passes.
+    // Only "the import succeeded and brought everything" separates them.
+    const wide: Record<string, unknown> = {};
+    for (let n = 0; n < 200_000; n += 1) {
+      wide[`n${String(n)}`] = { $type: "number", $value: n };
+    }
+    const result = importDtcg(JSON.stringify(wide), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.imported).toBe(200_000);
+    expect(result.skipped).toEqual([]);
   });
 
   it("says nothing about a well-formed document", () => {

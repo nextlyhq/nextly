@@ -84,8 +84,14 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
   }
 
   let read: ReturnType<typeof dtcgToTokens>;
+  let report: string[];
   try {
     read = dtcgToTokens(parsed);
+    // Inside the guard, because it is a SECOND traversal of the same untrusted
+    // document: whatever defeats the reader can defeat this too, and it runs
+    // after the reader has already succeeded — so outside, its failure would
+    // escape a boundary that had already decided the file was readable.
+    report = discarded(parsed);
   } catch {
     /*
      * The conversion walks the document recursively, so a deeply nested one —
@@ -102,10 +108,7 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
       skipped: [],
     };
   }
-  const skipped = [
-    ...read.issues.map(issue => issue.message),
-    ...discarded(parsed),
-  ];
+  const skipped = [...read.issues.map(issue => issue.message), ...report];
   if (read.tokens.length === 0) {
     return {
       ok: false,
@@ -154,8 +157,16 @@ function discarded(root: unknown): string[] {
     const here = stack.pop();
     if (here === undefined) continue;
     const read = childrenOf(here);
-    stack.push(...read.descend);
-    lost.push(...read.lost);
+    /*
+     * Pushed one at a time. `push(...frontier)` passes every entry as a
+     * function ARGUMENT, and a shallow document with enough top-level entries
+     * exceeds the engine's argument limit — measured at a valid file of about
+     * 5.6 MB, one group deep. Making the walk iterative to escape recursion
+     * depth and then spreading its frontier trades one stack overflow for
+     * another.
+     */
+    for (const frame of read.descend) stack.push(frame);
+    for (const line of read.lost) lost.push(line);
   }
   return lost;
 }
@@ -179,34 +190,57 @@ function childrenOf(here: Frame): { descend: Frame[]; lost: string[] } {
   const lost: string[] = [];
   if (!isRecord(here.node)) return { descend, lost };
 
+  const isToken = Object.hasOwn(here.node, "$value");
   for (const [key, value] of Object.entries(here.node)) {
-    const path = [...here.path, key].join(".");
-    /*
-     * `$root` is a TOKEN, not a reserved field: DTCG 2025.10 gives a group its
-     * own token under that name, so `color.$root` is a real token at the path
-     * `color.$root`. The shared reader skips every `$` key, so such a token is
-     * neither imported nor mentioned — the silent loss this walk exists to
-     * prevent, arriving through the one `$` key that is not metadata.
-     *
-     * Reported rather than imported: reading it belongs in the shared
-     * conversion, which this task does not own. Naming it is what can be done
-     * here, and it beats a file quietly losing a token.
-     */
-    if (key === "$root") {
-      lost.push(
-        `"${path}" is a group's own token, which this site cannot read yet, so it was skipped.`
-      );
-    } else if (key.startsWith("$")) {
-      continue;
-    } else if (isRecord(value)) {
+    const said = lostAt(key, value, here, isToken);
+    if (said !== undefined) lost.push(said);
+    else if (!key.startsWith("$") && isRecord(value)) {
       descend.push({ node: value, path: [...here.path, key] });
-    } else {
-      lost.push(
-        `"${path}" is neither a token nor a group of them, so it was skipped.`
-      );
     }
   }
   return { descend, lost };
+}
+
+/**
+ * Why this child will not survive the import, or `undefined` when it will.
+ *
+ * The three ways a child goes missing, asked in one place because a reader
+ * following "where does the walk go next" should not have to step through them,
+ * and because they share one shape: a key the reader passes over without a
+ * word.
+ */
+function lostAt(
+  key: string,
+  value: unknown,
+  here: Frame,
+  isToken: boolean
+): string | undefined {
+  const path = [...here.path, key].join(".");
+  /*
+   * `$root` is a TOKEN, not a reserved field: DTCG 2025.10 gives a group its
+   * own token under that name, so `color.$root` is a real token at the path
+   * `color.$root`. The shared reader skips every `$` key, so such a token is
+   * neither imported nor mentioned — silent loss arriving through the one `$`
+   * key that is not metadata.
+   */
+  if (key === "$root") {
+    return `"${path}" is a group's own token, which this site cannot read yet, so it was skipped.`;
+  }
+  /*
+   * On a TOKEN these are read and carried. On a GROUP they are not: the reader
+   * flattens a group's children and keeps nothing of the group itself, so a
+   * group's description and any vendor data on it are gone from the next export
+   * with nothing said.
+   */
+  if (key === "$description" || key === "$extensions") {
+    return isToken
+      ? undefined
+      : `"${path}" belongs to a group rather than to a token, and this site keeps only tokens, so it was skipped.`;
+  }
+  if (key.startsWith("$")) return undefined;
+  return isRecord(value)
+    ? undefined
+    : `"${path}" is neither a token nor a group of them, so it was skipped.`;
 }
 
 /** An object with named keys, which is what a group and a token both are. */
@@ -468,7 +502,10 @@ export interface ExportResult {
  */
 export function exportDtcg(tokens: SiteTokenSet): ExportResult {
   const { document, issues } = tokensToDtcg(tokens);
-  const skipped = issues.map(issue => issue.message);
+  const skipped = [
+    ...issues.map(issue => issue.message),
+    ...unwritable(tokens),
+  ];
   let text: string;
   try {
     text = `${JSON.stringify(document, null, 2)}\n`;
@@ -501,6 +538,85 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
     mime: "application/json",
     skipped,
   };
+}
+
+/**
+ * Tokens whose vendor data will not survive being written, named.
+ *
+ * A THROWING value is caught where the file is built. This is the quieter case:
+ * `JSON.stringify` succeeds and drops things on the way — a function, a symbol,
+ * an `undefined`, a `toJSON` returning nothing — so the check cannot be "did it
+ * throw". Everything it drops it drops SILENTLY, and one of the things riding
+ * in `$extensions` is this system's own record of a token's stable identity and
+ * exact CSS. Lose that and the file stops being round-trippable: importing it
+ * back gives the token a new identity, and every document referencing the old
+ * one stops resolving.
+ *
+ * Asked as "is this made only of things a file can hold" rather than by writing
+ * it and comparing what comes back. The ALLOWLIST is the sound direction here:
+ * what JSON can carry is closed and fixed by its grammar, while what it cannot
+ * grows with the language — a check built from the second list goes quiet about
+ * whatever was added since someone last looked at it.
+ */
+function unwritable(tokens: SiteTokenSet): string[] {
+  const lost: string[] = [];
+  for (const token of tokens.tokens) {
+    if (token.extensions === undefined) continue;
+    if (holdsOnlyJson(token.extensions)) continue;
+    lost.push(
+      `"${token.name}" carries vendor data that a file cannot hold, so the exported token is missing it. Importing this file back would give that token a different identity.`
+    );
+  }
+  return lost;
+}
+
+/**
+ * Whether a value is made only of what a JSON file can carry.
+ *
+ * `toJSON` counts as cannot: it means the written form is something other than
+ * the value, so what a reader gets back is not what was stored — which is the
+ * loss being looked for, whether or not the substitute is itself writable.
+ *
+ * A non-finite number is refused for the same reason rather than as pedantry:
+ * `NaN` and the infinities are written as `null`, so the value silently becomes
+ * a different one.
+ */
+function holdsOnlyJson(value: unknown, seen = new Set<unknown>()): boolean {
+  if (isJsonLeaf(value)) return true;
+  if (typeof value !== "object" || value === null) return false;
+  /*
+   * A cycle is not something a file can hold either, but it is reported where
+   * writing THROWS rather than here — so what this needs from it is only not to
+   * follow it forever. Without the set this walk recurses until the stack goes,
+   * which is the failure it was written to prevent, one level up.
+   */
+  if (seen.has(value)) return true;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.every(item => holdsOnlyJson(item, seen));
+  }
+  if (!isRecord(value)) return false;
+  // `toJSON` means the written form is something OTHER than the value, so a
+  // reader gets back something that was never stored — the loss being looked
+  // for, whether or not the substitute is itself writable.
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function")
+    return false;
+  return Object.values(value).every(item => holdsOnlyJson(item, seen));
+}
+
+/**
+ * Whether a value is one a JSON file can carry as it stands.
+ *
+ * The closed half of the question, asked apart from the walk because it is
+ * fixed by the grammar and the walk is not: strings, booleans, finite numbers
+ * and null, and nothing else. A non-finite number is refused rather than
+ * accepted as pedantry — `NaN` and the infinities are written as `null`, so the
+ * value silently becomes a different one.
+ */
+function isJsonLeaf(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 /**
