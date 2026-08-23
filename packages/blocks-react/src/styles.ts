@@ -1050,22 +1050,7 @@ export function resolvePageStylesWithTrace(
     // only by `PageRenderer` would mean every sheet written through this entry
     // keeps its drawless nodes' rules in `css` and carries no `gated` entry for
     // them, so republishing a page would never enable the drop.
-    const compiled = compilePageCss(document, {
-      ...compileContext,
-      // Asked for only when a caller wants it. The compiler builds the array
-      // lazily, so an ordinary render pays nothing for a facility the editor
-      // is the only consumer of.
-      ...(options.trace === true ? { trace: true } : {}),
-    });
-    return {
-      styles: toPageStyles(
-        compiled,
-        compileContext.scope,
-        options.fetchPolicyId,
-        sharedInputsId
-      ),
-      ...(compiled.trace === undefined ? {} : { trace: compiled.trace }),
-    };
+    return compileToStyles(document, compileContext, options, sharedInputsId);
   }
   return {
     styles: {
@@ -1073,6 +1058,39 @@ export function resolvePageStylesWithTrace(
       classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
     },
   };
+}
+
+/**
+ * One compile, packaged as the storable sheet plus the cascade behind it.
+ *
+ * Separated from the resolution above because the two answer different
+ * questions. That one decides WHETHER to compile — which is where every
+ * staleness rule lives — and this one performs the compile and shapes what
+ * comes back. Keeping them together meant a reader had to hold the trust rules
+ * in mind to follow the packaging, and the compiler's own options as well.
+ */
+function compileToStyles(
+  document: BlockDocument,
+  compileContext: StyleCompileContext,
+  options: ResolveStyleOptions,
+  sharedInputsId: string | undefined
+): ResolvedPageStyles {
+  const compiled = compilePageCss(document, {
+    ...compileContext,
+    // Asked for only when a caller wants it. The compiler builds the array
+    // lazily, so an ordinary render pays nothing for a facility the editor is
+    // the only consumer of.
+    ...(options.trace === true ? { trace: true } : {}),
+  });
+  const styles = toPageStyles(
+    compiled,
+    compileContext.scope,
+    options.fetchPolicyId,
+    sharedInputsId
+  );
+  return compiled.trace === undefined
+    ? { styles }
+    : { styles, trace: compiled.trace };
 }
 
 /**
