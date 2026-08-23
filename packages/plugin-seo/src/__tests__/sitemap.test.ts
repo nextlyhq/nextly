@@ -173,6 +173,18 @@ describe("defaultUrlForEntry", () => {
       "/docs/v1.2/a"
     );
   });
+
+  it("refuses a backslash, which the URL parser reads as a separator", () => {
+    // On an http(s) origin `\` separates path segments, so `/docs\..\admin` is
+    // one segment to a check that splits on "/" and three to URL resolution —
+    // which would carry the dot-segment escape straight past the check above.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\\..\\admin")
+    ).toThrow(/must not contain a backslash/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\\x")
+    ).toThrow(/must not contain a backslash/);
+  });
 });
 
 describe("buildSitemapUrls", () => {

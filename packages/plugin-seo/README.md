@@ -129,8 +129,12 @@ cannot hide the misconfiguration. It is used verbatim — already-escaped prefix
 
 `basePath` may be a plain string when every collection shares a prefix, and returning `null` from
 the function excludes that collection from the sitemap entirely. Pass `""` for a collection served
-at the site root — page-builder pages render at `/about`, not `/pages/about`, and their homepage at
-`/`.
+at the site root — page-builder pages render at `/about`, not `/pages/about`.
+
+It names the prefix only. An entry whose slug is EMPTY — a site's homepage — is skipped whatever
+`basePath` says, because whether a mount's own root routes depends on the route file: a required
+`[...slug]` catch-all matches no segments and 404s there, an optional `[[...slug]]` serves it. List
+a homepage with `urlFor`.
 
 For routing the prefix cannot express, `urlFor` still overrides the whole path:
 

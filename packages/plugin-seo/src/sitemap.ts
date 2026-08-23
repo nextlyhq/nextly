@@ -108,9 +108,13 @@ export interface SitemapOptions {
    * pages it lists.
    *
    * Pass `""` for a collection served at the site root — a page builder's pages
-   * render at `/about`, not `/pages/about`, and their homepage at `/`. A
-   * function receives each collection name; returning `null` EXCLUDES that
-   * collection from the sitemap entirely.
+   * render at `/about`, not `/pages/about`. A function receives each collection
+   * name; returning `null` EXCLUDES that collection from the sitemap entirely.
+   *
+   * It does NOT declare that the mount's own root is served, and an entry whose
+   * slug is empty is skipped whatever this says: that depends on the route
+   * file's bracket count, which is not visible from here. List a homepage with
+   * a custom `urlFor`.
    *
    * Ignored when `urlFor` is supplied, which already owns the whole path.
    *
@@ -156,6 +160,17 @@ function normalizeBasePath(basePath: string): string {
   if (/[?#]/.test(trimmed)) {
     throw new Error(
       `sitemap: basePath must be a path prefix with no query or fragment, got: ${basePath}`
+    );
+  }
+  // A backslash is a PATH SEPARATOR to the URL parser on an http(s) origin, not
+  // an ordinary character, so `/docs\..\admin` is one segment to a reader that
+  // splits on "/" and three to the thing that resolves the URL — and the dot
+  // segments below would be looked straight past. Refused rather than folded to
+  // "/", because a backslash in a mount is a mistake either way and silently
+  // rewriting a caller's path is how the two answers diverge again.
+  if (trimmed.includes("\\")) {
+    throw new Error(
+      `sitemap: basePath must not contain a backslash, got: ${basePath}`
     );
   }
   // A dot segment does not stay where it is written. URL resolution removes it
@@ -211,19 +226,18 @@ function normalizeBasePath(basePath: string): string {
  * there is no stable URL, and emitting `<basePath>/` for every slugless row
  * would advertise duplicate, meaningless listing URLs.
  *
- * ## The empty slug is the mount's own root, and needs the caller to say so
+ * ## An empty slug is ALWAYS skipped, `basePath` or not
  *
  * An empty string is not "no slug" — to the route it is the root of wherever
- * this collection is mounted, pre-rendered as `{ slug: [] }`. Whether that root
- * is actually served depends on the mount: a page builder collection at the
- * site root serves `/`, while `app/posts/[...slug]` (a non-optional catch-all)
- * never matches an empty path at all.
+ * this collection is mounted. But whether that root is SERVED depends on the
+ * route file, which is not visible from here: a required `[...slug]` catch-all
+ * matches no segments and answers `notFound()` there, while an optional
+ * `[[...slug]]` serves it. Both shapes ship in this repository.
  *
- * This module cannot see which, so it does not guess. An empty slug emits the
- * base path only when the caller supplied `basePath` — declaring the mount is
- * how they say the root is theirs to serve. With no `basePath` the default
- * `/<collection>` applies and an empty slug is skipped, which is what this
- * function has always done.
+ * `basePath` names the prefix, not the bracket count, so it cannot stand in for
+ * that answer and this does not treat it as one. A site that does serve its
+ * root lists it with a custom `urlFor`. Omitting a URL costs a listing;
+ * advertising one that 404s costs indexing.
  */
 export function defaultUrlForEntry(
   entry: Record<string, unknown>,

@@ -45,15 +45,11 @@ link. The module keeps no second copy of the denylist either way.
 is MOUNTED — the one part of an entry's URL that cannot be derived, because it is decided by where
 the route file sits in the app directory. It defaults to `/<collection>`, so an existing sitemap is
 unchanged for simple slugs. Pass `""` for a collection served at the site root: a page builder's
-pages render at `/about` rather than `/pages/about`, and their homepage at `/`, which no previous
-option could express. A function receives each collection name and may return `null` to exclude
+pages render at `/about` rather than `/pages/about`, which no previous option could express. A
+function receives each collection name and may return `null` to exclude
 that collection entirely, and it is resolved before the collection is read so an excluded one costs
 no queries. `basePath` is ignored when a custom `urlFor` is supplied, which already owns the whole
 path.
-
-An empty slug is the mount's own root rather than a missing one, and it is emitted only when
-`basePath` is given: whether that root is served depends on the mount, and declaring the mount is
-how a caller says it is theirs. With no `basePath` an empty slug is skipped exactly as before.
 
 `basePath` must be a plain path prefix. One carrying a query or fragment is refused rather than
 passed through, because `/docs?lang=en` reaches URL resolution as a query and would advertise every

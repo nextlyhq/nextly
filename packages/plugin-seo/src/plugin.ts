@@ -72,6 +72,10 @@ export interface SeoPluginOptions {
    * render at `/about`, not `/pages/about`. A function receives each collection
    * name; returning `null` excludes that collection from the sitemap.
    *
+   * It does not declare that the mount's own root is served: an entry with an
+   * empty slug is skipped regardless, because whether that root routes depends
+   * on the route file rather than on the prefix. List a homepage with `urlFor`.
+   *
    * Ignored when `urlFor` is supplied, which already owns the whole path.
    *
    * Typed FROM {@link SitemapOptions} rather than restated, because this option
