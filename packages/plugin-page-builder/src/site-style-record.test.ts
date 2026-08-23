@@ -121,6 +121,23 @@ describe("checkStoredTokens", () => {
       );
     });
 
+    it("still judges an entry SHADOWED by a later one sharing its identity", () => {
+      // The same inertness as the case above, reached from the other side: here
+      // both entries are shape-valid and the FIRST is malformed at the value
+      // level, so resolving keeps only the second and the first's bad name is
+      // never put to the emitter. The two differ in which entry is lost and in
+      // which message goes missing, so the shadowed case is pinned separately
+      // rather than left implied by the collision one.
+      const result = checkStoredTokens({
+        tokens: [
+          { ...token("not a name!", "#111111"), id: "color.primary" },
+          { ...token("color.brand", "#222222"), id: "color.primary" },
+        ],
+      });
+
+      expect(result.issues.join(" ")).toContain("is not a token name");
+    });
+
     it("leaves a token with no id exactly as it was", () => {
       // Every token stored before the field existed relies on the name BEING
       // the identity, so an absent id must stay absent rather than becoming one.
