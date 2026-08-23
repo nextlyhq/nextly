@@ -772,11 +772,68 @@ describe("bringing a token file in", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  /*
+   * NOT TESTED, and the reason is that I could not reach it. The report keys
+   * carry their position as well as their text, because a list keyed on text
+   * alone hands React two identical keys the moment a message repeats — but no
+   * fixture produced a repeat. The engine names the TOKEN in each of its
+   * messages, and this boundary's own refusals name a token or a path too. The
+   * one message that could repeat — two tokens refused for one taken name —
+   * cannot arrive from a file, because a design-token document derives a
+   * token's name from its path and so cannot hold two tokens under one.
+   *
+   * The keying stands as a cheap guard over a case nothing here can currently
+   * produce, rather than as a fix for an observed defect.
+   */
+
   it("keeps the report until it is dismissed", async () => {
     mount(TOKENS);
     await chooseFile(FILE);
     expect(screen.queryByRole("status")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("an export that could not be written", () => {
+  /** A token whose vendor data JSON has no form for. */
+  const UNWRITABLE: SiteTokenSet = (() => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic["self"] = cyclic;
+    return {
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111" },
+          extensions: { vendor: cyclic },
+        },
+      ],
+    };
+  })();
+
+  it("says it could not be written, and says it as a refusal", () => {
+    // The tone decides how the report is announced, so calling this "done"
+    // would headline "Saved ..." directly above a line saying nothing was, and
+    // announce a failure as a passive status update.
+    render(<TokensPanel tokens={UNWRITABLE} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("could not be written");
+    expect(said.textContent).not.toContain("Saved");
+  });
+
+  it("still reports a successful export as a status", () => {
+    // The control. Without it, a panel that called every export a refusal
+    // would pass the assertion above.
+    const withUnusable: SiteTokenSet = {
+      tokens: [
+        { name: "color.ok", kind: "color", values: { light: "#111111" } },
+        { name: "shadow.x", kind: "shadow", values: { light: "0 0 0 #000" } },
+      ],
+    };
+    render(<TokensPanel tokens={withUnusable} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export CSS" }));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

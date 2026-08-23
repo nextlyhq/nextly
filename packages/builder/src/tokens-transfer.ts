@@ -149,24 +149,64 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
  */
 function discarded(root: unknown): string[] {
   const lost: string[] = [];
-  const stack: { node: unknown; path: string[] }[] = [{ node: root, path: [] }];
+  const stack: Frame[] = [{ node: root, path: [] }];
   while (stack.length > 0) {
     const here = stack.pop();
     if (here === undefined) continue;
-    if (!isRecord(here.node)) continue;
-    for (const [key, value] of Object.entries(here.node)) {
-      if (key.startsWith("$")) continue;
-      const path = [...here.path, key];
-      if (isRecord(value)) {
-        stack.push({ node: value, path });
-        continue;
-      }
+    const read = childrenOf(here);
+    stack.push(...read.descend);
+    lost.push(...read.lost);
+  }
+  return lost;
+}
+
+/** One node still to look at, and the path that reached it. */
+interface Frame {
+  readonly node: unknown;
+  readonly path: readonly string[];
+}
+
+/**
+ * What one node's children are: places to go on looking, and things lost.
+ *
+ * Split from the walk because they are different questions — where to go next
+ * is about the shape of the document, and what was lost is about what this site
+ * can read — and a reader following one of them should not have to step through
+ * the other.
+ */
+function childrenOf(here: Frame): { descend: Frame[]; lost: string[] } {
+  const descend: Frame[] = [];
+  const lost: string[] = [];
+  if (!isRecord(here.node)) return { descend, lost };
+
+  for (const [key, value] of Object.entries(here.node)) {
+    const path = [...here.path, key].join(".");
+    /*
+     * `$root` is a TOKEN, not a reserved field: DTCG 2025.10 gives a group its
+     * own token under that name, so `color.$root` is a real token at the path
+     * `color.$root`. The shared reader skips every `$` key, so such a token is
+     * neither imported nor mentioned — the silent loss this walk exists to
+     * prevent, arriving through the one `$` key that is not metadata.
+     *
+     * Reported rather than imported: reading it belongs in the shared
+     * conversion, which this task does not own. Naming it is what can be done
+     * here, and it beats a file quietly losing a token.
+     */
+    if (key === "$root") {
       lost.push(
-        `"${path.join(".")}" is neither a token nor a group of them, so it was skipped.`
+        `"${path}" is a group's own token, which this site cannot read yet, so it was skipped.`
+      );
+    } else if (key.startsWith("$")) {
+      continue;
+    } else if (isRecord(value)) {
+      descend.push({ node: value, path: [...here.path, key] });
+    } else {
+      lost.push(
+        `"${path}" is neither a token nor a group of them, so it was skipped.`
       );
     }
   }
-  return lost;
+  return { descend, lost };
 }
 
 /** An object with named keys, which is what a group and a token both are. */
@@ -478,7 +518,15 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
 export function exportCss(tokens: SiteTokenSet): ExportResult {
   const sheet = compileSiteSheet({
     tokens,
-    breakpoints: { base: { id: "base", label: "Base" } } as never,
+    /*
+     * No breakpoints, and TYPED rather than cast. Token declarations are not
+     * emitted under any at-rule, so the axes decide nothing here — but the cast
+     * that used to stand in for them hid the fact that the value was the wrong
+     * SHAPE entirely, and a wrong argument to this call would have gone on
+     * compiling. A `BreakpointSet` with two empty axes says the same thing and
+     * says it in the type.
+     */
+    breakpoints: { viewport: [], container: [] },
   });
   return {
     text: `${sheet.css}\n`,

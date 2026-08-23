@@ -248,6 +248,17 @@ function TokenTransfer({
    * callback was created with.
    */
   const current = React.useRef(tokens);
+  /*
+   * The CALLBACK as it is now, for the same reason the token set is.
+   *
+   * A read in flight outlives the render that began it, and the host can
+   * re-render with a different `onChange` while it runs — in the page builder
+   * that closure captures the baseline an import is diffed against, so calling
+   * yesterday's callback diffs the new table against the old baseline and can
+   * persist code-supplied defaults as overrides. Keeping the set current and
+   * not the callback fixes half of one problem.
+   */
+  const latestChange = React.useRef(onChange);
   // Assigned during RENDER rather than from an effect. An effect runs after
   // commit, so a read resolving between the commit of an edit and the effect
   // that records it would still merge into the previous set — the window this
@@ -255,6 +266,7 @@ function TokenTransfer({
   // a mutable box rather than state, so writing the newest value this component
   // has been given is idempotent and observed by nothing.
   current.current = tokens;
+  latestChange.current = onChange;
 
   /*
    * Which read is the current one.
@@ -332,13 +344,14 @@ function TokenTransfer({
       }.`,
       detail: result.skipped,
     });
-    onChange(result.tokens);
+    latestChange.current(result.tokens);
   };
 
   const send = (made: ExportResult): void => {
     // Nothing to download is not a file worth handing over. An empty artefact
     // means the export could not be written, and the reason is in its report.
-    if (made.text !== "") download(made);
+    const wrote = made.text !== "";
+    if (wrote) download(made);
     /*
      * A clean export says nothing and CLEARS nothing. Exporting is the common
      * next step after an import, and the import's report is the only list
@@ -351,8 +364,14 @@ function TokenTransfer({
      */
     if (made.skipped.length === 0) return;
     setReport({
-      tone: "done",
-      headline: `Saved ${made.filename}.`,
+      // An export that WROTE nothing is a refusal, whatever it has to say. The
+      // tone also decides how the report is announced, so calling this "done"
+      // would headline "Saved …" directly above a line saying nothing was, and
+      // announce a failure as a passive status update.
+      tone: wrote ? "done" : "refused",
+      headline: wrote
+        ? `Saved ${made.filename}.`
+        : `${made.filename} could not be written.`,
       detail: made.skipped,
     });
   };
@@ -424,8 +443,14 @@ function TransferReport({
       <p>{report.headline}</p>
       {report.detail.length === 0 ? null : (
         <ul>
-          {report.detail.map(line => (
-            <li key={line}>{line}</li>
+          {/*
+            Keyed by POSITION as well as text. The same message arrives twice
+            whenever a file holds two tokens of one unsupported type — the
+            engine names the type, not the token — and a list keyed on the text
+            alone then hands React two identical keys.
+          */}
+          {report.detail.map((line, at) => (
+            <li key={`${String(at)}-${line}`}>{line}</li>
           ))}
         </ul>
       )}
@@ -451,7 +476,16 @@ function download(made: ExportResult): void {
   link.href = url;
   link.download = made.filename;
   link.click();
-  URL.revokeObjectURL(url);
+  /*
+   * Revoked on a LATER task. The click is dispatched synchronously but the
+   * fetch it starts is not, so releasing the URL in this turn can cancel the
+   * download it was created for — the file silently never arrives. Deferred
+   * rather than left alive, because an object URL holds the whole artefact in
+   * memory until the document is discarded.
+   */
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
 }
 
 /**

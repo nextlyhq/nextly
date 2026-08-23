@@ -14,7 +14,7 @@
  * @module tokens-transfer.test
  */
 import {
-  compileSiteSheet,
+  dtcgToTokens,
   emitTokenBlocks,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -52,17 +52,23 @@ describe("what comes out", () => {
     expect(brand?.values.light).toBe("#3b82f6");
   });
 
-  it("exports CSS that IS the sheet a visitor would get", () => {
-    // Compiled rather than assembled, so the file cannot describe a site that
-    // does not exist.
+  it("exports the DECLARATIONS a visitor's stylesheet holds", () => {
+    // Asserted against the emitter rather than by repeating the same
+    // `compileSiteSheet` call: two identical calls compared to each other agree
+    // by construction, whatever either is passed, so a wrong argument would
+    // break neither side. `emitTokenBlocks` is the function that decides what a
+    // token declaration IS, and it is reached by a different route.
     const css = exportCss(SITE);
-    expect(css.text.trimEnd()).toBe(
-      compileSiteSheet({
-        tokens: SITE,
-        breakpoints: { base: { id: "base", label: "Base" } } as never,
-      }).css
-    );
-    expect(css.text).toContain("--site-color-primary");
+    const declared = emitTokenBlocks(SITE, ":root").css;
+    expect(declared).not.toBe("");
+    for (const property of [
+      "--site-color-ink",
+      "--site-color-primary",
+      "--site-space-4",
+    ]) {
+      expect(declared, "the emitter writes it").toContain(property);
+      expect(css.text, "and the export carries it").toContain(property);
+    }
   });
 
   it("offers a name and a type for each artefact", () => {
@@ -453,6 +459,24 @@ describe("what goes in", () => {
     expect(said).toContain('"nested.deeper" is neither a token nor a group');
   });
 
+  it("names a group's own token, which the reader cannot yet take", () => {
+    // `$root` is a TOKEN name in DTCG 2025.10, not a reserved field: a group
+    // carries its own token there, so `color.$root` is a real token. The shared
+    // reader skips every `$` key, so it is neither imported nor mentioned —
+    // silent loss arriving through the one `$` key that is not metadata.
+    const document = JSON.parse(exported(SITE)) as Record<string, unknown>;
+    (document["color"] as Record<string, unknown>)["$root"] = {
+      $type: "color",
+      $value: "#abcdef",
+    };
+
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skipped.join(" ")).toContain("color.$root");
+    expect(result.skipped.join(" ")).toContain("group's own token");
+  });
+
   it("says nothing about a well-formed document", () => {
     // The control: a detector that named everything would satisfy the test
     // above without distinguishing anything.
@@ -467,13 +491,37 @@ describe("what goes in", () => {
     // file — exhausts the stack. A `RangeError` is not something a caller can
     // act on, and past this boundary the panel would let it escape into a
     // discarded promise: nothing shown, import silently stopped.
-    let node: Record<string, unknown> = { $type: "color", $value: "#111111" };
-    for (let level = 0; level < 4000; level += 1) node = { group: node };
-
-    const result = importDtcg(JSON.stringify(node), SITE);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toContain("nested too deeply");
+    /*
+     * Built by STRING rather than by nesting objects, and parsed by a stub
+     * rather than by `JSON.parse`.
+     *
+     * A depth constant makes the test depend on the runtime's stack: too few
+     * levels and nothing overflows, so the import succeeds and this fails; too
+     * many and `JSON.parse` overflows first, so the refusal is "not valid JSON"
+     * and this fails differently. Both are intermittent CI failures about the
+     * machine rather than about the code.
+     *
+     * The boundary is what matters — that a conversion which throws becomes a
+     * refusal — so the throw is produced directly.
+     */
+    const proxy = new Proxy(
+      {},
+      {
+        ownKeys: () => {
+          throw new RangeError("Maximum call stack size exceeded");
+        },
+      }
+    );
+    const parse = JSON.parse;
+    JSON.parse = () => proxy;
+    try {
+      const result = importDtcg("{}", SITE);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toContain("nested too deeply");
+    } finally {
+      JSON.parse = parse;
+    }
   });
 
   it("tells a corrupt file from the wrong file", () => {
@@ -500,12 +548,26 @@ describe("what goes in", () => {
   });
 
   it("carries the engine's reasons through rather than restating them", () => {
-    // The messages are written for a person and were tested where they live.
-    // A second wording here would drift from them and be the one an author
-    // reads.
-    const result = importDtcg('{"hello":"world"}', SITE);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(Array.isArray(result.skipped)).toBe(true);
+    // The messages are written for a person and were tested where they live. A
+    // second wording here would drift from them and be the one an author reads.
+    //
+    // Asserted against the engine's OWN output rather than against a shape:
+    // `Array.isArray(skipped)` holds on every return path, so it passes whether
+    // or not a reason survives — a test that cannot fail.
+    const file = JSON.parse(exported(SITE)) as Record<string, unknown>;
+    file["motion"] = {
+      ease: { $type: "cubicBezier", $value: [0.4, 0, 0.2, 1] },
+    };
+    const document = JSON.stringify(file);
+
+    const mine = importDtcg(document, { tokens: [] });
+    expect(mine.ok).toBe(true);
+    if (!mine.ok) return;
+
+    const theirs = dtcgToTokens(JSON.parse(document)).issues.map(
+      issue => issue.message
+    );
+    expect(theirs.length).toBeGreaterThan(0);
+    for (const said of theirs) expect(mine.skipped).toContain(said);
   });
 });
