@@ -1,7 +1,7 @@
-import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
-import { Children, forwardRef, Fragment, isValidElement } from "react";
+import type { CSSProperties, HTMLAttributes } from "react";
+import { forwardRef, useCallback, useEffect, useRef } from "react";
 
-import { devWarnOnce } from "../lib/dev-warn";
+import { devWarnOnce, isDevelopmentRuntime } from "../lib/dev-warn";
 import { cn } from "../lib/utils";
 
 /** @experimental */
@@ -34,34 +34,24 @@ export interface PageShellProps extends HTMLAttributes<HTMLDivElement> {
 type ShellStyle = CSSProperties & Record<"--nx-shell-measure", string>;
 
 /**
- * Whether anything that RENDERS as a direct child is a bare string or number.
+ * Whether the shell has a direct child TEXT node with visible content.
  *
- * CSS Grid wraps such a child in an ANONYMOUS grid item, and an anonymous item
- * matches no selector — so `.nx-page-shell > *` cannot reach it and it is
- * auto-placed into the first available track, which is a gutter. It renders,
- * it looks finished, and it sits outside the measure.
+ * Read from the DOM after mount rather than by walking `children` before it,
+ * because the element tree cannot answer this question. A component child is
+ * opaque to a pre-render walk — `() => "hello"` is an element whose type is a
+ * function, and what it returns is decided at render — so a traversal can only
+ * ever recognise the shapes someone thought to enumerate: a bare literal, then
+ * a fragment, then a component, then a component returning a fragment. The
+ * rendered DOM is where the answer already exists, and it covers every shape at
+ * once.
  *
- * A fragment has to be descended into rather than counted as one child. React
- * removes it from the DOM, so ITS children are what become the shell's grid
- * items, while `Children.toArray` returns the fragment as a single element and
- * stops there. Recursion, not a single pass, is what makes the two agree.
- *
- * TypeScript cannot express the constraint: `ReactNode` admits strings by
- * design, and narrowing `children` to elements would reject the valid fragments
- * and arrays this walks. So it is checked at runtime and reported in
- * development, the same way this kit reports the other contracts its types
- * cannot carry.
+ * Whitespace-only nodes are ignored: JSX routinely leaves them between elements
+ * and CSS Grid does not make a grid item of one.
  */
-function hasBareTextChild(children: ReactNode): boolean {
-  return Children.toArray(children).some(child => {
-    if (typeof child === "string" || typeof child === "number") return true;
-    // The generic narrows `child.props` to a shape with a typed `children`,
-    // which is what lets the recursion read it without asserting.
-    if (isValidElement<{ children?: ReactNode }>(child)) {
-      return child.type === Fragment && hasBareTextChild(child.props.children);
-    }
-    return false;
-  });
+function hasBareTextChild(shell: HTMLElement): boolean {
+  return Array.from(shell.childNodes).some(
+    node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim() !== ""
+  );
 }
 
 const MEASURE: Record<NonNullable<PageShellProps["width"]>, string> = {
@@ -82,17 +72,14 @@ const MEASURE: Record<NonNullable<PageShellProps["width"]>, string> = {
  *    form card at x=384 — a 24px disagreement between two elements that are
  *    supposed to share a left edge. Here the inset is a column, so there is one
  *    declaration and no second site to disagree with it.
- *  - The measure was applied INSIDE each form component, so anything the page
- *    rendered beside that form escaped it. Not hypothetical: the webhook edit
- *    page renders its signing-secret block as a sibling of the form, and it ran
- *    the full panel width while the form was centred. With the page owning the
- *    shell, a sibling is inside the measure by default and leaves it only by
- *    saying `Bleed`.
- *  - Centring was `mx-auto` on a max-width box, which does nothing at panel
- *    widths where the cap does not bind — and at the measured 952px panel the
- *    56rem cap never binds at all, so the apparent centring was only the two
- *    paddings. `justify-content: center` on the grid centres the column at
- *    every width.
+ *  - A measure applied INSIDE a form component lets anything the page renders
+ *    beside that form escape it. With the page owning the shell, a sibling is
+ *    inside the measure by default and leaves it only by saying `Bleed`.
+ *  - Centring by `mx-auto` on a max-width box does nothing at panel widths
+ *    where the cap does not bind. Here the two outer tracks are equal and
+ *    flexible, so the content column is centred at every width and no
+ *    `justify-content` is declared — with flexible tracks the grid fills its
+ *    container and there is no free space for one to distribute.
  *
  * Vertical padding stays ordinary `padding-block`: it is not in tension with
  * the columns, and keeping it here means one component answers the whole of
@@ -101,6 +88,34 @@ const MEASURE: Record<NonNullable<PageShellProps["width"]>, string> = {
  */
 export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
   ({ width = "form", className, children, style, ...props }, ref) => {
+    // The shell's own handle on its node, kept alongside whatever ref the
+    // caller passed so the development check below can read the rendered DOM
+    // without taking the ref away from them.
+    const shellRef = useRef<HTMLDivElement | null>(null);
+    const attachRef = useCallback(
+      (node: HTMLDivElement | null) => {
+        shellRef.current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      },
+      [ref]
+    );
+
+    // Gated on the runtime up front so the DOM read itself never happens in
+    // production, not merely its console output.
+    useEffect(() => {
+      if (!isDevelopmentRuntime()) return;
+      const shell = shellRef.current;
+      if (!shell) return;
+      devWarnOnce(
+        !hasBareTextChild(shell),
+        "PageShell: a direct child renders as bare text. CSS Grid wraps it in an anonymous " +
+          "grid item, which no selector can reach, so it is placed in the gutter rather than " +
+          "the content column and sits outside the page's measure. Wrap it in an element — a " +
+          "`<p>`, or the section it belongs to."
+      );
+    });
+
     // The caller's `style` is spread FIRST so the measure this component
     // computes from `width` wins over a hand-written `--nx-shell-measure`.
     // Two sources for one value would otherwise disagree silently, and
@@ -110,17 +125,9 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
       "--nx-shell-measure": MEASURE[width],
     };
 
-    devWarnOnce(
-      !hasBareTextChild(children),
-      "PageShell: a direct child is bare text. CSS Grid wraps it in an anonymous grid item, " +
-        "which no selector can reach, so it is placed in the gutter rather than the content " +
-        "column and sits outside the page's measure. Wrap it in an element — a `<p>`, or the " +
-        "section it belongs to."
-    );
-
     return (
       <div
-        ref={ref}
+        ref={attachRef}
         data-slot="page-shell"
         // The measure travels as a custom property rather than as a utility
         // class because the grid template reads it: one `grid-template-columns`

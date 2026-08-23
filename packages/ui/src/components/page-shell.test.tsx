@@ -151,6 +151,36 @@ describe("PageShell", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("warns when a COMPONENT child renders bare text", async () => {
+    // The shape a pre-render walk of `children` can never see: this element's
+    // type is a function, and what it returns is decided at render. Reading the
+    // mounted DOM answers it without enumerating shapes.
+    const Label = () => "text from a component";
+    const calls = await renderFresh(<Label />);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("anonymous grid item");
+  });
+
+  it("warns when a component renders a fragment around bare text", async () => {
+    const Label = () => <>text via a component and a fragment</>;
+    const calls = await renderFresh(<Label />);
+
+    expect(calls).toHaveLength(1);
+  });
+
+  it("ignores whitespace between elements", async () => {
+    // JSX leaves whitespace text nodes between elements routinely, and CSS Grid
+    // makes no grid item of one. Reporting them would make the warning noise.
+    const calls = await renderFresh(
+      <>
+        <p>one</p> <p>two</p>
+      </>
+    );
+
+    expect(calls).toEqual([]);
+  });
+
   it("stays silent when every rendered child is an element", async () => {
     // The negative control, and it is only evidence because the cases above run
     // against their own module instances rather than sharing this one's cache.
