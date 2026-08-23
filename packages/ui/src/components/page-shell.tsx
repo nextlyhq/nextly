@@ -1,6 +1,7 @@
-import type { CSSProperties, HTMLAttributes } from "react";
-import { forwardRef } from "react";
+import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
+import { Children, forwardRef } from "react";
 
+import { devWarnOnce } from "../lib/dev-warn";
 import { cn } from "../lib/utils";
 
 /** @experimental */
@@ -31,6 +32,25 @@ export interface PageShellProps extends HTMLAttributes<HTMLDivElement> {
  * layout would fall back to its default measure and nothing would say so.
  */
 type ShellStyle = CSSProperties & Record<"--nx-shell-measure", string>;
+
+/**
+ * Whether any direct child is a bare string or number.
+ *
+ * CSS Grid wraps such a child in an ANONYMOUS grid item, and an anonymous item
+ * matches no selector — so `.nx-page-shell > *` cannot reach it and it is
+ * auto-placed into the first available track, which is a gutter. It renders,
+ * it looks finished, and it sits outside the measure.
+ *
+ * TypeScript cannot express this: `ReactNode` admits strings by design, and
+ * narrowing `children` to elements would reject valid fragments and arrays. So
+ * it is checked at runtime and reported in development, the same way this kit
+ * reports the other contracts its types cannot carry.
+ */
+function hasBareTextChild(children: ReactNode): boolean {
+  return Children.toArray(children).some(
+    child => typeof child === "string" || typeof child === "number"
+  );
+}
 
 const MEASURE: Record<NonNullable<PageShellProps["width"]>, string> = {
   form: "var(--nx-measure-form)",
@@ -77,6 +97,14 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
       ...style,
       "--nx-shell-measure": MEASURE[width],
     };
+
+    devWarnOnce(
+      !hasBareTextChild(children),
+      "PageShell: a direct child is bare text. CSS Grid wraps it in an anonymous grid item, " +
+        "which no selector can reach, so it is placed in the gutter rather than the content " +
+        "column and sits outside the page's measure. Wrap it in an element — a `<p>`, or the " +
+        "section it belongs to."
+    );
 
     return (
       <div

@@ -4,22 +4,17 @@
  * and a `Bleed` child lands in the FULL one.
  *
  * jsdom computes no grid geometry, so these assert the class and
- * custom-property WIRING that produces it — the half a refactor can silently
- * drop — and never the resulting rectangle. Which is worth stating plainly
- * rather than leaving to be discovered: deleting the `.nx-page-shell > .nx-bleed`
- * rule from the stylesheet leaves every test in this file green, because no
- * stylesheet is applied here at all. `styles/__tests__/page-shell-grid.test.ts`
- * closes that by asserting the stylesheet's own contract, and neither file is
- * sufficient alone.
+ * custom-property WIRING that produces it and never the resulting rectangle.
+ * Deleting the `.nx-page-shell > .nx-bleed` rule from the stylesheet leaves
+ * every test here green, because no stylesheet is applied in this environment;
+ * `styles/__tests__/page-shell-grid.test.ts` asserts that half separately, and
+ * neither file is sufficient alone.
  *
- * Neither claims the resulting BOXES land where they should — only a browser
- * answers that, and no page renders the shell yet, so there is nothing for a
- * Playwright spec to assert against. That check lands with the first page that
- * consumes it. Until then the geometry rests on two measurements taken by hand
- * in a browser and recorded in the stylesheet test's comments.
+ * Neither claims the resulting BOXES land where they should. Only a browser
+ * answers that.
  */
 import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Bleed, PageShell } from "./page-shell";
 
@@ -43,9 +38,21 @@ describe("PageShell", () => {
   });
 
   it("selects the measure from `width`, so the two are one decision", () => {
-    const { container: form } = render(<PageShell width="form">x</PageShell>);
-    const { container: wide } = render(<PageShell width="wide">x</PageShell>);
-    const { container: full } = render(<PageShell width="full">x</PageShell>);
+    const { container: form } = render(
+      <PageShell width="form">
+        <p>x</p>
+      </PageShell>
+    );
+    const { container: wide } = render(
+      <PageShell width="wide">
+        <p>x</p>
+      </PageShell>
+    );
+    const { container: full } = render(
+      <PageShell width="full">
+        <p>x</p>
+      </PageShell>
+    );
 
     // Each arm resolves to a DIFFERENT value. Asserting only that the property
     // is set would pass on an implementation that hardcoded one measure and
@@ -57,13 +64,21 @@ describe("PageShell", () => {
   });
 
   it("defaults to the form measure when `width` is omitted", () => {
-    const { container } = render(<PageShell>x</PageShell>);
+    const { container } = render(
+      <PageShell>
+        <p>x</p>
+      </PageShell>
+    );
 
     expect(measureOf(container)).toBe("var(--nx-measure-form)");
   });
 
   it("applies no horizontal padding of its own", () => {
-    const { container } = render(<PageShell>x</PageShell>);
+    const { container } = render(
+      <PageShell>
+        <p>x</p>
+      </PageShell>
+    );
 
     // The whole point of spending the inset as columns is that there is ONE
     // declaration of it. A `px-*` utility here would be a second, and the two
@@ -75,9 +90,40 @@ describe("PageShell", () => {
   });
 
   it("still accepts a caller's className", () => {
-    const { container } = render(<PageShell className="pb-0">x</PageShell>);
+    const { container } = render(
+      <PageShell className="pb-0">
+        <p>x</p>
+      </PageShell>
+    );
 
     expect(shellOf(container)?.classList.contains("pb-0")).toBe(true);
+  });
+
+  it("warns for a bare text child and stays silent for an element one", () => {
+    // CSS Grid wraps bare text in an ANONYMOUS grid item, which no selector can
+    // reach, so `.nx-page-shell > *` does not place it and it lands in a gutter
+    // track outside the measure. Nothing in the rendered output says so.
+    //
+    // Both directions are asserted in ONE test, silent case FIRST, because
+    // `devWarnOnce` de-duplicates by message for the life of the module. Split
+    // across two tests the silent one is unfalsifiable: whichever runs second
+    // sees the message already emitted and passes even if the warning fires
+    // unconditionally. Ordering them here is what makes the silence evidence.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      render(
+        <PageShell>
+          <p>an element</p>
+        </PageShell>
+      );
+      expect(warn).not.toHaveBeenCalled();
+
+      render(<PageShell>bare text</PageShell>);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("anonymous grid item");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("forwards a ref and arbitrary div attributes", () => {
@@ -91,7 +137,7 @@ describe("PageShell", () => {
         role="region"
         aria-label="Settings"
       >
-        x
+        <p>x</p>
       </PageShell>
     );
 
@@ -113,7 +159,7 @@ describe("PageShell", () => {
           paddingTop: "4px",
         }}
       >
-        x
+        <p>x</p>
       </PageShell>
     );
 
@@ -178,12 +224,11 @@ describe("Bleed", () => {
   });
 
   it("is NOT a direct child once nested, which is the case the constraint warns about", () => {
-    // The positive case above passes just as happily on an implementation that
-    // never checks depth, so on its own it does not separate a correct nesting
-    // rule from no rule at all. This is the counterexample: a `Bleed` one level
-    // down still carries `.nx-bleed`, and that is precisely why the class alone
-    // is not evidence of full-bleed — the stylesheet's child combinator is, and
-    // `styles/__tests__/page-shell-grid.test.ts` is where that is pinned.
+    // The positive case above is satisfied by an implementation with no depth
+    // rule at all, so it does not separate the two on its own. A `Bleed` one
+    // level down still carries `.nx-bleed`, which is why the class is not
+    // evidence of full-bleed: the stylesheet's child combinator is, and
+    // `styles/__tests__/page-shell-grid.test.ts` pins that.
     const { container } = render(
       <PageShell>
         <div data-testid="wrapper">

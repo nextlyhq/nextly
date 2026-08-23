@@ -1145,29 +1145,22 @@
  *  - Every direct child defaults to the `content` column, so a page header and
  *    the card beneath it cannot disagree about their left edge.
  *
- * Centring comes from the two outer tracks being equal, not from
- * `margin-inline: auto` on a max-width box — the latter does nothing at panel
- * widths where the cap does not bind, which is why the previous layout only
- * appeared centred because of its paddings.
+ * Centring comes from the two outer tracks being equal rather than from
+ * `margin-inline: auto` on a max-width box, which does nothing at panel widths
+ * where the cap does not bind.
  */
 @layer components {
   .nx-page-shell {
     display: grid;
-    /* The outer tracks are `minmax(gutter, 1fr)`, NOT a fixed gutter.
+    /* The outer tracks are `minmax(gutter, 1fr)` rather than a fixed gutter so
+     * the grid always spans its container: a fixed pair would total only
+     * `measure + 2 * gutter`, leaving `full-start`/`full-end` short of the
+     * panel's edges in anything wider, and a `Bleed` child short with them. The
+     * `1fr` maximum absorbs the surplus while `gutter` holds as the minimum.
      *
-     * With fixed outer tracks the three columns total only
-     * `measure + 2 * gutter`, so in any panel wider than that the grid does not
-     * reach the panel's edges and `full-start`/`full-end` stop short with it —
-     * a `Bleed` child then spans the measure plus gutters instead of the panel.
-     * Measured in a browser at a 1200px panel: 960px, not 1200px, which is
-     * exactly `56rem + 2 * 2rem`. The `1fr` maximum lets each outer track
-     * absorb the surplus while `gutter` holds as its minimum, so `full` really
-     * is the full width at every panel size.
-     *
-     * The two outer tracks being equal is also what centres the content column,
-     * which is why no `justify-content` is needed: with `1fr` tracks the grid
-     * fills its container and there is no free space left for it to distribute,
-     * so declaring it would imply an effect it cannot have. */
+     * Their being equal is also what centres the content column, so no
+     * `justify-content` is declared: with flexible tracks the grid fills its
+     * container and there is no free space for it to distribute. */
     grid-template-columns:
       [full-start] minmax(var(--nx-gutter), 1fr)
       [content-start] minmax(0, var(--nx-shell-measure, var(--nx-measure-form)))
@@ -1198,13 +1191,10 @@
  * `content` is the container the admin's <main> already names. The step values
  * match Payload's --gutter-h ladder (32 / 24 / 16).
  *
- * The override lands on `.nx-page-shell` — a DESCENDANT of that container —
- * rather than on `:root` or `.nextly-admin`. A container query can only style
- * elements inside its container, and both of those are ANCESTORS of the
- * `<main>` that names it, so a rule targeting them never matches and the gutter
- * silently stays at its desktop value. Measured in a browser at a 700px
- * container: assigning to `:root` left the gutter at 2rem, while assigning to a
- * descendant gave the intended 1rem. */
+ * The override lands on `.nx-page-shell`, a DESCENDANT of that container. A
+ * container query styles only elements inside its container, so a rule naming
+ * `:root` or `.nextly-admin` — both ancestors of the `<main>` that declares it —
+ * never matches, and the gutter keeps its widest value at every panel size. */
 @container content (max-width: 1024px) {
   .nx-page-shell {
     --nx-gutter: 1.5rem;

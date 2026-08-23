@@ -54,20 +54,16 @@ describe("page shell stylesheet", () => {
   });
 
   it("lets the outer tracks absorb surplus width, so `full` reaches the panel edges", () => {
-    // This is the assertion the first version of this file was missing, and its
-    // absence is why a real defect shipped: with FIXED outer tracks the three
-    // columns total only `measure + 2 * gutter`, so in a wider panel the grid
-    // stops short and `full-start`/`full-end` stop with it. Measured in a
-    // browser at a 1200px panel, a `Bleed` spanned 960px — exactly
-    // `56rem + 2 * 2rem` — rather than running edge to edge as documented.
-    //
-    // `minmax(gutter, 1fr)` is what separates the correct grid from that one:
-    // the gutter is the track's MINIMUM and `1fr` lets it take the surplus.
+    // With FIXED outer tracks the three columns total only
+    // `measure + 2 * gutter`, so in any wider panel the grid stops short of the
+    // edges and `full-start`/`full-end` stop with it. `minmax(gutter, 1fr)` is
+    // what separates the two: the gutter is the track's MINIMUM and `1fr` lets
+    // it absorb the surplus.
     expect(flat).toContain("[full-start] minmax(var(--nx-gutter), 1fr)");
     expect(flat).toContain("[content-end] minmax(var(--nx-gutter), 1fr)");
 
-    // The bare form is the defect. Naming it explicitly means a revert to it
-    // fails here rather than passing on the line-name assertions alone.
+    // Rejecting the bare form explicitly, because the line-name assertions
+    // above are satisfied by it too.
     expect(flat).not.toContain("[full-start] var(--nx-gutter)");
   });
 
@@ -120,16 +116,11 @@ describe("page shell stylesheet", () => {
   });
 
   it("applies the gutter override to a DESCENDANT of the container, never an ancestor", () => {
-    // The other assertion this file was missing, and the other real defect it
-    // let through. A container query can style only elements INSIDE its
-    // container, and `:root` / `.nextly-admin` are ancestors of the `<main>`
-    // that names `content` — so a rule targeting them never matches and the
-    // gutter silently keeps its desktop value at every panel width. Measured in
-    // a browser at a 700px container: assigning to `:root` left it at 2rem
-    // while assigning to a descendant gave the intended 1rem.
-    //
-    // Checking only that an `@container` block EXISTS cannot separate those two
-    // implementations, which is precisely how the broken one passed.
+    // A container query styles only elements INSIDE its container, so a rule
+    // naming `:root` or `.nextly-admin` — both ancestors of the `<main>` that
+    // declares `content` — never matches, and the gutter keeps its widest value
+    // at every panel size. Asserting that an `@container` block EXISTS cannot
+    // separate that from a correct one, so the selector itself is read.
     for (const query of [
       "@container content (max-width: 1024px)",
       "@container content (max-width: 768px)",
