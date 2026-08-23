@@ -39,7 +39,16 @@ let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
     error: null,
   };
 
-vi.mock("@nextlyhq/builder/shell", () => {
+vi.mock("@nextlyhq/builder/shell", async importOriginal => {
+  /*
+   * The real module SPREAD, with only the surfaces this file drives replaced.
+   * A closed object literal here answers `undefined` for every export it does
+   * not list, so adding one to the shell breaks these tests and leaves the
+   * builder's own suite green — a failure that reads as a fault in this file
+   * rather than as a stale list. Measured: the real module imports cleanly
+   * under vitest and the overrides below win over the spread.
+   */
+  const real = await importOriginal<Record<string, unknown>>();
   const record =
     (key: "inspector" | "canvas") =>
     (props: Record<string, unknown>): React.JSX.Element => {
@@ -54,6 +63,7 @@ vi.mock("@nextlyhq/builder/shell", () => {
     children?: React.ReactNode;
   }): React.JSX.Element => <>{children}</>;
   return {
+    ...real,
     // Renders the inspector slot and its CHILDREN, because the canvas is a
     // child of the shell rather than one of its slots — a stub dropping them
     // would leave the canvas unrendered and its assertion passing on absence.
@@ -315,5 +325,38 @@ describe("what the token picker waits for", () => {
     openEditor();
 
     expect(seen.inspector?.tokens).toBeDefined();
+  });
+});
+
+describe("the shell mock keeps up with the shell", () => {
+  it("still provides every export this file's subject imports", async () => {
+    /*
+     * The stale-list failure, pinned. A `vi.mock` factory returning a closed
+     * object literal answers `undefined` for every export it does not name — so
+     * a surface added to the shell and imported by `BlocksField` arrives here
+     * as `undefined`, and the component throws only once something renders it.
+     * The break is then invisible in the builder's own suite, which passes, and
+     * reads in this package as a fault in the subject rather than as a mock
+     * that stopped covering it.
+     *
+     * Asserted over the names `BlocksField` actually imports rather than over
+     * the whole module, because the mock is entitled to omit what nothing here
+     * uses.
+     */
+    const shell = (await import("@nextlyhq/builder/shell")) as Record<
+      string,
+      unknown
+    >;
+    for (const name of [
+      "BuilderShell",
+      "Canvas",
+      "InspectorPanel",
+      "InsertPanel",
+      "LayersPanel",
+      "TokensPanel",
+      "useEditorState",
+    ]) {
+      expect(shell[name], name).toBeDefined();
+    }
   });
 });

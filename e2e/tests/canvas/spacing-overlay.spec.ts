@@ -902,6 +902,11 @@ test.describe("spacing values on the canvas", () => {
      * counter-rotated block still draws while the ancestor merely rotates, so
      * the emptiness afterwards is the CLIP being declined and not the rotation
      * being refused by the guard that was already there.
+     *
+     * The block is given PADDING for that control, not a margin. It carries its
+     * own transform here, and a transformed block's margin bands are declined
+     * for a different reason entirely — so a margin-only fixture would empty at
+     * the control and prove nothing about the clip.
      */
     await page.goto(ROUTE);
     const target = page.locator('[data-nx-node="hx-nested-text"]');
@@ -915,7 +920,7 @@ test.describe("spacing values on the canvas", () => {
       const text = document.querySelector(
         '[data-nx-node="hx-nested-text"]'
       ) as HTMLElement;
-      text.style.marginBottom = "24px";
+      text.style.padding = "6px";
       section.style.position = "relative";
       section.style.width = "200px";
       section.style.height = "200px";
@@ -966,6 +971,126 @@ test.describe("spacing values on the canvas", () => {
     });
 
     await expect(page.locator(BAND)).toHaveCount(0);
+  });
+
+  test("drops the MARGIN bands for a block carrying its own transform, and keeps padding", async ({
+    page,
+  }) => {
+    /*
+     * A transform does not affect layout, so the margin of a transformed block
+     * is not beside its rendered border edge — and no scale factor moves it
+     * there. Measured on a 100px block with `margin-bottom: 20px`: the gap to
+     * the next sibling is 70px under `scale(0.5)`, and NEGATIVE eighty under
+     * `scale(2)`, where the block is drawn over the neighbour its margin is
+     * holding away.
+     *
+     * PADDING is the control, and it is the reason this is not a whole-element
+     * refusal: padding lies inside the transform and renders scaled with the
+     * box, so those bands stay correct and must still be drawn. A fix that
+     * refused the block outright would pass the margin assertion and fail here.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.click();
+
+    // CONTROL: both boxes are drawn before the transform.
+    await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
+    await expect(page.locator(band("padding", "bottom"))).toHaveCount(1);
+
+    await block.evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.transformOrigin = "0 0";
+      el.style.transform = "scale(0.5)";
+    });
+
+    // A transform changes no layout size, so it emits no resize of its own;
+    // growing a sibling forces the re-measure, as the refusal tests do.
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
+    await expect(page.locator(band("padding", "bottom"))).toHaveCount(1);
+  });
+
+  test("keeps every margin band under an IDENTITY-valued transform", async ({
+    page,
+  }) => {
+    /*
+     * `scale(1)`, `translate(0)`, `translateY(0)` and `rotate(360deg)` all
+     * compute to a non-`none` transform and all serialize to exactly
+     * `matrix(1, 0, 0, 1, 0, 0)`. They move nothing — measured, the gap to the
+     * next sibling is the authored 20px on both axes for each of them.
+     *
+     * They are also the RESTING STATE of every hover animation, so a check that
+     * read the presence of a declaration rather than its effect would blank the
+     * margins of a large share of real pages. That is the separating case
+     * between the two implementations and the reason this test exists.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.click();
+    await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
+
+    for (const transform of [
+      "scale(1)",
+      "translate(0)",
+      "translateY(0)",
+      "rotate(360deg)",
+    ]) {
+      await block.evaluate((node, value) => {
+        (node as HTMLElement).style.transform = value;
+      }, transform);
+      await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+        const el = node as HTMLElement;
+        el.style.height = `${el.getBoundingClientRect().height + 8}px`;
+      });
+      await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
+      await expect(page.locator(band("margin", "bottom"))).toHaveText(
+        String(MARGIN_BOTTOM)
+      );
+    }
+  });
+
+  test("drops the margin only on the AXIS its own transform moves", async ({
+    page,
+  }) => {
+    /*
+     * The axes are independent, and a lift like `translateY(-4px)` is an
+     * ordinary hover state: measured, `translateY` leaves the horizontal gap at
+     * the authored 20px while making the vertical one −20, and `translateX`
+     * does the reverse. Refusing both axes because one moved would throw away
+     * bands that are exactly right.
+     *
+     * The horizontal margin is authored here because the seed carries only a
+     * block-end one, and a fixture with nothing on the surviving axis would pass
+     * against an implementation that dropped everything.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      (node as HTMLElement).style.marginRight = "32px";
+    });
+    await block.click();
+
+    // CONTROL: both axes draw before the transform.
+    await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
+    await expect(page.locator(band("margin", "right"))).toHaveCount(1);
+
+    await block.evaluate(node => {
+      (node as HTMLElement).style.transform = "translateY(40px)";
+    });
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    await expect(page.locator(band("margin", "bottom"))).toHaveCount(0);
+    await expect(page.locator(band("margin", "right"))).toHaveCount(1);
   });
 
   test("the bands take no pointer events, so a covered block stays clickable", async ({

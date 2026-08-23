@@ -236,5 +236,11 @@ export type {
  */
 export { LayersPanel } from "./layers-panel";
 export type { LayersPanelProps } from "./layers-panel";
+/*
+ * The tokens studio. A host that mounts it owns the site style document and
+ * decides when an edit is persisted; this exports the surface, not the save.
+ */
+export { TokensPanel } from "./tokens-panel";
+export type { TokensPanelProps } from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
