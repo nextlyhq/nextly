@@ -343,6 +343,13 @@ test.describe("spacing values on the canvas", () => {
       ["mirrored by scaleX(-1)", "scaleX(-1)"],
       ["rotated", "rotate(30deg)"],
       ["skewed", "skewX(20deg)"],
+      /*
+       * A 3D projection can flatten to a matrix with zero off-diagonal terms and
+       * positive `a` and `d`, so the 2D tests alone call it describable. It
+       * renders as a trapezoid whose scale varies across the box, which no
+       * uniformly scaled rectangle covers.
+       */
+      ["projected in 3D", "perspective(500px) rotateY(30deg)"],
     ] as const) {
       test(`draws nothing for a block ${name}`, async ({ page }) => {
         await page.goto(ROUTE);
@@ -377,6 +384,109 @@ test.describe("spacing values on the canvas", () => {
         await expect(page.locator(BAND)).toHaveCount(0);
       });
     }
+  });
+
+  test.describe("a box the canvas coordinates cannot hold", () => {
+    /*
+     * These are not transforms — they are blocks whose rendered geometry is not
+     * a single upright rectangle sitting in the canvas's own coordinate space,
+     * so the same refusal applies for the same reason.
+     */
+    for (const [name, apply] of [
+      [
+        "positioned fixed",
+        (el: HTMLElement) => {
+          el.style.position = "fixed";
+        },
+      ],
+      [
+        "positioned sticky",
+        (el: HTMLElement) => {
+          el.style.position = "sticky";
+          el.style.top = "0px";
+        },
+      ],
+      [
+        "a scroll container reserving a scrollbar gutter",
+        (el: HTMLElement) => {
+          el.style.overflow = "scroll";
+        },
+      ],
+    ] as const) {
+      test(`draws nothing for ${name}`, async ({ page }) => {
+        await page.goto(ROUTE);
+        const block = page.locator(`[data-nx-node="${PADDED}"]`);
+        await expect(block).toBeVisible();
+
+        // The positive control, in this test: bands exist before the change.
+        await block.click();
+        await expect(page.locator(BAND)).not.toHaveCount(0);
+
+        await block.evaluate((node, key) => {
+          const el = node as HTMLElement;
+          if (key === "positioned fixed") el.style.position = "fixed";
+          if (key === "positioned sticky") {
+            el.style.position = "sticky";
+            el.style.top = "0px";
+          }
+          if (key === "a scroll container reserving a scrollbar gutter") {
+            /*
+             * `scrollbar-gutter: stable` reserves the space deterministically.
+             * Left to the platform this is a coin toss — macOS uses overlay
+             * scrollbars that reserve nothing, so the defect only appears on
+             * Windows and Linux, and a test that depended on that would pass
+             * locally while covering nothing.
+             */
+            el.style.overflow = "scroll";
+            el.style.scrollbarGutter = "stable";
+          }
+        }, name);
+
+        // A style change emits no resize of its own, so a sibling is grown to
+        // force the re-measure that re-evaluates the refusal.
+        await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+          const el = node as HTMLElement;
+          el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+        });
+
+        await expect(page.locator(BAND)).toHaveCount(0);
+      });
+    }
+  });
+
+  test("draws nothing for an inline box fragmented across lines", async ({
+    page,
+  }) => {
+    /*
+     * An inline box that wraps produces one rectangle PER LINE, and its padding
+     * and margins belong to those fragments individually — while
+     * `getBoundingClientRect` reports their union. Bands drawn from the union run
+     * through the whitespace between lines and put the start and end padding on
+     * the union's edges rather than on the first and last fragment.
+     *
+     * The canvas is narrowed to force the wrap. `width` does NOT apply to an
+     * inline box, so constraining the element itself changes nothing — measured:
+     * `display: inline` alone reports one rectangle, adding `width: 40px` still
+     * reports one, and narrowing the canvas to 120px reports four.
+     */
+    await page.goto(ROUTE);
+    const text = page.locator('[data-nx-node="hx-text-short"]');
+    await expect(text).toBeVisible();
+
+    await text.click();
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    await page.evaluate(() => {
+      const el = document.querySelector(
+        '[data-nx-node="hx-text-short"]'
+      ) as HTMLElement;
+      el.style.display = "inline";
+      el.textContent = "wrap this text across several lines please and again";
+      (document.querySelector(".nx-canvas") as HTMLElement).style.width =
+        "120px";
+    });
+
+    await expect(page.locator(BAND)).toHaveCount(0);
   });
 
   test("the bands take no pointer events, so a covered block stays clickable", async ({

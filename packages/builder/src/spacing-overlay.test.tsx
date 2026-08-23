@@ -21,7 +21,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -75,6 +75,9 @@ function editorOf(selectedId: string | null, ids?: string[]): EditorState {
 /** The properties the overlay reads, with everything else reported as zero. */
 function styleOf(values: Record<string, string>): CSSStyleDeclaration {
   const zeroed: Record<string, string> = {
+    // Neither is read as a length; both are read by the describability guard,
+    // and jsdom supplies no default for a fake style object.
+    position: "static",
     marginTop: "0px",
     marginRight: "0px",
     marginBottom: "0px",
@@ -346,5 +349,65 @@ describe("what it stays subscribed to", () => {
 
     expect(before?.disconnected).toBe(true);
     expect(FakeResizeObserver.instances.length).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * Let the mutations React made while mounting reach the observer.
+ *
+ * Building the tree IS a mutation of the observed subtree, and the records are
+ * delivered on a microtask AFTER mount returns. Without draining them first, the
+ * next flush in a test re-measures because of the MOUNT rather than because of
+ * whatever the test just did — measured, by a probe that changed nothing at all
+ * and still saw the value move.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+describe("a computed style that changes with nothing else", () => {
+  it("re-measures when only the SHEET changed", async () => {
+    /*
+     * A site-style save changes a class-driven margin while the document, the
+     * selection and every element's SIZE stay as they were, so a resize observer
+     * has nothing to report and an effect keyed on document-and-selection never
+     * runs. What does change is the DOM: `PageRenderer` emits the compiled sheet
+     * as a `<style>` inside the page root, so the new bytes are a mutation in the
+     * canvas subtree.
+     */
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    await settle();
+    expect(labels(container)).toEqual(["16"]);
+
+    stubComputedStyle({ a: { marginTop: "48px" } });
+    const root = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    root?.appendChild(window.document.createElement("style"));
+    await settle();
+
+    expect(labels(container)).toEqual(["48"]);
+  });
+
+  it("ignores a mutation the overlay itself made", async () => {
+    /*
+     * The bands are drawn INSIDE the observed subtree, so reacting to every
+     * mutation would let one measurement trigger the next. A mutation confined to
+     * the overlay's own layer has to be ignored — and the test above is the
+     * positive control that says this fixture CAN move when something outside
+     * changes.
+     */
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    await settle();
+
+    stubComputedStyle({ a: { marginTop: "48px" } });
+    container
+      .querySelector(".nx-spacing-overlay")
+      ?.appendChild(window.document.createElement("span"));
+    await settle();
+
+    expect(labels(container)).toEqual(["16"]);
   });
 });

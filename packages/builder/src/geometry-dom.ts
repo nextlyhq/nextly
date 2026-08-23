@@ -144,7 +144,7 @@ export function containerEdges(root: HTMLElement): {
 }
 
 /**
- * Whether an element generates a layout box at all.
+ * How many layout boxes an element generates.
  *
  * `display: none` and `display: contents` are both catalog values, and an
  * element carrying either can still be SELECTED — the Layers panel addresses
@@ -153,16 +153,23 @@ export function containerEdges(root: HTMLElement): {
  * margin and padding stay whatever the author set. Chrome positioned from that
  * pair lands at the canvas origin describing spacing that is nowhere on screen.
  *
- * `getClientRects` is the direct question rather than a proxy: a zero-sized
- * rectangle is also what a genuinely empty block reports, and `core/spacer`
- * legitimately has one. An element that generates no box returns no rectangles
- * at all, which is the property that separates the two.
+ * ZERO means the element generates no box: `display: none` and
+ * `display: contents` both reach it. `getClientRects` is the direct question
+ * rather than a proxy, because a zero-SIZED rectangle is also what a genuinely
+ * empty block reports and `core/spacer` legitimately has one — an element that
+ * generates no box returns no rectangles at all.
+ *
+ * MORE THAN ONE means an inline box fragmented across lines. Its padding and
+ * margins belong to the individual fragments while `getBoundingClientRect`
+ * reports their union, so a band drawn from that union runs through the
+ * whitespace between lines and puts the start and end padding on the union's
+ * edges rather than on the first and last fragment.
  *
  * Here because this module is the one place allowed to read a rectangle from the
  * DOM, and a sibling guard enforces it by name.
  */
-export function hasLayoutBox(element: Element): boolean {
-  return element.getClientRects().length > 0;
+export function layoutFragments(element: Element): number {
+  return element.getClientRects().length;
 }
 
 /**
@@ -223,24 +230,85 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
   }
 
   let matrix = new view.DOMMatrix();
+  /*
+   * Stops BELOW the root, which is not an off-by-one.
+   *
+   * The overlay is a child of the root, so it is inside whatever transform the
+   * root carries and is drawn through it already. Composing the root's own
+   * transform here would apply it a second time — the bands would be scaled by
+   * its square while the page was scaled by it once.
+   */
   for (
     let node: Element | null = element;
-    node !== null && node !== root.parentElement;
+    node !== null && node !== root;
     node = node.parentElement
   ) {
     const declared = view.getComputedStyle(node).transform;
     if (declared === "" || declared === "none") continue;
     matrix = new view.DOMMatrix(declared).multiply(matrix);
-    if (node === root) break;
   }
 
-  // `b` and `c` are the off-diagonal terms: zero for any composition of
-  // translations and axis-aligned scales, non-zero the moment a rotation or a
-  // skew enters.
-  const axisAligned = matrix.b === 0 && matrix.c === 0;
+  /*
+   * `b` and `c` are the off-diagonal terms: zero for any composition of
+   * translations and axis-aligned scales, non-zero the moment a rotation or a
+   * skew enters.
+   *
+   * `is2D` is a separate question and a 2D check does not imply it. A
+   * `perspective(500px) rotateY(30deg)` projects the box as a trapezoid whose
+   * scale varies across it, and the flattened matrix can still show zero
+   * off-diagonal terms with positive `a` and `d` — describable by those tests
+   * and describable by nothing that draws rectangles.
+   */
+  const axisAligned = matrix.is2D && matrix.b === 0 && matrix.c === 0;
   return {
     x: matrix.a,
     y: matrix.d,
     describable: axisAligned && matrix.a > 0 && matrix.d > 0,
   };
+}
+
+/**
+ * Whether a classic scrollbar reserves space inside the element's border box.
+ *
+ * `overflow: auto` and `overflow: scroll` are catalog values, and on a platform
+ * without overlay scrollbars the scrollbar takes its width from BETWEEN the
+ * padding box and the border — so a padding box derived by removing only the
+ * borders is too wide by the gutter, and the right or bottom padding band is
+ * drawn over the scrollbar instead of over the padding. Which side it takes is
+ * a function of the writing direction, so a right-hand assumption is wrong in
+ * RTL.
+ *
+ * `clientWidth` excludes both the border and the gutter while `offsetWidth`
+ * excludes neither, so their difference beyond the borders IS the gutter. Both
+ * are integer-rounded, hence the half-pixel threshold: a real scrollbar is
+ * around fifteen pixels and sub-pixel layout noise is never that.
+ *
+ * Reported rather than corrected. The caller declines a block whose padding
+ * geometry cannot be represented, which is one rule it already applies to
+ * several other shapes.
+ */
+export function hasScrollbarGutter(
+  element: Element,
+  borders: { x: number; y: number }
+): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  const view = element.ownerDocument.defaultView;
+  if (view === null) return false;
+
+  /*
+   * Only a scroll container can reserve one, and asking anything else is not
+   * merely wasted — it is WRONG. `clientWidth` and `clientHeight` are defined as
+   * zero for an element with no CSS layout box in the usual sense, which
+   * includes every inline box, so the subtraction below reports the element's
+   * whole width as a gutter and an ordinary inline block is refused for a
+   * scrollbar it could not have.
+   */
+  const style = view.getComputedStyle(element);
+  const scrolls = (overflow: string): boolean =>
+    overflow === "auto" || overflow === "scroll";
+  if (!scrolls(style.overflowX) && !scrolls(style.overflowY)) return false;
+
+  const gutterX = element.offsetWidth - element.clientWidth - borders.x;
+  const gutterY = element.offsetHeight - element.clientHeight - borders.y;
+  return gutterX > 0.5 || gutterY > 0.5;
 }

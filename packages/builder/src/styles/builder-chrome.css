@@ -909,6 +909,21 @@
    * canvas that stops responding once anything is selected.
    */
   pointer-events: none;
+
+  /*
+   * Clipped at the canvas, so chrome never joins the page's scroll extent.
+   *
+   * The value chips deliberately overflow their own band, because the case where
+   * a number is hardest to guess is the case where the space is too small to
+   * hold it. On a block flush with a canvas edge that overflow would otherwise
+   * enlarge the scrollable area — and the canvas is the surface a responsive
+   * layout is measured against, so selecting a block could change the width the
+   * page lays out in and move the very spacing being inspected.
+   *
+   * `clip` rather than `hidden`: both contain the overflow, and `hidden` makes
+   * the element a scroll container, which is the thing being avoided.
+   */
+  overflow: clip;
 }
 
 .nx-spacing-overlay__band {

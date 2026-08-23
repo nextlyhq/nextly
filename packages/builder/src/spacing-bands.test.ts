@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Rect } from "./geometry";
 import {
+  sameBands,
   spacingBands,
   type EdgeLengths,
   type SpacingBand,
@@ -211,6 +212,21 @@ describe("where a padding band lands", () => {
     expect(band(bands, "padding", "left")?.rect.height).toBe(0);
   });
 
+  it("clamps a single padding extent to the box, not just the remainder", () => {
+    /*
+     * `box-sizing: border-box` with a fixed height and a larger padding keeps
+     * the computed padding and collapses the content, so one side alone can
+     * exceed the box. An unclamped band runs past the border edge and is drawn
+     * over the neighbouring block — naming another block's space as this one's,
+     * which is worse than drawing nothing.
+     */
+    const bands = bandsFor({ padding: { ...NONE, top: 400 } });
+    const top = band(bands, "padding", "top")?.rect;
+    expect(top?.height).toBe(150);
+    // Still labelled with what the author set, which the clamp must not change.
+    expect(band(bands, "padding", "top")?.label).toBe("400");
+  });
+
   it("clamps the padding box when the borders exceed the border box", () => {
     /*
      * A separate clamp from the one above, on the inset rather than on the
@@ -318,5 +334,47 @@ describe("paint order", () => {
       padding: { ...NONE, top: 10 },
     });
     expect(bands.map(one => one.box)).toEqual(["margin", "padding"]);
+  });
+});
+
+describe("comparing two band lists", () => {
+  const one = (over: Partial<SpacingBand> = {}): SpacingBand => ({
+    box: "margin",
+    side: "top",
+    rect: { x: 1, y: 2, width: 3, height: 4 },
+    label: "16",
+    negative: false,
+    ...over,
+  });
+
+  it("says two identical lists are the same", () => {
+    expect(sameBands([one()], [one()])).toBe(true);
+  });
+
+  it("says an empty list matches an empty list", () => {
+    expect(sameBands([], [])).toBe(true);
+  });
+
+  it("notices a different length", () => {
+    expect(sameBands([one()], [one(), one({ side: "left" })])).toBe(false);
+  });
+
+  it.each<[string, Partial<SpacingBand>]>([
+    ["the box", { box: "padding" }],
+    ["the side", { side: "bottom" }],
+    ["the label", { label: "24" }],
+    ["the negative flag", { negative: true }],
+    ["the rectangle's x", { rect: { x: 9, y: 2, width: 3, height: 4 } }],
+    ["the rectangle's y", { rect: { x: 1, y: 9, width: 3, height: 4 } }],
+    ["the rectangle's width", { rect: { x: 1, y: 2, width: 9, height: 4 } }],
+    ["the rectangle's height", { rect: { x: 1, y: 2, width: 3, height: 9 } }],
+  ])("notices a change to %s", (_label, over) => {
+    /*
+     * Every field, not a subset. A band that MOVED without resizing and a label
+     * that changed while the geometry held are both real changes an author has
+     * to see, and a comparison skipping either would freeze the overlay in
+     * exactly the case it exists to report.
+     */
+    expect(sameBands([one()], [one(over)])).toBe(false);
   });
 });

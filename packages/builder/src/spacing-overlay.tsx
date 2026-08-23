@@ -61,8 +61,15 @@ import * as React from "react";
 
 import { CANVAS_ROOT_CLASS, nodeElement, nodeElements } from "./canvas";
 import type { EditorState } from "./editor-state";
-import { canvasContentRect, hasLayoutBox, renderedScale } from "./geometry-dom";
 import {
+  canvasContentRect,
+  hasScrollbarGutter,
+  layoutFragments,
+  renderedScale,
+  type RenderedScale,
+} from "./geometry-dom";
+import {
+  sameBands,
   spacingBands,
   type EdgeLengths,
   type SpacingBand,
@@ -131,6 +138,53 @@ function boxesOf(style: CSSStyleDeclaration): {
   };
 }
 
+/** One array identity for every empty result, so React can bail out of a render. */
+const NO_BANDS: readonly SpacingBand[] = [];
+
+/**
+ * Whether axis-aligned bands can describe this block at all.
+ *
+ * One predicate rather than a guard per case, because every entry is the same
+ * property: the rendered box is not a single upright rectangle sitting in the
+ * canvas's own coordinates, so no rectangle pinned to a physical side describes
+ * it and no scale factor rescues one that tries.
+ *
+ * Drawing nothing is the right answer for all of them. A band is read as a
+ * MEASUREMENT, so one drawn in the wrong place is worse than an overlay that
+ * declines to draw.
+ */
+function describable(
+  fragments: number,
+  position: string,
+  gutter: boolean,
+  scale: RenderedScale
+): boolean {
+  // No box at all — `display: none`, `display: contents`.
+  if (fragments === 0) return false;
+  /*
+   * An inline box wrapped across lines. Its padding and margins belong to the
+   * individual fragments while the bounding rectangle is their union, so bands
+   * drawn from that union run through the whitespace between lines.
+   */
+  if (fragments > 1) return false;
+  /*
+   * Positioned against the viewport rather than the page. A sticky or fixed
+   * block stops moving with the canvas content the bands are drawn in, so they
+   * slide away from it on the first scroll — and scrolling emits no resize, so
+   * nothing re-measures.
+   */
+  if (position === "fixed" || position === "sticky") return false;
+  /*
+   * A classic scrollbar takes its width between the padding box and the border,
+   * so a padding box derived from the borders alone is too wide by the gutter
+   * and the band lands on the scrollbar. Which side it takes depends on the
+   * writing direction.
+   */
+  if (gutter) return false;
+  // A rotation, skew, reflection, perspective, or a collapse to zero.
+  return scale.describable;
+}
+
 export function SpacingOverlay({
   editor,
   hidden = false,
@@ -149,32 +203,22 @@ export function SpacingOverlay({
    * selection alone would keep describing the layout it used to have.
    */
   const measure = React.useCallback(() => {
+    const apply = (next: readonly SpacingBand[]): void => {
+      setBands(current => (sameBands(current, next) ? current : next));
+    };
     const element = layer.current;
     if (element === null || selectedId === null) {
-      setBands([]);
+      apply(NO_BANDS);
       return;
     }
     const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
     if (!(root instanceof HTMLElement)) {
-      setBands([]);
+      apply(NO_BANDS);
       return;
     }
     const block = nodeElement(root, selectedId);
     if (block === null) {
-      setBands([]);
-      return;
-    }
-    /*
-     * A selected block that generates no box has nothing to draw around.
-     *
-     * `display: none` and `display: contents` are both catalog values and both
-     * remain selectable through the Layers panel, which addresses nodes by id.
-     * Their computed margin and padding stay whatever the author set while every
-     * rectangle reads zero, so without this the bands appear at the canvas
-     * origin describing space that is nowhere on screen.
-     */
-    if (!hasLayoutBox(block)) {
-      setBands([]);
+      apply(NO_BANDS);
       return;
     }
     /*
@@ -184,29 +228,29 @@ export function SpacingOverlay({
      */
     const style = block.ownerDocument.defaultView?.getComputedStyle(block);
     if (style === undefined) {
-      setBands([]);
-      return;
-    }
-
-    /*
-     * A block whose rendered box cannot be described by axis-aligned bands gets
-     * none. A rotation or skew has no left edge to pin a band to; a mirrored
-     * block renders its left margin on the RIGHT; and a `scale(0)` collapses
-     * every band to nothing while the value chips, which are deliberately
-     * unclipped so a thin band stays readable, would pile up at the transform
-     * origin over an invisible block.
-     *
-     * All four are one property — the representation does not fit — so they are
-     * refused in one place rather than patched one at a time.
-     */
-    const scale = renderedScale(block, root);
-    if (!scale.describable) {
-      setBands([]);
+      apply(NO_BANDS);
       return;
     }
 
     const boxes = boxesOf(style);
-    setBands(
+    const borders = {
+      x: boxes.borderWidths.left + boxes.borderWidths.right,
+      y: boxes.borderWidths.top + boxes.borderWidths.bottom,
+    };
+    const scale = renderedScale(block, root);
+    if (
+      !describable(
+        layoutFragments(block),
+        style.position,
+        hasScrollbarGutter(block, borders),
+        scale
+      )
+    ) {
+      apply(NO_BANDS);
+      return;
+    }
+
+    apply(
       spacingBands({
         // Through `canvasContentRect` rather than a rectangle read here: this
         // package reads a rectangle in one place, so chrome measured one way
@@ -224,7 +268,7 @@ export function SpacingOverlay({
 
   React.useLayoutEffect(() => {
     if (hidden) {
-      setBands([]);
+      setBands(current => (current.length === 0 ? current : NO_BANDS));
       return;
     }
     measure();
@@ -258,14 +302,57 @@ export function SpacingOverlay({
     const element = layer.current;
     const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
     if (!(root instanceof HTMLElement)) return;
-    // Absent in jsdom unless a test supplies one, and absent in older browsers.
-    // A missing observer costs a re-measure, not correctness — every render
-    // path above still measures.
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measure());
-    observer.observe(root);
-    for (const node of nodeElements(root)) observer.observe(node);
-    return () => observer.disconnect();
+    /*
+     * Each observer is guarded separately, and that is not tidiness. They answer
+     * different questions — sizes changed, and the DOM changed — so a runtime
+     * missing one must still get the other. Guarding both behind `ResizeObserver`
+     * would silently drop mutation tracking wherever it is absent.
+     *
+     * Absent in jsdom unless a test supplies one, and absent in older browsers.
+     * A missing observer costs a re-measure, not correctness — every render path
+     * above still measures.
+     */
+    const sizes =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => measure());
+    if (sizes !== null) {
+      sizes.observe(root);
+      for (const node of nodeElements(root)) sizes.observe(node);
+    }
+
+    /*
+     * The other half: a change that alters computed style without altering any
+     * size. A site-style save recompiles the sheet, and `PageRenderer` emits it
+     * as a `<style>` INSIDE the page root — so the bytes changing is a mutation
+     * in this subtree, where a resize observer has nothing to report because a
+     * class-driven margin moves blocks without resizing them.
+     *
+     * Mutations inside the overlay's own layer are ignored. Drawing the bands is
+     * itself a mutation of this subtree, so reacting to it would have the
+     * measurement trigger the next measurement.
+     */
+    const styles =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(records => {
+            const own = layer.current;
+            const outside = records.some(
+              record => own === null || !own.contains(record.target)
+            );
+            if (outside) measure();
+          });
+    styles?.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    });
+
+    return () => {
+      sizes?.disconnect();
+      styles?.disconnect();
+    };
     /*
      * `document` re-subscribes, and dropping it strands the observer on a
      * DETACHED element. An edit replaces the rendered tree while the selection

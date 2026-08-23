@@ -261,30 +261,71 @@ function marginRect(border: Rect, side: SpacingSide, value: number): Rect {
  * remainder between top and bottom is then negative.
  */
 function paddingRect(inner: Rect, side: SpacingSide, by: EdgeLengths): Rect {
-  const middle = Math.max(0, inner.height - by.top - by.bottom);
+  /*
+   * Every extent is clamped to the box, not only the remainder between two
+   * sides. Padding can exceed the box it is measured in — `box-sizing:
+   * border-box` with a fixed height and a larger padding keeps the computed
+   * padding and collapses the content — and an unclamped band then runs past the
+   * border edge and is drawn over the neighbouring block, which is worse than
+   * drawing nothing because it names another block's space as this one's.
+   */
+  const top = Math.min(by.top, inner.height);
+  const bottom = Math.min(by.bottom, inner.height);
+  const left = Math.min(by.left, inner.width);
+  const right = Math.min(by.right, inner.width);
+  const middle = Math.max(0, inner.height - top - bottom);
   switch (side) {
     case "top":
-      return { x: inner.x, y: inner.y, width: inner.width, height: by.top };
+      return { x: inner.x, y: inner.y, width: inner.width, height: top };
     case "bottom":
       return {
         x: inner.x,
-        y: inner.y + inner.height - by.bottom,
+        y: inner.y + inner.height - bottom,
         width: inner.width,
-        height: by.bottom,
+        height: bottom,
       };
     case "left":
-      return {
-        x: inner.x,
-        y: inner.y + by.top,
-        width: by.left,
-        height: middle,
-      };
+      return { x: inner.x, y: inner.y + top, width: left, height: middle };
     case "right":
       return {
-        x: inner.x + inner.width - by.right,
-        y: inner.y + by.top,
-        width: by.right,
+        x: inner.x + inner.width - right,
+        y: inner.y + top,
+        width: right,
         height: middle,
       };
   }
+}
+
+/**
+ * Whether two band lists say the same thing, by VALUE.
+ *
+ * The overlay re-measures whenever the canvas moves or mutates, which on a page
+ * being typed into is often. Handing React a fresh array each time re-renders
+ * the whole overlay for a layout that did not move, so the caller keeps the
+ * array it already has when the answer is unchanged.
+ *
+ * Every field is compared, not a subset. A rectangle that moved without changing
+ * size, or a label that changed while the geometry held, are both real changes
+ * an author must see — and a comparison that skipped either would freeze the
+ * overlay in exactly the case it exists to report.
+ */
+export function sameBands(
+  left: readonly SpacingBand[],
+  right: readonly SpacingBand[]
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((one, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      one.box === other.box &&
+      one.side === other.side &&
+      one.label === other.label &&
+      one.negative === other.negative &&
+      one.rect.x === other.rect.x &&
+      one.rect.y === other.rect.y &&
+      one.rect.width === other.rect.width &&
+      one.rect.height === other.rect.height
+    );
+  });
 }
