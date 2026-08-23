@@ -79,6 +79,11 @@ rather than refused, because `//docs` has one possible meaning and left alone it
 protocol-relative — `//docs/a` resolves to host `docs`, off-origin, and the whole collection
 drops out of the sitemap with nothing said.
 
+Control characters are refused for the same reason a query is: URL parsing DELETES a tab, carriage
+return or newline rather than encoding it, so `/docs` plus a newline plus `admin` reaches the origin
+as `/docsadmin` — a mount nobody wrote. The whole C0 range is refused rather than those three
+spellings, since none of them belongs in a path prefix.
+
 The plugin's declared core-compat floor rises from `>=0.0.2-alpha.21` to `>=0.0.2-alpha.55`, the
 first core that exports `slugToStaticParam`. On an earlier core the new import fails at module load
 before the plugin can initialise, so the wider range advertised a compatibility that could not

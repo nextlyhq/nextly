@@ -173,6 +173,30 @@ function normalizeBasePath(basePath: string): string {
       `sitemap: basePath must not contain a backslash, got: ${basePath}`
     );
   }
+  // A tab, carriage return or newline is DELETED by URL parsing rather than
+  // encoded, so `/docs\nadmin` reaches the origin as `/docsadmin` — a mount the
+  // caller never wrote, advertised without complaint. `.trim()` above removes
+  // them only at the ends; an embedded one survives.
+  //
+  // Refused as a RANGE rather than as those three characters, because the list
+  // is someone else's spelling of the problem: the rest of the C0 controls are
+  // percent-encoded instead of stripped, which is visible rather than silent but
+  // still names a mount nobody configured. No control character belongs in a
+  // path prefix, so the range is both the simpler rule and the complete one.
+  //
+  // Tested by CODE POINT rather than by a character class, so this file carries
+  // no literal control characters of its own. A regex holding a raw tab renders
+  // as an ordinary space to everyone who edits it afterwards -- and makes the
+  // whole source read as binary to `grep`, which silently prints nothing.
+  const hasControl = [...trimmed].some(ch => {
+    const code = ch.codePointAt(0) ?? 0;
+    return code <= 0x1f || code === 0x7f;
+  });
+  if (hasControl) {
+    throw new Error(
+      `sitemap: basePath must not contain control characters, got: ${JSON.stringify(basePath)}`
+    );
+  }
   // A dot segment does not stay where it is written. URL resolution removes it
   // before the request is sent, so `/docs/../admin` mounts at `/admin` — the
   // prefix escapes itself and can land on a reserved root, and every entry under

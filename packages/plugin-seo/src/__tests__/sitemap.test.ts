@@ -144,6 +144,28 @@ describe("defaultUrlForEntry", () => {
     );
   });
 
+  it("refuses control characters, which URL parsing deletes rather than encodes", () => {
+    // A tab, CR or LF is REMOVED by `new URL()`, so `/docs\nadmin` reaches the
+    // origin as `/docsadmin` — a mount nobody wrote, advertised silently.
+    // `.trim()` only removes them at the ends; an embedded one survives.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\nadmin")
+    ).toThrow(/must not contain control characters/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\tadmin")
+    ).toThrow(/must not contain control characters/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\radmin")
+    ).toThrow(/must not contain control characters/);
+    // The whole C0 range, not just the three that are stripped: the rest are
+    // percent-encoded, which is visible rather than silent but still names a
+    // mount nobody configured. Written as an escape so this file carries no
+    // literal control character of its own.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs\u0001x")
+    ).toThrow(/must not contain control characters/);
+  });
+
   it("collapses repeated slashes so a mount cannot go protocol-relative", () => {
     // `//docs` is not a path: `new URL("//docs/a", "https://x.com")` resolves to
     // https://docs/a — a different HOST — which the origin check then drops,
