@@ -913,15 +913,6 @@
   --nx-measure-form: 56rem;
   --nx-measure-wide: 72rem;
 
-  /* The single vertical-rhythm token for a form section. `FormSection` applies
-   * it to every DIRECT CHILD, so the card's top and bottom breathing room and
-   * the gap between two fields are one decision and cannot drift apart. It
-   * replaces a delegation in which the section padded horizontally only and
-   * each row supplied its own vertical padding — which `SettingsRow` did and
-   * `FieldShell` did not, so a section built from the latter rendered its
-   * fields flush against the card's borders. */
-  --nx-field-gap: 1.25rem;
-
   /* Focus ring colors */
   --nx-focus-ring: var(--nx-primary);
   --nx-focus-ring-offset: oklch(1 0 0);
@@ -1154,18 +1145,34 @@
  *  - Every direct child defaults to the `content` column, so a page header and
  *    the card beneath it cannot disagree about their left edge.
  *
- * `justify-content: center` rather than `margin-inline: auto` on a max-width
- * box, so the centring holds at panel widths where the measure does not bind.
+ * Centring comes from the two outer tracks being equal, not from
+ * `margin-inline: auto` on a max-width box — the latter does nothing at panel
+ * widths where the cap does not bind, which is why the previous layout only
+ * appeared centred because of its paddings.
  */
 @layer components {
   .nx-page-shell {
     display: grid;
+    /* The outer tracks are `minmax(gutter, 1fr)`, NOT a fixed gutter.
+     *
+     * With fixed outer tracks the three columns total only
+     * `measure + 2 * gutter`, so in any panel wider than that the grid does not
+     * reach the panel's edges and `full-start`/`full-end` stop short with it —
+     * a `Bleed` child then spans the measure plus gutters instead of the panel.
+     * Measured in a browser at a 1200px panel: 960px, not 1200px, which is
+     * exactly `56rem + 2 * 2rem`. The `1fr` maximum lets each outer track
+     * absorb the surplus while `gutter` holds as its minimum, so `full` really
+     * is the full width at every panel size.
+     *
+     * The two outer tracks being equal is also what centres the content column,
+     * which is why no `justify-content` is needed: with `1fr` tracks the grid
+     * fills its container and there is no free space left for it to distribute,
+     * so declaring it would imply an effect it cannot have. */
     grid-template-columns:
-      [full-start] var(--nx-gutter)
+      [full-start] minmax(var(--nx-gutter), 1fr)
       [content-start] minmax(0, var(--nx-shell-measure, var(--nx-measure-form)))
-      [content-end] var(--nx-gutter)
+      [content-end] minmax(var(--nx-gutter), 1fr)
       [full-end];
-    justify-content: center;
     align-content: start;
   }
 
@@ -1189,17 +1196,23 @@
 /* The gutter steps with the content PANEL rather than the viewport: the panel's
  * width changes when a sidebar opens, and the panel is what the page sits in.
  * `content` is the container the admin's <main> already names. The step values
- * match Payload's --gutter-h ladder (32 / 24 / 16). */
+ * match Payload's --gutter-h ladder (32 / 24 / 16).
+ *
+ * The override lands on `.nx-page-shell` — a DESCENDANT of that container —
+ * rather than on `:root` or `.nextly-admin`. A container query can only style
+ * elements inside its container, and both of those are ANCESTORS of the
+ * `<main>` that names it, so a rule targeting them never matches and the gutter
+ * silently stays at its desktop value. Measured in a browser at a 700px
+ * container: assigning to `:root` left the gutter at 2rem, while assigning to a
+ * descendant gave the intended 1rem. */
 @container content (max-width: 1024px) {
-  :root,
-  .nextly-admin {
+  .nx-page-shell {
     --nx-gutter: 1.5rem;
   }
 }
 
 @container content (max-width: 768px) {
-  :root,
-  .nextly-admin {
+  .nx-page-shell {
     --nx-gutter: 1rem;
   }
 }

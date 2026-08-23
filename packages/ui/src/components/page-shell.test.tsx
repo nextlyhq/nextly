@@ -8,8 +8,15 @@
  * drop — and never the resulting rectangle. Which is worth stating plainly
  * rather than leaving to be discovered: deleting the `.nx-page-shell > .nx-bleed`
  * rule from the stylesheet leaves every test in this file green, because no
- * stylesheet is applied here at all. The geometry is covered by
- * `e2e/tests/admin/page-shell.spec.ts`, and neither file is sufficient alone.
+ * stylesheet is applied here at all. `styles/__tests__/page-shell-grid.test.ts`
+ * closes that by asserting the stylesheet's own contract, and neither file is
+ * sufficient alone.
+ *
+ * Neither claims the resulting BOXES land where they should — only a browser
+ * answers that, and no page renders the shell yet, so there is nothing for a
+ * Playwright spec to assert against. That check lands with the first page that
+ * consumes it. Until then the geometry rests on two measurements taken by hand
+ * in a browser and recorded in the stylesheet test's comments.
  */
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -72,6 +79,47 @@ describe("PageShell", () => {
 
     expect(shellOf(container)?.classList.contains("pb-0")).toBe(true);
   });
+
+  it("forwards a ref and arbitrary div attributes", () => {
+    let node: HTMLDivElement | null = null;
+    const { container } = render(
+      <PageShell
+        ref={el => {
+          node = el;
+        }}
+        id="page"
+        role="region"
+        aria-label="Settings"
+      >
+        x
+      </PageShell>
+    );
+
+    const shell = shellOf(container);
+    expect(node).toBe(shell);
+    expect(shell?.getAttribute("id")).toBe("page");
+    expect(shell?.getAttribute("role")).toBe("region");
+  });
+
+  it("keeps the measure it computed when a caller also passes style", () => {
+    // Two sources for one value would disagree silently. `width` is the
+    // supported way to choose the measure, so it wins over an inline override
+    // rather than the merge order deciding it by accident.
+    const { container } = render(
+      <PageShell
+        width="wide"
+        style={{
+          ["--nx-shell-measure" as string]: "10rem",
+          paddingTop: "4px",
+        }}
+      >
+        x
+      </PageShell>
+    );
+
+    expect(measureOf(container)).toBe("var(--nx-measure-wide)");
+    expect(shellOf(container)?.style.paddingTop).toBe("4px");
+  });
 });
 
 describe("Bleed", () => {
@@ -84,6 +132,32 @@ describe("Bleed", () => {
 
     const bleed = container.querySelector("[data-slot='bleed']");
     expect(bleed?.classList.contains("nx-bleed")).toBe(true);
+  });
+
+  it("forwards a ref and arbitrary div attributes", () => {
+    // A consumer cannot reach for the usual remedy of wrapping `Bleed` to
+    // attach these, because a wrapper is exactly what stops it working — so the
+    // forwarding matters more here than on an ordinary layout box.
+    let node: HTMLDivElement | null = null;
+    const { container } = render(
+      <PageShell>
+        <Bleed
+          ref={el => {
+            node = el;
+          }}
+          id="deliveries"
+          aria-label="Delivery log"
+          data-testid="bleed"
+        >
+          wide thing
+        </Bleed>
+      </PageShell>
+    );
+
+    const bleed = container.querySelector("[data-slot='bleed']");
+    expect(node).toBe(bleed);
+    expect(bleed?.getAttribute("id")).toBe("deliveries");
+    expect(bleed?.getAttribute("aria-label")).toBe("Delivery log");
   });
 
   it("is a DIRECT child of the shell, which is what puts the named columns in scope", () => {
@@ -101,5 +175,25 @@ describe("Bleed", () => {
     expect(container.querySelector("[data-slot='bleed']")?.parentElement).toBe(
       shellOf(container)
     );
+  });
+
+  it("is NOT a direct child once nested, which is the case the constraint warns about", () => {
+    // The positive case above passes just as happily on an implementation that
+    // never checks depth, so on its own it does not separate a correct nesting
+    // rule from no rule at all. This is the counterexample: a `Bleed` one level
+    // down still carries `.nx-bleed`, and that is precisely why the class alone
+    // is not evidence of full-bleed — the stylesheet's child combinator is, and
+    // `styles/__tests__/page-shell-grid.test.ts` is where that is pinned.
+    const { container } = render(
+      <PageShell>
+        <div data-testid="wrapper">
+          <Bleed>wide thing</Bleed>
+        </div>
+      </PageShell>
+    );
+
+    const bleed = container.querySelector("[data-slot='bleed']");
+    expect(bleed?.classList.contains("nx-bleed")).toBe(true);
+    expect(bleed?.parentElement).not.toBe(shellOf(container));
   });
 });

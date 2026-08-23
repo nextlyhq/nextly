@@ -201,11 +201,23 @@ turns full-bleed from an accident into a declaration.
 `Bleed` is valid only as a DIRECT child of `PageShell`, because the `full-start` and
 `full-end` lines are named on the shell's own grid and are in scope nowhere else. Nested
 deeper it renders a plain block and the `grid-column` is inert — which looks finished and
-is not full-bleed — so the constraint is pinned by test rather than left to the reader.
+is not full-bleed. Two tests pin that, and between them they cover the claim: the
+component test renders a nested `Bleed` and asserts it still carries `.nx-bleed` while
+NOT being the shell's child, and the stylesheet test asserts the rule uses the child
+combinator, which is the half that makes the nested case inert. Both forward their ref
+and any div attributes, which matters more for `Bleed` than for an ordinary box: a
+consumer cannot reach for the usual remedy of wrapping it, since a wrapper is exactly
+what stops it working.
 
 `PageShell` deliberately applies no horizontal padding of its own; a `px-*` utility on it
-would be the second declaration this design exists to remove. Neither is exercised by a
-first-party plugin yet, so both stay on the experimental list above.
+would be the second declaration this design exists to remove. Its outer grid tracks are
+`minmax(var(--nx-gutter), 1fr)` rather than a fixed gutter, so that in a panel wider than
+the measure the grid still reaches the panel's edges and a `Bleed` really is full-bleed —
+with fixed tracks it spans only `measure + 2 * gutter`. The gutter's responsive steps are
+applied to `.nx-page-shell` rather than to `:root`, because a container query can style
+only elements inside its container and `:root` is an ancestor of the element that names
+it. Neither component is exercised by a first-party plugin yet, so both stay on the
+experimental list above.
 
 ## Peer dependency policy
 
