@@ -13,6 +13,8 @@
  * Neither claims the resulting BOXES land where they should. Only a browser
  * answers that.
  */
+import type { ReactNode } from "react";
+
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -99,31 +101,66 @@ describe("PageShell", () => {
     expect(shellOf(container)?.classList.contains("pb-0")).toBe(true);
   });
 
-  it("warns for a bare text child and stays silent for an element one", () => {
-    // CSS Grid wraps bare text in an ANONYMOUS grid item, which no selector can
-    // reach, so `.nx-page-shell > *` does not place it and it lands in a gutter
-    // track outside the measure. Nothing in the rendered output says so.
-    //
-    // Both directions are asserted in ONE test, silent case FIRST, because
-    // `devWarnOnce` de-duplicates by message for the life of the module. Split
-    // across two tests the silent one is unfalsifiable: whichever runs second
-    // sees the message already emitted and passes even if the warning fires
-    // unconditionally. Ordering them here is what makes the silence evidence.
+  /**
+   * Each shape is exercised against a FRESHLY imported module.
+   *
+   * `devWarnOnce` de-duplicates by message for the life of the module it lives
+   * in, so a second shape asserted in the same module observes nothing however
+   * the predicate behaves — the silence would be the cache, not the code.
+   * Resetting the registry per case is what makes each assertion falsifiable.
+   */
+  async function renderFresh(node: ReactNode) {
+    vi.resetModules();
+    const fresh = await import("./page-shell");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      render(
-        <PageShell>
-          <p>an element</p>
-        </PageShell>
-      );
-      expect(warn).not.toHaveBeenCalled();
-
-      render(<PageShell>bare text</PageShell>);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]?.[0])).toContain("anonymous grid item");
+      render(<fresh.PageShell>{node}</fresh.PageShell>);
+      return warn.mock.calls.map(call => String(call[0]));
     } finally {
       warn.mockRestore();
     }
+  }
+
+  it("warns when a direct child is bare text", async () => {
+    // CSS Grid wraps bare text in an ANONYMOUS grid item, which no selector can
+    // reach, so `.nx-page-shell > *` does not place it and it lands in a gutter
+    // track outside the measure. Nothing in the rendered output says so.
+    const calls = await renderFresh("bare text");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("anonymous grid item");
+  });
+
+  it("warns when a fragment exposes bare text as a direct child", async () => {
+    // React removes the fragment from the DOM, so ITS children become the
+    // shell's own grid items. `Children.toArray` returns the fragment as one
+    // element and does not descend into it, so the check has to.
+    const calls = await renderFresh(<>fragment text</>);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("anonymous grid item");
+  });
+
+  it("warns for text nested through more than one fragment", async () => {
+    const calls = await renderFresh(
+      <>
+        <>deeply nested text</>
+      </>
+    );
+
+    expect(calls).toHaveLength(1);
+  });
+
+  it("stays silent when every rendered child is an element", async () => {
+    // The negative control, and it is only evidence because the cases above run
+    // against their own module instances rather than sharing this one's cache.
+    const calls = await renderFresh(
+      <>
+        <p>an element</p>
+      </>
+    );
+
+    expect(calls).toEqual([]);
   });
 
   it("forwards a ref and arbitrary div attributes", () => {

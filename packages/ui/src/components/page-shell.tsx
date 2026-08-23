@@ -1,5 +1,5 @@
 import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
-import { Children, forwardRef } from "react";
+import { Children, forwardRef, Fragment, isValidElement } from "react";
 
 import { devWarnOnce } from "../lib/dev-warn";
 import { cn } from "../lib/utils";
@@ -34,22 +34,34 @@ export interface PageShellProps extends HTMLAttributes<HTMLDivElement> {
 type ShellStyle = CSSProperties & Record<"--nx-shell-measure", string>;
 
 /**
- * Whether any direct child is a bare string or number.
+ * Whether anything that RENDERS as a direct child is a bare string or number.
  *
  * CSS Grid wraps such a child in an ANONYMOUS grid item, and an anonymous item
  * matches no selector — so `.nx-page-shell > *` cannot reach it and it is
  * auto-placed into the first available track, which is a gutter. It renders,
  * it looks finished, and it sits outside the measure.
  *
- * TypeScript cannot express this: `ReactNode` admits strings by design, and
- * narrowing `children` to elements would reject valid fragments and arrays. So
- * it is checked at runtime and reported in development, the same way this kit
- * reports the other contracts its types cannot carry.
+ * A fragment has to be descended into rather than counted as one child. React
+ * removes it from the DOM, so ITS children are what become the shell's grid
+ * items, while `Children.toArray` returns the fragment as a single element and
+ * stops there. Recursion, not a single pass, is what makes the two agree.
+ *
+ * TypeScript cannot express the constraint: `ReactNode` admits strings by
+ * design, and narrowing `children` to elements would reject the valid fragments
+ * and arrays this walks. So it is checked at runtime and reported in
+ * development, the same way this kit reports the other contracts its types
+ * cannot carry.
  */
 function hasBareTextChild(children: ReactNode): boolean {
-  return Children.toArray(children).some(
-    child => typeof child === "string" || typeof child === "number"
-  );
+  return Children.toArray(children).some(child => {
+    if (typeof child === "string" || typeof child === "number") return true;
+    // The generic narrows `child.props` to a shape with a typed `children`,
+    // which is what lets the recursion read it without asserting.
+    if (isValidElement<{ children?: ReactNode }>(child)) {
+      return child.type === Fragment && hasBareTextChild(child.props.children);
+    }
+    return false;
+  });
 }
 
 const MEASURE: Record<NonNullable<PageShellProps["width"]>, string> = {
