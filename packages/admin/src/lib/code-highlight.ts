@@ -85,15 +85,28 @@ export const CODE_TAG_SPECS: readonly {
     color: "var(--nx-code-punctuation)",
   },
   {
+    // `className` and `typeName` ride with the variables because rich-text-kit
+    // colours Prism's `class` and `class-name` that way, and a type name is the
+    // construct that engine already has an opinion about.
     tag: [
       t.variableName,
       t.definition(t.variableName),
       t.local(t.variableName),
+      t.className,
+      t.typeName,
     ],
     color: "var(--nx-code-variable)",
   },
   {
-    tag: [t.tagName, t.angleBracket, t.typeName, t.className, t.namespace],
+    // Comment-coloured, as rich-text-kit colours `namespace`: it qualifies the
+    // name beside it rather than being the name, so it reads quieter.
+    tag: [t.namespace],
+    color: "var(--nx-code-comment)",
+  },
+  {
+    // Markup only -- an element name and the brackets around it, which is what
+    // Prism's `tag` means too.
+    tag: [t.tagName, t.angleBracket],
     color: "var(--nx-code-tag)",
   },
   { tag: [t.deleted], color: "var(--nx-code-deleted)" },
@@ -177,6 +190,28 @@ export function nextlyEditorChrome({
     ".cm-selectionMatch": {
       backgroundColor: "color-mix(in srgb, var(--nx-primary) 20%, transparent)",
     },
+    // Selection is the one decoration `theme="none"` leaves actively wrong
+    // rather than merely unstyled. The base theme picks between its `&light`
+    // and `&dark` rules from `EditorView.darkTheme`, which only a bundled theme
+    // sets -- so without one it stays light, and its pale fill lands under the
+    // light-on-dark token colours in a dark admin.
+    //
+    // Answered with a token instead of by setting the facet: one rule then
+    // serves both modes, which is the same reason there is one highlight style
+    // rather than two.
+    "::selection": {
+      backgroundColor: "color-mix(in srgb, var(--nx-primary) 30%, transparent)",
+    },
+    ".cm-selectionBackground": {
+      backgroundColor: "color-mix(in srgb, var(--nx-primary) 25%, transparent)",
+    },
+    // The base theme raises its own specificity for the focused case, so this
+    // has to match that shape to win rather than relying on precedence alone.
+    "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
+      {
+        backgroundColor:
+          "color-mix(in srgb, var(--nx-primary) 35%, transparent)",
+      },
     // Bracket matching replaces the token span rather than decorating it, so
     // the bracket under the caret arrives with no highlight class of its own.
     // Without a colour here it falls back to the editor's foreground and reads
@@ -207,9 +242,13 @@ export function nextlyEditorChrome({
       borderLeftColor: "var(--nx-foreground)",
     },
     "&.cm-focused": {
-      // The bordered control around the editor already draws focus; a second
-      // outline inside it reads as two focused things.
-      outline: "none",
+      // A ring rather than the base theme's hardcoded dotted outline, which is
+      // off-token. It cannot be dropped: the wrappers these editors sit in draw
+      // a static border and none of them carries a `focus-within` treatment, so
+      // removing this leaves a keyboard user nothing but the caret to say which
+      // control they are in.
+      outline: "2px solid var(--nx-ring)",
+      outlineOffset: "-2px",
     },
   });
 }
