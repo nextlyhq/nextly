@@ -477,6 +477,38 @@ const PADDINGLESS: ReadonlySet<string> = new Set(
   [...MARGINLESS].filter(display => display !== "table-cell")
 );
 
+/**
+ * Computed displays that generate a NON-ATOMIC inline box.
+ *
+ * These are the boxes whose block-axis margins do not affect layout. An ATOMIC
+ * inline — `inline-block`, `inline-flex`, `inline-table`, `inline flow-root
+ * list-item` — is inline-level too, and its margins DO apply, so the question
+ * is not whether a box is inline-level but whether it is atomic.
+ *
+ * A set rather than an equality test, because `display` is a two-part value and
+ * the catalog ships the multi-keyword forms: `inline list-item` is authorable
+ * eight different ways, and `ruby` is inline-level without the word appearing in
+ * it at all. Matching `"inline"` exactly misses both.
+ *
+ * Written against the COMPUTED value, which is what makes a set sufficient. The
+ * browser normalises order and shorthand — every one of `list-item inline`,
+ * `flow inline list-item` and `inline flow list-item` computes to `inline
+ * list-item` — so the fifty-nine spellings the catalog ships collapse to
+ * twenty-seven computed values, and these are the three of them that are
+ * inline and non-atomic.
+ *
+ * Measured, every catalog display value at once, by declaring fifty pixels of
+ * margin above and below and reading how far the following content moved: these
+ * three moved it by zero. `contents` and `none` did too and are deliberately
+ * absent — they generate no box at all, which the caller refuses outright
+ * before asking this.
+ */
+const NON_ATOMIC_INLINE: ReadonlySet<string> = new Set([
+  "inline",
+  "inline list-item",
+  "ruby",
+]);
+
 /** Whether each physical side of one box can carry spacing at all. */
 export interface EdgeApplicability {
   readonly top: boolean;
@@ -514,11 +546,15 @@ function blockAxisIsVertical(writingMode: string): boolean {
 /**
  * Which spacing a generated box of this display type can actually have.
  *
- * PER SIDE rather than per box, because `display: inline` is not all-or-nothing:
- * a non-replaced inline box takes its INLINE-axis margins and ignores its
+ * PER SIDE rather than per box, because an inline box is not all-or-nothing: a
+ * non-replaced, non-atomic one takes its INLINE-axis margins and ignores its
  * BLOCK-axis ones entirely, while `getComputedStyle` reports whatever the author
  * declared on all four. A blanket answer draws top and bottom bands for space an
  * inline box does not create.
+ *
+ * Which displays those are is {@link NON_ATOMIC_INLINE}, and it is more than the
+ * `inline` keyword: the catalog ships the multi-keyword forms, so `inline
+ * list-item` and `ruby` reach here as well.
  *
  * Which physical sides those are depends on the writing mode: the block axis is
  * vertical in `horizontal-tb` and horizontal in every `vertical-*` mode. Padding
@@ -542,7 +578,8 @@ export function spacingApplies(
 ): { margin: EdgeApplicability; padding: EdgeApplicability } {
   const padding = PADDINGLESS.has(display) ? NO_SIDES : ALL_SIDES;
   if (MARGINLESS.has(display)) return { margin: NO_SIDES, padding };
-  if (display !== "inline" || replaced) return { margin: ALL_SIDES, padding };
+  if (!NON_ATOMIC_INLINE.has(display) || replaced)
+    return { margin: ALL_SIDES, padding };
 
   const acrossBlock = blockAxisIsVertical(writingMode);
   return {

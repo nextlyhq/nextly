@@ -623,6 +623,46 @@ describe("which spacing a generated box can have", () => {
     expect(replaced.padding).toEqual(ALL);
   });
 
+  it.each(["inline list-item", "ruby"])(
+    "treats the non-atomic inline %s the same as a bare inline",
+    display => {
+      /*
+       * `display` is a two-part value and the catalog ships the multi-keyword
+       * forms, so matching `"inline"` exactly is not enough. `inline list-item`
+       * is authorable eight ways — every ordering computes to this one string —
+       * and `ruby` is inline-level without the word appearing in it at all.
+       *
+       * Measured across the catalog's whole display list: these two move the
+       * content after them by nothing when given fifty pixels of margin above
+       * and below, exactly as a bare `inline` does.
+       */
+      expect(spacingApplies(display, "horizontal-tb", false).margin).toEqual({
+        top: false,
+        bottom: false,
+        left: true,
+        right: true,
+      });
+    }
+  );
+
+  it.each([
+    "inline flow-root list-item",
+    "inline-block",
+    "inline-flex",
+    "inline-table",
+    "block ruby",
+  ])("gives the ATOMIC inline-level %s every side", display => {
+    /*
+     * The separating set. Each of these is inline-LEVEL, and each of them takes
+     * its block-axis margins, so the question is not whether a box is inline
+     * but whether it is ATOMIC. A rule written as "starts with inline" or
+     * "contains inline" answers the tests above correctly and blanks all of
+     * these — `inline flow-root list-item` in particular differs from
+     * `inline list-item` by one keyword and goes the other way.
+     */
+    expect(spacingApplies(display, "horizontal-tb", false).margin).toEqual(ALL);
+  });
+
   it("still gives a replaced box in a MARGINLESS display no margins", () => {
     // Replaced-ness answers the inline question only. An author who sets
     // `display: table-row` on an image gets a box CSS applies no margin to, and

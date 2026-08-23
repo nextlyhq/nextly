@@ -419,14 +419,32 @@ export function clippedByAncestor(element: Element, root: Element): boolean {
      * clip edge half way through the border and accepts a child the container
      * visibly cuts — measured, the real padding edge sat at 40 while this
      * arithmetic answered 20 and a child at exactly 20 was let through.
-     *
-     * `x` and `y` are used without consulting `describable` on purpose. A
-     * rotated, mirrored or collapsed ancestor makes the composition from the
-     * BLOCK to the root non-describable too — it passes through this same node —
-     * so the caller has already refused the overlay by the time such a factor
-     * could be read. Declining here as well would be a branch nothing reaches.
      */
     const scale = renderedScale(node, root);
+    /*
+     * A clipping ancestor that is not axis-aligned is DECLINED rather than
+     * measured, because neither reading survives its transform: `a` and `d` are
+     * not scale factors once a rotation is present, and `getBoundingClientRect`
+     * answers with an axis-aligned BOUNDING box whose edges are not the clip
+     * edges at all. The real clip is a slanted rectangle sitting inside that
+     * box, so a child cut by it still reads as contained.
+     *
+     * It cannot be left to the caller's own describability check, which is what
+     * an earlier version of this assumed: a descendant carrying the INVERSE
+     * transform composes back to an axis-aligned matrix, so the block passes
+     * that check while this ancestor fails it. Measured — a block under
+     * `rotate(-30deg)` inside an ancestor under `rotate(30deg)` composes to
+     * `a=0.999999, b=0, c=0, d=0.999999` and is called describable, while its
+     * ancestor's own matrix carries `b=0.5, c=-0.5`; the block sat inside the
+     * ancestor's bounding box with a quarter of it beyond the clip.
+     *
+     * Refusing is deliberately broader than the defect: a block WHOLLY INSIDE a
+     * rotated clipping ancestor is not cut and loses its bands anyway. Deciding
+     * that needs the clip as an oriented rectangle, and drawing nothing is the
+     * same answer this module already gives for every other shape it cannot
+     * describe.
+     */
+    if (!scale.describable) return true;
     const clip = {
       top: outer.top + edgeWidth(style.borderTopWidth) * scale.y,
       left: outer.left + edgeWidth(style.borderLeftWidth) * scale.x,

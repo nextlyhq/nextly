@@ -883,6 +883,91 @@ test.describe("spacing values on the canvas", () => {
     await expect(page.locator(BAND)).toHaveCount(0);
   });
 
+  test("declines a clipping ancestor that is not axis-aligned", async ({
+    page,
+  }) => {
+    /*
+     * A rotated ancestor's `getBoundingClientRect` is an axis-aligned BOUNDING
+     * box whose edges are not the clip edges — the real clip is a slanted
+     * rectangle inside it — so a child cut by that clip still reads as
+     * contained, and its bands paint over ground the container hides.
+     *
+     * The block's OWN describability check does not cover this, which is the
+     * whole point of the fixture: the block carries the inverse rotation, so the
+     * composition from block to root is axis-aligned and passes. Measured, that
+     * composition comes back `a=0.999999, b=0, c=0, d=0.999999` while the
+     * ancestor's own matrix carries `b=0.5, c=-0.5`.
+     *
+     * The control is therefore load-bearing rather than decorative: it shows the
+     * counter-rotated block still draws while the ancestor merely rotates, so
+     * the emptiness afterwards is the CLIP being declined and not the rotation
+     * being refused by the guard that was already there.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+    await target.click();
+
+    await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      const text = document.querySelector(
+        '[data-nx-node="hx-nested-text"]'
+      ) as HTMLElement;
+      text.style.marginBottom = "24px";
+      section.style.position = "relative";
+      section.style.width = "200px";
+      section.style.height = "200px";
+      section.style.transform = "rotate(30deg)";
+      /*
+       * Placed so the block is INSIDE the ancestor's axis-aligned bounding box
+       * while hanging past its rotated right edge. That is what makes this
+       * fixture separate the decline from the four-edge comparison: a block
+       * that also escapes the bounding box is refused by that comparison, and
+       * removing the decline changes nothing.
+       */
+      text.style.position = "absolute";
+      text.style.left = "180px";
+      text.style.top = "90px";
+      text.style.width = "60px";
+      text.style.height = "20px";
+      text.style.transform = "rotate(-30deg)";
+    });
+
+    // The fixture's separating property, asserted rather than assumed: layout
+    // that drifted so the block escaped the bounding box would leave this test
+    // passing on the comparison below the decline.
+    const contained = await page.evaluate(() => {
+      const outer = (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).getBoundingClientRect();
+      const box = (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).getBoundingClientRect();
+      const slack = 0.5;
+      return !(
+        box.top < outer.top - slack ||
+        box.left < outer.left - slack ||
+        box.bottom > outer.bottom + slack ||
+        box.right > outer.right + slack
+      );
+    });
+    expect(contained).toBe(true);
+
+    // CONTROL: the composition is axis-aligned, so the block is describable and
+    // still draws under a rotated — but not yet clipping — ancestor.
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).style.overflow = "hidden";
+    });
+
+    await expect(page.locator(BAND)).toHaveCount(0);
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {
