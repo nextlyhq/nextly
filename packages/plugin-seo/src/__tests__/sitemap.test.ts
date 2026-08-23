@@ -144,13 +144,34 @@ describe("defaultUrlForEntry", () => {
     );
   });
 
-  it("emits the mount's root for an empty slug ONLY when the mount is declared", () => {
-    // An empty slug is the site root to a root-mounted collection...
-    expect(defaultUrlForEntry({ slug: "" }, "pages", "")).toBe("/");
-    expect(defaultUrlForEntry({ slug: "" }, "pages", "/site")).toBe("/site");
-    // ...but with no declared mount we cannot know whether the root is served,
-    // so it stays skipped exactly as before.
+  it("skips an empty slug under every mount, declared or not", () => {
+    // Whether a mount's own root is served depends on the bracket count of the
+    // route file — `[...slug]` matches no segments and 404s there, `[[...slug]]`
+    // serves it — and basePath names the prefix, not that. Declaring a mount is
+    // not a claim that its root is routable, so this does not infer one.
     expect(defaultUrlForEntry({ slug: "" }, "pages")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "" }, "pages", "")).toBeNull();
+    expect(defaultUrlForEntry({ slug: "" }, "pages", "/site")).toBeNull();
+  });
+
+  it("refuses a basePath whose dot segments would escape the mount", () => {
+    // `/docs/../admin` resolves to `/admin` before the request is sent, so the
+    // prefix escapes itself and can land on a reserved root.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs/../admin")
+    ).toThrow(/must not contain/);
+    // Percent-encoded dots decode to the same thing, so the encoded spelling
+    // cannot be used to evade the check.
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs/%2e%2e/admin")
+    ).toThrow(/must not contain/);
+    expect(() =>
+      defaultUrlForEntry({ slug: "a" }, "pages", "/docs/./x")
+    ).toThrow(/must not contain/);
+    // A name that merely CONTAINS dots is a legitimate segment and is kept.
+    expect(defaultUrlForEntry({ slug: "a" }, "pages", "/docs/v1.2")).toBe(
+      "/docs/v1.2/a"
+    );
   });
 });
 
@@ -217,11 +238,11 @@ describe("buildSitemapUrls", () => {
       basePath: collection => (collection === "posts" ? "/blog" : ""),
     });
 
-    // `pages` is mounted at the root, so its entries carry no prefix and its
-    // empty slug is the homepage; `posts` carries the declared one.
+    // `pages` is mounted at the root so its entries carry no prefix; `posts`
+    // carries the declared one. The empty slug is skipped under both, because
+    // whether a mount's root is routable is not something this can know.
     expect(urls.map(u => u.loc)).toEqual([
       "https://x.com/about",
-      "https://x.com/",
       "https://x.com/blog/hello",
     ]);
   });

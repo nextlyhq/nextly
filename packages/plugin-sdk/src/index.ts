@@ -27,6 +27,25 @@ export { definePlugin } from "nextly";
 export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
 
 /**
+ * The content route's own answer to "what path does this stored slug render at".
+ *
+ * @experimental Anything a plugin emits a URL FOR an entry with — a sitemap
+ *   `<loc>`, a canonical, a link between entries — derives it from this rather
+ *   than rebuilding the rule, because a second opinion names a path the route
+ *   does not serve. It returns the segments the catch-all matches, or `null`
+ *   when the route would refuse the slug: a reserved path, a `.`/`..` segment,
+ *   or one whose normalization changed.
+ *
+ *   Note what it is NOT told: the route's MOUNT. It judges the value Next hands
+ *   the route, which excludes the static prefix, so a caller mounting a
+ *   collection under `/blog` supplies that prefix itself.
+ *
+ *   `@nextlyhq/plugin-seo` exercises it for sitemap URLs, which starts the D55
+ *   clock rather than ending it.
+ */
+export { slugToStaticParam } from "nextly/runtime";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.

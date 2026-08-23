@@ -60,6 +60,24 @@ passed through, because `/docs?lang=en` reaches URL resolution as a query and wo
 entry at a location the route never serves — a misconfiguration is better as an error than as a
 sitemap of subtly wrong URLs.
 
+`@nextlyhq/plugin-sdk` gains `slugToStaticParam` as an `@experimental` export, and the sitemap takes
+it from there rather than reaching into `nextly/runtime`. The SDK is the stability boundary, and a
+first-party plugin is the worked example third parties copy, so importing core directly would have
+published the shortcut as the pattern. It costs nothing at the boundary: `nextly` is declared
+external in the SDK's build, so the entry grows by one re-export line and the route's module graph
+stays in the consumer's own `nextly` install.
+
+An empty slug is now skipped under every mount, declared or not. Whether a mount's own root is
+served depends on the route file — a required `[...slug]` catch-all matches no segments and 404s
+there, an optional `[[...slug]]` serves it — and `basePath` names the prefix, not that. Both shapes
+exist in this repository, so declaring a mount is not a claim that its root is routable, and a site
+that does serve its root maps it with `urlFor`. Omitting a URL costs a listing; advertising one that
+404s costs indexing.
+
+`basePath` also rejects `.` and `..` segments, including their percent-encoded spellings: a dot
+segment is removed by URL resolution before the request is sent, so `/docs/../admin` would mount at
+`/admin` and carry every entry under it somewhere the caller never named.
+
 The plugin's declared core-compat floor rises from `>=0.0.2-alpha.21` to `>=0.0.2-alpha.55`, the
 first core that exports `slugToStaticParam`. On an earlier core the new import fails at module load
 before the plugin can initialise, so the wider range advertised a compatibility that could not

@@ -14,11 +14,15 @@
  *
  * @module sitemap
  */
-// The route's own path derivation. Importing it keeps this module framework-
-// agnostic: `nextly/runtime` reaches `next/navigation` and `next/cache` through
-// a lazy `createRequire` precisely so that importing it never loads `next`, so
-// the package's zero-`next` guarantee is unaffected.
-import { slugToStaticParam } from "nextly/runtime";
+// The route's own path derivation, taken from the SDK rather than from core.
+// `@nextlyhq/plugin-sdk` is this repository's stability boundary, and a
+// first-party plugin is the worked example third parties copy — reaching past it
+// into `nextly/runtime` would publish that shortcut as the pattern.
+//
+// It keeps this module framework-agnostic either way: the routing entry reaches
+// `next/navigation` and `next/cache` through a lazy `createRequire` precisely so
+// importing it never loads `next`, so the package's zero-`next` guarantee holds.
+import { slugToStaticParam } from "@nextlyhq/plugin-sdk";
 
 /**
  * The minimal `listEntries` the sitemap builder calls — a structural slice of
@@ -154,6 +158,22 @@ function normalizeBasePath(basePath: string): string {
       `sitemap: basePath must be a path prefix with no query or fragment, got: ${basePath}`
     );
   }
+  // A dot segment does not stay where it is written. URL resolution removes it
+  // before the request is sent, so `/docs/../admin` mounts at `/admin` — the
+  // prefix escapes itself and can land on a reserved root, and every entry under
+  // it is then advertised somewhere the caller never named.
+  //
+  // Percent-encoded forms count: the URL standard decodes `%2e` to `.` for
+  // exactly this purpose, so `%2e%2e` resolves away too and a check that read
+  // only literal dots would pass the spelling written to evade it. Decided on
+  // the SEGMENTS rather than by searching the string, so a legitimate name that
+  // merely contains dots — `v1.2`, `file.tar.gz` — is untouched.
+  const decoded = trimmed.replace(/%2e/gi, ".");
+  if (decoded.split("/").some(seg => seg === "." || seg === "..")) {
+    throw new Error(
+      `sitemap: basePath must not contain "." or ".." segments, got: ${basePath}`
+    );
+  }
   const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   return withLeading.replace(/\/+$/, "");
 }
@@ -232,10 +252,18 @@ export function defaultUrlForEntry(
   const base = normalizeBasePath(declared ? basePath : `/${collection}`);
 
   if (param.slug.length === 0) {
-    // See the docblock: only a caller who named the mount has told us its root
-    // is served.
-    if (!declared) return null;
-    return base === "" ? "/" : base;
+    // An empty slug is the mount's own root, and whether that root is SERVED is
+    // not something this module can find out. A required catch-all (`[...slug]`)
+    // matches no segments at all, so its mount root 404s; an optional one
+    // (`[[...slug]]`) serves it. Both shapes exist in this repository — the
+    // playground's frontend route is required and its blocks route is optional —
+    // and `basePath` names the prefix, not the bracket count.
+    //
+    // Emitting on a declared mount would have been inferring the second fact
+    // from the first, so an empty slug is skipped and a site that does serve its
+    // root maps it with `urlFor`. Omitting a URL costs a listing; advertising
+    // one that 404s costs indexing, which is the trade this module exists for.
+    return null;
   }
 
   // Only the ROUTE-DERIVED segments are encoded. The prefix is a caller-supplied
