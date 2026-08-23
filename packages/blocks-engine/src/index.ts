@@ -265,6 +265,11 @@ export type {
 export {
   compilePageCss,
   BASE_BREAKPOINT,
+  // The width past which a stored record is not read. Exported for the same
+  // reason as the breakpoints below: a reader keyed on what compilation emits
+  // must stop reading where compilation stops, and a second constant would
+  // drift from the one that decides the output.
+  MAX_SCANNED_KEYS,
   // The normalised breakpoints, for a reader keyed on what the compiler emits
   // rather than on what was stored. Exported rather than restated because a
   // second copy of the dropping, sorting and capping rules would drift from the
@@ -345,6 +350,11 @@ export {
   compileStyleValues,
   tokenCustomProperty,
   DEFAULT_TOKEN_PREFIX,
+  // The prefix tokens are actually written under, which is not the one that was
+  // stored: unset, malformed and reserved prefixes all resolve to the default.
+  // Exported so a reader keyed on the emitted custom-property names asks this
+  // rather than the setting, which changes without the output changing.
+  safeTokenPrefix,
 } from "./style/declarations";
 export type { CompiledDeclarations, Declaration } from "./style/declarations";
 export { serializeRules } from "./style/serialize";

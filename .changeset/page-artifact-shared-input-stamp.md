@@ -53,8 +53,24 @@ from a compile context, so the ordinary route — a stored artifact plus
 those inputs can also compile a replacement, a refusal there recompiles the sheet
 instead of withholding it.
 
-`@nextlyhq/blocks-engine` exports `breakpointContexts`, the compiler's own
-normalised reading of a stored breakpoint set: definitions with a missing or
-unusable bound dropped, duplicate ids resolved, each axis sorted and capped, and
-every survivor carrying the at-rule text it is emitted under. Anything keyed on
-what a stylesheet actually contains reads that rather than the stored axes.
+The identity is taken over what the compiler READS, not over what was stored,
+which is the difference between invalidating a page and invalidating the site.
+Breakpoints are read through the engine's normalisation, so a definition it
+discards moves nothing; the token prefix is the one tokens are actually written
+under, so swapping one rejected spelling for another moves nothing; and block
+defaults are narrowed to the types a page draws, so a default changing for a
+block it does not hold moves nothing. A stored record wider than the compiler
+will read declines to identify the inputs at all rather than being read past
+that bound, which recompiles rather than reusing a sheet that was only partly
+described.
+
+`PageRenderer` also hands the site's own `mayFetchUrl` to the compile it
+synthesizes from `siteStyles`. The shared sheet has always honoured it, the
+page sheet is emitted after, and a page compiled under weaker rules would
+publish a request the sheet beside it was refused.
+
+`@nextlyhq/blocks-engine` exports `breakpointContexts`, `safeTokenPrefix` and
+`MAX_SCANNED_KEYS`: the compiler's own normalised breakpoints, the prefix tokens
+are really written under, and the width past which a stored record is not read.
+Anything keyed on what a stylesheet contains reads these rather than the stored
+settings, which change without the output changing.

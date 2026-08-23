@@ -148,15 +148,27 @@ export function toPageStyles(
  *
  * A context that already carries `blockBases` is left alone — an explicit
  * choice by the caller outranks what can be derived here.
+ *
+ * `stated` narrows a supplied record to this tree instead of deriving from the
+ * resolver, and it is the same walk because it is the same question: which
+ * types does this document draw defaults from. `compilePageCss` reads a base
+ * only for a type the document uses, so a site library carrying every block it
+ * has installed emits nothing for the rest — and anything keyed on what the
+ * sheet contains must not move when a default changes for a type this page does
+ * not hold.
  */
 export function blockBasesFor(
   document: BlockDocument,
-  blocks: BlockResolver
+  blocks: BlockResolver,
+  stated?: Readonly<Record<string, NodeStyles>>
 ): Record<string, NodeStyles> {
   const bases: Record<string, NodeStyles> = {};
   walkNodes(document.nodes, node => {
     if (bases[node.type] !== undefined) return;
-    const baseStyles = blocks.get(node.type)?.baseStyles;
+    const baseStyles =
+      stated === undefined
+        ? blocks.get(node.type)?.baseStyles
+        : stated[node.type];
     if (baseStyles !== undefined) bases[node.type] = baseStyles;
   });
   return bases;

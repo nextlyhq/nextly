@@ -272,3 +272,61 @@ describe("a stored artifact that covers a node its type no longer draws", () => 
     ).toContain("rebeccapurple");
   });
 });
+
+describe("a site library carrying block defaults this page never draws", () => {
+  // `compilePageCss` reads a base only for a type the document uses, so defaults
+  // for every other installed block emit nothing into this sheet. An identity
+  // taken over the whole record moves when one of them changes and recompiles a
+  // byte-identical page — on a read path that does not persist what it gets
+  // back, on every request.
+  const onePage: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [{ id: "n1", type: "test/shown", version: 1, props: {} }],
+  };
+  const blocks = createBlockResolver([shown, ghost]);
+
+  const site = (unusedColour: string) => ({
+    breakpoints: { viewport: [], container: [] },
+    blockBases: {
+      "test/shown": { base: { base: { color: "#030303" } } },
+      // Installed, and absent from this document. Nothing it holds can reach
+      // this page's sheet.
+      "test/ghost": { base: { base: { color: unusedColour } } },
+    },
+  });
+
+  const artifact: PageStyles = {
+    css: ".nx-n1{color:rebeccapurple}",
+    classes: { n1: "nx-n1" },
+    sharedInputsId: sharedStyleInputsId({
+      breakpoints: { viewport: [], container: [] },
+      namedClasses: [],
+      // The types this document draws from, which is the answer the compiler
+      // itself uses. Taken through the same helper rather than written out, so
+      // what this asserts is WHICH record the render stamps, not how the
+      // narrowing is spelled.
+      blockBases: blockBasesFor(onePage, blocks, site("#040404").blockBases),
+    }),
+  };
+
+  const render = (unusedColour: string) =>
+    renderToStaticMarkup(
+      <PageRenderer
+        document={onePage}
+        blocks={blocks}
+        styles={artifact}
+        siteStyles={site(unusedColour)}
+      />
+    );
+
+  it("REUSES the artifact, because an unused type is not in the identity", () => {
+    expect(render("#040404")).toContain("rebeccapurple");
+  });
+
+  it("still REUSES it after that unused default changes", () => {
+    // The half a narrowing that merely happened to agree would fail. Changing a
+    // default for a type this page does not hold changes no byte of its sheet.
+    expect(render("#eeeeee")).toContain("rebeccapurple");
+  });
+});

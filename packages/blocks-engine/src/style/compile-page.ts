@@ -525,8 +525,15 @@ function boundedKeys(record: Record<string, unknown>): string[] {
   return keys.sort();
 }
 
-/** How many keys of one stored record are read before the walk gives up. */
-const MAX_SCANNED_KEYS = 256;
+/**
+ * How many keys of one stored record are read before the walk gives up.
+ *
+ * Public because it is this engine's only answer to how wide a stored record can
+ * be and still be read. A reader that walks the same records — a cache stamp,
+ * most of all — has to stop where this stops, or a corrupt settings row costs it
+ * the unbounded scan this bound exists to prevent while compilation pays 256.
+ */
+export const MAX_SCANNED_KEYS = 256;
 
 function unknownBreakpointWarnings(
   styles: NodeStyles,

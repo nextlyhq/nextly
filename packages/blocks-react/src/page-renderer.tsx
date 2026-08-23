@@ -180,10 +180,11 @@ function pruneRenderedPlaceholders(
  *   reaches only one leaves every reference pointing at a property nothing
  *   declared — and an unresolved custom property invalidates the declaration
  *   rather than reporting.
- * - `mayFetchUrl` is reconciled a level up, in `effectiveCompile`, which
- *   derives one predicate and hands the same object to both. It has its own
- *   role rather than sharing one, so nothing here promises a reconciliation
- *   that happens elsewhere.
+ * - `mayFetchUrl` is reconciled a level up, in `effectiveCompile`, which derives
+ *   one predicate and hands the same object to both. It has its own role rather
+ *   than sharing one, so nothing here promises a reconciliation that happens
+ *   elsewhere — but the context handed to that reconciler has to CARRY the
+ *   site's predicate, or the reconciliation is over a value it never saw.
  * - `fonts` and `tokens` are the sheet's alone: it emits `@font-face` and the
  *   token blocks, and the page compile emits neither and reads neither.
  */
@@ -537,11 +538,17 @@ export function PageRenderer({
   //
   // Stated here rather than left to `resolvePageStyles` to derive, because what
   // it derives from is the tree it is handed, and this is the only place that
-  // still holds the wider one. A caller that named its own defaults keeps them.
-  const pageShared =
-    shared.blockBases === undefined
-      ? { ...shared, blockBases: blockBasesFor(doc, resolver) }
-      : shared;
+  // still holds the wider one.
+  //
+  // A stated record is NARROWED by the same walk rather than taken whole. The
+  // compiler reads a base only for a type the document uses, so a site library
+  // carrying every installed block emits nothing for the rest — and taking it
+  // whole would move the identity, and recompile a byte-identical page sheet,
+  // whenever a default changed for a type this page does not hold.
+  const pageShared = {
+    ...shared,
+    blockBases: blockBasesFor(doc, resolver, shared.blockBases),
+  };
   // Present whenever the render knows this site's breakpoints, whether they came
   // from a compile context or from `siteStyles`. Taking only the context leaves
   // the documented normal path — a route that supplies a stored artifact and the
@@ -559,7 +566,30 @@ export function PageRenderer({
       ? { ...styleContext, ...pageShared }
       : pageShared.breakpoints === undefined
         ? undefined
-        : { ...pageShared, breakpoints: pageShared.breakpoints };
+        : {
+            ...pageShared,
+            breakpoints: pageShared.breakpoints,
+            // The site's own fetch predicate, handed to the reconciler rather
+            // than reconciled here. `effectiveCompile` derives ONE predicate and
+            // gives it to both compiles — but only from what the context it is
+            // passed carries, and a synthesized context that omitted this would
+            // leave the site sheet judging a `url(...)` by the site's rules
+            // while the page sheet beside it judged the same value by the host's
+            // alone. The site sheet is emitted FIRST, so a page sheet cannot
+            // retract what it published.
+            //
+            // It carries no identity — `SiteSheetInput` has no `fetchPolicyId`,
+            // because the site artifact is addressed by the hash of its own
+            // bytes and needs none. So a page compiled under it is compiled
+            // under an ANONYMOUS predicate, and `effectiveCompile` already
+            // states what that means: no stored sheet can be judged against a
+            // predicate nothing can name, so every one of them is recompiled.
+            // That cost is the site opting into its own predicate, and it is the
+            // same answer a caller gets for passing one on the style context.
+            ...(siteInput?.mayFetchUrl === undefined
+              ? {}
+              : { mayFetchUrl: siteInput.mayFetchUrl }),
+          };
 
   const {
     context: compileContext,

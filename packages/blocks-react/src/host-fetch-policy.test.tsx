@@ -626,3 +626,70 @@ describe("the render and the link preview choose the same image", () => {
     expect(out).toBeNull();
   });
 });
+
+describe("a page RECOMPILED from stored site styles", () => {
+  // The route that supplies a stored artifact plus `siteStyles` and states no
+  // `styleContext` can now recompile, because the site's own inputs are enough
+  // to compile with. What it compiles under is this describe's subject: the site
+  // sheet has always honoured `siteStyles.mayFetchUrl`, and the page sheet is
+  // emitted AFTER it, so a page compiled under weaker rules publishes a request
+  // the shared sheet beside it was refused.
+  const URL = "https://cdn.other.test/a.png";
+
+  const page: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "n1",
+        type: "core/text",
+        version: 1,
+        props: { text: "body" },
+        // NODE-local, so only a page compile can emit it. A url on the class
+        // tier would be emitted by the site sheet and would answer whether THAT
+        // honours the predicate, which was never in question.
+        styles: { base: { base: { background: { url: URL } } } } as NodeStyles,
+      },
+    ],
+  };
+
+  /** A stored artifact carrying no stamp, so this render must recompile it. */
+  const stale: PageStyles = {
+    css: ".nx-n1{color:teal}",
+    classes: { n1: "nx-n1" },
+  };
+
+  function render(mayFetchUrl?: (candidate: string) => boolean) {
+    return renderToStaticMarkup(
+      <PageRenderer
+        document={page}
+        blocks={createBlockResolver(coreBlocks)}
+        styles={stale}
+        siteStyles={{
+          breakpoints: { viewport: [], container: [] },
+          ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
+        }}
+      />
+    );
+  }
+
+  it("asks the site's OWN predicate about a node-local url", () => {
+    // The defect: with no `styleContext`, the synthesized compile context is
+    // built from the site's inputs — and a context that omitted this predicate
+    // would leave the recompile asking the host list, or asking nothing at all.
+    const markup = render(() => false);
+
+    expect(markup).not.toContain("color:teal");
+    expect(markup).not.toContain("cdn.other.test");
+  });
+
+  it("CONTROL: emits the same url when the site asks nothing", () => {
+    // The separating property. A render that dropped the url unconditionally —
+    // or one that never recompiled at all — would satisfy the assertion above
+    // while asking no host question anywhere.
+    const markup = render();
+
+    expect(markup).not.toContain("color:teal");
+    expect(markup).toContain("cdn.other.test");
+  });
+});

@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { MAX_NAMED_CLASSES } from "@nextlyhq/blocks-engine";
+import { MAX_NAMED_CLASSES, MAX_SCANNED_KEYS } from "@nextlyhq/blocks-engine";
 
 import {
   UNIDENTIFIED_SHARED_INPUTS,
@@ -88,15 +88,6 @@ describe("the stamp", () => {
       // Renders into every `var(--<prefix><name>)` the sheet references.
       expect(sharedStyleInputsId(inputs({ tokenPrefix: "--acme-" }))).not.toBe(
         sharedStyleInputsId(inputs())
-      );
-    });
-
-    it("an UNSET prefix against an empty one", () => {
-      // Unset means the engine's default; `""` means a site that declared no
-      // prefix. They compile to different property names, so they must not
-      // stamp alike — this is what `JSON.stringify` is preserving.
-      expect(sharedStyleInputsId(inputs({ tokenPrefix: undefined }))).not.toBe(
-        sharedStyleInputsId(inputs({ tokenPrefix: "" }))
       );
     });
 
@@ -236,6 +227,27 @@ describe("the stamp", () => {
   });
 
   describe("holds still for what does not reach CSS", () => {
+    it("an UNSET prefix against an empty one", () => {
+      // Corrects what this file asserted first. `""` looks like "a site that
+      // declared no prefix", but `safeTokenPrefix` accepts only `--` followed by
+      // lowercase letters, digits and dashes, so an empty string is refused and
+      // the tokens are written under the engine's default — the same place unset
+      // writes them. Nothing about the sheet differs, so nothing may be
+      // invalidated over it.
+      expect(sharedStyleInputsId(inputs({ tokenPrefix: undefined }))).toBe(
+        sharedStyleInputsId(inputs({ tokenPrefix: "" }))
+      );
+    });
+
+    it("two prefixes the compiler refuses for different reasons", () => {
+      // A malformed one and a reserved one. Both resolve to the default, so both
+      // emit the identical `var(--site-*)` references, and swapping one rejected
+      // spelling for another must not recompile every page on the site.
+      expect(sharedStyleInputsId(inputs({ tokenPrefix: "acme" }))).toBe(
+        sharedStyleInputsId(inputs({ tokenPrefix: "--nx-brand" }))
+      );
+    });
+
     it("a breakpoint ORDER, with distinct bounds", () => {
       // The compiler sorts each axis by descending `maxWidth` before it emits,
       // so two storage orders of the same distinct widths produce the same CSS.
@@ -497,6 +509,50 @@ describe("what a corrupt or hostile settings row costs", () => {
     expect(
       sharedStyleInputsId(inputs({ namedClasses: [mapped([])] as never }))
     ).not.toBe(sharedStyleInputsId(inputs()));
+  });
+
+  it("refuses to IDENTIFY inputs holding a record wider than the compiler reads", () => {
+    // `compilePageCss` stops enumerating one stored record at MAX_SCANNED_KEYS,
+    // so a settings row wider than that costs it a bounded scan while costing an
+    // unbounded walk to anything that reads the same record on every render.
+    //
+    // Truncating instead would be unsound in the silent direction: the compiler
+    // reaches a state or a breakpoint BY NAME, so a key sorted past any cut is
+    // still emitted. Declining to identify the inputs recompiles every render,
+    // which is expensive and correct, on a row nothing legitimate produces.
+    const wide: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_SCANNED_KEYS + 1; i += 1) wide[`k${i}`] = i;
+
+    expect(
+      sharedStyleInputsId(
+        inputs({
+          namedClasses: [
+            { id: "c1", slug: "hero", orderIndex: 0, styles: wide },
+          ] as never,
+        })
+      )
+    ).toBe(UNIDENTIFIED_SHARED_INPUTS);
+  });
+
+  it("CONTROL: reads a record exactly at that width, and still separates it", () => {
+    // The bound must not fire on anything the compiler would have read. Asserted
+    // as a pair: identified rather than refused, AND still sensitive to a change
+    // inside it — a bound that returned a constant at this width would satisfy
+    // the first half alone.
+    const atWidth = (last: number) => {
+      const record: Record<string, unknown> = {};
+      for (let i = 0; i < MAX_SCANNED_KEYS - 1; i += 1) record[`k${i}`] = i;
+      record.color = last;
+      return { id: "c1", slug: "hero", orderIndex: 0, styles: record };
+    };
+    const one = sharedStyleInputsId(
+      inputs({ namedClasses: [atWidth(1)] as never })
+    );
+
+    expect(one).not.toBe(UNIDENTIFIED_SHARED_INPUTS);
+    expect(one).not.toBe(
+      sharedStyleInputsId(inputs({ namedClasses: [atWidth(2)] as never }))
+    );
   });
 
   it("notices a change DEEP inside an oversized envelope", () => {

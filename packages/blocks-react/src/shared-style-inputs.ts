@@ -57,10 +57,12 @@
  */
 import {
   MAX_NAMED_CLASSES,
+  MAX_SCANNED_KEYS,
   breakpointContexts,
   hashId,
   isPlainRecord,
   orderedNamedClasses,
+  safeTokenPrefix,
 } from "@nextlyhq/blocks-engine";
 import type { StyleCompileContext } from "@nextlyhq/blocks-engine";
 
@@ -157,44 +159,73 @@ const MAX_ENVELOPE_DEPTH = 32;
  * Own enumerable keys, sorted — the same reading `boundedKeys` performs in the
  * compiler, so a record's key order in storage moves neither the CSS nor this.
  *
- * Structures are read here and everything else by {@link leafText}, which is a
- * split by what the reading has to DO rather than a tidying: only a structure
- * can recur, can close a cycle, or can reach the depth bound.
+ * The split across four functions follows what the reading has to DO rather than
+ * being a tidying. This one decides which KIND a value is, and only a structure
+ * can recur, close a cycle or reach the depth bound; {@link leafText} writes the
+ * values that cannot; {@link sequenceText} and {@link recordText} each read one
+ * kind of structure, and each carries the width bound for its own shape.
  */
 function structuralText(
   value: unknown,
   ancestors: Set<object>,
-  depth: number
+  depth: number,
+  reading: Reading
 ): string {
   if (typeof value !== "object" || value === null) return leafText(value);
   if (ancestors.has(value)) return "<cycle>";
   if (depth >= MAX_ENVELOPE_DEPTH) return "<deeper>";
   ancestors.add(value);
   try {
-    if (Array.isArray(value)) {
-      const items: string[] = [];
-      for (let index = 0; index < value.length; index += 1) {
-        items.push(memberText(() => value[index], ancestors, depth));
-      }
-      return `[${items.join(",")}]`;
-    }
+    if (Array.isArray(value))
+      return sequenceText(value, ancestors, depth, reading);
     // Only a PLAIN record is a structure. The compiler descends with
     // `isPlainRecord` and treats anything else — a Map, a Date, a class
     // instance — as a value it cannot write, reporting it and emitting nothing.
     // Two of them therefore produce identical css, and reading their fields here
     // would invalidate artifacts over a difference no stylesheet can show.
     if (!isPlainRecord(value)) return "<opaque>";
-    const record: Record<string, unknown> = value;
-    return `{${Object.keys(record)
-      .sort()
-      .map(
-        key =>
-          `${JSON.stringify(key)}:${memberText(() => record[key], ancestors, depth)}`
-      )
-      .join(",")}}`;
+    return recordText(value, ancestors, depth, reading);
   } finally {
     ancestors.delete(value);
   }
+}
+
+/** A sequence, read in stored order, which is the only order it has. */
+function sequenceText(
+  items: readonly unknown[],
+  ancestors: Set<object>,
+  depth: number,
+  reading: Reading
+): string {
+  // Bounded exactly as a record is, and for the same reason: an array is a
+  // stored value like any other and nothing validated its length.
+  if (items.length > MAX_SCANNED_KEYS) return overWide(reading);
+  const parts: string[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    parts.push(memberText(() => items[index], ancestors, depth, reading));
+  }
+  return `[${parts.join(",")}]`;
+}
+
+/** A record, read by its own enumerable keys in sorted order. */
+function recordText(
+  record: Record<string, unknown>,
+  ancestors: Set<object>,
+  depth: number,
+  reading: Reading
+): string {
+  // Counted before anything materialises the key list, because `Object.keys` on
+  // a record with a million entries has already paid the cost this bound exists
+  // to refuse.
+  if (ownKeyCount(record, MAX_SCANNED_KEYS + 1) > MAX_SCANNED_KEYS)
+    return overWide(reading);
+  return `{${Object.keys(record)
+    .sort()
+    .map(
+      key =>
+        `${JSON.stringify(key)}:${memberText(() => record[key], ancestors, depth, reading)}`
+    )
+    .join(",")}}`;
 }
 
 /**
@@ -232,6 +263,50 @@ function leafText(value: unknown): string {
 }
 
 /**
+ * Whether one whole reading met a record too wide to be read.
+ *
+ * Carried rather than returned, because the answer is not about the value being
+ * read — it is about whether the INPUTS as a whole can still be identified, and
+ * that is decided by the outermost caller.
+ */
+interface Reading {
+  overWide: boolean;
+}
+
+/**
+ * How many own keys a record has, counted no further than it needs to be.
+ *
+ * The same bounded enumeration `boundedKeys` performs in the compiler, without
+ * building the array: the only question here is whether the record is wider
+ * than the compiler will read, and the answer is known at key 257.
+ */
+function ownKeyCount(record: Record<string, unknown>, stopAt: number): number {
+  let count = 0;
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
+    count += 1;
+    if (count >= stopAt) break;
+  }
+  return count;
+}
+
+/**
+ * A record wider than the compiler reads, which makes the whole reading refuse.
+ *
+ * TRUNCATING here would be unsound in the silent direction: the compiler reaches
+ * a state or a breakpoint by NAME, so a key sorted past any cut is still emitted,
+ * and two libraries differing only there would stamp alike. Refusing to identify
+ * the inputs at all costs a recompile per render on a settings row this wide,
+ * which nothing legitimate produces — an envelope holds four states, a state map
+ * holds one entry per breakpoint, and a declaration record holds one per CSS
+ * property this engine knows.
+ */
+function overWide(reading: Reading): string {
+  reading.overWide = true;
+  return "<over-wide>";
+}
+
+/**
  * One member of a structure, read behind a guard.
  *
  * A property whose getter throws is one the compiler cannot read either. The
@@ -241,18 +316,19 @@ function leafText(value: unknown): string {
 function memberText(
   read: () => unknown,
   ancestors: Set<object>,
-  depth: number
+  depth: number,
+  reading: Reading
 ): string {
   try {
-    return structuralText(read(), ancestors, depth + 1);
+    return structuralText(read(), ancestors, depth + 1, reading);
   } catch {
     return "<unreadable>";
   }
 }
 
 /** The same reading, started fresh. */
-function structural(value: unknown): string {
-  return structuralText(value, new Set<object>(), 0);
+function structural(value: unknown, reading: Reading): string {
+  return structuralText(value, new Set<object>(), 0, reading);
 }
 
 /**
@@ -271,8 +347,8 @@ function structural(value: unknown): string {
  * different CSS. Hashing bounds the label the same way and every character
  * reaches the digest.
  */
-function styleEnvelope(styles: unknown): string {
-  return hashId(structural(styles));
+function styleEnvelope(styles: unknown, reading: Reading): string {
+  return hashId(structural(styles, reading));
 }
 
 /**
@@ -287,7 +363,7 @@ function styleEnvelope(styles: unknown): string {
  * legible enough to answer WHICH class moved — which is the question it exists
  * to answer — and they are safe to carry raw because the reading above is total.
  */
-function classParts(entry: unknown): unknown {
+function classParts(entry: unknown, reading: Reading): unknown {
   // A malformed entry is reduced rather than dereferenced. This library is one
   // site-settings record read on every page render, and it arrives whether or
   // not anything validated it — `compilePageCss` treats a corrupt entry as
@@ -298,12 +374,12 @@ function classParts(entry: unknown): unknown {
   // Reduced to its own reading rather than to a hole, so a corrupt entry still
   // occupies its position AND stays distinguishable from a differently corrupt
   // one: dropping it would let a library gain a bad row and stamp identically.
-  if (!isRecord(entry)) return structural(entry);
+  if (!isRecord(entry)) return structural(entry, reading);
   return [
-    structural(entry.id),
-    structural(entry.slug),
-    structural(entry.orderIndex),
-    styleEnvelope(entry.styles),
+    structural(entry.id, reading),
+    structural(entry.slug, reading),
+    structural(entry.orderIndex, reading),
+    styleEnvelope(entry.styles, reading),
   ] as unknown;
 }
 
@@ -330,6 +406,10 @@ function classParts(entry: unknown): unknown {
  * before the forgiving compiler ever ran.
  */
 export function sharedStyleInputsLabel(inputs: SharedStyleInputs): string {
+  return labelFor(inputs, { overWide: false });
+}
+
+function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
   // Bounded exactly as the compiler bounds it. `compilePageCss` reads only the
   // first `MAX_NAMED_CLASSES` entries, so entries past that cap reach no
   // stylesheet and must not move a stamp — and an oversized settings row must
@@ -349,14 +429,24 @@ export function sharedStyleInputsLabel(inputs: SharedStyleInputs): string {
     // prevent. Read rather than restated, for the reason the class ordering is:
     // a second copy of those rules drifts from the one that decides the output.
     breakpointContexts(inputs.breakpoints),
-    structural(inputs.tokenPrefix ?? null),
+    // The prefix tokens are actually WRITTEN under, not the one that was stored.
+    // `safeTokenPrefix` maps unset, malformed and reserved prefixes alike to the
+    // engine's default, so all of them emit identical `var(--site-*)` references
+    // — and stamping the raw setting recompiles every page on the site when one
+    // rejected spelling is replaced by another. A non-string is passed as absent
+    // because it resolves to that same default.
+    safeTokenPrefix(
+      typeof inputs.tokenPrefix === "string" ? inputs.tokenPrefix : undefined
+    ).prefix,
     // Ordered by the ENGINE'S own comparator rather than as stored, because the
     // compiler sorts the library before emitting it — so two storage orders of
     // the same classes produce identical CSS and must produce identical stamps.
     // Imported rather than restated: a comparator copied here would drift from
     // the one that decides the output, and the drift would be silent in both
     // directions.
-    orderedNamedClasses(library.slice(0, MAX_NAMED_CLASSES)).map(classParts),
+    orderedNamedClasses(library.slice(0, MAX_NAMED_CLASSES)).map(entry =>
+      classParts(entry, reading)
+    ),
     // The block-type defaults, which the renderer resolves beside the other
     // three and the compiler emits into this very sheet. Keyed by type, so the
     // reading of the record is stable only if the keys are — hence the sort,
@@ -368,18 +458,22 @@ export function sharedStyleInputsLabel(inputs: SharedStyleInputs): string {
     // — a block package's declaration or a stored site record — and carrying one
     // of them raw would put a value the reduction exists to survive back into
     // the label.
-    blockBaseParts(inputs.blockBases),
+    blockBaseParts(inputs.blockBases, reading),
   ]);
 }
 
 /** Each block type's defaults, in a fixed key order, reduced as classes are. */
 function blockBaseParts(
-  blockBases: SharedStyleInputs["blockBases"]
+  blockBases: SharedStyleInputs["blockBases"],
+  reading: Reading
 ): unknown[] {
   const bases = blockBases ?? {};
   return Object.keys(bases)
     .sort()
-    .map(type => [structural(type), styleEnvelope(bases[type])]);
+    .map(type => [
+      structural(type, reading),
+      styleEnvelope(bases[type], reading),
+    ]);
 }
 
 /**
@@ -394,5 +488,15 @@ export function sharedStyleInputsId(
   inputs: SharedStyleInputs | undefined
 ): string | undefined {
   if (inputs === undefined) return undefined;
-  return `${ENCODING}:${hashId(sharedStyleInputsLabel(inputs))}`;
+  const reading: Reading = { overWide: false };
+  const label = labelFor(inputs, reading);
+  // A settings row too wide to read is not identified rather than partially
+  // identified, which is the sentinel's existing meaning: the caller HAS shared
+  // inputs and cannot name them, so every stored artifact reads as compiled
+  // against others and is recompiled. Partial identification would be the silent
+  // failure instead — two libraries differing only in what went unread would
+  // stamp alike.
+  return reading.overWide
+    ? UNIDENTIFIED_SHARED_INPUTS
+    : `${ENCODING}:${hashId(label)}`;
 }
