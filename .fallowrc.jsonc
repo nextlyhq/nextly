@@ -75,6 +75,16 @@
   //     sheet ships neither the `--nx-*` tokens nor the base reset, because the
   //     host owns both, so without them the shell renders with its colours
   //     resolving to nothing — which is a bug the shell suite has a test for.
+  //   @nextlyhq/ui/color = the same shape again, and the same measurement. It
+  //     is a declared exports subpath resolving to `./dist/color.mjs`, so a
+  //     local audit after `pnpm build` reports nothing while CI, which audits
+  //     after install and before build, reports it unresolved — measured on
+  //     PR #1143, where it was the single dead-code finding against 37
+  //     inherited dependency ones. The editor's colour control cannot drop the
+  //     import: it is the WRITING half of hex and the engine owns the reading
+  //     half, so composing the notation in `packages/builder` instead would be
+  //     the third colour parser `decision:pb-colour-parser-boundary` exists to
+  //     keep out.
   //
   // Every entry is an exact specifier rather than a prefix. These match the
   // raw import string, so `../dist/**` would also swallow a typo like
@@ -86,6 +96,7 @@
     "../dist/cli.mjs",
     "../dist/render/index.js",
     "@nextlyhq/ui/styles.css",
+    "@nextlyhq/ui/color",
     "@nextlyhq/builder/styles.css",
   ],
 
