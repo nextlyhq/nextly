@@ -23,6 +23,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { tags } from "@lezer/highlight";
 import { describe, expect, it } from "vitest";
 
 import { CODE_TAG_SPECS } from "../code-highlight";
@@ -157,5 +158,61 @@ describe("code-palette", () => {
       spec => (Array.isArray(spec.tag) ? spec.tag.length : 1) === 0
     );
     expect(empty).toEqual([]);
+  });
+});
+
+/**
+ * Tags this palette deliberately does not style, each with the reason.
+ *
+ * The list exists so that leaving a tag out is a DECISION rather than an
+ * oversight. `nextlyHighlighting` is registered without a fallback, so an
+ * unlisted tag is not merely undecorated -- it is claimed and then rendered as
+ * plain foreground, which looks correct in JSON and wrong in Markdown and CSS.
+ * Every omission found so far was found by someone opening the right file.
+ */
+const DELIBERATELY_UNSTYLED: Record<string, string> = {
+  // Prose in a Markdown document. Colouring body text would tint the document
+  // rather than highlight anything in it.
+  content: "ordinary prose, not a construct",
+  // The whole editor is already monospaced, so the tag has nothing to add.
+  monospace: "every editor surface is already mono",
+  // Diff state with no token of its own; `deleted` and `inserted` carry the
+  // two cases this admin actually renders.
+  changed: "no token; deleted and inserted cover the rendered cases",
+  // Styled in `nextlyHighlightStyle` directly rather than through the palette:
+  // a parse error is a fault, and reads from the admin's error token.
+  invalid: "styled outside the palette, from --nx-destructive",
+};
+
+describe("tag coverage", () => {
+  it("styles every standard tag, or says why not", () => {
+    const covered = new Set(
+      CODE_TAG_SPECS.flatMap(spec =>
+        Array.isArray(spec.tag) ? spec.tag : [spec.tag]
+      )
+    );
+    const unaccounted = Object.entries(tags)
+      .filter(([, tag]) => typeof tag !== "function")
+      .filter(
+        ([name, tag]) =>
+          !covered.has(tag as never) && !(name in DELIBERATELY_UNSTYLED)
+      )
+      .map(([name]) => name);
+    expect(unaccounted).toEqual([]);
+  });
+
+  it("keeps the unstyled list honest", () => {
+    // An entry that IS styled should not also claim to be deliberately skipped:
+    // the reason would be false and the next reader would trust it.
+    const covered = new Set(
+      CODE_TAG_SPECS.flatMap(spec =>
+        Array.isArray(spec.tag) ? spec.tag : [spec.tag]
+      )
+    );
+    const contradictory = Object.keys(DELIBERATELY_UNSTYLED).filter(name => {
+      const tag = (tags as Record<string, unknown>)[name];
+      return tag !== undefined && covered.has(tag as never);
+    });
+    expect(contradictory).toEqual([]);
   });
 });

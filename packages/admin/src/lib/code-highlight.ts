@@ -57,7 +57,19 @@ export const CODE_TAG_SPECS: readonly {
     // `boolean` and `constant` are number-coloured in rich-text-kit, and JSON's
     // `null` is the same kind of literal, so it travels with them rather than
     // with the keywords it parses beside.
-    tag: [t.bool, t.null, t.atom, t.number, t.integer, t.float],
+    // `color` and `unit` are CSS values -- `@lezer/css` tags `#fff` and `2rem`
+    // that way -- and read as the numbers they sit among rather than as names.
+    tag: [
+      t.bool,
+      t.null,
+      t.atom,
+      t.number,
+      t.integer,
+      t.float,
+      t.literal,
+      t.color,
+      t.unit,
+    ],
     construct: "number",
   },
   {
@@ -135,7 +147,41 @@ export const CODE_TAG_SPECS: readonly {
   // makes it not literal -- so it takes the escaping colour, not the string's.
   { tag: [t.escape], construct: "operator" },
   { tag: [t.labelName], construct: "variable" },
-  { tag: [t.meta, t.processingInstruction], construct: "comment" },
+  {
+    tag: [t.meta, t.processingInstruction, t.documentMeta],
+    construct: "comment",
+  },
+  { tag: [t.name, t.self, t.modifier], construct: "variable" },
+  { tag: [t.macroName, t.annotation], construct: "function" },
+  { tag: [t.definitionKeyword], construct: "keyword" },
+  { tag: [t.docString, t.attributeValue], construct: "string" },
+  {
+    tag: [
+      t.derefOperator,
+      t.bitwiseOperator,
+      t.updateOperator,
+      t.typeOperator,
+      t.controlOperator,
+    ],
+    construct: "operator",
+  },
+  // Markdown gives each heading level its own tag, so styling `heading` alone
+  // leaves every actual heading unstyled -- the generic tag is what a grammar
+  // falls back to, not what it usually emits.
+  {
+    tag: [
+      t.heading1,
+      t.heading2,
+      t.heading3,
+      t.heading4,
+      t.heading5,
+      t.heading6,
+    ],
+    construct: "keyword",
+    fontWeight: "600",
+  },
+  { tag: [t.contentSeparator, t.list], construct: "punctuation" },
+  { tag: [t.quote], construct: "comment", fontStyle: "italic" },
 ];
 
 /**
