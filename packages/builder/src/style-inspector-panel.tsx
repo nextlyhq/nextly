@@ -34,6 +34,10 @@ import {
   isTokenRef,
   trimCssWhitespace,
   type BreakpointId,
+  type ContrastResult,
+  type NodeStyles,
+  type SiteTokenSet,
+  type TokenMode,
   type StyleLeaf,
   type StyleShape,
   type StyleState,
@@ -44,8 +48,12 @@ import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
+  ColorPicker,
   Input,
   Label,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Select,
   SelectContent,
   SelectItem,
@@ -56,6 +64,20 @@ import * as React from "react";
 
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
+import {
+  activeTokenMode,
+  colourHexOf,
+  colourShowable,
+  colourTokenFor,
+  colourTokenLabel,
+  colourTokensFor,
+  contrastAtLeaf,
+  contrastObscuredAbove,
+  contrastObscuredIn,
+  contrastPartnerOf,
+  contrastRatioText,
+  type ColourToken,
+} from "./style-colour";
 import type {
   StyleControl,
   StyleControlKind,
@@ -104,11 +126,27 @@ export interface StyleInspectorPanelProps {
   state?: StyleState;
   /** The breakpoint being edited. The unconditional one when the host says nothing. */
   breakpoint?: BreakpointId;
+  /**
+   * The site's design tokens, so a colour control can offer them and resolve
+   * one it is shown.
+   *
+   * Separate from `policy.tokens`, which cannot serve this: a `TokenLookup` is
+   * `{ kindOf(name) }` and answers ABOUT a name the caller already has. It can
+   * confirm a reference and cannot enumerate one, so a picker sourced from it
+   * would have nothing to list.
+   *
+   * Carried rather than defaulted, exactly as `policy` is: omitting it does not
+   * mean the site has no tokens, it means the question was never asked. A
+   * control with no table offers no token picker and shows a stored reference
+   * by the identity the document holds, because that is the only name it has.
+   */
+  tokens?: SiteTokenSet;
 }
 
 export function StyleInspectorPanel({
   editor,
   policy,
+  tokens,
   state,
   breakpoint,
 }: StyleInspectorPanelProps): React.JSX.Element {
@@ -124,6 +162,7 @@ export function StyleInspectorPanel({
   const [chosenForms, setChosenForms] = React.useState<Record<string, number>>(
     {}
   );
+  const prefersDark = usePrefersDark();
 
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
@@ -213,12 +252,52 @@ export function StyleInspectorPanel({
             breakpoint={inspection.breakpoint}
             editor={editor}
             policy={policy}
+            tokens={tokens}
+            prefersDark={prefersDark}
             onChooseForm={chooseForm}
           />
         ))}
       </Accordion>
     </div>
   );
+}
+
+/**
+ * Whether the viewer's system asks for a dark colour scheme.
+ *
+ * Read because a site on the `media` dark-mode strategy has its dark token
+ * block wrapped in `@media (prefers-color-scheme:dark)`, so the canvas switches
+ * with the system and nothing tells the panel. Resolving every token to its
+ * light value regardless would paint swatches and report ratios for colours the
+ * canvas is not showing.
+ *
+ * Starts `false` and subscribes after mount, so a server render and the first
+ * client render agree — React discards a subtree whose two renders disagree,
+ * which would take the whole Style tab with it. A viewer already in dark mode
+ * sees one frame of light-mode swatches; the alternative is a hydration
+ * mismatch, which is worse and harder to see.
+ */
+function usePrefersDark(): boolean {
+  const [prefersDark, setPrefersDark] = React.useState(false);
+  React.useEffect(() => {
+    // Detected by CALLABILITY, not by presence. `"matchMedia" in window` is
+    // true under jsdom while the value is not a function, so the property test
+    // passes and the call throws — measured, and it took 85 tests down. A
+    // capability check has to ask the question the caller will ask.
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    ) {
+      return;
+    }
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    setPrefersDark(query.matches);
+    const listen = (event: MediaQueryListEvent): void =>
+      setPrefersDark(event.matches);
+    query.addEventListener("change", listen);
+    return () => query.removeEventListener("change", listen);
+  }, []);
+  return prefersDark;
 }
 
 /** One catalog group, as a section that opens onto its properties. */
@@ -229,6 +308,8 @@ function StyleSectionItem({
   breakpoint,
   editor,
   policy,
+  tokens,
+  prefersDark,
   onChooseForm,
 }: {
   section: StyleSection;
@@ -237,6 +318,8 @@ function StyleSectionItem({
   breakpoint: BreakpointId;
   editor: EditorState;
   policy: StylePolicy | undefined;
+  tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   // How many of this section's properties this node sets HERE, so an author can
@@ -268,6 +351,8 @@ function StyleSectionItem({
               breakpoint={breakpoint}
               editor={editor}
               policy={policy}
+              tokens={tokens}
+              prefersDark={prefersDark}
               onChooseForm={onChooseForm}
             />
           ))}
@@ -292,6 +377,8 @@ function StylePropertyFields({
   breakpoint,
   editor,
   policy,
+  tokens,
+  prefersDark,
   onChooseForm,
 }: {
   property: InspectedStyleProperty;
@@ -300,6 +387,8 @@ function StylePropertyFields({
   breakpoint: BreakpointId;
   editor: EditorState;
   policy: StylePolicy | undefined;
+  tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   const many = property.controls.length > 1;
@@ -377,6 +466,8 @@ function StylePropertyFields({
           breakpoint={breakpoint}
           editor={editor}
           policy={policy}
+          tokens={tokens}
+          prefersDark={prefersDark}
         />
       ))}
     </div>
@@ -524,6 +615,8 @@ function StyleControlField({
   breakpoint,
   editor,
   policy,
+  tokens,
+  prefersDark,
 }: {
   control: StyleControl;
   label: string;
@@ -554,6 +647,8 @@ function StyleControlField({
   breakpoint: BreakpointId;
   editor: EditorState;
   policy: StylePolicy | undefined;
+  tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
 }): React.JSX.Element {
   const id = React.useId();
   // The message's own id, so the control can point at it. A `role="alert"`
@@ -567,14 +662,19 @@ function StyleControlField({
     property: control.property,
     path: control.path,
   };
-  const node = findNode(editor.document.nodes, nodeId);
-  const stored = readStyleValue(node?.styles, address);
-  // The property alone where a property draws one control, and the property
-  // plus the position where it draws several.
-  const actionName =
-    propertyLabel === label
-      ? propertyLabel
-      : `${propertyLabel} ${label.toLowerCase()}`;
+  // Read ONCE and shared by both lookups below, so the control's own value and
+  // its contrast partner cannot come from two different reads of the document.
+  const styles = findNode(editor.document.nodes, nodeId)?.styles;
+  const stored = readStyleValue(styles, address);
+  const pairedColour = partnerColour(control.leaf, styles, address);
+  // This node's own styles first, then every ancestor's. An ancestor's
+  // `opacity`, `filter` or `mixBlendMode` composites this node along with the
+  // rest of the subtree, so both colours reach the eye altered and the ratio
+  // between the two stored values describes a rendering that does not happen.
+  const obscuredBy =
+    contrastObscuredIn(styles) ??
+    contrastObscuredAbove(editor.document.nodes, nodeId);
+  const actionName = actionNameFor(propertyLabel, label);
   const [issue, setIssue] = React.useState<string | null>(null);
 
   // A refusal describes the draft that produced it, so it stops describing
@@ -586,80 +686,27 @@ function StyleControlField({
     setIssue(null);
   }, [stored]);
 
-  /*
-   * Read the node at commit time rather than closing over one. A field
-   * committing on blur can fire after another edit has already replaced the
-   * node, and writing from the older copy would resurrect its styles.
-   */
-  const commit = (value: StyleValue | null): CommitOutcome => {
-    const current = findNode(editor.document.nodes, nodeId);
-    if (current === undefined) return "refused";
-    const write =
-      value === null
-        ? styleClearOp(nodeId, current.styles, address, policy)
-        : styleWriteOp(nodeId, current.styles, address, value, policy);
-    if (!write.ok) {
-      setIssue(write.issues[0]?.message ?? "This value cannot be used here.");
-      return "refused";
-    }
-    setIssue(null);
-    // Null is the store saying the document already holds this value, which is
-    // the ordinary case for a field blurred without being changed. Applying it
-    // would ask the op store for a history entry that undoes to no visible
-    // effect, which it refuses.
-    if (write.op === null) return "unchanged";
-    // The store's own refusal, which the validator cannot anticipate: it judges
-    // the edited leaf, while `applyOp` judges the whole document — a page at
-    // its byte limit rejects an edit whose value is perfectly valid. Unreported,
-    // the field goes on showing the draft and reads as saved while neither the
-    // document nor the undo history moved.
-    if (editor.apply(write.op) === null) {
-      setIssue("This edit could not be applied to the document.");
-      return "refused";
-    }
-    return "applied";
-  };
+  const commit = (value: StyleValue | null): CommitOutcome =>
+    writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
 
-  // A value that cannot be typed into is shown, not edited — and HTML's `for`
-  // only associates a label with a LABELABLE element (input, select, textarea,
-  // button, output, meter, progress). Pointing it at the paragraph those
-  // branches render drops the association silently, so the label carries an id
-  // of its own and the value points back at it instead.
-  //
-  // `control.supported` is NOT a term here: the branch below returns before
-  // this is read, so including it would be a condition that can never be true
-  // where it is used.
-  const readOnly =
-    clearOnly ||
-    isTokenRef(stored) ||
-    editableText(control, stored) === undefined;
+  const readOnly = showsNoField(control, stored, clearOnly);
   const labelId = `${id}-label`;
+  // Computed once and used by both the control and its message: two spellings
+  // of "is there an error" is the shape that drifts into a control described by
+  // a message it is not marked invalid for.
+  const describedBy = issue === null ? undefined : errorId;
 
   if (!control.supported) {
     return (
-      <div className="nx-inspector__field" data-unsupported={control.leaf.kind}>
-        {/*
-          The label carries no `htmlFor`, for the reason stated above: this
-          branch renders no labelable element.
-
-          UNTESTED as a CATALOG case, and stated rather than left to be assumed:
-          every leaf kind the engine ships resolves to a control, so a catalog
-          written by a newer engine is the only thing that reaches this — and
-          the catalog is compiled in rather than registered, so no fixture can
-          hand this panel an unknown kind. What IS reachable and IS covered is
-          the value: a node can store one at such a leaf, and it compiles.
-        */}
-        <Label id={labelId} title={summary}>
-          {label}
-        </Label>
-        <RetainedValue
-          labelledBy={labelId}
-          label={actionName}
-          stored={stored}
-          note={`This build has no control for ${control.leaf.kind} values.`}
-          onClear={() => commit(null)}
-        />
-      </div>
+      <UnsupportedField
+        labelId={labelId}
+        label={label}
+        summary={summary}
+        actionName={actionName}
+        leafKind={control.leaf.kind}
+        stored={stored}
+        onClear={() => commit(null)}
+      />
     );
   }
 
@@ -675,7 +722,11 @@ function StyleControlField({
         stored={stored}
         actionName={actionName}
         clearOnly={clearOnly}
-        describedBy={issue === null ? undefined : errorId}
+        tokens={tokens}
+        prefersDark={prefersDark}
+        pairedColour={pairedColour}
+        obscuredBy={obscuredBy}
+        describedBy={describedBy}
         onCommit={commit}
       />
       {issue === null ? null : (
@@ -702,6 +753,10 @@ function ControlValue({
   stored,
   actionName,
   clearOnly,
+  tokens,
+  prefersDark,
+  pairedColour,
+  obscuredBy,
   describedBy,
   onCommit,
 }: {
@@ -711,6 +766,16 @@ function ControlValue({
   stored: StyleValue | undefined;
   actionName: string;
   clearOnly: boolean;
+  tokens: SiteTokenSet | undefined;
+  /** Whether the viewer's system asks for dark, for a site on the media strategy. */
+  prefersDark: boolean;
+  /** The other half of this control's contrast pair, when its leaf has one. */
+  pairedColour: StyleValue | undefined;
+  /**
+   * A property on this node that puts something between the pair, or
+   * `undefined` when none does. A verdict is withheld while one is set.
+   */
+  obscuredBy: string | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -721,6 +786,43 @@ function ControlValue({
         label={actionName}
         stored={stored}
         onClear={() => onCommit(null)}
+      />
+    );
+  }
+  /*
+   * A colour draws its own surface, INCLUDING for a stored token reference.
+   *
+   * Placed before the token branch below rather than after it, because that one
+   * returns for every reference and a colour control would never see one. It
+   * exists for controls that cannot offer a token picker, and says so: choosing
+   * a token was "the token picker's job and it does not exist yet". For a
+   * colour it now does, so a reference here is editable rather than read-only.
+   *
+   * Narrowed on the LEAF rather than on `control.kind`, because the leaf is what
+   * carries `tokenKinds` and `cssProperty` — the two facts the colour surface
+   * asks the catalog for — so passing it narrowed means neither is re-derived.
+   *
+   * Guarded by {@link colourShowable}, so a value NO colour control can
+   * represent — an object at a scalar position from an import or the API — does
+   * not take this branch and skip the read-only surface below. Without it the
+   * field projects that object to an empty draft and reads as unset while the
+   * value goes on compiling, which is the failure the surface below exists to
+   * prevent.
+   */
+  if (control.leaf.kind === "color" && colourShowable(stored)) {
+    return (
+      <ColourField
+        id={id}
+        labelledBy={labelledBy}
+        control={{ ...control, leaf: control.leaf }}
+        stored={stored}
+        actionName={actionName}
+        tokens={tokens}
+        prefersDark={prefersDark}
+        pairedColour={pairedColour}
+        obscuredBy={obscuredBy}
+        describedBy={describedBy}
+        onCommit={onCommit}
       />
     );
   }
@@ -946,6 +1048,754 @@ function SelectField({
   );
 }
 /**
+ * What this control's clear action removes, named for the author.
+ *
+ * The property alone where a property draws one control, and the property plus
+ * the position where it draws several: `padding` and `margin` both have a block
+ * start, so two buttons called "Clear block start" name the same thing twice
+ * and a screen-reader user cannot tell which style each removes.
+ */
+function actionNameFor(propertyLabel: string, label: string): string {
+  return propertyLabel === label
+    ? propertyLabel
+    : `${propertyLabel} ${label.toLowerCase()}`;
+}
+
+/**
+ * Whether this position renders no element a label can be attached to.
+ *
+ * HTML's `for` only associates a label with a LABELABLE element — input,
+ * select, textarea, button, output, meter, progress. Pointing it at the
+ * paragraph the read-only surfaces render drops the association SILENTLY, so
+ * the label carries an id of its own and the value points back at it instead.
+ *
+ * `control.supported` is not a term here: the caller returns before this is
+ * read, so including it would be a condition that can never be true where it
+ * is used.
+ */
+function showsNoField(
+  control: StyleControl,
+  stored: StyleValue | undefined,
+  clearOnly: boolean
+): boolean {
+  if (clearOnly) return true;
+  // Every reference, whatever the control. The colour surface reaches this the
+  // same way the others do: it draws a name and a button for a reference and a
+  // text field only for a literal, so a reference has no field there either.
+  if (isTokenRef(stored)) return true;
+  return editableText(control, stored) === undefined;
+}
+
+/**
+ * A position this build has no control for: shown by value, and removable.
+ *
+ * Its own component because it is a different SURFACE rather than a variation
+ * of one — nothing here is editable, so no labelable element exists and the
+ * label has to name the value by id instead of pointing at a field.
+ *
+ * UNTESTED as a CATALOG case, and stated rather than left to be assumed: every
+ * leaf kind the engine ships resolves to a control, so only a catalog written
+ * by a newer engine reaches this — and the catalog is compiled in rather than
+ * registered, so no fixture can hand this panel an unknown kind. What IS
+ * reachable and IS covered is the value: a node can store one at such a leaf,
+ * and it compiles.
+ */
+function UnsupportedField({
+  labelId,
+  label,
+  summary,
+  actionName,
+  leafKind,
+  stored,
+  onClear,
+}: {
+  labelId: string;
+  label: string;
+  summary: string | undefined;
+  actionName: string;
+  leafKind: StyleLeaf["kind"];
+  stored: StyleValue | undefined;
+  onClear: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="nx-inspector__field" data-unsupported={leafKind}>
+      {/* No `htmlFor`: this branch renders no labelable element. */}
+      <Label id={labelId} title={summary}>
+        {label}
+      </Label>
+      <RetainedValue
+        labelledBy={labelId}
+        label={actionName}
+        stored={stored}
+        note={`This build has no control for ${leafKind} values.`}
+        onClear={onClear}
+      />
+    </div>
+  );
+}
+
+/**
+ * Apply one control's edit to the document, and say what happened to it.
+ *
+ * Lifted out of the field because it is a different question from drawing one:
+ * the field owns what the author is looking at, and this owns the write — which
+ * of two ops to build, which refusals are reportable, and which of the three
+ * outcomes each produces.
+ *
+ * Read the node at COMMIT TIME rather than closing over one. A field committing
+ * on blur can fire after another edit has already replaced the node, and
+ * writing from the older copy would resurrect its styles.
+ */
+function writeStyleValue({
+  editor,
+  nodeId,
+  address,
+  policy,
+  value,
+  setIssue,
+}: {
+  editor: EditorState;
+  nodeId: string;
+  address: StyleAddress;
+  policy: StylePolicy | undefined;
+  /** `null` clears, which is not the same as writing an empty value. */
+  value: StyleValue | null;
+  setIssue: (message: string | null) => void;
+}): CommitOutcome {
+  const current = findNode(editor.document.nodes, nodeId);
+  if (current === undefined) return "refused";
+  const write =
+    value === null
+      ? styleClearOp(nodeId, current.styles, address, policy)
+      : styleWriteOp(nodeId, current.styles, address, value, policy);
+  if (!write.ok) {
+    setIssue(write.issues[0]?.message ?? "This value cannot be used here.");
+    return "refused";
+  }
+  setIssue(null);
+  // Null is the store saying the document already holds this value, which is
+  // the ordinary case for a field blurred without being changed. Applying it
+  // would ask the op store for a history entry that undoes to no visible
+  // effect, which it refuses.
+  if (write.op === null) return "unchanged";
+  // The store's own refusal, which the validator cannot anticipate: it judges
+  // the edited leaf, while `applyOp` judges the whole document — a page at its
+  // byte limit rejects an edit whose value is perfectly valid. Unreported, the
+  // field goes on showing the draft and reads as saved while neither the
+  // document nor the undo history moved.
+  if (editor.apply(write.op) === null) {
+    setIssue("This edit could not be applied to the document.");
+    return "refused";
+  }
+  return "applied";
+}
+
+/**
+ * The other half of a contrast pair, for a leaf that has one.
+ *
+ * Read from THIS node at the same state and breakpoint the control edits,
+ * which is narrower than the cascade and is the honest limit of what this panel
+ * can answer today: a background arriving from a named class, a block default
+ * or a wider breakpoint is not seen, so the readout reports nothing rather than
+ * measuring against a background that is not the one on the page.
+ *
+ * Answering it properly means asking `styleProvenance`, which has already
+ * settled tier order, both breakpoint axes, states and specificity — and which
+ * needs a `trace` of compiled declarations that nothing supplies to this panel.
+ * Walking the cascade a second time HERE is the thing that must not happen.
+ *
+ * The address is reused rather than rebuilt so the state and breakpoint cannot
+ * drift from the ones the control is reading its own value at — a pair measured
+ * across two breakpoints is two colours that are never drawn together.
+ */
+function partnerColour(
+  leaf: StyleLeaf,
+  styles: NodeStyles | undefined,
+  address: StyleAddress
+): StyleValue | undefined {
+  const property = contrastPartnerOf(leaf);
+  if (property === undefined) return undefined;
+  return readStyleValue(styles, { ...address, property, path: [] });
+}
+
+/**
+ * Every id describing one control, or `undefined` when nothing does.
+ *
+ * A refusal message and a contrast verdict are both descriptions and neither
+ * replaces the other: a control pointed only at the refusal never announces the
+ * verdict, and one pointed only at the verdict drops the reason its last value
+ * was refused. Joined here so the two cannot be traded off at a call site.
+ *
+ * Note what this deliberately does NOT decide: whether the control is INVALID.
+ * A passing 21:1 contrast note is supplementary text, and a control inferring
+ * invalidity from having a description announced a perfectly good colour as an
+ * error.
+ */
+function describedByAll(
+  refusal: string | undefined,
+  verdict: string | undefined
+): string | undefined {
+  return (
+    [refusal, verdict].filter(part => part !== undefined).join(" ") || undefined
+  );
+}
+
+/**
+ * Whether opening the picker here would REPLACE something the author has.
+ *
+ * True when the surface cannot show the stored value and there is a stored
+ * value to lose — a reference, or non-empty text. The picker then starts at its
+ * fallback rather than at the value, so the first movement writes something
+ * unrelated to what was there, and the author is owed a warning first.
+ *
+ * The reference has to be tested explicitly: `storedText` answers `""` for one,
+ * so a predicate reading the draft alone missed every token — including the two
+ * that most need the warning, a token the site no longer defines and one whose
+ * value this package cannot resolve.
+ */
+function wouldReplace(
+  shown: string | undefined,
+  reference: string | null,
+  draft: string
+): boolean {
+  if (shown !== undefined) return false;
+  return reference !== null || draft !== "";
+}
+
+/**
+ * The text a control is editing, over the value the document holds.
+ *
+ * One implementation for both fields that need it. A draft is not just local
+ * state: it has to be REPLACED whenever the stored value moves underneath — an
+ * undo, an edit applied from elsewhere — or the control goes on showing a value
+ * the document no longer has, and the remount key changes with the SELECTION,
+ * which neither of those changes.
+ *
+ * `edited` is the same comparison every caller was making to decide whether a
+ * commit is worth attempting, so it is answered here rather than at each.
+ */
+function useDraft(stored: StyleValue | undefined): {
+  draft: string;
+  setDraft: (value: string) => void;
+  edited: boolean;
+  reset: () => void;
+} {
+  const [draft, setDraft] = React.useState(() => storedText(stored));
+  React.useEffect(() => {
+    setDraft(storedText(stored));
+  }, [stored]);
+  return {
+    draft,
+    setDraft,
+    edited: draft !== storedText(stored),
+    reset: () => setDraft(storedText(stored)),
+  };
+}
+
+/**
+ * The hex a picker opens on when the stored value cannot be decomposed.
+ *
+ * Black, and it is never WRITTEN by being shown: the picker reports a colour
+ * only when the author moves something. So this is where the surface starts for
+ * a value it cannot represent, not a value substituted for one.
+ */
+const PICKER_FALLBACK = "#000000";
+
+/**
+ * A colour: a swatch that opens a picker, beside the field that owns the value.
+ *
+ * **The text field remains the control**, exactly as it does for a length. A
+ * stored colour may be `oklch()`, `color-mix()`, a named colour, `currentcolor`,
+ * a CSS-wide keyword or a `var()`, and a control that modelled the value as
+ * RGBA would write every one of them away the moment it opened. The picker is
+ * an affordance on top, and it reports nothing until the author moves it.
+ *
+ * **A token reference is EDITABLE here rather than read-only**, which is the
+ * other half of what this control adds. `TokenValue` shows a reference and
+ * offers only Clear because choosing a token had nowhere to happen; a colour
+ * control has the site's table, so it shows the token's CURRENT name and lets
+ * the author swap it, replace it with a literal, or remove it.
+ *
+ * **A token is stored by IDENTITY, never by the name shown.** The two differ
+ * after a rename, and `ColourToken` carries both for that reason — the picker
+ * hands back the swatch it was given, so the identity travels with it and the
+ * label never reaches the document.
+ *
+ * **Literal and token are exclusive**, which is what the two layouts express.
+ * The same rule Gutenberg's palette follows: a value is a reference or a
+ * colour, and nothing sensible reads as both at once.
+ */
+function ColourField({
+  id,
+  labelledBy,
+  control,
+  stored,
+  actionName,
+  tokens,
+  prefersDark,
+  pairedColour,
+  obscuredBy,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  labelledBy: string;
+  control: StyleControl & { leaf: Extract<StyleLeaf, { kind: "color" }> };
+  stored: StyleValue | undefined;
+  actionName: string;
+  tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
+  pairedColour: StyleValue | undefined;
+  /**
+   * A property on this node that puts something between the pair, or
+   * `undefined` when none does. A verdict is withheld while one is set.
+   */
+  obscuredBy: string | undefined;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const noteId = React.useId();
+  // Lifted out of the text field because two controls edit one value: a draft
+  // private to the field would leave the swatch painting a superseded one.
+  const { draft, setDraft, edited, reset } = useDraft(stored);
+
+  const reference = isTokenRef(stored) ? stored.$token : null;
+  const mode = activeTokenMode(tokens, prefersDark);
+  const choices = colourTokensFor(control.leaf, tokens, mode);
+  // What the picker composed, written once the gesture is over. Compared
+  // against the stored text so closing a picker nobody moved writes nothing.
+  // What the picker has produced and not yet written. Held in a ref as well as
+  // in state because the unmount flush below reads it from a cleanup that runs
+  // once, where the closed-over `draft` would be the value at first render.
+  const pending = React.useRef<string | null>(null);
+  // The clear beside a token reference. It sits OUTSIDE the popover, so pressing
+  // it dismisses the picker and then commits — two writes for one intent unless
+  // the close knows the press belongs to it.
+  const clear = React.useRef<HTMLButtonElement | null>(null);
+  /*
+   * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
+   *
+   * Dropping the pending value is the whole of it. Pressing this control also
+   * dismisses the picker, and the close reads `pending.current` to decide what
+   * the gesture produced — so clearing it first leaves that close with nothing
+   * to write, and the discrete choice is the only edit. One rule expressed
+   * once: a second expression of it is what drifts.
+   */
+  const commitInstead = (value: StyleValue | null): void => {
+    pending.current = null;
+    onCommit(value);
+  };
+  /*
+   * The gesture, written when the picker closes.
+   *
+   * Synchronous, because an author can leave the editor entirely in the same
+   * interaction that dismisses this popover: the page builder hands the current
+   * document to its host form and unmounts, and a write scheduled for after
+   * that lands on an editor nobody is reading any more. The gesture is simply
+   * gone from the document handed over.
+   *
+   * Which is why the supersede below is decided by WHERE the interaction went
+   * rather than by giving a later handler time to cancel a scheduled write. A
+   * timer bought that cancellation and paid for it with this race.
+   */
+  const commitDraft = (): void => {
+    const unwritten = pending.current;
+    pending.current = null;
+    if (unwritten === null) return;
+    if (onCommit(unwritten) === "unchanged") reset();
+  };
+  // The current writer, held so the teardown below depends on nothing. A
+  // teardown listing `onCommit` would re-run its cleanup on every render that
+  // gives the field a new callback — which is every render — and flush a
+  // gesture the author is still making.
+  const write = React.useRef(onCommit);
+  React.useEffect(() => {
+    write.current = onCommit;
+  });
+  /*
+   * Write an unfinished gesture when this field goes away, and do it NOW.
+   *
+   * Two ways to leave without closing the popover: selecting another block in
+   * the canvas iframe cannot reach the outside-dismiss handler, and the
+   * selection change remounts this field without firing `onOpenChange`. A
+   * scheduled write would not survive either, so the timer is cancelled and the
+   * value written synchronously rather than left to a callback whose component
+   * has gone.
+   */
+  React.useEffect(
+    () => () => {
+      const unwritten = pending.current;
+      pending.current = null;
+      // The outcome is DROPPED, and that is the honest limit rather than an
+      // oversight. A refusal here — a document at its byte limit, say — is
+      // reported through state belonging to a component that is going away, so
+      // there is nobody left to show it to and nowhere to keep the value: the
+      // ref does not survive the remount either. Writing when the document
+      // accepts strictly improves on not writing at all, and cannot improve the
+      // case where it does not.
+      //
+      // Closing it properly means the pending edit living somewhere that
+      // outlives one field, which is the same thing undo and the unsaved-work
+      // guard need and is tracked with them.
+      if (unwritten !== null) write.current(unwritten);
+    },
+    []
+  );
+  // What the surface is currently SHOWING: the draft while a literal is being
+  // typed, so the swatch follows the field, and the stored value for a
+  // reference, which no field is editing. Named once and resolved once, rather
+  // than resolved in each branch — two calls to the same resolver is the shape
+  // that drifts.
+  // Once the draft has MOVED, it is what the surface shows — including over a
+  // stored token. Pinned to `stored` for a reference, the picker was handed the
+  // token's own hex again on every render, and its prop-sync effect reset the
+  // surface to it: the controls snapped back mid-drag and a token could not be
+  // replaced with a literal by using the picker at all.
+  const storedLabel = storedTokenLabel(reference, tokens, mode, choices);
+  const showing = reference === null || edited ? draft : stored;
+  const shown = colourHexOf(showing, tokens, mode);
+  // Measured from what the surface is SHOWING, which is the same value the
+  // swatch is painted from. Reading `stored` instead left the verdict describing
+  // the old colour for the whole of a picker gesture — stale exactly while an
+  // author is choosing, which is when a contrast readout is for — and put the
+  // swatch and the figure beside it on two different colours.
+  const contrast =
+    obscuredBy === undefined
+      ? contrastAtLeaf(control.leaf, showing, pairedColour, tokens, mode)
+      : undefined;
+  const describes = describedByAll(
+    describedBy,
+    contrast === undefined ? undefined : noteId
+  );
+
+  return (
+    <>
+      <div
+        className="nx-style-inspector__colour"
+        // Named as a GROUP only where there is no field to carry the name: with
+        // a text input present the label points at it directly, and a group
+        // wrapping a named control announces the property twice.
+        {...(reference === null
+          ? {}
+          : { role: "group", "aria-labelledby": labelledBy })}
+      >
+        <ColourPicker
+          shown={shown}
+          choices={choices}
+          actionName={actionName}
+          describedBy={describes}
+          invalid={describedBy !== undefined}
+          unrepresented={wouldReplace(shown, reference, draft)}
+          // The draft moves with the pointer and the DOCUMENT does not. A drag
+          // across the saturation surface fires `onColorChange` on every
+          // pointer event, and committing each one writes an editor op each
+          // time: one gesture becomes dozens of undo entries, and `MAX_HISTORY`
+          // is 100, so a single drag can evict unrelated earlier edits and
+          // leave undo walking intermediate colours instead of reverting the
+          // gesture. This is the rule the text fields already follow — an op
+          // per keystroke would make one undo remove one character.
+          onColour={value => {
+            pending.current = value;
+            setDraft(value);
+          }}
+          // Committed when the picker CLOSES, which is where the gesture ends.
+          onClosed={commitDraft}
+          commitsItself={target =>
+            clear.current !== null &&
+            target instanceof Node &&
+            clear.current.contains(target)
+          }
+          // A preset is one discrete choice rather than a gesture, so it
+          // commits immediately, exactly as the select and toggle controls do.
+          onToken={identity => commitInstead({ $token: identity })}
+        />
+        {reference === null ? (
+          // The SAME field every other text control uses, rather than one
+          // written here. Commit on blur, Enter, the empty draft that clears
+          // instead of storing `""`, and the `unchanged` case that puts back
+          // what the document holds are one contract — and a second copy of it
+          // beside the first is what drifts, silently, in the direction of
+          // losing an edit.
+          <TextField
+            id={id}
+            control={control}
+            stored={stored}
+            draft={draft}
+            setDraft={setDraft}
+            describedBy={describes}
+            // The REFUSAL alone. `describes` also carries the contrast verdict,
+            // which is supplementary text and never a complaint.
+            invalid={describedBy !== undefined}
+            onCommit={onCommit}
+          />
+        ) : (
+          <TokenName
+            buttonRef={clear}
+            label={storedLabel}
+            actionName={actionName}
+            onClear={() => commitInstead(null)}
+          />
+        )}
+      </div>
+      <ContrastNote id={noteId} contrast={contrast} />
+    </>
+  );
+}
+
+/**
+ * The swatch, and the surface it opens onto.
+ *
+ * Its own component because CHOOSING a colour is a different question from
+ * showing one: the row below owns the stored value and its text, and this owns
+ * the picker, the token swatches and what the trigger is painted with. Kept
+ * together here because all three read the one resolved colour, and split from
+ * the row because neither half needs the other's state.
+ *
+ * The two callbacks stay separate for the reason `ColorPicker` keeps them
+ * separate: only the host knows what a swatch MEANS. A token hands back its
+ * identity and never the colour it currently resolves to — storing that would
+ * turn a reference into a literal and stop the page following the token.
+ */
+function ColourPicker({
+  shown,
+  choices,
+  actionName,
+  describedBy,
+  invalid,
+  unrepresented,
+  onColour,
+  onClosed,
+  commitsItself,
+  onToken,
+}: {
+  /** The resolved colour, or `undefined` when nothing here can resolve one. */
+  shown: string | undefined;
+  choices: readonly ColourToken[];
+  actionName: string;
+  /** Everything describing the control: a refusal, a contrast verdict, or both. */
+  describedBy: string | undefined;
+  /** Whether the last value was refused. A contrast verdict is not a refusal. */
+  invalid: boolean;
+  /** Whether the stored value is one the picker cannot show. */
+  unrepresented: boolean;
+  /** The picker moved. Fires on every pointer event during a drag. */
+  onColour: (hex: string) => void;
+  /** The picker closed, which is where a gesture ends and a write belongs. */
+  onClosed: () => void;
+  /**
+   * Whether an interaction outside the popover will write for itself.
+   *
+   * Asked before the dismissal is turned into a write, so a control that both
+   * closes this picker and commits something of its own does not produce two
+   * edits for one intent. `onInteractOutside` is the single callback Radix
+   * fires for EVERY cause it dismisses on — pointer, focus and the rest — which
+   * is why the question is asked here rather than by hooking the causes one at
+   * a time and missing whichever is added next.
+   */
+  commitsItself: (target: EventTarget | null) => boolean;
+  onToken: (identity: string) => void;
+}): React.JSX.Element {
+  // Whether the dismissal in progress belongs to a control that writes for
+  // itself. Read once by the close below and reset there, so it cannot leak
+  // into the next open.
+  const superseded = React.useRef(false);
+  return (
+    <Popover
+      onOpenChange={open => {
+        if (open) return;
+        const own = superseded.current;
+        superseded.current = false;
+        if (!own) onClosed();
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="nx-style-inspector__swatch"
+          aria-label={`Colour for ${actionName}`}
+          aria-describedby={describedBy}
+          aria-invalid={invalid ? true : undefined}
+          // Painted through a custom property rather than `background-color`
+          // directly, so the chequerboard beneath a translucent colour stays
+          // visible through it. `undefined` leaves the class's own "nothing
+          // here" appearance rather than a colour this cannot vouch for.
+          style={
+            shown === undefined
+              ? undefined
+              : ({ "--nx-swatch": shown } as React.CSSProperties)
+          }
+          data-empty={shown === undefined ? "" : undefined}
+        />
+      </PopoverTrigger>
+      <PopoverContent
+        className="nx-style-inspector__picker"
+        onInteractOutside={event => {
+          superseded.current = commitsItself(event.target);
+        }}
+      >
+        {unrepresented ? (
+          <p className="nx-inspector__note">
+            This value cannot be shown on the picker. Choosing here replaces it.
+          </p>
+        ) : null}
+        <ColorPicker<ColourToken>
+          // A fallback only where nothing could be resolved, and it is never
+          // WRITTEN by being shown: the picker reports a colour only once the
+          // author moves something, so opening it over a value it cannot
+          // represent changes nothing.
+          color={shown ?? PICKER_FALLBACK}
+          showAlpha
+          swatches={choices.map(choice => ({
+            // The IDENTITY as the swatch id, which is what keeps the list
+            // stable across a rename: a key built from the label would remount
+            // every renamed token's swatch, and would collide between a renamed
+            // token and a new one that took its old name.
+            id: choice.identity,
+            // Qualified with the identity only where another offered token
+            // shares this name. Two presets under one label with equal or
+            // unresolvable colours are indistinguishable, and choosing either
+            // stores an identity the author could not have predicted.
+            label: colourTokenLabel(choice, choices),
+            // The RESOLVED colour, never the token's raw value. A preset button
+            // paints what it is handed, so a token holding `var(--brand)`,
+            // `currentcolor` or a CSS-wide keyword would resolve against the
+            // inspector rather than the canvas and show a colour the page does
+            // not have — the same failure the main swatch refuses. A token this
+            // package cannot resolve paints nothing and stays choosable, which
+            // is what keeps the reference reachable.
+            color: choice.swatch ?? "transparent",
+            value: choice,
+          }))}
+          onColorChange={onColour}
+          onSwatchSelect={swatch => {
+            if (swatch.value !== undefined) onToken(swatch.value.identity);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * What a STORED reference is called, for the row that displays it.
+ *
+ * Three answers to one question, which is why it is asked in one place: a
+ * reference the site still defines reads as that token's current name; one
+ * whose name another offered token shares is qualified with its identity, so
+ * the two rows cannot be confused; and one the site no longer defines at all
+ * reads as the raw identity the document holds. That last case is a warning
+ * rather than an error — the value goes on compiling — so showing the stored
+ * string is more use than showing an empty space.
+ *
+ * Separate from {@link colourTokenLabel} because that one answers about a token
+ * in hand, and this one has to find the token first, or account for there being
+ * none.
+ */
+function storedTokenLabel(
+  reference: string | null,
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode,
+  among: readonly ColourToken[]
+): string {
+  if (reference === null) return "";
+  const token = colourTokenFor(reference, tokens, mode);
+  return token === undefined ? reference : colourTokenLabel(token, among);
+}
+
+/**
+ * A stored token, by the name an author reads, with the way to remove it.
+ *
+ * The name is resolved by the caller and the fallback is the stored identity,
+ * which is the honest answer for a reference to a token the site no longer
+ * defines: an unknown token is a warning rather than an error, so the value
+ * goes on compiling and the author is shown the string their document holds
+ * rather than an empty space.
+ */
+function TokenName({
+  buttonRef,
+  label,
+  actionName,
+  onClear,
+}: {
+  /** Handed up so the picker can tell its own clear from any other dismissal. */
+  buttonRef: React.RefObject<HTMLButtonElement | null>;
+  /**
+   * What to show: the token's current name, qualified with its identity where
+   * another offered token shares that name, and the identity alone when the
+   * site defines no token for it. Resolved by the caller, which is the only
+   * place that holds the list the collision would be against.
+   */
+  label: string;
+  actionName: string;
+  onClear: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      <span className="nx-style-inspector__colour-token">{label}</span>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={onClear}
+        aria-label={`Clear ${actionName}`}
+      >
+        Clear
+      </button>
+    </>
+  );
+}
+
+/**
+ * How a colour pair fares, or nothing at all.
+ *
+ * `undefined` renders NOTHING rather than a placeholder, an approximation or a
+ * last-known figure. That is the engine's own reasoning carried up one level:
+ * a ratio computed from a colour that was misread "is worse than no figure,
+ * because it is a number somebody will act on", and there is no honest estimate
+ * of the contrast against a `var()` whose value the page decides at render.
+ *
+ * A failing pair is a WARNING and never a refusal — the value is valid, stored
+ * and compiling, and the author may have a reason. The same position
+ * Gutenberg's contrast checker takes.
+ */
+function ContrastNote({
+  id,
+  contrast,
+}: {
+  id: string;
+  contrast: ContrastResult | undefined;
+}): React.JSX.Element {
+  return (
+    <p
+      className="nx-style-inspector__contrast"
+      id={id}
+      // Announced as it changes, because the verdict moves while focus is
+      // INSIDE the picker — on the saturation square, the hue strip, the alpha
+      // strip or the hex field — and none of those controls is described by
+      // this note. `aria-describedby` is read when a control receives focus, so
+      // a figure that changes during the interaction is never spoken. Polite
+      // rather than assertive: it coalesces while a drag is moving and speaks
+      // once the author pauses, which is when the number is wanted.
+      aria-live="polite"
+      // Mounted even with nothing to say. A live region announces CHANGES to
+      // its contents, so one that arrives with its text already in place is not
+      // a change and is silent — the state this note is in every time a colour
+      // first becomes measurable. Empty it occupies no space; `:empty` drops
+      // the margin rather than the box, because `display: none` would take it
+      // out of the accessibility tree and stop it announcing at all.
+      {...(contrast === undefined ? {} : { "data-level": contrast.level })}
+    >
+      {contrast === undefined
+        ? ""
+        : `Contrast ${contrastRatioText(contrast)} — ${
+            contrast.passesBodyText
+              ? `passes AA for body text (${contrast.level})`
+              : "below AA for body text"
+          }`}
+    </p>
+  );
+}
+
+/**
  * The control a leaf's kind resolves to.
  *
  * A keyword leaf carries a closed vocabulary: two values get a toggle and more
@@ -1134,13 +1984,7 @@ function NumericField({
   // author who types `20` over `12px` and then picks `rem` had the blur refuse
   // the unitless draft, leaving `12px` stored — and the menu composed from
   // THAT, committing `12rem` and discarding the 20 they were looking at.
-  const [draft, setDraft] = React.useState(() => storedText(stored));
-  // The stored value wins whenever it changes underneath — an undo, an edit
-  // applied from elsewhere. Without this both controls go on showing a value
-  // the document no longer has.
-  React.useEffect(() => {
-    setDraft(storedText(stored));
-  }, [stored]);
+  const { draft, setDraft } = useDraft(stored);
   // Read from the DRAFT, so the menu offers units for the quantity on screen
   // and swaps the unit on that quantity rather than on a superseded one.
   const measurement = measurementOfText(draft);
@@ -1176,6 +2020,7 @@ function NumericField({
         draft={draft}
         setDraft={setDraft}
         describedBy={describedBy}
+        invalid={describedBy !== undefined}
         onCommit={onCommit}
         onStep={(draft, delta) => {
           const next = steppedValue(control.leaf, draft, delta);
@@ -1247,6 +2092,7 @@ function TextField({
   draft,
   setDraft,
   describedBy,
+  invalid,
   onCommit,
   onStep,
 }: {
@@ -1263,8 +2109,18 @@ function TextField({
    */
   draft: string;
   setDraft: (value: string) => void;
-  /** The id of the message explaining a refusal, and what marks this invalid. */
+  /**
+   * Everything describing this field: a refusal message, a contrast verdict, or
+   * both.
+   *
+   * Separate from {@link invalid}, and that separation is the point. A
+   * description is not a complaint — a passing 21:1 contrast note is
+   * supplementary text — so a field that inferred invalidity from having a
+   * description would announce a perfectly good colour as invalid.
+   */
   describedBy: string | undefined;
+  /** Whether the LAST value was refused, which is the only thing that invalidates. */
+  invalid: boolean;
   onCommit: (value: StyleValue | null) => CommitOutcome;
   /**
    * Applies one arrow-key step to the text currently shown, answering the text
@@ -1302,7 +2158,7 @@ function TextField({
       value={draft}
       placeholder={placeholderFor(control)}
       aria-describedby={describedBy}
-      aria-invalid={describedBy === undefined ? undefined : true}
+      aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
       // keystroke would make one undo remove one character.
       onChange={event => setDraft(event.target.value)}

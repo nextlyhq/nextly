@@ -255,3 +255,64 @@ describe("when the stored style cannot be read at all", () => {
     expect(document.querySelector('[data-canvas-state="failed"]')).toBeNull();
   });
 });
+
+describe("what the token picker waits for", () => {
+  /**
+   * A site whose config defines a colour token.
+   *
+   * Required by every case here, including the negatives: with no token defined
+   * anywhere, `tokens` is undefined whatever the gate does, and the two
+   * withholding assertions would pass on the fixture rather than on the gate.
+   * Measured — the control below failed until this was supplied.
+   */
+  beforeEach(() => {
+    clientConfig = {
+      siteStyle: {
+        tokens: {
+          tokens: [
+            { name: "color.ink", kind: "color", values: { light: "#111111" } },
+          ],
+        },
+      },
+    };
+  });
+
+  it("offers no tokens while the stored style is still arriving", () => {
+    // The same reasoning that holds the canvas back, one surface over. The
+    // defaults `useSiteStyle` answers with meanwhile are a real design, so a
+    // picker fed from them offers a token by a name and colour the site may
+    // have overridden — and the identity an author chose then resolves to
+    // something else on the published page.
+    siteStyleRead = { data: undefined, isPending: true, error: null };
+
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.tokens).toBeUndefined();
+  });
+
+  it("offers no tokens when the stored style cannot be read at all", () => {
+    // `pending` is false on this path while the merged value falls back to the
+    // config defaults, so gating on `pending` alone would hand the picker a
+    // tier nobody has read.
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("Forbidden"),
+    };
+
+    openEditor();
+
+    expect(seen.inspector?.tokens).toBeUndefined();
+  });
+
+  it("offers the merged tokens once the read has answered", () => {
+    // The control. Without it a build that never passed tokens at all would
+    // pass both tests above.
+    siteStyleRead = { data: undefined, isPending: false, error: null };
+
+    openEditor();
+
+    expect(seen.inspector?.tokens).toBeDefined();
+  });
+});

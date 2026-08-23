@@ -38,6 +38,7 @@ import {
   registerBlocks,
   registryNestingSource,
   type BlockDocument,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { registrySlotSource } from "@nextlyhq/builder";
@@ -76,7 +77,7 @@ import {
 
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
-import { siteBreakpoints, siteSheet } from "../site-style";
+import { siteBreakpoints, siteSheet, type SiteStyleData } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
@@ -327,6 +328,37 @@ function useCheckpoints<TFieldValues extends FieldValues>({
  * ask the admin to hide its navigation for every entry form holding a blocks
  * field, open or not.
  */
+/**
+ * The tokens an inspector may offer, or `undefined` while the site's own tier
+ * is still unknown.
+ *
+ * Withheld on exactly the two states that hold the CANVAS back, and for the
+ * same reason. Until the stored read answers, the merged value is the config
+ * defaults alone — a real design rather than a placeholder — so a picker fed
+ * from it offers a token by a name and a colour the site may have overridden,
+ * and the identity an author chooses then resolves to something else on the
+ * published page. The error path matters as much as the pending one: `pending`
+ * is false there while the value has still fallen back to defaults.
+ *
+ * `undefined` rather than an empty set, because the control reads absence as
+ * "the question was never asked" and offers no picker at all — which is the
+ * truth here, and is different from a site that defines no tokens.
+ */
+function offerableTokens(
+  style: SiteStyleData | undefined,
+  pending: boolean,
+  error: unknown
+): SiteTokenSet | undefined {
+  if (pending || error !== null) return undefined;
+  // A SET even when the site defines nothing, because the renderer compiles
+  // with `resolveSiteTokens`, which layers the engine's own defaults underneath.
+  // A site with no tokens of its own still emits `color.text`, `color.primary`
+  // and the rest, so handing over `undefined` here would have the picker offer
+  // none of them — and `undefined` already means something else to the control:
+  // that the question was never asked.
+  return style?.tokens ?? { tokens: [] };
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -570,7 +602,25 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // The policy travels with the panel because the Style tab judges a
         // written value at the keystroke and has to reach the same verdict the
         // published compiler will.
-        inspector={<InspectorPanel editor={editor} policy={stylePolicy} />}
+        //
+        // The tokens travel with it for the same reason one step further: a
+        // colour control offers the site's tokens and resolves a stored
+        // reference to the name an author currently reads, and `policy.tokens`
+        // cannot serve either — a `TokenLookup` answers ABOUT a name the caller
+        // already holds and cannot enumerate one. This is the MERGED set the
+        // canvas compiles with, so the picker offers exactly the tokens the
+        // page will resolve.
+        inspector={
+          <InspectorPanel
+            editor={editor}
+            policy={stylePolicy}
+            tokens={offerableTokens(
+              canvasSiteStyle,
+              siteStylePending,
+              siteStyleError
+            )}
+          />
+        }
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter
