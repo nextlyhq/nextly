@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import type {
   BlockDocument,
   BlockNode,
+  NodeStyles,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
@@ -266,5 +267,52 @@ describe("the exported resolver, handed a site-wide block library", () => {
       resolvePageStyles(doc(), undefined, drawn("#020202"), blocks, false, {})
         .sharedInputsId
     );
+  });
+});
+
+describe("an INHERITED block base is not turned into an emitted one", () => {
+  // `compilePageCss` emits a base for a used type only when
+  // `Object.hasOwn(bases, type)` succeeds, and its comment says why the boundary
+  // is drawn there: a node type reaches a SELECTOR, and this compiler reads
+  // persisted data whether or not anything validated it.
+  //
+  // Narrowing a stated record walks the document and copies what it finds, so a
+  // lookup that answered from the prototype would make an inherited value an OWN
+  // property of the narrowed record — and the compiler, seeing an own property,
+  // would emit a rule it had deliberately declined to emit.
+  const inherited = (colour: string): Record<string, NodeStyles> =>
+    Object.create({
+      "test/text": { base: { base: { color: colour } } },
+    }) as Record<string, NodeStyles>;
+
+  it("emits nothing for a base reachable only through the prototype", () => {
+    const css = resolvePageStyles(
+      doc(),
+      undefined,
+      { ...context(), blockBases: inherited("#abcdef") },
+      blocks,
+      false,
+      {}
+    ).css;
+
+    expect(css).not.toContain("#abcdef");
+  });
+
+  it("CONTROL: emits it when the record owns the entry", () => {
+    // The separating property. A narrowing that dropped every stated base would
+    // satisfy the assertion above while going blind to the ordinary case.
+    const css = resolvePageStyles(
+      doc(),
+      undefined,
+      {
+        ...context(),
+        blockBases: { "test/text": { base: { base: { color: "#abcdef" } } } },
+      },
+      blocks,
+      false,
+      {}
+    ).css;
+
+    expect(css).toContain("#abcdef");
   });
 });

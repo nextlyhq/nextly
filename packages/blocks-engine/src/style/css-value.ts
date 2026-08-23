@@ -1112,7 +1112,15 @@ export function isOverlongValue(value: string): boolean {
  * expensive parse: a flat value of a few hundred thousand tokens builds an AST
  * node for each. No real declaration approaches this.
  */
-const MAX_VALUE_LENGTH = 8192;
+/**
+ * The longest style value this engine will read.
+ *
+ * Public for the reason every other bound here is: a value past it is REFUSED
+ * before parsing, so a writer that wants its declaration emitted has to honour
+ * the same number, and anything walking the same stored values has to stop
+ * reading where the compiler stops.
+ */
+export const MAX_VALUE_LENGTH = 8192;
 
 /**
  * Deepest bracket nesting in a value.

@@ -59,6 +59,7 @@ import {
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
+  MAX_VALUE_LENGTH,
   breakpointContexts,
   hashId,
   isPlainRecord,
@@ -241,7 +242,23 @@ function leafText(value: unknown): string {
   if (value === null) return "null";
   switch (typeof value) {
     case "string":
-      return JSON.stringify(value);
+      // Bounded where the compiler bounds it. A style value past
+      // `MAX_VALUE_LENGTH` is refused before parsing and emits no declaration,
+      // so two of them produce identical CSS — carrying both in full invalidated
+      // a byte-identical sheet over a suffix nothing reads, and put an
+      // arbitrarily large allocation into every cache check.
+      //
+      // One character past the limit, which is what separates a value AT it —
+      // emitted, and preserved here in full — from one over it. Written as a
+      // slice rather than a branch because `slice` returns the string unchanged
+      // when it is shorter, so the ordinary case pays nothing.
+      //
+      // Applied to every string rather than to declaration values alone: the
+      // walk carries no notion of where it is, and every other string that
+      // reaches it is already bounded more tightly — a class id and slug at
+      // `MAX_NAMED_CLASS_NAME_LENGTH`, a breakpoint id at
+      // `MAX_BREAKPOINT_ID_LENGTH`, the token prefix by `safeTokenPrefix`.
+      return JSON.stringify(value.slice(0, MAX_VALUE_LENGTH + 1));
     case "number":
     case "boolean":
       // `String`, not `JSON.stringify`, which writes `null` for NaN and for both
