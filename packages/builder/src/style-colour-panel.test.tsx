@@ -26,6 +26,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
+import { InspectorPanel } from "./inspector-panel";
 import { StyleInspectorPanel } from "./style-inspector-panel";
 
 afterEach(() => {
@@ -656,5 +657,45 @@ describe("clearing a token while the picker is open", () => {
     expect(editor.apply).toHaveBeenCalledTimes(1);
     // A clear removes the entry rather than writing one.
     expect(JSON.stringify(editor.apply.mock.calls[0])).not.toContain("#ff0000");
+  });
+});
+
+describe("the route a real editor takes to the colour control", () => {
+  it("carries the site's tokens through the inspector into the Style tab", () => {
+    /*
+     * Mounted through `InspectorPanel`, which is what the page builder renders,
+     * rather than through `StyleInspectorPanel` directly.
+     *
+     * Every other case in this file constructs the Style tab by hand and hands
+     * it a token set, so all of them stay green with the forwarding through the
+     * inspector deleted — measured: removing `tokens={tokens}` from
+     * `InspectorPanel` moved ZERO of 1424 tests. The host-side test cannot see
+     * it either, because it mocks `InspectorPanel` to record its props. This is
+     * the one link production depends on and nothing exercised it.
+     */
+    register();
+    const document_: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: styles("#3b82f6"),
+        },
+      ] as BlockNode[],
+    } as BlockDocument;
+    render(<InspectorPanel editor={editorFor(document_)} tokens={TOKENS} />);
+
+    // `mouseDown`, not `click`: the trigger activates on pointer-down, and a
+    // synthetic click leaves the Content tab selected — which would make every
+    // assertion below run against the wrong panel.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    // The site's own token, reachable only if the set travelled the whole way.
+    expect(screen.getByRole("button", { name: "color.ink" })).toBeDefined();
   });
 });

@@ -621,7 +621,10 @@ export function contrastObscuredBy(
  * absent and a verdict that is sometimes wrong, this takes the first.
  *
  * A named class carrying one of these is still not seen, for the same reason,
- * and that limit is not closed here.
+ * and that limit is not closed here. Nor is a stored breakpoint the site no
+ * longer defines: its values never compile, so counting them withholds a
+ * verdict that would have been correct. Both err the same way as the rest of
+ * this function, which is why neither is treated as urgent.
  */
 export function contrastObscuredIn(
   styles: NodeStyles | undefined
