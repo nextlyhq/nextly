@@ -83,6 +83,60 @@ describe("resolveSiteStyle", () => {
     expect(byName.get("content.width")).toBe("60rem");
   });
 
+  it("keys the tier merge on IDENTITY, so a rename replaces its default", () => {
+    // The property the whole stable-identity field rests on. An author renames
+    // a config-stated token in the studio; the stored entry keeps the id and
+    // takes a new name. Keyed on the name, the two tiers stop matching and the
+    // default survives BESIDE the override — two entries for one token, with
+    // the stale one earlier in the list.
+    //
+    // That is not a collision. `resolveSiteTokens` is a Map keyed on identity,
+    // so it deduplicates and the stored token wins; what leaks is the list
+    // itself, which is what a tokens studio and `useSiteStyle` both read.
+    const merged = resolveSiteStyle(
+      {
+        tokens: {
+          tokens: [
+            {
+              name: "color.primary",
+              kind: "color" as const,
+              values: { light: "#111111" },
+            },
+          ],
+        },
+      },
+      {
+        tokens: {
+          tokens: [
+            {
+              id: "color.primary",
+              name: "color.brand",
+              kind: "color" as const,
+              values: { light: "#222222" },
+            },
+          ],
+        },
+      }
+    );
+
+    expect(merged.tokens?.tokens).toHaveLength(1);
+    expect(merged.tokens?.tokens[0]?.name).toBe("color.brand");
+    expect(merged.tokens?.tokens[0]?.values.light).toBe("#222222");
+  });
+
+  it("still merges by name when no token states an id", () => {
+    // The continuity case. `tokenIdentity` falls back to the name, so every
+    // token stored before the field existed keys exactly as it did — a change
+    // to the merge key must not move data that has no id to move.
+    const merged = resolveSiteStyle(
+      { tokens: tokens([{ name: "color.primary", light: "#111111" }]) },
+      { tokens: tokens([{ name: "color.primary", light: "#222222" }]) }
+    );
+
+    expect(merged.tokens?.tokens).toHaveLength(1);
+    expect(merged.tokens?.tokens[0]?.values.light).toBe("#222222");
+  });
+
   it("takes prefix and darkMode from the stored tier when stated", () => {
     const merged = resolveSiteStyle(
       { tokens: { tokens: [], prefix: "--acme-", darkMode: "media" } },
