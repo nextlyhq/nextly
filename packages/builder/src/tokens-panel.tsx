@@ -266,6 +266,25 @@ function TokenTransfer({
    * save path follows: an answer for a superseded operation says nothing.
    */
   const reads = React.useRef(0);
+  /*
+   * A read in flight when the panel goes away must not land.
+   *
+   * The shell renders one left panel at a time and keys them, so switching to
+   * Layers while a large file is being read unmounts this — and the
+   * continuation would still call `onChange`, changing the site AFTER the
+   * author left the tool, with the report it produced discarded. The same
+   * invalidation also stops a read from a previous mount racing one started
+   * after the panel is reopened.
+   *
+   * Marked rather than cancelled: a `File` read cannot be aborted, so what is
+   * available is refusing to act on its answer.
+   */
+  React.useEffect(
+    () => () => {
+      reads.current = -1;
+    },
+    []
+  );
 
   const read = async (file: File): Promise<void> => {
     const mine = reads.current + 1;

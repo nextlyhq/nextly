@@ -35,6 +35,7 @@
 import {
   compileSiteSheet,
   dtcgToTokens,
+  tokenCustomProperty,
   tokenIdentity,
   tokensToDtcg,
   type SiteToken,
@@ -134,54 +135,158 @@ function mergeById(
   incoming: readonly SiteToken[]
 ): { tokens: SiteTokenSet; landed: number; refused: string[] } {
   const refused: string[] = [];
+  const wanted = oneEach(incoming, refused);
+  /*
+   * Conflicts are judged against the table as it WOULD be with everything
+   * applied, not against a destination mutated entry by entry.
+   *
+   * Incrementally, the answer depends on the order the file happens to list its
+   * tokens: a file renaming `a` to `beta` and `b` to `gamma` imports both if
+   * `b` comes first and only one if `a` does, because `beta` is still taken at
+   * the moment `a` is considered. Coordinated renames are ordinary — a design
+   * tool emits them whenever someone reorganises a palette — and half-applying
+   * one is worse than refusing it, because the half that lands is a rename the
+   * author did not ask for on its own.
+   */
+  const blocked = clashingIn(applyAll(into.tokens, wanted), wanted, refused);
+  const taken = new Map(
+    [...wanted].filter(([identity]) => !blocked.has(identity))
+  );
+  return {
+    tokens: { ...into, tokens: applyAll(into.tokens, taken) },
+    landed: taken.size,
+    refused,
+  };
+}
 
-  const byIdentity = new Map<string, SiteToken>();
+/**
+ * One incoming token per identity, with the duplicates named.
+ *
+ * A file can name one token twice. `dtcgToTokens` returns both, because two
+ * DTCG paths are two entries — but they compose one custom property here, so
+ * only the last can land. Reported rather than dropped in silence: two tokens
+ * going in and one arriving is precisely the loss this feature exists to show.
+ */
+function oneEach(
+  incoming: readonly SiteToken[],
+  refused: string[]
+): Map<string, SiteToken> {
+  const wanted = new Map<string, SiteToken>();
   for (const token of incoming) {
     const identity = tokenIdentity(token);
-    const first = byIdentity.get(identity);
-    // A file can name one token twice. `dtcgToTokens` returns both, because
-    // two DTCG paths are two entries — but they compose one custom property
-    // here, so only the last can land. Reported rather than dropped in
-    // silence: two tokens going in and one arriving is precisely the kind of
-    // loss this whole feature exists to make visible.
+    const first = wanted.get(identity);
     if (first !== undefined) {
       refused.push(
         `"${first.name}" and "${token.name}" are one token in that file — both carry the identity "${identity}" — so only "${token.name}" was taken.`
       );
     }
-    byIdentity.set(identity, token);
+    wanted.set(identity, token);
   }
+  return wanted;
+}
 
-  const tokens = [...into.tokens];
-  let landed = 0;
-  for (const token of byIdentity.values()) {
-    const identity = tokenIdentity(token);
+/** The destination with every wanted token applied, replacing or appending. */
+function applyAll(
+  base: readonly SiteToken[],
+  wanted: ReadonlyMap<string, SiteToken>
+): SiteToken[] {
+  const tokens = [...base];
+  for (const [identity, token] of wanted) {
     const at = tokens.findIndex(held => tokenIdentity(held) === identity);
-    /*
-     * A NAME belongs to one token. The studio refuses a duplicate label
-     * outright, so admitting one here would import a state the editor cannot
-     * create and cannot repair — and the export would then place both at one
-     * DTCG path and drop one, making the round trip lossy in a way nothing
-     * announced.
-     *
-     * Checked against every token but the one being replaced, because a file
-     * renaming a token it also owns is not a clash with itself.
-     */
-    const clash = tokens.find(
-      (held, index) => index !== at && held.name === token.name
-    );
-    if (clash !== undefined) {
-      refused.push(
-        `"${token.name}" is already the name of a different token on this site, so it was not imported. Rename one of them and try again.`
-      );
-      continue;
-    }
     if (at === -1) tokens.push(token);
     else tokens[at] = token;
-    landed += 1;
   }
+  return tokens;
+}
 
-  return { tokens: { ...into, tokens }, landed, refused };
+/**
+ * Which incoming identities cannot land, because the result would be invalid.
+ *
+ * Two keys, and they are different questions. A NAME belongs to one token: the
+ * studio refuses a duplicate label outright, so admitting one imports a state
+ * the editor cannot create, and the export would place both at one design-token
+ * path and drop one. A composed CUSTOM PROPERTY belongs to one token too, and
+ * that one is not visible in the names: `color.primary-dark` and
+ * `color-primary.dark` read as different tokens and are the same property, so
+ * the emitter writes the first and refuses the second — an import that looked
+ * successful whose value never reaches the page.
+ *
+ * Only INCOMING tokens are blocked. A clash the destination already had is not
+ * this file's doing, and refusing the import for it would leave an author
+ * unable to bring anything in until they had repaired something else.
+ */
+function clashingIn(
+  proposed: readonly SiteToken[],
+  wanted: ReadonlyMap<string, SiteToken>,
+  refused: string[]
+): Set<string> {
+  return new Set([
+    ...sharingAKey(
+      proposed,
+      wanted,
+      refused,
+      token => token.name,
+      (token, name) =>
+        `"${name}" is already the name of a different token on this site, so it was not imported. Rename one of them and try again.`
+    ),
+    ...sharingAKey(
+      proposed,
+      wanted,
+      refused,
+      // The prefix is the same string in front of every property, so it can
+      // neither create a collision nor prevent one — the same reason the
+      // studio's own collision check composes without it.
+      token => tokenCustomProperty(tokenIdentity(token), ""),
+      (token, property) =>
+        `"${token.name}" and another token here both become "${property}", so it was not imported. Two tokens cannot share one custom property.`
+    ),
+  ]);
+}
+
+/**
+ * The incoming identities that share `keyOf` with some other token.
+ *
+ * One question asked twice rather than two loops that happen to look alike:
+ * what differs between the name check and the property check is the key and
+ * the wording, and writing each out separately is how the two stop agreeing
+ * about which side of a clash gets blocked.
+ */
+function sharingAKey(
+  proposed: readonly SiteToken[],
+  wanted: ReadonlyMap<string, SiteToken>,
+  refused: string[],
+  keyOf: (token: SiteToken) => string,
+  say: (token: SiteToken, key: string) => string
+): Set<string> {
+  const held = new Map<string, SiteToken[]>();
+  for (const token of proposed) group(held, keyOf(token), token);
+
+  const blocked = new Set<string>();
+  for (const [key, sharing] of held) {
+    if (sharing.length < 2) continue;
+    for (const token of sharing) {
+      const identity = tokenIdentity(token);
+      // Only INCOMING tokens are blocked. A clash the destination already had
+      // is not this file's doing, and refusing the import for it would leave an
+      // author unable to bring anything in until they had repaired something
+      // else entirely.
+      if (!wanted.has(identity)) continue;
+      blocked.add(identity);
+      refused.push(say(token, key));
+    }
+  }
+  return blocked;
+}
+
+/** Add a token to the list under a key, starting the list if it is the first. */
+function group(
+  index: Map<string, SiteToken[]>,
+  key: string,
+  token: SiteToken
+): void {
+  const held = index.get(key);
+  if (held === undefined) index.set(key, [token]);
+  else held.push(token);
 }
 
 /** A file this site can hand to another tool, and what it could not carry. */

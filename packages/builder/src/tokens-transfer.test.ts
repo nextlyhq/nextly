@@ -13,7 +13,11 @@
  *
  * @module tokens-transfer.test
  */
-import { compileSiteSheet, type SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  compileSiteSheet,
+  emitTokenBlocks,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { exportCss, exportDtcg, importDtcg } from "./tokens-transfer";
@@ -258,6 +262,105 @@ describe("what goes in", () => {
       "brand.hero",
       "space.4",
     ]);
+  });
+
+  it("refuses a token that would COLLIDE on a custom property", () => {
+    // Not visible in the names: `color.primary-dark` and `color-primary.dark`
+    // read as different tokens and compose the same property, so the emitter
+    // writes the first and refuses the second. Accepted here, the import looks
+    // successful and its value never reaches the page — discovered only on a
+    // later export.
+    const site: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.primary-dark",
+          kind: "color",
+          values: { light: "#111111" },
+        },
+      ],
+    };
+    const file = exported({
+      tokens: [
+        {
+          name: "color-primary.dark",
+          kind: "color",
+          values: { light: "#222222" },
+        },
+      ],
+    });
+    const result = importDtcg(file, site);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.imported).toBe(0);
+    expect(result.tokens.tokens.map(t => t.name)).toEqual([
+      "color.primary-dark",
+    ]);
+    expect(result.skipped.join(" ")).toContain("both become");
+    // And the engine agrees the result is clean.
+    expect(emitTokenBlocks(result.tokens, ":root").issues).toEqual([]);
+  });
+
+  it("applies a COORDINATED rename whichever order the file lists it in", () => {
+    // A design tool emits these whenever someone reorganises a palette. Judged
+    // entry by entry against a mutating destination, the outcome depends on
+    // file order — and half-applying a coordinated rename is worse than
+    // refusing it, because the half that lands is a rename nobody asked for on
+    // its own.
+    const site: SiteTokenSet = {
+      tokens: [
+        {
+          id: "id.a",
+          name: "alpha",
+          kind: "color",
+          values: { light: "#111111" },
+        },
+        {
+          id: "id.b",
+          name: "beta",
+          kind: "color",
+          values: { light: "#222222" },
+        },
+      ],
+    };
+    const shuffle = (tokens: SiteTokenSet["tokens"]) =>
+      importDtcg(exported({ tokens }), site);
+
+    for (const order of [
+      [
+        {
+          id: "id.a",
+          name: "beta",
+          kind: "color" as const,
+          values: { light: "#333333" },
+        },
+        {
+          id: "id.b",
+          name: "gamma",
+          kind: "color" as const,
+          values: { light: "#444444" },
+        },
+      ],
+      [
+        {
+          id: "id.b",
+          name: "gamma",
+          kind: "color" as const,
+          values: { light: "#444444" },
+        },
+        {
+          id: "id.a",
+          name: "beta",
+          kind: "color" as const,
+          values: { light: "#333333" },
+        },
+      ],
+    ]) {
+      const result = shuffle(order);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.imported, JSON.stringify(order.map(t => t.name))).toBe(2);
+      expect(result.tokens.tokens.map(t => t.name)).toEqual(["beta", "gamma"]);
+    }
   });
 
   it("REFUSES a document nested past what the reader can walk", () => {

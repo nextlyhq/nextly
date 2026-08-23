@@ -729,6 +729,40 @@ describe("bringing a token file in", () => {
     expect(screen.getByRole("status").textContent).toContain("cubicBezier");
   });
 
+  it("a read that lands after the panel is GONE changes nothing", async () => {
+    // The shell renders one left panel at a time and keys them, so switching
+    // to Layers while a large file is being read unmounts this — and the
+    // continuation would still call `onChange`, changing the site after the
+    // author left the tool, with its report discarded.
+    const onChange = vi.fn();
+    let resolveRead: ((text: string) => void) | undefined;
+    const slow = new File([FILE], "tokens.json", { type: "application/json" });
+    Object.defineProperty(slow, "text", {
+      value: () =>
+        new Promise<string>(resolve => {
+          resolveRead = resolve;
+        }),
+    });
+
+    const { unmount } = render(
+      <TokensPanel tokens={TOKENS} onChange={onChange} />
+    );
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [slow] },
+    });
+
+    unmount();
+    resolveRead?.(FILE);
+    await act(async () => {
+      await new Promise(resolve => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    // The site was not changed by a panel the author had already left.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("keeps the report until it is dismissed", async () => {
     mount(TOKENS);
     await chooseFile(FILE);
