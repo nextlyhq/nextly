@@ -70,7 +70,7 @@ import {
   colourTokenFor,
   colourTokensFor,
   contrastAtLeaf,
-  contrastObscuredBy,
+  contrastObscuredIn,
   contrastPartnerOf,
   contrastRatioText,
   type ColourToken,
@@ -664,11 +664,7 @@ function StyleControlField({
   const styles = findNode(editor.document.nodes, nodeId)?.styles;
   const stored = readStyleValue(styles, address);
   const pairedColour = partnerColour(control.leaf, styles, address);
-  // Asked at the SAME address the control reads its own value at, so a gradient
-  // set at another breakpoint does not withhold a verdict that is correct here.
-  const obscuredBy = contrastObscuredBy(property =>
-    readStyleValue(styles, { ...address, property, path: [] })
-  );
+  const obscuredBy = contrastObscuredIn(styles);
   const actionName = actionNameFor(propertyLabel, label);
   const [issue, setIssue] = React.useState<string | null>(null);
 
@@ -1359,10 +1355,43 @@ function ColourField({
   const choices = colourTokensFor(control.leaf, tokens, mode);
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
+  // What the picker has produced and not yet written. Held in a ref as well as
+  // in state because the unmount flush below reads it from a cleanup that runs
+  // once, where the closed-over `draft` would be the value at first render.
+  const pending = React.useRef<string | null>(null);
   const commitDraft = (): void => {
+    pending.current = null;
     if (!edited) return;
     if (onCommit(draft) === "unchanged") reset();
   };
+  /*
+   * Flush an unwritten gesture when this field goes away.
+   *
+   * The popover commits on close, and a close is not the only way an author
+   * leaves: selecting another block in the canvas iframe cannot reach the
+   * popover's outside-dismiss handler, and the selection change remounts this
+   * field — which does not fire `onOpenChange`. Without this the adjustment,
+   * and the whole gesture behind it, is discarded silently.
+   *
+   * Written through a ref and an empty dependency list so it runs exactly once,
+   * at teardown. `onCommit` reads the node from the store at call time, so a
+   * write from here lands on the current document rather than a captured one.
+   */
+  // The current writer, held so the teardown below depends on nothing. A
+  // teardown listing `onCommit` would re-run its cleanup on every render that
+  // gives the field a new callback — which is every render — and flush a
+  // gesture the author is still making.
+  const write = React.useRef(onCommit);
+  React.useEffect(() => {
+    write.current = onCommit;
+  });
+  React.useEffect(
+    () => () => {
+      const unwritten = pending.current;
+      if (unwritten !== null) write.current(unwritten);
+    },
+    []
+  );
   // What the surface is currently SHOWING: the draft while a literal is being
   // typed, so the swatch follows the field, and the stored value for a
   // reference, which no field is editing. Named once and resolved once, rather
@@ -1415,7 +1444,10 @@ function ColourField({
           // leave undo walking intermediate colours instead of reverting the
           // gesture. This is the rule the text fields already follow — an op
           // per keystroke would make one undo remove one character.
-          onColour={setDraft}
+          onColour={value => {
+            pending.current = value;
+            setDraft(value);
+          }}
           // Committed when the picker CLOSES, which is where the gesture ends.
           onClosed={commitDraft}
           // A preset is one discrete choice rather than a gesture, so it

@@ -38,6 +38,7 @@ import {
   registerBlocks,
   registryNestingSource,
   type BlockDocument,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { registrySlotSource } from "@nextlyhq/builder";
@@ -76,7 +77,7 @@ import {
 
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
-import { siteBreakpoints, siteSheet } from "../site-style";
+import { siteBreakpoints, siteSheet, type SiteStyleData } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
@@ -327,6 +328,31 @@ function useCheckpoints<TFieldValues extends FieldValues>({
  * ask the admin to hide its navigation for every entry form holding a blocks
  * field, open or not.
  */
+/**
+ * The tokens an inspector may offer, or `undefined` while the site's own tier
+ * is still unknown.
+ *
+ * Withheld on exactly the two states that hold the CANVAS back, and for the
+ * same reason. Until the stored read answers, the merged value is the config
+ * defaults alone — a real design rather than a placeholder — so a picker fed
+ * from it offers a token by a name and a colour the site may have overridden,
+ * and the identity an author chooses then resolves to something else on the
+ * published page. The error path matters as much as the pending one: `pending`
+ * is false there while the value has still fallen back to defaults.
+ *
+ * `undefined` rather than an empty set, because the control reads absence as
+ * "the question was never asked" and offers no picker at all — which is the
+ * truth here, and is different from a site that defines no tokens.
+ */
+function offerableTokens(
+  style: SiteStyleData | undefined,
+  pending: boolean,
+  error: unknown
+): SiteTokenSet | undefined {
+  if (pending || error !== null) return undefined;
+  return style?.tokens;
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -582,7 +608,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           <InspectorPanel
             editor={editor}
             policy={stylePolicy}
-            tokens={canvasSiteStyle?.tokens}
+            tokens={offerableTokens(
+              canvasSiteStyle,
+              siteStylePending,
+              siteStyleError
+            )}
           />
         }
         // Switched on the panel id rather than rendering the inserter for

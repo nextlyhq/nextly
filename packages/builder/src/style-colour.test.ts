@@ -10,6 +10,7 @@
  */
 import {
   STYLE_CATALOG,
+  type NodeStyles,
   type ContrastResult,
   type SiteTokenSet,
   type StyleLeaf,
@@ -23,6 +24,7 @@ import {
   colourTokenFor,
   colourTokensFor,
   contrastObscuredBy,
+  contrastObscuredIn,
   contrastOf,
   contrastPartnerOf,
   contrastRatioText,
@@ -585,5 +587,68 @@ describe("what stands between a contrast pair", () => {
     expect(
       contrastObscuredBy(p => (p === "padding" ? "4px" : undefined))
     ).toBeUndefined();
+  });
+});
+
+describe("the emitter decides which tokens are offered", () => {
+  it("withholds a token whose VALUE the canvas will not write", () => {
+    // The reason a partial copy of the emitter's rules is worse than none: the
+    // name here is fine and the identity collides with nothing, so a check that
+    // knew only those two rules would offer this token — and the canvas emits
+    // no property for it, so a stored reference loses the style silently.
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "color.ok", kind: "color", values: { light: "#111111" } },
+        {
+          name: "color.bad",
+          kind: "color",
+          values: { light: "url(https://example.com/a.png)" },
+        },
+      ],
+    };
+    expect(colourTokensFor(COLOR, set).map(t => t.name)).toEqual(["color.ok"]);
+  });
+
+  it("withholds a token with no usable light value", () => {
+    const set = {
+      tokens: [
+        { name: "color.ok", kind: "color", values: { light: "#111111" } },
+        { name: "color.empty", kind: "color", values: { light: 4 } },
+      ],
+    } as unknown as SiteTokenSet;
+    expect(colourTokensFor(COLOR, set).map(t => t.name)).toEqual(["color.ok"]);
+  });
+});
+
+describe("what obscures a pair anywhere on the node", () => {
+  it("sees a base-state gradient while a hover rule is being edited", () => {
+    // The cascade is why this cannot be address-scoped: a base gradient goes on
+    // covering the background when a hover rule sets only the two colours, so
+    // an address-scoped look reports a ratio for pixels the gradient hides.
+    const styles = {
+      base: { base: { backgroundGradient: "linear-gradient(#000, #000)" } },
+      hover: { base: { color: "#000000", backgroundColor: "#ffffff" } },
+    } as unknown as NodeStyles;
+    expect(contrastObscuredIn(styles)).toBe("backgroundGradient");
+  });
+
+  it("sees one set at another breakpoint", () => {
+    const styles = {
+      base: {
+        base: { color: "#000000", backgroundColor: "#ffffff" },
+        mobile: { opacity: 0.5 },
+      },
+    } as unknown as NodeStyles;
+    expect(contrastObscuredIn(styles)).toBe("opacity");
+  });
+
+  it("names nothing for a node carrying only the pair", () => {
+    // The positive control: it must find those and nothing else, or every
+    // verdict would be withheld.
+    const styles = {
+      base: { base: { color: "#000000", backgroundColor: "#ffffff" } },
+    } as unknown as NodeStyles;
+    expect(contrastObscuredIn(styles)).toBeUndefined();
+    expect(contrastObscuredIn(undefined)).toBeUndefined();
   });
 });

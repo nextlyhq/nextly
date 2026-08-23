@@ -518,3 +518,39 @@ describe("the picker can replace a stored token with a literal", () => {
     ).toBe("#ff0000");
   });
 });
+
+describe("a picker gesture survives the field being replaced", () => {
+  it("writes an unwritten adjustment when the control unmounts", () => {
+    // The popover commits on close, and a close is not the only way an author
+    // leaves: selecting another block in the canvas iframe cannot reach the
+    // popover's outside-dismiss handler, and the selection change remounts this
+    // field without firing `onOpenChange`. Unflushed, the whole gesture is
+    // discarded silently.
+    const editor = mount(styles("#3b82f6"));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    // The PICKER's hex field, not the control's own. Taking the first textbox
+    // picks up the main field, whose draft commits on blur and never reaches
+    // the pending gesture — so the assertion below would hold whether or not
+    // the flush exists.
+    const hex = screen
+      .getAllByRole("textbox")
+      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
+    expect(hex).toBeDefined();
+    if (hex === undefined) return;
+    fireEvent.change(hex, { target: { value: "#ff0000" } });
+    expect(editor.apply).not.toHaveBeenCalled();
+
+    // Unmount without ever closing the popover.
+    cleanup();
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes nothing when the picker was opened and not moved", () => {
+    // The positive control: unmounting must not manufacture an edit, or every
+    // click through the inspector would write a history entry.
+    const editor = mount(styles("#3b82f6"));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    cleanup();
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+});

@@ -61,7 +61,7 @@
 
 import {
   checkContrast,
-  isTokenName,
+  emitTokenBlocks,
   isTokenRef,
   parseColor,
   STYLE_CATALOG,
@@ -69,6 +69,7 @@ import {
   tokenIdentity,
   type ContrastResult,
   type Rgb,
+  type NodeStyles,
   type SiteToken,
   type SiteTokenSet,
   type TokenMode,
@@ -195,15 +196,43 @@ function emittableTokens(set: SiteTokenSet): readonly SiteToken[] {
   const seen = new Set<string>();
   const emittable: SiteToken[] = [];
   for (const token of set.tokens) {
-    // The NAME, matching the engine: it checks the name and then composes the
-    // property from the identity.
-    if (!isTokenName(token.name)) continue;
+    if (!emits(set, token)) continue;
+    // Which of two ACCEPTED tokens actually gets the property is the one thing
+    // the emitter cannot be asked, because both are individually fine and only
+    // their order decides. `tokenCustomProperty` composes the key, so the
+    // normalisation is still the engine's; only first-one-wins is repeated.
+    //
+    // The prefix is omitted deliberately: it is the same string in front of
+    // every property, so it can neither create a collision nor prevent one, and
+    // the site's real prefix is resolved by a function the engine keeps private.
     const property = tokenCustomProperty(tokenIdentity(token), "");
     if (seen.has(property)) continue;
     seen.add(property);
     emittable.push(token);
   }
   return emittable;
+}
+
+/**
+ * Whether the canvas will declare a custom property for this token.
+ *
+ * ASKED, by emitting the token on its own and seeing whether anything came out.
+ * `emitTokenBlocks` returns empty CSS when it wrote no light declaration, which
+ * is exactly its own verdict on the token — and it refuses for more reasons
+ * than are obvious from outside: a name that cannot become a property, an
+ * unusable id, a missing or non-string light value, a value that is not safe
+ * CSS, and a value that would make the page fetch something.
+ *
+ * A partial copy of that list is worse than none. It reads as complete, agrees
+ * with the engine on the cases someone thought of, and offers a token the
+ * canvas silently drops for any case they did not — which stores a reference to
+ * a property nothing declares and loses the style with no symptom.
+ *
+ * The whole SET is passed rather than a bare token, because a token's
+ * acceptance can depend on the set's own prefix.
+ */
+function emits(set: SiteTokenSet, token: SiteToken): boolean {
+  return emitTokenBlocks({ ...set, tokens: [token] }, ":root").css !== "";
 }
 
 /**
@@ -537,6 +566,42 @@ export function contrastObscuredBy(
   valueAt: (property: string) => StyleValue | undefined
 ): string | undefined {
   return OBSCURING_PROPERTIES.find(property => valueAt(property) !== undefined);
+}
+
+/**
+ * The property standing between a pair anywhere on this node, or `undefined`.
+ *
+ * Every state and every breakpoint, not the one address being edited. A base
+ * `backgroundGradient` goes on covering the background while a hover rule sets
+ * only the two colours, so an address-scoped look sees no gradient and reports
+ * a ratio for pixels the gradient hides — the guard failing OPEN, which is the
+ * one direction it must not fail in.
+ *
+ * This OVER-withholds, and that is the deliberate trade: a gradient set only at
+ * a narrow breakpoint suppresses the verdict at every width. Answering exactly
+ * needs `styleOrigin`, which has already settled tier order, both breakpoint
+ * axes, states and specificity — and needs a trace of compiled declarations
+ * that nothing supplies to this panel. Between a verdict that is sometimes
+ * absent and a verdict that is sometimes wrong, this takes the first.
+ *
+ * A named class carrying one of these is still not seen, for the same reason,
+ * and that limit is not closed here.
+ */
+export function contrastObscuredIn(
+  styles: NodeStyles | undefined
+): string | undefined {
+  if (styles === undefined) return undefined;
+  for (const breakpoints of Object.values(styles)) {
+    if (breakpoints === undefined) continue;
+    for (const values of Object.values(breakpoints)) {
+      if (values === undefined) continue;
+      const found = contrastObscuredBy(property =>
+        Object.hasOwn(values, property) ? values[property] : undefined
+      );
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
 }
 
 /**
