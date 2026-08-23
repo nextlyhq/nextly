@@ -532,7 +532,6 @@ export function PageRenderer({
   const {
     context: compileContext,
     fetchPolicyId,
-    sharedInputsId,
     mayFetchUrl,
   } = effectiveCompile({
     styleContext: pageStyleContext,
@@ -547,7 +546,7 @@ export function PageRenderer({
     compileContext,
     resolver,
     repairedDocument,
-    { fetchPolicyId, sharedInputsId }
+    { fetchPolicyId }
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 

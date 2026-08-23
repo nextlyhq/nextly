@@ -22,11 +22,32 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
+import { defineBlock } from "./context";
 import { createBlockResolver } from "./resolver";
-import { sharedStyleInputsId } from "./shared-style-inputs";
 import { resolvePageStyles, type PageStyles } from "./styles";
 
-const blocks = createBlockResolver([]);
+/**
+ * A block whose TYPE carries defaults, so the resolver has some to derive.
+ *
+ * An empty resolver makes `blockBasesFor` return `{}`, which stamps identically
+ * to the `undefined` a caller's own context holds — so every assertion about
+ * derived defaults would pass against an implementation that never derived
+ * them. The fixture has to be able to tell the two apart before it can test
+ * which one is used.
+ */
+const styledBlock = defineBlock({
+  // `name`, because `createBlockResolver` keys its map on `definition.name` —
+  // a fixture keyed on `type` resolves to nothing and its defaults never reach
+  // `blockBasesFor`, which is silent and looks like the derivation not running.
+  name: "test/text",
+  version: 1,
+  description: "Declares shared defaults for its type.",
+  example: { props: {} },
+  baseStyles: { base: { base: { color: "#010101" } } },
+  render: () => null,
+});
+
+const blocks = createBlockResolver([styledBlock]);
 
 const node = (id: string): BlockNode => ({
   id,
@@ -64,9 +85,21 @@ const stored = (sharedInputsId?: string): PageStyles => ({
 
 /** What a render decides, given an artifact and the inputs now in force. */
 function resolve(styles: PageStyles, now: StyleCompileContext): PageStyles {
-  return resolvePageStyles(doc(), styles, now, blocks, false, {
-    sharedInputsId: sharedStyleInputsId(now),
-  });
+  return resolvePageStyles(doc(), styles, now, blocks, false, {});
+}
+
+/**
+ * The stamp a render under these inputs actually writes.
+ *
+ * Taken from a real compile rather than computed here. The resolver derives the
+ * identity from the context it COMPILES, which is not the context handed in —
+ * it fills in block defaults from the resolver first — so a stamp built in the
+ * test would be a second answer to the same question and would agree only by
+ * coincidence.
+ */
+function stampWritten(now: StyleCompileContext): string | undefined {
+  return resolvePageStyles(doc(), undefined, now, blocks, false, {})
+    .sharedInputsId;
 }
 
 describe("a stored sheet against the site's shared inputs", () => {
@@ -76,7 +109,7 @@ describe("a stored sheet against the site's shared inputs", () => {
     // page on every render — which is the cost the whole stamp exists to avoid.
     const now = context();
 
-    expect(resolve(stored(sharedStyleInputsId(now)), now).css).toContain(
+    expect(resolve(stored(stampWritten(now)), now).css).toContain(
       "color: teal"
     );
   });
@@ -86,7 +119,7 @@ describe("a stored sheet against the site's shared inputs", () => {
     // rename needs no document migration — but the selector is `nx-c-<slug>`,
     // so the stored sheet still carries the old one and the page silently
     // loses that styling.
-    const before = sharedStyleInputsId(context("hero"));
+    const before = stampWritten(context("hero"));
 
     const styles = resolve(stored(before), context("banner"));
 
@@ -94,14 +127,14 @@ describe("a stored sheet against the site's shared inputs", () => {
   });
 
   it("is REFUSED when the token prefix moved", () => {
-    const before = sharedStyleInputsId(context());
+    const before = stampWritten(context());
     const moved: StyleCompileContext = { ...context(), tokenPrefix: "--acme-" };
 
     expect(resolve(stored(before), moved).css).not.toContain("color: teal");
   });
 
   it("is REFUSED when the breakpoints moved", () => {
-    const before = sharedStyleInputsId(context());
+    const before = stampWritten(context());
     const moved: StyleCompileContext = {
       ...context(),
       breakpoints: {
@@ -124,7 +157,45 @@ describe("a stored sheet against the site's shared inputs", () => {
     const styles = resolve(stored(undefined), context());
 
     expect(styles.css).not.toContain("color: teal");
-    expect(styles.sharedInputsId).toBe(sharedStyleInputsId(context()));
+    expect(styles.sharedInputsId).toBe(stampWritten(context()));
+  });
+
+  it("keeps a STAMPED sheet when the render states no inputs at all", () => {
+    // The case a refusal cannot help. With no compile context the render cannot
+    // derive an identity to compare against and has nothing to recompile with,
+    // so treating the artifact's own stamp as a mismatch would withhold the
+    // sheet and render the page UNSTYLED — worse than the staleness it guards.
+    // The question is not asked where it cannot be answered.
+    const styles = resolvePageStyles(
+      doc(),
+      stored(stampWritten(context())),
+      undefined,
+      blocks,
+      false,
+      {}
+    );
+
+    expect(styles.css).toContain("color: teal");
+  });
+
+  it("REFUSES when only the derived block defaults moved", () => {
+    // The identity is taken from the context that is COMPILED, not the one
+    // handed in — the resolver fills block defaults from the resolver itself,
+    // and a stamp read before that step describes a compile that never happens.
+    const withDefaults = stampWritten(context());
+    const bare = resolvePageStyles(
+      doc(),
+      undefined,
+      context(),
+      createBlockResolver([]),
+      false,
+      {}
+    ).sharedInputsId;
+
+    // The two renders differ ONLY in what the resolver derived, so equal stamps
+    // here would mean the derivation never reached the identity.
+    expect(withDefaults).not.toBe(bare);
+    expect(resolve(stored(bare), context()).css).not.toContain("color: teal");
   });
 
   it("keeps an UNSTAMPED sheet when the render states no inputs at all", () => {

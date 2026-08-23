@@ -162,6 +162,43 @@ function blockBasesFor(
   return bases;
 }
 
+/**
+ * The context a render will ACTUALLY compile with.
+ *
+ * Not the one the caller handed over: `blockBases` is derived from the resolver
+ * when the caller did not state them, and `drawsNothing` is this layer's own
+ * answer rather than something it accepts. A reader judging the caller's
+ * context instead describes a compile that never happens — and a block package
+ * changing its `baseStyles` would leave a stamp unmoved while the sheet it
+ * produces changes.
+ *
+ * `drawsNothing` is set LAST, so it replaces anything the caller put there. The
+ * renderer asks each block's declaration what to draw, so a supplied answer
+ * could only make the rules disagree with the markup.
+ *
+ * Built here rather than by a caller because this function is exported and a
+ * write path uses it directly to produce the artifact it stores: a value
+ * supplied only by `PageRenderer` would leave every sheet written through the
+ * other door describing something else. It is also not something a consumer
+ * could supply — neither `effectiveCompile` nor `sharedStyleInputsId` is part
+ * of this package's entry.
+ */
+function compileContextFor(
+  styleContext: StyleCompileContext | undefined,
+  document: BlockDocument,
+  blocks: BlockResolver,
+  drawsNothing: (node: BlockNode) => boolean
+): StyleCompileContext | undefined {
+  if (styleContext === undefined) return undefined;
+  return {
+    ...styleContext,
+    ...(styleContext.blockBases === undefined
+      ? { blockBases: blockBasesFor(document, blocks) }
+      : {}),
+    drawsNothing,
+  };
+}
+
 /** Every node id in a document, in document order. */
 function documentNodeIds(document: BlockDocument): string[] {
   const ids: string[] = [];
@@ -681,15 +718,6 @@ export interface EffectiveCompile {
   /** The policy label to compare a stored sheet's stamp against. */
   fetchPolicyId: string | undefined;
   /**
-   * The shared-input digest to compare a stored sheet's stamp against.
-   *
-   * Derived here for the same reason the policy label is: this is the one
-   * reconciliation every entry point runs, and a second derivation elsewhere
-   * would decide a different answer for the same render — which is the shape
-   * that produces one sheet trusting an artifact another refuses.
-   */
-  sharedInputsId: string | undefined;
-  /**
    * The host-fetch predicate in force for this render — the caller's own when
    * they supplied one, otherwise the one derived from the pattern list.
    *
@@ -754,21 +782,10 @@ export function effectiveCompile(args: {
     (patterns === undefined
       ? undefined
       : (url: string) => isFetchableUrl(url, patterns));
-  // Taken from the caller's context, which is the only place the shared inputs
-  // appear. With no context there is nothing to compile against and nothing to
-  // stamp — and no artifact can be trusted either, because absence reads as
-  // untrusted at the comparison below rather than as "compiled against none".
-  const sharedInputsId = sharedStyleInputsId(args.styleContext);
   if (args.styleContext === undefined)
-    return {
-      context: undefined,
-      fetchPolicyId,
-      sharedInputsId,
-      mayFetchUrl: derived,
-    };
+    return { context: undefined, fetchPolicyId, mayFetchUrl: derived };
   return {
     mayFetchUrl: derived,
-    sharedInputsId,
     context: {
       ...args.styleContext,
       limits: args.limits ?? args.styleContext.limits ?? DEFAULT_LIMITS,
@@ -796,13 +813,6 @@ export interface ResolveStyleOptions {
    * under other rules and cannot be trusted for this render.
    */
   fetchPolicyId?: string;
-  /**
-   * The shared-input digest this render is judged by, from `effectiveCompile`.
-   *
-   * Taken from there rather than derived here, so the sheet a page reuses and
-   * the sheet it would compile are decided by one answer.
-   */
-  sharedInputsId?: string;
 }
 
 export function resolvePageStyles(
@@ -843,6 +853,14 @@ export function resolvePageStyles(
   // Derived before either branch, so the read path and the compile path cannot
   // answer differently about the same document.
   const drawsNothing = drawlessTestFor(blocks);
+
+  const compileContext = compileContextFor(
+    styleContext,
+    document,
+    blocks,
+    drawsNothing
+  );
+  const sharedInputsId = sharedStyleInputsId(compileContext);
 
   // An artifact naming classes for nodes this document does not contain was compiled from a
   // DIFFERENT, larger tree — which is exactly what pruning produces. Its `css` may carry those
@@ -891,9 +909,15 @@ export function resolvePageStyles(
   // not write one, so the cost is once per artifact where a caller persists or
   // caches the result, and once per request where nothing does. The correctness
   // is the same either way; only the price differs.
+  // Only ASKED when a context exists. With none there is nothing to compare a
+  // stamp against and nothing to recompile with, so a mismatch could not be
+  // acted on — it would withhold the sheet and render the page unstyled, which
+  // is worse than the staleness it was guarding. A context-free read is not a
+  // place this question can be answered, so it is not asked there.
   const compiledAgainstOtherInputs =
     styles !== undefined &&
-    (styles.sharedInputsId !== options.sharedInputsId ||
+    compileContext !== undefined &&
+    (styles.sharedInputsId !== sharedInputsId ||
       styles.sharedInputsId === UNIDENTIFIED_SHARED_INPUTS);
 
   if (
@@ -921,32 +945,17 @@ export function resolvePageStyles(
   ) {
     return { ...normalizeStoredStyles(styles, document).styles, css: "" };
   }
-  if (styleContext) {
-    // Both derivations happen HERE rather than at the one call site that knows
-    // about them, because this function is exported and a write path uses it
-    // directly to produce the artifact it stores. A predicate injected only by
-    // `PageRenderer` would mean every sheet written through this entry keeps its
-    // drawless nodes' rules in `css` and carries no `gated` entry for them — so
-    // republishing a page would never enable the drop, and the behaviour would
-    // depend on which door the compile came through.
-    //
-    // `drawsNothing` is set LAST, so it replaces anything the caller put there.
-    // The field is how this layer states its derived answer to the compiler, not
-    // a way to be told one: the renderer asks each block's declaration for what
-    // to draw, so a supplied answer could only make the rules disagree with the
-    // markup.
-    const context: StyleCompileContext = {
-      ...styleContext,
-      ...(styleContext.blockBases === undefined
-        ? { blockBases: blockBasesFor(document, blocks) }
-        : {}),
-      drawsNothing,
-    };
+  if (compileContext) {
+    // Compiled with the context built above rather than the caller's, for the
+    // reasons `compileContextFor` states — including that a predicate injected
+    // only by `PageRenderer` would mean every sheet written through this entry
+    // keeps its drawless nodes' rules in `css` and carries no `gated` entry for
+    // them, so republishing a page would never enable the drop.
     return toPageStyles(
-      compilePageCss(document, context),
-      context.scope,
+      compilePageCss(document, compileContext),
+      compileContext.scope,
       options.fetchPolicyId,
-      options.sharedInputsId
+      sharedInputsId
     );
   }
   return {
