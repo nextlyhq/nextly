@@ -1169,3 +1169,77 @@ describe("what the report says about a token named twice", () => {
     expect(said).not.toContain("was taken");
   });
 });
+
+describe("the reader's whole condition for stored CSS", () => {
+  it("names a kind the format has no type for", () => {
+    /*
+     * `readToken` takes the stored CSS only when the block is an object, its
+     * light value is a string AND the kind is one the format has a type for.
+     * With a valid light value and an unusable kind it reads the native
+     * `$value` instead — so the token imports looking successful and holds a
+     * different value from the one the extension states.
+     */
+    const document = {
+      thing: {
+        $type: "number",
+        $value: 1,
+        $extensions: {
+          "com.nextlyhq.nextly": { css: { light: "99" }, kind: "bogus" },
+        },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The separating observation: the value came from `$value`, not the CSS.
+    expect(result.tokens.tokens[0]?.values.light).toBe("1");
+    expect(result.skipped.join(" ")).toContain("com.nextlyhq.nextly");
+  });
+
+  it("says nothing about an extension carrying only an identity", () => {
+    /*
+     * The control, and the case that makes a blunter check unusable: a rename
+     * travels as an extension holding an `id` and nothing else. It states no
+     * values, so there is nothing to have lost, and reporting one would name a
+     * loss on every coordinated rename a design tool emits.
+     */
+    const document = {
+      renamed: {
+        $type: "number",
+        $value: 1,
+        $extensions: { "com.nextlyhq.nextly": { id: "kept.identity" } },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tokens.tokens[0]?.id).toBe("kept.identity");
+    expect(result.skipped).toEqual([]);
+  });
+});
+
+describe("vendor data whose written form is not the value", () => {
+  it("refuses an ARRAY that serialises itself", () => {
+    // `toJSON` belongs to any object. Asked only of records, it was never
+    // reached for an array, which returned as soon as its elements checked out.
+    const listing: unknown[] = [1, 2];
+    (listing as { toJSON?: () => unknown }).toJSON = () => [9];
+    const tokens: SiteTokenSet = {
+      tokens: [
+        {
+          name: "foo",
+          kind: "number",
+          values: { light: "1" },
+          extensions: { "com.figma": { order: listing } },
+        },
+      ],
+    };
+
+    // The control on the fixture: every element is writable on its own, and
+    // the written form is still something that was never stored.
+    expect(JSON.stringify(listing)).toBe("[9]");
+
+    const result = exportDtcg(tokens);
+    expect(result.skipped.join(" ")).toContain("foo");
+  });
+});

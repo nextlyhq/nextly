@@ -325,7 +325,12 @@ export type {
 } from "./style/site-tokens";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
-export { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./style/dtcg";
+export {
+  NEXTLY_EXTENSION,
+  dtcgToTokens,
+  isKind,
+  tokensToDtcg,
+} from "./style/dtcg";
 export type { DtcgNode } from "./style/dtcg";
 export {
   checkContrast,

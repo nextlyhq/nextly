@@ -12,6 +12,8 @@ import { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./dtcg";
 import type { SiteToken } from "./site-tokens";
 import { renameSiteToken } from "./site-tokens";
 
+import { isTokenName } from "./declarations";
+
 const tokens = (list: SiteToken[]) => ({ tokens: list });
 
 describe("export", () => {
@@ -799,5 +801,85 @@ describe("a token's stable identity across the format", () => {
 
     expect(read).toEqual([]);
     expect(issues.some(i => i.message.includes("id"))).toBe(true);
+  });
+});
+
+describe("a name the object prototype already answers for", () => {
+  /*
+   * A document node is an ordinary object, so reading a segment directly finds
+   * whatever `Object.prototype` supplies. `node["constructor"]` is a function
+   * rather than `undefined`, so the emitter concluded the path was already
+   * taken and refused a token nothing had written — the document came back
+   * `{}` with "exported more than once" beside it, and the token could not
+   * leave this system at all.
+   *
+   * DERIVED rather than listed, so this widens with the grammar instead of
+   * pinning today's answer. The name rule is lowercase-only, which is why
+   * `constructor` is currently the only prototype key a token name can spell:
+   * `toString` and the rest carry capitals and are refused as names long
+   * before they reach the emitter.
+   */
+  const REACHABLE = Object.getOwnPropertyNames(Object.prototype).filter(
+    isTokenName
+  );
+
+  it("has something to test", () => {
+    // The positive control on the fixture itself. Filtered to nothing, every
+    // `it.each` below would silently run zero times and read as a pass.
+    expect(REACHABLE).toContain("constructor");
+  });
+
+  it.each(REACHABLE)("writes a token named %s", name => {
+    const { document, issues } = tokensToDtcg({
+      tokens: [{ name, kind: "number", values: { light: "1" } }],
+    });
+    expect(issues).toEqual([]);
+    // Asserted as an OWN key, because `document[name]` is truthy for every one
+    // of these whether or not anything was written.
+    expect(Object.hasOwn(document, name)).toBe(true);
+    expect(JSON.parse(JSON.stringify(document))).toHaveProperty([name]);
+  });
+
+  it("writes a token whose PATH passes through such a name", () => {
+    // The same lookup runs at every segment on the way down, not only the leaf.
+    const { document, issues } = tokensToDtcg({
+      tokens: [
+        { name: "a.constructor.b", kind: "number", values: { light: "1" } },
+      ],
+    });
+    expect(issues).toEqual([]);
+    const written = JSON.parse(JSON.stringify(document)) as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+    expect(written["a"]?.["constructor"]?.["b"]).toBeDefined();
+  });
+
+  it("round-trips such a token back to the same name", () => {
+    const { document } = tokensToDtcg({
+      tokens: [{ name: "constructor", kind: "number", values: { light: "1" } }],
+    });
+    const read = dtcgToTokens(JSON.parse(JSON.stringify(document)));
+    expect(read.issues).toEqual([]);
+    expect(read.tokens.map(token => token.name)).toEqual(["constructor"]);
+  });
+
+  it("still refuses a genuine duplicate at such a name", () => {
+    // The control. Own-key lookups must not stop the emitter noticing a path
+    // it really has written already.
+    const { issues } = tokensToDtcg({
+      tokens: [
+        { name: "constructor", kind: "number", values: { light: "1" } },
+        {
+          id: "other",
+          name: "constructor",
+          kind: "number",
+          values: { light: "2" },
+        },
+      ],
+    });
+    expect(issues.map(issue => issue.message).join(" ")).toContain(
+      "exported more than once"
+    );
   });
 });

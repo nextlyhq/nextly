@@ -34,6 +34,7 @@
  */
 import {
   NEXTLY_EXTENSION,
+  isKind,
   isPlainRecord,
   compileSiteSheet,
   dtcgToTokens,
@@ -365,16 +366,43 @@ function vendorLostIn(value: unknown, path: string): string | undefined {
   const own = value[NEXTLY_EXTENSION];
   if (!isPlainRecord(own)) return undefined;
   const at = `${path}.${NEXTLY_EXTENSION}`;
+  if (readsStoredCss(own)) return darkLostAt(own.css, at);
+  /*
+   * An extension carrying NEITHER field states no values of its own — the id
+   * alone is what a rename travels as — so there is nothing to have lost.
+   */
+  if (own.css === undefined && own.kind === undefined) return undefined;
+  return `"${at}" does not state values this site can read — a light value as a string, and a kind the format has a type for — so its own values were skipped and the token was read from "$value" instead.`;
+}
+
+/**
+ * Whether the reader will take this payload's stored CSS rather than `$value`.
+ *
+ * The engine's condition has THREE parts and is asked through the engine's own
+ * `isKind`, because restating that one gets it wrong: the kinds it accepts are
+ * the ones the FORMAT has a type for, which is not every `TokenKind` —
+ * `custom` is a kind and is not one of them. Its own function because it is
+ * the single thing here most likely to drift, and a caller asking "what was
+ * lost" should not have to carry the reader's rules to find out.
+ */
+function readsStoredCss(own: Record<string, unknown>): boolean {
   const css = own.css;
-  const usable = isPlainRecord(css) && typeof css.light === "string";
-  if (!usable) {
-    // The whole extension path is skipped and the token is read from its
-    // native value, which is a different token from the one stated here.
-    return own.css === undefined
-      ? undefined
-      : `"${at}.css" does not state a light value as a string, so this site's own values in it were skipped and the token was read from "$value" instead.`;
-  }
-  return css.dark === undefined || typeof css.dark === "string"
+  return (
+    isPlainRecord(css) && typeof css.light === "string" && isKind(own.kind)
+  );
+}
+
+/**
+ * Why a stored DARK value will not be kept, or `undefined`.
+ *
+ * Asked only once the reader is known to be taking this payload at all, and
+ * separate because it is a different loss: the token still arrives with the
+ * values this system wrote, one mode short, so nothing about the import looks
+ * wrong and the next export writes a token the file did not describe.
+ */
+function darkLostAt(css: unknown, at: string): string | undefined {
+  const dark = isPlainRecord(css) ? css.dark : undefined;
+  return dark === undefined || typeof dark === "string"
     ? undefined
     : `"${at}.css.dark" is not a string, so the token arrived with its light value only.`;
 }
@@ -852,6 +880,18 @@ function holdsOnlyJson(value: unknown, seen = new Set<unknown>()): boolean {
    */
   if (seen.has(value)) return true;
   seen.add(value);
+  /*
+   * `toJSON` BEFORE the branch below, because it belongs to any object: an
+   * array can carry one exactly as a record can, and `JSON.stringify` calls it
+   * either way. Asked inside the record branch it was never reached for an
+   * array, which returned as soon as its own elements checked out — so `[1, 2]`
+   * with a `toJSON` returning `[9]` was written as `[9]` and reported as
+   * nothing lost. The written form being something OTHER than the value is the
+   * loss being looked for, whether or not the substitute is itself writable.
+   */
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+    return false;
+  }
   if (Array.isArray(value)) {
     /*
      * Index by index rather than through `every`, which SKIPS holes. A sparse
@@ -876,24 +916,15 @@ function holdsOnlyJson(value: unknown, seen = new Set<unknown>()): boolean {
 /**
  * Whether a non-array object is what it appears to be, contents included.
  *
- * Its own question because an object can MISREPRESENT itself in two ways an
- * array cannot, and both are answered before any of its contents matter:
- *
- * A `Map` or a `Set` has no own enumerable keys, so walking its values finds
- * nothing and it looks perfectly safe — and `JSON.stringify` writes it as
- * `{}`, erasing everything it held. That is the trap the engine's own
- * `isPlainRecord` exists for, and the reason it reads the prototype rather
- * than counting keys.
- *
- * A `toJSON` method means the written form is something OTHER than the value,
- * so a reader gets back something that was never stored — the loss being looked
- * for, whether or not the substitute is itself writable.
+ * Its own question because an object can MISREPRESENT itself in a way an array
+ * cannot, and it is answered before any of its contents matter: a `Map` or a
+ * `Set` has no own enumerable keys, so walking its values finds nothing and it
+ * looks perfectly safe — and `JSON.stringify` writes it as `{}`, erasing
+ * everything it held. That is the trap the engine's own `isPlainRecord` exists
+ * for, and the reason it reads the prototype rather than counting keys.
  */
 function recordHoldsJson(value: object, seen: Set<unknown>): boolean {
   if (!isPlainRecord(value)) return false;
-  if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
-    return false;
-  }
   return Object.values(value).every(item => holdsOnlyJson(item, seen));
 }
 

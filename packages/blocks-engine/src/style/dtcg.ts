@@ -233,7 +233,22 @@ function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
   return entry;
 }
 
-/** Put a token at its path, creating the groups it passes through. */
+/**
+ * Put a token at its path, creating the groups it passes through.
+ *
+ * Every lookup asks for an OWN key. A document node is an ordinary object, so
+ * reading a segment directly finds whatever `Object.prototype` supplies:
+ * `node["constructor"]` is a function rather than `undefined`, and a token
+ * named `constructor` — which `isTokenName` accepts, because it is a perfectly
+ * ordinary name — was refused as though the site already held it. The document
+ * came back `{}` with "exported more than once" beside it, so the token could
+ * not leave this system at all. `toString`, `valueOf` and the rest of the
+ * prototype behaved the same way, at a leaf or at any segment on the way down.
+ *
+ * `__proto__` is the one name that would also corrupt the ASSIGNMENT rather
+ * than only the lookup, and it cannot arrive here: `exportableValue` refuses a
+ * name `isTokenName` rejects, and that regex requires a letter first.
+ */
 function place(
   root: DtcgNode,
   path: string[],
@@ -243,7 +258,7 @@ function place(
   let node = root;
   for (let index = 0; index < path.length - 1; index++) {
     const segment = path[index] ?? "";
-    const existing = node[segment];
+    const existing = Object.hasOwn(node, segment) ? node[segment] : undefined;
     if (existing === undefined) {
       const group: DtcgNode = {};
       node[segment] = group;
@@ -263,7 +278,7 @@ function place(
     node = existing;
   }
   const leaf = path[path.length - 1] ?? "";
-  if (node[leaf] !== undefined) {
+  if (Object.hasOwn(node, leaf)) {
     issues.push(issue(`"${path.join(".")}" is exported more than once.`));
     return;
   }
@@ -764,8 +779,17 @@ function isWritableValue(
   return true;
 }
 
-/** Whether a value is one of this system's token kinds. */
-function isKind(value: unknown): value is TokenKind {
+/**
+ * Whether a value is one of this system's token kinds.
+ *
+ * Exported because {@link readToken} decides whether to take a token's stored
+ * CSS on this and two other conditions, and a caller reporting what the reader
+ * dropped has to ask the same question rather than restate it. Restating it
+ * gets the answer wrong: the kinds this predicate accepts are the ones the
+ * FORMAT has a type for, which is not every `TokenKind` — `custom` is a kind
+ * and is not one of them.
+ */
+export function isKind(value: unknown): value is TokenKind {
   return typeof value === "string" && Object.hasOwn(DTCG_TYPE, value);
 }
 

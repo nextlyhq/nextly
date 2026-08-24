@@ -35,3 +35,8 @@ types than the engine maps, so what fits comes in and everything skipped is
 named with the reason. Export writes the token document a design tool reads back
 exactly, and the CSS custom properties a visitor's stylesheet actually contains,
 compiled by the same function that builds the site sheet.
+
+Fixes a token named `constructor`, or any path passing through that segment,
+being refused on export as though the site already held it: the emitter read
+the name off the document object directly, where `Object.prototype` answers for
+it. Such a token now leaves and returns unchanged.
