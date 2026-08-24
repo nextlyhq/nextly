@@ -14,6 +14,7 @@
 
 import {
   Button,
+  Card,
   FieldShell,
   FormActions,
   Input,
@@ -369,8 +370,12 @@ function FormBuilderViewInner({
         </p>
       </div>
 
-      {/* ── Metadata & tab navigation ── */}
-      <div className="border-b border-border space-y-4 pb-4 mb-6">
+      {/* ── Form metadata ──
+          A card, so the fields that identify the form read as one group and
+          have a surface to sit on. The builder canvas below is deliberately
+          NOT carded: it draws its own drop zone, and a frame around a frame
+          reads as a nested box rather than as structure. */}
+      <Card className="mb-6 px-6 py-5">
         <div className="flex flex-wrap gap-4">
           <FieldShell
             label="Form Name"
@@ -382,7 +387,6 @@ function FormBuilderViewInner({
               value={formData.name || ""}
               onChange={e => handleNameChange(e.target.value)}
               placeholder="e.g., Contact Form"
-              className="bg-transparent"
             />
           </FieldShell>
 
@@ -396,7 +400,7 @@ function FormBuilderViewInner({
               value={formData.slug || ""}
               onChange={e => updateFormData({ slug: e.target.value })}
               placeholder="e.g., contact-form"
-              className="bg-transparent placeholder:text-muted-foreground"
+              className="placeholder:text-muted-foreground"
             />
           </FieldShell>
 
@@ -424,7 +428,6 @@ function FormBuilderViewInner({
                     id={id}
                     aria-describedby={describedBy}
                     aria-invalid={invalid}
-                    className="bg-transparent"
                   >
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
@@ -438,8 +441,13 @@ function FormBuilderViewInner({
             </FieldShell>
           </div>
         </div>
+      </Card>
 
-        {/* ── Main tab navigation ── */}
+      {/* ── Main tab navigation ──
+          On the page rather than inside the card above: the rail switches what
+          is BELOW it, so grouping it with the metadata would attach it to the
+          wrong thing. */}
+      <div className="border-b border-border mb-6">
         <Tabs
           value={activeTab}
           onValueChange={v => setActiveTab(v as typeof activeTab)}
