@@ -284,21 +284,29 @@ export function inCascadeOrder(defs: BreakpointDef[]): BreakpointDef[] {
  * 1024 rules apply, and the base rules underneath them all. The set therefore
  * runs outward from the edited definition, never inward.
  *
- * ## The other axis contributes its unbounded context and nothing more
+ * ## An unknown container context is EXCLUDED, not assumed live
  *
- * A stated limit rather than an oversight. Viewport and container widths are
- * independent: choosing to edit a 768px viewport breakpoint says nothing about
- * how wide any container on the page is, so no BOUNDED container definition can
- * be known to apply. Claiming one does would report a control as inheriting from
- * a container rule that is not matching.
+ * The viewport's unbounded context matches at every width and is always in play.
+ * The container axis is not its counterpart: even at its widest a container
+ * context emits `@container (min-width: 0)`, which matches only an element that
+ * HAS a query-container ancestor. Whether the selected block has one is a fact
+ * about the rendered tree that this arithmetic cannot see, so treating it as
+ * universally live lets a container declaration win for a root block the browser
+ * is applying nothing to — a false indicator, in the direction that states
+ * something wrong rather than saying nothing.
  *
- * The cost is the reverse — a value that genuinely arrives from a narrow
- * container breakpoint is attributed to whatever the viewport axis says — and
- * that is the safer of the two, because a control that under-reports its origin
- * is quiet where one that over-reports is wrong.
+ * So the container axis contributes only when the author is EDITING that axis,
+ * which is the one case where they have said which context they mean. Otherwise
+ * it is left out entirely.
  *
- * An id belonging to no emitted context yields the unbounded contexts alone,
- * which is what an unknown breakpoint actually leaves matching.
+ * The cost is the reverse — a value genuinely arriving from a container
+ * breakpoint is attributed to whatever the viewport axis says while a viewport
+ * breakpoint is being edited — and that is the safer of the two, because a
+ * control that under-reports its origin is quiet where one that over-reports is
+ * wrong.
+ *
+ * An id belonging to no emitted context yields the viewport's unbounded context
+ * alone, which is what an unknown breakpoint actually leaves matching.
  *
  * @experimental
  */
@@ -307,12 +315,22 @@ export function liveBreakpointsFor(
   edited: BreakpointId
 ): BreakpointId[] {
   const contexts = breakpointContexts(set);
-  const unbounded = contexts
-    .filter(context => !isUsableWidth(context.maxWidth))
-    .map(context => context.id);
   const chosen = contexts.find(context => context.id === edited);
-  // An unknown id, or the unconditional context itself: neither adds anything
-  // to the contexts that match at every width.
+  /*
+   * The viewport's unbounded context alone. A container one is only included
+   * when the author is editing the container axis — see the note above: at its
+   * widest it still emits a query that matches only an element inside a query
+   * container, which this cannot know.
+   */
+  const unbounded = contexts
+    .filter(
+      context =>
+        !isUsableWidth(context.maxWidth) &&
+        (context.axis !== "container" || chosen?.axis === "container")
+    )
+    .map(context => context.id);
+  // An unknown id, or an unbounded context itself: neither adds anything to the
+  // contexts already matching.
   if (chosen === undefined || !isUsableWidth(chosen.maxWidth)) return unbounded;
   const width = chosen.maxWidth;
   const wider = contexts

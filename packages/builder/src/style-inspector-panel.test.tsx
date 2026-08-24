@@ -32,7 +32,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import {
+  describeProvenance,
+  StyleInspectorPanel,
+} from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
 
 afterEach(() => {
@@ -1450,5 +1453,92 @@ describe("where a control's value came from", () => {
     expect(
       Array.from(dots).map(dot => dot.getAttribute("data-provenance"))
     ).toEqual(["authored", "authored"]);
+  });
+});
+
+describe("naming the place a value came from", () => {
+  /*
+   * The four-way `node` answer is pure logic over an origin, an entry and the
+   * address being edited, so it is asked directly. Driving it through the panel
+   * would need a fixture where an ancestor's descendant rule wins for a
+   * descendant-selector control — reachable, but the fixture would be testing
+   * the ENGINE's cascade rather than this wording, and the cascade has its own
+   * suite.
+   */
+  const editing = {
+    nodeId: "a",
+    state: "base" as never,
+    breakpoint: BASE_BREAKPOINT,
+    labelOf: (id: string) => (id === "md" ? "Medium" : id),
+  };
+  const at = (over: Record<string, unknown> = {}) =>
+    ({
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint: BASE_BREAKPOINT,
+      ...over,
+    }) as never;
+
+  const nameFor = (origin: unknown, entry = at()) =>
+    describeProvenance(
+      { kind: "inherited", entry, from: origin } as never,
+      editing as never
+    )?.text;
+
+  it("names a class by its SLUG, never its id", () => {
+    // The id is storage and must not reach anything rendered or queried; the
+    // slug is what the author typed and what the canvas shows.
+    expect(nameFor({ kind: "class", id: "cls-1", slug: "card" })).toBe(
+      "Inherited from .card"
+    );
+  });
+
+  it("names the block's own defaults and the page", () => {
+    expect(nameFor({ kind: "blockType", type: "acme/box" })).toBe(
+      "Inherited from this block's defaults"
+    );
+    expect(nameFor({ kind: "page" })).toBe("Inherited from the page");
+  });
+
+  it("separates an ENCLOSING block from this one", () => {
+    /*
+     * The defect this replaced: every `node` origin read as "this block". An
+     * ancestor's rule reaches here through a descendant selector and the winning
+     * entry then carries the ANCESTOR's id, so an author told "this block" goes
+     * looking for a value that is not on the block they selected.
+     */
+    expect(nameFor({ kind: "node", id: "outer" })).toBe(
+      "Inherited from an enclosing block"
+    );
+    expect(nameFor({ kind: "node", id: "a" })).toBe(
+      "Inherited from this block"
+    );
+  });
+
+  it("names the BREAKPOINT a same-node value came from, by its label", () => {
+    expect(nameFor({ kind: "node", id: "a" }, at({ breakpoint: "md" }))).toBe(
+      "Inherited from this block at Medium"
+    );
+  });
+
+  it("names the STATE a same-node value came from", () => {
+    expect(nameFor({ kind: "node", id: "a" }, at({ state: "hover" }))).toBe(
+      "Inherited from this block's hover state"
+    );
+  });
+
+  it("says nothing at all for unset and for ambiguous", () => {
+    // Both are cases where a dot would claim something the record does not say.
+    expect(
+      describeProvenance({ kind: "unset" } as never, editing as never)
+    ).toBeNull();
+    expect(
+      describeProvenance(
+        { kind: "ambiguous", entry: at(), sharedWith: ["a", "b"] } as never,
+        editing as never
+      )
+    ).toBeNull();
+    expect(describeProvenance(undefined, editing as never)).toBeNull();
   });
 });

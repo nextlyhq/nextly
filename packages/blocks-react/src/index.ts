@@ -45,6 +45,18 @@ export type { PageRendererProps } from "./page-renderer";
 // a `DarkModeStrategy`. A caller writing a site's design system needs every one
 // of them by name, so withholding any makes the prop typeable but unusable —
 // which is the same defect as not exporting the outer type, one level in.
+/**
+ * The cascade behind a page, for chrome that names where a value came from.
+ *
+ * Exported because the reconciliation it needs — named classes, block bases, the
+ * token prefix and the fetch predicate, each resolved from two tiers — is
+ * private to this package. A consumer assembling its own context compiles a
+ * cascade the page never had, and the shortfall is silent: no class declaration
+ * reaches the trace, so every value from a named class reports as set by nobody.
+ */
+export { pageStyleTrace } from "./page-style-trace";
+export type { PageStyleTraceInput } from "./page-style-trace";
+
 export type {
   DarkModeStrategy,
   FontFaceDef,

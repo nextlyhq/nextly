@@ -231,7 +231,14 @@ type ResolvedShared = {
 type SharedStyleInputs = Partial<ResolvedShared>;
 
 /**
- * Resolve every shared input once, so the two compiles cannot disagree.
+ * Resolve every shared input once, so the compiles cannot disagree.
+ *
+ * Exported at MODULE level and deliberately not from the package entry. A third
+ * compile exists — the editor asks for the cascade behind the page so its
+ * inspector can say where a value came from — and a context assembled
+ * independently there is the same defect this function was written to prevent,
+ * one caller further out: the trace would carry no named classes and report a
+ * value from `.card` as coming from nowhere.
  *
  * The defect this exists to prevent is not a wrong precedence — it is two
  * computations of one question. Each field therefore keeps the precedence it
@@ -251,7 +258,7 @@ type SharedStyleInputs = Partial<ResolvedShared>;
  * Only defined values are returned, so spreading this over a context adds no
  * key the caller did not have.
  */
-function sharedStyleInputs(
+export function sharedStyleInputs(
   styleContext: StyleCompileContext | undefined,
   site: SiteSheetInput | undefined
 ): SharedStyleInputs {

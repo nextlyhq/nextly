@@ -296,31 +296,35 @@ describe("which breakpoints are live while one is being edited", () => {
      * rule the browser is not applying.
      */
     const live = liveBreakpointsFor(SET, "vp-md");
-    expect([...live].sort()).toEqual(
-      ["base", "c-base", "vp-lg", "vp-md"].sort()
-    );
+    expect([...live].sort()).toEqual(["base", "vp-lg", "vp-md"].sort());
   });
 
   it("includes the edited breakpoint itself", () => {
     expect(liveBreakpointsFor(SET, "vp-sm")).toContain("vp-sm");
   });
 
-  it("takes the widest breakpoint to be live with only the bases", () => {
+  it("takes the widest breakpoint to be live with only the base", () => {
     const live = liveBreakpointsFor(SET, "vp-lg");
-    expect([...live].sort()).toEqual(["base", "c-base", "vp-lg"].sort());
+    expect([...live].sort()).toEqual(["base", "vp-lg"].sort());
   });
 
-  it("contributes only the OTHER axis's base, never its bounded ones", () => {
+  it("excludes the container axis ENTIRELY while a viewport breakpoint is edited", () => {
     /*
-     * A stated limit rather than an oversight. Editing a 768px VIEWPORT
-     * breakpoint says nothing about how wide any container on the page is, so
-     * no bounded container definition can be known to apply — and `c-wide` at
-     * 900 would be picked up by any rule that compared widths across the axes.
+     * Including the container's unbounded context looks harmless and is not.
+     * Even at its widest a container context emits `@container (min-width: 0)`,
+     * which matches only an element that HAS a query-container ancestor —
+     * whether the selected block does is a fact about the rendered tree this
+     * arithmetic cannot see. Treated as live, a container declaration can win
+     * for a root block the browser applies nothing to, and the control states
+     * something false rather than staying quiet.
+     *
+     * `c-wide` at 900 would also be picked up by any rule comparing widths
+     * across the axes, which is the second thing this pins.
      */
     const live = liveBreakpointsFor(SET, "vp-md");
+    expect(live).not.toContain("c-base");
     expect(live).not.toContain("c-wide");
     expect(live).not.toContain("c-narrow");
-    expect(live).toContain("c-base");
   });
 
   it("reads the container axis the same way when a container is edited", () => {
@@ -333,17 +337,25 @@ describe("which breakpoints are live while one is being edited", () => {
     expect(live).not.toContain("vp-md");
   });
 
-  it("yields both bases for the unconditional breakpoint", () => {
-    expect([...liveBreakpointsFor(SET, "base")].sort()).toEqual(
-      ["base", "c-base"].sort()
-    );
+  it("yields the viewport base alone for the unconditional breakpoint", () => {
+    expect(liveBreakpointsFor(SET, "base")).toEqual(["base"]);
   });
 
-  it("yields both bases for an id belonging to neither axis", () => {
+  it("yields the viewport base alone for an id belonging to neither axis", () => {
     // What an unrecognised breakpoint actually leaves matching, rather than an
     // empty set that would report every control as unset.
-    expect([...liveBreakpointsFor(SET, "gone")].sort()).toEqual(
-      ["base", "c-base"].sort()
+    expect(liveBreakpointsFor(SET, "gone")).toEqual(["base"]);
+  });
+
+  it("admits the container axis once the author is EDITING it", () => {
+    /*
+     * The one case where the context is not a guess: choosing to edit a
+     * container breakpoint is the author saying which container they mean. The
+     * viewport base stays in because it matches at every width regardless.
+     */
+    const live = liveBreakpointsFor(SET, "c-narrow");
+    expect([...live].sort()).toEqual(
+      ["base", "c-base", "c-narrow", "c-wide"].sort()
     );
   });
 

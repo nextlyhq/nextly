@@ -661,14 +661,23 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * holds neither the site's breakpoints nor the document, and compiling nearer
    * the controls would walk the cascade once per control.
    *
-   * The breakpoints come from `siteBreakpoints(canvasSiteStyle)` — the same
-   * expression the canvas compiles with, deliberately. Two readings of "what
-   * are this site's breakpoints" is the shape where the panel names a
-   * breakpoint the page never emitted under.
+   * It is handed the SAME inputs the canvas is: `canvasRender.styleContext`, the
+   * site sheet, and the host's remote patterns. Not a narrower context assembled
+   * beside them — named classes, block bases, the token prefix and the fetch
+   * predicate are each reconciled from two tiers, and a second assembly compiles
+   * a cascade the page never had. The shortfall would be silent: no class
+   * declaration in the trace, so every value from a named class reads as set by
+   * nobody, and a `url(...)` this host refuses reads as active.
    */
   const styleTrace = useMemo(
-    () => pageStyleTrace(editor.document, siteBreakpoints(canvasSiteStyle)),
-    [editor.document, canvasSiteStyle]
+    () =>
+      pageStyleTrace(
+        editor.document,
+        canvasRender.styleContext,
+        siteSheet(canvasSiteStyle),
+        remotePatterns
+      ),
+    [editor.document, canvasRender, canvasSiteStyle, remotePatterns]
   );
 
   useCheckpoints({ name, control, document: editor.document });

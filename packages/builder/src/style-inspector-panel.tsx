@@ -276,6 +276,17 @@ export function StyleInspectorPanel({
     editor.selectedId === null
       ? undefined
       : styleSubjectFor(editor.document.nodes, editor.selectedId);
+  /*
+   * What the panel is editing, so an inherited label can say what DIFFERS from
+   * it. Built once beside the subject for the same reason: every control is
+   * asking about one node at one address.
+   */
+  const editing: EditedAddress = {
+    nodeId: inspection.nodeId,
+    state: inspection.state,
+    breakpoint: inspection.breakpoint,
+    labelOf: id => breakpointLabel(breakpoints, id),
+  };
   const provenanceOf: ProvenanceOf = leaf => {
     // Absent means the question was never asked. A host that supplies no trace
     // gets no indicators, which is the honest answer for a surface that cannot
@@ -330,6 +341,7 @@ export function StyleInspectorPanel({
             tokens={tokens}
             prefersDark={prefersDark}
             provenanceOf={provenanceOf}
+            editing={editing}
             onChooseForm={chooseForm}
           />
         ))}
@@ -387,6 +399,7 @@ function StyleSectionItem({
   tokens,
   prefersDark,
   provenanceOf,
+  editing,
   onChooseForm,
 }: {
   section: StyleSection;
@@ -398,6 +411,7 @@ function StyleSectionItem({
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
   provenanceOf: ProvenanceOf;
+  editing: EditedAddress;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   // How many of this section's properties this node sets HERE, so an author can
@@ -432,6 +446,7 @@ function StyleSectionItem({
               tokens={tokens}
               prefersDark={prefersDark}
               provenanceOf={provenanceOf}
+              editing={editing}
               onChooseForm={onChooseForm}
             />
           ))}
@@ -459,6 +474,7 @@ function StylePropertyFields({
   tokens,
   prefersDark,
   provenanceOf,
+  editing,
   onChooseForm,
 }: {
   property: InspectedStyleProperty;
@@ -470,6 +486,7 @@ function StylePropertyFields({
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
   provenanceOf: ProvenanceOf;
+  editing: EditedAddress;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   const many = property.controls.length > 1;
@@ -550,6 +567,7 @@ function StylePropertyFields({
           tokens={tokens}
           prefersDark={prefersDark}
           provenanceOf={provenanceOf}
+          editing={editing}
         />
       ))}
     </div>
@@ -700,6 +718,7 @@ function StyleControlField({
   tokens,
   prefersDark,
   provenanceOf,
+  editing,
 }: {
   control: StyleControl;
   label: string;
@@ -733,6 +752,7 @@ function StyleControlField({
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
   provenanceOf: ProvenanceOf;
+  editing: EditedAddress;
 }): React.JSX.Element {
   const id = React.useId();
   // The message's own id, so the control can point at it. A `role="alert"`
@@ -798,7 +818,10 @@ function StyleControlField({
     <div className="nx-inspector__field" data-control={control.kind}>
       <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
         {label}
-        <ProvenanceDot provenance={provenanceOf(control.leaf)} />
+        <ProvenanceDot
+          provenance={provenanceOf(control.leaf)}
+          editing={editing}
+        />
       </Label>
       <ControlValue
         id={id}
@@ -1303,10 +1326,12 @@ function writeStyleValue({
  */
 function ProvenanceDot({
   provenance,
+  editing,
 }: {
   provenance: StyleProvenance | undefined;
+  editing: EditedAddress;
 }): React.JSX.Element | null {
-  const described = describeProvenance(provenance);
+  const described = describeProvenance(provenance, editing);
   if (described === null) return null;
   return (
     <span
@@ -1332,7 +1357,8 @@ function ProvenanceDot({
  * string by construction rather than by two call sites agreeing.
  */
 export function describeProvenance(
-  provenance: StyleProvenance | undefined
+  provenance: StyleProvenance | undefined,
+  editing: EditedAddress
 ): { kind: "authored" | "inherited"; text: string } | null {
   if (provenance === undefined) return null;
   if (provenance.kind === "authored") {
@@ -1341,8 +1367,36 @@ export function describeProvenance(
   if (provenance.kind !== "inherited") return null;
   return {
     kind: "inherited",
-    text: `Inherited from ${originName(provenance.from)}`,
+    text: `Inherited from ${originName(provenance.from, provenance.entry, editing)}`,
   };
+}
+
+/**
+ * A breakpoint's author-facing name, or its id when the site defines no such
+ * breakpoint.
+ *
+ * Falling back to the id rather than to a placeholder: a value keyed to a
+ * breakpoint the settings no longer define is exactly the case an author needs
+ * to recognise, and "unknown" tells them nothing they can act on.
+ */
+function breakpointLabel(
+  breakpoints: BreakpointSet | undefined,
+  id: BreakpointId
+): string {
+  for (const axis of [breakpoints?.viewport, breakpoints?.container]) {
+    const found = (axis ?? []).find(def => def.id === id);
+    if (found !== undefined) return found.label;
+  }
+  return id;
+}
+
+/** Which node, state and breakpoint the panel is editing, to say what DIFFERS. */
+export interface EditedAddress {
+  readonly nodeId: string;
+  readonly state: StyleState;
+  readonly breakpoint: BreakpointId;
+  /** A breakpoint's author-facing name, for saying which one a value came from. */
+  readonly labelOf: (breakpoint: BreakpointId) => string;
 }
 
 /**
@@ -1352,8 +1406,23 @@ export function describeProvenance(
  * typed and what the canvas shows, while the id is storage. The id is never
  * interpolated anywhere — see `canvas.tsx`'s `nodeElement` for why a class id
  * must not reach a selector or a queried attribute.
+ *
+ * A `node` origin is FOUR different answers and reading it as one misnames three
+ * of them. The winning declaration can belong to an ancestor, whose rule reached
+ * this block through a descendant selector; or to this block at another
+ * breakpoint; or in another interaction state; and only what is left is "this
+ * block". An author told "this block" about an ancestor's rule goes looking for
+ * a value that is not on the block they have selected.
+ *
+ * The breakpoint is named by its LABEL rather than its id, for the same reason
+ * the class is named by its slug: the id is storage and the label is what the
+ * author reads everywhere else.
  */
-function originName(origin: StyleOrigin): string {
+function originName(
+  origin: StyleOrigin,
+  entry: StyleTraceEntry,
+  editing: EditedAddress
+): string {
   switch (origin.kind) {
     case "class":
       return `.${origin.slug}`;
@@ -1362,6 +1431,13 @@ function originName(origin: StyleOrigin): string {
     case "page":
       return "the page";
     case "node":
+      if (origin.id !== editing.nodeId) return "an enclosing block";
+      if (entry.breakpoint !== editing.breakpoint) {
+        return `this block at ${editing.labelOf(entry.breakpoint)}`;
+      }
+      if (entry.state !== editing.state) {
+        return `this block's ${entry.state} state`;
+      }
       return "this block";
   }
 }

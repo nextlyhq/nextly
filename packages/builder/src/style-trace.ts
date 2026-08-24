@@ -57,13 +57,12 @@
 
 import type {
   BlockDocument,
-  BreakpointSet,
+  RemotePatternInput,
+  SiteSheetInput,
+  StyleCompileContext,
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
-import {
-  registeredBlocks,
-  resolvePageStylesWithTrace,
-} from "@nextlyhq/blocks-react";
+import { pageStyleTrace as compileTrace } from "@nextlyhq/blocks-react";
 
 /**
  * The declarations the compiler wrote for this document, in cascade order.
@@ -73,23 +72,28 @@ import {
  * told that would report every value as coming from nowhere, which is worse than
  * showing no indicator at all.
  *
- * The blocks come from `registeredBlocks()`, which is the SAME default
- * `PageRenderer` uses when a host names no resolver, so the two are looking at
- * one registry rather than at two assembled alike.
+ * The compile itself lives in `@nextlyhq/blocks-react`, and that is not
+ * indirection for its own sake. Named classes, block bases, the token prefix and
+ * the fetch predicate are each reconciled from TWO tiers — the route's context
+ * and the site's — by a function private to that package. A context assembled
+ * here instead compiles a cascade the page never had, and the shortfall is
+ * silent: measured, with only `breakpoints` passed no class declaration reaches
+ * the trace at all, so every value arriving from a named class reports as set by
+ * nobody and the "Inherited from `.card`" indicator can never appear.
  */
 export function pageStyleTrace(
   document: BlockDocument,
-  breakpoints: BreakpointSet
+  styleContext: StyleCompileContext | undefined,
+  site: SiteSheetInput | undefined,
+  remotePatterns?: readonly RemotePatternInput[]
 ): readonly StyleTraceEntry[] | undefined {
-  return resolvePageStylesWithTrace(
+  return compileTrace({
     document,
-    // No stored artifact. One would be REUSED rather than recompiled, and a
-    // reused sheet has no cascade to report — the editor would get `undefined`
-    // for a document it can perfectly well compile.
-    undefined,
-    { breakpoints },
-    registeredBlocks(),
-    false,
-    { trace: true }
-  ).trace;
+    styleContext,
+    site,
+    // The registry a renderer uses when a host names none is the default there
+    // too, so the two are looking at one registry rather than at two assembled
+    // alike.
+    ...(remotePatterns === undefined ? {} : { remotePatterns }),
+  });
 }

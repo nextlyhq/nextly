@@ -70,7 +70,11 @@ function doc(): BlockDocument {
 describe("the cascade fetched for the panel", () => {
   it("reports the declarations the document authored", () => {
     register();
-    const trace = pageStyleTrace(doc(), BREAKPOINTS);
+    const trace = pageStyleTrace(
+      doc(),
+      { breakpoints: BREAKPOINTS },
+      undefined
+    );
 
     // The POPULATION first. An empty trace satisfies every `toContain` below by
     // vacuity, and `undefined` is a documented answer here, so both have to be
@@ -82,7 +86,11 @@ describe("the cascade fetched for the panel", () => {
 
   it("reports a breakpoint's own entry, which is what a badge names", () => {
     register();
-    const trace = pageStyleTrace(doc(), BREAKPOINTS);
+    const trace = pageStyleTrace(
+      doc(),
+      { breakpoints: BREAKPOINTS },
+      undefined
+    );
 
     // The separating property for C-6 specifically: the value authored at `md`
     // has to arrive as its OWN entry carrying that breakpoint, or the badge
@@ -116,7 +124,9 @@ describe("the cascade fetched for the panel", () => {
 
     expect(rendered.css).toBe(compiled.css);
     // And the trace belongs to that same compile rather than to a different one.
-    expect(pageStyleTrace(page, BREAKPOINTS)?.length).toBe(
+    expect(
+      pageStyleTrace(page, { breakpoints: BREAKPOINTS }, undefined)?.length
+    ).toBe(
       compilePageCss(page, { breakpoints: BREAKPOINTS, trace: true }).trace
         ?.length
     );
@@ -143,8 +153,92 @@ describe("the cascade fetched for the panel", () => {
       ],
     } as unknown as BlockDocument;
 
-    const trace = pageStyleTrace(hidden, BREAKPOINTS);
+    const trace = pageStyleTrace(
+      hidden,
+      { breakpoints: BREAKPOINTS },
+      undefined
+    );
 
     expect(trace?.map(entry => entry.property)).toContain("color");
+  });
+});
+
+describe("the SHARED inputs the page is compiled from", () => {
+  /** A site library holding one class, as the canvas is given it. */
+  const site = {
+    breakpoints: BREAKPOINTS,
+    classes: [
+      {
+        id: "cls-1",
+        slug: "card",
+        orderIndex: 0,
+        styles: { base: { base: { color: "rebeccapurple" } } },
+      },
+    ],
+  } as never;
+
+  /** A node that applies that class and authors nothing of its own for it. */
+  const classed = (): BlockDocument =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    }) as unknown as BlockDocument;
+
+  it("reports a NAMED CLASS declaration, which is the whole affordance", () => {
+    /*
+     * The case the indicator exists for — "this comes from `.card`" — and the
+     * one a narrower context loses SILENTLY. `namedClasses` is reconciled from
+     * the site tier by the renderer, so a trace compiled from breakpoints alone
+     * carries no class declaration at all: every value arriving from a class
+     * reports as set by nobody, and the dot never appears.
+     *
+     * A test that fed a class entry to the panel by hand would pass against that
+     * bug, because it proves the RENDERING and not that a compile ever produces
+     * one. This asks the compiler.
+     */
+    register();
+    const trace = pageStyleTrace(classed(), { breakpoints: BREAKPOINTS }, site);
+
+    // The population first: an empty trace satisfies every search below.
+    expect(trace).toBeDefined();
+    expect(trace ?? []).not.toHaveLength(0);
+
+    const fromClass = (trace ?? []).filter(
+      entry => entry.origin.kind === "class"
+    );
+    expect(fromClass).not.toHaveLength(0);
+    expect(fromClass[0]?.origin).toEqual({
+      kind: "class",
+      id: "cls-1",
+      slug: "card",
+    });
+    expect(fromClass[0]?.value).toBe("rebeccapurple");
+  });
+
+  it("carries the site's classes even when the route states no context", () => {
+    // The site tier alone can compile, provided it named the breakpoints — the
+    // one field a compile cannot proceed without. A host that passes only a site
+    // sheet still gets an answer rather than silence.
+    register();
+    const trace = pageStyleTrace(classed(), undefined, site);
+    expect((trace ?? []).some(entry => entry.origin.kind === "class")).toBe(
+      true
+    );
+  });
+
+  it("answers undefined when nothing names a breakpoint to compile against", () => {
+    // A real answer rather than a failure, and the caller is documented not to
+    // read it as "nothing is authored".
+    register();
+    expect(pageStyleTrace(classed(), undefined, undefined)).toBeUndefined();
   });
 });
