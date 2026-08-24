@@ -860,3 +860,76 @@ describe("the Advanced tab inside the entry's form", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+describe("a node carrying both a css id and a legacy id attribute", () => {
+  const both = { cssId: "kept", attributes: { id: "legacy", "data-x": "1" } };
+
+  it("does not delete the legacy id just by being looked at", () => {
+    /*
+     * An imported node can hold both. The renderer ignores the bag one while
+     * the field has a value, so it is dead data — but deleting it because
+     * someone opened a tab is not the author asking for it to go, and if they
+     * later clear the field it is what would render.
+     */
+    const editor = mount(both);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("does not delete it when the requested id was REFUSED", () => {
+    /*
+     * A refusal keeps the id the node already had, which is still non-empty —
+     * so a rule keyed on "the field holds something" fired and wrote an
+     * attributes-only update, deleting data on a change that did not happen.
+     */
+    register();
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/heading", version: 1, props: {}, ...both },
+        {
+          id: "b",
+          type: "acme/heading",
+          version: 1,
+          props: {},
+          cssId: "taken",
+        },
+      ],
+    } as unknown as BlockDocument);
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "taken" } });
+    fireEvent.blur(field);
+
+    // Two alerts are correct here — the field's collision, and the id row
+    // pointing at the field — so this names the one under test.
+    const said = screen
+      .getAllByRole("alert")
+      .map(each => each.textContent ?? "")
+      .join(" ");
+    expect(said).toContain("already uses that id");
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("DOES drop it when the author actually sets a new id", () => {
+    // The control, and the behaviour an earlier finding asked for: once the
+    // author sets the field, the bag value can never render again, so keeping
+    // it would let a later clear bring a dead id back to life.
+    const editor = mount(both);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "fresh" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "fresh", attributes: { "data-x": "1" } },
+    });
+  });
+});

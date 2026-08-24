@@ -137,7 +137,19 @@ export function AdvancedPanel({
     const keptId = id !== "" && taken.has(id) ? cssId : id;
     const wanted = {
       cssId: keptId,
-      attributes: storedAttributes(next.rows, keptId, attributes ?? {}),
+      /*
+       * The shadowed `id` is dropped only when the author has just SET the
+       * field, never merely because it holds something. A node imported with
+       * both a `cssId` and a legacy `id` would otherwise lose the second the
+       * moment anyone opened this tab — and lose it again on a change that was
+       * REFUSED, since a refusal keeps the id the node already had and that is
+       * still non-empty. Nothing the author did not ask for gets deleted.
+       */
+      attributes: storedAttributes(
+        next.rows,
+        keptId === cssId ? "" : keptId,
+        attributes ?? {}
+      ),
     };
     const update = htmlUpdate(wanted, { cssId, attributes });
     if (update === undefined) return;
