@@ -51,7 +51,25 @@ export function FormSection({
         ) : null}
       </div>
       <Card className="overflow-hidden">
-        <div className="divide-y divide-foreground/10 px-6">{children}</div>
+        {/* The section owns its vertical rhythm rather than leaving each child
+            to pad itself. That delegation is what produced fields flush against
+            the card's borders: `SettingsRow` supplied the padding and
+            `FieldShell` did not, and a card cannot see which of the two it was
+            handed.
+
+            One token serves both the card's edge padding and the gap between
+            two fields, because they are the same measurement seen twice. Two
+            tokens could drift apart with nothing to notice.
+
+            The value uses Tailwind v4's PARENTHESIS syntax for a custom
+            property. The square-bracket form containing `var()` is a v3 spelling
+            that v4 changed because it became ambiguous, and here it compiled to
+            a literal `padding-block: var(...)` — invalid CSS that took the whole
+            admin stylesheet down with it rather than merely dropping this
+            declaration. */}
+        <div className="divide-y divide-foreground/10 px-6 [&>*]:py-(--nx-field-gap)">
+          {children}
+        </div>
       </Card>
     </section>
   );

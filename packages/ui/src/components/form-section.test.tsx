@@ -67,6 +67,34 @@ describe("FormSection", () => {
     expect(label.id).not.toBe("");
   });
 
+  it("gives every direct child the same vertical rhythm, whatever idiom it is", () => {
+    // The section cannot see WHICH row idiom it was handed, so the rhythm
+    // cannot be the caller's to supply. Two shipped idioms disagreed about it —
+    // one padded itself, the other did not — and a section built from the
+    // second rendered its first field hard against the card's top border.
+    //
+    // One token covers both the card's edge padding and the gap between two
+    // fields, because they are the same measurement seen twice: the first
+    // child's top padding IS the card's top inset.
+    const { container } = render(
+      <FormSection label="Locale">
+        <div data-testid="first">first</div>
+        <div data-testid="second">second</div>
+      </FormSection>
+    );
+
+    const rows = container.querySelector('[data-slot^="card."] > div');
+    // Tailwind v4's parenthesis syntax for a custom property. The
+    // square-bracket `var()` spelling is a v3 form that v4 changed, and it
+    // compiles here to a literal `padding-block: var(...)` — invalid CSS that
+    // fails the whole stylesheet rather than dropping one rule, so the spelling
+    // is part of the contract and not a formatting preference.
+    expect(rows?.className).toContain("[&>*]:py-(--nx-field-gap)");
+    // Assembled rather than written whole, for the reason above: a complete
+    // arbitrary-value token anywhere in a scanned file becomes a real rule.
+    expect(rows?.className).not.toContain(`py-${"["}var(`);
+  });
+
   it("uses the shared Card for its container, not a hand-rolled one", () => {
     // Card is the one container implementation and carries the documented
     // container radius tier. Re-rolling the chrome here is what produced the

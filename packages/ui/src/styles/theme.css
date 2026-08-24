@@ -921,6 +921,19 @@
    * the grid is used without that component. */
   --nx-shell-measure: var(--nx-measure-form);
 
+  /* The single vertical-rhythm token for a form section. `FormSection` applies
+   * it to every DIRECT child, so the card's top and bottom breathing room and
+   * the gap between two fields are one decision and cannot drift apart — the
+   * first child's top padding IS the card's top inset.
+   *
+   * It replaces a delegation in which the section padded horizontally only and
+   * each row supplied its own vertical padding. Two shipped row idioms
+   * disagreed about that: one carried it, the other did not, so a section built
+   * from the second rendered its fields flush against the card's borders. The
+   * card cannot see which idiom it was handed, which is why the rhythm cannot
+   * be the caller's to supply. */
+  --nx-field-gap: 1.25rem;
+
   /* Focus ring colors */
   --nx-focus-ring: var(--nx-primary);
   --nx-focus-ring-offset: oklch(1 0 0);
