@@ -86,7 +86,7 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
 `TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
-`PageShell`, `Bleed`),
+`PageShell`, `Bleed`, `PageHeader`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
 `useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
 
@@ -208,6 +208,23 @@ combinator, which is the half that makes the nested case inert. Both forward the
 and any div attributes, which matters more for `Bleed` than for an ordinary box: a
 consumer cannot reach for the usual remedy of wrapping it, since a wrapper is exactly
 what stops it working.
+
+`PageHeader` (with `PageHeaderProps`) is a page's own identity: its breadcrumb trail,
+its `h1`, a one-line description and its actions. Every value arrives as a PROP, and
+that is the contract rather than an implementation choice. The markup it replaces was
+written out by hand on 22 pages, and the settings pages took their title from a
+~130-line chain matching `window.location.pathname` in a file none of them imported —
+so a page's name lived either in 22 copies or in one foreign file, adding a route meant
+editing someone else's `if`, and the header was wrong for any page reachable at more
+than one path. A plugin could not contribute a settings page at all, because it cannot
+add a branch to a chain it does not ship.
+
+This mirrors a decision the route registry already made: a private route must DECLARE
+the rail section it belongs to, so a missing declaration is a compile error rather than
+a page that silently highlights the wrong entry. `PageHeader` applies the same rule to
+the page's own name. `description` is a `ReactNode` rather than a string because a
+description carrying a link or inline code is ordinary here, and a narrower type would
+push those pages back to hand-rolling the header this exists to remove.
 
 `PageShell` deliberately applies no horizontal padding of its own; a `px-*` utility on it
 would be the second declaration this design exists to remove. Its outer grid tracks are

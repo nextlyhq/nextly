@@ -511,6 +511,9 @@ const EmailTemplatesPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SettingsLayout
+          title="Email Templates"
+          description="Manage and customize system email content"
+          crumb="Email Templates"
           actions={
             <Button
               onClick={() => navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE)}

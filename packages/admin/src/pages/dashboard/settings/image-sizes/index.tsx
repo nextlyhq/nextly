@@ -333,6 +333,9 @@ export default function ImageSizesSettingsPage() {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SettingsLayout
+          title="Image Sizes"
+          description="Configure image sizes generated for uploaded images"
+          crumb="Image Sizes"
           actions={
             <Link href={ROUTES.SETTINGS_IMAGE_SIZES_CREATE}>
               <Button size="md" className="flex items-center gap-1.5">
