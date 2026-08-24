@@ -244,65 +244,65 @@ export function QueryBuilder({
 
         {/* Depth stands alone for a single: there is one document, so paging,
             ordering and searching have nothing to act on. */}
-        <div
-          className={cn("grid gap-4", isSingle ? "grid-cols-1" : "grid-cols-3")}
-        >
-          <Field
-            id="param-depth"
-            label="Depth"
-            hint="How many levels of related entries to embed. 0 returns their IDs only."
-          >
-            <Input
+        {/* Sized from the PANE rather than the viewport, because the pane is
+            resizable now: a viewport breakpoint cannot describe a column
+            somebody just dragged narrower. A single has only Depth, so it
+            renders one child rather than asking for a different grid. */}
+        <div className="@container/params">
+          <div className="grid grid-cols-1 gap-4 @md/params:grid-cols-3">
+            <Field
               id="param-depth"
-              aria-describedby="param-depth-hint"
-              type="number"
-              min={0}
-              max={DEPTH_MAX}
-              value={params.depth ?? ""}
-              onChange={e => updateParam("depth", e.target.value)}
-              placeholder="0"
-              className="font-mono text-xs"
-            />
-          </Field>
+              label="Depth"
+              hint="Levels of related entries to embed. 0 returns IDs."
+            >
+              <Input
+                id="param-depth"
+                aria-describedby="param-depth-hint"
+                type="number"
+                min={0}
+                max={DEPTH_MAX}
+                value={params.depth ?? ""}
+                onChange={e => updateParam("depth", e.target.value)}
+                placeholder="0"
+                className="font-mono text-xs"
+              />
+            </Field>
 
-          {!isSingle && (
-            <>
-              <Field
-                id="param-limit"
-                label="Limit"
-                hint={`Entries per page. Capped at ${LIMIT_MAX}.`}
-              >
-                <Input
+            {!isSingle && (
+              <>
+                <Field
                   id="param-limit"
-                  aria-describedby="param-limit-hint"
-                  type="number"
-                  min={1}
-                  max={LIMIT_MAX}
-                  value={params.limit ?? ""}
-                  onChange={e => updateParam("limit", e.target.value)}
-                  placeholder="10"
-                  className="font-mono text-xs"
-                />
-              </Field>
+                  label="Limit"
+                  hint={`Per page. Max ${LIMIT_MAX}.`}
+                >
+                  <Input
+                    id="param-limit"
+                    aria-describedby="param-limit-hint"
+                    type="number"
+                    min={1}
+                    max={LIMIT_MAX}
+                    value={params.limit ?? ""}
+                    onChange={e => updateParam("limit", e.target.value)}
+                    placeholder="10"
+                    className="font-mono text-xs"
+                  />
+                </Field>
 
-              <Field
-                id="param-page"
-                label="Page"
-                hint="Which page to return. The first page is 1."
-              >
-                <Input
-                  id="param-page"
-                  aria-describedby="param-page-hint"
-                  type="number"
-                  min={1}
-                  value={params.page ?? ""}
-                  onChange={e => updateParam("page", e.target.value)}
-                  placeholder="1"
-                  className="font-mono text-xs"
-                />
-              </Field>
-            </>
-          )}
+                <Field id="param-page" label="Page" hint="Page number, from 1.">
+                  <Input
+                    id="param-page"
+                    aria-describedby="param-page-hint"
+                    type="number"
+                    min={1}
+                    value={params.page ?? ""}
+                    onChange={e => updateParam("page", e.target.value)}
+                    placeholder="1"
+                    className="font-mono text-xs"
+                  />
+                </Field>
+              </>
+            )}
+          </div>
         </div>
 
         {!isSingle && (
@@ -425,7 +425,7 @@ export function QueryBuilder({
                     onClick={() => toggleSelected(name)}
                     title={fieldLabel(name, fields)}
                     className={cn(
-                      "cursor-pointer border px-2 py-1 font-mono text-xs transition-colors",
+                      "cursor-pointer rounded-sm border px-2 py-1 font-mono text-xs transition-colors",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       on
                         ? "border-primary bg-primary text-primary-foreground"
