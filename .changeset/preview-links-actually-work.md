@@ -55,3 +55,31 @@ itself off as a local path.
 Add `draft: previewDraftGate()` to the content route the link lands on. Without it the route serves
 published entries only, and a preview link verifies, redirects, and then answers 404 from a page
 that looks entirely correct.
+
+A collection that declares no preview URL now refuses to mint a link, instead of reporting success
+and handing over one that answers 404. Nextly cannot work out where an entry is served — only the
+application knows whether a post with the slug `hello-world` is at `/hello-world` or
+`/blog/hello-world` — so a collection says it:
+
+```ts
+admin: {
+  preview: {
+    url: entry => (entry.slug ? `/blog/${entry.slug}` : null),
+  },
+},
+```
+
+The "Copy shareable link" button still appears either way, deliberately: hiding it would leave an
+editor with a feature that vanished and nothing explaining why. Refusing at the click puts the
+cause, and the fact that a developer is the one who fixes it, in front of the person who hit it.
+
+The page builder's own `pages` collection now declares one, defaulted to the site root and
+overridable with `pageBuilder({ pagePreviewPath: "/blocks/{slug}" })` for a site that mounts its
+pages elsewhere.
+
+In development, a content route that receives a valid preview link while declaring no
+`draft` hook now says so, naming the hook to add. Production is unchanged: every refusal stays an
+identical 404, because one that varied by cause would let a stranger discover which entries have
+drafts.
+
+New guide: **Draft Preview Links**.
