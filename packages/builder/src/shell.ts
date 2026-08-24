@@ -117,6 +117,19 @@ export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
 
 /**
+ * The site's breakpoints, as a trigger and the dialog behind it.
+ *
+ * The MANAGER is published and the dialog is not. A host needs the pair —
+ * something to click and something to edit in — and publishing the dialog alone
+ * would leave every host inventing the same open state, while publishing both
+ * would offer two ways to mount one feature that must agree about when the
+ * saved set has actually been read.
+ */
+export { authoredBreakpoints, sameBreakpoints } from "./breakpoints";
+export { BreakpointManager } from "./breakpoint-manager";
+export type { BreakpointManagerProps } from "./breakpoint-manager";
+
+/**
  * The editor's keyboard actions — moving, deleting, undoing — behind the same
  * client banner.
  *

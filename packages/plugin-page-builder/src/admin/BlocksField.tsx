@@ -39,13 +39,16 @@ import {
   registerBlocks,
   registryNestingSource,
   type BlockDocument,
+  type BreakpointSet,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
+  authoredBreakpoints,
   BlockToolbar,
+  BreakpointManager,
   EditorCommandPalette,
   BuilderShell,
   Canvas,
@@ -480,6 +483,96 @@ function TokensStudio({
   );
 }
 
+/**
+ * Writing the site's breakpoints, for the manager in the top bar.
+ *
+ * A hook rather than a callback inside the editor, because that component is
+ * already the largest branch point on this surface and every decision folded
+ * into it is one more path through the whole thing. What it needs from here is
+ * one stable function.
+ *
+ * Section-scoped, so this sends the breakpoints and nothing else — the other
+ * three fields of the record are owned by other studios and are not read here in
+ * order to write this one.
+ */
+function useBreakpointWriter(
+  configSiteStyle: SiteStyleData | undefined
+): (next: BreakpointSet) => Promise<string | undefined> {
+  const { save: saveSiteStyle } = useSaveSiteStyle();
+  /*
+   * Whether the HOST states breakpoints in its config, which is what makes an
+   * empty stored set unrepresentable. Read from the config tier rather than from
+   * the merged value, because the merged one cannot tell a stored set from a
+   * defaulted one — which is the ambiguity being guarded.
+   *
+   * Through the SAME base filter the manager uses. A config carrying only the
+   * built-in `{ id: "base" }` row states no authored breakpoint, so counting it
+   * refuses the one save that returns such a site to its base-only state — and
+   * tells the author to remove a config row the manager deliberately hides as
+   * built in. Three surfaces now ask this question and all three ask it once.
+   */
+  const configuredAuthored = authoredBreakpoints(configSiteStyle?.breakpoints);
+  const configured =
+    configuredAuthored.viewport.length > 0 ||
+    configuredAuthored.container.length > 0;
+
+  return useCallback(
+    async (next: BreakpointSet): Promise<string | undefined> => {
+      /*
+       * An empty set is not storable as an intention while the host states
+       * defaults, so it is refused rather than reported as saved.
+       *
+       * `resolveSiteStyle` layers the stored record over the host's config and
+       * decides "was anything stored" with `hasBreakpoints`, which is
+       * `viewport.length > 0 || container.length > 0`. So writing
+       * `{ viewport: [], container: [] }` succeeds, reads back as NOTHING
+       * STORED, and the config defaults return — the author removes every row,
+       * is told it saved, and watches them reappear.
+       *
+       * Refusing says what happened and where the remaining breakpoints come
+       * from, which is the one thing the author cannot see from this screen.
+       * Representing "explicitly none" would take a stored-format change, and
+       * that is not a decision this callback should make silently.
+       */
+      const emptied = next.viewport.length === 0 && next.container.length === 0;
+      if (emptied && configured) {
+        return "Your site's configuration defines these breakpoints, so removing them all here would restore them. Remove them from the config instead.";
+      }
+      const result = await saveSiteStyle("breakpoints", next);
+      if (result.saved) return undefined;
+      const reasons = Object.values(result.issues);
+      // `issues` can be empty on a refusal the transport could not describe.
+      // Answering `undefined` there would report a save that did not happen,
+      // which is the one outcome that must never be silent.
+      return reasons.length > 0
+        ? reasons.join(" ")
+        : "These breakpoints could not be saved.";
+    },
+    [saveSiteStyle, configured]
+  );
+}
+
+/**
+ * What the stored site style's read has DONE, in the manager's three words.
+ *
+ * Named rather than written inline for the reason the writer moved out of the
+ * editor component: every decision folded into that function is another path
+ * through the whole of it, and `fallow` reports the growth as introduced
+ * complexity.
+ *
+ * `error === null`, not `!== undefined`. `useSiteStyle` types the field as
+ * `Error | null` and normalises a successful read to `null`, so an `undefined`
+ * comparison is true on success as well as on failure — the mistake that once
+ * withheld the provenance trace unconditionally.
+ */
+function siteStyleStatus(
+  pending: boolean,
+  error: Error | null
+): "loading" | "unavailable" | "ready" {
+  if (pending) return "loading";
+  return error === null ? "ready" : "unavailable";
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -643,6 +736,21 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * and the tree behind it is re-rendered on every selection and keystroke.
    */
   /*
+   * Writing the site's breakpoints, for the manager in the top bar.
+   *
+   * Section-scoped, so this sends the breakpoints and nothing else — the other
+   * three fields of the record are owned by other studios and are not read here
+   * in order to write this one.
+   *
+   * The result is narrowed to the shape the dialog understands: `undefined` for
+   * a save that landed, and the reason otherwise. The reasons are joined rather
+   * than picked from, because `issues` is keyed by path and taking the first
+   * would silently drop the others — an author told about one refused field
+   * while a second is also refused fixes one and is refused again.
+   */
+  const saveBreakpoints = useBreakpointWriter(configSiteStyle);
+
+  /*
    * The canvas's own render inputs, and the ONE place this surface derives a
    * breakpoint set.
    *
@@ -788,7 +896,28 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
         // editor is open, because the document is committed on the way out.
-        topBar={<DocumentStatusPill isDirty={editor.undoDepth > 0} />}
+        topBar={
+          <>
+            <DocumentStatusPill isDirty={editor.undoDepth > 0} />
+            {/*
+             * Gated on the SAME read the canvas and the cascade are gated on.
+             * Until the stored style has answered, `canvasSiteStyle` is the
+             * host's config defaults — so the dialog would open on a set the
+             * site never chose, and saving from that draft would overwrite the
+             * site's real breakpoints with defaults the author never saw.
+             *
+             * `!== null`, not `!== undefined`: `useSiteStyle` types `error` as
+             * `Error | null` and normalises success to `null`, so the
+             * `undefined` comparison is true on success too — the same mistake
+             * that once withheld the provenance trace unconditionally.
+             */}
+            <BreakpointManager
+              value={canvasRender.styleContext.breakpoints}
+              onSave={saveBreakpoints}
+              status={siteStyleStatus(siteStylePending, siteStyleError)}
+            />
+          </>
+        }
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears

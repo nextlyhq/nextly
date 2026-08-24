@@ -9,7 +9,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { MAX_BREAKPOINT_ID_LENGTH } from "@nextlyhq/blocks-engine";
+
 import {
+  authoredBreakpoints,
   BASE_BREAKPOINT,
   MAX_BREAKPOINTS_PER_AXIS,
   storedLimitFor,
@@ -39,6 +42,70 @@ function rows(prefix: string, count: number) {
     maxWidth: 1000 - i * 50,
   }));
 }
+
+describe("the authored set", () => {
+  it("strips a stored base row from both axes", () => {
+    /*
+     * A stored set CAN carry a `base` row and the plugin's README documents a
+     * host config that does, while the compiler claims that id before reading
+     * any stored definition. Three surfaces ask "what has this site defined" —
+     * the dialog's draft, the trigger's count, and the host deciding whether
+     * config defaults exist — and each one that answered differently produced
+     * its own defect.
+     */
+    const stripped = authoredBreakpoints({
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+      ],
+      container: [{ id: "base", label: "Base" }],
+    } as unknown as BreakpointSet);
+
+    expect(stripped.viewport.map(def => def.id)).toEqual(["tablet"]);
+    expect(stripped.container).toEqual([]);
+  });
+
+  it("answers for an absent set rather than throwing", () => {
+    // The host's config states no breakpoints at all far more often than it
+    // states some, and that caller reads the field optionally.
+    expect(authoredBreakpoints(undefined)).toEqual({
+      viewport: [],
+      container: [],
+    });
+  });
+});
+
+describe("an id the compiler would drop", () => {
+  it("is reported, rather than saved into nothing", () => {
+    /*
+     * The COMPILER's limit, not one chosen here. `namedDefinition` keeps a
+     * definition only while `def.id.length <= MAX_BREAKPOINT_ID_LENGTH`, so an
+     * id this screen accepted would save, report success, and then exist
+     * nowhere — with every style filed under it silently unapplied.
+     *
+     * Asserted at the boundary in both directions, because an off-by-one here
+     * is the whole defect: one character over must be reported, and exactly at
+     * the limit must not.
+     */
+    const idOf = (length: number) => "b".repeat(length);
+    const setWith = (id: string) =>
+      ({
+        viewport: [{ id, label: "Wide", maxWidth: 900 }],
+        container: [],
+      }) as unknown as BreakpointSet;
+
+    expect(
+      validateBreakpoints(setWith(idOf(MAX_BREAKPOINT_ID_LENGTH + 1))).map(
+        issue => issue.code
+      )
+    ).toContain("id-too-long");
+    expect(
+      validateBreakpoints(setWith(idOf(MAX_BREAKPOINT_ID_LENGTH))).map(
+        issue => issue.code
+      )
+    ).not.toContain("id-too-long");
+  });
+});
 
 describe("breakpoint definitions the compiler would keep", () => {
   it("reports nothing for an ordinary desktop-first set", () => {

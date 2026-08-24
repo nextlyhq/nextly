@@ -32,6 +32,7 @@
 import {
   BASE_BREAKPOINT,
   BREAKPOINT_AXES,
+  MAX_BREAKPOINT_ID_LENGTH,
   MAX_BREAKPOINTS_PER_AXIS,
   type BreakpointAxis,
   type BreakpointDef,
@@ -67,6 +68,7 @@ export type { BreakpointAxis, BreakpointDef, BreakpointSet };
  * @experimental
  */
 export type BreakpointIssueCode =
+  | "id-too-long"
   | "id-required"
   | "id-reserved"
   | "id-duplicate"
@@ -105,6 +107,63 @@ export function storedLimitFor(axis: BreakpointAxis): number {
   return axis === "viewport"
     ? MAX_BREAKPOINTS_PER_AXIS - 1
     : MAX_BREAKPOINTS_PER_AXIS;
+}
+
+/**
+ * The set with the built-in base removed from both axes.
+ *
+ * The base is not a definition an author added: `breakpointContexts` prepends
+ * its context whether or not one is stored, and `validateBreakpoints` reports
+ * the id as reserved. But a stored set CAN carry a `base` row and the plugin's
+ * README documents a host config that does, so every surface that asks "what
+ * has this site actually defined" has to strip it — and each one that forgets
+ * gets a different wrong answer from the same set.
+ *
+ * Published rather than repeated, because it has three askers already: the
+ * dialog's draft, the trigger's count, and the host deciding whether config
+ * defaults exist. The first two disagreeing is what made Save unreachable on
+ * the documented configuration; the third disagreeing made a site with only a
+ * base row unable to return to it.
+ *
+ * @experimental
+ */
+export function authoredBreakpoints(
+  set: BreakpointSet | undefined
+): BreakpointSet {
+  const authored = (axis: readonly BreakpointDef[] | undefined) =>
+    (axis ?? []).filter(def => def?.id !== BASE_BREAKPOINT);
+  return {
+    viewport: authored(set?.viewport),
+    container: authored(set?.container),
+  };
+}
+
+/**
+ * Whether two sets describe the same breakpoints.
+ *
+ * By CONTENT, never by object identity. The prop contract does not promise a
+ * stable reference — a host that rebuilds an equal object on any parent render
+ * is within its rights — so identity answers "has the read changed" wrongly in
+ * both directions, and a surface that asks it gets a different wrong answer
+ * depending on which way the host happens to render.
+ *
+ * Compares the AUTHORED sets, so a stored base row on one side and none on the
+ * other is not a difference: the compiler prepends that context either way, and
+ * treating it as a change would report a set that renders identically as new.
+ *
+ * @experimental
+ */
+export function sameBreakpoints(
+  a: BreakpointSet | undefined,
+  b: BreakpointSet | undefined
+): boolean {
+  const shape = (set: BreakpointSet | undefined) => {
+    const authored = authoredBreakpoints(set);
+    const axis = (defs: readonly BreakpointDef[]) =>
+      defs.map(def => `${def.id}\u0000${def.label}\u0000${def.maxWidth ?? ""}`);
+    return [axis(authored.viewport), axis(authored.container)];
+  };
+  return JSON.stringify(shape(a)) === JSON.stringify(shape(b));
 }
 
 /**
@@ -170,6 +229,19 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
       const id = def.id;
       if (id.length === 0) {
         at("id", "id-required", "Give this breakpoint an id.");
+      } else if (id.length > MAX_BREAKPOINT_ID_LENGTH) {
+        /*
+         * The COMPILER's limit, not one chosen here. `namedDefinition` drops a
+         * definition whose id exceeds it, so an id this screen accepted would
+         * save, report success, and then exist nowhere — with every style filed
+         * under it silently unapplied. Two gates disagreeing about what is
+         * storable is worse than either being strict.
+         */
+        at(
+          "id",
+          "id-too-long",
+          `An id can be at most ${MAX_BREAKPOINT_ID_LENGTH} characters.`
+        );
       } else if (id === BASE_BREAKPOINT) {
         at(
           "id",
