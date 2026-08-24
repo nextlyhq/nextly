@@ -89,6 +89,32 @@ describe("ResponseViewer", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders a JSON null body rather than calling it empty", async () => {
+    // `null` is a valid JSON body. Collapsing it into the same empty string an
+    // absent body produces made a real payload read as nothing returned -- and
+    // because the toolbar keys on the same value, uncopyable with it.
+    // NO `raw` here, deliberately. With `raw` supplied the fallback in
+    // `bodyText` covers this case on its own, so the test would pass against a
+    // `jsonString` that still collapses null -- proving the fallback, not the
+    // fix. Withholding it puts the assertion on `jsonString` alone.
+    render(<ResponseViewer data={null} code={code} status={200} />);
+
+    expect(screen.queryByText("No content")).toBeNull();
+    expect(screen.getByRole("button", { name: /^copy$/i })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+    expect(writeText).toHaveBeenCalledWith("null");
+  });
+
+  it("keeps a body copyable when its rendered view is empty", () => {
+    // A JSON `""` renders as nothing and is still a body that arrived. Presence
+    // is decided by the bytes, not by what the view happens to show.
+    render(<ResponseViewer data="" raw='""' code={code} status={200} />);
+
+    expect(screen.queryByText("No content")).toBeNull();
+    expect(screen.getByRole("button", { name: /^copy$/i })).toBeEnabled();
+  });
+
   it("still says nothing was sent before the first request", () => {
     // The control for the test above: without it, an implementation that always
     // says "No content" passes that one and is wrong in the commoner case.

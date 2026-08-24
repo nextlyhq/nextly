@@ -96,7 +96,13 @@ export function RequestBar({
     // which is where a focus ring lives. Every control that touches an edge
     // therefore draws its ring INSIDE, or keyboard focus disappears on the
     // outermost ones.
-    <div className="flex shrink-0 items-stretch gap-px overflow-hidden rounded-lg border border-border-strong bg-border-strong">
+    //
+    // It wraps for the same reason. The children that do not shrink come to
+    // 456px -- the picker, two icon buttons and Send -- so under about 490px
+    // of content width the clip takes the RIGHTMOST control, which is Send.
+    // A primary action that silently disappears on a narrow screen is worse
+    // than one that costs a second row.
+    <div className="flex shrink-0 flex-wrap items-stretch gap-px overflow-hidden rounded-lg border border-border-strong bg-border-strong">
       <div className="w-52 shrink-0 bg-background">{action}</div>
 
       <div className="flex flex-1 items-center gap-3 bg-background px-4 py-2.5 min-w-0">

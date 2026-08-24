@@ -104,7 +104,10 @@ export function ResponseViewer({
   );
 
   const jsonString = useMemo(() => {
-    if (data === undefined || data === null) return "";
+    // `undefined` only. `null` is a VALID JSON body and stringifies to "null",
+    // and collapsing the two made a real payload read as nothing returned --
+    // unreadable in the pane, and un-copyable because the toolbar keys on this.
+    if (data === undefined) return "";
     if (typeof data === "string") return data;
     try {
       return JSON.stringify(data, null, 2);
@@ -138,6 +141,18 @@ export function ResponseViewer({
    * clipboard -- the same defect this control was rewritten to remove, one tab
    * further along.
    */
+  /**
+   * The body as anything should act on it.
+   *
+   * `jsonString` is a VIEW of the body and `raw` is the bytes that arrived. A
+   * body can render as an empty view and still exist -- a JSON `""` -- so
+   * presence comes from the richer value, and the view is used only when it
+   * has something to show. One expression rather than two, because the pane
+   * and the toolbar disagreeing about whether there IS a body is exactly how
+   * a real payload became uncopyable.
+   */
+  const bodyText = jsonString || (raw ?? "");
+
   const target: { text: string; label: string; filename: string } =
     tab === "code"
       ? {
@@ -151,7 +166,7 @@ export function ResponseViewer({
             label: "Headers",
             filename: `${filename}-headers`,
           }
-        : { text: jsonString, label: "Response", filename };
+        : { text: bodyText, label: "Response", filename };
   const copyTarget = target.text;
 
   const handleCopy = useCallback(async () => {
@@ -299,7 +314,7 @@ export function ResponseViewer({
               {error}
             </p>
           </div>
-        ) : !jsonString ? (
+        ) : !bodyText ? (
           <div className="flex h-full flex-col items-center justify-center bg-muted/30 p-12 text-center">
             <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-md border border-border bg-card">
               <FileJson className="h-6 w-6 text-muted-foreground" />
@@ -326,7 +341,7 @@ export function ResponseViewer({
             </p>
           </div>
         ) : (
-          <JsonViewer value={jsonString} />
+          <JsonViewer value={bodyText} />
         )}
       </TabsContent>
 
