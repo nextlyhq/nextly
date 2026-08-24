@@ -116,6 +116,41 @@ export interface SingleRouteConfig<TNode> {
   locale?: string;
   /** Relation depth for the read. Defaults to the reader's own default. */
   depth?: number;
+  /**
+   * The collections this route's trust extends to, when it populates
+   * relationships.
+   *
+   * **Defaults to NOTHING**, which is what a draft grant actually authorizes.
+   * The grant names ONE document and says nothing about what that document
+   * points at, so a target reached through a field is read the way an anonymous
+   * visitor would read it: its own access rules apply, and only its published
+   * rows come back.
+   *
+   * Without it a trusted read spreads to everything the Single populates, and a
+   * caller who may preview this document receives related records they have no
+   * permission to read at all.
+   *
+   * ```ts
+   * // The landing page populates a featured post, and those are public.
+   * createSingleRoute({
+   *   slug: "landing-page",
+   *   trustedCollections: ["posts"],
+   *   draft: previewSingleDraftGate(),
+   *   render: ...,
+   * });
+   * ```
+   *
+   * **This only ever narrows.** It is evaluated as
+   * `overrideAccess && trusted(target)`, so naming a collection cannot grant
+   * more than the read already holds, and it decides nothing on an enforced
+   * read. Naming one does NOT admit its drafts: trusting a collection says its
+   * published content may be shown, and nothing here widens a lifecycle.
+   *
+   * The same option, with the same meaning, as
+   * `ContentRouteConfig.trustedCollections` — one question keeps one answer
+   * whether the document came from a collection or is a Single.
+   */
+  trustedCollections?: string[];
   /** Identity to evaluate access rules against. Enforced routes only. */
   user?: UserContext;
 
@@ -224,9 +259,18 @@ function buildSingleRoute<TNode>(
    * worth reading apart: this decides the POSTURE of the request, while `read`
    * below only classifies what came back.
    */
+  // Built once: a `Set` lookup per populated target, and the same bound on every
+  // read this route issues.
+  const trustedSet = new Set(config.trustedCollections ?? []);
+
   function readArgs(draft: boolean) {
     return {
       slug: config.slug,
+      // The bound travels WITH the widening. Passed on every read rather than
+      // only the trusted ones, because it is evaluated as
+      // `overrideAccess && trusted(target)` — inert when the read is enforced,
+      // and impossible to forget on the one path where it matters.
+      trusted: (collection: string): boolean => trustedSet.has(collection),
       // The posture, expressed to the reader. An enforced route asks as the
       // visitor would; a public route has stated that this Single is public.
       //
