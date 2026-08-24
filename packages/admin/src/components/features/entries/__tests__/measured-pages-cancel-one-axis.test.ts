@@ -17,11 +17,10 @@
  * WHAT THIS COVERS: every `.ts` and `.tsx` under the admin's source, minus
  * this file, whose fixtures are examples of the thing being forbidden.
  *
- * It covered five named files until a review pointed out that a class list
- * extracted to a constant in a sixth still compiles — Tailwind scans literals
- * across the whole source set — so the list would have gone green while the
- * bleed came back. A list of files to check is a list someone has to remember
- * to extend; scanning the tree is not.
+ * A list of files would not do: a class list extracted to a constant in a file
+ * nobody thought to list still compiles, because Tailwind scans literals across
+ * the whole source set. A list is something someone has to remember to extend;
+ * a tree walk is not.
  *
  * This is only affordable because the utility is used NOWHERE else in the
  * admin: measured, every other occurrence is prose explaining its removal. If a
@@ -36,6 +35,7 @@ import { describe, expect, it } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADMIN_SRC = resolve(HERE, "../../../..");
+const GLOBALS_CSS = resolve(ADMIN_SRC, "styles/globals.css");
 
 /**
  * The one file allowed to contain these utilities: this one, whose fixtures are
@@ -46,18 +46,46 @@ const ADMIN_SRC = resolve(HERE, "../../../..");
 const THIS_FILE =
   "components/features/entries/__tests__/measured-pages-cancel-one-axis.test.ts";
 
-/** Every `.ts`/`.tsx` under the admin's source, as paths relative to it. */
-function sourceFiles(dir = ""): string[] {
-  const here = resolve(ADMIN_SRC, dir);
+/**
+ * Every tree Tailwind reads when it compiles the admin, DERIVED from the
+ * stylesheet that declares them.
+ *
+ * The admin's own source is one of four: `globals.css` also pulls in
+ * `@nextlyhq/ui` and both first-party plugin admin trees, because a utility
+ * used only there would otherwise be dropped from the build. A class in any of
+ * them reaches the same stylesheet, so a scan of one tree answers a narrower
+ * question than the one worth asking.
+ *
+ * Read from the `@source` directives rather than listed here, so a tree added
+ * to the build joins this scan in the same edit.
+ */
+function scannedRoots(): string[] {
+  const css = readFileSync(GLOBALS_CSS, "utf8");
+  const declared = [...css.matchAll(/@source\s+"([^"]+)"/g)]
+    .map(m => m[1])
+    .filter(spec => !spec.startsWith("inline("));
+
+  return [
+    ADMIN_SRC,
+    ...declared.map(spec => resolve(dirname(GLOBALS_CSS), spec)),
+  ];
+}
+
+/** Every `.ts`/`.tsx` under `root`, as absolute paths. */
+function filesUnder(root: string): string[] {
   const found: string[] = [];
 
-  for (const entry of readdirSync(here, { withFileTypes: true })) {
-    const path = dir ? `${dir}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) found.push(...sourceFiles(path));
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = `${root}/${entry.name}`;
+    if (entry.isDirectory()) found.push(...filesUnder(path));
     else if (/\.tsx?$/.test(entry.name)) found.push(path);
   }
 
   return found;
+}
+
+function sourceFiles(): string[] {
+  return scannedRoots().flatMap(filesUnder);
 }
 
 /**
@@ -66,36 +94,25 @@ function sourceFiles(dir = ""): string[] {
  *
  * Both utilities, because both do it: the two-axis inset cancels the horizontal
  * axis as a side effect, and the horizontal-only one beside a `-my-8`
- * recreates it deliberately. An
- * earlier version matched only the first and carried a control asserting
- * the horizontal-only spelling was fine — which would have let exactly that pairing restore the
- * 64px bleed with this test green.
+ * recreates it deliberately.
  *
- * Not anchored on `className="`, which an earlier version was. That anchor
- * makes the check a check on ONE SPELLING rather than on the class: moving the
- * list into a `cn(...)` call is an ordinary refactor and it walked straight
- * past.
+ * Nothing is anchored on `className="`. Such an anchor checks a SPELLING
+ * rather than a class, and a list moved into a `cn(...)` call is an ordinary
+ * refactor that would walk straight past it.
  *
- * Comments are NOT excluded, which an earlier version also got wrong. Tailwind
- * scans them like any other text and emits the rule from a sentence that spells
- * the class out. Measured: prose in three files put both selectors into the
- * shipped stylesheet, where a class built at runtime would have found them
- * waiting. So the scan agrees with the scanner — any complete token anywhere is
- * a finding — and the prose in those files, and in this one, describes the
- * utility instead of naming it.
- *
- * This sentence is the demonstration. An earlier draft of it spelled both
- * classes out to explain the hazard, and put them straight back into the
- * stylesheet.
+ * Comments are not excluded either, because Tailwind does not exclude them: it
+ * emits the rule from a sentence that spells the class out exactly as it does
+ * from code, and both selectors reach the shipped stylesheet that way. So any
+ * complete token anywhere is a finding, and every comment about this utility —
+ * in the layouts and in this file — describes it rather than naming it.
  */
 /**
  * The two forbidden utilities, ASSEMBLED rather than written.
  *
  * Tailwind scans this file like any other source, so a complete token here —
  * in a fixture or in a sentence — makes it emit the very rule the file exists
- * to forbid. Measured: an earlier version put both selectors into the shipped
- * stylesheet, which meant a class built at runtime would have found a rule
- * waiting for it and bled 64px while this test passed.
+ * to forbid. A class assembled at runtime, which no source scan can see, would
+ * then find that rule waiting and bleed 64px while this test passed.
  *
  * Split so no scanner sees a whole class. Nothing below writes one either; the
  * prose says "the two-axis inset" and "the horizontal-only inset" for the same
@@ -107,22 +124,26 @@ const HORIZONTAL_ONLY = `-mx${"-8"}`;
 const HORIZONTAL_CANCEL = /(?:^|[\s:"'`{(,])-mx?-8\b/;
 
 describe("a measured entry page", () => {
-  it("reads the whole admin, not a list someone maintains", () => {
-    // The population was a list of five files until a review pointed out the
-    // obvious: a class list extracted to a constant in a SIXTH file still
-    // compiles — Tailwind scans literals across the source set — and the list
-    // would not have seen it. There is no list now, so there is nothing to
-    // forget to update.
-    const files = sourceFiles();
+  it("reads every tree the build reads", () => {
+    // Four trees, not one: the admin's own source plus `@nextlyhq/ui` and both
+    // plugin admin trees, which `globals.css` pulls in so a utility used only
+    // there is not dropped from the build. A class in any of them reaches the
+    // same stylesheet.
+    const roots = scannedRoots();
+    expect(roots).toHaveLength(4);
+    expect(roots.some(r => r.endsWith("packages/ui/src"))).toBe(true);
 
+    const files = sourceFiles();
     expect(files.length).toBeGreaterThan(500);
-    for (const path of [
+    for (const suffix of [
       "components/features/entries/EntryForm/EntryForm.tsx",
       "components/features/singles/SingleForm.tsx",
-      "pages/dashboard/entries/[slug]/create.tsx",
-      "pages/dashboard/singles/[slug]/index.tsx",
+      "packages/ui/src/components/page-shell.tsx",
     ]) {
-      expect(files, `${path} is not in the scan`).toContain(path);
+      expect(
+        files.some(f => f.endsWith(suffix)),
+        `${suffix} is not in the scan`
+      ).toBe(true);
     }
   });
 
@@ -170,7 +191,7 @@ describe("a measured entry page", () => {
 
   it("cancels the vertical inset nowhere but here", () => {
     const offenders = sourceFiles()
-      .filter(path => path !== THIS_FILE)
+      .filter(path => !path.endsWith(THIS_FILE))
       .filter(path =>
         HORIZONTAL_CANCEL.test(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
       );
