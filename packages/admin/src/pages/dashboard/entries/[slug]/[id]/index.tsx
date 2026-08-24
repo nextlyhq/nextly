@@ -471,7 +471,18 @@ export default function EditEntryPage({
 
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <PageContainer>
+        {/* A custom view that did NOT take the window is page CONTENT: it
+            renders under this breadcrumb, inside this frame. So the measure is
+            the page's, declared here, rather than the view's — a view that
+            declared its own would sit inside this container's padding and add
+            a second inset to it, which is the disagreement the shell exists to
+            end.
+
+            A view that wants the whole panel does not reach this branch at
+            all: it asks to suppress `pageFrame` on mount and is returned
+            above, without a container. Those two branches are the whole
+            vocabulary, so there is no third case for a width to answer. */}
+        <PageContainer width="form">
           <div className="mb-6">
             <EditEntryBreadcrumbs
               collectionSlug={slug}
