@@ -403,6 +403,38 @@ describe("the id a node actually renders", () => {
     expect(taken.has("hero")).toBe(true);
   });
 
+  it("survives a malformed SLOTS map, and a null inside one", () => {
+    /*
+     * Two more shapes a stored document can hold, and neither is the attribute
+     * bag: `Object.values(null)` throws on a null `slots`, and a null sitting
+     * inside a slot array reaches the walk itself, which reads `.id` off it.
+     * Guarding only the first — the obvious one — leaves the second, so the
+     * check lives at the single point every node passes through.
+     */
+    expect(() =>
+      domIdsTaken(
+        [
+          node({ id: "b", slots: null }),
+          node({ id: "c", slots: { main: [null, "nope"] } }),
+          node({ id: "d", cssId: "kept" }),
+        ],
+        "a"
+      )
+    ).not.toThrow();
+    // And a real nested node beside the rubbish is still read, so the guard
+    // skips rather than abandoning the walk.
+    const taken = domIdsTaken(
+      [
+        node({
+          id: "b",
+          slots: { main: [null, node({ id: "e", cssId: "nested" })] },
+        }),
+      ],
+      "a"
+    );
+    expect(taken.has("nested")).toBe(true);
+  });
+
   it("survives a malformed bag on another node", () => {
     /*
      * This walks every OTHER node, and a stored document holds whatever the

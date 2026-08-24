@@ -219,8 +219,18 @@ export function domIdsTaken(
   exceptNodeId: string
 ): Set<string> {
   const taken = new Set<string>();
-  const visit = (node: BlockNode): void => {
-    if (node.id !== exceptNodeId) {
+  /*
+   * Every node passes through HERE, which is why the shape is checked here
+   * and not at the two places that call it. A stored document holds what the
+   * database returned: a `null` inside a slot array reaches this, and reading
+   * `.id` off it throws before the tab renders. Guarding the callers instead
+   * would be two guards to keep in step, and the walk gained its second
+   * caller in the same commit that guarded the first.
+   */
+  const visit = (node: unknown): void => {
+    if (typeof node !== "object" || node === null) return;
+    const held = node as BlockNode;
+    if (held.id !== exceptNodeId) {
       /*
        * ONE id per node, because the renderer emits one: the modelled field
        * wins over the bag. Adding both refused another block the bag's value
@@ -234,12 +244,12 @@ export function domIdsTaken(
        * recorded the bag's value and refused another block an id that never
        * renders.
        */
-      const modelled = typeof node.cssId === "string" ? node.cssId : undefined;
-      const rendered = modelled ?? renderedIdIn(node.attributes);
+      const modelled = typeof held.cssId === "string" ? held.cssId : undefined;
+      const rendered = modelled ?? renderedIdIn(held.attributes);
       // An empty id is not an id, so it takes nothing — it only stops the bag.
       if (rendered !== undefined && rendered !== "") taken.add(rendered);
     }
-    for (const child of childNodesOf(node)) visit(child);
+    for (const child of childNodesOf(held)) visit(child);
   };
   for (const node of nodes) visit(node);
   return taken;
@@ -279,9 +289,11 @@ function renderedIdIn(
 }
 
 /** Every node nested inside one, across all of its slots. */
-function childNodesOf(node: BlockNode): BlockNode[] {
+function childNodesOf(node: BlockNode): unknown[] {
   const slots = node.slots;
-  if (slots === undefined) return [];
+  // `Object.values(null)` throws, and a stored `slots` can be anything —
+  // the same shape check the attribute bag beside it already gets.
+  if (typeof slots !== "object" || slots === null) return [];
   return Object.values(slots).flatMap(held =>
     Array.isArray(held) ? held : []
   );
