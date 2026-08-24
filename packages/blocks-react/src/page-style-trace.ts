@@ -20,6 +20,7 @@
 
 import type {
   BlockDocument,
+  BlockNode,
   DocumentLimits,
   RemotePatternInput,
   SiteSheetInput,
@@ -61,6 +62,22 @@ export interface PageStyleTraceInput {
 }
 
 /**
+ * A page's cascade, and the tree it describes.
+ *
+ * The two travel TOGETHER because they are one answer. Every reader of the
+ * entries also has to know which node an entry belongs to, and deriving that
+ * from the document the caller happens to hold reintroduces the divergence this
+ * module exists to close — the entries describe the prepared tree, so anything
+ * asking "which node is this" must ask the same tree.
+ */
+export interface PageStyleCascade {
+  /** The declarations the compiler wrote, in cascade order. */
+  readonly entries: readonly StyleTraceEntry[];
+  /** The nodes those declarations describe: the tree the sheet was compiled from. */
+  readonly nodes: readonly BlockNode[];
+}
+
+/**
  * Every declaration the compiler would write for this page, in cascade order.
  *
  * `undefined` when no compile could run — there are no breakpoints to compile
@@ -80,7 +97,7 @@ export interface PageStyleTraceInput {
  */
 export function pageStyleTrace(
   input: PageStyleTraceInput
-): readonly StyleTraceEntry[] | undefined {
+): PageStyleCascade | undefined {
   const shared = sharedStyleInputs(input.styleContext, input.site);
   /*
    * The same construction the renderer uses, and for its reason: a route context
@@ -189,8 +206,21 @@ export function pageStyleTrace(
   // An unreadable ENVELOPE, which is a real answer: nothing can be compiled from
   // a document this format does not recognise.
   if (stages === null) return undefined;
-  return resolvePageStylesWithTrace(
-    pruneRenderedPlaceholders(stages.deduped, resolver),
+  /*
+   * The tree, named once and used twice.
+   *
+   * Returned alongside the entries rather than recomputed by the caller, and
+   * that is the whole point of the pairing: a reader that asks WHICH NODE it is
+   * looking at from the raw document, while the entries describe this tree,
+   * has two answers to one question. They diverge wherever the preparation
+   * repaired something — most sharply on a duplicated id, where gating can
+   * remove the first node and leave a later one rendering under that id, so the
+   * raw lookup returns a node with different classes, a different type and a
+   * different chain of ancestors than the one the declarations belong to.
+   */
+  const nodes = pruneRenderedPlaceholders(stages.deduped, resolver);
+  const entries = resolvePageStylesWithTrace(
+    nodes,
     // No stored artifact. One would be REUSED rather than recompiled, and a
     // reused sheet has no cascade to report — the caller would get `undefined`
     // for a document it can perfectly well compile.
@@ -200,4 +230,5 @@ export function pageStyleTrace(
     false,
     { trace: true }
   ).trace;
+  return entries === undefined ? undefined : { entries, nodes: nodes.nodes };
 }

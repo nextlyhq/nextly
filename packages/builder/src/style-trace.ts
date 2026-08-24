@@ -61,9 +61,8 @@ import type {
   RemotePatternInput,
   SiteSheetInput,
   StyleCompileContext,
-  StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
-import type { BlockResolver } from "@nextlyhq/blocks-react";
+import type { BlockResolver, PageStyleCascade } from "@nextlyhq/blocks-react";
 import { pageStyleTrace as compileTrace } from "@nextlyhq/blocks-react";
 
 /**
@@ -112,7 +111,7 @@ export function pageStyleTrace(
      */
     readonly limits?: DocumentLimits;
   }
-): readonly StyleTraceEntry[] | undefined {
+): PageStyleCascade | undefined {
   return compileTrace({
     document,
     styleContext,

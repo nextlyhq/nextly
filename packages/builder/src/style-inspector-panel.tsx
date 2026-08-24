@@ -47,6 +47,7 @@ import {
   type StyleTraceEntry,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   Accordion,
   AccordionContent,
@@ -166,18 +167,27 @@ export interface StyleInspectorPanelProps {
    */
   tokens?: SiteTokenSet;
   /**
-   * The declarations the compiler wrote for this document, in emission order.
+   * The declarations the compiler wrote for this document, WITH the tree they
+   * describe.
    *
    * What lets a control say where its value came from. Supplied by the host
    * rather than compiled here, and that is the point: the panel renders once per
    * control, so compiling in this component would walk the cascade per control
    * — the thing this file's own comments say must not happen.
    *
+   * The tree travels with the entries rather than being taken from
+   * {@link editor}, because the two are one answer. Read-time repair can change
+   * WHICH node owns an id: a duplicated id whose first node is condition-gated
+   * leaves a later node rendering under it, and a lookup in the raw document
+   * then returns a node with different classes, a different type and a different
+   * chain of ancestors than the declarations belong to. A visibly applied class
+   * is reported as unset, or attributed to the wrong tier.
+   *
    * Absent means the question was never asked, not that nothing is inherited: a
-   * host that supplies no trace gets no indicators, which is the honest answer
+   * host that supplies no cascade gets no indicators, which is the honest answer
    * for a surface that cannot compile.
    */
-  trace?: readonly StyleTraceEntry[];
+  cascade?: PageStyleCascade;
   /**
    * The site's breakpoints, for deciding which declarations are live.
    *
@@ -194,7 +204,7 @@ export function StyleInspectorPanel({
   tokens,
   state,
   breakpoint,
-  trace,
+  cascade,
   breakpoints,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
@@ -281,7 +291,17 @@ export function StyleInspectorPanel({
   const subject =
     editor.selectedId === null
       ? undefined
-      : styleSubjectFor(editor.document.nodes, editor.selectedId);
+      : styleSubjectFor(
+          /*
+           * The cascade's OWN tree where there is one. Asking the raw document
+           * instead would answer about a node the declarations may not describe,
+           * and the fallback below is only for a panel with no cascade at all —
+           * where no indicator is drawn and the subject is read for the block
+           * type alone.
+           */
+          cascade?.nodes ?? editor.document.nodes,
+          editor.selectedId
+        );
   /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
@@ -295,12 +315,12 @@ export function StyleInspectorPanel({
     labelOf: id => breakpointLabel(breakpoints, id),
   };
   const provenanceOf: ProvenanceOf = leaf => {
-    // Absent means the question was never asked. A host that supplies no trace
+    // Absent means the question was never asked. A host that supplies no cascade
     // gets no indicators, which is the honest answer for a surface that cannot
     // compile — and not the same as "nothing is inherited".
-    if (trace === undefined || subject === undefined) return undefined;
+    if (cascade === undefined || subject === undefined) return undefined;
     return styleProvenance({
-      trace,
+      trace: cascade.entries,
       subject,
       // The control's own leaf, never the catalog key: two keys can write one
       // CSS property, and the trace records what was WRITTEN.
