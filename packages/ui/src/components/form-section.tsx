@@ -52,24 +52,24 @@ export function FormSection({
       </div>
       <Card className="overflow-hidden">
         {/* The section owns its vertical rhythm rather than leaving each child
-            to pad itself. That delegation is what produced fields flush against
-            the card's borders: `SettingsRow` supplied the padding and
-            `FieldShell` did not, and a card cannot see which of the two it was
-            handed.
+            to pad itself. A card renders whatever children it is handed and
+            cannot tell one row idiom from another, so a rhythm supplied by the
+            rows is only as reliable as the least careful of them — and a row
+            that supplies none renders flush against the card's borders.
 
             One token serves both the card's edge padding and the gap between
             two fields, because they are the same measurement seen twice. Two
             tokens could drift apart with nothing to notice.
 
             The rhythm itself is a plain CSS rule shipped in the theme
-            (`.nx-form-section-rows`) rather than a Tailwind utility here, so it
-            compiles identically under the v3 preset this package also publishes
-            and leaves no arbitrary-value token for a scanner to extract from a
-            file that merely names it.
+            (`.nx-form-section-rows`) rather than a Tailwind utility here. The
+            utility spelling differs between Tailwind majors, and an
+            arbitrary-value token is extracted from any file the scanner reads —
+            a comment naming one included. A theme rule has neither property.
 
             A child must not pad itself: the two are additive, so a row carrying
-            its own `py-*` doubles the rhythm on exactly the sections that were
-            already correct. */}
+            its own `py-*` doubles the rhythm on the sections that are already
+            correct. */}
         <div className="nx-form-section-rows divide-y divide-foreground/10 px-6">
           {children}
         </div>
