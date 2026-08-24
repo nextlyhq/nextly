@@ -16,6 +16,7 @@
  *
  * @module runtime/preview/preview-draft-gate
  */
+import { assertEntryPreviewable } from "../../api/preview-access";
 import type { PreviewTokenScope } from "../../auth/preview/preview-token";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import type { ResolvedContext } from "../routing/content-route";
@@ -132,6 +133,37 @@ export function previewDraftGate(
     if (minter === undefined) return false;
     const readAs = await resolvePreviewIdentity(minter);
     if (readAs === null) return false;
+
+    // Asked again, on every render, and that is what makes revocation real.
+    //
+    // Rebuilding the sharer's identity re-evaluates FIELD rules against their
+    // current permissions and nothing else: the read below runs with
+    // `overrideAccess: true`, so the collection gate and every row-level rule
+    // are bypassed. A sharer who loses their update role, or stops satisfying
+    // an owner-only rule, would therefore keep serving the draft to whoever
+    // holds the link until it expired — an account that is still ACTIVE, so the
+    // deactivation check does not reach it either.
+    //
+    // The SAME function the mint uses, rather than a second implementation of
+    // "may this person preview this entry". Two versions of that question agree
+    // on the day they are written; the one that drifts is the one nobody runs,
+    // and here they would drift into a link that mints and cannot render, or
+    // renders and should not.
+    try {
+      await assertEntryPreviewable(collection, scope.entryId, readAs, {
+        // FALSE, and this is the load-bearing half. A render is an anonymous
+        // public request: nothing ran the coarse RBAC / code-defined access
+        // gate for it, so claiming otherwise would skip the check that notices
+        // a sharer's role was withdrawn — leaving this "re-authorization" able
+        // to catch only a deleted or deactivated account.
+        routeAuthorized: false,
+      });
+    } catch {
+      // Refused rather than propagated. A revoked link is an ordinary request
+      // outcome — the visitor sees the published page or a 404, the same as an
+      // expired one — not a 500 on a page that was working yesterday.
+      return false;
+    }
 
     return { entryId: scope.entryId, readAs };
   };

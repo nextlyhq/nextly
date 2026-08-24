@@ -26,7 +26,7 @@ import { buildUserContext } from "../../auth/user-context";
 import { getService } from "../../di/register";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { getCachedNextly } from "../../init";
-import { listRoleSlugsForUser } from "../../services/lib/permissions";
+import { listRoleSlugsForUserStrict } from "../../services/lib/permissions";
 
 /**
  * Rebuild the `UserContext` the sharer's own request would be judged against.
@@ -60,10 +60,22 @@ import { listRoleSlugsForUser } from "../../services/lib/permissions";
  * needs the sharer's claims carried out of the request that minted the link,
  * which is a design decision about the token, not about this function.
  *
+ * **Resolved from the process-global container, which bounds where this is
+ * correct.** A content route may be given its own `nextly` reader, and the
+ * previewed document is read through THAT — so a deployment pointing one at a
+ * different database would resolve the document from one place and the sharer
+ * from another. It is stated rather than closed because it cannot be closed
+ * here: `NextlyContentReader` is a content-read interface and exposes no user
+ * lookup, so there is nothing to thread. Supporting it means an explicit
+ * identity-resolver option on the gate, which is worth adding when a
+ * deployment needs it and not before — an escape hatch invented for a
+ * configuration nothing else in the product supports is a second code path
+ * that nobody exercises.
+ *
  * @returns The identity, or `null` when it cannot be established — a deleted
- * user, or a database that will not answer. The caller must refuse the draft
- * rather than render without one: a preview with no identity is a preview with
- * no field rules, which is the defect itself.
+ * user, a DEACTIVATED one, or a database that will not answer. The caller must
+ * refuse the draft rather than render without one: a preview with no identity
+ * is a preview with no field rules, which is the defect itself.
  */
 export async function resolvePreviewIdentity(
   minter: string
@@ -75,8 +87,21 @@ export async function resolvePreviewIdentity(
   try {
     const [user, roles] = await Promise.all([
       getService("userService").findById(minter, {}),
-      listRoleSlugsForUser(minter),
+      // The STRICT lookup, and the distinction is the whole point. The ordinary
+      // one degrades a database failure to an empty role set, which is the safe
+      // direction for a rule that grants on a role and the wrong one for a rule
+      // that withholds on one: `!roles.includes("restricted")` passes for a
+      // sharer whose roles could not be read. Here a failure to ask must not be
+      // reported as an answer.
+      listRoleSlugsForUserStrict(minter),
     ]);
+
+    // Deactivating an account revokes its sessions — `session.ts` and
+    // `refresh.ts` both refuse on `!user.isActive` — and a preview link is a
+    // credential that outlives the session that minted it. Without this, every
+    // outstanding link kept serving drafts under a former colleague's
+    // permissions until it expired.
+    if (!user.isActive) return null;
 
     return buildUserContext({
       id: user.id,

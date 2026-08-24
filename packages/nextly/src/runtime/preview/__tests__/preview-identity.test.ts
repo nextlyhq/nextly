@@ -14,17 +14,19 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-const { findById, listRoleSlugsForUser, getService } = vi.hoisted(() => {
+const { findById, listRoleSlugsForUserStrict, getService } = vi.hoisted(() => {
   const findById = vi.fn();
   return {
     findById,
-    listRoleSlugsForUser: vi.fn(),
+    listRoleSlugsForUserStrict: vi.fn(),
     getService: vi.fn(() => ({ findById })),
   };
 });
 
 vi.mock("../../../di/register", () => ({ getService }));
-vi.mock("../../../services/lib/permissions", () => ({ listRoleSlugsForUser }));
+vi.mock("../../../services/lib/permissions", () => ({
+  listRoleSlugsForUserStrict,
+}));
 vi.mock("../../../init", () => ({
   getCachedNextly: () => Promise.resolve({}),
 }));
@@ -41,13 +43,14 @@ describe("the identity a previewed draft is rendered as", () => {
       id: "u1",
       name: "Ada",
       email: "ada@example.com",
+      isActive: true,
     });
-    listRoleSlugsForUser.mockResolvedValue(["editor", "reviewer"]);
+    listRoleSlugsForUserStrict.mockResolvedValue(["editor", "reviewer"]);
 
     const identity = await resolvePreviewIdentity("u1");
 
     expect(findById).toHaveBeenCalledWith("u1", {});
-    expect(listRoleSlugsForUser).toHaveBeenCalledWith("u1");
+    expect(listRoleSlugsForUserStrict).toHaveBeenCalledWith("u1");
     expect(identity).toMatchObject({
       id: "u1",
       name: "Ada",
@@ -68,10 +71,11 @@ describe("the identity a previewed draft is rendered as", () => {
       id: "u1",
       name: "Ada",
       email: "ada@example.com",
+      isActive: true,
       department: "engineering",
       tier: "gold",
     });
-    listRoleSlugsForUser.mockResolvedValue([]);
+    listRoleSlugsForUserStrict.mockResolvedValue([]);
 
     const identity = await resolvePreviewIdentity("u1");
 
@@ -82,8 +86,13 @@ describe("the identity a previewed draft is rendered as", () => {
   // An absent name is stored as null. Passed through, a rule comparing
   // `user.name` reads the null as a value it can test rather than as nothing.
   it("reports an absent name as absent rather than as null", async () => {
-    findById.mockResolvedValue({ id: "u1", name: null, email: "a@b.c" });
-    listRoleSlugsForUser.mockResolvedValue([]);
+    findById.mockResolvedValue({
+      id: "u1",
+      name: null,
+      email: "a@b.c",
+      isActive: true,
+    });
+    listRoleSlugsForUserStrict.mockResolvedValue([]);
 
     const identity = await resolvePreviewIdentity("u1");
 
@@ -94,17 +103,52 @@ describe("the identity a previewed draft is rendered as", () => {
   // applies no field rules at all, which is the leak itself.
   it("answers null when the sharer's account is gone", async () => {
     findById.mockRejectedValue(new Error("NOT_FOUND"));
-    listRoleSlugsForUser.mockResolvedValue([]);
+    listRoleSlugsForUserStrict.mockResolvedValue([]);
 
     expect(await resolvePreviewIdentity("deleted-user")).toBeNull();
   });
 
-  // The same answer for a database that will not respond. A lookup failure must
-  // not degrade into an unredacted render, which is what returning a partial
-  // identity would do for every rule that reads what is missing.
+  // The same answer for a database that will not respond, and the STRICT lookup
+  // is what makes this test mean anything. The ordinary `listRoleSlugsForUser`
+  // catches its own errors and resolves `[]`, so mocking it as rejecting
+  // asserts against behaviour the concrete helper cannot produce — the identity
+  // would really have been built with no roles, and a rule reading
+  // `!roles.includes("restricted")` would have passed.
   it("answers null when the roles lookup fails", async () => {
+    findById.mockResolvedValue({
+      id: "u1",
+      name: "Ada",
+      email: "a@b.c",
+      isActive: true,
+    });
+    listRoleSlugsForUserStrict.mockRejectedValue(
+      new Error("connection refused")
+    );
+
+    expect(await resolvePreviewIdentity("u1")).toBeNull();
+  });
+  // Deactivating an account revokes its sessions; a preview link is a credential
+  // that outlives the session that minted it. Without this, every outstanding
+  // link kept serving drafts under a former colleague's permissions until it
+  // expired.
+  it("answers null when the sharer's account has been deactivated", async () => {
+    findById.mockResolvedValue({
+      id: "u1",
+      name: "Ada",
+      email: "a@b.c",
+      isActive: false,
+    });
+    listRoleSlugsForUserStrict.mockResolvedValue(["editor"]);
+
+    expect(await resolvePreviewIdentity("u1")).toBeNull();
+  });
+
+  // An absent flag is not an active account. The rest of the product reads this
+  // as `!user.isActive`, and a record that does not say it is active must fail
+  // the same way here rather than being read as "not explicitly disabled".
+  it("answers null when the record does not say the sharer is active", async () => {
     findById.mockResolvedValue({ id: "u1", name: "Ada", email: "a@b.c" });
-    listRoleSlugsForUser.mockRejectedValue(new Error("connection refused"));
+    listRoleSlugsForUserStrict.mockResolvedValue(["editor"]);
 
     expect(await resolvePreviewIdentity("u1")).toBeNull();
   });

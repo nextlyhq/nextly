@@ -199,7 +199,11 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
       name: auth.userName,
       email: auth.userEmail,
       roles,
-    })
+    }),
+    // The route above ran the coarse gate for `update` on this collection, so
+    // repeating it here would ask a question already answered. The preview
+    // RENDER passes `false`: it has no route gate at all.
+    { routeAuthorized: true }
   );
 
   // Refused BEFORE a token is signed, because a link that cannot land is worse

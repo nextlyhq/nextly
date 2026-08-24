@@ -26,6 +26,13 @@ let generation = 1;
 const resolvePreviewIdentity = vi.hoisted(() => vi.fn());
 vi.mock("../preview-identity", () => ({ resolvePreviewIdentity }));
 
+// The per-render re-authorization. It reaches the container and the database;
+// what it decides is covered in the integration suite, where a real revocation
+// can actually be performed. Here it stands aside so these cases stay about
+// CONFINEMENT — which document a token reaches.
+const assertEntryPreviewable = vi.hoisted(() => vi.fn());
+vi.mock("../../../api/preview-access", () => ({ assertEntryPreviewable }));
+
 vi.mock("../preview-route-defaults", () => ({
   defaultSecret: () => TEST_SECRET,
   defaultGeneration: () => Promise.resolve(generation),
@@ -57,6 +64,8 @@ describe("previewDraftGate with no arguments", () => {
     cookieValue = undefined;
     generation = 1;
     resolvePreviewIdentity.mockClear();
+    assertEntryPreviewable.mockClear();
+    assertEntryPreviewable.mockResolvedValue(undefined);
     resolvePreviewIdentity.mockResolvedValue({
       id: "minter-1",
       roles: ["editor"],

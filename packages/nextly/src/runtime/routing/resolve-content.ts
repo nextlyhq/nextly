@@ -274,9 +274,62 @@ export async function resolveContent(
   const status =
     options.status ?? (draft && overrideAccess ? "all" : "published");
 
+  /**
+   * One statement of whose field rules a read is judged by.
+   *
+   * Spread into every read that carries the sharer rather than written out at
+   * each of them. Three copies agree on the day they are written; the one that
+   * is forgotten afterwards hands back an unredacted document, which is the
+   * defect this option exists to close. Resolves to today's behaviour wherever
+   * no sharer is named.
+   */
+  const sharerFieldAccess = {
+    user: draftFieldAccessAs ?? user,
+    enforceFieldAccess: draftFieldAccessAs !== undefined,
+  };
+
   /** Whether a resolved entry is the one this path asked for. */
   const answersThisPath = (entry: ContentEntry): boolean =>
     entry[slugField] === slug;
+
+  /**
+   * The same question, asked where the slug may have been REDACTED away.
+   *
+   * The slug field is an ordinary field and may carry its own read rule. Once
+   * the granted read is judged by the sharer, a rule that denies them removes
+   * the slug from the document — and deciding the path from a value that was
+   * withheld rather than absent answers 404 for a perfectly valid link, or
+   * silently serves the published row instead of the draft.
+   *
+   * So an absent slug is resolved separately: one trusted read of that column,
+   * by the id the token names, on the same draft view the granted read used —
+   * a draft that renamed its own slug must compare as the draft, not as the
+   * live row. Nothing is disclosed: the value is compared and discarded, and
+   * the path it is compared against is the one the bearer supplied.
+   *
+   * Only on the redacted case, so an ordinary preview pays for no extra query.
+   */
+  const grantedAnswersThisPath = async (
+    entry: ContentEntry,
+    id: string
+  ): Promise<boolean> => {
+    if (entry[slugField] !== undefined) return answersThisPath(entry);
+
+    const row = await readOverlay(() =>
+      nextly.findByID({
+        collection,
+        id,
+        draft: true,
+        depth: 0,
+        overrideAccess: true,
+        trusted,
+        user: undefined,
+        select: { [slugField]: true },
+        ...(locale ? { locale } : {}),
+      })
+    );
+    return row !== null && row[slugField] === slug;
+  };
 
   /**
    * Resolve this path with no draft authorization at all.
@@ -328,18 +381,21 @@ export async function resolveContent(
             depth,
             overrideAccess,
             trusted,
-            user: draftFieldAccessAs ?? user,
             // Keeps the row bypass above and gives back the field half, judged
-            // as the sharer. `false` is exactly today's behaviour, so a read
-            // that names nobody is unchanged.
-            enforceFieldAccess: draftFieldAccessAs !== undefined,
+            // as the sharer.
+            ...sharerFieldAccess,
             ...(options.richTextFormat
               ? { richTextFormat: options.richTextFormat }
               : {}),
             ...(locale ? { locale } : {}),
           })
         );
-        if (granted !== null && answersThisPath(granted)) return granted;
+        if (
+          granted !== null &&
+          (await grantedAnswersThisPath(granted, grantedEntryId))
+        ) {
+          return granted;
+        }
         // Deleted, or living at a different path than the one requested, so
         // this request holds no draft authorization for THIS path. It resolves
         // published-only from here, which is what makes the fall-through safe
@@ -370,11 +426,10 @@ export async function resolveContent(
         // CLEARS any default user configured on the reader instead of merging
         // over it — otherwise a reader booted with a default identity would make
         // this "anonymous" read run as that member.
-        user: draftFieldAccessAs ?? user,
         // See the by-id read above: a trusted draft keeps its row bypass and
         // hands back the field half to the sharer's own rules. Resolves to
-        // `undefined`/`false` on every non-draft read, which is unchanged.
-        enforceFieldAccess: draftFieldAccessAs !== undefined,
+        // today's behaviour on every non-draft read.
+        ...sharerFieldAccess,
         ...(options.richTextFormat
           ? { richTextFormat: options.richTextFormat }
           : {}),
@@ -410,7 +465,10 @@ export async function resolveContent(
           depth,
           overrideAccess,
           trusted,
-          user,
+          // The overlay REPLACES the row resolved above, so it has to be judged
+          // by the same rules. Carrying the plain `user` here handed back the
+          // fully trusted draft and undid the enforcement one line earlier.
+          ...sharerFieldAccess,
           ...(options.richTextFormat
             ? { richTextFormat: options.richTextFormat }
             : {}),

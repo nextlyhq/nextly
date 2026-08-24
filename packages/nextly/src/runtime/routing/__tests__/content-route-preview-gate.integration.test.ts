@@ -30,6 +30,7 @@ const SECRET = "content-route-preview-gate-secret-32chars!!";
 const GENERATION = 1;
 const PRIVILEGED_EMAIL = "privileged@example.com";
 const PLAIN_EMAIL = "plain@example.com";
+const HIDDEN_SLUG_EMAIL = "no-slug@example.com";
 
 const pages = () =>
   defineCollection({
@@ -37,7 +38,14 @@ const pages = () =>
     status: true,
     versions: { drafts: true },
     fields: [
-      text({ name: "slug" }),
+      // The slug itself carries a read rule, because it is an ordinary field
+      // and nothing stops one being declared on it. Once the preview is judged
+      // by the sharer, a denied slug is REMOVED from the document — and the
+      // route decides whether the entry answers this path by reading it.
+      text({
+        name: "slug",
+        access: { read: ({ req }) => req.user?.email !== HIDDEN_SLUG_EMAIL },
+      }),
       text({ name: "title" }),
       // A field ONE person can read. The preview link is supposed to show what
       // its SENDER can see, so the same draft has to come back differently
@@ -83,7 +91,12 @@ async function sharer(
   const created = await nextly.users.create({
     email,
     password: "PreviewTest123!",
-    data: { name: "Sharer" },
+    // ACTIVE explicitly. A user created through this API is inactive until an
+    // invite is accepted, and an inactive account cannot open a session — so a
+    // link minted "as" one is correctly refused, and a fixture that left the
+    // default would have tested the refusal path while claiming to test the
+    // preview.
+    data: { name: "Sharer", isActive: true },
   });
   return String(created.item.id);
 }
@@ -177,7 +190,7 @@ describe("createContentRoute driven by previewDraftGate", () => {
     const sharer = await current.nextly.users.create({
       email: PLAIN_EMAIL,
       password: "PreviewTest123!",
-      data: { name: "Plain" },
+      data: { name: "Plain", isActive: true },
     });
     const created = await current.nextly.create({
       collection: "pages",
@@ -213,7 +226,7 @@ describe("createContentRoute driven by previewDraftGate", () => {
     const sharer = await current.nextly.users.create({
       email: PRIVILEGED_EMAIL,
       password: "PreviewTest123!",
-      data: { name: "Privileged" },
+      data: { name: "Privileged", isActive: true },
     });
     const created = await current.nextly.create({
       collection: "pages",
@@ -259,5 +272,40 @@ describe("createContentRoute driven by previewDraftGate", () => {
         params: { slug: ["unreleased"] },
       })
     ).rejects.toThrow();
+  });
+  // A path decided from a REDACTED value is decided from an absence. Once the
+  // draft is judged by the sharer, a read rule on the slug field removes it
+  // from the document — and comparing that missing value against the requested
+  // path fails, so a perfectly valid link answers 404 or silently serves the
+  // published row instead of the draft it was minted for.
+  it("serves the draft to a sharer who cannot read the slug field", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: {
+        slug: "unreleased",
+        title: "Unreleased",
+        secret: "salary-band-4",
+        status: "draft",
+      },
+    });
+
+    const { token } = await signPreviewToken(
+      { collection: "pages", entryId: String(created.item.id) },
+      SECRET,
+      {
+        generation: GENERATION,
+        minter: await sharer(current.nextly, HIDDEN_SLUG_EMAIL),
+      }
+    );
+
+    const page = (await route(current.nextly, token).ContentPage({
+      params: { slug: ["unreleased"] },
+    })) as ContentEntry;
+
+    // The draft, not the published fall-through — and the slug is still absent
+    // from what renders, so the path was settled without handing it back.
+    expect(page.title).toBe("Unreleased");
+    expect(page.slug).toBeUndefined();
   });
 });

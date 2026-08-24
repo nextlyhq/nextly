@@ -25,6 +25,13 @@ const SHARER = { id: "minter-1", roles: ["editor"], role: "editor" };
 const resolvePreviewIdentity = vi.hoisted(() => vi.fn());
 vi.mock("../preview-identity", () => ({ resolvePreviewIdentity }));
 
+// The per-render re-authorization. It reaches the container and the database;
+// what it DECIDES is covered in the integration suite, where a permission can
+// actually be revoked. Here it stands aside so these cases stay about
+// confinement — which document a token reaches.
+const assertEntryPreviewable = vi.hoisted(() => vi.fn());
+vi.mock("../../../api/preview-access", () => ({ assertEntryPreviewable }));
+
 const SECRET = "test-secret-value-long-enough-for-hmac";
 const GENERATION = 1;
 
@@ -60,6 +67,8 @@ describe("previewDraftGate", () => {
   beforeEach(() => {
     resolvePreviewIdentity.mockClear();
     resolvePreviewIdentity.mockResolvedValue(SHARER);
+    assertEntryPreviewable.mockClear();
+    assertEntryPreviewable.mockResolvedValue(undefined);
   });
 
   it("is accepted as a content route's draft hook", () => {
@@ -247,5 +256,35 @@ describe("previewDraftGate", () => {
     );
     // And it never reached the identity lookup: there was no id to look up.
     expect(resolvePreviewIdentity).not.toHaveBeenCalled();
+  });
+  // A sharer who is still ACTIVE but no longer authorized — an update role
+  // withdrawn, an owner-only rule they stopped satisfying. Rebuilding their
+  // identity re-evaluates FIELD rules and nothing else, because the read runs
+  // with the row checks bypassed, so without this the link kept serving the
+  // draft until it expired.
+  it("refuses once the sharer may no longer preview the entry", async () => {
+    assertEntryPreviewable.mockRejectedValue(new Error("forbidden"));
+    const cookies = await cookiesFor({
+      collection: "pages",
+      entryId: "entry-1",
+    });
+
+    expect(await gate(cookies)({ collection: "pages", slug: "about" })).toBe(
+      false
+    );
+    // Asked about the entry the TOKEN names, as the SHARER — not about whatever
+    // the path resolves to, and not as the anonymous visitor holding the link.
+    //
+    // `routeAuthorized: false` is asserted rather than left to the call: a
+    // render has no route gate, and claiming one ran skips the coarse access
+    // check — which is the only part of this probe that notices a withdrawn
+    // role. Passing `true` here would leave every assertion in this file green
+    // while the re-authorization caught nothing but a deleted account.
+    expect(assertEntryPreviewable).toHaveBeenCalledWith(
+      "pages",
+      "entry-1",
+      SHARER,
+      { routeAuthorized: false }
+    );
   });
 });
