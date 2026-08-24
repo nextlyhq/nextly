@@ -477,18 +477,22 @@ describe("mintPreviewLink", () => {
     );
   });
 
-  it("judges an API key on the key's own grants, not its owner's", async () => {
-    // The leak direction, which is the one a naive test gets backwards. Asserting
-    // that a key is DENIED something it should not have passes against the broken
-    // code too, because the OWNER's grants happen to allow it. What is wrong is
-    // that the key is still GRANTED something only the owner had — so both gates
-    // have to carry the key's own scope for the services to judge it on.
+  it("refuses to mint from an API key at all", async () => {
+    // A preview link records WHOSE permissions the draft is rendered through,
+    // and a key names no person. It is authorized on the grants stamped on the
+    // key — deliberately, so a narrow key cannot mint on the strength of its
+    // owner's account — but the only identity it could record is that owner,
+    // whose access is exactly what the key was scoped away from. The link would
+    // render under permissions the request never had.
+    //
+    // This REPLACES a case asserting that both gates carried the key's own
+    // scope. That property is now unreachable rather than untested: the request
+    // is refused before either gate runs, which is strictly stronger than
+    // judging it correctly.
     (
       requireRouteCollectionAccess as ReturnType<typeof vi.fn>
     ).mockResolvedValue({
       userId: "owner-who-can-read",
-      // Update but NOT read. The owner is a super-admin who can read everything;
-      // without the scope below the gates resolve the OWNER's RBAC and mint.
       permissions: ["update-pages"],
       roles: [],
       authMethod: "api-key",
@@ -496,17 +500,19 @@ describe("mintPreviewLink", () => {
       claims: {},
     });
 
-    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
 
-    const scope = { actorType: "apiKey", permissions: ["update-pages"] };
-    expect(getEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ authenticatedScope: scope })
-    );
-    // Both gates, not just the read. A scope carried into one and dropped from
-    // the other judges a single request as two different callers.
-    expect(canUpdateEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ authenticatedScope: scope })
-    );
+    // 403 exactly, not merely >= 400: an unrecognised failure renders as 500,
+    // and a range assertion cannot tell a refusal from a crash.
+    expect(response.status).toBe(403);
+    // Refused BEFORE the authorization probe, so a rejected request performs no
+    // reads on the caller's behalf — and before any token exists, since a token
+    // that was signed and then discarded is still a token.
+    expect(getEntry).not.toHaveBeenCalled();
+    expect(canUpdateEntry).not.toHaveBeenCalled();
+    expect(getGeneration).not.toHaveBeenCalled();
   });
 
   it("sends no scope for a session caller, so it resolves grants the normal way", async () => {

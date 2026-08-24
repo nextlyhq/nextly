@@ -19,7 +19,6 @@
 
 import { z } from "zod";
 
-import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { signPreviewToken } from "../auth/preview/preview-token";
 import { buildUserContext } from "../auth/user-context";
 import { container, getService } from "../di";
@@ -145,6 +144,34 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // link into a collection they have no access to by naming it here.
   const auth = await requireRouteCollectionAccess(req, "update", collection);
 
+  // A link is minted BY A PERSON, and an API key is not one.
+  //
+  // The token records who to render the draft as, and the page then judges
+  // every field by that person's rules. A key is authorized on the grants
+  // stamped on the KEY — deliberately, so a narrow key cannot mint on the
+  // strength of its owner's account — but the only identity it could record is
+  // that owner, whose access is exactly what the key was scoped away from. The
+  // link would then render under permissions the request never had: a key
+  // allowed to update an entry but denied one of its fields would hand its
+  // recipient that field.
+  //
+  // Refused rather than approximated. The honest alternative is to record the
+  // KEY and evaluate field rules against its own grants, which means teaching
+  // the field-level registry to take a grant set instead of resolving one from
+  // a user id — a change to a primitive every read and write shares, not
+  // something to infer from a preview link.
+  if (auth.authMethod === "api-key") {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "preview-link-minted-by-api-key",
+        remedy:
+          "A preview link records whose permissions the draft is rendered " +
+          "through, and a key names no person. Mint it from a signed-in " +
+          "session.",
+      },
+    });
+  }
+
   // That gate is one granularity coarser than what it hands out: it answers
   // "may this caller edit this COLLECTION", while the token names one ENTRY
   // and confers a read of it. Where a collection carries a row-level rule the
@@ -157,15 +184,6 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   await getCachedNextly();
   const roles = await resolveRoleSlugs(auth);
 
-  // An API key is authorized on the grants stamped on the KEY, never on its
-  // owner's roles. Without this the probe resolves the owner's RBAC — including
-  // a super-admin bypass — so a key holding `update-*` but not `read-*` would
-  // mint a link on the strength of an account that can read, handing out a
-  // bearer credential for a document the key itself may not fetch.
-  const actor: AuthenticatedScope | undefined =
-    auth.authMethod === "api-key"
-      ? { actorType: "apiKey", permissions: auth.permissions }
-      : undefined;
   // Authorized through the gate that serves collection reads and writes, so the
   // verdict here is the verdict the bearer's own read will reach. It asks two
   // questions the previous by-id probe could not express: whether the entry is
@@ -181,8 +199,7 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
       name: auth.userName,
       email: auth.userEmail,
       roles,
-    }),
-    actor
+    })
   );
 
   // Refused BEFORE a token is signed, because a link that cannot land is worse
