@@ -50,6 +50,25 @@ export interface Rect {
   readonly height: number;
 }
 
+/** Four physical edge lengths, in unscaled CSS pixels. */
+export interface EdgeLengths {
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly left: number;
+}
+
+/**
+ * How much bigger a measured rectangle is than the layout it came from.
+ *
+ * Per-axis because a transform scales the two independently. `{ x: 1, y: 1 }`
+ * for an untransformed element, which is the ordinary case.
+ */
+export interface Scale {
+  readonly x: number;
+  readonly y: number;
+}
+
 /**
  * How the canvas frame sits inside the host page.
  *

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { SQUARE_CORNERS } from "./border-radii";
 import type { Rect } from "./geometry";
 import {
   overlayEscape,
@@ -33,6 +34,9 @@ function bandsFor(over: Partial<SpacingGeometry>): readonly SpacingBand[] {
     // Equal to `scale` unless a case says otherwise, which is what an element
     // carrying no transform of its own reports.
     marginScale: over.scale ?? { x: 1, y: 1 },
+    // Square unless a case says otherwise, which is what a block with no
+    // `border-radius` reports and what nearly every block on a page is.
+    radii: SQUARE_CORNERS,
     ...over,
   });
 }
