@@ -5457,14 +5457,14 @@ describe("a block that does not render a single element", () => {
      * placeholder, which is a visible box rather than a log.
      */
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const original = globalThis.process;
     try {
-      // @ts-expect-error deleting a global for the duration of one assertion.
-      delete globalThis.process;
+      // Modelled the way the placeholder's own absent-runtime test models it,
+      // and without disabling type checking to do so.
+      vi.stubGlobal("process", undefined);
       await renderWith(wrapped as AnyBlockDefinition);
       expect(warn).not.toHaveBeenCalled();
     } finally {
-      globalThis.process = original;
+      vi.unstubAllGlobals();
       warn.mockRestore();
     }
   });

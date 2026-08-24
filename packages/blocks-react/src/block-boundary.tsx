@@ -423,9 +423,41 @@ function nodeRootReason(
  * first-hand, and the two drift; the artifact is the only witness.
  */
 function noHostRootReason(output: ReactNode): string | null {
-  if (!isValidElement(output)) return "returned no element";
-  if (typeof output.type === "string") return null;
-  return "returned a wrapper rather than an element";
+  switch (rootShapeOf(output)) {
+    case "host":
+      return null;
+    case "none":
+      return "returned no element";
+    case "fragment":
+    case "component":
+      return "returned a wrapper rather than an element";
+  }
+}
+
+/**
+ * What KIND of root a block's output gives the node.
+ *
+ * The classification itself, held ONCE, because two policies read it and must
+ * not classify apart. The placeholder above decides whether root fields can
+ * land; the warning below decides whether to tell an author their block is
+ * broken. Those are different questions with opposite safe directions — each
+ * says which, beside itself — but they are the same READING, and a second copy
+ * of the reading is where recognising another wrapper kind updates one answer
+ * and leaves the other behind.
+ *
+ * Asked of what the boundary RECEIVED, never of what a definition predicts. A
+ * prediction is a second model of something this already knows first-hand, and
+ * the two drift; the artifact is the only witness.
+ */
+type RootShape = "host" | "component" | "fragment" | "none";
+
+function rootShapeOf(output: ReactNode): RootShape {
+  if (!isValidElement(output)) return "none";
+  if (output.type === Fragment) return "fragment";
+  // A string type is a host element. Anything else React accepts here is a
+  // component, which may or may not render a host element of its own — which
+  // is exactly why the two policies below answer differently about it.
+  return typeof output.type === "string" ? "host" : "component";
 }
 
 /**
@@ -446,11 +478,19 @@ function noHostRootReason(output: ReactNode): string | null {
  * at all are named: no element, or a fragment.
  */
 function brokenRootReason(output: ReactNode): string | null {
-  if (!isValidElement(output)) return "returned no element";
-  if (output.type === Fragment) {
-    return "returned a fragment rather than an element";
+  switch (rootShapeOf(output)) {
+    // A COMPONENT is not broken: one that renders a host element and forwards
+    // `className` gets its compiled styles applied. The placeholder still
+    // refuses to attach root fields to it, not being able to know that — which
+    // is the one place these two policies part company.
+    case "host":
+    case "component":
+      return null;
+    case "none":
+      return "returned no element";
+    case "fragment":
+      return "returned a fragment rather than an element";
   }
-  return null;
 }
 
 /**
