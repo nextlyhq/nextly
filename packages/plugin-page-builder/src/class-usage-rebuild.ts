@@ -40,6 +40,7 @@
  * @module class-usage-rebuild
  */
 import { classIdsUsedBy } from "./class-usage";
+import { readStoredJson } from "./stored-json";
 
 /** How many pages one query asks for. */
 const PAGE_SIZE = 100;
@@ -108,9 +109,16 @@ function isStoredPage(value: unknown): value is StoredPage {
  * existed. Those are the rows the rebuild is for, so they answer false.
  */
 function recordMatches(stored: unknown, derived: readonly string[]): boolean {
-  if (!Array.isArray(stored)) return false;
-  if (stored.length !== derived.length) return false;
-  return stored.every((value, index) => value === derived[index]);
+  // Read through the same seam the document is read through, because this
+  // column is `json` for the same reason and comes back in the same two shapes.
+  // Comparing the raw value would find no array on a dialect that stores it as
+  // text, report every record as absent, and rewrite EVERY page on every
+  // rebuild — moving `updatedAt` site-wide and firing whatever watches for
+  // edits, which is the cost this comparison exists to avoid.
+  const record = readStoredJson(stored);
+  if (!Array.isArray(record)) return false;
+  if (record.length !== derived.length) return false;
+  return record.every((value, index) => value === derived[index]);
 }
 
 /**

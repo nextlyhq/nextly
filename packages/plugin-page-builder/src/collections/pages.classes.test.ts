@@ -12,8 +12,18 @@ import { describe, expect, it } from "vitest";
 
 import { pagesCollection } from "./pages";
 
-/** The declared `beforeChange` handlers, as the registry would run them. */
-function runBeforeChange(data: unknown): unknown {
+/**
+ * The declared `beforeChange` handlers, as the registry would run them.
+ *
+ * `rest` carries the parts of the context the handler reads besides `data` —
+ * `operation`, and the `originalData` the update paths supply from the row
+ * being changed. Omitting them models a context that carries neither, which is
+ * the case the handler must refuse to derive from rather than guess at.
+ */
+function runBeforeChange(
+  data: unknown,
+  rest: Record<string, unknown> = {}
+): unknown {
   const hooks = (
     pagesCollection() as unknown as {
       hooks?: { beforeChange?: ((context: unknown) => unknown)[] };
@@ -22,7 +32,7 @@ function runBeforeChange(data: unknown): unknown {
   const handlers = hooks?.beforeChange ?? [];
   expect(handlers.length).toBeGreaterThan(0);
   let current = data;
-  for (const handler of handlers) current = handler({ data: current });
+  for (const handler of handlers) current = handler({ ...rest, data: current });
   return current;
 }
 
@@ -62,22 +72,80 @@ describe("the referenced-class record on a page write", () => {
     expect(runBeforeChange(first)).toEqual(first);
   });
 
-  it("leaves the record ALONE when the write does not carry the document", () => {
+  it("derives from the STORED document when the write does not carry one", () => {
     // A patch touching only the title must not derive an empty list from a
     // `content` this write never had — which would silently orphan every class
-    // the page really uses.
+    // the page really uses. The stored row is what the update paths pass as
+    // `originalData`, so it can answer instead of the write being guessed at.
     //
-    // The expectation is written out rather than compared against the input,
-    // because the handler MUTATES the object it is given (the convention every
-    // hook in this repo follows) — so `expect(run(patch)).toEqual(patch)` is a
-    // value compared against itself and passes whatever the handler did. That
-    // version of this test survived removing the guard it exists to protect.
-    const patch = { title: "Renamed", usedClasses: ["hero"] };
+    // The list supplied by the caller disagrees with the stored document on
+    // purpose: the derived answer must win, or a caller could set this field to
+    // whatever it liked by omitting `content`.
+    const patch = { title: "Renamed", usedClasses: ["forged"] };
 
-    expect(runBeforeChange(patch)).toEqual({
-      title: "Renamed",
-      usedClasses: ["hero"],
+    expect(
+      runBeforeChange(patch, {
+        operation: "update",
+        originalData: {
+          title: "Home",
+          content: {
+            nodes: [{ id: "n1", classes: ["hero", "card"] }],
+          },
+        },
+      })
+    ).toEqual({ title: "Renamed", usedClasses: ["card", "hero"] });
+  });
+
+  it("reads a stored document that arrives as a JSON STRING", () => {
+    // Which shape comes back is a property of the dialect, not of the data: the
+    // runtime schema builds this column as `jsonb`/`json` on Postgres and
+    // MySQL, whose drivers parse it, and as plain `text` on SQLite, whose
+    // driver does not. A reader that handled only the parsed shape would report
+    // every page on SQLite as referencing nothing.
+    const patch: Record<string, unknown> = { title: "Renamed" };
+
+    runBeforeChange(patch, {
+      operation: "update",
+      originalData: {
+        content: JSON.stringify({ nodes: [{ id: "n1", classes: ["hero"] }] }),
+      },
     });
+
+    expect(patch.usedClasses).toEqual(["hero"]);
+  });
+
+  it("REMOVES the field when nothing in the write can be derived from", () => {
+    // Removing the key is what "leave the stored record as it is" means on a
+    // partial update: an absent field is not written. Assigning an empty list
+    // would RECORD that the page references nothing, and under-counting is the
+    // direction that gets a live class deleted.
+    //
+    // Keeping the caller's value would be worse still — this field is writable
+    // by anyone who may update the page, so a value the hook did not derive is
+    // unverified whoever sent it.
+    const patch: Record<string, unknown> = {
+      title: "Renamed",
+      usedClasses: ["forged"],
+    };
+
+    runBeforeChange(patch, { operation: "update" });
+
+    expect("usedClasses" in patch).toBe(false);
+    expect(patch).toEqual({ title: "Renamed" });
+  });
+
+  it("records nothing for a page CREATED without a document", () => {
+    // Distinguished from the case above: a create has no stored row to fall
+    // back to, and a page with no document genuinely references nothing. That
+    // is a derived answer rather than an absent one, so it is written.
+    const data: Record<string, unknown> = {
+      title: "New",
+      usedClasses: ["forged"],
+    };
+
+    runBeforeChange(data, { operation: "create" });
+
+    expect(data.usedClasses).toEqual([]);
   });
 
   it("does not fail the write for a document nobody validated", () => {
@@ -96,12 +164,12 @@ describe("the referenced-class record on a page write", () => {
 });
 
 describe("a document the derivation cannot read", () => {
-  it("leaves the record alone rather than clearing it or failing the save", () => {
-    // Two mistakes are available and they pull opposite ways: failing an
-    // author's save over a bookkeeping field, and recording a list that is
-    // wrong. Clearing would be the second, and an under-count is the direction
-    // that gets a class deleted — so the previous list stands and the rebuild
-    // walk repairs it.
+  it("writes nothing rather than clearing the record or failing the save", () => {
+    // Three mistakes are available and they pull in different directions:
+    // failing an author's save over a bookkeeping field, recording a list that
+    // is wrong, and storing one the hook did not derive. Removing the key
+    // avoids all three — the stored list stands, and the rebuild walk repairs
+    // it, which is the route a page written before this field existed takes.
     const unreadable = {
       get nodes(): never {
         throw new Error("cannot read this document");
@@ -113,8 +181,8 @@ describe("a document the derivation cannot read", () => {
       usedClasses: ["hero"],
     };
 
-    expect(() => runBeforeChange(data)).not.toThrow();
-    expect(data.usedClasses).toEqual(["hero"]);
+    expect(() => runBeforeChange(data, { operation: "update" })).not.toThrow();
+    expect("usedClasses" in data).toBe(false);
   });
 
   it("still derives from a document it CAN read, so the guard is not swallowing everything", () => {

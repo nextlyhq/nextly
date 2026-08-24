@@ -208,6 +208,30 @@ describe("what it must never do", () => {
     expect(() => classIdsUsedBy(document)).not.toThrow();
   });
 
+  it.each([
+    ["text that is not JSON at all", "{ nodes: ["],
+    ["JSON that is a bare string", '"hero"'],
+    ["JSON that is a number", "7"],
+    ["JSON that is null", "null"],
+    ["JSON whose nodes are not an array", '{"nodes":5}'],
+  ])("answers rather than throwing for stored %s", (_what, stored) => {
+    // The string arm exists because the column is `text` on SQLite, so what
+    // arrives is whatever bytes are in it — including bytes no writer of this
+    // field produced.
+    expect(() => classIdsUsedBy(stored)).not.toThrow();
+    expect(classIdsUsedBy(stored)).toEqual([]);
+  });
+
+  it("reads a document stored as a JSON STRING, so the string arm is not just refusing", () => {
+    // The control for the five cases above, which a function that returned an
+    // empty list for every string would satisfy completely.
+    expect(
+      classIdsUsedBy(
+        JSON.stringify({ nodes: [{ id: "a", classes: ["hero", "card"] }] })
+      )
+    ).toEqual(["card", "hero"]);
+  });
+
   it("still reads a well-formed document, so the table is not passing on refusal", () => {
     // The control. Every case above would pass for a function that returned an
     // empty list unconditionally, which is the shape that would satisfy them

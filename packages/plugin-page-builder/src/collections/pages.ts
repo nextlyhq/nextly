@@ -81,6 +81,11 @@ export function pagesCollection() {
       // Hidden because it is bookkeeping, not content: an author neither writes
       // it nor needs to read it, and a field they can edit is one that can
       // disagree with the document it describes.
+      //
+      // `hidden` governs what the admin UI RENDERS and denies no write, so it
+      // is not what keeps the two in agreement. The hook below is: it derives
+      // the value or removes the key on every path, so a value supplied by any
+      // caller is replaced rather than stored.
       json({
         name: "usedClasses",
         label: "Referenced classes",
@@ -110,36 +115,56 @@ export function pagesCollection() {
       // Safe on a `before*` phase only while this cannot fail the write, and
       // that is arranged here rather than assumed of the derivation.
       // `classIdsUsedBy` answers rather than throwing for every shape that
-      // reaches STORAGE — a stored document arrives from `JSON.parse` and
-      // carries no accessor that can throw — and a table of those shapes is
-      // asserted beside it. An in-process caller can still hand over an object
-      // that throws on being read, which storage cannot produce, so the catch
-      // below closes the remaining distance rather than trusting the range.
+      // reaches STORAGE, and a table of those shapes is asserted beside it. An
+      // in-process caller can still hand over an object that throws on being
+      // read, which storage cannot produce, so the catch below closes the
+      // remaining distance rather than trusting the range.
+      //
+      // It reads `originalData` on a patch that omits the document, which the
+      // update paths supply from the row this write is changing. That makes the
+      // stored document the authority for a write that does not carry one, so
+      // this field cannot be set to anything the hook did not derive — and a
+      // list computed elsewhere from a document that has since been replaced is
+      // recomputed rather than believed.
       beforeChange: [
         (context: HookContext) => {
           const { data } = context;
           if (!isPlainRecord(data)) return data;
-          // Only when the document itself is part of this write. A patch that
-          // touches the title alone must leave the record as it is rather than
-          // deriving an empty list from a `content` this write never carried.
-          if (!("content" in data)) return data;
           try {
-            data.usedClasses = classIdsUsedBy(data.content);
+            // Every path either DERIVES the value or REMOVES it, and there is
+            // no path that lets one through. A value this hook did not compute
+            // is unverified whoever sent it, and the field is reachable by
+            // anyone who may update the page: `admin.hidden` governs what the
+            // admin UI renders and denies no write, so hiding it never made it
+            // unwritable.
+            //
+            // Removing the key is what "leave the record as it is" means on a
+            // partial update — an absent field is not written, so the stored
+            // list stands. Assigning an empty list instead would RECORD that
+            // the page references nothing, and under-counting is the direction
+            // that gets a live class deleted.
+            if ("content" in data) {
+              // The document is part of this write, so it is the authority.
+              data.usedClasses = classIdsUsedBy(data.content);
+            } else if (context.operation === "create") {
+              // A page created without a document references nothing, and that
+              // is a derivation rather than an absence of one.
+              data.usedClasses = [];
+            } else if (isPlainRecord(context.originalData)) {
+              // A patch that does not carry the document — a title-only save,
+              // or a rebuild writing this field alone. The stored document is
+              // read in the same operation as this write, so a list derived
+              // from a document that has since changed is replaced by one
+              // derived from what is actually stored, rather than accepted.
+              data.usedClasses = classIdsUsedBy(context.originalData.content);
+            } else {
+              delete data.usedClasses;
+            }
           } catch {
-            // The record is LEFT ALONE rather than cleared. Two things must not
-            // happen here and they pull in opposite directions: failing the
-            // author's save over a bookkeeping field, and recording a list that
-            // is wrong. Writing an empty one would do the second — and an
-            // under-count is the direction that gets a class deleted, so it is
-            // the more expensive of the two mistakes.
-            //
-            // Leaving it means the previous list stands and the rebuild walk
-            // repairs it, which is the same route a page written before this
-            // field existed takes.
-            //
-            // Reachable only from a caller that constructs the document in
-            // process: a stored one arrives from `JSON.parse` and carries no
-            // accessor that can throw.
+            // Nothing readable can be derived, so nothing is written. Reachable
+            // from a caller that constructs the document in process and hands
+            // over an accessor that throws; a stored document cannot do this.
+            delete data.usedClasses;
           }
           return data;
         },

@@ -82,6 +82,43 @@ describe("rebuildClassUsage", () => {
     });
   });
 
+  it("does not write when a MATCHING record arrived as a JSON string", () => {
+    // Which shape a `json` column comes back in is a property of the dialect:
+    // Postgres and MySQL parse it, SQLite stores it as text and does not. A
+    // comparison that read only the parsed shape would find no array here,
+    // call every record absent, and rewrite EVERY page on every rebuild — the
+    // site-wide `updatedAt` jump this comparison exists to prevent, happening
+    // on exactly one of the three supported databases.
+    const { store, writes } = storeOf([
+      [page("a", ["hero", "card"], JSON.stringify(["card", "hero"]))],
+    ]);
+
+    return rebuildClassUsage({ store }).then(report => {
+      expect(report).toEqual({ scanned: 1, repaired: 0 });
+      expect(writes).toEqual([]);
+    });
+  });
+
+  it("repairs a page whose DOCUMENT arrived as a JSON string", () => {
+    // The same column shape on the other field. Reading only the parsed form
+    // would derive an empty list for every page on that dialect and record
+    // that the whole site references nothing — the under-count direction that
+    // gets a live class deleted.
+    const { store, writes } = storeOf([
+      [
+        {
+          id: "a",
+          content: JSON.stringify({ nodes: [{ id: "n", classes: ["hero"] }] }),
+        },
+      ],
+    ]);
+
+    return rebuildClassUsage({ store }).then(report => {
+      expect(report).toEqual({ scanned: 1, repaired: 1 });
+      expect(writes).toEqual([{ id: "a", data: { usedClasses: ["hero"] } }]);
+    });
+  });
+
   it("repairs a record that disagrees with the document", () => {
     const { store, writes } = storeOf([[page("a", ["hero"], ["stale"])]]);
 

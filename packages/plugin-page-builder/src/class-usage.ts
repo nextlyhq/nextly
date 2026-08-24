@@ -38,6 +38,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { BlockNode } from "@nextlyhq/blocks-engine";
 
+import { readStoredJson } from "./stored-json";
+
 /**
  * Whether a stored value can name a class this site could actually define.
  *
@@ -66,7 +68,8 @@ function namesAClass(value: unknown): value is string {
  * is what lets a caller compare a stored list against a fresh one without
  * re-sorting or set arithmetic.
  */
-export function classIdsUsedBy(document: unknown): string[] {
+export function classIdsUsedBy(stored: unknown): string[] {
+  const document = readStoredJson(stored);
   if (!isPlainRecord(document)) return [];
   const nodes: unknown = document.nodes;
   if (!Array.isArray(nodes)) return [];
