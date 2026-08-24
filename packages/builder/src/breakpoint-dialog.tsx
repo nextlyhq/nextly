@@ -53,8 +53,19 @@ export interface BreakpointDialogProps {
    *
    * Only ever called with a set that produces no issues, so a host does not
    * have to re-validate before storing it.
+   *
+   * **A promise is awaited, and the dialog stays open until it settles.** A host
+   * that persists over the network resolves with a message when the write was
+   * refused, and the draft is still on screen to retry or copy from. Closing on
+   * the click instead — which this did — threw away a set the author had just
+   * built by hand the moment a save failed, with nothing left to recover it
+   * from: the dialog was gone, the draft with it, and the site's breakpoints
+   * unchanged.
+   *
+   * Resolving with `undefined`, or returning nothing at all, means saved. A
+   * synchronous host needs no change.
    */
-  onSave: (next: BreakpointSet) => void;
+  onSave: (next: BreakpointSet) => void | Promise<string | undefined>;
 }
 
 /** A draft row. Width is held as TEXT while editing. */
@@ -178,6 +189,17 @@ export function BreakpointDialog({
   // the module has been rendered.
   const addedRows = React.useRef(0);
   const wasOpen = React.useRef(open);
+  /*
+   * Whether a save is in flight, and why the last one was refused.
+   *
+   * Derived here rather than taken as props. A `saving` prop can disagree with
+   * the promise this component is actually awaiting — a host that forgets to
+   * clear it leaves the dialog permanently disabled with no way to close the
+   * loop — and the only thing that knows when THIS save settled is the promise
+   * returned to THIS click.
+   */
+  const [saving, setSaving] = React.useState(false);
+  const [refusal, setRefusal] = React.useState<string | undefined>(undefined);
 
   // Re-seeded on the CLOSED-to-OPEN transition only. Depending on `value`
   // itself would reseed on any parent render that rebuilt it — a background
@@ -188,6 +210,10 @@ export function BreakpointDialog({
     wasOpen.current = open;
     if (!opening) return;
     addedRows.current = 0;
+    // Cleared with the draft it belonged to. A refusal left standing would
+    // describe a set the author is no longer looking at, and reopening after a
+    // failed save would show a stale reason for a draft that has been reseeded.
+    setRefusal(undefined);
     setDraft({
       viewport: toDraft("viewport", value.viewport),
       container: toDraft("container", value.container),
@@ -236,9 +262,40 @@ export function BreakpointDialog({
   };
 
   const save = (): void => {
-    if (issues.length > 0) return;
-    onSave(toSet(draft));
-    onOpenChange(false);
+    if (issues.length > 0 || saving) return;
+    setRefusal(undefined);
+    const outcome = onSave(toSet(draft));
+    // A synchronous host is finished here, and awaiting its `undefined` would
+    // still cost a microtask — long enough to paint a disabled button that has
+    // nothing to wait for.
+    if (!(outcome instanceof Promise)) {
+      onOpenChange(false);
+      return;
+    }
+    setSaving(true);
+    void outcome
+      .then(message => {
+        if (message === undefined) {
+          onOpenChange(false);
+          return;
+        }
+        setRefusal(message);
+      })
+      .catch((reason: unknown) => {
+        /*
+         * A rejection is a refusal too, and the dialog must not close on one.
+         * A host that throws rather than resolving is not following the
+         * contract, but the author's draft is not the place to make that point.
+         */
+        setRefusal(
+          reason instanceof Error
+            ? reason.message
+            : "These breakpoints could not be saved."
+        );
+      })
+      .finally(() => {
+        setSaving(false);
+      });
   };
 
   return (
@@ -381,15 +438,26 @@ export function BreakpointDialog({
           <p
             className={cn(
               "text-xs",
-              issues.length > 0 ? "text-destructive" : "text-muted-foreground"
+              issues.length > 0 || refusal !== undefined
+                ? "text-destructive"
+                : "text-muted-foreground"
             )}
             // Announced rather than only coloured, so the reason Save is
             // unavailable reaches a screen reader too.
             role="status"
           >
-            {issues.length === 0
-              ? "Every breakpoint is usable."
-              : `${issues.length} ${issues.length === 1 ? "problem" : "problems"} to fix before saving.`}
+            {/*
+             * A REFUSAL outranks the issue count, because they answer different
+             * questions and only one of them is news. The count says what the
+             * author must fix before saving; a refusal says the save they just
+             * made did not happen. Showing "Every breakpoint is usable." beside
+             * a failed write — which is what the count says at that moment,
+             * truthfully — would read as confirmation.
+             */}
+            {refusal ??
+              (issues.length === 0
+                ? "Every breakpoint is usable."
+                : `${issues.length} ${issues.length === 1 ? "problem" : "problems"} to fix before saving.`)}
           </p>
           <div className="flex gap-2">
             <Button
@@ -399,8 +467,12 @@ export function BreakpointDialog({
             >
               Cancel
             </Button>
-            <Button type="button" disabled={issues.length > 0} onClick={save}>
-              Save breakpoints
+            <Button
+              type="button"
+              disabled={issues.length > 0 || saving}
+              onClick={save}
+            >
+              {saving ? "Saving…" : "Save breakpoints"}
             </Button>
           </div>
         </DialogFooter>

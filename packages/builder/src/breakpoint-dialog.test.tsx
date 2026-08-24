@@ -10,7 +10,13 @@
  * definition — the same silent loss the validation exists to prevent, arriving
  * through the screen that was supposed to prevent it.
  */
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BreakpointDialog } from "./breakpoint-dialog";
@@ -23,11 +29,11 @@ function stored(): BreakpointSet {
   };
 }
 
-function open(value: BreakpointSet, onSave = vi.fn()) {
+function open(value: BreakpointSet, onSave = vi.fn(), onOpenChange = vi.fn()) {
   render(
     <BreakpointDialog
       open
-      onOpenChange={vi.fn()}
+      onOpenChange={onOpenChange}
       value={value}
       onSave={onSave}
     />
@@ -40,9 +46,19 @@ function open(value: BreakpointSet, onSave = vi.fn()) {
 // on the property under test.
 afterEach(cleanup);
 
+/*
+ * Matched on either label, because the button reports its own progress.
+ *
+ * Its accessible name becomes "Saving…" while a write is in flight, and that is
+ * deliberate rather than incidental: a disabled button whose text never changed
+ * tells a sighted author nothing is happening, and an `aria-label` pinned to the
+ * idle wording while the visible text moved on is the label-in-name mismatch
+ * WCAG 2.5.3 exists to prevent. The name changes because the button means
+ * something different.
+ */
 const saveButton = (): HTMLButtonElement =>
   screen.getByRole("button", {
-    name: "Save breakpoints",
+    name: /save breakpoints|saving/i,
   }) as HTMLButtonElement;
 
 describe("saving", () => {
@@ -60,6 +76,92 @@ describe("saving", () => {
     // Not `toEqual("768")`: a string passes a loose comparison and is exactly
     // the value the compiler discards.
     expect(typeof saved.viewport[0]?.maxWidth).toBe("number");
+  });
+
+  it("stays open until an async save settles, then closes", async () => {
+    /*
+     * The close is the destructive half. Until the write lands there is nothing
+     * anywhere else holding this draft, so closing on the click means a refusal
+     * arrives with the set already gone.
+     *
+     * Both moments are asserted, and the ORDER is the property: still open
+     * while the promise is pending, closed only once it resolves. Asserting the
+     * end state alone would pass against a dialog that closed immediately.
+     */
+    let settle: (value: undefined) => void = () => {};
+    const onSave = vi.fn(
+      () =>
+        new Promise<undefined>(resolve => {
+          settle = resolve;
+        })
+    );
+    const onOpenChange = vi.fn();
+    open(stored(), onSave, onOpenChange);
+
+    fireEvent.click(saveButton());
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    // And it says so, rather than looking idle while a write is in flight.
+    expect(saveButton().disabled).toBe(true);
+
+    settle(undefined);
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("keeps the draft on screen when the save is REFUSED", async () => {
+    /*
+     * The case the whole change exists for. A refused write used to close the
+     * dialog anyway, discarding a set the author had just built by hand with
+     * nothing left to recover it from.
+     *
+     * Asserted on three things, because any one alone is satisfiable by a
+     * dialog that is simply broken: the reason is shown, the dialog did NOT
+     * close, and the edited value is still in its field.
+     */
+    const onSave = vi.fn(() => Promise.resolve("The server refused this."));
+    const onOpenChange = vi.fn();
+    open(stored(), onSave, onOpenChange);
+
+    fireEvent.change(screen.getByDisplayValue("991"), {
+      target: { value: "768" },
+    });
+    fireEvent.click(saveButton());
+
+    await waitFor(() =>
+      expect(screen.getByText("The server refused this.")).toBeDefined()
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue("768")).toBeDefined();
+  });
+
+  it("treats a REJECTION as a refusal, not as a save", async () => {
+    /*
+     * A host that throws is not following the contract, and the author's draft
+     * is not the place to make that point. An unhandled rejection would also
+     * leave the button disabled forever, so the settled state is asserted too.
+     */
+    const onSave = vi.fn(() => Promise.reject(new Error("Network down")));
+    const onOpenChange = vi.fn();
+    open(stored(), onSave, onOpenChange);
+
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(screen.getByText("Network down")).toBeDefined());
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it("closes at once for a host that saves synchronously", () => {
+    // The contract that already existed must not have grown a microtask: a host
+    // returning nothing is finished when the call returns.
+    const onOpenChange = vi.fn();
+    open(stored(), vi.fn(), onOpenChange);
+
+    fireEvent.click(saveButton());
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("is refused while a definition would be dropped", () => {

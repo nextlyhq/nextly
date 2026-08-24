@@ -26,7 +26,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const seen: {
   inspector: Record<string, unknown> | undefined;
   canvas: Record<string, unknown> | undefined;
-} = { inspector: undefined, canvas: undefined };
+  breakpoints: Record<string, unknown> | undefined;
+} = { inspector: undefined, canvas: undefined, breakpoints: undefined };
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
@@ -69,16 +70,25 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     // would leave the canvas unrendered and its assertion passing on absence.
     BuilderShell: ({
       inspector,
+      topBar,
       children,
     }: {
       inspector: React.ReactNode;
+      topBar?: React.ReactNode;
       children?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
+        {/*
+         * The top bar is rendered for the same reason the children are: the
+         * breakpoint manager lives there, and a stub that dropped the slot
+         * would leave its assertions passing on absence.
+         */}
+        {topBar}
         {inspector}
         {children}
       </div>
     ),
+    BreakpointManager: record("breakpoints"),
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
     BlockKeyboardActions: passthrough,
@@ -119,6 +129,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // `null` is a real answer the pill handles — "no status has been persisted",
+  // which is what a create form and a preview both look like — so this mounts
+  // the top bar without putting a second subject in the assertions below.
+  useDocumentStatus: () => null,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the
   // merge of stored over defaults is `site-style-client`'s own question and has
@@ -151,6 +165,7 @@ function openEditor(): void {
 beforeEach(() => {
   seen.inspector = undefined;
   seen.canvas = undefined;
+  seen.breakpoints = undefined;
   clientConfig = undefined;
   siteStyleRead = { data: undefined, isPending: false, error: null };
 });
@@ -392,6 +407,68 @@ describe("the shell mock", () => {
 
     expect(seen.inspector).toBeDefined();
     expect(seen.canvas).toBeDefined();
+  });
+});
+
+describe("what the breakpoint manager is told", () => {
+  it("is NOT ready while the stored style is still arriving", () => {
+    /*
+     * The same gate the canvas and the cascade are held behind, and the one
+     * whose failure is a write rather than a wrong pixel. Until the read
+     * answers, the value handed to the manager is the host's CONFIG DEFAULTS —
+     * so an author who opened the dialog then would edit a set the site never
+     * chose, and saving it would overwrite the site's real breakpoints with
+     * defaults they never saw.
+     */
+    siteStyleRead = { data: undefined, isPending: true, error: null };
+
+    openEditor();
+
+    expect(seen.breakpoints).toBeDefined();
+    expect(seen.breakpoints?.ready).toBe(false);
+  });
+
+  it("is NOT ready after a FAILED read, which is not a passing state", () => {
+    /*
+     * The half a `pending` check alone gets wrong: on failure `pending` goes
+     * false while the value falls back to defaults, so gating on pending alone
+     * would arm the manager over a tier nobody has read.
+     */
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("nope"),
+    };
+
+    openEditor();
+
+    expect(seen.breakpoints?.ready).toBe(false);
+  });
+
+  it("IS ready once the read has answered, which is the control", () => {
+    /*
+     * Without this, a manager that was never ready would satisfy both cases
+     * above and the feature would be permanently unreachable rather than
+     * gated — which is exactly what shipped once before on this surface, when
+     * an `!== undefined` test against an `Error | null` was true on success too.
+     */
+    openEditor();
+
+    expect(seen.breakpoints?.ready).toBe(true);
+  });
+
+  it("is given the SAME breakpoints the canvas renders against", () => {
+    /*
+     * One derivation, not two. The manager edits the set the cascade was
+     * compiled with, so a second call to `siteBreakpoints` beside the canvas's
+     * would let the dialog show and save a set the page was never drawn with.
+     */
+    openEditor();
+
+    expect(seen.breakpoints?.value).toBe(
+      (seen.canvas?.render as { styleContext?: { breakpoints?: unknown } })
+        ?.styleContext?.breakpoints
+    );
   });
 });
 

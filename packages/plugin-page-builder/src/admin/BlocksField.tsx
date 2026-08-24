@@ -39,6 +39,7 @@ import {
   registerBlocks,
   registryNestingSource,
   type BlockDocument,
+  type BreakpointSet,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
@@ -46,6 +47,7 @@ import { registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   BlockToolbar,
+  BreakpointManager,
   EditorCommandPalette,
   BuilderShell,
   Canvas,
@@ -643,6 +645,35 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * and the tree behind it is re-rendered on every selection and keystroke.
    */
   /*
+   * Writing the site's breakpoints, for the manager in the top bar.
+   *
+   * Section-scoped, so this sends the breakpoints and nothing else — the other
+   * three fields of the record are owned by other studios and are not read here
+   * in order to write this one.
+   *
+   * The result is narrowed to the shape the dialog understands: `undefined` for
+   * a save that landed, and the reason otherwise. The reasons are joined rather
+   * than picked from, because `issues` is keyed by path and taking the first
+   * would silently drop the others — an author told about one refused field
+   * while a second is also refused fixes one and is refused again.
+   */
+  const { save: saveSiteStyle } = useSaveSiteStyle();
+  const saveBreakpoints = useCallback(
+    async (next: BreakpointSet): Promise<string | undefined> => {
+      const result = await saveSiteStyle("breakpoints", next);
+      if (result.saved) return undefined;
+      const reasons = Object.values(result.issues);
+      // `issues` can be empty on a refusal the transport could not describe.
+      // Answering `undefined` there would report a save that did not happen,
+      // which is the one outcome that must never be silent.
+      return reasons.length > 0
+        ? reasons.join(" ")
+        : "These breakpoints could not be saved.";
+    },
+    [saveSiteStyle]
+  );
+
+  /*
    * The canvas's own render inputs, and the ONE place this surface derives a
    * breakpoint set.
    *
@@ -788,7 +819,28 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
         // editor is open, because the document is committed on the way out.
-        topBar={<DocumentStatusPill isDirty={editor.undoDepth > 0} />}
+        topBar={
+          <>
+            <DocumentStatusPill isDirty={editor.undoDepth > 0} />
+            {/*
+             * Gated on the SAME read the canvas and the cascade are gated on.
+             * Until the stored style has answered, `canvasSiteStyle` is the
+             * host's config defaults — so the dialog would open on a set the
+             * site never chose, and saving from that draft would overwrite the
+             * site's real breakpoints with defaults the author never saw.
+             *
+             * `!== null`, not `!== undefined`: `useSiteStyle` types `error` as
+             * `Error | null` and normalises success to `null`, so the
+             * `undefined` comparison is true on success too — the same mistake
+             * that once withheld the provenance trace unconditionally.
+             */}
+            <BreakpointManager
+              value={canvasRender.styleContext.breakpoints}
+              onSave={saveBreakpoints}
+              ready={!siteStylePending && siteStyleError === null}
+            />
+          </>
+        }
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears
