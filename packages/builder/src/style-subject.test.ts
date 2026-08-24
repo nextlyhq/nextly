@@ -1,4 +1,4 @@
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { MAX_CLASSES_PER_NODE, type BlockNode } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { styleSubjectFor } from "./style-subject";
@@ -98,7 +98,6 @@ describe("the subject a provenance question is asked about", () => {
     ["a bare string", "card"],
     ["a number", 7],
     ["an object", { card: true }],
-    ["an array holding a non-string", ["ok", 3]],
   ])("ignores `classes` stored as %s", (_label, classes) => {
     /*
      * A stored document is untrusted, and the compiler treats a `classes` that
@@ -116,6 +115,60 @@ describe("the subject a provenance question is asked about", () => {
     const subject = styleSubjectFor(nodes, "n");
     expect(subject).toBeDefined();
     expect("classIds" in subject!).toBe(false);
+  });
+
+  it("skips ONE malformed member instead of voiding the whole list", () => {
+    /*
+     * The compiler skips what it cannot read and applies the rest, and this has
+     * to agree with it or the panel describes a different element than the one
+     * on screen.
+     *
+     * An earlier version required EVERY member to be a string and dropped them
+     * all otherwise. One bad entry — a forgiving import, a hand edit — then
+     * turned a block whose canvas plainly shows `.card` winning into one whose
+     * every class-sourced value reported as set by nobody.
+     *
+     * Asserted on both halves: the good member survives AND the bad one does
+     * not, so neither "kept everything" nor "kept nothing" satisfies this.
+     */
+    const nodes = [
+      {
+        id: "n",
+        type: "core/box",
+        version: 1,
+        props: {},
+        classes: ["cls-1", 3, "cls-2"],
+      },
+    ] as unknown as BlockNode[];
+
+    expect(styleSubjectFor(nodes, "n")?.classIds).toEqual(["cls-1", "cls-2"]);
+  });
+
+  it("reads to the compiler's cap BY INDEX, counting malformed members", () => {
+    /*
+     * The other direction, and the reason the cap is taken before the filter
+     * rather than after. The compiler's window is `min(stored.length,
+     * MAX_CLASSES_PER_NODE)` over the RAW array, so a malformed member consumes
+     * a slot. Filtering first would slide a later class into the window and let
+     * the panel report a class whose token the canvas never emitted.
+     *
+     * Built with a non-string at the front so the two orders give different
+     * answers: capped-then-filtered ends at `cls-62`, filtered-then-capped would
+     * reach `cls-63`.
+     */
+    const classes: unknown[] = [
+      7,
+      ...Array.from({ length: MAX_CLASSES_PER_NODE }, (_, i) => `cls-${i}`),
+    ];
+    const nodes = [
+      { id: "n", type: "core/box", version: 1, props: {}, classes },
+    ] as unknown as BlockNode[];
+
+    const ids = styleSubjectFor(nodes, "n")?.classIds;
+
+    expect(ids).toHaveLength(MAX_CLASSES_PER_NODE - 1);
+    expect(ids).toContain(`cls-${MAX_CLASSES_PER_NODE - 2}`);
+    expect(ids).not.toContain(`cls-${MAX_CLASSES_PER_NODE - 1}`);
   });
 
   it("keeps a well-formed class list, which is the point of checking", () => {

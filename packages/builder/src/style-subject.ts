@@ -28,7 +28,11 @@
  */
 
 import type { BlockNode, StyleSubject } from "@nextlyhq/blocks-engine";
-import { findNode, locateNode } from "@nextlyhq/blocks-engine";
+import {
+  MAX_CLASSES_PER_NODE,
+  findNode,
+  locateNode,
+} from "@nextlyhq/blocks-engine";
 
 /** One node's own identity, without the chain above it. */
 type SubjectNode = Omit<StyleSubject, "ancestors">;
@@ -47,6 +51,27 @@ type SubjectNode = Omit<StyleSubject, "ancestors">;
  * STRING also answers, by substring. A node storing `classes: "card-primary"`
  * would then report `.card` as the winning origin for a class the canvas emitted
  * no token for.
+ *
+ * WHICH members survive follows the compiler, in both directions, because the
+ * question this answers is "did the rendered element carry this token" and only
+ * the compiler decides that.
+ *
+ * Read to `MAX_CLASSES_PER_NODE` BY INDEX, not filtered then capped. The
+ * compiler's window counts malformed members toward the limit, so a node whose
+ * 30th entry is a number has a different 64th applied class than one whose
+ * entries are all strings. Taking the cap after filtering would silently shift
+ * that window and admit a class the canvas emitted no token for.
+ *
+ * Malformed members are skipped INDIVIDUALLY rather than voiding the array. An
+ * earlier version required every member to be a string and dropped all of them
+ * otherwise — which turned one bad entry, from a forgiving import or a hand
+ * edit, into a block whose every class-sourced value reported as set by nobody
+ * while the canvas plainly showed `.card` winning. The compiler skips what it
+ * cannot read and applies the rest, and this has to agree with it.
+ *
+ * Over-long ids are left in rather than filtered: the compiler keeps them too,
+ * and a string too long to name a class matches no class id, so the membership
+ * test answers the same either way.
  */
 function identityOf(node: BlockNode): SubjectNode {
   const subject: { -readonly [K in keyof SubjectNode]: SubjectNode[K] } = {
@@ -54,8 +79,10 @@ function identityOf(node: BlockNode): SubjectNode {
     blockType: node.type,
   };
   const classes = node.classes;
-  if (Array.isArray(classes) && classes.every(id => typeof id === "string")) {
-    subject.classIds = classes;
+  if (Array.isArray(classes)) {
+    subject.classIds = classes
+      .slice(0, MAX_CLASSES_PER_NODE)
+      .filter((id): id is string => typeof id === "string");
   }
   return subject;
 }
