@@ -195,30 +195,36 @@ try {
   // back from: it pulls content PAST its own column. Measured, that was 64px on
   // the entry editor.
   //
-  // Checked HERE rather than in a unit test because the property is about this
-  // file. A test that reads sources has to know every input Tailwind reads —
-  // four package trees, plus `@source inline(...)` safelists whose brace
-  // expansions contain no literal class at all — and each one it misses is a
-  // way for the rule to reach the stylesheet unseen. The output has one answer.
+  // The DECLARATION is what is checked, not the class name. A name can be
+  // renamed away — `.editor-bleed { @apply -mx-8; }` emits the same margin
+  // under a selector that says nothing — and it can be absent from every source
+  // it was compiled from, because a `@source inline(...)` safelist spells out
+  // no class at all. What survives every spelling is the rule that reaches the
+  // browser, which is this file.
   //
-  // The utilities are assembled rather than written: this file is not scanned,
-  // but the same habit is what keeps the rule out of the sources that are.
-  const forbidden = [`-m${"-8"}`, `-mx${"-8"}`];
+  // `margin` and `margin-inline` only. `margin-block` is the vertical half,
+  // which the editors legitimately use to reach the panel's top and bottom.
   const shipped = fs.readFileSync(outputFile, "utf-8");
-  const emitted = forbidden.filter(name =>
-    new RegExp(`\\.[^{\\s,]*${name.replace(/-/g, "\\\\?-")}(?![\\w-])`).test(shipped)
-  );
-  if (emitted.length) {
+  const NEGATIVE_8 = String.raw`calc\(var\(--spacing\)\s*\*\s*-8\)`;
+  const offenders = [
+    ["margin", new RegExp(String.raw`[;{]\s*margin:\s*${NEGATIVE_8}`)],
+    ["margin-inline", new RegExp(String.raw`[;{]\s*margin-inline:\s*${NEGATIVE_8}`)],
+  ].filter(([, re]) => re.test(shipped));
+
+  if (offenders.length) {
     console.error(
-      `\n❌ The stylesheet emits ${emitted.length} inset(s) that cancel a page's\n` +
-        "horizontal padding:\n"
+      "\n❌ The stylesheet cancels a page's horizontal inset:\n"
     );
-    for (const name of emitted) console.error("  ." + name);
+    for (const [prop] of offenders) {
+      console.error(`  ${prop}: calc(var(--spacing) * -8)`);
+    }
     console.error(
       "\nA measured page has no horizontal padding to cancel — it spends the\n" +
-        "inset as grid columns — so content carrying one of these lands outside\n" +
-        "its own column. Remove the class, or the sentence naming it: Tailwind\n" +
-        "emits the rule from a comment exactly as it does from code.\n"
+        "inset as grid columns — so content carrying this lands outside its own\n" +
+        "column. It reaches the sheet from a class, an `@apply` alias, or a\n" +
+        "safelist; the declaration is the same either way. Cancel only the\n" +
+        "vertical axis, and remove any sentence that spells the class out —\n" +
+        "Tailwind emits the rule from a comment exactly as it does from code.\n"
     );
     process.exit(1);
   }

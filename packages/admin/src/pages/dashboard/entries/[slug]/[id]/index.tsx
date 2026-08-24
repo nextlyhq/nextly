@@ -476,10 +476,19 @@ export default function EditEntryPage({
             />
           }
         >
-          <PluginSlot
-            path={customEditViewPath}
-            props={customViewProps as unknown as Record<string, unknown>}
-          />
+          {/* Boxed for the same reason the injection slots are: under the
+              measured frame this is a direct child of a CSS grid, and the rule
+              that puts a child in the content column can only place a
+              generated element box. A view rooted in bare text, or in an
+              element with `display: contents`, produces none and is
+              auto-placed into a gutter. The registry imposes no root-element
+              contract, so the page provides the box. */}
+          <div>
+            <PluginSlot
+              path={customEditViewPath}
+              props={customViewProps as unknown as Record<string, unknown>}
+            />
+          </div>
         </MeasuredPageFrame>
       </QueryErrorBoundary>
     );
