@@ -86,7 +86,11 @@ function CreateEntryPageSkeleton() {
         Loading collection...
       </div>
 
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
+      {/* Cancels the page's vertical inset only.
+          The horizontal half would pull this skeleton past the measured
+          column, and the editor that replaces it would then jump 64px
+          narrower. */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
         {/* Main Content */}
         <div className="flex-1 space-y-6 lg:p-8 pt-6">
           {/* Breadcrumbs skeleton */}
