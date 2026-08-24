@@ -154,7 +154,7 @@ function readString(value: unknown): string | null {
 export async function verifyPreviewToken(
   token: string,
   secret: string,
-  options: { generation: number }
+  options: { generation: number | (() => number | Promise<number>) }
 ): Promise<PreviewVerifyResult> {
   let payload: Record<string, unknown>;
   try {
@@ -179,7 +179,18 @@ export async function verifyPreviewToken(
 
   // Checked AFTER the shape, so a malformed token is never reported as merely
   // revoked — the two need different answers from a caller.
-  if (payload.gen !== options.generation) {
+  // Resolved HERE rather than by the caller, and that placement is the point.
+  // Reading the revocation counter means a database query, and every check
+  // above this line needs only the secret — so resolving it up front would let
+  // any unauthenticated request carrying arbitrary bytes force a settings read,
+  // on this endpoint and on every content request that consults a preview
+  // cookie. Nothing reaches this line without a valid signature.
+  const generation =
+    typeof options.generation === "function"
+      ? await options.generation()
+      : options.generation;
+
+  if (payload.gen !== generation) {
     return { valid: false, reason: "revoked" };
   }
 

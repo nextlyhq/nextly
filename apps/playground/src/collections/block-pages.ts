@@ -1,4 +1,9 @@
-import { defineCollection, json, text } from "nextly/config";
+import {
+  defineCollection,
+  json,
+  previewUrlFromTemplate,
+  text,
+} from "nextly/config";
 
 // Pages rendered by the code-first blocks renderer (`@nextlyhq/blocks-react`),
 // served at /blocks/<slug> by apps/playground/src/app/blocks/[[...slug]]/page.tsx.
@@ -20,6 +25,24 @@ export const BlockPages = defineCollection({
   // Draft/Published lifecycle. The route reads with the default `published`
   // scope, so an unpublished row must 404 rather than render.
   status: true,
+  // Where a block page previews. Without this the collection resolves to
+  // `notConfigured`, and a preview link minted for one of its drafts has
+  // nowhere to send the reviewer — it verifies, then refuses, which is
+  // indistinguishable from an expired link.
+  //
+  // `/blocks/` because that is where this collection's route is mounted, in
+  // `src/app/blocks/[[...slug]]/page.tsx`. The mount is the application's
+  // choice, so the path is stated here rather than guessed anywhere else.
+  admin: {
+    // Built through the shared helper rather than interpolated here. A slug
+    // holding a URL-significant character — `?`, `#`, `%`, a space — changes the
+    // meaning of a hand-built path instead of addressing the stored slug, so
+    // `draft?mode=x` would redirect to the route for `draft` and the token's
+    // entry comparison would then refuse it. The helper applies the same
+    // encoding a stored `urlTemplate` gets, so both spellings resolve one entry
+    // to one address.
+    preview: { url: previewUrlFromTemplate("/blocks/{slug}") },
+  },
   fields: [
     text({ name: "title", required: true }),
     text({ name: "slug", required: true, unique: true }),

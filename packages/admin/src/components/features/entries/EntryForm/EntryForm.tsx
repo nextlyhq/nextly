@@ -28,7 +28,6 @@ import { snapshotToFormValues } from "@admin/components/features/versions/snapsh
 import { VersionSnapshotForm } from "@admin/components/features/versions/VersionSnapshotForm";
 import { Alert, AlertDescription, Skeleton } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -59,7 +58,6 @@ import {
   effectiveEntryStatus,
   isSlugPerLocale,
   previewLinkLocale,
-  previewLinkSiteUrl,
   useHasPublicAddress,
 } from "./entry-address";
 import { EntryFormActions } from "./EntryFormActions";
@@ -507,7 +505,6 @@ export function EntryForm({
   // the entry exists. The id is read here rather than inside the hook because
   // hooks run unconditionally: on create the mutation is constructed and never
   // reachable, since the control that would call it is not rendered.
-  const { data: generalSettings } = useGeneralSettings();
   const savedEntryId = entry?.id === undefined ? "" : String(entry.id);
 
   // Recovery points for this author, recorded while they type. Addressed only
@@ -566,18 +563,14 @@ export function EntryForm({
     locale,
     defaultLocale,
   });
-  // A link that travels by email or chat has to name a host. `window` is read
-  // through a guard because this module is imported in a server render, where
-  // there is no origin and the configured site is the only source anyway.
-  const linkSiteUrl = previewLinkSiteUrl({
-    configured: generalSettings?.siteUrl,
-    origin: typeof window === "undefined" ? undefined : window.location.origin,
-  });
+  // No site URL is computed here. A link that travels by email or chat has to
+  // name a host, and the server is the only place that can: `settings` is a
+  // system resource the `editor` and `author` presets cannot read, and those
+  // are exactly the roles that share preview links.
   const previewLink = usePreviewLink({
     collection: collection.name,
     entryId: savedEntryId,
     ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
-    ...(linkSiteUrl === undefined ? {} : { siteUrl: linkSiteUrl }),
   });
 
   // Only enable shortcuts in standalone mode (not embedded modals)

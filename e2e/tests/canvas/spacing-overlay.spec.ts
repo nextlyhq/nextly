@@ -1055,19 +1055,20 @@ test.describe("spacing values on the canvas", () => {
     }
   });
 
-  test("drops the margin only on the AXIS its own transform moves", async ({
+  test("drops EVERY band when a plain translate moves the whole box", async ({
     page,
   }) => {
     /*
-     * The axes are independent, and a lift like `translateY(-4px)` is an
-     * ordinary hover state: measured, `translateY` leaves the horizontal gap at
-     * the authored 20px while making the vertical one −20, and `translateX`
-     * does the reverse. Refusing both axes because one moved would throw away
-     * bands that are exactly right.
+     * An earlier version of this test asserted the opposite for the horizontal
+     * side — that `translateY` left the right margin drawable, on the grounds
+     * that the gap it names is still 32px wide. That was wrong, and the reason
+     * is worth keeping: an edge is a SEGMENT, and the right edge's endpoints are
+     * both displaced vertically by a `translateY`. Its band therefore has the
+     * correct WIDTH forty pixels away from the space it names, which is the
+     * failure this module treats as worse than drawing nothing.
      *
-     * The horizontal margin is authored here because the seed carries only a
-     * block-end one, and a fixture with nothing on the surviving axis would pass
-     * against an implementation that dropped everything.
+     * A pinned edge is a different case and still keeps its band — the test
+     * below covers it. What a plain translate cannot do is pin anything.
      */
     await page.goto(ROUTE);
     const block = page.locator(`[data-nx-node="${PADDED}"]`);
@@ -1077,7 +1078,8 @@ test.describe("spacing values on the canvas", () => {
     });
     await block.click();
 
-    // CONTROL: both axes draw before the transform.
+    // CONTROL: both axes draw before the transform, so the emptiness afterwards
+    // is the rule firing rather than a fixture that authored nothing.
     await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
     await expect(page.locator(band("margin", "right"))).toHaveCount(1);
 
@@ -1089,8 +1091,302 @@ test.describe("spacing values on the canvas", () => {
       el.style.height = `${el.getBoundingClientRect().height + 40}px`;
     });
 
+    await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
+    // PADDING is the control on the other side: it lies inside the transform and
+    // travels with the box, so it stays correct and must still be drawn. Without
+    // this, a whole-element refusal would satisfy the assertion above.
+    await expect(page.locator(band("padding", "bottom"))).toHaveCount(1);
+  });
+
+  test("keeps the band beside an edge its transform leaves STATIONARY", async ({
+    page,
+  }) => {
+    /*
+     * A transform is applied about `transform-origin`, so a translate composed
+     * with a scale can pin one edge and move only the other. Measured on a 100px
+     * block: `translateY(-25px) scaleY(0.5)` computes to
+     * `matrix(1, 0, 0, 0.5, 0, -25)` and renders its top edge at exactly the
+     * position layout gave it, while plain `scaleY(0.5)` moves that edge by 25.
+     * The shift below is derived from the block's measured height for that
+     * reason — the pinning is a relationship between the two, not a number.
+     *
+     * Reachable with `transform` ALONE, which is a catalog property —
+     * `transform-origin` is not, and an earlier version of this rule concluded
+     * from that fact that a pinned edge could not arise. It can; composing two
+     * functions is enough.
+     *
+     * So the top band must survive while the bottom one goes, and an answer per
+     * axis fails this while satisfying every other transform test in the file.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      (node as HTMLElement).style.marginTop = "28px";
+    });
+    await block.click();
+
+    // CONTROL: both vertical bands draw before the transform.
+    await expect(page.locator(band("margin", "top"))).toHaveCount(1);
+    await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
+
+    const pinned = await block.evaluate(node => {
+      const el = node as HTMLElement;
+      const before = el.getBoundingClientRect();
+      /*
+       * The shift is DERIVED from the block's own height rather than written as
+       * a constant. With the initial origin at the box's centre, halving the
+       * height draws the top edge down by a quarter of it, so the translate that
+       * cancels that is a function of the height — a literal would pin the edge
+       * only for a block that happened to be the size the literal was written
+       * for, and the seed's is not.
+       */
+      const shift = (before.height / 2) * (1 - 0.5);
+      el.style.transform = `translateY(${String(-shift)}px) scaleY(0.5)`;
+      return Math.abs(el.getBoundingClientRect().top - before.top) < 0.5;
+    });
+    // The fixture's separating property, asserted rather than assumed: layout
+    // that drifted so the top edge DID move would leave this test passing on the
+    // axis rule it exists to reject.
+    expect(pinned).toBe(true);
+
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    await expect(page.locator(band("margin", "top"))).toHaveCount(1);
     await expect(page.locator(band("margin", "bottom"))).toHaveCount(0);
-    await expect(page.locator(band("margin", "right"))).toHaveCount(1);
+  });
+
+  test("drops the band when a STRONG own scale moves the edge", async ({
+    page,
+  }) => {
+    /*
+     * The case that separates converting the displacement by the ancestors from
+     * converting it by the composed scale. The displacement is already in the
+     * parent's coordinates — the element's own transform is what produced it —
+     * so multiplying by that transform again counts it twice.
+     *
+     * Measured on a 100px block under `scaleY(0.01)`: each vertical edge moves
+     * 49.5 rendered pixels, while the composed conversion answers 0.495, which
+     * is under the half-pixel threshold and would call a plainly moved edge
+     * stationary. The pinned-edge test above cannot catch this — its
+     * displacement is exactly zero, so both multipliers agree there.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.marginTop = "28px";
+    });
+    await block.click();
+    await expect(page.locator(band("margin", "top"))).toHaveCount(1);
+
+    /*
+     * The scale is chosen rather than picked, and it is what makes this test
+     * separate at all. The wrong conversion answers `displacement * scale`, so
+     * the two implementations only disagree while that product is under the
+     * half-pixel threshold — and the displacement is about half the block's
+     * height, which the seed's own padding puts at 120. A tenth of a percent
+     * clears it with room; a hundredth of the box, tried first, did not, and
+     * both implementations dropped the bands for the same reason.
+     */
+    const OWN_SCALE = 0.001;
+    const moved = await block.evaluate((node, value) => {
+      const el = node as HTMLElement;
+      const before = el.getBoundingClientRect().top;
+      el.style.transform = `scaleY(${String(value)})`;
+      return Math.abs(el.getBoundingClientRect().top - before);
+    }, OWN_SCALE);
+    // The separating property, asserted BOTH ways: the edge really moves far,
+    // and the wrong conversion of that same displacement lands under the
+    // threshold — so the two implementations must disagree here.
+    expect(moved).toBeGreaterThan(5);
+    expect(moved * OWN_SCALE).toBeLessThan(0.5);
+
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
+  });
+
+  test("draws a retained margin band at its FULL height, not the scaled one", async ({
+    page,
+  }) => {
+    /*
+     * A transform does not scale the space a margin reserves. With the top edge
+     * pinned the band survives, and it has to cover the real gap: measured, a
+     * block with `margin-top: 28px` under a pinning transform leaves 28 rendered
+     * pixels above it, while the composed scale would draw 14 and name half the
+     * space it points at.
+     *
+     * The pinned-edge test asserts the band EXISTS and stops there, so it stays
+     * green against the halved geometry. This one reads the rectangle.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      (node as HTMLElement).style.marginTop = "28px";
+    });
+    await block.click();
+
+    const before = await page.locator(band("margin", "top")).boundingBox();
+    if (before === null) throw new Error("the margin band has no box");
+    expect(Math.abs(before.height - 28)).toBeLessThan(TOLERANCE);
+
+    await block.evaluate(node => {
+      const el = node as HTMLElement;
+      const shift = (el.getBoundingClientRect().height / 2) * (1 - 0.5);
+      el.style.transform = `translateY(${String(-shift)}px) scaleY(0.5)`;
+    });
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    const after = await page.locator(band("margin", "top")).boundingBox();
+    if (after === null) throw new Error("the margin band was dropped");
+    expect(Math.abs(after.height - 28)).toBeLessThan(TOLERANCE);
+    // And the number still reads what the author typed.
+    await expect(page.locator(band("margin", "top"))).toHaveText("28");
+  });
+
+  test("drops a band whose edge is pinned on its own axis but slid ALONG itself", async ({
+    page,
+  }) => {
+    /*
+     * An edge is a SEGMENT, so its own coordinate is only half the question.
+     * Measured, `translate(30px, -25px) scaleY(0.5)` leaves the top edge's Y
+     * exactly where layout put it and slides the whole edge thirty pixels
+     * sideways — a band anchored to it then names pixels the margin never
+     * occupied, at exactly the right height.
+     *
+     * The pinned-edge test above varies only Y, so it passes whether or not the
+     * perpendicular extent is considered. This is the case that separates them.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      (node as HTMLElement).style.marginTop = "28px";
+    });
+    await block.click();
+    await expect(page.locator(band("margin", "top"))).toHaveCount(1);
+
+    const shifted = await block.evaluate(node => {
+      const el = node as HTMLElement;
+      const before = el.getBoundingClientRect();
+      // Derived so the vertical pin holds for this block's height, exactly as
+      // the pinned-edge test does; the sideways slide is what this one adds.
+      const lift = (before.height / 2) * (1 - 0.5);
+      el.style.transform = `translate(30px, ${String(-lift)}px) scaleY(0.5)`;
+      const after = el.getBoundingClientRect();
+      return {
+        topStillPinned: Math.abs(after.top - before.top) < 0.5,
+        movedSideways: Math.abs(after.left - before.left),
+      };
+    });
+    // Both halves of the separating property, asserted rather than assumed.
+    expect(shifted.topStillPinned).toBe(true);
+    expect(shifted.movedSideways).toBeGreaterThan(5);
+
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    await expect(page.locator(band("margin", "top"))).toHaveCount(0);
+  });
+
+  test("declines margins under an ancestor reflection the block cancels", async ({
+    page,
+  }) => {
+    /*
+     * A reflection cancelled by the element's own composes to a POSITIVE matrix,
+     * so the describability guard — which reads the composed matrix — passes.
+     * Measured: a parent at `scaleX(-1)` holding a child at
+     * `translateX(-width) scaleX(-1)` composes to `a = 1` while the ancestor's
+     * own `a` is still −1.
+     *
+     * That negative factor is what a margin would be scaled by, turning a
+     * positive margin into a negative extent — drawn INWARD over the content and
+     * still labelled as ordinary positive spacing. The mirrored space is real; a
+     * rectangle claiming to be it is not.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="hx-nested-text"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      (node as HTMLElement).style.marginLeft = "24px";
+    });
+    await block.click();
+
+    // CONTROL: the band draws before either reflection exists.
+    await expect(page.locator(band("margin", "left"))).toHaveCount(1);
+
+    /*
+     * Both transforms go on together, because neither alone reaches the state.
+     * The element's reflection ALONE composes to a negative matrix and the
+     * describability guard refuses the whole overlay; the ancestor's alone does
+     * the same. Only the pair composes to a positive matrix that passes.
+     *
+     * The element's shift is `-2 * originX`, which pins the endpoint at local
+     * `v = 0`: a transform about `o` maps `v` to `o + a(v - o) + e`, so with
+     * `a = -1` that endpoint moves by `2o + e`, and `e = -2o` makes it zero.
+     * That endpoint is what the per-edge rule consults for the LEFT side, so the
+     * left margin survives the endpoint rule and the ancestor's sign becomes the
+     * only thing left to refuse it.
+     *
+     * Note the reflection SWAPS which edge is which on screen — the image of
+     * `v = 0` is the rendered box's right side — so an on-screen check of
+     * `rect.left` would be measuring the wrong endpoint. The separation is
+     * established by the break instead: removing the ancestor guard puts this
+     * band back.
+     */
+    const cancelled = await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      const text = document.querySelector(
+        '[data-nx-node="hx-nested-text"]'
+      ) as HTMLElement;
+      const originX = Number.parseFloat(
+        getComputedStyle(text).transformOrigin.split(" ")[0] ?? "0"
+      );
+      section.style.transform = "scaleX(-1)";
+      text.style.transform = `translateX(${String(-2 * originX)}px) scaleX(-1)`;
+      const compose = (el: Element | null): DOMMatrix => {
+        let m = new DOMMatrix();
+        for (let n = el; n !== null; n = n.parentElement) {
+          const t = getComputedStyle(n).transform;
+          if (t !== "" && t !== "none") m = new DOMMatrix(t).multiply(m);
+        }
+        return m;
+      };
+      return {
+        ancestorNegative: compose(section).a < 0,
+        composedPositive:
+          compose(document.querySelector('[data-nx-node="hx-nested-text"]')).a >
+          0,
+      };
+    });
+    // The separating property: the describability guard upstream sees a POSITIVE
+    // composition and lets this through, so an ancestor-side check is the only
+    // thing that can refuse it.
+    expect(cancelled.ancestorNegative).toBe(true);
+    expect(cancelled.composedPositive).toBe(true);
+
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
   });
 
   test("the bands take no pointer events, so a covered block stays clickable", async ({

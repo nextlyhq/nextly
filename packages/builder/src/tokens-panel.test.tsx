@@ -13,11 +13,41 @@
  * @module tokens-panel.test
  */
 import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { TokensPanel } from "./tokens-panel";
+import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
+
+/**
+ * The panel with a host that answers `currentTokens` from what it last passed.
+ *
+ * That is what a host WITHOUT a synchronous authority can manage, and it is
+ * enough for every test that does not put an edit and a file read in flight at
+ * the same moment. The ones that do supply their own, because the difference
+ * between the two is the whole point of the prop.
+ */
+type HostedPanelProps = Omit<TokensPanelProps, "currentTokens"> &
+  Partial<Pick<TokensPanelProps, "currentTokens">>;
+
+function Panel({
+  currentTokens,
+  ...props
+}: HostedPanelProps): React.JSX.Element {
+  return (
+    <TokensPanel
+      {...props}
+      currentTokens={currentTokens ?? (() => props.tokens)}
+    />
+  );
+}
 
 afterEach(cleanup);
 
@@ -61,7 +91,7 @@ const TOKENS: SiteTokenSet = {
  */
 function mount(tokens: SiteTokenSet | undefined) {
   const onChange = vi.fn();
-  render(<TokensPanel tokens={tokens} onChange={onChange} />);
+  render(<Panel tokens={tokens} onChange={onChange} />);
   return onChange;
 }
 
@@ -102,7 +132,7 @@ describe("what the studio draws", () => {
       ],
     };
     const { container } = render(
-      <TokensPanel tokens={unresolvable} onChange={vi.fn()} />
+      <Panel tokens={unresolvable} onChange={vi.fn()} />
     );
     const swatches = Array.from(
       container.querySelectorAll(".nx-tokens__swatch")
@@ -173,7 +203,7 @@ describe("editing a value", () => {
     const wrong: SiteTokenSet = {
       tokens: [{ name: "color.bad", kind: "color", values: { light: "16px" } }],
     };
-    render(<TokensPanel tokens={wrong} onChange={vi.fn()} />);
+    render(<Panel tokens={wrong} onChange={vi.fn()} />);
     expect(screen.getByText(/not a colour/)).toBeDefined();
   });
 });
@@ -252,7 +282,7 @@ describe("adding a token", () => {
 
   it("adds into a site that has no table at all", () => {
     const onChange = vi.fn();
-    render(<TokensPanel tokens={{ tokens: [] }} onChange={onChange} />);
+    render(<Panel tokens={{ tokens: [] }} onChange={onChange} />);
     fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
     expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).tokens.length).toBe(1);
   });
@@ -267,9 +297,7 @@ describe("a token the site's own code supplies", () => {
 
   function mountWith(tokens: SiteTokenSet, supplied: SiteTokenSet) {
     const onChange = vi.fn();
-    render(
-      <TokensPanel tokens={tokens} supplied={supplied} onChange={onChange} />
-    );
+    render(<Panel tokens={tokens} supplied={supplied} onChange={onChange} />);
     return onChange;
   }
 
@@ -332,7 +360,7 @@ describe("a save that did not happen", () => {
     // site holds the old value, so a validation failure, a missing permission
     // and a dropped network all look exactly like success.
     render(
-      <TokensPanel
+      <Panel
         tokens={TOKENS}
         onChange={vi.fn()}
         issue="You do not have permission to change site styles."
@@ -361,11 +389,9 @@ describe("removing a row does not carry state onto its successor", () => {
     // Keyed by position, deleting `color.a` shifts every following row and
     // React reuses the deleted row's component for `color.b` — so the
     // uncontrolled inputs keep the removed token's text.
-    const { rerender } = render(
-      <TokensPanel tokens={THREE} onChange={vi.fn()} />
-    );
+    const { rerender } = render(<Panel tokens={THREE} onChange={vi.fn()} />);
     const after: SiteTokenSet = { tokens: THREE.tokens.slice(1) };
-    rerender(<TokensPanel tokens={after} onChange={vi.fn()} />);
+    rerender(<Panel tokens={after} onChange={vi.fn()} />);
 
     expect(valueField("color.b")).toHaveProperty("value", "#222222");
     expect(valueField("color.c")).toHaveProperty("value", "#333333");
@@ -376,14 +402,12 @@ describe("removing a row does not carry state onto its successor", () => {
     // The sharper half: the confirm state belongs to the row component, so a
     // reused component hands the next token a live "Remove" button it never
     // asked for — one click from removing the wrong token.
-    const { rerender } = render(
-      <TokensPanel tokens={THREE} onChange={vi.fn()} />
-    );
+    const { rerender } = render(<Panel tokens={THREE} onChange={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Remove color.a" }));
     expect(screen.getByText(/loses that style/)).toBeDefined();
 
     const after: SiteTokenSet = { tokens: THREE.tokens.slice(1) };
-    rerender(<TokensPanel tokens={after} onChange={vi.fn()} />);
+    rerender(<Panel tokens={after} onChange={vi.fn()} />);
     expect(screen.queryByText(/loses that style/)).toBeNull();
   });
 });
@@ -393,20 +417,18 @@ describe("a reverted value reaches the field", () => {
     // The inputs are uncontrolled, so a prop change alone does not move them:
     // the panel would go on showing an override that storage and the canvas no
     // longer hold, with the author believing it was saved.
-    const { rerender } = render(
-      <TokensPanel tokens={TOKENS} onChange={vi.fn()} />
-    );
+    const { rerender } = render(<Panel tokens={TOKENS} onChange={vi.fn()} />);
     const typed: SiteTokenSet = {
       tokens: [
         { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
         ...TOKENS.tokens.slice(1),
       ],
     };
-    rerender(<TokensPanel tokens={typed} onChange={vi.fn()} />);
+    rerender(<Panel tokens={typed} onChange={vi.fn()} />);
     expect(valueField("color.ink")).toHaveProperty("value", "#ff0000");
 
     // Refused: the host puts the persisted set back.
-    rerender(<TokensPanel tokens={TOKENS} onChange={vi.fn()} />);
+    rerender(<Panel tokens={TOKENS} onChange={vi.fn()} />);
     expect(valueField("color.ink")).toHaveProperty("value", "#111111");
   });
 
@@ -422,20 +444,16 @@ describe("a reverted value reaches the field", () => {
         ...TOKENS.tokens.slice(1),
       ],
     };
-    const { rerender } = render(
-      <TokensPanel tokens={renamed} onChange={vi.fn()} />
-    );
+    const { rerender } = render(<Panel tokens={renamed} onChange={vi.fn()} />);
     expect(nameField("text.body")).toHaveProperty("value", "text.body");
-    rerender(<TokensPanel tokens={TOKENS} onChange={vi.fn()} />);
+    rerender(<Panel tokens={TOKENS} onChange={vi.fn()} />);
     expect(nameField("color.ink")).toHaveProperty("value", "color.ink");
   });
 });
 
 describe("no tokens to show, and why", () => {
   it("says a read is in flight while it is", () => {
-    render(
-      <TokensPanel tokens={undefined} onChange={vi.fn()} absence="pending" />
-    );
+    render(<Panel tokens={undefined} onChange={vi.fn()} absence="pending" />);
     expect(screen.getByText(/Reading this site/)).toBeDefined();
   });
 
@@ -443,9 +461,7 @@ describe("no tokens to show, and why", () => {
     // A 403 or an exhausted retry leaves the same `undefined`, and a panel
     // that reports it as loading describes a state the site is not in and
     // gives the author nothing to act on.
-    render(
-      <TokensPanel tokens={undefined} onChange={vi.fn()} absence="failed" />
-    );
+    render(<Panel tokens={undefined} onChange={vi.fn()} absence="failed" />);
     expect(screen.queryByText(/Reading this site/)).toBeNull();
     const said = screen.getByRole("alert");
     expect(said.textContent).toContain("could not be read");
@@ -478,6 +494,517 @@ describe("pinning a dark value to what light already gives", () => {
     const field = valueField("color.ink");
     fireEvent.change(field, { target: { value: "#111111" } });
     fireEvent.blur(field);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("bringing a token file in", () => {
+  /** A DTCG document holding one colour this site does not have. */
+  const FILE = JSON.stringify({
+    color: {
+      brand: {
+        $type: "color",
+        $value: "#f59e0b",
+        $extensions: {
+          "com.nextlyhq.nextly": {
+            css: { light: "#f59e0b" },
+            kind: "color",
+          },
+        },
+      },
+    },
+  });
+
+  /** A `File` whose `text()` resolves, which jsdom does not provide. */
+  function fileOf(contents: string): File {
+    const file = new File([contents], "tokens.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(file, "text", {
+      value: () => Promise.resolve(contents),
+    });
+    return file;
+  }
+
+  /**
+   * Choose a file and wait for the panel to have ANSWERED.
+   *
+   * Waits for the observable condition rather than for one turn of the event
+   * loop. A single tick is enough only when nothing else is competing for it:
+   * under a full suite or a loaded machine the read can settle after that tick
+   * and the assertion looks at a panel that has not reported yet. That is a
+   * test which passes on a fast machine and fails in CI, which is worse than
+   * one that fails everywhere.
+   */
+  const chooseFile = async (contents: string): Promise<void> => {
+    const input = screen.getByLabelText("Import");
+    fireEvent.change(input, { target: { files: [fileOf(contents)] } });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("status") ?? screen.queryByRole("alert")
+      ).not.toBeNull();
+    });
+  };
+
+  it("MERGES the file into what the site already has", async () => {
+    const onChange = mount(TOKENS);
+    await chooseFile(FILE);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0]?.[0] as SiteTokenSet;
+    // Everything that was there is still there, and the file was added.
+    expect(next.tokens.map(t => t.name)).toEqual([
+      "color.ink",
+      "brand.main",
+      "color.brand",
+    ]);
+  });
+
+  it("says how many arrived", async () => {
+    mount(TOKENS);
+    await chooseFile(FILE);
+    expect(screen.getByRole("status").textContent).toContain(
+      "Imported 1 token"
+    );
+  });
+
+  it("NAMES what it could not carry, rather than reporting success alone", async () => {
+    // The report is the feature: a designer handed a file with tokens missing
+    // has no other way to know, and the missing ones are the interesting ones.
+    const withUnusable = JSON.parse(FILE) as Record<string, unknown>;
+    withUnusable["motion"] = {
+      ease: { $type: "cubicBezier", $value: [0.4, 0, 0.2, 1] },
+    };
+    mount(TOKENS);
+    await chooseFile(JSON.stringify(withUnusable));
+    const said = screen.getByRole("status").textContent ?? "";
+    expect(said).toContain("Imported 1 token");
+    expect(said).toContain("cubicBezier");
+  });
+
+  it("refuses a file that is not JSON, and changes nothing", async () => {
+    const onChange = mount(TOKENS);
+    await chooseFile("{ not json");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("not valid JSON");
+  });
+
+  /*
+   * NOT TESTED HERE, deliberately: that clearing the input lets the same file
+   * be chosen twice. jsdom reports `value` as "" for a file input whether or
+   * not a file was chosen — measured — so an assertion on it passes with the
+   * clearing removed and proves nothing. The behaviour is real in a browser,
+   * where an unchanged value fires no change event and an author who fixed
+   * their file and picked it back would see nothing happen. It is covered by
+   * the comment at the call site rather than by a green test that cannot fail.
+   */
+
+  it("merges into what the HOST holds, before React has re-rendered it", async () => {
+    /*
+     * The window a re-render cannot model. An author's edit reaches the host
+     * synchronously, but React commits the resulting render on its own
+     * schedule — so between the edit and that commit there is no version of
+     * "the latest props this panel saw" that has it. A file read resolving in
+     * there merges into the set from before the edit and persists it.
+     *
+     * So the panel is never re-rendered here. The only thing that changes is
+     * what the host ANSWERS, which is exactly what a host keeping its authority
+     * in a ref can offer and a prop cannot.
+     */
+    const onChange = vi.fn();
+    const held: { set: SiteTokenSet } = { set: TOKENS };
+    let resolveRead: ((text: string) => void) | undefined;
+    const slow = new File([FILE], "tokens.json", { type: "application/json" });
+    Object.defineProperty(slow, "text", {
+      value: () =>
+        new Promise<string>(resolve => {
+          resolveRead = resolve;
+        }),
+    });
+
+    render(
+      <Panel
+        tokens={TOKENS}
+        onChange={onChange}
+        currentTokens={() => held.set}
+      />
+    );
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [slow] },
+    });
+
+    held.set = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
+        ...TOKENS.tokens.slice(1),
+      ],
+    };
+
+    resolveRead?.(FILE);
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+
+    const merged = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(merged.tokens.find(t => t.name === "color.ink")?.values.light).toBe(
+      "#ff0000"
+    );
+    // The control: the file still arrived, so this is a merge rather than the
+    // edit simply being handed back.
+    expect(merged.tokens.map(t => t.name)).toContain("color.brand");
+  });
+
+  it("merges into the set as it is NOW, not as it was when the read began", async () => {
+    // Reading a file is asynchronous and an author can edit while it is in
+    // flight. Merging into the set this render closed over discards that edit
+    // and persists the stale result — an edit made, seen, and silently undone
+    // by an import that was already running.
+    const onChange = vi.fn();
+    let resolveRead: ((text: string) => void) | undefined;
+    const slow = new File([FILE], "tokens.json", { type: "application/json" });
+    Object.defineProperty(slow, "text", {
+      value: () =>
+        new Promise<string>(resolve => {
+          resolveRead = resolve;
+        }),
+    });
+
+    const { rerender } = render(<Panel tokens={TOKENS} onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [slow] },
+    });
+
+    // The author edits while the read is still out, and the host re-renders
+    // the panel with the newer set.
+    const edited: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
+        ...TOKENS.tokens.slice(1),
+      ],
+    };
+    rerender(<Panel tokens={edited} onChange={onChange} />);
+
+    resolveRead?.(FILE);
+    // The observable condition, not a turn of the loop: the import has
+    // reported back.
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+
+    const merged = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    // The edit survived the import.
+    expect(merged.tokens.find(t => t.name === "color.ink")?.values.light).toBe(
+      "#ff0000"
+    );
+    // And the file still arrived.
+    expect(merged.tokens.map(t => t.name)).toContain("color.brand");
+  });
+
+  it("reports a file it could not READ, rather than doing nothing quietly", async () => {
+    // Removed between choosing and opening, a permission refusal, a failing
+    // disk. Without a guard the rejection escapes into the `void` at the call
+    // site and the import does nothing while saying nothing.
+    const onChange = mount(TOKENS);
+    const broken = new File(["x"], "tokens.json", { type: "application/json" });
+    Object.defineProperty(broken, "text", {
+      value: () => Promise.reject(new Error("EACCES")),
+    });
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [broken] },
+    });
+    const said = await screen.findByRole("alert");
+    expect(said.textContent).toContain("could not be read");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  /*
+   * NOT SEPARATED HERE, and said rather than left as a silent gap: whether the
+   * latest-set ref is assigned during RENDER or from an effect. The window is
+   * real — an effect runs after commit, so a read resolving between the commit
+   * of an edit and the effect that records it reads the previous set — but this
+   * harness cannot open it: `rerender` runs inside `act`, which flushes effects
+   * before returning, so both forms pass. Measured: moving the assignment back
+   * into an effect fails nothing.
+   *
+   * The assignment is therefore in render on reasoning rather than on a failing
+   * test, and the reasoning is that an effect cannot close a window that opens
+   * before effects run.
+   */
+
+  it("an OLDER read does not overwrite a newer one's report", async () => {
+    // Two files in flight, answering out of order. Without a sequence guard a
+    // slow rejection lands after a fast success and reports failure for an
+    // import that was applied and persisted.
+    const onChange = vi.fn();
+    let rejectFirst: ((reason: Error) => void) | undefined;
+    const slow = new File(["x"], "a.json", { type: "application/json" });
+    Object.defineProperty(slow, "text", {
+      value: () =>
+        new Promise<string>((_, reject) => {
+          rejectFirst = reject;
+        }),
+    });
+
+    render(<Panel tokens={TOKENS} onChange={onChange} />);
+    const input = screen.getByLabelText("Import");
+
+    fireEvent.change(input, { target: { files: [slow] } });
+    // The author picks a second, good file before the first answers.
+    fireEvent.change(input, { target: { files: [fileOf(FILE)] } });
+    const first = await screen.findByRole("status");
+    expect(first.textContent).toContain("Imported 1 token");
+
+    // Now the FIRST read fails, late.
+    rejectFirst?.(new Error("EACCES"));
+    // An ABSENCE is asserted below, so this has to give the late rejection
+    // every chance to speak rather than race it. `waitFor` retries until its
+    // body stops throwing, which is the wrong shape for a condition that must
+    // hold rather than arrive.
+    await act(async () => {
+      await new Promise(resolve => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    // The success still stands: the older answer said nothing.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Imported 1 token"
+    );
+  });
+
+  it("a clean export does not wipe an import's report", async () => {
+    // Exporting is the common next step after an import, and the import's
+    // report is the only list naming what the source file could not carry.
+    // Clearing it because a later action had no news of its own destroys the
+    // one thing the author still needed — without them dismissing anything.
+    const withUnusable = JSON.parse(FILE) as Record<string, unknown>;
+    withUnusable["motion"] = {
+      ease: { $type: "cubicBezier", $value: [0.4, 0, 0.2, 1] },
+    };
+    mount(TOKENS);
+    await chooseFile(JSON.stringify(withUnusable));
+    expect(screen.getByRole("status").textContent).toContain("cubicBezier");
+
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+
+    // The list the author still needs is still there.
+    expect(screen.getByRole("status").textContent).toContain("cubicBezier");
+  });
+
+  /*
+   * NOT SEPARATED HERE either, and for the same reason as the render-versus-
+   * effect note above: whether the unmount invalidation is layout-timed or
+   * passive. `unmount` runs inside `act`, which flushes passive effects, so the
+   * commit-to-passive-cleanup window never opens and both forms pass —
+   * measured. It is layout-timed on the reasoning that a passive cleanup runs
+   * after the unmount commit, which is precisely the gap it exists to close.
+   */
+
+  it("a read that lands after the panel is GONE changes nothing", async () => {
+    // The shell renders one left panel at a time and keys them, so switching
+    // to Layers while a large file is being read unmounts this — and the
+    // continuation would still call `onChange`, changing the site after the
+    // author left the tool, with its report discarded.
+    const onChange = vi.fn();
+    let resolveRead: ((text: string) => void) | undefined;
+    const slow = new File([FILE], "tokens.json", { type: "application/json" });
+    Object.defineProperty(slow, "text", {
+      value: () =>
+        new Promise<string>(resolve => {
+          resolveRead = resolve;
+        }),
+    });
+
+    const { unmount } = render(<Panel tokens={TOKENS} onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [slow] },
+    });
+
+    unmount();
+    resolveRead?.(FILE);
+    await act(async () => {
+      await new Promise(resolve => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    // The site was not changed by a panel the author had already left.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  /*
+   * NOT TESTED, and the reason is that I could not reach it. The report keys
+   * carry their position as well as their text, because a list keyed on text
+   * alone hands React two identical keys the moment a message repeats — but no
+   * fixture produced a repeat. The engine names the TOKEN in each of its
+   * messages, and this boundary's own refusals name a token or a path too. The
+   * one message that could repeat — two tokens refused for one taken name —
+   * cannot arrive from a file, because a design-token document derives a
+   * token's name from its path and so cannot hold two tokens under one.
+   *
+   * The keying stands as a cheap guard over a case nothing here can currently
+   * produce, rather than as a fix for an observed defect.
+   */
+
+  it("keeps the report until it is dismissed", async () => {
+    mount(TOKENS);
+    await chooseFile(FILE);
+    expect(screen.queryByRole("status")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+/** A token whose vendor data JSON has no form for. */
+const UNWRITABLE: SiteTokenSet = (() => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic["self"] = cyclic;
+  return {
+    tokens: [
+      {
+        name: "color.ink",
+        kind: "color",
+        values: { light: "#111111" },
+        extensions: { vendor: cyclic },
+      },
+    ],
+  };
+})();
+
+describe("an export that could not be written", () => {
+  it("says it could not be written, and says it as a refusal", () => {
+    // The tone decides how the report is announced, so calling this "done"
+    // would headline "Saved ..." directly above a line saying nothing was, and
+    // announce a failure as a passive status update.
+    render(<Panel tokens={UNWRITABLE} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("could not be written");
+    expect(said.textContent).not.toContain("Saved");
+  });
+
+  it("still reports a successful export as a STATUS, not merely as not-an-alert", () => {
+    // The control, and it has to REQUIRE the status rather than assert the
+    // absence of an alert: no report at all satisfies "no alert", so the weaker
+    // form passes for a panel that reports nothing and for one that calls every
+    // export a refusal — the second only by accident.
+    //
+    // The fixture therefore has something to report: a token whose kind the
+    // format cannot carry, so the export succeeds AND warns.
+    const partly: SiteTokenSet = {
+      tokens: [
+        { name: "color.ok", kind: "color", values: { light: "#111111" } },
+        { name: "odd.one", kind: "custom", values: { light: "0" } },
+      ],
+    };
+    render(<Panel tokens={partly} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+    const said = screen.getByRole("status");
+    expect(said.textContent).toContain("Saved tokens.json");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("an export that produces no file", () => {
+  it("says so when there is nothing to write", () => {
+    /*
+     * A site with no token values compiles to an empty stylesheet and warns
+     * about nothing, so there is no file AND no list of reasons. The silence
+     * that is right for a successful export — the file is the confirmation —
+     * covered this too, and the button did nothing at all: no download, no
+     * message, nothing to act on.
+     */
+    render(<Panel tokens={{ tokens: [] }} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export CSS" }));
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("no token values to write");
+    // And it is not worded as a failure, because nothing failed.
+    expect(said.textContent).not.toContain("could not be written");
+  });
+
+  it("still says COULD NOT when something actually went wrong", () => {
+    // The control: an artefact that is empty because the write was refused
+    // keeps the fault wording and its list of reasons.
+    render(<Panel tokens={UNWRITABLE} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("could not be written");
+    expect(said.textContent).not.toContain("no token values");
+  });
+
+  it("stays silent when a file DID arrive with nothing to report", () => {
+    /*
+     * The other control, and the reason the silence exists: exporting is the
+     * common next step after an import, and a clean export must not wipe the
+     * import's report of what the source file could not carry.
+     *
+     * The absence of a report is not enough on its own. An export that stopped
+     * handing over a file while still taking the wrote branch would satisfy
+     * both queries below and be exactly the silent no-op the sibling test
+     * exists to catch — so the download boundary is asserted to have been
+     * REACHED, with the bytes that were built.
+     */
+    const made = vi.spyOn(URL, "createObjectURL");
+    try {
+      render(<Panel tokens={TOKENS} onChange={vi.fn()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Export CSS" }));
+      expect(made).toHaveBeenCalledTimes(1);
+      expect(made.mock.calls[0]?.[0]).toBeInstanceOf(Blob);
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      made.mockRestore();
+    }
+  });
+});
+
+describe("an import where nothing landed", () => {
+  it("reports a refusal and does NOT save", async () => {
+    /*
+     * `importDtcg` succeeds when the file was readable, and every token in it
+     * can still be refused afterwards — by a name the site holds, by a path, by
+     * a custom property two tokens compose. Announcing "Imported 0 tokens." as
+     * a status claims an arrival that did not happen, and handing the host a
+     * table identical to the one it had spends a save on nothing.
+     */
+    const onChange = vi.fn();
+    const held: SiteTokenSet = {
+      tokens: [
+        { id: "other", name: "thing", kind: "number", values: { light: "9" } },
+      ],
+    };
+    render(
+      <Panel tokens={held} onChange={onChange} currentTokens={() => held} />
+    );
+    /*
+     * Names a token the site already holds under a DIFFERENT identity, so the
+     * file reads fine and its one token is refused on the way in. A NUMBER,
+     * because a bare string is not a readable DTCG colour value and the token
+     * would then be unusable rather than refused — a different path, and one
+     * that reports its own refusal.
+     */
+    const document = JSON.stringify({
+      thing: { $type: "number", $value: 1 },
+    });
+    /*
+     * `text` supplied explicitly, as every other import test here does: jsdom
+     * File does not implement it, and without this the panel reports the file
+     * as unreadable — a refusal that would satisfy the assertion below for
+     * entirely the wrong reason.
+     */
+    const chosen = new File([document], "tokens.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(chosen, "text", {
+      value: () => Promise.resolve(document),
+    });
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [chosen] },
+    });
+
+    const said = await screen.findByRole("alert");
+    expect(said.textContent).toContain("could be imported");
+    // The half that matters beyond the wording: no no-op save.
     expect(onChange).not.toHaveBeenCalled();
   });
 });

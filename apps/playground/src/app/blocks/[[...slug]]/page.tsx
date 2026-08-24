@@ -25,6 +25,7 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
+import { previewDraftGate } from "nextly/runtime";
 
 import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
 import { SITE_STYLE_DEFAULTS } from "../../../lib/site-style-defaults";
@@ -71,6 +72,16 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["block-pages"],
   field: "content",
   nextly: siteReader,
+  // Without this the route serves published entries only, so a preview link
+  // verifies, redirects, and then answers 404 from a page that looks entirely
+  // correct — indistinguishable, to the reviewer who opened it, from a link
+  // that had expired.
+  //
+  // The gate grants exactly the ONE entry the visitor's token names, which is
+  // the part Next's own draft mode cannot express: `draftMode()` is a single
+  // boolean for the whole host, so enabling it alone would turn a link meant
+  // for one unpublished page into a key to every unpublished page on the site.
+  draft: previewDraftGate(),
   // Stated even though it is this site's default language, because the read is
   // not the only thing it feeds. An omitted locale still serves the right page
   // — the read defaults it internally — but it is also what a `draft` decision

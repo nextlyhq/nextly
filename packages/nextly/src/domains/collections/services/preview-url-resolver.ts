@@ -179,6 +179,27 @@ function interpolate(
 }
 
 /**
+ * A code-first `preview.url` function built from a `{field}` template.
+ *
+ * The two authoring paths are disjoint by construction — a code-first
+ * collection declares a function, a UI-created one declares a template string —
+ * so a package that ships a collection in code and wants to express its preview
+ * as a PATH has no way to say so. This bridges them, and it is built on the
+ * same `interpolate` the template path uses rather than beside it: two
+ * substitution rules that agree today would drift, and the drift is silent
+ * because a wrong preview URL still looks like a URL.
+ *
+ * Returns `null` for an entry whose placeholders are not all filled, which the
+ * resolver reports as `unavailable` — an entry with no slug yet is not
+ * previewable, and will be once it has one.
+ */
+export function previewUrlFromTemplate(
+  template: string
+): (entry: Record<string, unknown>) => string | null {
+  return entry => interpolate(template, entry);
+}
+
+/**
  * Resolve the preview URL for one entry.
  *
  * `siteUrl` is where the reader's site is served, which is what turns the
@@ -231,7 +252,39 @@ export function resolvePreviewUrl({
   // Join without doubling or dropping the separator: the configured site may or
   // may not carry a trailing slash, and an authored path may or may not lead
   // with one.
-  const origin = `${base.origin}${base.pathname}`.replace(/\/+$/, "");
+  const basePath = `${base.origin}${base.pathname}`.replace(/\/+$/, "");
   const suffix = path.startsWith("/") ? path : `/${path}`;
-  return { status: "resolved", url: `${origin}${suffix}` };
+
+  const joined = joinUnderSite(`${basePath}${suffix}`, base);
+  // The pieces parsed separately and not together, which is a declaration this
+  // resolver cannot turn into an address.
+  if (joined === null) return { status: "unavailable" };
+  return { status: "resolved", url: joined };
+}
+
+/**
+ * An authored path placed under the configured site, keeping what the site URL
+ * itself declared.
+ *
+ * The site's own query and fragment are CARRIED rather than discarded. A site
+ * URL may legitimately hold one — a tenant selector is the usual reason — and
+ * the settings schema accepts it, so dropping it would send a visitor to the
+ * same path on a different tenant. It would also disagree with the minted link,
+ * which keeps it: the reviewer's first request would arrive scoped correctly and
+ * the redirect would then strip the scope.
+ *
+ * The authored path wins a conflict. It describes one document while the site
+ * URL describes the deployment, so the narrower statement is the one to honour.
+ */
+function joinUnderSite(candidate: string, base: URL): string | null {
+  try {
+    const joined = new URL(candidate);
+    for (const [key, value] of base.searchParams) {
+      if (!joined.searchParams.has(key)) joined.searchParams.append(key, value);
+    }
+    if (joined.hash === "" && base.hash !== "") joined.hash = base.hash;
+    return joined.toString();
+  } catch {
+    return null;
+  }
 }

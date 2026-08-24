@@ -118,6 +118,19 @@ export interface PageBuilderOptions {
    * the object once and hand it to both.
    */
   siteStyle?: SiteStyleData;
+
+  /**
+   * Where this application serves its pages, as a path with `{field}`
+   * placeholders — `"/{slug}"` for a blocks page at the site root,
+   * `"/blocks/{slug}"` for one mounted under a prefix.
+   *
+   * **Setting this is what enables shareable preview links for pages**, and
+   * there is deliberately no default. The plugin cannot install the host's
+   * preview route or its draft gate, and cannot discover where pages are
+   * mounted — so a defaulted path would let an editor mint a link that resolves
+   * to nothing, while declaring nothing gets them an explanation instead.
+   */
+  pagePreviewPath?: string;
 }
 
 /**
@@ -188,7 +201,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       services: {
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
-      collections: [pagesCollection()],
+      collections: [pagesCollection(opts.pagePreviewPath)],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated
       // defaults, because the storage existing is what the style studios and

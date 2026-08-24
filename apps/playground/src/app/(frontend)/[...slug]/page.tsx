@@ -40,6 +40,7 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
+import { previewDraftGate } from "nextly/runtime";
 
 import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
 import { SITE_STYLE_DEFAULTS } from "../../../lib/site-style-defaults";
@@ -76,6 +77,16 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // preview gate refusing every default-language preview, behind a published
   // page that looks entirely correct.
   locale: "en",
+  // Without this the route serves published entries only, so a preview link
+  // verifies, redirects, and then answers 404 from a page that looks entirely
+  // correct — indistinguishable, to the reviewer who opened it, from a link
+  // that had expired.
+  //
+  // The gate grants exactly the ONE entry the visitor's token names. That is
+  // the part Next's own draft mode cannot express: `draftMode()` is a single
+  // boolean for the whole host, so enabling it alone would turn a link meant
+  // for one unpublished page into a key to every unpublished page on the site.
+  draft: previewDraftGate(),
   // An explicit set, not the process registry. `registeredBlocks()` reads the
   // engine's global registry, which is populated by whatever booted the editor
   // — so a public route depending on it renders the unknown-block placeholder

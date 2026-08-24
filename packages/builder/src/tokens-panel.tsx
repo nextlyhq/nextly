@@ -64,6 +64,12 @@ import {
   tokenRowsFor,
   type TokenRow,
 } from "./tokens-studio";
+import {
+  exportCss,
+  exportDtcg,
+  importDtcg,
+  type ExportResult,
+} from "./tokens-transfer";
 
 export interface TokensPanelProps {
   /**
@@ -77,6 +83,29 @@ export interface TokensPanelProps {
   tokens: SiteTokenSet | undefined;
   /** An edit. The host owns the document and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
+  /**
+   * The set the host holds RIGHT NOW, asked at the moment it is needed.
+   *
+   * Reading a file is asynchronous, and an author can edit a token while it is
+   * in flight. Merging into anything this panel captured earlier would discard
+   * that edit and persist the result — an edit made, seen, and silently undone
+   * by an import that was already running.
+   *
+   * A function rather than a value because the panel CANNOT observe the newest
+   * set: a host that has dispatched a state update has not necessarily
+   * re-rendered, so every form of "the latest props this component saw" is one
+   * commit behind for as long as that takes. The host is the only place that
+   * knows, so it is the host that answers.
+   *
+   * Answer it from a REF the host writes as it dispatches, not from a value
+   * captured when the function was made. This panel may hold an accessor a
+   * commit older than the newest render, which is harmless when the accessor
+   * reads a ref and is the whole defect when it reads a captured value.
+   *
+   * Required rather than defaulted to the `tokens` prop. That default would be
+   * exactly the stale read this exists to prevent, and it would be silent.
+   */
+  currentTokens: () => SiteTokenSet | undefined;
   /**
    * The tokens something ELSE supplies, which the stored ones layer over.
    *
@@ -117,6 +146,7 @@ export interface TokensPanelProps {
 export function TokensPanel({
   tokens,
   onChange,
+  currentTokens,
   supplied,
   issue,
   absence = "pending",
@@ -151,6 +181,7 @@ export function TokensPanel({
         <h2 className="nx-tokens__title">Tokens</h2>
         <ModeSwitch mode={mode} onMode={setMode} />
       </div>
+      <TokenTransfer onChange={onChange} currentTokens={currentTokens} />
       {issue === undefined ? null : (
         /*
          * A save that did not happen. `role="alert"` because it reports on an
@@ -187,6 +218,379 @@ export function TokensPanel({
       </Tabs>
     </div>
   );
+}
+
+/**
+ * Why no file arrived, in the author's terms rather than the compiler's.
+ *
+ * Two different things produce an empty artefact and they need different words.
+ * Something went WRONG — vendor data that cannot be written, a stylesheet the
+ * compiler refused — and the reasons are listed beneath. Or there was simply
+ * nothing to write, which is not a fault and must not be worded as one: a site
+ * with no token values compiles to an empty sheet and warns about nothing, and
+ * telling that author the file "could not be written" describes a failure that
+ * did not happen.
+ */
+function refusalFor(made: ExportResult): string {
+  return made.skipped.length > 0
+    ? `${made.filename} could not be written.`
+    : `${made.filename} was not created, because this site has no token values to write.`;
+}
+
+/**
+ * Bringing a token file in, and taking one out.
+ *
+ * ## In: a file, not a paste
+ *
+ * A design-token document is something a TOOL produced — Figma, Style
+ * Dictionary — and lives on disk as a file. Asking for a paste would make the
+ * author open it, select it and copy it first, for no gain. The one other
+ * import in this product takes a paste, and rightly: it imports a list of
+ * options somebody may have in a spreadsheet or an email, which is a different
+ * artefact.
+ *
+ * ## Out: two files, because two audiences read them
+ *
+ * The token document goes back to a design tool and round-trips exactly. The
+ * CSS is what a visitor's stylesheet contains, for someone wiring these values
+ * into something this system does not render — and it is compiled by the same
+ * function the site sheet is, so it cannot describe a site that does not exist.
+ *
+ * ## The report is not chrome
+ *
+ * Both directions can carry less than they were given, and both say what they
+ * left behind. That report IS the feature: a designer handed a file with three
+ * tokens missing has no way to know otherwise, and the ones that go missing are
+ * the interesting ones. So it is shown until dismissed rather than flashed.
+ */
+function TokenTransfer({
+  onChange,
+  currentTokens,
+}: {
+  onChange: (tokens: SiteTokenSet) => void;
+  currentTokens: () => SiteTokenSet | undefined;
+}): React.JSX.Element {
+  const id = React.useId();
+  const [report, setReport] = React.useState<{
+    tone: "done" | "refused";
+    headline: string;
+    detail: readonly string[];
+  } | null>(null);
+
+  /*
+   * The CALLBACK as it is now.
+   *
+   * A read in flight outlives the render that began it, and the host can
+   * re-render with a different `onChange` while it runs — in the page builder
+   * that closure captures the baseline an import is diffed against, so calling
+   * yesterday's callback diffs the new table against the old baseline and can
+   * persist code-supplied defaults as overrides.
+   *
+   * Published at COMMIT rather than during render. Both earlier forms were
+   * wrong in opposite directions: a passive effect runs AFTER the commit,
+   * leaving a window where a read resolves against the previous value, and
+   * assigning during render closes that one and opens another — a concurrent
+   * render later abandoned still ran the line, so a read resolving then calls a
+   * callback from a render that never happened. A layout effect runs when a
+   * render commits and only when it commits.
+   *
+   * That still leaves the gap between a host DISPATCHING an update and React
+   * committing it, which no ref written from this component can close. It is
+   * why the token set is asked for through `currentTokens` instead of kept
+   * here: the set is what an import would silently overwrite, and the callback
+   * is not — every value this one closes over comes from the site's own
+   * configuration rather than from anything an author edits mid-read.
+   */
+  const latestChange = React.useRef(onChange);
+  /*
+   * The ACCESSOR is kept the same way, and for a reason worth separating from
+   * the callback's: an `async` function closes over the props of the render
+   * that created it, so a read still in flight would go on asking the accessor
+   * it was born with. Held as a value that would be exactly the staleness this
+   * prop exists to remove, wearing a different shape.
+   *
+   * Being one commit behind is harmless HERE, which is what makes the ref
+   * enough. A stale closure over a value is stale; a stale closure over the
+   * host's own ref still reads whatever that ref holds now. That is the
+   * contract the prop asks for, and it is why the panel can stop trying to
+   * track the set itself.
+   */
+  const latestCurrent = React.useRef(currentTokens);
+  React.useLayoutEffect(() => {
+    latestChange.current = onChange;
+    latestCurrent.current = currentTokens;
+  });
+
+  /*
+   * Which read is the current one.
+   *
+   * Two files can be in flight at once — an author picks one, then picks
+   * another before the first answers — and their answers need not arrive in
+   * order. Without this, a slow rejection lands after a fast success and
+   * reports failure for an import that was applied and persisted. Same rule the
+   * save path follows: an answer for a superseded operation says nothing.
+   */
+  const reads = React.useRef(0);
+  /*
+   * A read in flight when the panel goes away must not land.
+   *
+   * The shell renders one left panel at a time and keys them, so switching to
+   * Layers while a large file is being read unmounts this — and the
+   * continuation would still call `onChange`, changing the site AFTER the
+   * author left the tool, with the report it produced discarded. The same
+   * invalidation also stops a read from a previous mount racing one started
+   * after the panel is reopened.
+   *
+   * Marked rather than cancelled: a `File` read cannot be aborted, so what is
+   * available is refusing to act on its answer.
+   *
+   * LAYOUT-timed, for the same reason the latest-set ref is assigned in render.
+   * A passive cleanup runs after the unmount commit, so a read settling in that
+   * gap passes the sequence guard and calls back into a panel that is already
+   * gone — the window this cleanup exists to close, left open by the mechanism
+   * meant to close it. A layout cleanup is synchronous with the unmount.
+   */
+  React.useLayoutEffect(
+    () => () => {
+      reads.current = -1;
+    },
+    []
+  );
+
+  /**
+   * The set to work from, or `undefined` having already said why there is none.
+   *
+   * Every path here asks the HOST rather than reading a snapshot, because the
+   * panel cannot see an edit the host has dispatched and not yet re-rendered
+   * with. That matters most for the import, which merges into this set after a
+   * wait, and it is no less true of an export clicked immediately after an
+   * edit: both would otherwise describe a table the author has already changed.
+   *
+   * A guard over a value already in hand. The panel draws a note instead of a
+   * table when the set is absent, so this is not reachable today — and a guess
+   * here is the loss the whole path exists to prevent.
+   */
+  const workingSet = (doing: string): SiteTokenSet | undefined => {
+    const set = latestCurrent.current();
+    if (set !== undefined) return set;
+    setReport({
+      tone: "refused",
+      headline: `This site\u2019s tokens are no longer loaded, so there is nothing to ${doing}.`,
+      detail: [],
+    });
+    return undefined;
+  };
+
+  const read = async (file: File): Promise<void> => {
+    const mine = reads.current + 1;
+    reads.current = mine;
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      if (mine !== reads.current) return;
+      /*
+       * The file could not be READ at all — removed between choosing and
+       * opening, a permission refusal, a failing disk. Distinct from a file
+       * that read fine and held nothing usable, and reported rather than
+       * swallowed: without this the promise rejects into the `void` at the
+       * call site and the import does nothing while saying nothing.
+       */
+      setReport({
+        tone: "refused",
+        headline:
+          "That file could not be read. It may have been moved or renamed since you chose it.",
+        detail: [],
+      });
+      return;
+    }
+    if (mine !== reads.current) return;
+    // Asked HERE, after the wait, and never before it.
+    const into = workingSet("merge into");
+    if (into === undefined) return;
+    const result = importDtcg(text, into);
+    if (!result.ok) {
+      setReport({
+        tone: "refused",
+        headline: result.error,
+        detail: result.skipped,
+      });
+      return;
+    }
+    /*
+     * NOTHING landed is a refusal, even though the file was readable. Every
+     * token in it can be refused after the fact — by a name the site already
+     * holds, by a path, by a custom property two tokens compose — and the
+     * import then reports "Imported 0 tokens." as a success while handing the
+     * host a table identical to the one it already had. That announces an
+     * arrival that did not happen AND spends a save on it.
+     */
+    if (result.imported === 0) {
+      setReport({
+        tone: "refused",
+        headline:
+          "No tokens from that file could be imported, so nothing was changed.",
+        detail: result.skipped,
+      });
+      return;
+    }
+    setReport({
+      tone: "done",
+      headline: `Imported ${String(result.imported)} ${
+        result.imported === 1 ? "token" : "tokens"
+      }.`,
+      detail: result.skipped,
+    });
+    latestChange.current(result.tokens);
+  };
+
+  /** Build an artefact from the set as it is NOW, or say there is none. */
+  const sendCurrent = (make: (set: SiteTokenSet) => ExportResult): void => {
+    const set = workingSet("write out");
+    if (set !== undefined) send(make(set));
+  };
+
+  const send = (made: ExportResult): void => {
+    // Nothing to download is not a file worth handing over. An empty artefact
+    // means the export could not be written, and the reason is in its report.
+    const wrote = made.text !== "";
+    if (wrote) download(made);
+    /*
+     * A clean export says nothing and CLEARS nothing. Exporting is the common
+     * next step after an import, and the import's report is the only list
+     * naming what the source file could not carry — wiping it because a later
+     * action had no news of its own destroys the one thing the author still
+     * needed, and does it without them dismissing anything.
+     *
+     * The FILE ARRIVING is what makes that silence acceptable: it is the
+     * confirmation, and a report is for what the author could not otherwise
+     * see. So the silence is conditional on `wrote`. Without that it also
+     * covered the case with no file and nothing to say — an empty site, whose
+     * stylesheet compiles to nothing and warns about nothing — and the button
+     * did nothing at all, which is the one outcome an author cannot act on.
+     */
+    if (wrote && made.skipped.length === 0) return;
+    setReport({
+      // An export that WROTE nothing is a refusal, whatever it has to say. The
+      // tone also decides how the report is announced, so calling this "done"
+      // would headline "Saved …" directly above a line saying nothing was, and
+      // announce a failure as a passive status update.
+      tone: wrote ? "done" : "refused",
+      headline: wrote ? `Saved ${made.filename}.` : refusalFor(made),
+      detail: made.skipped,
+    });
+  };
+
+  return (
+    <div className="nx-tokens__transfer">
+      <label className="nx-tokens__import" htmlFor={`${id}-file`}>
+        Import
+        {/*
+          The input is the control; the label is what is seen. A button that
+          forwards a click to a hidden input is a second mechanism for one
+          affordance, and the one that breaks first is the keyboard.
+        */}
+        <input
+          id={`${id}-file`}
+          type="file"
+          accept="application/json,.json,.tokens.json"
+          onChange={event => {
+            const file = event.target.files?.[0];
+            // Cleared so choosing the SAME file twice fires again — after a
+            // refusal an author edits the file and picks it back, and an input
+            // holding the old value reports nothing.
+            event.target.value = "";
+            if (file !== undefined) void read(file);
+          }}
+        />
+      </label>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => sendCurrent(exportDtcg)}
+      >
+        Export JSON
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => sendCurrent(exportCss)}
+      >
+        Export CSS
+      </Button>
+      {report === null ? null : (
+        <TransferReport report={report} onDismiss={() => setReport(null)} />
+      )}
+    </div>
+  );
+}
+
+/** What an import or an export carried, and what it did not. */
+function TransferReport({
+  report,
+  onDismiss,
+}: {
+  report: {
+    tone: "done" | "refused";
+    headline: string;
+    detail: readonly string[];
+  };
+  onDismiss: () => void;
+}): React.JSX.Element {
+  return (
+    <div
+      className="nx-tokens__report"
+      data-tone={report.tone}
+      role={report.tone === "refused" ? "alert" : "status"}
+    >
+      <p>{report.headline}</p>
+      {report.detail.length === 0 ? null : (
+        <ul>
+          {/*
+            Keyed by POSITION as well as text. The same message arrives twice
+            whenever a file holds two tokens of one unsupported type — the
+            engine names the type, not the token — and a list keyed on the text
+            alone then hands React two identical keys.
+          */}
+          {report.detail.map((line, at) => (
+            <li key={`${String(at)}-${line}`}>{line}</li>
+          ))}
+        </ul>
+      )}
+      <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
+        Dismiss
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Hand a generated file to the browser.
+ *
+ * An object URL rather than a data URL: a token document can run to tens of
+ * kilobytes, and a data URL of that size is refused outright by some browsers
+ * and truncated by others. Revoked immediately — the click has already happened
+ * by the time the handler returns, and leaving it alive holds the whole file in
+ * memory until the tab closes.
+ */
+function download(made: ExportResult): void {
+  const url = URL.createObjectURL(new Blob([made.text], { type: made.mime }));
+  const link = window.document.createElement("a");
+  link.href = url;
+  link.download = made.filename;
+  link.click();
+  /*
+   * Revoked on a LATER task. The click is dispatched synchronously but the
+   * fetch it starts is not, so releasing the URL in this turn can cancel the
+   * download it was created for — the file silently never arrives. Deferred
+   * rather than left alive, because an object URL holds the whole artefact in
+   * memory until the document is discarded.
+   */
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
 }
 
 /**
