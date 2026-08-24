@@ -17,7 +17,12 @@ import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import { compilePageCss } from "@nextlyhq/blocks-engine";
 
 import { createBlockResolver } from "./resolver";
-import { resolvePageStyles, toPageStyles, type PageStyles } from "./styles";
+import {
+  resolvePageStyles,
+  resolvePageStylesWithTrace,
+  toPageStyles,
+  type PageStyles,
+} from "./styles";
 
 const blocks = createBlockResolver([]);
 
@@ -244,5 +249,121 @@ describe("the scope an artifact records", () => {
     });
     expect(compiled.css).toContain("nx-doc-1");
     expect(toPageStyles(compiled, "nx-doc-1").scope).toBe("nx-doc-1");
+  });
+});
+
+describe("the cascade the compiler produced, alongside the sheet", () => {
+  /**
+   * A node with a value of its own, so the compile has something to record.
+   *
+   * A document whose nodes declare nothing compiles to an empty trace, and an
+   * empty array satisfies "is defined" exactly as a populated one does — so
+   * every assertion below would pass against a resolver that asked for the
+   * trace and threw the entries away.
+   */
+  const styled = (): BlockDocument => ({
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "a",
+        type: "test/text",
+        version: 1,
+        props: {},
+        styles: { base: { base: { color: "teal" } } },
+      } as unknown as BlockNode,
+    ],
+  });
+
+  const context = {
+    breakpoints: { viewport: [{ id: "base" }], container: [] },
+  };
+
+  it("reports the declarations it wrote when asked", () => {
+    const resolved = resolvePageStylesWithTrace(
+      styled(),
+      undefined,
+      context as never,
+      blocks,
+      false,
+      { trace: true }
+    );
+
+    // The POPULATION first: an empty trace would satisfy every assertion below
+    // for a reason that has nothing to do with the trace being carried through.
+    expect(resolved.trace ?? []).not.toHaveLength(0);
+    expect(resolved.trace?.map(entry => entry.property)).toContain("color");
+    // And the sheet is still the sheet — asking for the cascade must not change
+    // what gets rendered or stored.
+    expect(resolved.styles.css).toContain("teal");
+  });
+
+  it("reports nothing when it was not asked", () => {
+    const resolved = resolvePageStylesWithTrace(
+      styled(),
+      undefined,
+      context as never,
+      blocks
+    );
+
+    expect(resolved.trace).toBeUndefined();
+    // The control: the same document DOES produce a trace when asked, so the
+    // absence above is the option being off rather than a document with
+    // nothing to record.
+    expect(
+      resolvePageStylesWithTrace(
+        styled(),
+        undefined,
+        context as never,
+        blocks,
+        false,
+        {
+          trace: true,
+        }
+      ).trace
+    ).not.toBeUndefined();
+  });
+
+  it("reports nothing for a sheet no compile produced, even when asked", () => {
+    /*
+     * A page served from a STORED artifact is not recompiled, so there is no
+     * cascade to report and absence is the honest answer. It matters that a
+     * caller can tell this apart from "nothing is authored": an editor treating
+     * absence as an empty cascade would tell an author every value came from
+     * nowhere.
+     */
+    const resolved = resolvePageStylesWithTrace(
+      // BOTH nodes, because the stored artifact names classes for both. An
+      // artifact describing a node the document lacks was compiled from a
+      // larger tree, which this resolver refuses outright — the sheet would
+      // come back empty and the assertion below would pass for that reason
+      // instead of the one it names.
+      doc(node("a"), node("b")),
+      stored(),
+      undefined,
+      blocks,
+      false,
+      { trace: true }
+    );
+
+    expect(resolved.trace).toBeUndefined();
+    expect(resolved.styles.css).toContain("teal");
+  });
+
+  it("gives the narrow entry exactly the sheet the wide one carries", () => {
+    // The derivation, asserted rather than assumed: two resolutions of one
+    // question are what every staleness test in this module exists to catch.
+    const args = [
+      styled(),
+      undefined,
+      context as never,
+      blocks,
+      false,
+      {},
+    ] as const;
+
+    expect(resolvePageStyles(...args)).toEqual(
+      resolvePageStylesWithTrace(...args).styles
+    );
   });
 });

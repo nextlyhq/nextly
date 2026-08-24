@@ -26,6 +26,8 @@
 import {
   findNode,
   type BreakpointId,
+  type BreakpointSet,
+  type StyleTraceEntry,
   type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -95,6 +97,17 @@ export interface InspectorPanelProps {
    */
   blocks?: BlockResolver;
   /**
+   * The declarations the compiler wrote, so the Style tab can say where a
+   * control's value came from.
+   *
+   * Forwarded rather than compiled here for the reason the panel states: the
+   * cascade is walked ONCE per document, by the host that already holds the
+   * breakpoints it must be compiled against.
+   */
+  trace?: readonly StyleTraceEntry[];
+  /** The site's breakpoints, which decide which of those declarations are live. */
+  breakpoints?: BreakpointSet;
+  /**
    * The site's design tokens, forwarded to the Style tab's colour controls.
    *
    * Carried rather than defaulted, as `policy` is: omitting it means the
@@ -130,6 +143,8 @@ export function InspectorPanel({
   policy,
   styleState,
   breakpoint,
+  trace,
+  breakpoints,
   tokens,
   blocks,
 }: InspectorPanelProps): React.JSX.Element {
@@ -268,6 +283,8 @@ export function InspectorPanel({
             policy={policy}
             state={styleState}
             breakpoint={breakpoint}
+            trace={trace}
+            breakpoints={breakpoints}
             tokens={tokens}
           />
         </TabsContent>

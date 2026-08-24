@@ -35,6 +35,8 @@ import {
   MAX_BREAKPOINTS_PER_AXIS,
   type BreakpointAxis,
   type BreakpointDef,
+  breakpointContexts,
+  type BreakpointId,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
@@ -248,4 +250,171 @@ export function inCascadeOrder(defs: BreakpointDef[]): BreakpointDef[] {
   return [...defs].sort(
     (a, b) => (b.maxWidth ?? Infinity) - (a.maxWidth ?? Infinity)
   );
+}
+
+/**
+ * Every breakpoint whose rules are live while the editor is showing one.
+ *
+ * `styleProvenance` needs this and cannot derive it: which declarations are in
+ * PLAY is a fact about the width being viewed, while the breakpoint being edited
+ * only decides whether the winner among them belongs to this control. An editor
+ * simulating a narrow viewport inside a wide window is the ordinary case.
+ *
+ * ## Read from what is EMITTED, never from the stored set
+ *
+ * The stored axes and the emitted ones disagree, and this is the one question
+ * where that matters. `breakpointContexts` drops a definition whose bound is
+ * missing, non-finite or at or below zero; keeps only the FIRST of a duplicated
+ * id; allows one unbounded definition on the container axis and none on the
+ * viewport; and slices each axis to the per-axis cap. A set read raw therefore
+ * names breakpoints no stylesheet ever mentions, and reports a value keyed to a
+ * dropped id as live.
+ *
+ * That failure is SILENT in both directions: a badge naming a real-looking id
+ * looks identical whether or not a rule was written under it, and a value whose
+ * breakpoint was dropped is a value the author cannot see the source of. Asking
+ * the compiler's own normaliser is what keeps the panel and the page saying the
+ * same thing.
+ *
+ * ## Outward, never inward
+ *
+ * The model is DESKTOP-FIRST — every bounded definition compiles to
+ * `@media (max-width: N)` — so a narrow width satisfies its own query and every
+ * WIDER one as well. Showing a 768px breakpoint means the 768 rules apply, the
+ * 1024 rules apply, and the base rules underneath them all. The set therefore
+ * runs outward from the edited definition, never inward.
+ *
+ * ## An unknown container context is EXCLUDED, not assumed live
+ *
+ * The viewport's unbounded context matches at every width and is always in play.
+ * The container axis is not its counterpart: even at its widest a container
+ * context emits `@container (min-width: 0)`, which matches only an element that
+ * HAS a query-container ancestor. Whether the selected block has one is a fact
+ * about the rendered tree that this arithmetic cannot see, so treating it as
+ * universally live lets a container declaration win for a root block the browser
+ * is applying nothing to — a false indicator, in the direction that states
+ * something wrong rather than saying nothing.
+ *
+ * So the container axis contributes only when the author is EDITING that axis,
+ * which is the one case where they have said which context they mean. Otherwise
+ * it is left out entirely.
+ *
+ * The cost is the reverse — a value genuinely arriving from a container
+ * breakpoint is attributed to whatever the viewport axis says while a viewport
+ * breakpoint is being edited — and that is the safer of the two, because a
+ * control that under-reports its origin is quiet where one that over-reports is
+ * wrong.
+ *
+ * An id belonging to no emitted context yields the viewport's unbounded context
+ * alone, which is what an unknown breakpoint actually leaves matching.
+ *
+ * @experimental
+ */
+export function liveBreakpointsFor(
+  set: BreakpointSet | undefined,
+  edited: BreakpointId
+): BreakpointId[] {
+  const contexts = breakpointContexts(set);
+  const chosen = contexts.find(context => context.id === edited);
+  /*
+   * The viewport's unbounded context alone. A container one is only included
+   * when the author is editing the container axis — see the note above: at its
+   * widest it still emits a query that matches only an element inside a query
+   * container, which this cannot know.
+   */
+  const unbounded = contexts
+    .filter(
+      context =>
+        !isUsableWidth(context.maxWidth) &&
+        (context.axis !== "container" || chosen?.axis === "container")
+    )
+    .map(context => context.id);
+  // An unknown id, or an unbounded context itself: neither adds anything to the
+  // contexts already matching.
+  if (chosen === undefined || !isUsableWidth(chosen.maxWidth)) return unbounded;
+  const width = chosen.maxWidth;
+  const wider = contexts
+    .filter(
+      context =>
+        context.axis === chosen.axis &&
+        isUsableWidth(context.maxWidth) &&
+        context.maxWidth >= width
+    )
+    .map(context => context.id);
+  return [...unbounded, ...wider];
+}
+
+/**
+ * The breakpoints whose rules the BROWSER is currently applying.
+ *
+ * Asked of the browser rather than derived from the breakpoint being edited,
+ * because those are different facts and only one of them decides what is on
+ * screen. The edited breakpoint says where a write LANDS; which declarations are
+ * in play is a property of the width the page is being viewed at, and the editor
+ * renders its canvas inline rather than in a frame — so an ordinary window
+ * narrow enough to satisfy `@media (max-width: 1024px)` has those rules active
+ * while the panel is still editing the base breakpoint.
+ *
+ * Evaluated by `matchMedia` against each emitted context's OWN at-rule text, so
+ * there is no second reading of what a breakpoint means: the compiler wrote the
+ * query, and the browser answers it. Width arithmetic here would be a second
+ * implementation of the same condition and would drift the moment the emitted
+ * form changed.
+ *
+ * **Container contexts are excluded and cannot be answered this way.** A
+ * `@container` query resolves against an element's query container, not the
+ * viewport, so `matchMedia` has nothing to say about it — see
+ * {@link liveBreakpointsFor}, which excludes them for the same reason.
+ *
+ * A runtime without `matchMedia` gets the unconditional contexts alone, which is
+ * what is certainly live anywhere.
+ *
+ * @experimental
+ */
+export function matchedBreakpoints(
+  set: BreakpointSet | undefined,
+  matches: (query: string) => boolean
+): BreakpointId[] {
+  const live: BreakpointId[] = [];
+  for (const context of breakpointContexts(set)) {
+    if (context.atRule === undefined) {
+      // The unconditional VIEWPORT context: no query to ask, and always
+      // applying. A container's widest context is not this case — it still
+      // carries `@container (min-width: 0)` and is filtered below.
+      live.push(context.id);
+      continue;
+    }
+    /*
+     * Only a MEDIA query is answerable here, and the at-rule's own prefix is
+     * what decides. An explicit axis check beside this would be a second
+     * decision about one question: a container context's at-rule is
+     * `@container (...)`, so it fails this test already, and the two could only
+     * ever disagree by drifting apart.
+     */
+    const condition = context.atRule.replace(/^@media\s*/, "");
+    if (condition === context.atRule) continue;
+    if (matches(condition)) live.push(context.id);
+  }
+  return live;
+}
+
+/**
+ * Every media condition the site's viewport breakpoints emit, for subscribing to.
+ *
+ * Beside {@link matchedBreakpoints} because they must agree on which contexts
+ * carry a query and how its text is reduced to a condition — a subscriber
+ * listening to a different set than the reader evaluates is a panel that stops
+ * updating at exactly the widths it was added for.
+ *
+ * @experimental
+ */
+export function breakpointQueries(set: BreakpointSet | undefined): string[] {
+  const queries: string[] = [];
+  for (const context of breakpointContexts(set)) {
+    if (context.atRule === undefined) continue;
+    const condition = context.atRule.replace(/^@media\s*/, "");
+    // The same single test {@link matchedBreakpoints} applies, deliberately.
+    if (condition !== context.atRule) queries.push(condition);
+  }
+  return queries;
 }

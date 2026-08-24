@@ -14,10 +14,12 @@
  */
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   clearBlocks,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type BreakpointSet,
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -32,7 +34,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import {
+  breakpointLabel,
+  describeProvenance,
+  StyleInspectorPanel,
+} from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
 
 afterEach(() => {
@@ -1256,5 +1262,497 @@ describe("what the arrow keys do and do not claim", () => {
 
     expect(() => fireEvent.keyDown(field, { key: "ArrowUp" })).not.toThrow();
     expect(editor.apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("where a control's value came from", () => {
+  /** The dot for one property's single control. */
+  const dotIn = (property: string) =>
+    document.querySelector(
+      `[data-property="${property}"] .nx-style-inspector__provenance`
+    );
+
+  /**
+   * A trace entry as the compiler records one.
+   *
+   * Hand-built rather than compiled, because these tests are about the WIRING —
+   * that the panel resolves one subject, asks per control and renders the
+   * answer. Whether the cascade itself is read correctly is
+   * `style-provenance.test.ts`'s question and is settled there.
+   */
+  const entry = (over: Record<string, unknown> = {}) =>
+    ({
+      origin: { kind: "node", id: "a" },
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint: BASE_BREAKPOINT,
+      ...over,
+    }) as never;
+
+  function mountWithTrace(trace: readonly unknown[] | undefined) {
+    register({ color: true });
+    const editor = editorFor(
+      documentOf({ base: { [BASE_BREAKPOINT]: { color: "#111" } } })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        {...(trace === undefined ? {} : { trace: trace as never })}
+      />
+    );
+    return editor;
+  }
+
+  it("marks a value the author set on THIS block as set here", () => {
+    mountWithTrace([entry()]);
+    const dot = dotIn("color");
+    expect(dot?.getAttribute("data-provenance")).toBe("authored");
+    // Named for assistive technology, not only in a tooltip: a `title` reaches
+    // a mouse and nothing else.
+    expect(dot?.getAttribute("aria-label")).toBe("Set here");
+  });
+
+  it("names the CLASS an inherited value came from, by its slug", () => {
+    /*
+     * The slug, never the id. The id is storage and must not reach anything
+     * rendered or queried; the slug is what the author typed and what the
+     * canvas shows.
+     */
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        trace={
+          [
+            entry({
+              origin: { kind: "class", id: "cls-1", slug: "card" },
+            }),
+          ] as never
+        }
+      />
+    );
+    const dot = dotIn("color");
+    expect(dot?.getAttribute("data-provenance")).toBe("inherited");
+    expect(dot?.getAttribute("aria-label")).toBe("Inherited from .card");
+  });
+
+  it("puts the same sentence in TEXT, for someone who tabs rather than points", () => {
+    /*
+     * The gap the dot alone leaves. `title` reaches a pointer and `aria-label`
+     * reaches assistive technology; a sighted keyboard user sits between them
+     * and had a coloured dot with nothing to explain it.
+     *
+     * Asserted as ONE string shared with the dot rather than as a literal,
+     * because two copies of a sentence are two places for it to drift — and a
+     * literal here would keep passing after the dot's wording changed.
+     *
+     * `aria-hidden` is asserted as the other half: without it the same sentence
+     * is announced twice, and the fix for one group becomes a regression for
+     * another. The VISIBLE reveal is `:focus-within` in the stylesheet, which
+     * jsdom does not apply — what is certified here is the DOM contract the
+     * reveal depends on.
+     */
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        trace={
+          [
+            entry({
+              origin: { kind: "class", id: "cls-1", slug: "card" },
+            }),
+          ] as never
+        }
+      />
+    );
+
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
+
+    // The POPULATION first. Both sides of the comparison below read through
+    // `?.`, so a query that found nothing would compare `undefined` with
+    // `undefined` and pass while nothing was rendered at all.
+    expect(dotIn("color")).not.toBeNull();
+    expect(text).not.toBeNull();
+    expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
+    expect(text?.textContent).not.toBe("");
+    expect(text?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("draws NOTHING for a property no tier set", () => {
+    // Eight empty dots per section is the shape that trains an author to stop
+    // reading the panel.
+    register({ color: true });
+    const editor = editorFor(documentOf());
+    render(<StyleInspectorPanel editor={editor} trace={[] as never} />);
+    expect(dotIn("color")).toBeNull();
+  });
+
+  it("draws nothing at all when the host supplies no trace", () => {
+    /*
+     * Absent means the question was never asked, which is NOT "nothing is
+     * inherited". A host that cannot compile gets no indicators rather than a
+     * panel confidently reporting every control as unset.
+     *
+     * The control itself still renders, which is the separating half: a panel
+     * that had thrown would also show no dots.
+     */
+    mountWithTrace(undefined);
+    expect(dotIn("color")).toBeNull();
+    expect(fieldsOf("color").getByLabelText("Color")).toBeTruthy();
+  });
+
+  it("draws nothing when the trace cannot say WHICH control wrote it", () => {
+    /*
+     * The case the record reports rather than guesses, and the one a dot must
+     * not claim. `background-image` is written by TWO catalog controls —
+     * `background.url` and `backgroundGradient` — and the trace identifies a
+     * declaration by its CSS property and selector, which does not separate
+     * them. With one of the pair stored, treating the winner as this control's
+     * would light the dot on a control the author never touched.
+     *
+     * Reported as ambiguous by `styleProvenance`; drawn as nothing here, which
+     * is the same judgement one level up.
+     */
+    register({ background: { image: true } });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { background: { url: "/a.png" } } },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        trace={
+          [
+            entry({
+              property: "background-image",
+              value: 'url("/a.png")',
+            }),
+          ] as never
+        }
+      />
+    );
+
+    /*
+     * The separating half: the control IS on screen and IS showing the stored
+     * value, so the absent dot is the ambiguity being respected rather than the
+     * panel having failed to render the field at all.
+     */
+    expect(fieldsOf("background").getByLabelText("Url")).toBeTruthy();
+    expect(dotIn("background")).toBeNull();
+  });
+
+  it("resolves the subject ONCE however many controls are shown", () => {
+    /*
+     * The cost this indicator was designed around. Every control asks about the
+     * same node, so the document must be walked once per render and not once
+     * per control — the panel's own comments call walking it per control the
+     * thing that must not happen.
+     *
+     * Asserted through the rendered result rather than by counting calls: with
+     * several controls on screen, all of them answer, which is only possible
+     * from one shared subject.
+     */
+    register({ spacing: true });
+    const editor = editorFor(
+      documentOf({
+        base: {
+          [BASE_BREAKPOINT]: {
+            padding: { blockStart: "8px", blockEnd: "12px" },
+          },
+        },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        trace={
+          [
+            entry({ property: "padding-block-start", value: "8px" }),
+            entry({ property: "padding-block-end", value: "12px" }),
+          ] as never
+        }
+      />
+    );
+
+    // `spacing` draws a field per side, so the panel is answering for several
+    // controls at once — which one shared subject is what makes affordable.
+    const dots = document.querySelectorAll(
+      '[data-property="padding"] .nx-style-inspector__provenance'
+    );
+    expect(dots.length).toBe(2);
+    expect(
+      Array.from(dots).map(dot => dot.getAttribute("data-provenance"))
+    ).toEqual(["authored", "authored"]);
+  });
+});
+
+describe("naming the place a value came from", () => {
+  /*
+   * The four-way `node` answer is pure logic over an origin, an entry and the
+   * address being edited, so it is asked directly. Driving it through the panel
+   * would need a fixture where an ancestor's descendant rule wins for a
+   * descendant-selector control — reachable, but the fixture would be testing
+   * the ENGINE's cascade rather than this wording, and the cascade has its own
+   * suite.
+   */
+  const editing = {
+    nodeId: "a",
+    blockType: "acme/box",
+    state: "base" as never,
+    breakpoint: BASE_BREAKPOINT,
+    labelOf: (id: string) => (id === "md" ? "Medium" : id),
+  };
+  const at = (over: Record<string, unknown> = {}) =>
+    ({
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint: BASE_BREAKPOINT,
+      ...over,
+    }) as never;
+
+  const nameFor = (origin: unknown, entry = at()) =>
+    describeProvenance(
+      { kind: "inherited", entry, from: origin } as never,
+      editing as never
+    )?.text;
+
+  it("names a class by its SLUG, never its id", () => {
+    // The id is storage and must not reach anything rendered or queried; the
+    // slug is what the author typed and what the canvas shows.
+    expect(nameFor({ kind: "class", id: "cls-1", slug: "card" })).toBe(
+      "Inherited from .card"
+    );
+  });
+
+  it("names the block's own defaults and the page", () => {
+    expect(nameFor({ kind: "blockType", type: "acme/box" })).toBe(
+      "Inherited from this block's defaults"
+    );
+    expect(nameFor({ kind: "page" })).toBe("Inherited from the page");
+  });
+
+  it("separates an ENCLOSING block's defaults from this block's", () => {
+    /*
+     * The same route the `node` case takes: `reachesThroughAncestor` matches a
+     * `blockType` origin against the ANCESTOR's type, so a descendant rule from
+     * an enclosing block's defaults arrives carrying that block's type. Told
+     * "this block's defaults", an author goes looking in the wrong block's
+     * definition.
+     */
+    expect(nameFor({ kind: "blockType", type: "acme/section" })).toBe(
+      "Inherited from an enclosing block's defaults"
+    );
+  });
+
+  it("separates an ENCLOSING block from this one", () => {
+    /*
+     * The defect this replaced: every `node` origin read as "this block". An
+     * ancestor's rule reaches here through a descendant selector and the winning
+     * entry then carries the ANCESTOR's id, so an author told "this block" goes
+     * looking for a value that is not on the block they selected.
+     */
+    expect(nameFor({ kind: "node", id: "outer" })).toBe(
+      "Inherited from an enclosing block"
+    );
+    expect(nameFor({ kind: "node", id: "a" })).toBe(
+      "Inherited from this block"
+    );
+  });
+
+  it("names the BREAKPOINT a same-node value came from, by its label", () => {
+    expect(nameFor({ kind: "node", id: "a" }, at({ breakpoint: "md" }))).toBe(
+      "Inherited from this block at Medium"
+    );
+  });
+
+  it("names the STATE a same-node value came from", () => {
+    expect(nameFor({ kind: "node", id: "a" }, at({ state: "hover" }))).toBe(
+      "Inherited from this block in its hover state"
+    );
+  });
+
+  it("names the DEFINITION the compiler kept, not the first one stored", () => {
+    /*
+     * The label and the rule have to come from the same row or the tooltip sends
+     * an author to a definition that did not produce the value.
+     *
+     * `breakpointContexts` sorts each axis WIDEST-FIRST and then claims each id
+     * once, so of two rows storing `dup` the wider survives and emits the rule.
+     * A raw search over the stored axes returns whichever was written first.
+     * Stored narrow-then-wide, those two disagree — which is why the fixture is
+     * in that order and not the other.
+     *
+     * The engine is asked for the expectation rather than a literal, so this
+     * tracks the compiler if its normalisation ever changes rather than pinning
+     * today's answer as a second opinion.
+     */
+    const set = {
+      viewport: [
+        { id: "dup", label: "Narrow row", maxWidth: 400 },
+        { id: "dup", label: "Wide row", maxWidth: 900 },
+      ],
+      container: [],
+    } as unknown as BreakpointSet;
+
+    const kept = breakpointContexts(set).find(context => context.id === "dup");
+
+    expect(kept?.maxWidth).toBe(900);
+    expect(breakpointLabel(set, "dup")).toBe("Wide row");
+  });
+
+  it("falls back to the id for a breakpoint the settings no longer define", () => {
+    // A value keyed to a removed breakpoint is exactly what an author needs to
+    // recognise; a placeholder would tell them nothing they can act on.
+    expect(breakpointLabel({ viewport: [], container: [] }, "gone")).toBe(
+      "gone"
+    );
+  });
+
+  it("carries the address on a CLASS origin too, not only on a node", () => {
+    /*
+     * The same misdirection one tier over, and the reason the qualifiers were
+     * moved out of the node branch. A class holds responsive and
+     * interaction-state values of its own, so a Mobile declaration on `.card`
+     * winning while the panel edits base is answered by ".card" alone — and the
+     * author opens the class editor at base, sees a different value, and has no
+     * way to learn the one on screen came from another row.
+     *
+     * Asserted on the qualifier specifically, not just the whole string, so a
+     * regression that drops it cannot pass by matching the slug.
+     */
+    const label = nameFor(
+      { kind: "class", id: "cls-1", slug: "card" },
+      at({ breakpoint: "md" })
+    );
+
+    expect(label).toContain("at Medium");
+    expect(label).toBe("Inherited from .card at Medium");
+  });
+
+  it("says which control a non-node rule came THROUGH, without moving the place", () => {
+    /*
+     * The control is the subject only for a value on this block, where it is the
+     * field to open. On a class it is a qualifier: the rule came through that
+     * field, and the place to go is still the class. Told only "the Link color
+     * control", an author would look on the block and find nothing.
+     */
+    const label = nameFor(
+      { kind: "class", id: "cls-1", slug: "card" },
+      at({ property: "color", descendant: " a" })
+    );
+
+    expect(label).toContain(".card");
+    expect(label).toContain("via");
+  });
+
+  it("names BOTH axes when both differ, not just the first", () => {
+    /*
+     * The defect a first-match answer produces, and it needs no unusual document
+     * to reach: editing hover at Tablet, a value arriving from base at Mobile.
+     * Labelled "this block at Mobile", the author goes to hover at Mobile —
+     * a real address that does not hold the value — finds nothing, and the
+     * indicator has misdirected rather than merely under-informed them.
+     *
+     * The separating property is asserted directly: the state has to APPEAR, so
+     * a label that merely happens to name the breakpoint cannot satisfy this.
+     */
+    const label = nameFor(
+      { kind: "node", id: "a" },
+      at({ breakpoint: "md", state: "hover" })
+    );
+
+    expect(label).toContain("Medium");
+    expect(label).toContain("hover");
+    expect(label).toBe(
+      "Inherited from this block at Medium in its hover state"
+    );
+  });
+
+  it("names the CONTROL a descendant rule came from, not just the block", () => {
+    /*
+     * A rule reaches a control whose descendant selector is more specific than
+     * its own: with no hover value stored, `linkColorHover` displays the plain
+     * `a` declaration. Same node, same breakpoint, same state — so what differs
+     * is WHICH CONTROL wrote it, and "this block" leaves the author unable to
+     * find the field that actually holds the value.
+     *
+     * Named from the catalog rather than from the selector: ` a` is not a name
+     * an author has seen anywhere.
+     */
+    expect(
+      describeProvenance(
+        {
+          kind: "inherited",
+          entry: at({ property: "color", descendant: " a" }),
+          from: { kind: "node", id: "a" },
+        } as never,
+        editing as never,
+        "a:hover"
+      )?.text
+    ).toBe("Inherited from the Link color control");
+  });
+
+  it("still says 'this block' when the control's OWN rule won", () => {
+    /*
+     * The control. Naming a source whenever a descendant exists would relabel
+     * every link control on the page, including the ones displaying exactly what
+     * they wrote.
+     */
+    expect(
+      describeProvenance(
+        {
+          kind: "inherited",
+          entry: at({ property: "color", descendant: " a", breakpoint: "md" }),
+          from: { kind: "node", id: "a" },
+        } as never,
+        editing as never,
+        "a"
+      )?.text
+    ).toBe("Inherited from this block at Medium");
+  });
+
+  it("says nothing at all for unset and for ambiguous", () => {
+    // Both are cases where a dot would claim something the record does not say.
+    expect(
+      describeProvenance({ kind: "unset" } as never, editing as never)
+    ).toBeNull();
+    expect(
+      describeProvenance(
+        { kind: "ambiguous", entry: at(), sharedWith: ["a", "b"] } as never,
+        editing as never
+      )
+    ).toBeNull();
+    expect(describeProvenance(undefined, editing as never)).toBeNull();
   });
 });

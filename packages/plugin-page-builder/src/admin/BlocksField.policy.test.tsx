@@ -394,3 +394,61 @@ describe("the shell mock", () => {
     expect(seen.canvas).toBeDefined();
   });
 });
+
+describe("what the inspector is told about provenance", () => {
+  it("withholds the trace while the stored style is still arriving", () => {
+    /*
+     * The same reason the canvas is held back, one surface over. While the read
+     * is pending `useSiteStyle` answers with the host's config defaults, so a
+     * cascade compiled from it is not the page's: a class the site adds is
+     * missing and one it overrides is wrong. The dots would say where a value
+     * came from, confidently and incorrectly, and then change under the author.
+     */
+    siteStyleRead = { data: undefined, isPending: true, error: null };
+
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.trace).toBeUndefined();
+  });
+
+  it("withholds it after a FAILED read, which is not a passing state", () => {
+    /*
+     * The half that a `pending` check alone gets wrong. On failure `pending`
+     * goes false while the value falls back to the defaults, so the inspector
+     * would become permanently certain about a tier nobody has read.
+     */
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("nope"),
+    };
+
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.trace).toBeUndefined();
+  });
+
+  it("passes a trace once the read has ANSWERED", () => {
+    /*
+     * The control, and it is the most load-bearing assertion in this file.
+     *
+     * Without it the two withholding tests above are satisfied by a gate that
+     * withholds ALWAYS — which is exactly what shipped: `useSiteStyle` types
+     * `error` as `Error | null` and normalises success to `null`, so a
+     * `!== undefined` test was true on every render and no provenance dot ever
+     * appeared anywhere.
+     *
+     * I wrote this control, watched it fail, and removed it on the reasoning
+     * that the harness could not produce a trace — the registry is real and
+     * empty, so nothing compiles. That reasoning was available, plausible, and
+     * not the cause. A red test explained away is the same error as a green one
+     * taken at face value, and this is the shape it takes.
+     */
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.trace).toBeDefined();
+  });
+});

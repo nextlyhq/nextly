@@ -25,6 +25,23 @@ export { BuilderShell } from "./builder-shell";
 export type { BuilderShellProps } from "./builder-shell";
 
 /**
+ * The compiled cascade behind the page, for chrome that names where a value
+ * came from.
+ *
+ * On the CLIENT entry rather than the root one. It reaches
+ * `@nextlyhq/blocks-react` to compile, so publishing it from the server-safe
+ * barrel would pull a React dependency into an artifact whose whole contract is
+ * that a Server Component can call everything in it.
+ *
+ * Exported at all because the HOST is the only surface holding both halves the
+ * compile needs — the document and the site's breakpoints — while the panel that
+ * reads the answer sits several layers below. Compiling once at the top is what
+ * keeps the cascade from being walked per control; `style-trace.ts` says why it
+ * is compiled a second time.
+ */
+export { pageStyleTrace } from "./style-trace";
+
+/**
  * Whether the surrounding shell is interactive.
  *
  * Exported for slot content that PORTALS out of the shell, which the shell cannot reach with

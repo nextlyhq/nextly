@@ -52,6 +52,7 @@ import {
   DropIndicator,
   InsertPanel,
   InspectorPanel,
+  pageStyleTrace,
   LayersPanel,
   TokensPanel,
   OnboardingChecklist,
@@ -651,6 +652,63 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     [canvasSiteStyle, remotePatterns]
   );
 
+  /*
+   * The cascade behind the canvas, compiled ONCE per document.
+   *
+   * The inspector's Style tab uses it to say whether a control's value was set
+   * on this block or arrived from a class, the block's defaults or the page.
+   * Only this surface can compile it: the panel sits several layers down and
+   * holds neither the site's breakpoints nor the document, and compiling nearer
+   * the controls would walk the cascade once per control.
+   *
+   * It is handed the SAME inputs the canvas is: `canvasRender.styleContext`, the
+   * site sheet, and the host's remote patterns. Not a narrower context assembled
+   * beside them — named classes, block bases, the token prefix and the fetch
+   * predicate are each reconciled from two tiers, and a second assembly compiles
+   * a cascade the page never had. The shortfall would be silent: no class
+   * declaration in the trace, so every value from a named class reads as set by
+   * nobody, and a `url(...)` this host refuses reads as active.
+   */
+  const styleTrace = useMemo(
+    () =>
+      /*
+       * Withheld on exactly the states the CANVAS is withheld on, and for the
+       * same reason one level over. While the stored tier is unread
+       * `useSiteStyle` answers with the host's config defaults, so a trace
+       * compiled from it describes a cascade that is not the page's: a class the
+       * site adds is missing, one it overrides is wrong, and the dots say so
+       * confidently.
+       *
+       * A FAILED read is the worse half and is not a passing state. `pending`
+       * goes false while the value falls back to defaults, so gating on pending
+       * alone would leave the inspector permanently certain about a tier nobody
+       * has read. No dots is the honest answer; a fabricated origin is not.
+       */
+      /*
+       * `!== null`, NOT `!== undefined`. `useSiteStyle` types `error` as
+       * `Error | null` and normalises a successful read to `null`, so the
+       * `undefined` comparison is true on success as well as on failure — and
+       * withheld the trace unconditionally, which meant no provenance dot ever
+       * appeared. The same test the canvas below uses.
+       */
+      siteStylePending || siteStyleError !== null
+        ? undefined
+        : pageStyleTrace(
+            editor.document,
+            canvasRender.styleContext,
+            siteSheet(canvasSiteStyle),
+            remotePatterns === undefined ? {} : { remotePatterns }
+          ),
+    [
+      editor.document,
+      canvasRender,
+      canvasSiteStyle,
+      remotePatterns,
+      siteStylePending,
+      siteStyleError,
+    ]
+  );
+
   useCheckpoints({ name, control, document: editor.document });
 
   /*
@@ -734,6 +792,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           <InspectorPanel
             editor={editor}
             policy={stylePolicy}
+            trace={styleTrace}
+            breakpoints={siteBreakpoints(canvasSiteStyle)}
             tokens={offerableTokens(
               canvasSiteStyle,
               siteStylePending,

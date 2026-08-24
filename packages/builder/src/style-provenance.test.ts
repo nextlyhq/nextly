@@ -402,3 +402,193 @@ describe("several interaction states matching at once", () => {
     );
   });
 });
+
+describe("a declaration the PAGE wrote", () => {
+  const subject = { nodeId: "a", blockType: "acme/box", ancestors: [] };
+  const query = (trace: readonly unknown[]) =>
+    styleProvenance({
+      trace: trace as never,
+      subject,
+      cssProperty: "padding-top",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+  const pageEntry = (over: Record<string, unknown> = {}) =>
+    ({
+      origin: { kind: "page" },
+      property: "padding-top",
+      value: "8px",
+      state: "base",
+      breakpoint: "base",
+      ...over,
+    }) as never;
+
+  it("does NOT reach a block when it lands on the page root alone", () => {
+    /*
+     * The page's own settings compile onto the page ROOT, so a non-inherited
+     * property written there styles that element and nothing inside it. Reported
+     * unfiltered, a block control says "Inherited from the page" for a value the
+     * browser is not applying to it — and padding is exactly such a property.
+     */
+    expect(query([pageEntry()]).kind).toBe("unset");
+  });
+
+  it("DOES reach a block through a descendant selector", () => {
+    /*
+     * The separating half. `.page a` styles the links inside, this block's
+     * included — the same rule an ancestor's declarations are held to — so
+     * filtering every page origin would be as wrong in the other direction.
+     */
+    const result = styleProvenance({
+      trace: [pageEntry({ descendant: " a", property: "color" })] as never,
+      subject,
+      cssProperty: "color",
+      descendant: "a",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+    expect(result.kind).toBe("inherited");
+  });
+
+  it("leaves every other origin alone", () => {
+    // The filter is about page origins specifically. A node's own declaration
+    // carries no descendant either, and must still be found.
+    const own = pageEntry({ origin: { kind: "node", id: "a" } });
+    expect(query([own]).kind).toBe("authored");
+  });
+});
+
+describe("ranking winners from two live states", () => {
+  const subject = { nodeId: "a", blockType: "acme/box", ancestors: [] };
+  const at = (over: Record<string, unknown>) =>
+    ({
+      origin: { kind: "node", id: "a" },
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint: "base",
+      ...over,
+    }) as never;
+
+  it("prefers descendant SPECIFICITY over emission order", () => {
+    /*
+     * `styleOrigin` ranks by specificity within ONE state, and is asked once per
+     * live state — so across states the comparison lands here, and position
+     * alone gets it wrong.
+     *
+     * A state's rules are wrapped in `:where()`, which contributes NOTHING to
+     * specificity. So an EARLIER `a:hover` rule outranks a LATER plain-`a` one
+     * however far apart they were emitted, and naming the later one reports a
+     * declaration the browser is not showing.
+     */
+    const trace = [
+      at({ descendant: " a:hover", value: "#hover", state: "hover" }),
+      at({ descendant: " a", value: "#plain", state: "base" }),
+    ];
+    const result = styleProvenance({
+      trace: trace as never,
+      subject,
+      cssProperty: "color",
+      descendant: "a:hover",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["hover"],
+    });
+
+    /*
+     * The separating property, stated in the test: the specific rule is EARLIER
+     * in the trace, so anything preferring source order picks the other one.
+     */
+    expect(trace.indexOf(trace[0]!)).toBeLessThan(trace.indexOf(trace[1]!));
+    expect((result as { entry?: { value: string } }).entry?.value).toBe(
+      "#hover"
+    );
+  });
+
+  it("still falls back to emission order at EQUAL specificity", () => {
+    // The control. Preferring specificity must not throw away the cascade's own
+    // tie-break, which is the later rule.
+    const trace = [
+      at({ descendant: " a", value: "#first", state: "base" }),
+      at({ descendant: " a", value: "#second", state: "hover" }),
+    ];
+    const result = styleProvenance({
+      trace: trace as never,
+      subject,
+      cssProperty: "color",
+      descendant: "a",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["hover"],
+    });
+    expect((result as { entry?: { value: string } }).entry?.value).toBe(
+      "#second"
+    );
+  });
+});
+
+describe("a caller that states which states are live", () => {
+  const subject = { nodeId: "a", blockType: "acme/box", ancestors: [] };
+  const at = (over: Record<string, unknown>) =>
+    ({
+      origin: { kind: "node", id: "a" },
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint: "base",
+      ...over,
+    }) as never;
+
+  it("does NOT add the edited state back when a set was supplied", () => {
+    /*
+     * The field's contract: omitting it means the edited state plus base, so
+     * stating one is the host ruling states OUT. A canvas simulating only `base`
+     * while the panel edits `hover` would otherwise have the hover declaration
+     * reported as the visible winner — a value the browser is not showing, which
+     * is the exact case the field exists to prevent.
+     */
+    const result = styleProvenance({
+      trace: [at({ state: "hover", value: "#hover" })] as never,
+      subject,
+      cssProperty: "color",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["base"],
+    });
+    expect(result.kind).toBe("unset");
+  });
+
+  it("DOES default to the edited state when none was supplied", () => {
+    // The other half of the same contract, and the control: respecting a
+    // supplied set must not turn into ignoring the default.
+    const result = styleProvenance({
+      trace: [at({ state: "hover", value: "#hover" })] as never,
+      subject,
+      cssProperty: "color",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+    expect(result.kind).toBe("authored");
+  });
+
+  it("keeps base live whatever the caller stated", () => {
+    // Base rules are not state-gated and match alongside anything else, so they
+    // are in play even for a caller that named only an interaction state.
+    const result = styleProvenance({
+      trace: [at({ state: "base", value: "#base" })] as never,
+      subject,
+      cssProperty: "color",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["hover"],
+    });
+    expect(result.kind).toBe("inherited");
+  });
+});
