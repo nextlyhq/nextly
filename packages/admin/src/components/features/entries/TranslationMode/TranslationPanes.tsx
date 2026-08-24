@@ -151,11 +151,13 @@ function ActivePanes({
               translation-mode branch anywhere in the form. */}
           <div className="@container/content h-full overflow-y-auto">
             {/* The pane stands in for `PageContainer`, so it owes the same
-                horizontal padding. The editor cancels that padding itself at
-                `@4xl` with `-m-8` to run edge-to-edge — a negative margin with
-                nothing to cancel makes its layout 64px WIDER than the pane, so
-                the document rail is laid out past the right edge and clipped.
-                Measured before this: a 921px pane holding a 985px row.
+                horizontal inset — and stops owing it at the same width. The
+                editor's two columns go edge-to-edge from `@4xl`, so the padding
+                ends there rather than being applied and then cancelled by a
+                negative margin inside the editor. Cancellation is what made
+                this fragile: the margin cannot see whether its container padded,
+                so the same class was right here and 64px too wide on a measured
+                page, where the inset is spent as grid columns instead.
 
                 On an INNER element, deliberately: the container is declared
                 above, and an element cannot query itself — padding written up
@@ -170,7 +172,7 @@ function ActivePanes({
                 sourceLabel: source.sourceLabel,
               }}
             >
-              <div className="px-4 @sm/content:px-6 @2xl/content:px-8">
+              <div className="px-4 @sm/content:px-6 @2xl/content:px-8 @4xl/content:px-0">
                 {children}
               </div>
             </TranslationFieldProvider>

@@ -500,8 +500,17 @@ export default function EditEntryPage({
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <EntryPageFrame>
+        {/* Each injection slot gets a box of its own. Under the measured
+            frame these are direct children of a CSS grid, and the rule that
+            puts a child in the content column can only place a generated
+            element box: a plugin whose root is bare text, or an element with
+            `display: contents`, produces none and is auto-placed into a gutter
+            instead. The registry imposes no root-element contract on a plugin,
+            so the page provides the box rather than trusting it to. */}
         {beforeEditPath && (
-          <PluginSlot path={beforeEditPath} props={editInjectionProps} />
+          <div>
+            <PluginSlot path={beforeEditPath} props={editInjectionProps} />
+          </div>
         )}
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
@@ -523,7 +532,9 @@ export default function EditEntryPage({
           onCancel={handleCancel}
         />
         {afterEditPath && (
-          <PluginSlot path={afterEditPath} props={editInjectionProps} />
+          <div>
+            <PluginSlot path={afterEditPath} props={editInjectionProps} />
+          </div>
         )}
       </EntryPageFrame>
     </QueryErrorBoundary>
