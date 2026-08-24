@@ -667,3 +667,55 @@ describe("ids on a node the page replaces with a placeholder", () => {
     expect([...taken]).toEqual(["kept"]);
   });
 });
+
+describe("ids on a node the page gates behind a condition", () => {
+  const node = (over: Record<string, unknown>): never =>
+    ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
+  const gated = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+
+  it("reserves nothing for a gated node", () => {
+    /*
+     * `pruneHiddenNodes` removes it before the render and before the style
+     * compile, and the gate fails closed because no evaluator exists — so the
+     * id is on no page. Refusing it blocks the pattern the feature is for:
+     * two variants of one section sharing an anchor, one of them served.
+     */
+    const taken = domIdsTaken(
+      [node({ id: "b", cssId: "hero", visibility: gated })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual([]);
+  });
+
+  it("reserves nothing INSIDE one either", () => {
+    // The second site: the subtree goes with the node it hung from.
+    const taken = domIdsTaken(
+      [
+        node({
+          id: "b",
+          cssId: "outer",
+          visibility: gated,
+          slots: { children: [node({ id: "c", cssId: "inner" })] },
+        }),
+      ],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual([]);
+  });
+
+  it("still reserves an id on a node whose gate is EMPTY", () => {
+    /*
+     * The control, and the boundary the engine draws: an empty condition list
+     * is not a restriction, so the node is served and its id is taken. Reading
+     * "has a visibility envelope" as gated would free an id that renders.
+     */
+    const taken = domIdsTaken(
+      [node({ id: "b", cssId: "hero", visibility: { conditions: [] } })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual(["hero"]);
+  });
+});

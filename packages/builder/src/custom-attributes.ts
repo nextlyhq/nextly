@@ -17,7 +17,7 @@
  *
  * @module custom-attributes
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { isConditionGated, type BlockNode } from "@nextlyhq/blocks-engine";
 import {
   EDITOR_NAMESPACE,
   isAllowedAttribute,
@@ -297,6 +297,25 @@ export function domIdsTaken(
      * copy of that list is a copy to keep in step.
      */
     if (!rendersOwnMarkup(held, resolver)) return;
+    /*
+     * A CONDITION-GATED node reserves nothing either, and neither does anything
+     * inside it — `pruneHiddenNodes` drops the subtree before either the render
+     * or the style compile sees it. The gate fails closed because the engine
+     * defines no evaluator yet, so such a node is currently absent from every
+     * page, and the pattern this most affects is the one the feature is for:
+     * personalised variants of a section, each carrying the same anchor,
+     * exactly one of them served.
+     *
+     * Asked of the engine's own predicate, which the renderer and the style
+     * compiler already share. They once derived it separately and disagreed in
+     * both directions; a third copy here would be a third way to disagree.
+     *
+     * What this cannot decide is the day an evaluator arrives and two gated
+     * nodes both match. Nothing here or in `validateDomIds` would catch that,
+     * and it belongs to the evaluator rather than to a scan that has no
+     * conditions to read.
+     */
+    if (isConditionGated(held)) return;
     if (held.id !== exceptNodeId) {
       const rendered = renderedIdOf(held);
       if (rendered !== undefined) taken.add(rendered);
