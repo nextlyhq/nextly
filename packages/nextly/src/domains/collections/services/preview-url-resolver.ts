@@ -142,7 +142,7 @@ const NAVIGABLE_PROTOCOLS = new Set(["http:", "https:"]);
  * same-origin blank tab — turning a settings write into script execution in the
  * admin for whoever next clicks Preview.
  */
-function asNavigableUrl(value: string): URL | null {
+export function asNavigableUrl(value: string): URL | null {
   let parsed: URL;
   try {
     parsed = new URL(value);

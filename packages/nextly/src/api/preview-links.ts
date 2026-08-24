@@ -27,6 +27,7 @@ import type { NextlyServiceConfig } from "../di/register";
 import { resolvePreviewRedirect } from "../domains/collections/services/preview-redirect-resolver";
 import { hasPreviewConfigured } from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
+import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
@@ -101,7 +102,8 @@ function previewSigningSecret(): string {
  * to place the pathname and the parameter cannot make that mistake, and it
  * keeps a site URL's own query intact rather than silently discarding it.
  *
- * `null` when no site URL is configured. A relative URL would be resolved
+ * `null` only when the site's address is available NOWHERE — neither the stored
+ * setting nor the application's own URL. A relative URL would be resolved
  * against whatever origin the admin is served from, which is not the site's on
  * any deployment that separates them.
  */
@@ -233,7 +235,9 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
           // happens to have the answer.
           loadDeclaration: () => Promise.resolve(declaration),
           loadSiteUrl: async () =>
-            (await settingsService()).getSettings().then(s => s.siteUrl),
+            resolvePreviewSiteUrl(
+              await (await settingsService()).getSettings().then(s => s.siteUrl)
+            ),
         }
       )
     : null;
@@ -289,8 +293,9 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // withholding it would break preview outright on a site that never set a
   // URL, rather than degrading the one thing that needs the host.
   const settings = await (await settingsService()).getSettings();
+  const siteUrl = resolvePreviewSiteUrl(settings.siteUrl);
   const url = previewLinkUrl({
-    siteUrl: settings.siteUrl,
+    siteUrl,
     route: resolvePreviewRoute(
       container.get<NextlyServiceConfig>("config")?.preview
     ),

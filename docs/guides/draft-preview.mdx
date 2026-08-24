@@ -216,6 +216,14 @@ that cannot honour it.
 **The admin says a preview URL is not configured.** The collection declares no
 `admin.preview`. Add one, as in step 3.
 
+**The admin says this site has no address configured.** The link has to name a
+host, because it travels by email and chat to someone with no session. Nextly
+takes that host from the **Site URL** setting, and falls back to
+`NEXT_PUBLIC_APP_URL` when it is empty — so this means neither is set, or one of
+them holds something that is not an `http(s)` address. Set either; the setting
+is what you want when the admin and the site are on different origins, since it
+is the only one that can name the site rather than the app the admin runs in.
+
 **The reviewer sees the published page, not the draft.** The draft cookie was
 set on a different origin from the one serving the page — usually an admin and
 site on separate hosts with the preview route mounted on the admin. It belongs
