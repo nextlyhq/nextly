@@ -116,6 +116,7 @@ import {
 import type {
   PluginContext,
   PluginDefinition,
+  PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins } from "../plugins/resolve";
@@ -2706,48 +2707,50 @@ async function initializePlugins(
 
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 
-  const getServiceForPlugin = <
-    T extends
-      | "collectionService"
-      | "userService"
-      | "mediaService"
-      | "emailService"
-      | "versionsService"
-      | "db"
-      | "logger"
-      | "config",
-  >(
-    name: T
-  ):
-    | CollectionService
-    | UserService
-    | UnifiedMediaService
-    | EmailService
-    | VersionsService
-    | DatabaseInstance
-    | Logger
-    | NextlyServiceConfig => {
-    switch (name) {
-      case "collectionService":
-        return container.get<CollectionService>("collectionService");
-      case "userService":
-        return container.get<UserService>("userService");
-      case "mediaService":
-        return container.get<UnifiedMediaService>("mediaService");
-      case "emailService":
-        return container.get<EmailService>("emailService");
-      case "versionsService":
-        return container.get<VersionsService>("versionsService");
-      case "db":
-        return adapterDrizzleDb;
-      case "logger":
-        return logger;
-      case "config":
-        return transformedConfig;
-      default:
-        throw new Error(`Unknown service: ${name}`);
-    }
+  /**
+   * What each service name a plugin context may ask for resolves to.
+   *
+   * A RECORD keyed by the name rather than a switch, because that makes the
+   * mapping exhaustive by CONSTRUCTION: a name added to
+   * `PLUGIN_SERVICE_NAMES` with no entry here fails to compile at this
+   * declaration, naming the missing key. A switch could only report it from a
+   * `default` arm, and before that it reported nothing at all — the context
+   * asked for a name this resolver did not handle, TypeScript saw nothing
+   * because the resolver is passed through a cast, and the mismatch surfaced
+   * as `Unknown service` when a plugin first read the property.
+   *
+   * Each entry is a thunk so nothing is resolved until asked for. Several of
+   * these are lazy on the context side for the same reason, and eager lookups
+   * here would undo that.
+   */
+  const pluginServiceResolvers: Record<
+    PluginServiceName,
+    () =>
+      | CollectionService
+      | UserService
+      | UnifiedMediaService
+      | EmailService
+      | VersionsService
+      | SingleRegistryService
+      | DatabaseInstance
+      | Logger
+      | NextlyServiceConfig
+  > = {
+    collectionService: () =>
+      container.get<CollectionService>("collectionService"),
+    userService: () => container.get<UserService>("userService"),
+    mediaService: () => container.get<UnifiedMediaService>("mediaService"),
+    emailService: () => container.get<EmailService>("emailService"),
+    versionsService: () => container.get<VersionsService>("versionsService"),
+    singleRegistryService: () =>
+      container.get<SingleRegistryService>("singleRegistryService"),
+    db: () => adapterDrizzleDb,
+    logger: () => logger,
+    config: () => transformedConfig,
   };
+
+  const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
+    pluginServiceResolvers[name]();
 
   // HMR/re-registration safety (B2): drop every plugin's prior event/hook
   // subscriptions before plugins re-subscribe in init(), so the globalThis

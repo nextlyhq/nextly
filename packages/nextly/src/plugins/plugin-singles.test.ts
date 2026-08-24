@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { Logger } from "../shared/types";
+import { createPluginContext, PLUGIN_SERVICE_NAMES } from "./plugin-context";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 
 /**
@@ -29,6 +30,16 @@ function recordingRegistry(): {
     }
   ) as SingleRegistryService;
   return { registry, touched };
+}
+
+/** The hook registry shape `createPluginContext` requires. */
+function hookRegistryDouble(): Parameters<typeof createPluginContext>[1] {
+  return {
+    register: vi.fn(),
+    unregister: vi.fn(),
+    registerBeforeOperation: vi.fn(),
+    unregisterBeforeOperation: vi.fn(),
+  } as unknown as Parameters<typeof createPluginContext>[1];
 }
 
 describe("wrapSinglesForPlugin", () => {
@@ -64,24 +75,6 @@ describe("wrapSinglesForPlugin", () => {
     const surface = wrapSinglesForPlugin(registry);
 
     expect(Object.keys(surface)).toEqual(["list"]);
-  });
-
-  it("performs no write on the registry when a plugin lists", async () => {
-    // The property the founder ruling named: listing must not bring Singles
-    // into existence. A read-shaped call on the Single path is not free of
-    // side effects in general — the readable half of `assertSinglePreviewable`
-    // creates a Single's row when it is absent — so this asserts the absence
-    // of that whole class rather than of one named method.
-    const { registry, touched } = recordingRegistry();
-
-    await wrapSinglesForPlugin(registry).list();
-
-    const writes = touched.filter(name =>
-      /^(register|unregister|update|set|create|delete|ensure|sync|lock)/i.test(
-        name
-      )
-    );
-    expect(writes).toEqual([]);
   });
 });
 
@@ -160,5 +153,47 @@ describe("listing Singles creates nothing", () => {
     await wrapSinglesForPlugin(registry).list();
 
     expect(ops).toContain("select");
+  });
+});
+
+describe("the context's service names and the resolver that answers them", () => {
+  it("names every service the context may ask for", () => {
+    // Pinned exhaustively because this list is the contract BETWEEN the context
+    // and whatever resolver is passed to it. A member added here without a
+    // matching case stops the resolver compiling, which is the guard; this test
+    // is what makes the list itself deliberate rather than incidental.
+    expect([...PLUGIN_SERVICE_NAMES]).toEqual([
+      "collectionService",
+      "userService",
+      "mediaService",
+      "emailService",
+      "versionsService",
+      "singleRegistryService",
+      "db",
+      "logger",
+      "config",
+    ]);
+  });
+
+  it("exposes singles by ACCESSING the property, not by listing keys", () => {
+    // The assertion that was missing, and its absence is why a broken feature
+    // shipped green: `Object.keys(ctx.services)` reports a getter WITHOUT
+    // invoking it, so an enumeration passes while every real read throws
+    // `Unknown service`. Reading the property is the whole point.
+    const asked: string[] = [];
+    const registry = { listSingles: async () => ({ data: [], total: 0 }) };
+    const getServiceFn = ((name: string) => {
+      asked.push(name);
+      if (name === "singleRegistryService") return registry;
+      if (name === "config") return { plugins: [] };
+      return {};
+    }) as unknown as Parameters<typeof createPluginContext>[0];
+
+    const ctx = createPluginContext(getServiceFn, hookRegistryDouble());
+
+    // The ACCESS is the test. A getter wired to a name nothing provides throws
+    // here and cannot throw during an enumeration.
+    expect(typeof ctx.services.singles.list).toBe("function");
+    expect(asked).toContain("singleRegistryService");
   });
 });

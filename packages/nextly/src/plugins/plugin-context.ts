@@ -754,19 +754,37 @@ export function definePlugin(definition: PluginDefinition): PluginDefinition {
  * }
  * ```
  */
+/**
+ * Every service name `createPluginContext` may ask its resolver for.
+ *
+ * Declared once and consumed by both sides, because the two had drifted: the
+ * context asked for a name the production resolver's switch did not handle, and
+ * the mismatch was invisible in three separate ways at once. The resolver is
+ * passed through a cast, so the compiler saw nothing; the context test
+ * enumerated `Object.keys(ctx.services)`, which reports a getter WITHOUT
+ * invoking it; and the failure only appears when a plugin actually reads the
+ * property, at which point the resolver throws `Unknown service`.
+ *
+ * With one list, adding a member here makes an unhandled case a COMPILE error
+ * at the resolver rather than a runtime throw in somebody's app.
+ */
+export const PLUGIN_SERVICE_NAMES = [
+  "collectionService",
+  "userService",
+  "mediaService",
+  "emailService",
+  "versionsService",
+  "singleRegistryService",
+  "db",
+  "logger",
+  "config",
+] as const;
+
+/** One of the names a plugin-context resolver must answer. */
+export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
+
 export function createPluginContext(
-  getServiceFn: <
-    T extends
-      | "collectionService"
-      | "userService"
-      | "mediaService"
-      | "emailService"
-      | "versionsService"
-      | "singleRegistryService"
-      | "db"
-      | "logger"
-      | "config",
-  >(
+  getServiceFn: <T extends PluginServiceName>(
     name: T
   ) => T extends "collectionService"
     ? CollectionService

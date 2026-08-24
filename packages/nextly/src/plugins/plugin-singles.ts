@@ -41,9 +41,9 @@
  */
 import type {
   ListSinglesOptions,
-  ListSinglesResult,
   SingleRegistryService,
 } from "../domains/singles/services/single-registry-service";
+import type { DynamicSingleRecord } from "../schemas/dynamic-singles/types";
 
 /**
  * @public Read-only registry access to the app's Singles.
@@ -53,6 +53,63 @@ import type {
  * is what preview tokens are scoped on for the same reason. A consumer keying
  * anything on a Single's id will work until it meets a Single nobody has edited.
  */
+/**
+ * A field as this listing can return it: JSON, with every function gone.
+ *
+ * NOT `FieldConfig`. The registry reads `dynamic_singles.fields`, a JSON
+ * column, so a code-first field declaring a function-valued option — a
+ * `defaultValue` computed at write time, a custom `validate` — arrives here
+ * with that option simply absent. `single-mutation-service.ts` says the same
+ * thing from the other side: "serialized field defs drop them".
+ *
+ * Typing this as `FieldConfig` would promise a plugin it may call
+ * `field.defaultValue()`, which is a type contract the data cannot honour —
+ * and the failure would be a `TypeError` in somebody's plugin rather than a
+ * compile error here.
+ *
+ * Only `name` and `type` are declared, plus `fields` for the container types.
+ * Those three survive serialization and are what a consumer looking for a
+ * particular field type needs.
+ *
+ * Deliberately NO index signature. One was tried and removed: it made every
+ * remaining option reachable as `unknown`, which reads as generous and is the
+ * opposite — a closed interface is not assignable to one carrying an index
+ * signature, so the whole listing then needed an `as unknown as` to compile,
+ * and a double assertion is exactly the thing that would have let the
+ * overstated `FieldConfig` through in the first place. A consumer needing an
+ * option beyond these three narrows the value itself, at the point where it
+ * knows which field type it is holding and what that option should be.
+ */
+export interface SerializedFieldConfig {
+  /**
+   * Optional, because a NESTED field's name is. Presentational field types
+   * carry no name — the compiler reported `string | undefined` here when this
+   * was declared required, which is the data disagreeing with the type rather
+   * than an inconvenience to assert past. A consumer keying anything on the
+   * name has to handle its absence, and now has to.
+   */
+  name?: string;
+  type: string;
+  /** Nested fields, for the container types that have them. */
+  fields?: SerializedFieldConfig[];
+}
+
+/**
+ * A Single as the registry can describe it.
+ *
+ * Everything `DynamicSingleRecord` carries, with `fields` narrowed to what
+ * survived the round trip through storage.
+ */
+export type PluginSingleRecord = Omit<DynamicSingleRecord, "fields"> & {
+  fields: SerializedFieldConfig[];
+};
+
+/** What a plugin gets back from listing Singles. */
+export interface PluginSinglesResult {
+  data: PluginSingleRecord[];
+  total: number;
+}
+
 export interface PluginSinglesService {
   /**
    * List the declared Singles, with their field definitions.
@@ -65,7 +122,7 @@ export interface PluginSinglesService {
    * to. `fields` is the declaration, so a consumer looking for a particular
    * field type finds it here whether or not anybody has filled it in.
    */
-  list(options?: ListSinglesOptions): Promise<ListSinglesResult>;
+  list(options?: ListSinglesOptions): Promise<PluginSinglesResult>;
 }
 
 /**
@@ -81,6 +138,9 @@ export function wrapSinglesForPlugin(
   registry: SingleRegistryService
 ): PluginSinglesService {
   return {
+    // The registry types `fields` as `FieldConfig[]`; what it actually holds
+    // came back through JSON. Narrowed here rather than left overstated, so the
+    // published type says what the data can support.
     list: options => registry.listSingles(options),
   };
 }
