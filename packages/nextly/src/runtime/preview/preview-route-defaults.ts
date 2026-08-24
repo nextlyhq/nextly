@@ -17,6 +17,10 @@
  * @module runtime/preview/preview-route-defaults
  */
 
+import {
+  isSingleScope,
+  type PreviewTokenScope,
+} from "../../auth/preview/preview-token";
 import { container, getService } from "../../di";
 import {
   resolvePreviewRedirect,
@@ -94,9 +98,14 @@ export async function defaultCookies(): Promise<{
  * explain them.
  */
 export async function defaultRedirectTo(
-  scope: PreviewRedirectScope,
+  scope: PreviewTokenScope,
   context?: { requestOrigin: string }
 ): Promise<string | null> {
+  // A Single names no collection and no entry id, so the collection-preview
+  // resolution below cannot answer for one. Refused rather than guessed, which
+  // the route reports as the same 404 every other refusal gets.
+  if (isSingleScope(scope)) return null;
+
   await getCachedNextly();
   const { previewDeclarationFor } = await import("../../api/preview-url");
   const collections = getService("collectionsHandler");

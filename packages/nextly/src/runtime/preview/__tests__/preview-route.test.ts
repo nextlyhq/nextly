@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { signPreviewToken } from "../../../auth/preview/preview-token";
+import {
+  isSingleScope,
+  signPreviewToken,
+} from "../../../auth/preview/preview-token";
 import {
   PREVIEW_SCOPE_COOKIE,
   createPreviewRoute,
@@ -27,7 +30,13 @@ function routeFor(
   const route = createPreviewRoute({
     secret: TEST_SECRET,
     generation: GENERATION,
-    redirectTo: scope => `/${scope.collection}/${scope.entryId}`,
+    // Narrowed rather than asserted: the scope is a union, and this suite's
+    // tokens are all entry-scoped, so the single branch is genuinely
+    // unreachable here and says so instead of being cast away.
+    redirectTo: scope =>
+      isSingleScope(scope)
+        ? `/single/${scope.single}`
+        : `/${scope.collection}/${scope.entryId}`,
     draftMode: draft.draftMode,
     ...overrides,
   });
