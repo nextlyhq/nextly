@@ -1,39 +1,8 @@
-import { cva } from "class-variance-authority";
-
 import { cn } from "../lib/utils";
-import type { FormActionsProps, FormLayoutProps } from "../types/form-layout";
+import type { FormActionsProps } from "../types/form-layout";
 
 /**
- * The measure is owned here rather than by each page.
- *
- * The admin content region is roughly 950px on a laptop once both sidebars are
- * accounted for, so an unbounded form stretches a short text input across the
- * whole of it. Bounding it centrally is also what keeps the column still as the
- * sub-sidebar opens and closes.
- */
-const measure = cva("mx-auto w-full px-6 py-8", {
-  variants: {
-    width: {
-      form: "max-w-[56rem]",
-      wide: "max-w-[72rem]",
-    },
-  },
-  defaultVariants: { width: "form" },
-});
-
-/**
- * @experimental
- */
-export function FormLayout({
-  width = "form",
-  className,
-  children,
-}: FormLayoutProps) {
-  return <div className={cn(measure({ width }), className)}>{children}</div>;
-}
-
-/**
- * One action bar per form, at the end of the measure.
+ * One action bar per form, at the end of the page's measure.
  *
  * A form commits as a single document, so there is one place to commit it. The
  * dirty flag arrives from the page because the form state already answers that

@@ -15,7 +15,7 @@ export default function EditRolePage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <RoleBreadcrumbs currentPage="edit" />
 
         <RoleForm roleId={roleId} />

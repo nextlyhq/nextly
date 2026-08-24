@@ -70,6 +70,43 @@ export type PageContainerProps = React.HTMLAttributes<HTMLDivElement> & {
    * ```
    */
   className?: string;
+
+  /**
+   * Bound the content to a reading measure and centre it, instead of letting it
+   * run the full width of the panel.
+   *
+   * `form` is the narrower measure a labelled form reads best at; `wide` suits
+   * a page of cards or a table. A child opts back out to the panel's full width
+   * with `Bleed`.
+   *
+   * OMITTING it is not the same as asking for the full width, and the
+   * difference is deliberate. With a measure the container becomes a CSS grid
+   * whose outer columns are the inset; without one it stays the padded block it
+   * has always been. Four pages depend on the block behaviour and would break
+   * silently under a grid, because they hand their own height down through a
+   * `height: 100%` chain, and a percentage height resolves against a grid area
+   * that `align-content: start` has already sized to its content:
+   *
+   *  - `APIPlayground/ApiPlaygroundPage.tsx` — `flex h-full min-h-0 flex-col
+   *    overflow-hidden`, which is what lets its two panes scroll independently
+   *    while the request bar stays put
+   *  - `schema-builder/BuilderPageLayout.tsx` — `flex-1 pb-0`
+   *  - `shared/not-found-page/index.tsx` — centres itself in the full height
+   *  - `pages/dashboard/media/index.tsx` — `overflow-hidden`
+   *
+   * jsdom computes no layout, so no test on those pages can observe the
+   * collapse. The default is therefore pinned by a test on THIS component
+   * instead: a container given no width must render no grid.
+   *
+   * @example
+   * ```tsx
+   * <PageContainer width="form">
+   *   <PageHeader title="Webhooks" />
+   *   <WebhookForm />
+   * </PageContainer>
+   * ```
+   */
+  width?: "form" | "wide";
 };
 
 /**

@@ -331,7 +331,7 @@ export default function ImageSizesSettingsPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="wide">
         <SettingsLayout
           title="Image Sizes"
           description="Configure image sizes generated for uploaded images"

@@ -4,7 +4,6 @@ import {
   AlertTitle,
   Button,
   FormActions,
-  FormLayout,
 } from "@nextlyhq/ui";
 import { FormProvider } from "react-hook-form";
 
@@ -55,7 +54,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
   } = useRoleForm(roleId);
 
   return (
-    <FormLayout>
+    <>
       {/* Error Alert */}
       {error && (
         <Alert variant="destructive" className="mb-6">
@@ -182,6 +181,6 @@ export function RoleForm({ roleId }: RoleFormProps) {
           </form>
         </FormProvider>
       )}
-    </FormLayout>
+    </>
   );
 }

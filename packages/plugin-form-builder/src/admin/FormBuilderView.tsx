@@ -16,7 +16,6 @@ import {
   Button,
   FieldShell,
   FormActions,
-  FormLayout,
   Input,
   toast,
   Tabs,
@@ -351,10 +350,13 @@ function FormBuilderViewInner({
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────
-  // `FormLayout` owns the page measure, centring and padding, so nothing here
-  // hand-rolls a card, a width cap or a hack to escape either.
+  // The host page owns the measure, the centring and the padding — this view
+  // renders as content inside its frame, under its breadcrumb. Declaring a
+  // shell here would nest one inset inside another and put this heading out of
+  // line with that breadcrumb. Nothing below hand-rolls a card, a width cap or
+  // a hack to escape either.
   return (
-    <FormLayout>
+    <>
       {/* ── Page header ── */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">
@@ -568,7 +570,7 @@ function FormBuilderViewInner({
           )}
         </Button>
       </FormActions>
-    </FormLayout>
+    </>
   );
 }
 

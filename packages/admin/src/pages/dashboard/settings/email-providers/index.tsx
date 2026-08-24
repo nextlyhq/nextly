@@ -808,7 +808,7 @@ function EmailProviderTable() {
 const EmailProvidersPage: React.FC = () => {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="wide">
         <SettingsLayout
           title="Email Providers"
           description="Configure your SMTP and email delivery services"

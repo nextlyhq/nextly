@@ -15,6 +15,7 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
+import { CustomEntryView } from "@admin/components/features/entries/CustomEntryView";
 import {
   EntryForm,
   type EntryFormCollection,
@@ -271,15 +272,16 @@ export default function CreateEntryPage({
 
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <PageContainer>
-          <div className="mb-6">
+        <CustomEntryView
+          breadcrumbs={
             <CreateEntryBreadcrumbs
               collectionSlug={slug}
               collectionLabel={collectionLabel}
             />
-          </div>
+          }
+        >
           <CustomEditView {...customViewProps} />
-        </PageContainer>
+        </CustomEntryView>
       </QueryErrorBoundary>
     );
   }

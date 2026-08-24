@@ -179,15 +179,20 @@ internal layout and stay on the inner element in both modes. Non-responsive mode
 unchanged: one element, everything on it. No first-party plugin exercises this prop
 yet, so `Grid` stays on the experimental list above.
 
-`FormLayout` (with `FormLayoutProps` and `FormMeasure`) is the form-layout kit's page
-measure: it centres a bounded column so pages stop each hand-rolling their own width,
-and takes an opt-in `wide` variant for denser forms. `FormActions` (with
-`FormActionsProps`) is its single action bar, sticky to the bottom of the measure —
-there is deliberately no per-section footer, for the same reason `FormSection` has
-none. `FormActions` never computes its `dirty` flag; the page passes it down from the
-form state that already tracks it, so `@nextlyhq/ui` never depends on
-`react-hook-form`. No first-party plugin exercises either yet, so both stay on the
-experimental list above.
+`FormActions` (with `FormActionsProps`) is a form's single action bar, sticky to the
+bottom of the page's measure — there is deliberately no per-section footer, for the
+same reason `FormSection` has none. `FormActions` never computes its `dirty` flag; the
+page passes it down from the form state that already tracks it, so `@nextlyhq/ui`
+never depends on `react-hook-form`. No first-party plugin exercises it yet, so it
+stays on the experimental list above.
+
+The measure it sits at belongs to `PageShell`, reached through the page. A
+`FormLayout` export used to own that instead, applying its own centred `max-w` and
+side padding from inside the form; it is gone. Two components deciding one page's
+width disagree the moment either changes, and they did — the hard-coded `56rem` and
+`72rem` there were a second copy of `--nx-measure-form` and `--nx-measure-wide`, free
+to drift the instant a theme retuned the tokens. A form now renders its fields and the
+page says how wide the page is.
 
 `PageShell` (with `PageShellProps`) and `Bleed` (with `BleedProps`) own the page's
 horizontal inset and its measure, spent as GRID COLUMNS rather than as padding. The

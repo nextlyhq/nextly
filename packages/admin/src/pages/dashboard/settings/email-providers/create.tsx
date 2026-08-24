@@ -77,7 +77,7 @@ export default function CreateEmailProviderPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout
           title="New Email Provider"
           description="Configure a new email delivery provider"
