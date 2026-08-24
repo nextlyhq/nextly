@@ -242,7 +242,7 @@ type BuildTask =
       kind: "close";
       source: unknown;
       mapped: BlockNode;
-      built: Record<string, BlockNode[]>;
+      built: Map<string, BlockNode[]>;
       out: unknown[];
     };
 
@@ -255,7 +255,7 @@ type BuildTask =
 function queueSlotRebuilds(
   stack: BuildTask[],
   mapped: BlockNode,
-  built: Record<string, BlockNode[]>
+  built: Map<string, BlockNode[]>
 ): void {
   const names = Object.keys(mapped.slots ?? {});
   // Reversed so the first slot is rebuilt first.
@@ -265,7 +265,7 @@ function queueSlotRebuilds(
     const children = mapped.slots?.[name];
     if (!Array.isArray(children)) continue;
     const into: BlockNode[] = [];
-    built[name] = into;
+    built.set(name, into);
     stack.push({ kind: "read", source: children, index: 0, out: into });
   }
 }
@@ -334,7 +334,13 @@ function mapForest(
     }
 
     onPath.add(entry);
-    const built: Record<string, BlockNode[]> = {};
+    // A Map, not a record. Slot NAMES come from unvalidated stored data, and a
+    // plain object answers for keys it never had: `built["constructor"]`
+    // resolves `Object.prototype.constructor`, so a malformed slot deliberately
+    // left out of this set would come back as a function and be dropped by
+    // serialization — the stored value destroyed by an unrelated edit, which is
+    // the exact loss preserving it was meant to prevent.
+    const built = new Map<string, BlockNode[]>();
     stack.push({ kind: "close", source: entry, mapped, built, out: top.out });
     queueSlotRebuilds(stack, mapped, built);
   }
@@ -345,14 +351,14 @@ function mapForest(
 /** Put the rebuilt slots back on a node, keeping any slot that was not rebuilt. */
 function assembleSlots(
   mapped: BlockNode,
-  built: Record<string, BlockNode[]>
+  built: Map<string, BlockNode[]>
 ): BlockNode {
   const slots: Record<string, BlockNode[]> = {};
   for (const [name, original] of Object.entries(mapped.slots ?? {})) {
     // A slot absent from `built` held something this rebuild could not walk.
     // Keeping the stored value is the point: an unrelated edit must not be the
     // thing that destroys it.
-    slots[name] = built[name] ?? original;
+    slots[name] = built.get(name) ?? original;
   }
   return { ...mapped, slots };
 }
@@ -527,10 +533,39 @@ function reidOne(node: BlockNode): BlockNode {
   return copy;
 }
 
+/**
+ * Whether a subtree contains a node reached through itself.
+ *
+ * Asked of the walk rather than looked for here. `walkNodes` is cycle-TOLERANT
+ * by design — a reader counting classes or measuring a document must answer
+ * rather than fail — so a cycle is invisible in what it visits, and what the
+ * walk REPORTS is the only account of it. A second traversal written here would
+ * be a second definition of the same thing.
+ */
+function isCyclic(node: BlockNode): boolean {
+  let cyclic = false;
+  walkNodes([node], () => undefined, {
+    onCycle: () => {
+      cyclic = true;
+    },
+  });
+  return cyclic;
+}
+
 /** Insert a re-id'd copy of a node immediately after the original. */
 export function duplicateNode(nodes: BlockNode[], id: string): BlockNode[] {
   const found = findNode(nodes, id);
   if (!found) return nodes;
+  // A cyclic subtree cannot be duplicated into a usable forest. The clone is
+  // rebuilt without the edge that closes the cycle, but the ORIGINAL is still
+  // in the forest and still cyclic — so the result carries a structure
+  // `JSON.stringify` refuses, and the page cannot be stored at all.
+  //
+  // Refused rather than repaired, and the no-op contract these primitives share
+  // is what makes that safe to say: silently rebuilding the source would edit a
+  // node the caller never named, on an operation they asked to be additive.
+  // `insertNode` refuses a cyclic subtree for the same reason.
+  if (isCyclic(found)) return nodes;
   const location = locateNode(nodes, id);
   if (!location) return nodes;
   return insertNode(nodes, reidSubtree(found), {

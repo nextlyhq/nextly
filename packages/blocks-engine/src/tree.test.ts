@@ -322,10 +322,34 @@ describe("a forest whose slots form a cycle", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("duplicates and re-ids a cyclic subtree without recursing forever", () => {
+  it("REFUSES to duplicate a cyclic subtree rather than adding an unusable clone", () => {
+    // The clone is rebuilt without the edge that closes the cycle, but the
+    // ORIGINAL stays in the forest and stays cyclic — so the result carries a
+    // structure `JSON.stringify` refuses and the page cannot be stored at all.
+    // "Did not throw" cannot see that, which is why the previous version of
+    // this test passed while the returned forest was still unusable.
+    //
+    // Refused rather than repaired: silently rebuilding the source would edit a
+    // node the caller never named, on an operation they asked to be additive.
     const nodes = cyclic();
-    expect(() => duplicateNode(nodes, nodes[0]!.id)).not.toThrow();
-    expect(() => reidSubtree(nodes[0]!)).not.toThrow();
+
+    expect(duplicateNode(nodes, nodes[0]!.id)).toBe(nodes);
+  });
+
+  it("still duplicates an ACYCLIC subtree, so the refusal is not blanket", () => {
+    // The control. A `duplicateNode` that refused everything would satisfy the
+    // case above while never duplicating anything for anyone.
+    const child = makeNode("core/text", 1);
+    const parent = makeNode("core/box", 1, {}, { main: [child] });
+
+    const next = duplicateNode([parent], parent.id);
+
+    expect(next).toHaveLength(2);
+    expect(next[1]?.id).not.toBe(parent.id);
+  });
+
+  it("re-ids a cyclic subtree without recursing forever", () => {
+    expect(() => reidSubtree(cyclic()[0]!)).not.toThrow();
   });
 
   it("terminates on a cycle LONGER than the call stack, not just a short one", () => {
@@ -381,6 +405,22 @@ describe("a forest whose slots form a cycle", () => {
     const next = updateNode([holder, other], other.id, { props: { x: 1 } });
 
     expect(next[0]?.slots?.broken).toEqual({ nope: true });
+  });
+
+  it("keeps a malformed slot whose NAME collides with Object.prototype", () => {
+    // Slot names come from unvalidated stored data. A plain object answers for
+    // keys it never had — `built["constructor"]` resolves
+    // `Object.prototype.constructor` — so a malformed slot deliberately left
+    // out of the rebuilt set came back as a FUNCTION and was then dropped by
+    // serialization. The stored value destroyed by an unrelated edit, which is
+    // the exact loss preserving it was meant to prevent.
+    const holder = makeNode("core/box", 1);
+    holder.slots = { constructor: { nope: true } as unknown as BlockNode[] };
+    const other = makeNode("core/text", 1);
+
+    const next = updateNode([holder, other], other.id, { props: { x: 1 } });
+
+    expect(next[0]?.slots?.constructor).toEqual({ nope: true });
   });
 
   it("passes a malformed ENTRY through rather than mapping it", () => {
