@@ -612,10 +612,24 @@ function warnNoHostRoot(
    * advisory diagnostic that is the cheaper error: a miss costs the report,
    * while a false one in production teaches everyone to filter the message.
    */
-  const environment =
-    typeof process === "undefined" ? undefined : process.env?.NODE_ENV;
-  if (environment !== "development" && environment !== "test") return;
   try {
+    /*
+     * Read INSIDE the guard, because reading it is itself author-exposed. A
+     * standalone SSR host supplies its own `process`, and `env` can be a
+     * throwing getter or a proxy — so `process.env?.NODE_ENV` raises before a
+     * `try` placed after it ever begins. The synchronous call to
+     * `checkedOutput` sits PAST the try that contains `render`, as the comment
+     * at that call site says, so a raise here does not become a placeholder: it
+     * takes the page. An advisory diagnostic aborting the render is the exact
+     * thing this function promises not to do.
+     *
+     * Failing to read it lands in the catch below and says nothing, which is
+     * the same answer the checks below give any environment that cannot be
+     * positively identified. Unable to tell, a diagnostic stays quiet.
+     */
+    const environment =
+      typeof process === "undefined" ? undefined : process.env?.NODE_ENV;
+    if (environment !== "development" && environment !== "test") return;
     // Rendering nothing is a DECISION, not a violation — the same exemption the
     // placeholder grants, asked the same way.
     if (declaresNothing || rendersNothing(output)) return;
@@ -644,12 +658,9 @@ function warnNoHostRoot(
      *
      * It no longer covers the CLASSIFICATION, which was the exposure it was
      * written for: that is read once by {@link readRootShape}, under its own
-     * floor, and arrives here as a value. What is left is `rendersNothing` over
-     * an array this renderer materialised and the `console` call itself — a
-     * host with a broken console is not much of a case, but neither is it worth
-     * a page.
-     *
-     * UNREACHED in testing, and stated as such rather than implied by a test.
+     * floor, and arrives here as a value. What it covers now is the environment
+     * read above, `rendersNothing` over an array this renderer materialised,
+     * and the `console` call itself.
      */
   }
 }

@@ -5775,18 +5775,44 @@ describe("an element type that answers differently on a later read", () => {
     try {
       /*
        * `cssId` is set so BOTH policies run: the warning classifies, and the
-       * placeholder policy — the one that had no floor — classifies too. Ten
-       * covers every read this path makes today with room over it.
+       * placeholder policy — the one that had no floor — classifies too.
+       *
+       * The bound is MEASURED rather than picked. A sweep past the last read is
+       * a run of iterations whose accessor never throws, and every one of them
+       * passes anyway — this node carries `cssId` on a wrapper root, so it is
+       * replaced by an ordinary `invalid-output` placeholder whether anything
+       * raised or not. Those iterations would report containment without ever
+       * reaching the mechanism, and the count they pad is the only number that
+       * says how much of it was covered.
        */
-      for (let throwOn = 1; throwOn <= 10; throwOn += 1) {
+      let observed = 0;
+      await renderTricky(
+        () => {
+          observed += 1;
+        },
+        { cssId: "anchor" }
+      );
+      // The premise of the whole finding: this path reads the tag more than
+      // once. If that stops being true there is nothing here to contain.
+      expect(observed).toBeGreaterThan(1);
+
+      for (let throwOn = 1; throwOn <= observed; throwOn += 1) {
         let reads = 0;
+        let threw = false;
         const html = await renderTricky(
           () => {
             reads += 1;
-            if (reads === throwOn) throw new Error("tag read");
+            if (reads === throwOn) {
+              threw = true;
+              throw new Error("tag read");
+            }
           },
           { cssId: "anchor" }
         );
+        // Evidence before verdict: this iteration actually reached the read it
+        // names. Without it the assertion below is satisfied by a placeholder
+        // the node was getting anyway.
+        expect(threw).toBe(true);
         /*
          * Contained: the render RESOLVED, and what came back is this block's
          * placeholder rather than its output.
@@ -5853,6 +5879,41 @@ describe("which runtimes the contract warning is willing to speak in", () => {
     // `staging` is neither development nor production, and guessing which it
     // resembles is exactly the judgement a diagnostic should decline to make.
     await saysNothingWhen({ NODE_ENV: "staging" });
+  });
+
+  it("says nothing when reading the environment THROWS", async () => {
+    /*
+     * A standalone SSR host supplies its own `process`, and nothing says its
+     * `env` has to be a plain object — a throwing getter or a proxy is a shape
+     * this renderer will meet. The read used to sit ahead of the diagnostic's
+     * own guard, so it raised before there was anything to catch it.
+     *
+     * Where that lands is the point. `checkedOutput` is called PAST the try
+     * that contains the block's `render` on the synchronous path, so the throw
+     * is not contained into a placeholder: it leaves the package and takes the
+     * page — `renderToHtml` fails the test through its `onError`. An advisory
+     * warning must never be able to do that.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubGlobal("process", {
+        get env(): never {
+          throw new Error("no env here");
+        },
+      });
+      // Population first: the render COMPLETED and the block's output is on the
+      // page, so this is containment rather than a page that failed some other
+      // way and happened to log nothing.
+      const html = await renderIt();
+      expect(html).toContain("held");
+      expect(html).not.toMatch(PLACEHOLDER);
+      // And unable to tell, it stayed quiet — the same answer every other
+      // unidentifiable environment gets.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
   });
 
   it("DOES speak in development", async () => {

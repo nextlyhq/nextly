@@ -29,8 +29,15 @@
 Warns a block author, in development, when their block does not render a single
 element. The block contract states that a block renders one element and never
 wraps it, because the generated class has to go somewhere — so a block returning
-a fragment, a list or a primitive already has styles that never apply, and until
-now nothing said so.
+a fragment, a list or a primitive gives that class no root element to sit on,
+and until now nothing said so.
+
+Deliberately NOT "its styles never apply", which is the stronger claim and is
+false for a real shape: a wrapper root that places the supplied class on a child
+renders it into the DOM, and the compiled CSS matches normally. What such a
+block certainly loses is the node's ROOT FIELDS — `cssId` and attributes are
+attached to the block's own root element and have nowhere to go — so the warning
+is right and the diagnosis is the narrower one.
 
 The only existing signal arrived through the placeholder that replaces such a
 block when a document sets an `id` or an attribute on it. That blames the wrong
