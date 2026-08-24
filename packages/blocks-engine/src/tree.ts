@@ -328,7 +328,13 @@ function mapForest(
     if (onPath.has(entry)) continue;
 
     const mapped = fn(entry);
-    if (mapped.slots === undefined) {
+    // Anything that is not a slots RECORD is passed through untouched, not just
+    // `undefined`. A stored `slots: null` — or a primitive — has no entries to
+    // enumerate, and sending it on would replace it with `{}`: stored content
+    // rewritten by an edit that named a different node. The recursive rebuild
+    // this replaced kept such a node as it was, and losing that was a
+    // regression rather than a change of policy.
+    if (!isSlotsRecord(mapped.slots)) {
       top.out.push(mapped);
       continue;
     }
@@ -346,6 +352,13 @@ function mapForest(
   }
 
   return rebuilt as BlockNode[];
+}
+
+/** Whether a node's `slots` is a record this rebuild can enumerate. */
+function isSlotsRecord(slots: unknown): slots is Record<string, BlockNode[]> {
+  // `Array.isArray` separately, because `typeof [] === "object"` and an array
+  // of slots is malformed rather than empty.
+  return typeof slots === "object" && slots !== null && !Array.isArray(slots);
 }
 
 /** Put the rebuilt slots back on a node, keeping any slot that was not rebuilt. */

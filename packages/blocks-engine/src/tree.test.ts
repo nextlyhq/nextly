@@ -366,8 +366,31 @@ describe("a forest whose slots form a cycle", () => {
     expect(next[1]?.id).not.toBe(parent.id);
   });
 
-  it("re-ids a cyclic subtree without recursing forever", () => {
-    expect(() => reidSubtree(cyclic()[0]!)).not.toThrow();
+  it("re-ids a cyclic subtree into a fresh, SERIALIZABLE one", () => {
+    // "Does not throw" is satisfied by a fallback that returns the original
+    // node untouched — no new ids, still cyclic, still unstorable. So the
+    // assertions are the two things that separate a real rebuild from that:
+    // the ids changed, and the result can actually be written.
+    const source = cyclic()[0]!;
+
+    const copy = reidSubtree(source);
+
+    expect(copy.id).not.toBe(source.id);
+    expect(copy.slots?.main?.[0]?.id).not.toBe(source.slots?.main?.[0]?.id);
+    expect(() => JSON.stringify(copy)).not.toThrow();
+  });
+
+  it("keeps a malformed slots CONTAINER on an unrelated edit", () => {
+    // `slots: null` is not the same as absent. It has no entries to enumerate,
+    // so a rebuild that treated only `undefined` as absent replaced it with
+    // `{}` — stored content rewritten by an edit naming a different node.
+    const holder = makeNode("core/box", 1);
+    holder.slots = null as unknown as Record<string, BlockNode[]>;
+    const other = makeNode("core/text", 1);
+
+    const next = updateNode([holder, other], other.id, { props: { x: 1 } });
+
+    expect(next[0]?.slots).toBeNull();
   });
 
   it("terminates on a cycle LONGER than the call stack, not just a short one", () => {

@@ -38,7 +38,12 @@ different slots is two elements of the document and is still counted, measured
 and rebuilt twice, exactly as before. Behaviour on every acyclic document is
 unchanged.
 
-An immutable rebuild cannot reproduce a cycle — the result would have to
-contain itself — so `updateNode`, `duplicateNode` and `reidSubtree` drop the
-edge that closes it and return a finite forest, rather than failing the
-operation.
+An immutable rebuild cannot reproduce a cycle, since the result would have to
+contain itself. `updateNode` and `reidSubtree` therefore drop the edge that
+closes it and return a finite forest rather than failing the operation.
+
+`duplicateNode` REFUSES instead, returning the forest unchanged, and the
+difference is deliberate. It adds a node rather than transforming one, so the
+original stays in the result — a copy taken from a forest that cannot be
+serialized still cannot be serialized, whatever is done to the clone. Reporting
+success there would hand back a document that cannot be stored.
