@@ -5,7 +5,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { defineConfig } from "../collections/config/define-config";
-import { getNextly, shutdownNextly, type Nextly } from "../init";
+import { isServicesRegistered, registerServices } from "../di/register";
+import { buildServiceConfig } from "../init/build-service-config";
+import {
+  getCachedNextly,
+  getNextly,
+  shutdownNextly,
+  type Nextly,
+} from "../init";
 
 // Mock console.log to avoid noise in tests
 const originalLog = console.log;
@@ -253,6 +260,115 @@ describe("init - Nextly API", () => {
       };
 
       expect(nextly).toBeDefined();
+    });
+  });
+
+  describe("getCachedNextly() — fallback path", () => {
+    // The full public surface, pinned by name so a member dropped from the
+    // instance construction fails HERE with the member it is missing,
+    // rather than as a shape diff against whatever the code still builds.
+    // The compiler enforces the same list on the annotated literal; this
+    // pins it on the object the process actually hands out.
+    const PUBLIC_MEMBERS = [
+      "access",
+      "adapter",
+      "bulkDelete",
+      "changePassword",
+      "collections",
+      "count",
+      "create",
+      "delete",
+      "duplicate",
+      "email",
+      "emailProviders",
+      "emailTemplates",
+      "fieldGroups",
+      "find",
+      "findByID",
+      "findSingle",
+      "findSingles",
+      "forgotPassword",
+      "forms",
+      "login",
+      "logout",
+      "me",
+      "media",
+      "mediaService",
+      "meta",
+      "permissions",
+      "register",
+      "resetPassword",
+      "roles",
+      "shutdown",
+      "storage",
+      "update",
+      "updateMe",
+      "updateSingle",
+      "userFields",
+      "userService",
+      "users",
+      "verifyEmail",
+    ];
+
+    function testOptions(): Parameters<typeof getNextly>[0] {
+      return {
+        config: defineConfig({}),
+        storage: {
+          upload: vi.fn(),
+          delete: vi.fn(),
+          getUrl: vi.fn(),
+          exists: vi.fn(),
+          getMetadata: vi.fn(),
+        } as any,
+        imageProcessor: {
+          resize: vi.fn(),
+          optimize: vi.fn(),
+        } as any,
+      };
+    }
+
+    function shapeOf(instance: Nextly): Record<string, string> {
+      const shape: Record<string, string> = {};
+      for (const key of Object.keys(instance).sort()) {
+        shape[key] = typeof instance[key];
+      }
+      return shape;
+    }
+
+    it("builds the same instance the public factory builds", async () => {
+      const normal = await getNextly(testOptions());
+      // The factory-path instance carries the full surface — the control
+      // that separates "fallback is incomplete" from "everything is".
+      expect(Object.keys(shapeOf(normal))).toEqual(PUBLIC_MEMBERS);
+
+      await shutdownNextly();
+      expect(isServicesRegistered()).toBe(false);
+
+      // The request-path boot: services registered directly, without the
+      // public factory ever running — the state route-handler's
+      // ensureServicesInitialized leaves the process in.
+      await registerServices(buildServiceConfig(testOptions()));
+
+      const fallback = await getCachedNextly();
+      expect(Object.keys(shapeOf(fallback))).toEqual(PUBLIC_MEMBERS);
+      expect(shapeOf(fallback)).toEqual(shapeOf(normal));
+    });
+
+    it("caches the fallback instance and shuts it down cleanly", async () => {
+      await registerServices(buildServiceConfig(testOptions()));
+
+      const first = await getCachedNextly();
+      const second = await getCachedNextly();
+      expect(second).toBe(first);
+
+      const mockLog = vi.fn();
+      console.log = mockLog;
+      await first.shutdown();
+      expect(isServicesRegistered()).toBe(false);
+      // Both construction paths share one shutdown, so the fallback logs
+      // the completion line the factory path always has. Pins the unified
+      // behavior; before the unification the fallback shut down silently.
+      expect(mockLog).toHaveBeenCalledWith("Nextly shutdown complete");
     });
   });
 });
