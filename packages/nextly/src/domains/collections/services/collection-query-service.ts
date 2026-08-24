@@ -73,6 +73,7 @@ import {
   type ReadAccessRedactions,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
+import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -1060,6 +1061,15 @@ export class CollectionQueryService extends BaseService {
       // i18n M7: pull the reserved `_translated` language filter out FIRST — the geo/component
       // extractors below drop object-valued keys they don't recognize, so it must be removed
       // before them and turned into a companion EXISTS/NOT EXISTS condition.
+      // Before the filter can reach SQL. Redaction runs on rows already chosen,
+      // so it cannot answer a `where` that selected them BY a hidden value.
+      assertFilterableFields(
+        "collection",
+        params.collectionName,
+        listQueryWhere,
+        { overrideAccess: params.overrideAccess }
+      );
+
       const { filter: translationFilter, cleanedWhere: whereAfterTranslation } =
         this.extractTranslationStatusFilter(listQueryWhere);
       if (translationFilter) {
@@ -1966,6 +1976,17 @@ export class CollectionQueryService extends BaseService {
       if (accessDenied) {
         return accessDenied;
       }
+
+      // A count is a cleaner oracle than a listing, not a lesser one: "how many
+      // rows carry this value" answers 1 or 0 without returning a row at all.
+      assertFilterableFields(
+        "collection",
+        params.collectionName,
+        params.where,
+        {
+          overrideAccess: params.overrideAccess,
+        }
+      );
 
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
