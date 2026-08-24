@@ -28,6 +28,11 @@ export {
   // write must refuse what the compiler will not read, and a copy of this
   // number in another package is a second statement that goes stale silently.
   MAX_NAMED_CLASSES,
+  // The per-node cap, public for the same reason and with a sharper use: it is
+  // how many of a node's classes the compiler APPLIES, so a reader asking which
+  // classes a document actually references has to stop where the compiler does.
+  // Reading further reports a reference the page does not render.
+  MAX_CLASSES_PER_NODE,
   isTokenRef,
   isBindingSource,
   isBlockType,

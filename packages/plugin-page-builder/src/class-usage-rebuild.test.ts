@@ -215,6 +215,36 @@ describe("rebuildClassUsage", () => {
     });
   });
 
+  it("refuses to report a rebuild that ran out of pages before the store ran out", () => {
+    // Exhausting the page guard and reaching the end are different outcomes
+    // that produced the same `RebuildReport`, and the numbers on it are the
+    // same numbers a complete run would carry — so a caller would record a
+    // successful rebuild over a site it had only partly scanned, and go on to
+    // trust records for pages nothing ever read.
+    //
+    // A store that always claims another page is what a malformed `hasNext`
+    // looks like, and it is also what a site larger than the guard looks like.
+    // Neither is a rebuild that finished.
+    const endless: PageUsageStore = {
+      find: () => Promise.resolve({ items: [], meta: { hasNext: true } }),
+      update: () => Promise.resolve({}),
+    };
+
+    return expect(rebuildClassUsage({ store: endless })).rejects.toThrow(
+      /were not read/
+    );
+  });
+
+  it("reports normally when the store DOES report an end, so the refusal is not unconditional", () => {
+    // The control. A rebuild that threw whenever it finished would satisfy the
+    // case above while never completing for anyone.
+    const { store } = storeOf([[page("a", ["hero"])]]);
+
+    return rebuildClassUsage({ store }).then(report => {
+      expect(report).toEqual({ scanned: 1, repaired: 1 });
+    });
+  });
+
   it("lets a store failure propagate rather than reporting a clean rebuild", () => {
     // `classIdsUsedBy` is total, so a failure here is the store being
     // unreachable or refusing the write. Reporting a completed rebuild that

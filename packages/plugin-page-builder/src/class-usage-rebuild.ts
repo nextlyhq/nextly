@@ -51,6 +51,11 @@ const PAGE_SIZE = 100;
  * `hasNext` comes from the store, and a walk that trusts it completely is one
  * malformed response away from running forever. Sized so that reaching it means
  * the response is wrong rather than the site is large.
+ *
+ * Reaching it is REPORTED rather than absorbed. A guard that silently ends the
+ * walk turns "I could not finish" into a report indistinguishable from "there
+ * was nothing more", and the pages past it keep whatever stale records they
+ * hold while a completed rebuild says otherwise.
  */
 const MAX_PAGES = 10_000;
 
@@ -145,6 +150,7 @@ export async function rebuildClassUsage(args: {
   const collection = args.collection ?? "pages";
   let scanned = 0;
   let repaired = 0;
+  let reachedTheEnd = false;
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     const result = await args.store.find({
@@ -170,7 +176,27 @@ export async function rebuildClassUsage(args: {
       repaired++;
     }
 
-    if (!result.meta.hasNext) break;
+    if (!result.meta.hasNext) {
+      reachedTheEnd = true;
+      break;
+    }
+  }
+
+  if (!reachedTheEnd) {
+    // The loop ended because its own guard ran out, not because the store said
+    // there was nothing left — so pages after this point were never read, and
+    // whatever stale records they hold are still there.
+    //
+    // Thrown rather than returned as a flag on the report. A `RebuildReport`
+    // reads as a completed pass, and the two numbers on it are the same numbers
+    // a genuinely complete run would produce; a caller doing the obvious thing
+    // with the result would record a successful rebuild over a site it had only
+    // partly scanned. The whole point of the report is to say the records can
+    // now be trusted, and after this they cannot.
+    throw new Error(
+      `Class-usage rebuild stopped after ${MAX_PAGES} pages of ${PAGE_SIZE} with more reported; ` +
+        `${scanned} page(s) scanned and ${repaired} repaired, and the rest were not read.`
+    );
   }
 
   return { scanned, repaired };

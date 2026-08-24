@@ -28,11 +28,25 @@
  * built on this has to say so where it is shown rather than implying it counted
  * everything.
  *
+ * Within that, it reads exactly what the COMPILER reads: the first
+ * `MAX_CLASSES_PER_NODE` entries of each node's list, over at most `MAX_NODES`
+ * nodes. Those numbers are imported rather than restated, because the question
+ * is which classes the page renders — a reader that stopped anywhere else would
+ * answer about a document other than the one being served, naming a class the
+ * page never applies or omitting one it does.
+ *
+ * The bounds are on WORK, never on the answer. Nothing reachable is dropped, so
+ * an id missing from the result means the document does not render it. That is
+ * what lets a caller treat this as authoritative for its own question; a bound
+ * that silently truncated the result would make every absence ambiguous, and
+ * absence is what a safe-delete check reads.
+ *
  * @module class-usage
  */
 import {
-  MAX_NAMED_CLASSES,
+  MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  MAX_NODES,
   isPlainRecord,
   walkNodes,
 } from "@nextlyhq/blocks-engine";
@@ -75,19 +89,32 @@ export function classIdsUsedBy(stored: unknown): string[] {
   if (!Array.isArray(nodes)) return [];
 
   const ids = new Set<string>();
+  let nodesRead = 0;
   walkNodes(nodes as BlockNode[], node => {
+    // Both bounds below are the COMPILER's, taken from the engine rather than
+    // chosen here, because the question is which classes this page renders. A
+    // reader that stopped somewhere else would answer about a different
+    // document than the one being served — reporting a reference the page does
+    // not apply, or omitting one it does.
+    //
+    // A cap on DISTINCT ids used to sit here instead, and it was the wrong
+    // quantity twice over. It let a corrupt array of repeats be scanned in full
+    // while never filling, since repeats add no distinct entry; and once it did
+    // fill, it dropped every later id — so a page mentioning many ids of
+    // deleted classes before a live one omitted the live one, which is the
+    // direction that gets a class deleted while a page still uses it. The two
+    // caps below bound the work by construction and drop nothing reachable.
+    if (nodesRead >= MAX_NODES) return;
+    nodesRead++;
+
     const classes: unknown = (node as { classes?: unknown }).classes;
     if (!Array.isArray(classes)) return;
-    for (const id of classes) {
-      // Bounded by the size of the library it is counted against: a page cannot
-      // usefully reference more DISTINCT classes than a site can define, so a
-      // document claiming to is corrupt and reading further buys nothing.
-      //
-      // Tested per ID rather than per node, which is where the bound has to sit
-      // to be one: a single node carrying an oversized `classes` array is the
-      // cheapest way to produce this shape, and a check that only ran between
-      // nodes would let that one array through whole.
-      if (ids.size >= MAX_NAMED_CLASSES) return;
+    // Bounds ENTRIES READ, not ids kept, and the two differ exactly where it
+    // matters: an array of a million repeats holds one distinct id, so a
+    // distinct-count bound never trips and the whole array is read.
+    const readable = Math.min(classes.length, MAX_CLASSES_PER_NODE);
+    for (let i = 0; i < readable; i++) {
+      const id: unknown = classes[i];
       if (namesAClass(id)) ids.add(id);
     }
   });

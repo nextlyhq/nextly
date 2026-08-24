@@ -12,8 +12,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_NAMED_CLASSES,
+  MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  MAX_NODES,
 } from "@nextlyhq/blocks-engine";
 
 import { classIdsUsedBy } from "./class-usage";
@@ -139,16 +140,96 @@ describe("what a document nobody validated costs", () => {
     expect(classIdsUsedBy(withClasses([over, "real"]))).toEqual(["real"]);
   });
 
-  it("stops at the number of classes a site can define", () => {
-    // A page cannot usefully reference more DISTINCT classes than the library
-    // can hold, so a document claiming to is corrupt — and this runs on every
-    // page write, where an unbounded read is paid every time.
+  it("reads a node's classes only as far as the compiler applies them", () => {
+    // The bound is the COMPILER's, not one chosen here: it applies the first
+    // `MAX_CLASSES_PER_NODE` of a node's list and warns about the rest, so an
+    // id past that position is not a reference this page renders. Reading
+    // further would report a class as used on a page that never applies it,
+    // and block its deletion forever.
     const many = Array.from(
-      { length: MAX_NAMED_CLASSES + 500 },
+      { length: MAX_CLASSES_PER_NODE + 500 },
       (_, i) => `c${i}`
     );
 
-    expect(classIdsUsedBy(withClasses(many))).toHaveLength(MAX_NAMED_CLASSES);
+    expect(classIdsUsedBy(withClasses(many))).toHaveLength(
+      MAX_CLASSES_PER_NODE
+    );
+  });
+
+  it("bounds ENTRIES READ, not distinct ids, so repeats cannot make it scan forever", () => {
+    // The two quantities come apart exactly here. An array of a million
+    // identical entries holds ONE distinct id, so a bound on the number of ids
+    // KEPT never trips however long the array is, and the whole thing is read
+    // on every page write.
+    //
+    // Asserted by COUNTING the reads rather than by the returned list, which
+    // cannot see this at all: an unbounded read of repeats returns `["hero"]`
+    // exactly as a bounded one does, so a test comparing the result passes
+    // whether or not any bound exists.
+    let readsPastTheCap = 0;
+    const repeats: unknown[] = Array.from(
+      { length: MAX_CLASSES_PER_NODE + 200 },
+      () => "hero"
+    );
+    for (let i = MAX_CLASSES_PER_NODE; i < repeats.length; i++) {
+      Object.defineProperty(repeats, i, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          readsPastTheCap++;
+          return "hero";
+        },
+      });
+    }
+
+    expect(classIdsUsedBy(withClasses(repeats))).toEqual(["hero"]);
+    expect(readsPastTheCap).toBe(0);
+  });
+
+  it("keeps a live id that appears after thousands of others", () => {
+    // The failure a distinct-id cap produced: ids of deleted classes still sit
+    // in stored documents, and once enough of them filled the cap every later
+    // id was dropped — including one the renderer still applies. That is the
+    // under-count direction, the one that lets a class in use be deleted.
+    //
+    // Spread across nodes rather than one list, because a single node's list is
+    // bounded by what the compiler applies; the count that used to be capped
+    // was the distinct total across the whole document.
+    const nodes = Array.from({ length: 3000 }, (_, i) => ({
+      id: `n${i}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes: [`stale-${i}`],
+    }));
+    nodes.push({
+      id: "last",
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes: ["still-in-use"],
+    });
+
+    expect(classIdsUsedBy({ formatVersion: 1, kind: "page", nodes })).toContain(
+      "still-in-use"
+    );
+  });
+
+  it("stops reading after the number of nodes a document may hold", () => {
+    // The other half of the bound, and the one that keeps the id set finite: a
+    // document reaches here unvalidated, so nothing has enforced the node cap
+    // before this runs.
+    const nodes = Array.from({ length: MAX_NODES + 100 }, (_, i) => ({
+      id: `n${i}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes: [`c${i}`],
+    }));
+
+    expect(
+      classIdsUsedBy({ formatVersion: 1, kind: "page", nodes })
+    ).toHaveLength(MAX_NODES);
   });
 });
 
