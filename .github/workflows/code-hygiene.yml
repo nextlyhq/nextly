@@ -159,14 +159,14 @@ jobs:
 
       # One run per analysis. `set +e` because a findings exit (code 1) would
       # otherwise abort the step under GitHub's `bash -e`, taking the summary
-      # with it. Dupes and dead code are both reported in the summary.
+      # with it. Dead code, dupes, and health are all reported in the summary.
       # Anything above 1 is a fallow crash, surfaced separately.
       - name: Analyse the whole repository
         id: analyse
         run: |
           set +e
           crashed=""
-          for analysis in dead-code dupes; do
+          for analysis in dead-code dupes health; do
             pnpm exec fallow "$analysis" \
               --workspace "!playground" \
               --config .fallowrc.jsonc \
@@ -189,12 +189,12 @@ jobs:
           {
             echo "## Whole-repository scan — PR branch current state"
             echo
-            echo "Full dead-code and duplication report for the PR branch as it"
-            echo "stands now. Playground is excluded. Quality gate enforcement on"
-            echo "introduced issues is performed by the Changed files job."
+            echo "Full dead-code, duplication, and health/complexity report for the"
+            echo "PR branch as it stands now. Playground is excluded. Quality gate"
+            echo "enforcement on introduced issues is performed by the Changed files job."
             echo
           } >> "$GITHUB_STEP_SUMMARY"
-          for analysis in dead-code dupes; do
+          for analysis in dead-code dupes health; do
             pnpm exec fallow report --from "/tmp/head-$analysis.json" \
               --format github-summary >> "$GITHUB_STEP_SUMMARY"
           done
