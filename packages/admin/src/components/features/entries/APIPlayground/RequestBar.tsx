@@ -28,43 +28,36 @@ import { cn } from "@admin/lib/utils";
 import type { HttpMethod } from "./APIPlayground";
 
 /**
- * Method colours, by what the verb does to your data.
+ * What each verb does to your data, and the two ways that is shown.
  *
- * Exported so the action list reads the same as the bar: a verb that means
- * "destroys a row" should not be one colour in the menu and another once
- * chosen.
- */
-export const METHOD_TONE: Record<HttpMethod, string> = {
-  GET: "text-foreground",
-  POST: "text-success",
-  PATCH: "text-warning",
-  DELETE: "text-destructive",
-};
-
-/**
- * The same meanings as a chip, for the request line.
+ * ONE record rather than two. The action list and the request line are two
+ * VIEWS of a single classification -- "this verb destroys a row" -- and a verb
+ * that reads as destructive in the menu must not read as neutral once chosen.
+ * Two `Record<HttpMethod, string>` maps agree on the day they are written and
+ * nothing keeps them agreeing: the compiler checks that each lists every verb,
+ * never that POST means success in both.
  *
- * The verb is the first thing read on that line and bare coloured text is easy
- * to skim past, which matters most for the one that destroys a row.
- *
- * The COLOUR is carried by the fill and the ink stays neutral, which is forced
- * rather than chosen. This chip is `text-xs`, so it owes 4.5:1, and at that
- * size nothing coloured in this palette clears it: `text-success` reaches
- * 4.35:1 on a light page, and even the theme's own declared pairs are built for
- * large text -- measured, `success-foreground` on `bg-success` is 3.43:1 in
- * dark and `warning-foreground` on `bg-warning` is 3.27:1 in light.
+ * On the chip, the COLOUR is carried by the fill and the ink stays neutral,
+ * which is forced rather than chosen. The chip is `text-xs`, so it owes 4.5:1,
+ * and at that size nothing coloured in this palette clears it: `text-success`
+ * reaches 4.35:1 on a light page, and even the theme's own declared pairs are
+ * built for large text -- measured, `success-foreground` on `bg-success` is
+ * 3.43:1 in dark and `warning-foreground` on `bg-warning` is 3.27:1 in light.
  *
  * A translucent role fill flips with the mode because the role token does, and
  * `foreground` flips with it, so one pair serves both. GET stays neutral
  * because a read is not an event; the other three are things that happen to
  * your data.
  */
-export const METHOD_PILL: Record<HttpMethod, string> = {
-  GET: "bg-muted text-foreground",
-  POST: "bg-success/15 text-foreground",
-  PATCH: "bg-warning/15 text-foreground",
-  DELETE: "bg-destructive/15 text-foreground",
-};
+export const METHOD_SEMANTICS = {
+  GET: { tone: "text-foreground", pill: "bg-muted text-foreground" },
+  POST: { tone: "text-success", pill: "bg-success/15 text-foreground" },
+  PATCH: { tone: "text-warning", pill: "bg-warning/15 text-foreground" },
+  DELETE: {
+    tone: "text-destructive",
+    pill: "bg-destructive/15 text-foreground",
+  },
+} as const satisfies Record<HttpMethod, { tone: string; pill: string }>;
 
 export interface RequestBarProps {
   method: HttpMethod;
@@ -98,6 +91,11 @@ export function RequestBar({
   onOpen,
 }: RequestBarProps) {
   return (
+    // `overflow-hidden` is what makes the strip clip to its own rounded
+    // corner, and it also clips anything a child paints outside its box --
+    // which is where a focus ring lives. Every control that touches an edge
+    // therefore draws its ring INSIDE, or keyboard focus disappears on the
+    // outermost ones.
     <div className="flex shrink-0 items-stretch gap-px overflow-hidden rounded-lg border border-border-strong bg-border-strong">
       <div className="w-52 shrink-0 bg-background">{action}</div>
 
@@ -105,7 +103,7 @@ export function RequestBar({
         <span
           className={cn(
             "shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-xs font-semibold tracking-wide",
-            METHOD_PILL[method]
+            METHOD_SEMANTICS[method].pill
           )}
         >
           {method}
@@ -122,7 +120,7 @@ export function RequestBar({
         onClick={onCopy}
         aria-label={copied ? "URL copied" : "Copy request URL"}
         title="Copy request URL"
-        className="flex w-11 shrink-0 cursor-pointer items-center justify-center bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-11 shrink-0 cursor-pointer items-center justify-center bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-success" />
@@ -136,7 +134,7 @@ export function RequestBar({
         onClick={onOpen}
         aria-label="Open request URL in a new tab"
         title="Open in a new tab"
-        className="flex w-11 shrink-0 cursor-pointer items-center justify-center bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-11 shrink-0 cursor-pointer items-center justify-center bg-background text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <ExternalLink className="h-3.5 w-3.5" />
       </button>
@@ -151,7 +149,10 @@ export function RequestBar({
         // rounded button inside it would draw a second curve just inside the
         // first. This is the overlapped-strip case theme.css names, not an
         // element that missed the radius knob.
-        className="w-40 shrink-0 gap-2 rounded-none"
+        // `ring-inset` for the same reason the icon buttons carry it: the bar
+        // clips to its own rounded corner, and a ring painted outside the
+        // button's box is cut off exactly where the button meets that edge.
+        className="w-40 shrink-0 gap-2 rounded-none focus-visible:ring-inset"
       >
         {isLoading ? (
           <>

@@ -49,6 +49,73 @@ describe("ResponseViewer", () => {
     expect(screen.getByTestId("response-meta")).toHaveTextContent("—");
   });
 
+  it("treats a completed empty body as a response, not as nothing sent", () => {
+    // A 204 is a correct outcome, not an absence to keep waiting on. Deriving
+    // "is there a response" from the body alone told a reader to send a request
+    // that had already come back, with its headers sitting unread.
+    render(<ResponseViewer data={undefined} code={code} status={204} />);
+
+    expect(screen.getByText("No content")).toBeInTheDocument();
+    expect(screen.queryByText("No response yet")).toBeNull();
+    expect(
+      screen.getByText(/returned 204 with an empty body/)
+    ).toBeInTheDocument();
+  });
+
+  it("tells the headers tab the response arrived, even with no body", async () => {
+    // Asserts on the HEADERS message specifically, because that is what
+    // `hasResponse` decides. The body-tab assertions above read `status`
+    // directly and stay green whatever `hasResponse` does -- so on their own
+    // they cover the empty-state copy and not the bug.
+    render(<ResponseViewer data={undefined} code={code} status={204} />);
+    await userEvent.click(screen.getByRole("tab", { name: /headers/i }));
+
+    expect(
+      screen.getByText("This response carried no headers.")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Send the request to see its response headers.")
+    ).toBeNull();
+  });
+
+  it("still tells the headers tab to send, before the first request", async () => {
+    // The control: an implementation hardcoding the arrived-message passes the
+    // test above and is wrong every time somebody opens the page.
+    render(<ResponseViewer data={undefined} code={code} />);
+    await userEvent.click(screen.getByRole("tab", { name: /headers/i }));
+
+    expect(
+      screen.getByText("Send the request to see its response headers.")
+    ).toBeInTheDocument();
+  });
+
+  it("still says nothing was sent before the first request", () => {
+    // The control for the test above: without it, an implementation that always
+    // says "No content" passes that one and is wrong in the commoner case.
+    render(<ResponseViewer data={undefined} code={code} />);
+
+    expect(screen.getByText("No response yet")).toBeInTheDocument();
+    expect(screen.queryByText("No content")).toBeNull();
+  });
+
+  it("keeps the size within the width the row reserves", () => {
+    // `formatBytes` had no gigabyte arm, so megabytes counted up forever and a
+    // multi-gigabyte reply rendered wider than any reservation could cover.
+    render(
+      <ResponseViewer
+        data={{ items: [] }}
+        code={code}
+        status={200}
+        size={5 * 1024 * 1024 * 1024}
+      />
+    );
+
+    const meta = screen.getByTestId("response-meta");
+    expect(meta).toHaveTextContent("5.00 GB");
+    // 10ch is what the row reserves; the widest bounded form must fit it.
+    expect("1023.99 GB".length).toBeLessThanOrEqual(10);
+  });
+
   it("shows the metrics once a response exists", () => {
     render(
       <ResponseViewer

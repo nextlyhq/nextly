@@ -39,11 +39,11 @@ import {
 } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
 import { usePersistedState } from "@admin/hooks/usePersistedState";
-import { cn } from "@admin/lib/utils";
 
 import { CodePanel } from "./CodePanel";
 import type { CodeSnippets } from "./generate-code";
 import { JsonViewer } from "./JsonViewer";
+import { ResponseMetrics } from "./ResponseMetrics";
 
 /** Which of the three panes is open, so the toolbar can act on it. */
 type ResponseTab = "body" | "headers" | "code";
@@ -57,44 +57,6 @@ type ResponseTab = "body" | "headers" | "code";
 const FLAVOUR_KEY = "nextly:admin:api-playground:flavour";
 const isFlavour = (value: string): value is keyof CodeSnippets =>
   value === "sdk" || value === "fetch" || value === "curl";
-
-/**
- * The status dot, keyed to the same meaning as the status text beside it.
- */
-function statusDotTone(status: number): string {
-  if (status >= 200 && status < 300) return "bg-success";
-  if (status >= 300 && status < 400) return "bg-muted-foreground";
-  if (status >= 400 && status < 500) return "bg-warning";
-  if (status >= 500) return "bg-destructive";
-  return "bg-muted-foreground";
-}
-
-/**
- * Colour a response by what its status class means.
- *
- * A 4xx is the caller's mistake and a 5xx is the server's, so they read as
- * warning and error respectively.
- */
-function statusTone(status: number): string {
-  if (status >= 200 && status < 300) return "text-success";
-  if (status >= 300 && status < 400) return "text-muted-foreground";
-  if (status >= 400 && status < 500) return "text-warning";
-  if (status >= 500) return "text-destructive";
-  return "text-muted-foreground";
-}
-
-/**
- * A payload size someone can act on.
- *
- * Two significant figures past a kilobyte: the question a size answers here is
- * "is this response big?", and 2.4 KB answers it while 2438 B makes you count
- * digits.
- */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-}
 
 export interface ResponseViewerProps {
   /** Response data to display */
@@ -117,22 +79,6 @@ export interface ResponseViewerProps {
   time?: number;
   /** Body size in bytes — what `depth` and `limit` are traded against. */
   size?: number;
-}
-
-/** One reading in the meta row, with a placeholder that holds its width. */
-function Metric({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      {children}
-    </div>
-  );
 }
 
 export function ResponseViewer({
@@ -255,7 +201,12 @@ export function ResponseViewer({
     URL.revokeObjectURL(url);
   }, [raw, jsonString, headerText, tab, target.filename]);
 
-  const hasResponse = Boolean(jsonString) || isLoading || Boolean(error);
+  // A completed request with an empty body -- a 204, or a 200 returning
+  // nothing -- is a RESPONSE. Deriving this from the body alone made the
+  // headers tab say "send the request" about a request that had just come
+  // back, and its headers were sitting there unread.
+  const hasResponse =
+    status !== undefined || Boolean(jsonString) || isLoading || Boolean(error);
 
   return (
     <Tabs
@@ -263,64 +214,7 @@ export function ResponseViewer({
       onValueChange={value => setTab(value as ResponseTab)}
       className="@container/response flex h-full min-h-0 flex-col"
     >
-      {/* Always rendered, and every value reserves the width its populated form
-          needs. The metrics used to appear with the first reply, so the header
-          reflowed at the moment somebody was reading it -- and a placeholder
-          alone does not fix that: an em dash is narrower than `200`, `123ms`
-          and `5.8 KB`, so at pane widths between the two intrinsic widths the
-          row still wrapped on arrival and pushed the toolbar down. The mono
-          face advances every glyph equally, so `ch` reserves exactly. */}
-      <div
-        data-testid="response-meta"
-        // Wraps rather than clipping. The pane is resizable, and its minimum
-        // against a wide admin sidebar leaves a few hundred pixels -- at which
-        // a non-wrapping row puts the metrics past the card's clipped edge.
-        className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-1 border-b border-border px-6 py-2"
-      >
-        <Metric label="Status">
-          {/* Drawn at every moment, coloured only once there is a status. Built
-              conditionally, the dot and its gap are 14px that arrive with the
-              first reply. */}
-          <span
-            className={cn(
-              "h-1.5 w-1.5 shrink-0 rounded-full",
-              status === undefined ? "bg-transparent" : statusDotTone(status)
-            )}
-          />
-          <span
-            className={cn(
-              // 3ch: an HTTP status code is always three digits, so this
-              // reserves the exact width rather than an estimate of it.
-              "min-w-[3ch] font-mono text-sm font-semibold",
-              status === undefined
-                ? "text-muted-foreground"
-                : statusTone(status)
-            )}
-          >
-            {status ?? "—"}
-          </span>
-        </Metric>
-        <div className="h-4 w-px bg-border" />
-        <Metric label="Latency">
-          {/* 6ch holds `9999ms`. Past ten seconds the value outgrows its
-              reservation and the row can reflow again, which is a real change
-              in the content rather than the empty-to-populated step this
-              reserves against. */}
-          <span className="min-w-[6ch] font-mono text-sm font-semibold text-foreground">
-            {time === undefined ? "—" : `${time}ms`}
-          </span>
-        </Metric>
-        <div className="h-4 w-px bg-border" />
-        {/* Beside latency because they are the pair traded against each other
-            when tuning depth and limit. */}
-        <Metric label="Size">
-          {/* 9ch holds the widest form `formatBytes` produces below a gigabyte:
-              `1023.9 KB` and `123.45 MB` are both nine characters. */}
-          <span className="min-w-[9ch] font-mono text-sm font-semibold text-foreground">
-            {size === undefined ? "—" : formatBytes(size)}
-          </span>
-        </Metric>
-      </div>
+      <ResponseMetrics status={status} time={time} size={size} />
 
       {/* Stacks below a narrow pane so the tabs and the copy control stay
           reachable instead of overflowing the card's clipped edge. */}
@@ -410,12 +304,25 @@ export function ResponseViewer({
             <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-md border border-border bg-card">
               <FileJson className="h-6 w-6 text-muted-foreground" />
             </div>
+            {/* Two different facts, and telling a reader the wrong one wastes
+                their time: nothing has been sent yet, versus it came back and
+                carried no body -- which for a 204 is the CORRECT outcome, not
+                an absence to keep waiting on. */}
             <h3 className="mb-1 text-base font-semibold tracking-tight text-foreground">
-              No response yet
+              {status === undefined ? "No response yet" : "No content"}
             </h3>
             <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
-              Send the request to see the response here. The Code tab already
-              has the call.
+              {status === undefined ? (
+                <>
+                  Send the request to see the response here. The Code tab
+                  already has the call.
+                </>
+              ) : (
+                <>
+                  The request returned {status} with an empty body. Its headers
+                  are on the Headers tab.
+                </>
+              )}
             </p>
           </div>
         ) : (

@@ -55,7 +55,7 @@ import { generateCode } from "./generate-code";
 import type { PlaygroundField, WhereCondition } from "./query-fields";
 import { formatWhere } from "./query-fields";
 import { QueryBuilder } from "./QueryBuilder";
-import { METHOD_TONE, RequestBar } from "./RequestBar";
+import { METHOD_SEMANTICS, RequestBar } from "./RequestBar";
 import { ResponseViewer } from "./ResponseViewer";
 
 // CodeMirror reaches for browser globals on import, so it loads on demand.
@@ -627,8 +627,14 @@ export function APIPlayground({
   const requestPane = (
     <Card className="flex h-full flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
       <CardHeader className="p-6 pb-4" noBorder>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base font-semibold tracking-tight text-foreground">
+        {/* Wraps rather than clipping. The pane is draggable down to a quarter
+            of the group, which against a wide sidebar is under 200px -- less
+            than this title and Reset need side by side -- and the card clips to
+            its own corner, so the overflow is not scrolled to, it is gone.
+            Wrapping costs a line at widths where the alternative is a control
+            nobody can reach. */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="min-w-0 text-base font-semibold tracking-tight text-foreground">
             Request configuration
           </CardTitle>
           <Button
@@ -650,17 +656,29 @@ export function APIPlayground({
         {/* Entry ID Input (conditional) */}
         {!isSingle && currentAction.requiresEntryId && (
           <div className="space-y-2">
-            <Label className="text-sm font-medium text-foreground">
+            <Label
+              htmlFor="playground-entry-id"
+              className="text-sm font-medium text-foreground"
+            >
               Entry ID <span className="text-destructive">*</span>
             </Label>
             <Input
+              id="playground-entry-id"
               value={entryId}
               onChange={e => setEntryId(e.target.value)}
               placeholder="Enter entry ID (e.g., abc123)"
               className="font-mono text-xs"
+              aria-required
+              aria-invalid={entryIdMissing || undefined}
+              aria-describedby={
+                entryIdMissing ? "playground-entry-id-error" : undefined
+              }
             />
             {entryIdMissing && (
-              <p className="text-xs text-destructive">
+              <p
+                id="playground-entry-id-error"
+                className="text-xs text-destructive"
+              >
                 Entry ID is required for this action
               </p>
             )}
@@ -687,10 +705,20 @@ export function APIPlayground({
                 highlighting, bracket matching, or a line to point at when
                 the JSON is wrong. */}
               <div className="flex h-full min-h-0 flex-col gap-2">
-                <Label className="text-sm font-medium text-foreground">
+                {/* `htmlFor` cannot reach it: CodeMirror owns a contenteditable
+                    rather than a form control, so the label is bound by id and
+                    the editor names itself with the same words. */}
+                <Label
+                  id="playground-request-body-label"
+                  className="text-sm font-medium text-foreground"
+                >
                   Request body (JSON)
                 </Label>
-                <div className="min-h-0 flex-1 rounded-md border border-input">
+                <div
+                  role="group"
+                  aria-labelledby="playground-request-body-label"
+                  className="min-h-0 flex-1 rounded-md border border-input"
+                >
                   <Suspense
                     fallback={
                       <div className="h-full w-full animate-pulse bg-muted/30" />
@@ -791,7 +819,7 @@ export function APIPlayground({
                   <span
                     className={cn(
                       "shrink-0 font-mono text-xs font-semibold",
-                      METHOD_TONE[currentAction.method]
+                      METHOD_SEMANTICS[currentAction.method].tone
                     )}
                   >
                     {currentAction.method}
@@ -814,7 +842,7 @@ export function APIPlayground({
                     <span
                       className={cn(
                         "w-12 shrink-0 font-mono text-xs font-semibold",
-                        METHOD_TONE[a.method]
+                        METHOD_SEMANTICS[a.method].tone
                       )}
                     >
                       {a.method}
