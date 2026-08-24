@@ -11,6 +11,7 @@
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus } from "../events/event-bus";
@@ -33,6 +34,8 @@ import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
 import type { PluginCategory } from "./plugin-categories";
+import { wrapSinglesForPlugin } from "./plugin-singles";
+import type { PluginSinglesService } from "./plugin-singles";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import {
@@ -279,6 +282,20 @@ export interface PluginContext {
      * diff arrive in later stages.
      */
     versions: VersionsService;
+    /**
+     * @experimental Read-only registry access to the app's Singles: which are
+     * declared, and what fields they have.
+     *
+     * The counterpart to `collections` for the other kind of content. Without
+     * it a plugin can enumerate collections and is simply blind to Singles, so
+     * anything that sweeps the app's documents silently covers half of it —
+     * which is how a usage index reports a class as unreferenced while a
+     * homepage still renders it.
+     *
+     * Addressed by SLUG, because a Single's row may not exist until something
+     * writes to it. Listing creates nothing; see `plugin-singles`.
+     */
+    singles: PluginSinglesService;
     /**
      * @experimental Services contributed by plugins, keyed by plugin name
      * then service name. Lazily resolved (instantiated on first access). Runtime
@@ -745,6 +762,7 @@ export function createPluginContext(
       | "mediaService"
       | "emailService"
       | "versionsService"
+      | "singleRegistryService"
       | "db"
       | "logger"
       | "config",
@@ -760,13 +778,15 @@ export function createPluginContext(
           ? EmailService
           : T extends "versionsService"
             ? VersionsService
-            : T extends "db"
-              ? DatabaseInstance
-              : T extends "logger"
-                ? Logger
-                : T extends "config"
-                  ? NextlyServiceConfig
-                  : never,
+            : T extends "singleRegistryService"
+              ? SingleRegistryService
+              : T extends "db"
+                ? DatabaseInstance
+                : T extends "logger"
+                  ? Logger
+                  : T extends "config"
+                    ? NextlyServiceConfig
+                    : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -910,6 +930,12 @@ export function createPluginContext(
       // touch version history.
       get versions() {
         return getServiceFn("versionsService");
+      },
+      // Lazy for the same reason as `versions` directly above: this module is
+      // exported, so a context built by a caller that never asks about Singles
+      // must not require the registry to have been resolved first.
+      get singles() {
+        return wrapSinglesForPlugin(getServiceFn("singleRegistryService"));
       },
       plugins: buildPluginServicesNamespace(),
     },

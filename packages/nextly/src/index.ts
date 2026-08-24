@@ -510,6 +510,10 @@ export type {
   ServiceOpts,
   PluginCollectionService,
 } from "./plugins/service-opts";
+// Exported alongside `PluginCollectionService` because a plugin typing its own
+// helper against `ctx.services.singles` needs to name the type, and an
+// unexported one leaves it reaching into a deep path or widening to `unknown`.
+export type { PluginSinglesService } from "./plugins/plugin-singles";
 export type { AuthUser } from "./types/auth";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
