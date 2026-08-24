@@ -1209,9 +1209,13 @@ function blocksRouteConfig(
  *
  * The blocks options are the page route's, minus everything that only means
  * something when a path is being RESOLVED. A Single is not looked up by slug, so
- * `collections`, `slugField` and `staticParamsLimit` have nothing to act on;
- * `status` and `draft` are the collection lifecycle's, which a Single route does
- * not scope.
+ * `collections`, `slugField` and `staticParamsLimit` have nothing to act on, and
+ * `status` is the collection lifecycle's, which a Single route does not scope.
+ *
+ * `draft` is omitted from the page route's set and RE-DECLARED below, because
+ * the two hooks answer differently shaped questions: a collection's returns the
+ * entry id the route must then compare against the row a path resolved to, and a
+ * Single has no path and no id to compare.
  */
 export interface BlocksSinglePageConfig
   extends Omit<
@@ -1226,6 +1230,26 @@ export interface BlocksSinglePageConfig
   > {
   /** Which Single to serve, by its slug. */
   slug: string;
+
+  /**
+   * Whether this request may read the Single's pending working draft.
+   *
+   * Without it the route serves the published document only, so a preview link
+   * verifies, redirects, and then answers 404 from a page that looks entirely
+   * correct — indistinguishable, to the reviewer who opened it, from a link that
+   * had expired.
+   *
+   * @example
+   * ```ts
+   * import { previewSingleDraftGate } from "nextly/runtime";
+   *
+   * createSinglePage({ slug: "homepage", draft: previewSingleDraftGate() });
+   * ```
+   *
+   * `createPublicSinglePage` refuses it, because a draft read is per-visitor and
+   * uncacheable while that factory exists to be cached and pre-rendered.
+   */
+  draft?: SingleRouteConfig<ReactElement>["draft"];
   /*
    * No `user`, deliberately, and for the same reason the page route has none:
    * these helpers read anonymously or trusted, and offering an identity here
@@ -1261,7 +1285,11 @@ function blocksSingleConfig(
   config: BlocksSinglePageConfig,
   isPublic: boolean
 ): SingleRouteConfig<ReactElement> {
-  const { slug, tags, revalidate, ...blocksOptions } = config;
+  // `draft` is pulled out rather than left in the rest, because what follows
+  // hands `blocksOptions` to the PAGE route's config builder, whose `draft` hook
+  // has the collection shape — resolving an entry id this route has nothing to
+  // compare against.
+  const { slug, tags, revalidate, draft, ...blocksOptions } = config;
 
   const routeConfig = blocksRouteConfig(
     { ...blocksOptions, collections: [slug] },
@@ -1280,6 +1308,10 @@ function blocksSingleConfig(
     ...(config.depth === undefined ? {} : { depth: config.depth }),
     ...(config.nextly === undefined ? {} : { nextly: config.nextly }),
     ...(revalidate === undefined ? {} : { revalidate }),
+    // Passed straight to the Single route, which is where the refusal lives:
+    // `createPublicSingleRoute` rejects a draft hook at construction, so
+    // `createPublicSinglePage` inherits that rather than restating it.
+    ...(draft === undefined ? {} : { draft }),
     // The media tag comes from the page route's own tag set, which is computed
     // for a collection this route does not have. Taking it from there rather
     // than recomputing keeps one answer to "what does a blocks page depend on".
