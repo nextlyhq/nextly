@@ -499,10 +499,15 @@ describe("ranking winners from two live states", () => {
     });
 
     /*
-     * The separating property, stated in the test: the specific rule is EARLIER
-     * in the trace, so anything preferring source order picks the other one.
+     * The separating property lives in the FIXTURE, not in an assertion: the
+     * specific rule is written first above, so an implementation preferring
+     * source order returns the other one and the value below differs.
+     *
+     * An earlier version asserted `trace.indexOf(trace[0])` against
+     * `trace.indexOf(trace[1])` to state that ordering. Those are 0 and 1 by
+     * definition, for any array and any implementation — a line that cannot
+     * fail, which reads as evidence while establishing nothing.
      */
-    expect(trace.indexOf(trace[0]!)).toBeLessThan(trace.indexOf(trace[1]!));
     expect((result as { entry?: { value: string } }).entry?.value).toBe(
       "#hover"
     );

@@ -70,7 +70,7 @@ function doc(): BlockDocument {
 describe("the cascade fetched for the panel", () => {
   it("reports the declarations the document authored", () => {
     register();
-    const trace = pageStyleTrace(
+    const cascade = pageStyleTrace(
       doc(),
       { breakpoints: BREAKPOINTS },
       undefined
@@ -79,14 +79,14 @@ describe("the cascade fetched for the panel", () => {
     // The POPULATION first. An empty trace satisfies every `toContain` below by
     // vacuity, and `undefined` is a documented answer here, so both have to be
     // excluded before anything is read out of it.
-    expect(trace).toBeDefined();
-    expect(trace ?? []).not.toHaveLength(0);
-    expect(trace?.map(entry => entry.property)).toContain("color");
+    expect(cascade).toBeDefined();
+    expect(cascade?.entries ?? []).not.toHaveLength(0);
+    expect(cascade?.entries.map(entry => entry.property)).toContain("color");
   });
 
   it("reports a breakpoint's own entry, which is what a badge names", () => {
     register();
-    const trace = pageStyleTrace(
+    const cascade = pageStyleTrace(
       doc(),
       { breakpoints: BREAKPOINTS },
       undefined
@@ -96,7 +96,7 @@ describe("the cascade fetched for the panel", () => {
     // has to arrive as its OWN entry carrying that breakpoint, or the badge
     // cannot say which breakpoint a value came from and the whole affordance
     // reduces to "set somewhere".
-    const breakpoints = trace?.map(entry => entry.breakpoint);
+    const breakpoints = cascade?.entries.map(entry => entry.breakpoint);
     expect(breakpoints).toContain("base");
     expect(breakpoints).toContain("md");
   });
@@ -125,7 +125,8 @@ describe("the cascade fetched for the panel", () => {
     expect(rendered.css).toBe(compiled.css);
     // And the trace belongs to that same compile rather than to a different one.
     expect(
-      pageStyleTrace(page, { breakpoints: BREAKPOINTS }, undefined)?.length
+      pageStyleTrace(page, { breakpoints: BREAKPOINTS }, undefined)?.entries
+        .length
     ).toBe(
       compilePageCss(page, { breakpoints: BREAKPOINTS, trace: true }).trace
         ?.length
@@ -153,13 +154,13 @@ describe("the cascade fetched for the panel", () => {
       ],
     } as unknown as BlockDocument;
 
-    const trace = pageStyleTrace(
+    const cascade = pageStyleTrace(
       hidden,
       { breakpoints: BREAKPOINTS },
       undefined
     );
 
-    expect(trace?.map(entry => entry.property)).toContain("color");
+    expect(cascade?.entries.map(entry => entry.property)).toContain("color");
   });
 });
 
@@ -206,13 +207,17 @@ describe("the SHARED inputs the page is compiled from", () => {
      * one. This asks the compiler.
      */
     register();
-    const trace = pageStyleTrace(classed(), { breakpoints: BREAKPOINTS }, site);
+    const cascade = pageStyleTrace(
+      classed(),
+      { breakpoints: BREAKPOINTS },
+      site
+    );
 
     // The population first: an empty trace satisfies every search below.
-    expect(trace).toBeDefined();
-    expect(trace ?? []).not.toHaveLength(0);
+    expect(cascade).toBeDefined();
+    expect(cascade?.entries ?? []).not.toHaveLength(0);
 
-    const fromClass = (trace ?? []).filter(
+    const fromClass = (cascade?.entries ?? []).filter(
       entry => entry.origin.kind === "class"
     );
     expect(fromClass).not.toHaveLength(0);
@@ -229,10 +234,10 @@ describe("the SHARED inputs the page is compiled from", () => {
     // one field a compile cannot proceed without. A host that passes only a site
     // sheet still gets an answer rather than silence.
     register();
-    const trace = pageStyleTrace(classed(), undefined, site);
-    expect((trace ?? []).some(entry => entry.origin.kind === "class")).toBe(
-      true
-    );
+    const cascade = pageStyleTrace(classed(), undefined, site);
+    expect(
+      (cascade?.entries ?? []).some(entry => entry.origin.kind === "class")
+    ).toBe(true);
   });
 
   it("applies the SITE's own fetch predicate on a site-only compile", () => {
@@ -278,8 +283,8 @@ describe("the SHARED inputs the page is compiled from", () => {
      */
     const urls = (entries: readonly { value: string }[] | undefined) =>
       (entries ?? []).filter(entry => entry.value.includes("cdn.example"));
-    expect(urls(allowed)).not.toHaveLength(0);
-    expect(urls(refused)).toHaveLength(0);
+    expect(urls(allowed?.entries)).not.toHaveLength(0);
+    expect(urls(refused?.entries)).toHaveLength(0);
   });
 
   it("answers undefined when nothing names a breakpoint to compile against", () => {
@@ -334,9 +339,11 @@ describe("a stored document that still needs reader repair", () => {
       ],
     } as unknown as BlockDocument;
 
-    const trace = pageStyleTrace(mixed, context, undefined);
-    expect(trace).toBeDefined();
-    expect((trace ?? []).map(entry => entry.property)).toContain("color");
+    const cascade = pageStyleTrace(mixed, context, undefined);
+    expect(cascade).toBeDefined();
+    expect((cascade?.entries ?? []).map(entry => entry.property)).toContain(
+      "color"
+    );
   });
 
   it("answers undefined for an envelope the format does not recognise", () => {
@@ -387,7 +394,7 @@ describe("a node the reader would withhold", () => {
       ],
     } as unknown as BlockDocument;
 
-    const trace = pageStyleTrace(
+    const cascade = pageStyleTrace(
       gated,
       { breakpoints: BREAKPOINTS },
       undefined
@@ -395,9 +402,11 @@ describe("a node the reader would withhold", () => {
 
     // The population first, then the property: an empty trace satisfies the
     // search below by vacuity.
-    expect(trace).toBeDefined();
-    expect(trace ?? []).not.toHaveLength(0);
-    expect((trace ?? []).map(entry => entry.value)).toContain("rebeccapurple");
+    expect(cascade).toBeDefined();
+    expect(cascade?.entries ?? []).not.toHaveLength(0);
+    expect((cascade?.entries ?? []).map(entry => entry.value)).toContain(
+      "rebeccapurple"
+    );
   });
 });
 
@@ -432,17 +441,17 @@ describe("a stored document with duplicate node ids", () => {
       ],
     } as unknown as BlockDocument;
 
-    const trace = pageStyleTrace(
+    const cascade = pageStyleTrace(
       duplicated,
       { breakpoints: BREAKPOINTS },
       undefined
     );
 
     // The population first: an empty trace satisfies the search by vacuity.
-    expect(trace).toBeDefined();
-    expect(trace ?? []).not.toHaveLength(0);
-    expect((trace ?? []).some(entry => entry.origin.kind === "node")).toBe(
-      true
-    );
+    expect(cascade).toBeDefined();
+    expect(cascade?.entries ?? []).not.toHaveLength(0);
+    expect(
+      (cascade?.entries ?? []).some(entry => entry.origin.kind === "node")
+    ).toBe(true);
   });
 });

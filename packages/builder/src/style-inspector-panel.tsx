@@ -34,6 +34,7 @@ import {
   findNode,
   isTokenRef,
   trimCssWhitespace,
+  walkNodes,
   type BreakpointId,
   type BreakpointSet,
   type ContrastResult,
@@ -47,6 +48,7 @@ import {
   type StyleTraceEntry,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   Accordion,
   AccordionContent,
@@ -166,18 +168,27 @@ export interface StyleInspectorPanelProps {
    */
   tokens?: SiteTokenSet;
   /**
-   * The declarations the compiler wrote for this document, in emission order.
+   * The declarations the compiler wrote for this document, WITH the tree they
+   * describe.
    *
    * What lets a control say where its value came from. Supplied by the host
    * rather than compiled here, and that is the point: the panel renders once per
    * control, so compiling in this component would walk the cascade per control
    * — the thing this file's own comments say must not happen.
    *
+   * The tree travels with the entries rather than being taken from
+   * {@link editor}, because the two are one answer. Read-time repair can change
+   * WHICH node owns an id: a duplicated id whose first node is condition-gated
+   * leaves a later node rendering under it, and a lookup in the raw document
+   * then returns a node with different classes, a different type and a different
+   * chain of ancestors than the declarations belong to. A visibly applied class
+   * is reported as unset, or attributed to the wrong tier.
+   *
    * Absent means the question was never asked, not that nothing is inherited: a
-   * host that supplies no trace gets no indicators, which is the honest answer
+   * host that supplies no cascade gets no indicators, which is the honest answer
    * for a surface that cannot compile.
    */
-  trace?: readonly StyleTraceEntry[];
+  cascade?: PageStyleCascade;
   /**
    * The site's breakpoints, for deciding which declarations are live.
    *
@@ -194,7 +205,7 @@ export function StyleInspectorPanel({
   tokens,
   state,
   breakpoint,
-  trace,
+  cascade,
   breakpoints,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
@@ -249,6 +260,38 @@ export function StyleInspectorPanel({
     );
   }
 
+  /*
+   * A block whose id is not unique cannot be styled, and saying so is the only
+   * honest answer this panel has.
+   *
+   * The compiler already reaches this conclusion for the same reason, and its
+   * words are worth keeping: a class is derived from the id, so two nodes
+   * sharing one share a class, and "writing corrupts a node the author did not
+   * touch". It refuses to emit their rules.
+   *
+   * The editor has to refuse for a second reason the compiler does not face. The
+   * cascade is read from the PREPARED tree, where read-time repair has already
+   * dropped the later duplicate — but gating runs first, so a gated first node
+   * leaves a LATER one owning that id there, while every lookup in the stored
+   * document returns the first. The controls would then show and write one
+   * block while the provenance dots describe another, and typing into a field
+   * would silently change a block that is not on screen.
+   *
+   * Refused rather than reconciled: pointing the controls at the rendered node
+   * would not help, because a write is addressed by id and would still land on
+   * the first. There is no edit here that means what it appears to mean.
+   */
+  if (editor.selectedId !== null && sharesItsId(editor, editor.selectedId)) {
+    return (
+      <div className="nx-style-inspector" data-empty="duplicate-id">
+        <p className="nx-inspector__note">
+          Another block on this page has the same id, so styles written here
+          could not be told apart. Give one of them a new id to style either.
+        </p>
+      </div>
+    );
+  }
+
   if (inspection === null) {
     return (
       <div className="nx-style-inspector" data-empty="no-selection">
@@ -281,7 +324,17 @@ export function StyleInspectorPanel({
   const subject =
     editor.selectedId === null
       ? undefined
-      : styleSubjectFor(editor.document.nodes, editor.selectedId);
+      : styleSubjectFor(
+          /*
+           * The cascade's OWN tree where there is one. Asking the raw document
+           * instead would answer about a node the declarations may not describe,
+           * and the fallback below is only for a panel with no cascade at all —
+           * where no indicator is drawn and the subject is read for the block
+           * type alone.
+           */
+          cascade?.nodes ?? editor.document.nodes,
+          editor.selectedId
+        );
   /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
@@ -295,12 +348,12 @@ export function StyleInspectorPanel({
     labelOf: id => breakpointLabel(breakpoints, id),
   };
   const provenanceOf: ProvenanceOf = leaf => {
-    // Absent means the question was never asked. A host that supplies no trace
+    // Absent means the question was never asked. A host that supplies no cascade
     // gets no indicators, which is the honest answer for a surface that cannot
     // compile — and not the same as "nothing is inherited".
-    if (trace === undefined || subject === undefined) return undefined;
+    if (cascade === undefined || subject === undefined) return undefined;
     return styleProvenance({
-      trace,
+      trace: cascade.entries,
       subject,
       // The control's own leaf, never the catalog key: two keys can write one
       // CSS property, and the trace records what was WRITTEN.
@@ -1582,6 +1635,25 @@ export function breakpointLabel(
     def => def.id === id && def.maxWidth === context.maxWidth
   );
   return survivor?.label ?? id;
+}
+
+/**
+ * Whether the stored document holds this id more than once.
+ *
+ * Asked of the STORED document rather than of the cascade's tree, which is the
+ * whole point: preparation drops the later duplicate, so the tree the
+ * declarations describe never contains one and could never report this.
+ *
+ * `walkNodes` rather than a walk written here — it is cycle-safe and
+ * depth-bounded, and it deliberately visits the same node object twice when it
+ * sits in two slots, which is precisely the shape being counted.
+ */
+function sharesItsId(editor: EditorState, id: string): boolean {
+  let seen = 0;
+  walkNodes(editor.document.nodes, node => {
+    if (node.id === id) seen += 1;
+  });
+  return seen > 1;
 }
 
 /** Which node, state and breakpoint the panel is editing, to say what DIFFERS. */

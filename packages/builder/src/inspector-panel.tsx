@@ -27,11 +27,10 @@ import {
   findNode,
   type BreakpointId,
   type BreakpointSet,
-  type StyleTraceEntry,
   type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
-import type { BlockResolver } from "@nextlyhq/blocks-react";
+import type { BlockResolver, PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   Checkbox,
   Input,
@@ -97,14 +96,16 @@ export interface InspectorPanelProps {
    */
   blocks?: BlockResolver;
   /**
-   * The declarations the compiler wrote, so the Style tab can say where a
-   * control's value came from.
+   * The declarations the compiler wrote and the tree they describe, so the Style
+   * tab can say where a control's value came from.
    *
    * Forwarded rather than compiled here for the reason the panel states: the
    * cascade is walked ONCE per document, by the host that already holds the
-   * breakpoints it must be compiled against.
+   * breakpoints it must be compiled against. The tree is carried with it so the
+   * panel resolves the selected node in the same tree the declarations belong
+   * to; see {@link StyleInspectorPanelProps.cascade}.
    */
-  trace?: readonly StyleTraceEntry[];
+  cascade?: PageStyleCascade;
   /** The site's breakpoints, which decide which of those declarations are live. */
   breakpoints?: BreakpointSet;
   /**
@@ -143,7 +144,7 @@ export function InspectorPanel({
   policy,
   styleState,
   breakpoint,
-  trace,
+  cascade,
   breakpoints,
   tokens,
   blocks,
@@ -283,7 +284,7 @@ export function InspectorPanel({
             policy={policy}
             state={styleState}
             breakpoint={breakpoint}
-            trace={trace}
+            cascade={cascade}
             breakpoints={breakpoints}
             tokens={tokens}
           />

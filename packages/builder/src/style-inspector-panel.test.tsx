@@ -1290,7 +1290,7 @@ describe("where a control's value came from", () => {
       ...over,
     }) as never;
 
-  function mountWithTrace(trace: readonly unknown[] | undefined) {
+  function mountWithTrace(entries: readonly unknown[] | undefined) {
     register({ color: true });
     const editor = editorFor(
       documentOf({ base: { [BASE_BREAKPOINT]: { color: "#111" } } })
@@ -1298,7 +1298,19 @@ describe("where a control's value came from", () => {
     render(
       <StyleInspectorPanel
         editor={editor}
-        {...(trace === undefined ? {} : { trace: trace as never })}
+        {...(entries === undefined
+          ? {}
+          : {
+              // The cascade's tree is this document's own here: the harness
+              // builds a document that needs no repair, so the prepared tree and
+              // the stored one are the same nodes. Passing the editor's is what
+              // makes these tests about the WIRING rather than about
+              // preparation, which has its own suite.
+              cascade: {
+                entries,
+                nodes: editor.document.nodes,
+              } as never,
+            })}
       />
     );
     return editor;
@@ -1336,18 +1348,115 @@ describe("where a control's value came from", () => {
     render(
       <StyleInspectorPanel
         editor={editor}
-        trace={
-          [
-            entry({
-              origin: { kind: "class", id: "cls-1", slug: "card" },
-            }),
-          ] as never
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              entry({
+                origin: { kind: "class", id: "cls-1", slug: "card" },
+              }),
+            ] as never,
+          } as never
         }
       />
     );
     const dot = dotIn("color");
     expect(dot?.getAttribute("data-provenance")).toBe("inherited");
     expect(dot?.getAttribute("aria-label")).toBe("Inherited from .card");
+  });
+
+  it("refuses to style a block whose id another block also uses", () => {
+    /*
+     * The case that makes the two trees disagree, and the one edit here that
+     * could not mean what it appears to mean.
+     *
+     * Gating runs before deduplication, so a gated first duplicate leaves a
+     * LATER node owning that id in the prepared tree while every lookup in the
+     * stored document returns the first. Controls and writes would describe one
+     * block while the dots describe another, and a write is addressed by id so
+     * it lands on the first regardless of which one the panel displayed.
+     *
+     * Asserted on BOTH halves: the refusal is shown AND no control is drawn, so
+     * a panel that rendered the note above a live field would fail this.
+     */
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/box", version: 1, props: {} },
+        { id: "a", type: "acme/box", version: 1, props: {} },
+      ],
+    } as never);
+
+    const { container } = render(<StyleInspectorPanel editor={editor} />);
+
+    expect(
+      container.querySelector('[data-empty="duplicate-id"]')
+    ).not.toBeNull();
+    expect(container.querySelector("[data-property]")).toBeNull();
+  });
+
+  it("still styles a block whose id is unique, which is the control", () => {
+    // Without this, refusing EVERY block would satisfy the case above and take
+    // the whole panel with it.
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    const { container } = render(<StyleInspectorPanel editor={editor} />);
+
+    expect(container.querySelector('[data-empty="duplicate-id"]')).toBeNull();
+    expect(container.querySelector("[data-property]")).not.toBeNull();
+  });
+
+  it("resolves the selected node in the CASCADE's tree, not the stored one", () => {
+    /*
+     * The two trees are not always the same document. Read-time repair changes
+     * which node owns an id — most sharply on a duplicated id, where gating can
+     * remove the first node and leave a later one rendering under it — and then
+     * the stored lookup returns a node whose classes, type and ancestors belong
+     * to something that is not on the page. A class the canvas visibly applies
+     * reads as set by nobody, or is attributed to the wrong tier.
+     *
+     * Modelled directly rather than through a repair fixture: the stored node
+     * applies NO class and the cascade's node applies `cls-1`, so the origin can
+     * only land if the subject was built from the cascade's tree. A repair
+     * fixture would test the preparation pipeline, which has its own suite, and
+     * would leave this wiring inferred rather than asserted.
+     */
+    register({ color: true });
+    const stored = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "a", type: "acme/box", version: 1, props: {} }],
+    } as never;
+    const rendered = [
+      {
+        id: "a",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        classes: ["cls-1"],
+      },
+    ];
+
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(stored)}
+        cascade={
+          {
+            nodes: rendered,
+            entries: [
+              entry({ origin: { kind: "class", id: "cls-1", slug: "card" } }),
+            ],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")?.getAttribute("aria-label")).toBe(
+      "Inherited from .card"
+    );
   });
 
   it("puts the same sentence in TEXT, for someone who tabs rather than points", () => {
@@ -1383,12 +1492,15 @@ describe("where a control's value came from", () => {
     render(
       <StyleInspectorPanel
         editor={editor}
-        trace={
-          [
-            entry({
-              origin: { kind: "class", id: "cls-1", slug: "card" },
-            }),
-          ] as never
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              entry({
+                origin: { kind: "class", id: "cls-1", slug: "card" },
+              }),
+            ] as never,
+          } as never
         }
       />
     );
@@ -1412,7 +1524,12 @@ describe("where a control's value came from", () => {
     // reading the panel.
     register({ color: true });
     const editor = editorFor(documentOf());
-    render(<StyleInspectorPanel editor={editor} trace={[] as never} />);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={{ entries: [], nodes: editor.document.nodes } as never}
+      />
+    );
     expect(dotIn("color")).toBeNull();
   });
 
@@ -1451,13 +1568,16 @@ describe("where a control's value came from", () => {
     render(
       <StyleInspectorPanel
         editor={editor}
-        trace={
-          [
-            entry({
-              property: "background-image",
-              value: 'url("/a.png")',
-            }),
-          ] as never
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              entry({
+                property: "background-image",
+                value: 'url("/a.png")',
+              }),
+            ] as never,
+          } as never
         }
       />
     );
@@ -1495,11 +1615,14 @@ describe("where a control's value came from", () => {
     render(
       <StyleInspectorPanel
         editor={editor}
-        trace={
-          [
-            entry({ property: "padding-block-start", value: "8px" }),
-            entry({ property: "padding-block-end", value: "12px" }),
-          ] as never
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              entry({ property: "padding-block-start", value: "8px" }),
+              entry({ property: "padding-block-end", value: "12px" }),
+            ] as never,
+          } as never
         }
       />
     );

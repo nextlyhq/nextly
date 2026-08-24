@@ -409,7 +409,7 @@ describe("what the inspector is told about provenance", () => {
     openEditor();
 
     expect(seen.inspector).toBeDefined();
-    expect(seen.inspector?.trace).toBeUndefined();
+    expect(seen.inspector?.cascade).toBeUndefined();
   });
 
   it("withholds it after a FAILED read, which is not a passing state", () => {
@@ -427,7 +427,7 @@ describe("what the inspector is told about provenance", () => {
     openEditor();
 
     expect(seen.inspector).toBeDefined();
-    expect(seen.inspector?.trace).toBeUndefined();
+    expect(seen.inspector?.cascade).toBeUndefined();
   });
 
   it("passes a trace once the read has ANSWERED", () => {
@@ -449,6 +449,6 @@ describe("what the inspector is told about provenance", () => {
     openEditor();
 
     expect(seen.inspector).toBeDefined();
-    expect(seen.inspector?.trace).toBeDefined();
+    expect(seen.inspector?.cascade).toBeDefined();
   });
 });
