@@ -231,17 +231,17 @@ jobs:
         if: always() && steps.analyse.conclusion != 'skipped'
         run: |
           {
-            echo "## Whole-repository scan — PR branch current state"
+            echo "## 📊 Whole-Repository Code Hygiene Summary"
             echo
             echo "Full dead-code, duplication, and health/complexity report for the"
             echo "PR branch as it stands now. Playground is excluded. Quality gate"
             echo "enforcement on introduced issues is performed by the Changed files job."
             echo
-          } >> "$GITHUB_STEP_SUMMARY"
-          for analysis in dead-code dupes health; do
-            pnpm exec fallow report --from "/tmp/head-$analysis.json" \
-              --format github-summary >> "$GITHUB_STEP_SUMMARY"
-          done
+            for analysis in dead-code dupes health; do
+              pnpm exec fallow report --from "/tmp/head-$analysis.json" --format github-summary
+            done
+          } > "/tmp/whole-repo-summary.md"
+          cat "/tmp/whole-repo-summary.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Post or update whole-repo sticky comment
         if: always() && steps.analyse.conclusion != 'skipped' && github.event.pull_request.number != null
@@ -253,12 +253,16 @@ jobs:
             const prNumber = context.issue.number;
             const commentMarker = '<!-- fallow:whole-repo-hygiene -->';
 
-            let commentBody = `${commentMarker}\n`;
-            if (process.env.GITHUB_STEP_SUMMARY && fs.existsSync(process.env.GITHUB_STEP_SUMMARY)) {
-              commentBody += fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, 'utf8');
-            } else {
-              commentBody += `## Whole-repository scan — PR branch current state\n\nFull scan completed for PR #${prNumber}.`;
+            let summaryContent = '';
+            if (fs.existsSync('/tmp/whole-repo-summary.md')) {
+              summaryContent = fs.readFileSync('/tmp/whole-repo-summary.md', 'utf8');
             }
+
+            if (!summaryContent.trim()) {
+              summaryContent = `## 📊 Whole-Repository Code Hygiene Summary\n\nFull scan completed for PR #${prNumber}.`;
+            }
+
+            const commentBody = `${commentMarker}\n${summaryContent}`;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
