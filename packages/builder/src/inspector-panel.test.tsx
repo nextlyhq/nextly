@@ -823,8 +823,24 @@ describe("the Advanced tab inside the entry's form", () => {
       fireEvent(screen.getByLabelText(label), event);
       expect(event.defaultPrevented, label).toBe(true);
     }
-    // And Enter still COMMITS, rather than merely being swallowed.
+    // Nothing was written, because nothing was edited — swallowing the key
+    // must not be mistaken for the commit being asserted below.
     expect(editor.apply).not.toHaveBeenCalled();
+
+    // And Enter COMMITS, rather than merely being swallowed. Asserted on an
+    // edit, because the check above passes on a panel that ignores the key
+    // entirely and would have read as proof of a commit it never made.
+    fireEvent.change(screen.getByLabelText("Value of attribute 1"), {
+      target: { value: "2" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Value of attribute 1"), {
+      key: "Enter",
+    });
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { attributes: { "data-x": "2" } },
+    });
   });
 
   it("reports a refused save instead of showing a value nothing stored", () => {
@@ -844,7 +860,9 @@ describe("the Advanced tab inside the entry's form", () => {
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
 
-    expect(screen.getByRole("alert").textContent).toContain("size limit");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be saved"
+    );
   });
 
   it("says nothing when the save DID land", () => {
@@ -1127,14 +1145,16 @@ describe("a refusal that no longer describes anything", () => {
     fireEvent.change(field, { target: { value: "enormous" } });
     fireEvent.blur(field);
     // The control on both tests below: the alert was there to be cleared.
-    expect(screen.getByRole("alert").textContent).toContain("size limit");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be saved"
+    );
     return field;
   };
 
   const sizeAlert = () =>
     screen
       .queryAllByRole("alert")
-      .find(each => each.textContent?.includes("size limit"));
+      .find(each => each.textContent?.includes("could not be saved"));
 
   it("clears when the field is put back to what it was", () => {
     // The first route: the draft matches what was loaded, so the commit stops
@@ -1224,5 +1244,58 @@ describe("an id the editor tidied on the way in", () => {
     }
     expect(node.cssId).toBe("hero");
     expect(node.attributes).toEqual({ "data-x": "2" });
+  });
+});
+
+describe("the Advanced tab stays mounted without staying on screen", () => {
+  /*
+   * Keeping the draft alive across a tab switch means keeping the panel
+   * mounted, and Radix ties presence to visibility: `TabsContent` renders
+   * `hidden={!present}` with `present` = `forceMount || isSelected`, so asking
+   * it to stay mounted also told it it was on screen. The Advanced fields
+   * appeared under Content and under Style.
+   *
+   * Retention and invisibility are therefore two claims, and the draft tests
+   * above only make the first. This makes the second.
+   */
+  const panelOf = (element: HTMLElement): HTMLElement => {
+    const panel = element.closest('[role="tabpanel"]');
+    if (panel === null) throw new Error("no tabpanel above the CSS id field");
+    return panel as HTMLElement;
+  };
+
+  it("is hidden under the other tabs, and shown under its own", () => {
+    mount({});
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    // The control: it really is on screen when chosen, so `hidden` below is
+    // a state it moved INTO rather than one it never left.
+    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(false);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(true);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Content" }));
+    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(true);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(false);
+  });
+
+  it("is out of the accessibility tree while hidden", () => {
+    /*
+     * `hidden` is the claim that matters to someone who cannot see the panel:
+     * a mounted-but-offscreen tab that a screen reader still announces is the
+     * same defect wearing different clothes. Asked by ROLE, which resolves
+     * against the accessibility tree rather than the DOM.
+     */
+    mount({});
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    expect(screen.queryByRole("textbox", { name: "CSS id" })).not.toBeNull();
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    expect(screen.queryByRole("textbox", { name: "CSS id" })).toBeNull();
+    // Still MOUNTED, which is the whole point of hiding it rather than
+    // removing it — the draft has to survive.
+    expect(screen.queryByLabelText("CSS id")).not.toBeNull();
   });
 });

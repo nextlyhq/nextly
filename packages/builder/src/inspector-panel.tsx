@@ -265,10 +265,17 @@ export function InspectorPanel({
           FORCE-MOUNTED, alone among the three. The other two hold controls that
           write on the spot; this one holds a draft, and unmounting it threw
           away both what the author had typed and the reason a refused row was
-          not saved. Radix keeps it hidden while another tab is chosen, so it is
-          out of the accessibility tree exactly as before.
+          not saved.
+
+          HIDDEN here rather than left to Radix, which ties the two together:
+          `TabsContent` renders `hidden={!present}` where `present` is
+          `forceMount || isSelected`, so asking it to stay mounted also tells it
+          it is on screen — and the Advanced fields appeared under Content and
+          Style as well. Keeping the mount and stating the visibility separately
+          is what was actually wanted, and `hidden` takes it out of the
+          accessibility tree exactly as an unmounted panel was.
         */}
-        <TabsContent value="advanced" forceMount>
+        <TabsContent value="advanced" forceMount hidden={tab !== "advanced"}>
           <AdvancedPanel
             // Keyed by node, so a half-typed attribute does not travel to the
             // next block the way an uncommitted name would. The panel holds

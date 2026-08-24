@@ -179,16 +179,21 @@ export function AdvancedPanel({
       ...(update.unset.length > 0 ? { unset: update.unset } : {}),
     } as Parameters<EditorState["apply"]>[0]);
     /*
-     * REFUSED ops leave the document alone — a value that pushes it past its
-     * byte limit is the reachable one — and `apply` says so by answering
+     * REFUSED ops leave the document alone, and `apply` says so by answering
      * `null`. Marking the attempt as written before knowing would tell the
      * effect above that the props it sees are this panel's own echo, so it
      * would stop re-reading the document and the field would go on showing a
      * value nothing stored.
+     *
+     * The message names no single cause, because `apply` reports none: it
+     * answers `null` for ANY refused op — a value past the document's byte
+     * limit, but equally an update to a node a concurrent edit or an undo has
+     * removed. Both are reachable from this panel, and telling an author their
+     * page is full when their block has gone sends them to fix the wrong thing.
      */
     if (applied === null) {
       setRefusal(
-        "That change could not be saved — the page is at its size limit. Shorten the value and try again."
+        "That change could not be saved. A very long value can push the page past its size limit; otherwise the block may have changed since you opened this tab."
       );
       return;
     }
