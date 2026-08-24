@@ -767,6 +767,9 @@ export class ZodGenerator {
 
   /**
    * Builds a Zod object schema from nested fields.
+   *
+   * Derives each nested field's schema from the canonical per-field generator,
+   * preserving field-level validation rules across top-level and nested contexts.
    */
   private buildNestedObjectSchema(fields: FieldConfig[]): string {
     const fieldSchemas: string[] = [];
@@ -774,82 +777,10 @@ export class ZodGenerator {
     for (const field of fields) {
       if (!isDataField(field) && !isPluginDataField(field)) continue;
 
-      // Skip fields without names
-      if (!("name" in field) || !field.name) continue;
-
-      const fieldName = field.name;
-      const isRequired = "required" in field && field.required;
-
-      // Recursively build field schema (simplified - reuse main logic)
-      let zodSchema: string;
-
-      if (isTextField(field)) {
-        zodSchema = this.buildTextSchema(field);
-      } else if (isTextareaField(field)) {
-        zodSchema = "z.string()";
-      } else if (isRichTextField(field)) {
-        zodSchema = "z.string()";
-      } else if (isEmailField(field)) {
-        zodSchema = "z.string().email()";
-      } else if (isPasswordField(field)) {
-        zodSchema = "z.string()";
-      } else if (isCodeField(field)) {
-        zodSchema = "z.string()";
-      } else if (isNumberField(field)) {
-        zodSchema = this.buildNumberSchema(field);
-      } else if (isCheckboxField(field)) {
-        zodSchema = "z.boolean()";
-      } else if (isDateField(field)) {
-        zodSchema = "z.string().datetime()";
-      } else if (isSelectField(field)) {
-        zodSchema = this.buildSelectSchema(field);
-      } else if (isRadioField(field)) {
-        zodSchema = this.buildRadioSchema(field);
-      } else if (isUploadField(field)) {
-        zodSchema = this.buildUploadSchema(field);
-      } else if (isRelationshipField(field)) {
-        zodSchema = this.buildRelationshipSchema(field);
-      } else if (isRepeaterField(field)) {
-        zodSchema = this.buildArraySchema(field);
-      } else if (isGroupField(field)) {
-        zodSchema = this.buildGroupSchema(field);
-      } else if (isJSONField(field)) {
-        zodSchema = "z.any()";
-      } else if (isChipsField(field)) {
-        zodSchema = this.buildChipsSchema(field);
-      } else {
-        // Same for a nested plugin type: skipping it would drop the value from
-        // the row's schema even though it is stored.
-        const contributed = pluginZodSchema(field);
-        if (contributed !== undefined) {
-          // Recorded like the top-level branch: an import used only by a
-          // nested field would otherwise be filtered out and the schema would
-          // name an identifier it never imported.
-          this.pluginExpressions.set(field, contributed);
-          this.recordEmission(field, contributed);
-          // Parenthesized for the same reason as the top-level branch: the
-          // `.optional()` below is appended as text.
-          zodSchema = `(${contributed})`;
-        } else {
-          const storageType = pluginStorageFieldType(field);
-          const asStorage =
-            storageType === undefined
-              ? null
-              : this.generateFieldSchema(
-                  asScalarStorageField(field, storageType)
-                );
-          if (asStorage === null) continue;
-          // The nested builder emits `name: schema` itself, so the line the
-          // shared path produced is reused verbatim.
-          fieldSchemas.push(asStorage.trim().replace(/,$/, ""));
-          continue;
-        }
+      const fieldSchema = this.generateFieldSchema(field);
+      if (fieldSchema) {
+        fieldSchemas.push(fieldSchema.trim().replace(/,$/, ""));
       }
-
-      // Apply optional if not required
-      const finalSchema = isRequired ? zodSchema : `${zodSchema}.optional()`;
-
-      fieldSchemas.push(`${fieldName}: ${finalSchema}`);
     }
 
     if (fieldSchemas.length === 0) {
