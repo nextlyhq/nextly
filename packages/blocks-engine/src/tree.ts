@@ -76,12 +76,16 @@ export interface WalkOptions {
   /** Reported as the parent of the top-level nodes. */
   parent?: BlockNode;
   /**
-   * Stop after visiting this many nodes.
+   * Stop after reading this many entries.
    *
-   * A bound the caller applies in its own callback is not this: the callback
-   * can decline to do work, but the walk has already reached every remaining
-   * node, so a corrupt document still costs time proportional to the whole
-   * stored tree. This ends the traversal.
+   * ENTRIES, not nodes visited: a forest can begin with a long run of nulls or
+   * primitives that never reach the callback, and a bound counting callbacks
+   * cannot see them. Reading is the work being bounded, and `selectNodes`
+   * bounds the same quantity so a caller reasons about one budget.
+   *
+   * A bound the caller applies in its own callback is not this either: the
+   * callback can decline to do work, but the walk has already reached every
+   * remaining entry. This ends the traversal.
    */
   maxNodes?: number;
   /**
@@ -224,10 +228,22 @@ export function walkNodes(
     { kind: "list", nodes, index: 0, parent: options.parent },
   ];
 
-  let visited = 0;
+  // Every entry READ spends the budget, not every entry that turned out to be a
+  // node. Reading is the work being bounded, so a forest beginning with a long
+  // run of nulls or primitives would otherwise be traversed in full while the
+  // budget sat untouched — the callback never fires, and a bound counting
+  // callbacks cannot see it. `selectNodes` bounds the same quantity, for the
+  // same reason, and the two agreeing is what lets a caller reason about one
+  // budget rather than two.
+  //
+  // Checked BEFORE taking the next entry rather than after using it, so
+  // "entries read" is exactly what the number means.
+  let read = 0;
   for (;;) {
+    if (read >= limit) return;
     const entry = takeNext(stack, onPath);
     if (entry === undefined) return;
+    read += 1;
 
     if (!isWalkableNode(entry.node)) continue;
     if (onPath.has(entry.node)) {
@@ -237,12 +253,6 @@ export function walkNodes(
 
     onPath.add(entry.node);
     fn(entry.node, entry.parent);
-    visited += 1;
-    // Returning rather than breaking out of the descent leaves the stack
-    // unread, which is the point: the budget bounds the traversal, not just the
-    // work done per node.
-    if (visited >= limit) return;
-
     stack.push({ kind: "leave", node: entry.node });
     pushChildren(stack, entry.node);
   }

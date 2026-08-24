@@ -171,6 +171,31 @@ describe("walkNodes / findNode / locateNode", () => {
     expect(readsPastTheBudget).toBe(0);
   });
 
+  it("spends the budget on MALFORMED entries too, not only on nodes visited", () => {
+    // A forest can begin with a long run of nulls or primitives that never
+    // reach the callback. A bound counting callbacks cannot see them, so the
+    // whole array is read while the budget sits untouched — and the previous
+    // test cannot distinguish that, because its roots are all valid objects.
+    let readsPastTheBudget = 0;
+    const roots: unknown[] = Array.from({ length: 200 }, () => null);
+    const watched = new Proxy(roots, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key) && Number(key) >= 10) {
+          readsPastTheBudget += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    }) as unknown as BlockNode[];
+
+    let visited = 0;
+    walkNodes(watched, () => visited++, { maxNodes: 10 });
+
+    // Nothing was walkable, so the callback never ran — and the walk still
+    // stopped, which is the property a callback count cannot express.
+    expect(visited).toBe(0);
+    expect(readsPastTheBudget).toBe(0);
+  });
+
   it("still accepts a bare parent NODE as its third argument", () => {
     // The shape this function published before it took options. A caller
     // compiled against it passes a node, and nothing at runtime would reject
