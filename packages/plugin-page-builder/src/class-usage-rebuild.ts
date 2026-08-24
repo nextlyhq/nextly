@@ -83,6 +83,25 @@ export interface PageUsageStore {
     page: number;
     sort: string;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
+  /**
+   * Write the given fields to the LIVE row named by `id`.
+   *
+   * "Live row" is the load-bearing part, and an implementation that forwards
+   * straight to a collection update does not satisfy it. On a `status: true`
+   * collection with drafts, an update that omits `status` is stored as a
+   * WORKING DRAFT and the published row is left untouched — so a plain forward
+   * would accumulate this field onto an author's pending edit, leave the stale
+   * published record exactly as it was, and report a repair that never reached
+   * the row the rebuild had read.
+   *
+   * It must also not promote or overwrite a draft that is already there. An
+   * author's unpublished work is not this walk's to touch; the field being
+   * repaired is bookkeeping the author never wrote.
+   *
+   * Declared here rather than assumed because this is a PORT — the caller
+   * supplies it, so the requirement has to travel with the type or it travels
+   * nowhere.
+   */
   update(args: {
     collection: string;
     id: string;

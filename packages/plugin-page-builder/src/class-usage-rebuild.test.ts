@@ -280,6 +280,25 @@ describe("rebuildClassUsage", () => {
     });
   });
 
+  it("writes by ID and field only, leaving HOW to reach the live row to the store", () => {
+    // The rebuild cannot route its own write: on a drafts-enabled collection an
+    // update that omits `status` is stored as a working draft and the published
+    // row is untouched, so a store forwarding straight to a collection update
+    // would repair an author's pending edit and leave the stale live record.
+    //
+    // That requirement belongs to the port, and this pins the half the rebuild
+    // owns: it names the row and the field, and adds nothing that would make
+    // the write mean something else. A `status` smuggled in here would publish
+    // a draft nobody asked to publish.
+    const { store, writes } = storeOf([[page("a", ["hero"])]]);
+
+    return rebuildClassUsage({ store }).then(() => {
+      expect(writes).toHaveLength(1);
+      expect(Object.keys(writes[0]?.data ?? {})).toEqual(["usedClasses"]);
+      expect(writes[0]?.id).toBe("a");
+    });
+  });
+
   it("lets a store failure propagate rather than reporting a clean rebuild", () => {
     // `classIdsUsedBy` is total, so a failure here is the store being
     // unreachable or refusing the write. Reporting a completed rebuild that
