@@ -93,6 +93,25 @@ describe("walkNodes / findNode / locateNode", () => {
     expect(visited).toEqual(["a"]);
   });
 
+  it("does not hand an ARRAY to the callback as though it were a node", () => {
+    // `typeof [] === "object"`, so a guard written as a type test alone lets an
+    // array through. Nothing then throws, which is the difficulty: every caller
+    // reads its fields as `undefined` and carries on. The id-uniqueness check
+    // behind this compares `undefined` against `undefined` and reports a
+    // collision between two malformed entries, or none at all.
+    const visited: unknown[] = [];
+    walkNodes(
+      [
+        [{ id: "buried" }],
+        { id: "real", type: "t", version: 1, props: {} },
+      ] as unknown as BlockNode[],
+      n => visited.push(n)
+    );
+
+    expect(visited.some(n => Array.isArray(n))).toBe(false);
+    expect(visited.map(n => (n as BlockNode).id)).toEqual(["real"]);
+  });
+
   it("still visits a repeated ID that is a DISTINCT object", () => {
     // The control for the cycle guard, and the boundary of what it costs. It
     // skips a node OBJECT already visited, not an id already seen — two sibling

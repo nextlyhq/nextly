@@ -122,7 +122,15 @@ export function walkNodes(
     const entry = stack.pop();
     if (entry === undefined) break;
     const node = entry.node;
-    if (typeof node !== "object" || node === null) continue;
+    // `Array.isArray` is checked SEPARATELY because `typeof [] === "object"`,
+    // so the type test alone hands an array to `fn` as though it were a node.
+    // Every caller then reads its fields as `undefined` rather than failing:
+    // an id-uniqueness check sees `undefined` and compares it against other
+    // `undefined`s, a class reader finds no classes, a renderer finds no type.
+    // Silence in each case, from a value none of them can act on.
+    if (typeof node !== "object" || node === null || Array.isArray(node)) {
+      continue;
+    }
     if (seen.has(node)) continue;
     seen.add(node);
 
