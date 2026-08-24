@@ -79,6 +79,13 @@ export default function CreateEmailProviderPage() {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SettingsLayout
+          title="New Email Provider"
+          description="Configure a new email delivery provider"
+          crumb="New Email Provider"
+          parentCrumb={{
+            label: "Email Providers",
+            href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
+          }}
           actions={
             <>
               {/* Test Connection is only meaningful once a provider has been

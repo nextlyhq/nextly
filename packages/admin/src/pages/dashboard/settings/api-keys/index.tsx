@@ -101,6 +101,9 @@ const ApiKeysPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SettingsLayout
+          title="API Keys"
+          description="Manage secure access keys for API integrations"
+          crumb="API Keys"
           actions={
             <Button
               size="md"

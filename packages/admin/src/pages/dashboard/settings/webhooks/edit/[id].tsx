@@ -35,6 +35,17 @@ import {
   type WebhookFormValues,
 } from "@admin/lib/webhook-validation";
 
+/**
+ * This page renders the settings chrome in several branches — loading,
+ * error and the resolved document — and its identity is the same in all of
+ * them. Stated once here so the branches cannot drift apart.
+ */
+const WEBHOOK_PAGE = {
+  title: "Edit Webhook",
+  description: "Update the endpoint, events, and headers",
+  crumb: "Edit Webhook",
+  parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
+} as const;
 const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   const { data: webhook, isLoading, isError, error } = useWebhook(id);
   const { mutate: doUpdate, isPending } = useUpdateWebhook();
@@ -286,7 +297,7 @@ export default function EditWebhookPage() {
   if (!id) {
     return (
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...WEBHOOK_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
               Invalid endpoint ID. Please go back and try again.
@@ -305,7 +316,7 @@ export default function EditWebhookPage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...WEBHOOK_PAGE}>
           <EditWebhookContent id={id} />
         </SettingsLayout>
       </PageContainer>
