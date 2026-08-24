@@ -463,7 +463,12 @@ async function mintForSingle(
   // read below, so a refused caller reaches neither.
   refuseApiKeyMint(auth);
   const { user } = await callerFor(auth);
-  await assertSinglePreviewable(single, locale, user);
+  await assertSinglePreviewable(single, locale, user, {
+    // The route above ran the coarse gate for `update` on this Single, so
+    // repeating it here would ask a question already answered. The preview
+    // RENDER passes `false`: it has no route gate at all.
+    routeAuthorized: true,
+  });
 
   const declaration = await singlePreviewDeclarationFor(single);
 

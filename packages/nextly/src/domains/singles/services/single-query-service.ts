@@ -992,6 +992,10 @@ export class SingleQueryService extends BaseService {
       options.depth,
       {
         enforceFieldAccess: enforceRelatedFieldAccess,
+        // Beside the flag, never folded into `user`: a preview judges a related
+        // row's fields as the sharer while every hook goes on seeing the
+        // anonymous visitor who is actually asking.
+        fieldAccessUser: options.fieldAccessUser,
         // Always on, unlike field redaction: the authorization view must not be
         // shown a related row the response is going to withhold, or its rule
         // approves the document and the read's side effects run before the
@@ -1064,6 +1068,10 @@ export class SingleQueryService extends BaseService {
           // caller travels down to reach the related row's own rules.
           access: {
             enforceFieldAccess: enforceRelatedFieldAccess,
+            // Beside the flag, never folded into `user`: a preview judges a related
+            // row's fields as the sharer while every hook goes on seeing the
+            // anonymous visitor who is actually asking.
+            fieldAccessUser: options.fieldAccessUser,
             enforceCollectionAccess: true,
             user: options.user as Record<string, unknown> | undefined,
             overrideAccess: options.overrideAccess,
@@ -2772,6 +2780,11 @@ export class SingleQueryService extends BaseService {
           enforceFieldAccess: access.enforceFieldAccess,
           enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
+          // Beside `user`, never folded into it. Dropped here, every top-level
+          // relationship — live and working-draft alike — is judged as the
+          // anonymous bearer while the document above it is judged as the
+          // sharer, which is the disclosure the identity exists to close.
+          fieldAccessUser: access.fieldAccessUser,
           overrideAccess: access.overrideAccess,
           // Narrows that bypass per RELATED collection. Absent means unchanged;
           // dropping it here would silently restore the full bypass.

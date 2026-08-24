@@ -117,6 +117,17 @@ export async function applyMediaTrustBound(
 export interface CallerOptions {
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
+  /**
+   * Whether the caller asked for field-level read rules to be enforced despite
+   * being otherwise trusted, and whose rules to judge by.
+   *
+   * The pair travels together because neither means anything alone: an identity
+   * with nothing asking for enforcement is ignored, and enforcement naming
+   * nobody judges the anonymous caller. See
+   * {@link RelatedRowReadContext.fieldAccessUser}.
+   */
+  enforceFieldAccess?: boolean;
+  fieldAccessUser?: Record<string, unknown>;
   trusted?: (collection: string) => boolean;
   authenticatedScope?: AuthenticatedScope;
 }
@@ -135,6 +146,12 @@ export function expansionAccess(options: CallerOptions): RelatedRowReadContext {
   return {
     user: options.user,
     overrideAccess: options.overrideAccess,
+    // Carried for the reason this function exists at all: an expansion that
+    // rebuilt its own context and dropped these would be a VALID context
+    // describing a different caller — one whose related rows are judged by
+    // nobody. That is silent, and it is the direction that leaks.
+    enforceFieldAccess: options.enforceFieldAccess,
+    fieldAccessUser: options.fieldAccessUser,
     trusted: options.trusted,
     authenticatedScope: options.authenticatedScope,
   };
