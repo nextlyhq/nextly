@@ -113,6 +113,33 @@ export function useEditorState({
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
   const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
 
+  /**
+   * The document as it stands NOW, for everything a LATER event reaches.
+   *
+   * Every callback below closes over the render it was made in. Most callers
+   * take theirs from the current render and the distinction never shows, but
+   * two paths do not, and both read this ref rather than the state.
+   *
+   * `select`, because a gesture is handled by whatever handler the last render
+   * bound and the selection rules need the document that is current when the
+   * click lands. Closing over it resolves a range against a stale tree, which
+   * is a wrong selection rather than a missing one.
+   *
+   * `run`, because a panel that commits from an unmount cleanup necessarily
+   * holds an older callback: the component going away does not render again, so
+   * its closure predates the very edit that removed it. Folding onto that older
+   * document did not merely apply a stale edit — it SUCCEEDED where it should
+   * have been refused, the node still being present in that copy, and then
+   * wrote the whole document back. Deleting a block with an unsaved panel open
+   * restored the block and discarded everything since. Read through the ref the
+   * same call is refused, which is what callers are already written to handle.
+   *
+   * The hazard was named here for `select` alone and left on the op path, which
+   * is the more expensive of the two.
+   */
+  const latestDocument = useRef(document);
+  latestDocument.current = document;
+
   const undoStack = useRef<BuilderOp[][]>([]);
   const redoStack = useRef<BuilderOp[][]>([]);
   // Mirrors the stack lengths so the flags below are STATE and re-render when
@@ -160,9 +187,9 @@ export function useEditorState({
       // Nothing to do, and nothing to record. An empty group must NOT push an
       // entry: that would be an undo that appears to do nothing, which reads as
       // the history being broken.
-      if (ops.length === 0) return document;
+      if (ops.length === 0) return latestDocument.current;
 
-      let working = document;
+      let working = latestDocument.current;
       const inverses: BuilderOp[] = [];
       for (const op of ops) {
         let applied;
@@ -204,6 +231,10 @@ export function useEditorState({
         undo: undoStack.current.length,
         redo: redoStack.current.length,
       });
+      // Ahead of `setDocument`, which does not take effect until the next
+      // render: two ops applied in one tick must see each other, or the second
+      // is folded onto the document the first already replaced.
+      latestDocument.current = applied.document;
       setDocument(applied.document);
 
       // A selection pointing at a node this edit removed would leave every
@@ -215,7 +246,11 @@ export function useEditorState({
 
       return applied.document;
     },
-    [document, limits]
+    // NOT `document`: it is read through the ref above, so depending on it here
+    // would rebuild these callbacks every edit for a value none of them close
+    // over. Stable identity is also the point — a stale `run` is now the same
+    // `run`, folding onto the tree as it stands.
+    [limits]
   );
 
   const apply = useCallback((op: BuilderOp) => run([op], "new"), [run]);
@@ -242,18 +277,6 @@ export function useEditorState({
     setDepths(d => ({ ...d, redo: redoStack.current.length }));
     run(group, "undo");
   }, [run]);
-
-  /*
-   * The document is read from a REF rather than closed over.
-   *
-   * A gesture is handled by whatever handler the last render bound, and the
-   * selection rules need the document that is current when the click lands —
-   * not the one that was current when the handler was made. Closing over it
-   * would resolve a range against a stale tree, which is a wrong selection
-   * rather than a missing one.
-   */
-  const latestDocument = useRef(document);
-  latestDocument.current = document;
 
   const select = useCallback(
     (id: string | null, mode: SelectionMode = "replace") =>

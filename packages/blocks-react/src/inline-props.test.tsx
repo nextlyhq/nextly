@@ -14,7 +14,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
-import { PROP_ATTRIBUTE } from "./block-boundary";
+import { NODE_ID_ATTRIBUTE, PROP_ATTRIBUTE } from "./block-boundary";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
@@ -177,5 +177,66 @@ describe("the declaration and the marking must agree", () => {
         `${blockName} declares "${propName}" inline but never marks an element for it`
       ).toContain(`${PROP_ATTRIBUTE}="${propName}"`);
     }
+  });
+});
+
+describe("a document cannot forge the editor's own markers", () => {
+  const forged = (attributes: Record<string, string>): BlockDocument =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Hello" },
+          attributes,
+        },
+      ],
+    }) as unknown as BlockDocument;
+
+  it("drops an authored marker while rendering FOR the editor", async () => {
+    /*
+     * All three markers share the editor's namespace and all three matter: the
+     * node id decides which block a click selects, the prop marker decides
+     * which property inline editing commits into, and the canvas treats a
+     * chrome ancestor as its own UI and ignores clicks inside it. A document can
+     * arrive from an import or a script, so the panel that offers this field is
+     * not the only way one is written.
+     */
+    const markup = await html(
+      forged({
+        [NODE_ID_ATTRIBUTE]: "somewhere-else",
+        [PROP_ATTRIBUTE]: "another-prop",
+        "data-nx-chrome": "true",
+      }),
+      true
+    );
+
+    expect(markup).toContain(`${NODE_ID_ATTRIBUTE}="n1"`);
+    expect(markup).not.toContain("somewhere-else");
+    expect(markup).not.toContain("another-prop");
+    expect(markup).not.toContain("data-nx-chrome");
+  });
+
+  it("keeps an ordinary author attribute beside them", async () => {
+    // The control: the namespace is reserved, `data-` is not.
+    const markup = await html(
+      forged({ "data-analytics": "hero", [PROP_ATTRIBUTE]: "another-prop" }),
+      true
+    );
+    expect(markup).toContain('data-analytics="hero"');
+    expect(markup).not.toContain("another-prop");
+  });
+
+  it("leaves them alone on a PUBLISHED page", async () => {
+    /*
+     * Off the editor there is no marker to protect and no hit-testing to
+     * confuse: these are ordinary author data, and dropping them would be this
+     * system taking a namespace it is not using.
+     */
+    const markup = await html(forged({ "data-nx-chrome": "true" }), false);
+    expect(markup).toContain('data-nx-chrome="true"');
   });
 });

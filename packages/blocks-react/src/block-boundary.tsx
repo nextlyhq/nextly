@@ -85,14 +85,51 @@ function slotNodes(node: BlockNode, name: string): BlockNode[] {
 const ALLOWED_ATTRIBUTE_NAMES = new Set(["id", "title", "lang", "dir"]);
 
 /**
+ * A name HTML can carry, which is the XML `Name` production.
+ *
+ * Mirrors React's own attribute-name validation rather than a narrower rule of
+ * this project's own: refusing a name React WOULD render is a false alarm on
+ * correct input, and this predicate is what an editor asks before telling an
+ * author their attribute is unusable. The unicode ranges are that production's,
+ * so a non-ASCII `data-` name is accepted exactly where the DOM accepts it.
+ */
+/** The first character of an XML `Name`. */
+const NAME_START =
+  "[:A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD]";
+
+/**
+ * Every LATER character, combining ranges first.
+ *
+ * Order matters only to a reader: with a base character immediately before a
+ * combining range, the two read as one combined character rather than as two
+ * alternatives, and a linter says so. Leading with the combining ranges keeps
+ * the set identical and the intent unambiguous.
+ */
+const NAME_CHAR =
+  "[\\u0300-\\u036F\\u203F-\\u2040\\u00B7\\-.0-9:A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD]";
+
+const ATTRIBUTE_NAME = new RegExp(`^${NAME_START}${NAME_CHAR}*$`, "u");
+
+/**
  * Whether an author-supplied attribute may reach the DOM.
  *
  * `data-*` and `aria-*` are open by prefix: both are namespaces defined to carry
  * author data and accessibility semantics, neither can name a destination or
  * execute anything, and closing them would defeat the feature the field exists
  * for. `role` is the ARIA sibling of `aria-*` and belongs with them.
+ *
+ * EXPORTED so an editor offering this field can ask it rather than restate it.
+ * The list above already says the render-safe set lives here and only here; a
+ * second copy in an editor would drift, and it would drift silently in the
+ * worse direction — the editor accepting a name this loop then skips, so the
+ * author sets an attribute, sees it saved, and never sees it on the page.
  */
-function isAllowedAttribute(name: string): boolean {
+export function isAllowedAttribute(name: string): boolean {
+  // SYNTAX first, because the open prefixes below admit anything after them.
+  // `data-x foo` and `data-x"` start with `data-` and are not attribute names:
+  // React refuses them and renders nothing, so a check that stopped at the
+  // prefix let a value be stored that could never appear on a page.
+  if (!ATTRIBUTE_NAME.test(name)) return false;
   const lower = name.toLowerCase();
   if (lower === "role") return true;
   if (lower.startsWith("data-") || lower.startsWith("aria-")) return true;
@@ -125,6 +162,16 @@ export const NODE_ID_ATTRIBUTE = "data-nx-node";
  * either alone addresses nothing.
  */
 export const PROP_ATTRIBUTE = "data-nx-prop";
+
+/**
+ * The prefix every marker the editor puts on a rendered element shares.
+ *
+ * A NAMESPACE rather than a list, because a list is a thing to keep in sync
+ * and this one already fell behind once: three markers exist and only the
+ * node id was protected here. Anything a future overlay needs is covered by
+ * construction.
+ */
+export const EDITOR_NAMESPACE = "data-nx-";
 
 /**
  * Builds the `markProp` a block spreads onto the element carrying a value.
@@ -176,9 +223,6 @@ function withNodeAttributes(
   if (typeof output.type !== "string") return output;
 
   const extra: Record<string, string> = {};
-  // Written before the author's own attributes so it cannot be overwritten by
-  // one: the editor's address for a node is not a value the document may set.
-  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = node.id;
   if (attributes) {
     for (const [name, value] of Object.entries(attributes)) {
       if (!isAllowedAttribute(name)) continue;
@@ -191,12 +235,35 @@ function withNodeAttributes(
       // document can hold anything; a non-string would be handed to React as a
       // prop value it never expected.
       if (typeof value !== "string") continue;
+      /*
+       * The editor's own namespace is not the document's to write, and only
+       * while this render is FOR the editor: on a published page these are
+       * ordinary author data and none of this system's business.
+       *
+       * Filtered HERE rather than trusted to the panel that offers the field.
+       * A document can arrive from an import or a script, and the marker it
+       * would overwrite decides which block a click selects and which
+       * property inline editing commits into.
+       */
+      if (nodeAttribute && key.startsWith(EDITOR_NAMESPACE)) continue;
       extra[key] = value;
     }
   }
   // The modelled field wins over an attribute of the same name: `cssId` is what
   // the editor writes, and the attribute bag is the escape hatch beside it.
   if (cssId !== undefined) extra.id = cssId;
+  /*
+   * LAST, so it cannot be overwritten. This was written first, with a comment
+   * saying that made it safe — the opposite of what the code did: the author's
+   * loop ran afterwards and assigning the same key simply replaced it. A
+   * document could therefore hand every block the same address, or one block
+   * another's, and the editor's hit-testing reads exactly this value to decide
+   * which block was clicked.
+   *
+   * It is the editor's address for a node, not a value the document may set, so
+   * the position enforces that rather than a note asking the loop above to.
+   */
+  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = node.id;
 
   return Object.keys(extra).length > 0 ? cloneElement(output, extra) : output;
 }
