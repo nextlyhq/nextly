@@ -1093,6 +1093,67 @@ test.describe("spacing values on the canvas", () => {
     await expect(page.locator(band("margin", "right"))).toHaveCount(1);
   });
 
+  test("keeps the band beside an edge its transform leaves STATIONARY", async ({
+    page,
+  }) => {
+    /*
+     * A transform is applied about `transform-origin`, so a translate composed
+     * with a scale can pin one edge and move only the other. Measured on a 100px
+     * block: `translateY(-25px) scaleY(0.5)` computes to
+     * `matrix(1, 0, 0, 0.5, 0, -25)` and renders its top edge at exactly the
+     * position layout gave it, while plain `scaleY(0.5)` moves that edge by 25.
+     * The shift below is derived from the block's measured height for that
+     * reason — the pinning is a relationship between the two, not a number.
+     *
+     * Reachable with `transform` ALONE, which is a catalog property —
+     * `transform-origin` is not, and an earlier version of this rule concluded
+     * from that fact that a pinned edge could not arise. It can; composing two
+     * functions is enough.
+     *
+     * So the top band must survive while the bottom one goes, and an answer per
+     * axis fails this while satisfying every other transform test in the file.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      (node as HTMLElement).style.marginTop = "28px";
+    });
+    await block.click();
+
+    // CONTROL: both vertical bands draw before the transform.
+    await expect(page.locator(band("margin", "top"))).toHaveCount(1);
+    await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
+
+    const pinned = await block.evaluate(node => {
+      const el = node as HTMLElement;
+      const before = el.getBoundingClientRect();
+      /*
+       * The shift is DERIVED from the block's own height rather than written as
+       * a constant. With the initial origin at the box's centre, halving the
+       * height draws the top edge down by a quarter of it, so the translate that
+       * cancels that is a function of the height — a literal would pin the edge
+       * only for a block that happened to be the size the literal was written
+       * for, and the seed's is not.
+       */
+      const shift = (before.height / 2) * (1 - 0.5);
+      el.style.transform = `translateY(${String(-shift)}px) scaleY(0.5)`;
+      return Math.abs(el.getBoundingClientRect().top - before.top) < 0.5;
+    });
+    // The fixture's separating property, asserted rather than assumed: layout
+    // that drifted so the top edge DID move would leave this test passing on the
+    // axis rule it exists to reject.
+    expect(pinned).toBe(true);
+
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    await expect(page.locator(band("margin", "top"))).toHaveCount(1);
+    await expect(page.locator(band("margin", "bottom"))).toHaveCount(0);
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {

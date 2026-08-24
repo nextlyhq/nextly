@@ -217,55 +217,66 @@ export interface RenderedScale {
   /** False for a rotation, a skew, a reflection, or a collapse to zero. */
   readonly describable: boolean;
   /**
-   * The axes the element's OWN transform moves or rescales, if any.
+   * The physical edges the element's OWN transform draws away from their layout
+   * position.
    *
    * Separated from the composed scale because the two do OPPOSITE things to a
    * margin. **A transform does not affect layout.** An ancestor's transform
    * scales the whole subtree it lays out, gaps included, so a margin inside one
    * really does render smaller and `x`/`y` above are right to apply. The
-   * element's own transform moves only its rendering, while the space its
-   * margin reserves stays where the untransformed box left it.
+   * element's own transform moves only its rendering, while the space its margin
+   * reserves stays where the untransformed box left it — measured, a 100px block
+   * with `margin-bottom: 20px` under `scale(2)` leaves a gap of MINUS eighty
+   * pixels, drawn over the neighbour the margin is holding away.
    *
-   * Measured on a 100px block with a 20px margin, reading the gap between the
-   * rendered border edge and the next sibling on each axis:
+   * PER EDGE, and the question asked is the direct one: does this edge RENDER
+   * where it LAYS OUT. Coarser answers were tried and each was a different wrong
+   * one. Reading whether a transform is DECLARED blanks the margins of every
+   * resting hover state, since `scale(1)`, `translate(0)` and `rotate(360deg)`
+   * all compute to a non-`none` matrix that moves nothing. Reading it per AXIS
+   * blanks a valid band whenever one edge is pinned: measured,
+   * `translateY(-25px) scaleY(0.5)` on a 100px block computes to
+   * `matrix(1, 0, 0, 0.5, 0, -25)` and renders its top edge exactly where the
+   * layout put it while moving the bottom one, and `transform` is a catalog
+   * property so an author reaches that with no `transform-origin` at all.
    *
-   * | transform on the block | vertical gap | horizontal gap |
-   * | --- | --- | --- |
-   * | none | 20 | 20 |
-   * | `scale(1)`, `translate(0)`, `rotate(360deg)` | 20 | 20 |
-   * | `translateY(40px)` | **−20** | 20 |
-   * | `translateX(30px)` | 20 | **−10** |
-   * | `scaleY(0.5)` | **70** | 20 |
-   * | `scaleX(0.5)` | 20 | **70** |
-   *
-   * Two things follow, and each rules out a simpler answer.
-   *
-   * PER AXIS, because a transform on one axis leaves the other's margin exactly
-   * where it was — and a lift like `translateY(-4px)` is a common hover state
-   * whose left and right bands stay perfectly good.
-   *
-   * By the MATRIX, not by the presence of a declaration. `scale(1)`,
-   * `translate(0)`, `translateY(0)` and `rotate(360deg)` all compute to a
-   * non-`none` transform and all serialize to exactly
-   * `matrix(1, 0, 0, 1, 0, 0)`; they move nothing, and they are the resting
-   * state of every hover animation, so treating them as displacement would
-   * blank the margins of a large share of real pages.
-   *
-   * The negatives in that table are why an axis this reports is DECLINED rather
-   * than corrected: the block is drawn over the neighbour its margin is holding
-   * away, so no rectangle beside the rendered border edge describes it and no
-   * factor applied to `20` produces one.
+   * There is no finer grain below an edge, which is the point of asking the
+   * question this way rather than refining a proxy again.
    */
-  readonly selfMoved: { readonly x: boolean; readonly y: boolean };
+  readonly selfMoved: MovedEdges;
 }
 
-const NOT_MOVED = { x: false, y: false } as const;
+/** Which physical edges are drawn away from where they were laid out. */
+export interface MovedEdges {
+  readonly top: boolean;
+  readonly right: boolean;
+  readonly bottom: boolean;
+  readonly left: boolean;
+}
+
+const NO_EDGE_MOVED: MovedEdges = {
+  top: false,
+  right: false,
+  bottom: false,
+  left: false,
+};
+
+/**
+ * How far an edge may be drawn from its layout position and still count as put.
+ *
+ * Half a rendered pixel: below that the band and the space it names are the same
+ * pixels on screen, and refusing the band would cost an author information to
+ * avoid an error nobody can see. Deliberately NOT the axis-aligned tolerance,
+ * which guards serialization noise in a matrix term; this one is about what is
+ * visible, and the two would drift apart if they shared a constant.
+ */
+const EDGE_STILL_PX = 0.5;
 
 const IDENTITY_SCALE: RenderedScale = {
   x: 1,
   y: 1,
   describable: true,
-  selfMoved: NOT_MOVED,
+  selfMoved: NO_EDGE_MOVED,
 };
 
 /** Below this, an off-diagonal matrix term is serialization noise, not a rotation. */
@@ -330,11 +341,25 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
     matrix.is2D &&
     Math.abs(matrix.b) < AXIS_ALIGNED_TOLERANCE &&
     Math.abs(matrix.c) < AXIS_ALIGNED_TOLERANCE;
+  const describable = axisAligned && matrix.a > 0 && matrix.d > 0;
+  const scale = { x: matrix.a, y: matrix.d };
   return {
-    x: matrix.a,
-    y: matrix.d,
-    describable: axisAligned && matrix.a > 0 && matrix.d > 0,
-    selfMoved: axesMovedBy(own),
+    ...scale,
+    describable,
+    /*
+     * Only asked where the composed scale is usable, because deriving the
+     * untransformed box divides by it: a collapsed or mirrored composition has
+     * no box to measure against, and the caller refuses such an element
+     * outright, so every edge is reported moved rather than divided for.
+     */
+    selfMoved: describable
+      ? edgesMovedBy(
+          own,
+          transformOriginOf(view.getComputedStyle(element)),
+          untransformedBox(element, scale),
+          scale
+        )
+      : { top: true, right: true, bottom: true, left: true },
   };
 }
 
@@ -376,15 +401,78 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
  * rather than wrong: an anchored edge keeps its band today and would lose it,
  * which is the safe direction to be imprecise in.
  */
-function axesMovedBy(own: DOMMatrix | null): { x: boolean; y: boolean } {
-  if (own === null) return { ...NOT_MOVED };
-  const off = (value: number): boolean =>
-    Math.abs(value) > AXIS_ALIGNED_TOLERANCE;
-  if (!own.is2D || off(own.b) || off(own.c)) return { x: true, y: true };
+function edgesMovedBy(
+  own: DOMMatrix | null,
+  origin: { x: number; y: number },
+  box: { width: number; height: number },
+  scale: { x: number; y: number }
+): MovedEdges {
+  if (own === null) return { ...NO_EDGE_MOVED };
+  const skewed =
+    !own.is2D ||
+    Math.abs(own.b) > AXIS_ALIGNED_TOLERANCE ||
+    Math.abs(own.c) > AXIS_ALIGNED_TOLERANCE;
+  if (skewed) return { top: true, right: true, bottom: true, left: true };
+
+  /*
+   * How far one edge is drawn from where it was laid out.
+   *
+   * A transform about an origin maps a local coordinate `v` to
+   * `o + factor * (v - o) + shift`, so an edge at `v` is displaced by
+   * `(o - v) * (1 - factor) + shift`. The near edge sits at `v = 0` and the far
+   * one at `v = size`, which is the whole of the arithmetic.
+   *
+   * Compared in RENDERED pixels rather than local ones, because the tolerance is
+   * about what an author can see: a tenth of a local pixel under a tenfold
+   * ancestor scale is a visible pixel on screen, and the same displacement
+   * inside a shrunken ancestor is not.
+   */
+  const moved = (
+    o: number,
+    v: number,
+    factor: number,
+    shift: number,
+    axisScale: number
+  ): boolean =>
+    Math.abs(((o - v) * (1 - factor) + shift) * axisScale) > EDGE_STILL_PX;
+
   return {
-    x: off(own.a - 1) || off(own.e),
-    y: off(own.d - 1) || off(own.f),
+    top: moved(origin.y, 0, own.d, own.f, scale.y),
+    bottom: moved(origin.y, box.height, own.d, own.f, scale.y),
+    left: moved(origin.x, 0, own.a, own.e, scale.x),
+    right: moved(origin.x, box.width, own.a, own.e, scale.x),
   };
+}
+
+/**
+ * The element's own border box before its own transform, in local pixels.
+ *
+ * Derived from the rendered rectangle and the COMPOSED scale rather than read
+ * from `offsetWidth`, which is integer-rounded: half a pixel of rounding is
+ * multiplied by `1 - factor` in the arithmetic above, and under a large scale
+ * that is enough to report a stationary edge as displaced.
+ *
+ * The composed scale is used because the rendered rectangle has been through
+ * every transform between the element and the root, not only its own.
+ */
+function untransformedBox(
+  element: Element,
+  scale: { x: number; y: number }
+): { width: number; height: number } {
+  const rect = element.getBoundingClientRect();
+  return { width: rect.width / scale.x, height: rect.height / scale.y };
+}
+
+/** The resolved `transform-origin`, in local pixels from the border box's corner. */
+function transformOriginOf(style: CSSStyleDeclaration): {
+  x: number;
+  y: number;
+} {
+  // Two or three components, space separated, already resolved to pixels by the
+  // time computed style reports them — a keyword or a percentage never survives
+  // to here. The third is the Z origin, which an axis-aligned box ignores.
+  const parts = style.transformOrigin.split(" ");
+  return { x: edgeWidth(parts[0] ?? ""), y: edgeWidth(parts[1] ?? "") };
 }
 
 /**
