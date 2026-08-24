@@ -147,28 +147,6 @@ export interface APIResponse {
 // Constants
 // ============================================================================
 
-/** The status dot, keyed to the same meaning as the status text beside it. */
-function statusDotTone(status: number): string {
-  if (status >= 200 && status < 300) return "bg-success";
-  if (status >= 300 && status < 400) return "bg-muted-foreground";
-  if (status >= 400 && status < 500) return "bg-warning";
-  if (status >= 500) return "bg-destructive";
-  return "bg-muted-foreground";
-}
-
-/**
- * A payload size someone can act on.
- *
- * Two significant figures past a kilobyte: the question a size answers here is
- * "is this response big?", and 2.4 KB answers it while 2438 B makes you count
- * digits.
- */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-}
-
 /** Configuration for each endpoint action */
 const ENDPOINT_ACTIONS: {
   value: EndpointAction;
@@ -600,21 +578,6 @@ export function APIPlayground({
   }, [fullUrl]);
 
   /**
-   * Colour a response by what its status class means.
-   *
-   * Tokens rather than palette classes, so the hues track the theme and stay
-   * legible in dark mode. A 4xx is the caller's mistake and a 5xx is the
-   * server's, so they read as warning and error respectively.
-   */
-  const getStatusColor = (status: number): string => {
-    if (status >= 200 && status < 300) return "text-success";
-    if (status >= 300 && status < 400) return "text-muted-foreground";
-    if (status >= 400 && status < 500) return "text-warning";
-    if (status >= 500) return "text-destructive";
-    return "text-muted-foreground";
-  };
-
-  /**
    * Check if the current action requires a request body
    */
   const actionRequiresBody = [
@@ -780,48 +743,9 @@ export function APIPlayground({
   const responsePane = (
     <Card className="flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
       <CardHeader className="p-6 pb-4" noBorder>
-        <div className="flex items-center justify-between gap-4">
-          <CardTitle className="text-base font-semibold tracking-tight text-foreground">
-            API response
-          </CardTitle>
-          {response && (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Status</span>
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full",
-                    statusDotTone(response.status)
-                  )}
-                />
-                <span
-                  className={cn(
-                    "font-mono text-sm font-semibold",
-                    getStatusColor(response.status)
-                  )}
-                >
-                  {response.status}
-                </span>
-              </div>
-              <div className="h-4 w-px bg-border" />
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Latency</span>
-                <span className="font-mono text-sm font-semibold text-foreground">
-                  {response.time}ms
-                </span>
-              </div>
-              <div className="h-4 w-px bg-border" />
-              {/* Size sits beside latency because they are the pair you
-                  trade against each other when tuning depth and limit. */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Size</span>
-                <span className="font-mono text-sm font-semibold text-foreground">
-                  {formatBytes(response.size)}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
+        <CardTitle className="text-base font-semibold tracking-tight text-foreground">
+          API response
+        </CardTitle>
       </CardHeader>
       <CardContent className="flex-1 min-h-0 p-0 overflow-hidden">
         <ResponseViewer
@@ -832,6 +756,9 @@ export function APIPlayground({
           raw={response?.raw}
           code={codeSnippets}
           filename={`${collectionSlug}-response`}
+          status={response?.status}
+          time={response?.time}
+          size={response?.size}
         />
       </CardContent>
     </Card>

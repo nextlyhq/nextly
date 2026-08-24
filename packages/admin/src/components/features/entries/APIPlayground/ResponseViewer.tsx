@@ -5,11 +5,16 @@
  *
  * Three tabs rather than one JSON pane: the body answers "did it work", the
  * headers answer "why did it do that" (they carry the request id we stamp on
- * every reply), and the code answers "how do I use this", which is the step
- * the playground used to leave you to work out yourself.
+ * every reply), and the code answers "how do I use this", which the playground
+ * used to leave you to work out yourself.
  *
  * The tabs render whether or not a response exists, because the code is built
  * from the request — it is worth reading before you send, not only after.
+ *
+ * The tab selection is held here rather than left to the primitive, because the
+ * toolbar has to act on what is being READ. A Copy that always took the body
+ * put JSON on the clipboard while the reader was looking at a snippet, and did
+ * it silently.
  *
  * @module components/entries/APIPlayground/ResponseViewer
  */
@@ -33,10 +38,63 @@ import {
   Download,
 } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
+import { usePersistedState } from "@admin/hooks/usePersistedState";
+import { cn } from "@admin/lib/utils";
 
 import { CodePanel } from "./CodePanel";
 import type { CodeSnippets } from "./generate-code";
 import { JsonViewer } from "./JsonViewer";
+
+/** Which of the three panes is open, so the toolbar can act on it. */
+type ResponseTab = "body" | "headers" | "code";
+
+/**
+ * The last code flavour read, remembered.
+ *
+ * Somebody who works in curl is working in curl on the next request too, and
+ * being returned to the SDK tab every time is a small tax paid repeatedly.
+ */
+const FLAVOUR_KEY = "nextly:admin:api-playground:flavour";
+const isFlavour = (value: string): value is keyof CodeSnippets =>
+  value === "sdk" || value === "fetch" || value === "curl";
+
+/**
+ * The status dot, keyed to the same meaning as the status text beside it.
+ */
+function statusDotTone(status: number): string {
+  if (status >= 200 && status < 300) return "bg-success";
+  if (status >= 300 && status < 400) return "bg-muted-foreground";
+  if (status >= 400 && status < 500) return "bg-warning";
+  if (status >= 500) return "bg-destructive";
+  return "bg-muted-foreground";
+}
+
+/**
+ * Colour a response by what its status class means.
+ *
+ * A 4xx is the caller's mistake and a 5xx is the server's, so they read as
+ * warning and error respectively.
+ */
+function statusTone(status: number): string {
+  if (status >= 200 && status < 300) return "text-success";
+  if (status >= 300 && status < 400) return "text-muted-foreground";
+  if (status >= 400 && status < 500) return "text-warning";
+  if (status >= 500) return "text-destructive";
+  return "text-muted-foreground";
+}
+
+/**
+ * A payload size someone can act on.
+ *
+ * Two significant figures past a kilobyte: the question a size answers here is
+ * "is this response big?", and 2.4 KB answers it while 2438 B makes you count
+ * digits.
+ */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
 
 export interface ResponseViewerProps {
   /** Response data to display */
@@ -53,6 +111,28 @@ export interface ResponseViewerProps {
   code: CodeSnippets;
   /** Collection slug, for the download filename. */
   filename?: string;
+  /** HTTP status, absent until the first reply. */
+  status?: number;
+  /** Round trip in milliseconds. */
+  time?: number;
+  /** Body size in bytes — what `depth` and `limit` are traded against. */
+  size?: number;
+}
+
+/** One reading in the meta row, with a placeholder that holds its width. */
+function Metric({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
 }
 
 export function ResponseViewer({
@@ -63,8 +143,17 @@ export function ResponseViewer({
   raw,
   code,
   filename = "response",
+  status,
+  time,
+  size,
 }: ResponseViewerProps) {
   const [copied, setCopied] = useState(false);
+  const [tab, setTab] = useState<ResponseTab>("body");
+  const [flavour, setFlavour] = usePersistedState(
+    FLAVOUR_KEY,
+    "sdk",
+    isFlavour
+  );
 
   const jsonString = useMemo(() => {
     if (data === undefined || data === null) return "";
@@ -77,17 +166,24 @@ export function ResponseViewer({
     }
   }, [data]);
 
+  // What the toolbar acts on is what the reader is looking at, which is the
+  // whole point of holding the tab here.
+  const onCode = tab === "code";
+  const copyTarget = onCode ? code[flavour] : jsonString;
+
   const handleCopy = useCallback(async () => {
-    if (!jsonString) return;
+    if (!copyTarget) return;
     try {
-      await navigator.clipboard.writeText(jsonString);
+      await navigator.clipboard.writeText(copyTarget);
       setCopied(true);
-      toast.success("Response copied to clipboard");
+      toast.success(
+        onCode ? "Code copied to clipboard" : "Response copied to clipboard"
+      );
       setTimeout(() => setCopied(false), UI.COPY_FEEDBACK_TIMEOUT_MS);
     } catch {
-      toast.error("Failed to copy response");
+      toast.error("Failed to copy");
     }
-  }, [jsonString]);
+  }, [copyTarget, onCode]);
 
   /**
    * Save the body to a file.
@@ -115,7 +211,56 @@ export function ResponseViewer({
   const hasResponse = Boolean(jsonString) || isLoading || Boolean(error);
 
   return (
-    <Tabs defaultValue="body" className="flex h-full min-h-0 flex-col">
+    <Tabs
+      value={tab}
+      onValueChange={value => setTab(value as ResponseTab)}
+      className="flex h-full min-h-0 flex-col"
+    >
+      {/* Always rendered, with placeholders holding the width. The metrics used
+          to appear with the first reply, so the header reflowed at the moment
+          somebody was reading it. */}
+      <div
+        data-testid="response-meta"
+        className="flex shrink-0 items-center justify-end gap-4 border-b border-border px-6 py-2"
+      >
+        <Metric label="Status">
+          {status === undefined ? (
+            <span className="font-mono text-sm text-muted-foreground">—</span>
+          ) : (
+            <>
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  statusDotTone(status)
+                )}
+              />
+              <span
+                className={cn(
+                  "font-mono text-sm font-semibold",
+                  statusTone(status)
+                )}
+              >
+                {status}
+              </span>
+            </>
+          )}
+        </Metric>
+        <div className="h-4 w-px bg-border" />
+        <Metric label="Latency">
+          <span className="font-mono text-sm font-semibold text-foreground">
+            {time === undefined ? "—" : `${time}ms`}
+          </span>
+        </Metric>
+        <div className="h-4 w-px bg-border" />
+        {/* Beside latency because they are the pair traded against each other
+            when tuning depth and limit. */}
+        <Metric label="Size">
+          <span className="font-mono text-sm font-semibold text-foreground">
+            {size === undefined ? "—" : formatBytes(size)}
+          </span>
+        </Metric>
+      </div>
+
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/30 px-6 py-1.5">
         <TabsList variant="ghost">
           <TabsTrigger value="body" size="sm">
@@ -135,23 +280,27 @@ export function ResponseViewer({
         </TabsList>
 
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleDownload}
-            disabled={!jsonString}
-            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <Download className="h-3.5 w-3.5" />
-            Download
-          </Button>
+          {/* Absent on the Code tab: a snippet saved as `<collection>.json` is
+              not a thing anybody wants, and offering it invites the mistake. */}
+          {!onCode && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDownload}
+              disabled={!jsonString}
+              className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Download
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
             onClick={() => {
               void handleCopy();
             }}
-            disabled={!jsonString}
+            disabled={!copyTarget}
             className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
           >
             {copied ? (
@@ -164,9 +313,12 @@ export function ResponseViewer({
         </div>
       </div>
 
+      {/* The mono face belongs to the JSON, which brings its own. It used to sit
+          here, so the loading, error and empty states inherited it and the prose
+          was set in a code face. */}
       <TabsContent
         value="body"
-        className="mt-0 min-h-0 flex-1 overflow-auto bg-background font-mono text-xs leading-relaxed selection:bg-primary selection:text-primary-foreground"
+        className="mt-0 min-h-0 flex-1 overflow-auto bg-background selection:bg-primary selection:text-primary-foreground"
       >
         {isLoading ? (
           <div className="flex h-full flex-col items-center justify-center bg-muted/30">
@@ -234,7 +386,7 @@ export function ResponseViewer({
       </TabsContent>
 
       <TabsContent value="code" className="mt-0 min-h-0 flex-1 overflow-hidden">
-        <CodePanel code={code} />
+        <CodePanel code={code} flavour={flavour} onFlavourChange={setFlavour} />
       </TabsContent>
     </Tabs>
   );
