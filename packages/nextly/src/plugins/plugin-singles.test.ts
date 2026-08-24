@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { SingleRegistryService } from "../domains/singles/services/single-registry-service";
+import type { Logger } from "../shared/types";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 
 /**
@@ -80,5 +82,83 @@ describe("wrapSinglesForPlugin", () => {
       )
     );
     expect(writes).toEqual([]);
+  });
+});
+
+describe("listing Singles creates nothing", () => {
+  /**
+   * An adapter that records every operation asked of it.
+   *
+   * The point of reaching past the wrapper to the real `SingleRegistryService`
+   * is that the property being guarded lives THERE, not here. The wrapper tests
+   * above show it calls `listSingles` and nothing else; they cannot show what
+   * `listSingles` itself does, and that is where a lazy-materialise would be
+   * added — by someone changing the registry for an unrelated reason, with no
+   * idea a plugin surface depends on this read staying a read.
+   */
+  function recordingAdapter(): { adapter: DrizzleAdapter; ops: string[] } {
+    const ops: string[] = [];
+    const adapter = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (typeof prop !== "string") return undefined;
+          return (...args: unknown[]) => {
+            ops.push(prop);
+            // Shapes the read path needs back. Anything else returns undefined,
+            // which is fine: this test is about WHICH operations are issued.
+            if (prop === "select") return Promise.resolve([]);
+            if (prop === "selectOne") return Promise.resolve(null);
+            if (prop === "tableExists") return Promise.resolve(true);
+            void args;
+            return Promise.resolve(undefined);
+          };
+        },
+      }
+    ) as DrizzleAdapter;
+    return { adapter, ops };
+  }
+
+  const silentLogger = {
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  } as unknown as Logger;
+
+  it("issues only read operations against the database", async () => {
+    // The boundary the founder ruling asked for, in place of a docblock
+    // promising it. A read-shaped call on the Single path is not free of side
+    // effects in general — the readable half of the preview check creates a
+    // Single's row when absent — so a plugin walking every Single to build an
+    // index would materialise every Single in the app while appearing to work.
+    const { adapter, ops } = recordingAdapter();
+    const registry = new SingleRegistryService(adapter, silentLogger);
+
+    await wrapSinglesForPlugin(registry).list();
+
+    // Asserted against the whole class of write-shaped names rather than a list
+    // of the ones that exist today, so an operation added later is caught by
+    // this test rather than by whoever is debugging a site full of Singles
+    // nobody created.
+    const writes = ops.filter(op =>
+      /insert|update|delete|upsert|create|drop|alter|execute|transaction/i.test(
+        op
+      )
+    );
+    expect(writes).toEqual([]);
+  });
+
+  it("actually reached the database, so the assertion above is not vacuous", async () => {
+    // The positive control. "No writes were issued" is satisfied perfectly by a
+    // call that issued NOTHING — a registry that threw early, a double wired to
+    // the wrong method, a listing short-circuited before it queried. Without
+    // this, the test above passes against all three.
+    const { adapter, ops } = recordingAdapter();
+    const registry = new SingleRegistryService(adapter, silentLogger);
+
+    await wrapSinglesForPlugin(registry).list();
+
+    expect(ops).toContain("select");
   });
 });
