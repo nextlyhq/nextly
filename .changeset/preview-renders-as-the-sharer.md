@@ -43,13 +43,19 @@ changes.
 
 The preview route uses it to render a draft as the person who shared it. The token records who that
 was — as a basis for field rules, never as an identity: the bearer is still anonymous and still
-reaches exactly the one document the link names. The identity is re-read on every render rather
-than frozen into the token, so permissions revoked after a link was shared take effect on its next
-render. It is applied to the draft read alone; once a grant stops answering a path the request is
-an ordinary anonymous one again, and public content is not judged by a stranger's rules.
+reaches exactly the one document the link names. It is applied to the draft read alone; once a
+grant stops answering a path the request is an ordinary anonymous one again, and public content is
+not judged by a stranger's rules.
 
-A link whose sender cannot be identified — an account since deleted, or a token minted before the
-record existed — is refused rather than rendered. Rendering it as nobody would apply no field rules
+Revocation reaches links already in circulation, and it takes two things rather than one. The
+identity is re-read on every render rather than frozen into the token, so a deleted or deactivated
+account stops rendering immediately. But rebuilding an identity re-evaluates FIELD rules and
+nothing else — the read still bypasses the row and collection checks — so the render also re-asks
+the question the mint asked: may this person still preview this entry. A sharer who keeps their
+account and loses their authority stops serving the draft on the next render.
+
+A link whose sender cannot be identified — an account since deleted or deactivated, or a token
+minted before the record existed — is refused rather than rendered. Rendering it as nobody would apply no field rules
 at all, which is the leak itself; the visitor sees the published page or a 404, the same as an
 expired link. Links minted in the hour before this ships therefore stop working, and re-sharing is
 the remedy.
