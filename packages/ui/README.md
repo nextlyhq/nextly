@@ -69,7 +69,18 @@ directly (`var(--nx-primary)`) — never wrap them in `hsl()`.
 ```js
 // tailwind.config.js
 const { uiPreset } = require("@nextlyhq/ui/tailwind-preset");
-module.exports = { presets: [uiPreset], content: [...] };
+
+module.exports = {
+  presets: [uiPreset],
+  content: [
+    "./src/**/*.{js,jsx,ts,tsx}",
+    // Required. Tailwind generates a utility only for a class it has SEEN, and
+    // the classes these components write live in the published bundle rather
+    // than in your source. Omit this path and the components render with their
+    // utilities missing — no error, just unstyled markup.
+    "./node_modules/@nextlyhq/ui/dist/**/*.{js,mjs,cjs}",
+  ],
+};
 ```
 
 Import `@nextlyhq/ui/theme.css` alongside it. The preset carries tokens and the utilities
