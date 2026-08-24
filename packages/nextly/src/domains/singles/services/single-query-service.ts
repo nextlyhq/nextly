@@ -1947,12 +1947,20 @@ export class SingleQueryService extends BaseService {
       // field see that field absent — the same "missing means allowed" reading
       // that admits a caller the rule exists to refuse. Access decides on the
       // document as assembled; the response is narrowed once it is decided.
+      // Document trust and FIELD trust are separate questions and this read may
+      // answer them differently. `overrideAccess` alone means both; a caller
+      // that asked for field rules to be enforced keeps its document bypass and
+      // gives up only the field one. Mirrors the collection read path.
       await applyFieldReadAccess({
         kind: "single",
         slug,
         entry: doc,
-        user: options.user,
-        overrideAccess: options.overrideAccess,
+        // The field-access identity, never the hook one. A preview judges these
+        // fields as the sharer while the hooks above go on seeing the anonymous
+        // bearer who is actually asking.
+        user: options.fieldAccessUser ?? options.user,
+        overrideAccess:
+          options.enforceFieldAccess === true ? false : options.overrideAccess,
       });
 
       // Defense in depth, after every user callback on this document: hooks,

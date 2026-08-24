@@ -101,6 +101,26 @@ export interface SignPreviewTokenOptions {
   /** Seconds the link stays usable. */
   ttlSeconds?: number;
   /**
+   * The id of the user who shared the link, recorded so the page can be
+   * rendered through their field-level permissions rather than through none.
+   *
+   * **This does NOT authenticate anybody, and the distinction is the whole
+   * point.** The bearer is still anonymous and still gets exactly the one
+   * document the scope names. What the claim decides is which fields of that
+   * document are visible: without it the render skips field-level read rules
+   * entirely, so a link would show its recipient fields the person sharing it
+   * cannot see — a way to read past your own permissions by sending yourself a
+   * link.
+   *
+   * **Required when signing, and merely REPORTED when verifying — the
+   * asymmetry is deliberate and it is not a compatibility allowance.**
+   * Verification answers what a token holds; whether an absent record is
+   * acceptable is a policy question, and it belongs where the policy is. The
+   * draft gate refuses such a token outright, because a draft rendered as
+   * nobody is a draft rendered with no field rules at all.
+   */
+  minter: string;
+  /**
    * The site's current revocation generation.
    *
    * Every token records the generation it was minted under, and verification
@@ -116,7 +136,26 @@ export interface SignPreviewTokenOptions {
 }
 
 export type PreviewVerifyResult =
-  | { valid: true; scope: PreviewTokenScope; expiresAt: Date }
+  | {
+      valid: true;
+      scope: PreviewTokenScope;
+      /**
+       * Who shared the link, when the token records it.
+       *
+       * Beside the scope rather than inside it, deliberately. The scope is the
+       * DOCUMENT a token names and `previewTokenCovers` compares scopes for
+       * equality — folding an identity in would make two links to one document
+       * compare unequal because different people sent them.
+       *
+       * Absent on every token minted before this claim existed; the signer
+       * refuses to produce one without it now. A reader must handle the absence
+       * rather than assume it away — and must fail CLOSED on it, since a draft
+       * with no recorded sender cannot be judged by anyone's field rules. See
+       * {@link SignPreviewTokenOptions.minter}.
+       */
+      minter?: string;
+      expiresAt: Date;
+    }
   /** Signature, audience, shape, or anything else that makes it not a token. */
   | { valid: false; reason: "invalid" }
   | { valid: false; reason: "expired" }
@@ -174,6 +213,33 @@ export async function signPreviewToken(
     });
   }
 
+  // The TYPE makes this required and the type is not a boundary. A JavaScript
+  // caller omits it and compiles nothing; a typed one can pass `""`. Either way
+  // the claim below would be dropped, verification would read the result as a
+  // token minted before the claim existed, and the draft gate would omit
+  // redaction — rendering every field to whoever holds the link. That is the
+  // whole defect this claim closes, reachable through the front door.
+  //
+  // Refused rather than defaulted: there is no safe stand-in for "whose
+  // permissions is this seen through", and inventing one would authorize a view
+  // nobody asked for.
+  if (
+    typeof options.minter !== "string" ||
+    options.minter.trim().length === 0
+  ) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "minter",
+          code: "REQUIRED",
+          message:
+            "A preview token must record who minted it, so the page can be " +
+            "rendered through that person's field-level permissions.",
+        },
+      ],
+    });
+  }
+
   const ttlSeconds = options.ttlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   const issuedAt = Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + ttlSeconds;
@@ -188,6 +254,10 @@ export async function signPreviewToken(
   const token = await new SignJWT({
     ...claims,
     ...(scope.locale === undefined ? {} : { loc: scope.locale }),
+    // `mnt`, not `sub`: the subject below names the DOCUMENT, and a reader that
+    // mistook this for an authenticated principal would be reading a bearer
+    // token as a session. It is a redaction basis and nothing more.
+    mnt: options.minter,
     gen: options.generation,
   })
     .setProtectedHeader({ alg: ALGORITHM })
@@ -303,9 +373,12 @@ export async function verifyPreviewToken(
     return { valid: false, reason: "invalid" };
   }
 
+  const minter = readString(payload.mnt);
+
   return {
     valid: true,
     scope: locale === null ? scope : { ...scope, locale },
+    ...(minter === null ? {} : { minter }),
     expiresAt,
   };
 }

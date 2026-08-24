@@ -88,6 +88,35 @@ export interface GetSingleOptions {
   overrideAccess?: boolean;
 
   /**
+   * Enforce FIELD-level read rules even on a read that is otherwise trusted.
+   *
+   * `overrideAccess` governs two different trusts with one boolean — "you may
+   * see this document" and "skip every field rule" — and a caller can need the
+   * first without the second. A shared preview link is the case that forced
+   * them apart: it must reach an unpublished document, which only
+   * `overrideAccess` grants, and it must not show its recipient fields the
+   * person who shared it cannot see.
+   *
+   * Absent means today's behaviour exactly — field trust follows document trust
+   * — so no existing caller changes. Set it beside a `user`: the rules are
+   * evaluated as THAT user.
+   *
+   * Mirrors the collection read path, and is not optional there either: the
+   * option is declared on the configuration BOTH APIs inherit, so a Single read
+   * that ignored it would return fields the caller was promised were redacted.
+   */
+  enforceFieldAccess?: boolean;
+
+  /**
+   * Whose field-level read rules to judge by, when that is NOT the caller.
+   *
+   * See the collection read path: a preview's bearer is anonymous and must stay
+   * anonymous to every hook, while the FIELDS are judged as the person who
+   * shared the link. A redaction basis, never a principal.
+   */
+  fieldAccessUser?: UserContext;
+
+  /**
    * Set by a route whose middleware already authenticated AND authorized the
    * caller. Skips only the redundant RBAC re-check, which resolves permissions
    * from the caller's stored roles and would otherwise reject an API key whose

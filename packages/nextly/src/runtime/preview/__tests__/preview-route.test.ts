@@ -65,6 +65,7 @@ describe("the preview route", () => {
   it("starts a draft session and sends the visitor to the document", async () => {
     const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
     const { route, enable } = routeFor();
 
@@ -80,6 +81,7 @@ describe("the preview route", () => {
     // what keeps a link meant for ONE page from unlocking every draft.
     const { token, expiresAt } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
     const { route } = routeFor();
 
@@ -103,6 +105,7 @@ describe("the preview route", () => {
             (
               await signPreviewToken(SCOPE, `${TEST_SECRET}-other`, {
                 generation: GENERATION,
+                minter: "minter-1",
               })
             ).token
           ),
@@ -114,6 +117,7 @@ describe("the preview route", () => {
             (
               await signPreviewToken(SCOPE, TEST_SECRET, {
                 generation: GENERATION - 1,
+                minter: "minter-1",
               })
             ).token
           ),
@@ -141,6 +145,7 @@ describe("the preview route", () => {
       // unreachable.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       for (const target of [
@@ -178,6 +183,7 @@ describe("the preview route", () => {
       // never did.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       for (const redirectTo of [
@@ -206,6 +212,7 @@ describe("the preview route", () => {
       // NUL, so the header cannot carry a second one.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
       const CR = String.fromCharCode(13);
       const LF = String.fromCharCode(10);
@@ -234,6 +241,7 @@ describe("the preview route", () => {
       // needs — a locale query or an anchor into the page being reviewed.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
       const { route } = routeFor({
         redirectTo: () => "/pages/entry-1?locale=fr#section-2",
@@ -299,6 +307,7 @@ describe("the reader shapes both supported Next majors supply", () => {
   it("enables draft mode from either major", async () => {
     const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
 
     for (const draftMode of [next14Draft, next15Draft]) {
@@ -342,6 +351,7 @@ describe("request input the reader must survive", () => {
   it("accepts a synchronous draftMode(), as Next 14 supplies", async () => {
     const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
     const enable = vi.fn();
     const route = createPreviewRoute({
@@ -362,6 +372,7 @@ describe("what a preview session may read", () => {
   async function sessionFor(scope = SCOPE, generation = GENERATION) {
     const { token } = await signPreviewToken(scope, TEST_SECRET, {
       generation,
+      minter: "minter-1",
     });
     const { route } = routeFor();
     return cookiesFrom(await route.GET(request(token)));
@@ -389,10 +400,16 @@ describe("what a preview session may read", () => {
 
     expect(previewGrantsDraft(scope, SCOPE)).toBe(true);
     expect(
-      previewGrantsDraft(scope, { collection: "pages", entryId: "entry-2" })
+      previewGrantsDraft(scope, {
+        collection: "pages",
+        entryId: "entry-2",
+      })
     ).toBe(false);
     expect(
-      previewGrantsDraft(scope, { collection: "posts", entryId: "entry-1" })
+      previewGrantsDraft(scope, {
+        collection: "posts",
+        entryId: "entry-1",
+      })
     ).toBe(false);
     // No session at all grants nothing, which is the default for every visitor.
     expect(previewGrantsDraft(null, SCOPE)).toBe(false);

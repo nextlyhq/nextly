@@ -33,6 +33,7 @@ async function cookieFor(
 ): Promise<void> {
   const { token } = await signPreviewToken(scope, TEST_SECRET, {
     generation: options.generation ?? 1,
+    minter: "minter-1",
     ...(options.ttlSeconds === undefined
       ? {}
       : { ttlSeconds: options.ttlSeconds }),

@@ -34,7 +34,7 @@ async function tokenFor(): Promise<string> {
   const { token } = await signPreviewToken(
     { collection: "pages", entryId: "entry-1" },
     TEST_SECRET,
-    { generation: 1 }
+    { generation: 1, minter: "minter-1" }
   );
   return token;
 }

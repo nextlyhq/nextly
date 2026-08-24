@@ -438,6 +438,53 @@ export interface DirectAPIConfig {
   trusted?: (collection: string) => boolean;
 
   /**
+   * Enforce FIELD-level read rules even though `overrideAccess` is on.
+   *
+   * `overrideAccess: true` says two things at once — "you may see this row" and
+   * "skip every field rule" — and a caller can genuinely need the first without
+   * the second. Set this beside a `user` to keep the row bypass and give up
+   * only the field one; the rules are then evaluated as that user.
+   *
+   * ```ts
+   * // A shared preview link: reach a never-published draft, but show its
+   * // recipient only the fields the person who shared it can see.
+   * await nextly.findByID({
+   *   collection: "pages",
+   *   id: entryId,
+   *   draft: true,
+   *   overrideAccess: true,
+   *   enforceFieldAccess: true,
+   *   user: sharer,
+   * });
+   * ```
+   *
+   * **This can only ever narrow**, like `trusted`: it withdraws part of a
+   * bypass the caller already had and can never grant one it did not. On a read
+   * that is not overriding access, field rules already run and this changes
+   * nothing.
+   *
+   * @default undefined — field trust follows row trust, as it always has
+   */
+  enforceFieldAccess?: boolean;
+
+  /**
+   * Whose field-level read rules to judge by, when that is NOT the caller.
+   *
+   * A shared preview link is the case this exists for. Its bearer is anonymous
+   * and must stay anonymous to every hook — a hook branching on `req.user` that
+   * saw the sharer would produce an editor-only value and hand it to whoever
+   * holds the link, and a value a hook invents need not correspond to any
+   * declared field, so field access cannot remove it again. What the sharer
+   * decides is narrower: which of the document's DECLARED fields are visible.
+   *
+   * A redaction basis, then, and never a principal — which is why it is its own
+   * option rather than a second meaning for `user`.
+   *
+   * @default undefined — field rules are judged as `user`, the ordinary case
+   */
+  fieldAccessUser?: UserContext;
+
+  /**
    * User context for access control.
    *
    * Required when `overrideAccess` is `false`. Provides the user identity

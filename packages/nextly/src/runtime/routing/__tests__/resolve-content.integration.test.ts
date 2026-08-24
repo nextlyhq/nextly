@@ -127,4 +127,101 @@ describe("resolveContent (integration)", () => {
     });
     expect((resolved as { id?: string } | null)?.id).toBe(expectedId);
   });
+  // The working-draft overlay REPLACES the row resolved by slug, so it has to
+  // be judged by the same rules. Carrying the plain `user` into it handed back
+  // the fully trusted draft and undid the enforcement one line earlier — a leak
+  // that only shows on the slug path, where a caller names no entry id, so the
+  // preview gate's own tests cannot reach it.
+  it("judges the draft overlay by the same rules as the row it replaces", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "slug" }),
+            text({ name: "title" }),
+            text({
+              name: "secret",
+              access: { read: ({ req }) => req.user?.email === "boss@x.test" },
+            }),
+          ],
+        }),
+      ],
+    });
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: {
+        slug: "about",
+        title: "About",
+        secret: "published-secret",
+        status: "published",
+      },
+    });
+    // A pending edit, so an overlay exists to replace the published row.
+    await current.nextly.update({
+      collection: "pages",
+      id: String(created.item.id),
+      data: { title: "About (pending)", secret: "draft-secret" },
+    });
+
+    const seen = (await resolveContent("pages", "about", {
+      nextly: current.nextly,
+      draft: true,
+      overrideAccess: true,
+      draftFieldAccessAs: { id: "u1", email: "nobody@x.test", roles: [] },
+    })) as { title?: string; secret?: string } | null;
+
+    // The overlay won — otherwise this asserts nothing about the overlay at
+    // all, and the published row would satisfy the redaction check by itself.
+    expect(seen?.title).toBe("About (pending)");
+    expect(seen?.secret).toBeUndefined();
+  });
+
+  // The positive control: the same overlay, read by someone the rule allows.
+  // Without it, an overlay that returned nothing at all would pass above.
+  it("shows the overlay's denied field to a reader the rule allows", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "slug" }),
+            text({ name: "title" }),
+            text({
+              name: "secret",
+              access: { read: ({ req }) => req.user?.email === "boss@x.test" },
+            }),
+          ],
+        }),
+      ],
+    });
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: {
+        slug: "about",
+        title: "About",
+        secret: "published-secret",
+        status: "published",
+      },
+    });
+    await current.nextly.update({
+      collection: "pages",
+      id: String(created.item.id),
+      data: { title: "About (pending)", secret: "draft-secret" },
+    });
+
+    const seen = (await resolveContent("pages", "about", {
+      nextly: current.nextly,
+      draft: true,
+      overrideAccess: true,
+      draftFieldAccessAs: { id: "u1", email: "boss@x.test", roles: [] },
+    })) as { title?: string; secret?: string } | null;
+
+    expect(seen?.title).toBe("About (pending)");
+    expect(seen?.secret).toBe("draft-secret");
+  });
 });

@@ -848,6 +848,47 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks (collection-level, field permissions) */
     overrideAccess?: boolean;
     /**
+     * Enforce FIELD-level read rules even on a read that is otherwise trusted.
+     *
+     * `overrideAccess` governs two different trusts with one boolean — "you may
+     * see this row" and "skip every field rule" — and a caller can genuinely
+     * need the first without the second. A shared preview link is the case that
+     * forced them apart: it must reach a never-published row, which only
+     * `overrideAccess` grants, and it must NOT show its recipient fields the
+     * person who shared it cannot see, which is what the same flag silently
+     * turned off.
+     *
+     * Absent means today's behaviour exactly — field trust follows row trust —
+     * so no existing caller changes. Set it beside a `user`: the rules are
+     * evaluated as THAT user, and a trusted read has otherwise dropped its user
+     * for row purposes (see `accessUser`), so the two are asked separately on
+     * purpose.
+     *
+     * Relationship expansion has always carried its own copy of this question
+     * ({@link RelatedRowReadContext.enforceFieldAccess}); this is the same axis
+     * for the top-level rows, which had no way to express it.
+     */
+    enforceFieldAccess?: boolean;
+    /**
+     * Whose field-level read rules to judge by, when that is NOT the caller.
+     *
+     * A preview link is the case this exists for. The bearer is anonymous and
+     * must stay anonymous to every hook — a hook branching on `req.user` that
+     * saw the sharer would add an editor-only value and hand it to whoever
+     * holds the link, and a value a hook invents need not correspond to any
+     * declared field, so the access pass below cannot remove it again. What the
+     * sharer decides is narrower than that: which of the document's declared
+     * fields are visible.
+     *
+     * So it is a redaction basis and nothing else, and it is a separate
+     * parameter for exactly that reason. Folding it into `user` made the
+     * identity mean two things at once, which is the shape of defect this
+     * option exists to repair one level up.
+     *
+     * Absent means the caller's own `user`, which is the ordinary case.
+     */
+    fieldAccessUser?: UserContext;
+    /**
      * Which collections a trusted read may reach as relationships are expanded,
      * asked per RELATED collection. Absent means every populated target inherits
      * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
@@ -1449,6 +1490,7 @@ export class CollectionQueryService extends BaseService {
             // collection's field rules say nothing about another collection's
             // fields — so the caller has to reach the related row's own rules.
             enforceFieldAccess: true,
+            fieldAccessUser: params.fieldAccessUser,
             // The caller's bound, at the TOP-LEVEL expansion. Without it the
             // relationship service sees no predicate and treats every target as
             // fully trusted, so a rejected collection's rows are returned before
@@ -1501,6 +1543,7 @@ export class CollectionQueryService extends BaseService {
             // rules, exactly as it does for direct relationships.
             access: {
               enforceFieldAccess: true,
+              fieldAccessUser: params.fieldAccessUser,
               user: params.user,
               overrideAccess: params.overrideAccess,
               // Narrows that bypass per RELATED collection. Absent means unchanged;
@@ -1618,6 +1661,7 @@ export class CollectionQueryService extends BaseService {
       const nestedHookState = this.relationshipService.createNestedHookState();
       const nestedAccess = {
         enforceFieldAccess: true,
+        fieldAccessUser: params.fieldAccessUser,
         user: params.user,
         overrideAccess: params.overrideAccess,
         // Narrows that bypass per RELATED collection. Absent means unchanged;
@@ -1722,6 +1766,13 @@ export class CollectionQueryService extends BaseService {
       // first) — while restoring each removed value as evidence in the second pass
       // keeps a conditional rule judging against the whole row and catches a denied
       // field a hook reintroduced. Runs on the whole rows, before selection.
+      // Row trust and FIELD trust are separate questions and this read may
+      // answer them differently. `overrideAccess` alone means both; a caller
+      // that asked for field rules to be enforced keeps its row bypass and
+      // gives up only the field one. Computed once, beside the two passes it
+      // governs, so they cannot drift apart.
+      const skipFieldRules =
+        params.enforceFieldAccess === true ? false : params.overrideAccess;
       for (const entry of finalData as Record<string, unknown>[]) {
         const sourceRedactions: ReadAccessRedactions = new WeakMap();
         await applyFieldReadAccess(
@@ -1729,8 +1780,8 @@ export class CollectionQueryService extends BaseService {
             kind: "collection",
             slug: params.collectionName,
             entry,
-            user: params.user,
-            overrideAccess: params.overrideAccess,
+            user: params.fieldAccessUser ?? params.user,
+            overrideAccess: skipFieldRules,
           },
           sourceRedactions
         );
@@ -1747,8 +1798,8 @@ export class CollectionQueryService extends BaseService {
             kind: "collection",
             slug: params.collectionName,
             entry,
-            user: params.user,
-            overrideAccess: params.overrideAccess,
+            user: params.fieldAccessUser ?? params.user,
+            overrideAccess: skipFieldRules,
           },
           sourceRedactions
         );
@@ -2361,6 +2412,47 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * Enforce FIELD-level read rules even on a read that is otherwise trusted.
+     *
+     * `overrideAccess` governs two different trusts with one boolean — "you may
+     * see this row" and "skip every field rule" — and a caller can genuinely
+     * need the first without the second. A shared preview link is the case that
+     * forced them apart: it must reach a never-published row, which only
+     * `overrideAccess` grants, and it must NOT show its recipient fields the
+     * person who shared it cannot see, which is what the same flag silently
+     * turned off.
+     *
+     * Absent means today's behaviour exactly — field trust follows row trust —
+     * so no existing caller changes. Set it beside a `user`: the rules are
+     * evaluated as THAT user, and a trusted read has otherwise dropped its user
+     * for row purposes (see `accessUser`), so the two are asked separately on
+     * purpose.
+     *
+     * Relationship expansion has always carried its own copy of this question
+     * ({@link RelatedRowReadContext.enforceFieldAccess}); this is the same axis
+     * for the top-level rows, which had no way to express it.
+     */
+    enforceFieldAccess?: boolean;
+    /**
+     * Whose field-level read rules to judge by, when that is NOT the caller.
+     *
+     * A preview link is the case this exists for. The bearer is anonymous and
+     * must stay anonymous to every hook — a hook branching on `req.user` that
+     * saw the sharer would add an editor-only value and hand it to whoever
+     * holds the link, and a value a hook invents need not correspond to any
+     * declared field, so the access pass below cannot remove it again. What the
+     * sharer decides is narrower than that: which of the document's declared
+     * fields are visible.
+     *
+     * So it is a redaction basis and nothing else, and it is a separate
+     * parameter for exactly that reason. Folding it into `user` made the
+     * identity mean two things at once, which is the shape of defect this
+     * option exists to repair one level up.
+     *
+     * Absent means the caller's own `user`, which is the ordinary case.
+     */
+    fieldAccessUser?: UserContext;
+    /**
      * Which collections a trusted read may reach as relationships are expanded,
      * asked per RELATED collection. Absent means every populated target inherits
      * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
@@ -2624,6 +2716,7 @@ export class CollectionQueryService extends BaseService {
           // Same reasoning as the list path: a related row is redacted by its
           // own collection's field rules, for this caller.
           enforceFieldAccess: true,
+          fieldAccessUser: params.fieldAccessUser,
           // Same deferral as the list path; this path runs the same pass.
           fieldAccessStage: "assembled" as const,
           user: params.user,
@@ -2668,6 +2761,7 @@ export class CollectionQueryService extends BaseService {
           // component is judged by its own collection's field rules.
           access: {
             enforceFieldAccess: true,
+            fieldAccessUser: params.fieldAccessUser,
             user: params.user,
             overrideAccess: params.overrideAccess,
             // Narrows that bypass per RELATED collection. Absent means
@@ -2866,6 +2960,7 @@ export class CollectionQueryService extends BaseService {
             >[3] = {
               depth: params.depth,
               enforceFieldAccess: true,
+              fieldAccessUser: params.fieldAccessUser,
               // The overlaid draft is the document the post-assembly pass runs
               // over, so its related rows defer field rules for the same reason
               // the live read does. Without this a draft read hides a denied
@@ -2971,6 +3066,7 @@ export class CollectionQueryService extends BaseService {
         this.relationshipService.createNestedHookState();
       const detailNestedAccess = {
         enforceFieldAccess: true,
+        fieldAccessUser: params.fieldAccessUser,
         user: params.user,
         overrideAccess: params.overrideAccess,
         // Narrows that bypass per RELATED collection. Absent means unchanged;
@@ -3062,14 +3158,21 @@ export class CollectionQueryService extends BaseService {
       // cannot copy a denied sibling onto an allowed key selection now projects
       // last) while a conditional rule still judges against the whole row and a
       // hook-reintroduced denied field is caught.
+      // Row trust and FIELD trust are separate questions and this read may
+      // answer them differently. `overrideAccess` alone means both; a caller
+      // that asked for field rules to be enforced keeps its row bypass and
+      // gives up only the field one. Computed once, beside the two passes it
+      // governs, so they cannot drift apart.
+      const skipFieldRules =
+        params.enforceFieldAccess === true ? false : params.overrideAccess;
       const detailSourceRedactions: ReadAccessRedactions = new WeakMap();
       await applyFieldReadAccess(
         {
           kind: "collection",
           slug: params.collectionName,
           entry: finalData,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
+          user: params.fieldAccessUser ?? params.user,
+          overrideAccess: skipFieldRules,
         },
         detailSourceRedactions
       );
@@ -3086,8 +3189,8 @@ export class CollectionQueryService extends BaseService {
           kind: "collection",
           slug: params.collectionName,
           entry: finalData,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
+          user: params.fieldAccessUser ?? params.user,
+          overrideAccess: skipFieldRules,
         },
         detailSourceRedactions
       );

@@ -19,7 +19,6 @@
 
 import { z } from "zod";
 
-import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import {
   signPreviewToken,
   type PreviewTokenScope,
@@ -249,6 +248,15 @@ function refuseUnservableLink(args: {
  */
 async function respondWithPreviewLink(
   scope: PreviewTokenScope,
+  /**
+   * The id of the person the draft will be rendered as.
+   *
+   * Threaded through this shared helper rather than supplied at each mint, for
+   * the reason the generation is: a Single link and an entry link that recorded
+   * this differently would render under different permissions, and the one that
+   * forgot it would render under none at all.
+   */
+  minter: string,
   ttlSeconds?: number
 ): Promise<Response> {
   const generation = await (
@@ -258,7 +266,15 @@ async function respondWithPreviewLink(
   const { token, expiresAt } = await signPreviewToken(
     scope,
     previewSigningSecret(),
-    { generation, ...(ttlSeconds === undefined ? {} : { ttlSeconds }) }
+    {
+      generation,
+      // Recorded so the page renders through the SHARER's field-level
+      // permissions. Without it the render skips those rules entirely and the
+      // recipient sees fields the sharer cannot — which makes a link a way to
+      // read past your own permissions by sending one to yourself.
+      minter,
+      ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+    }
   );
 
   const settings = await (await settingsService()).getSettings();
@@ -289,12 +305,43 @@ async function respondWithPreviewLink(
  * confer the same kind of credential, so a difference in who they think is
  * asking would be a difference in who can obtain one.
  */
+/**
+ * Refuse to mint from an API key.
+ *
+ * A preview link records WHOSE permissions the draft is rendered through, and a
+ * key names no person. It is authorized on the grants stamped on the KEY —
+ * deliberately, so a narrow key cannot mint on the strength of its owner's
+ * account — but the only identity it could record is that owner, whose access
+ * is exactly what the key was scoped away from. The link would then render
+ * under permissions the request never had: a key allowed to update a document
+ * while denied one of its fields would hand its recipient that field.
+ *
+ * Refused rather than approximated. The honest alternative is to record the KEY
+ * and evaluate field rules against its own grants, which means teaching the
+ * field-level registry to take a grant set instead of resolving one from a user
+ * id — a change to a primitive every read and write shares.
+ *
+ * Shared by BOTH mints rather than written at one: an entry link and a Single
+ * link hand out the same kind of credential, and a rule applied to one of them
+ * is a rule with a way around it.
+ */
+function refuseApiKeyMint(auth: { authMethod: "session" | "api-key" }): void {
+  if (auth.authMethod === "api-key") {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "preview-link-minted-by-api-key",
+        remedy:
+          "A preview link records whose permissions the draft is rendered " +
+          "through, and a key names no person. Mint it from a signed-in " +
+          "session.",
+      },
+    });
+  }
+}
+
 async function callerFor(
   auth: Awaited<ReturnType<typeof requireRouteCollectionAccess>>
-): Promise<{
-  user: UserContext;
-  actor: AuthenticatedScope | undefined;
-}> {
+): Promise<{ user: UserContext }> {
   const roles = await resolveRoleSlugs(auth);
   return {
     user: buildUserContext({
@@ -304,11 +351,10 @@ async function callerFor(
       email: auth.userEmail,
       roles,
     }),
-    actor:
-      auth.authMethod === "api-key"
-        ? { actorType: "apiKey", permissions: auth.permissions }
-        : undefined,
   };
+  // No `actor`. It existed to judge an API KEY on its own stamped grants, and
+  // both mints now refuse a key outright — which is strictly stronger than
+  // judging one correctly, so nothing is lost but the branch.
 }
 
 /**
@@ -415,8 +461,9 @@ async function mintForSingle(
   // The Single's STORED rules, against the real document, in the TRANSLATION
   // the token will name. Runs before anything is signed and before the trusted
   // read below, so a refused caller reaches neither.
-  const { user, actor } = await callerFor(auth);
-  await assertSinglePreviewable(single, locale, user, actor);
+  refuseApiKeyMint(auth);
+  const { user } = await callerFor(auth);
+  await assertSinglePreviewable(single, locale, user);
 
   const declaration = await singlePreviewDeclarationFor(single);
 
@@ -444,6 +491,7 @@ async function mintForSingle(
 
   return respondWithPreviewLink(
     { kind: "single", single, ...(locale === undefined ? {} : { locale }) },
+    auth.userId,
     ttlSeconds
   );
 }
@@ -477,6 +525,24 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // link into a collection they have no access to by naming it here.
   const auth = await requireRouteCollectionAccess(req, "update", collection);
 
+  // A link is minted BY A PERSON, and an API key is not one.
+  //
+  // The token records who to render the draft as, and the page then judges
+  // every field by that person's rules. A key is authorized on the grants
+  // stamped on the KEY — deliberately, so a narrow key cannot mint on the
+  // strength of its owner's account — but the only identity it could record is
+  // that owner, whose access is exactly what the key was scoped away from. The
+  // link would then render under permissions the request never had: a key
+  // allowed to update an entry but denied one of its fields would hand its
+  // recipient that field.
+  //
+  // Refused rather than approximated. The honest alternative is to record the
+  // KEY and evaluate field rules against its own grants, which means teaching
+  // the field-level registry to take a grant set instead of resolving one from
+  // a user id — a change to a primitive every read and write shares, not
+  // something to infer from a preview link.
+  refuseApiKeyMint(auth);
+
   // That gate is one granularity coarser than what it hands out: it answers
   // "may this caller edit this COLLECTION", while the token names one ENTRY
   // and confers a read of it. Where a collection carries a row-level rule the
@@ -487,14 +553,19 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // read. Booted first because that gate resolves services from the container,
   // and on a cold process the permission lookup itself needs them registered.
   await getCachedNextly();
-  const { user, actor } = await callerFor(auth);
+  const { user } = await callerFor(auth);
   // Authorized through the gate that serves collection reads and writes, so the
   // verdict here is the verdict the bearer's own read will reach. It asks two
   // questions the previous by-id probe could not express: whether the entry is
   // visible at all INCLUDING one never published, and whether this caller may
   // edit it — which is what the draft overlay requires before surfacing the
   // working draft the token hands out.
-  await assertEntryPreviewable(collection, entryId, user, actor);
+  await assertEntryPreviewable(collection, entryId, user, {
+    // The route above ran the coarse gate for `update` on this collection, so
+    // repeating it here would ask a question already answered. The preview
+    // RENDER passes `false`: it has no route gate at all.
+    routeAuthorized: true,
+  });
 
   // Refused BEFORE a token is signed, because a link that cannot land is worse
   // than no link: the reviewer who opens it sees a 404 indistinguishable from
@@ -559,6 +630,7 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
 
   return respondWithPreviewLink(
     { collection, entryId, ...(locale === undefined ? {} : { locale }) },
+    auth.userId,
     ttlSeconds
   );
 });

@@ -102,6 +102,20 @@ export interface RelatedRowReadContext {
   enforceFieldAccess?: boolean;
 
   /**
+   * Whose field-level read rules to judge related rows by, when that is NOT the
+   * caller.
+   *
+   * Separate from `user` for the reason the top-level read keeps them apart: a
+   * preview's bearer is anonymous and every HOOK must go on seeing them that
+   * way, while the FIELDS are judged as the person who shared the link. One
+   * identity serving both makes a hook branching on `req.user` produce an
+   * editor-only value for an anonymous recipient.
+   *
+   * Absent means `user`, which is the ordinary case.
+   */
+  fieldAccessUser?: Record<string, unknown>;
+
+  /**
    * Evaluate the target collection's own read rules, independently of whether
    * fields are redacted. A Single's authorization view wants the second without
    * the first: its rule must read real values, and must still not be shown a row

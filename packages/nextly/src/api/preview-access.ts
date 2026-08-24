@@ -23,7 +23,6 @@
  * @module api/preview-access
  */
 
-import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { getService } from "../di";
 import {
   singleDocumentEditable,
@@ -78,7 +77,24 @@ export async function assertEntryPreviewable(
   collection: string,
   entryId: string,
   user: UserContext,
-  actor?: AuthenticatedScope
+  options: {
+    /**
+     * Whether the CALLER has already passed the coarse RBAC / code-defined
+     * access gate for `update` on this collection.
+     *
+     * Required, and per call site rather than defaulted, because it is true for
+     * one caller and false for the other and the wrong answer is silent. The
+     * mint runs behind `requireRouteCollectionAccess(req, "update", collection)`
+     * and would repeat that check for nothing. A preview RENDER runs on an
+     * anonymous public request with no route gate at all, so assuming it ran
+     * skips the very check that catches a sharer whose role was withdrawn —
+     * the check that makes revocation reach links already in circulation.
+     *
+     * A default would pick one of those and be wrong for the other in whichever
+     * direction nobody notices.
+     */
+    routeAuthorized: boolean;
+  }
 ): Promise<void> {
   const collections = getService("collectionsHandler");
 
@@ -93,7 +109,6 @@ export async function assertEntryPreviewable(
     depth: 0,
     overrideAccess: false,
     user,
-    authenticatedScope: actor,
     status: "all",
   });
 
@@ -127,18 +142,17 @@ export async function assertEntryPreviewable(
   // which this boundary cannot observe. Closing that needs the consumption path
   // to carry the minter's identity rather than a better guess here.
   //
-  // `routeAuthorized: true`: the mint route already ran
-  // `requireRouteCollectionAccess(req, "update", collection)`, and this flag
-  // skips ONLY that coarse RBAC/code-access gate. The stored owner-only,
-  // role-based and custom rules still evaluate against the loaded document with
-  // the real user, which is the part that answers this question.
-
+  // `routeAuthorized` skips ONLY the coarse RBAC / code-defined access gate;
+  // the stored owner-only, role-based and custom rules still evaluate against
+  // the loaded document with the real user either way. Which makes it exactly
+  // the flag that must not be decided here: skipping a gate that DID run costs
+  // nothing, and skipping one that did not is the difference between enforcing
+  // a withdrawn role and ignoring it.
   const mayEdit = await collections.canUpdateEntry({
     collectionName: collection,
     entryId,
     user,
-    routeAuthorized: true,
-    authenticatedScope: actor,
+    routeAuthorized: options.routeAuthorized,
   });
 
   if (!mayEdit) {
@@ -170,12 +184,13 @@ export async function assertEntryPreviewable(
 export async function assertSinglePreviewable(
   single: string,
   locale: string | undefined,
-  user: UserContext,
-  actor?: AuthenticatedScope
+  user: UserContext
 ): Promise<void> {
   const identity = {
     user,
-    ...(actor === undefined ? {} : { actor }),
+    // No `actor`. It carried an API KEY's own stamped grants, and both mints
+    // now refuse a key outright — a preview link records whose permissions the
+    // draft renders through, and a key names no person.
     // The TRANSLATION the token will name, so the rules are evaluated against
     // the document the bearer actually receives. A localized Single is a
     // different document per language, and an owner-only or custom rule can
