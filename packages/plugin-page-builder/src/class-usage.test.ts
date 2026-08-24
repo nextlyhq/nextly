@@ -215,21 +215,44 @@ describe("what a document nobody validated costs", () => {
     );
   });
 
-  it("stops reading after the number of nodes a document may hold", () => {
+  it("stops TRAVERSING after the number of nodes a document may hold", () => {
     // The other half of the bound, and the one that keeps the id set finite: a
     // document reaches here unvalidated, so nothing has enforced the node cap
     // before this runs.
-    const nodes = Array.from({ length: MAX_NODES + 100 }, (_, i) => ({
-      id: `n${i}`,
-      type: "core/text",
-      version: 1,
-      props: {},
-      classes: [`c${i}`],
-    }));
+    //
+    // The tripwire is on nodes PAST the bound, because the returned list cannot
+    // tell a bounded traversal from one that walked the whole tree and ignored
+    // the tail — both return exactly `MAX_NODES` ids. Reading `classes` is what
+    // the callback does with a node it was handed, so a walk that stopped never
+    // touches these.
+    let readPastTheBound = 0;
+    const nodes: unknown[] = Array.from(
+      { length: MAX_NODES + 100 },
+      (_, i) => ({
+        id: `n${i}`,
+        type: "core/text",
+        version: 1,
+        props: {},
+        classes: [`c${i}`],
+      })
+    );
+    for (let i = MAX_NODES; i < nodes.length; i++) {
+      nodes[i] = {
+        id: `n${i}`,
+        type: "core/text",
+        version: 1,
+        props: {},
+        get classes(): string[] {
+          readPastTheBound++;
+          return [`c${i}`];
+        },
+      };
+    }
 
     expect(
       classIdsUsedBy({ formatVersion: 1, kind: "page", nodes })
     ).toHaveLength(MAX_NODES);
+    expect(readPastTheBound).toBe(0);
   });
 });
 

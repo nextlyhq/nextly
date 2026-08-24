@@ -48,10 +48,31 @@ export interface TreePosition {
   index: number;
 }
 
-/** One node waiting to be visited, with the parent to report it under. */
-interface PendingNode {
-  node: unknown;
-  parent: BlockNode | undefined;
+/**
+ * One step of the walk: a node to visit, or the moment its subtree ends.
+ *
+ * The `leave` marker is what makes ancestry observable in an iterative walk.
+ * A recursive one knows it has left a subtree because the call returns; a
+ * stack has to be told, so each node queues its own marker BEFORE its children
+ * and the marker therefore pops after every descendant.
+ */
+type PendingNode =
+  | { kind: "visit"; node: unknown; parent: BlockNode | undefined }
+  | { kind: "leave"; node: unknown };
+
+/** How a caller narrows the walk. */
+export interface WalkOptions {
+  /** Reported as the parent of the top-level nodes. */
+  parent?: BlockNode;
+  /**
+   * Stop after visiting this many nodes.
+   *
+   * A bound the caller applies in its own callback is not this: the callback
+   * can decline to do work, but the walk has already queued and popped every
+   * remaining node, so a corrupt document still costs time and memory
+   * proportional to the whole stored tree. This ends the traversal.
+   */
+  maxNodes?: number;
 }
 
 /**
@@ -71,72 +92,85 @@ function pushChildren(stack: PendingNode[], node: BlockNode): void {
     const children = slots[s];
     if (!Array.isArray(children)) continue;
     for (let i = children.length - 1; i >= 0; i--) {
-      stack.push({ node: children[i], parent: node });
+      stack.push({ kind: "visit", node: children[i], parent: node });
     }
   }
 }
 
-/** Depth-first visit over the forest: each node, then its slots' children in order. */
+/** Whether an entry is a value this walk can treat as a node. */
+function isWalkableNode(node: unknown): node is BlockNode {
+  // `Array.isArray` is checked SEPARATELY because `typeof [] === "object"`, so
+  // the type test alone hands an array to `fn` as though it were a node. Every
+  // caller then reads its fields as `undefined` rather than failing: an
+  // id-uniqueness check sees `undefined` and compares it against other
+  // `undefined`s, a class reader finds no classes, a renderer finds no type.
+  // Silence in each case, from a value none of them can act on.
+  return typeof node === "object" && node !== null && !Array.isArray(node);
+}
+
+/**
+ * Depth-first visit over the forest: each node, then its slots' children in
+ * order.
+ *
+ * The forest reaches here from persisted data whether or not anything validated
+ * it — the blocks field admits any value whose `nodes` is an array — so an entry
+ * may be `null` or a primitive, and a slot's children may not be an array at
+ * all. Those are skipped rather than reported, because a walk has nobody to
+ * report to: a caller that needs to know an entry was unreadable is asking a
+ * validation question, and validation is where that answer lives. Skipping also
+ * matches what the renderer does with the same shapes, so a reader counting
+ * references here agrees with what the page actually applies.
+ *
+ * Iterative rather than recursive, because the forest's DEPTH is bounded by
+ * nothing that has run before this. `MAX_DEPTH` is a validation rule, and a
+ * document arrives whether or not validation ever passed on it — measured, a
+ * chain about ten thousand deep exited a recursive walk with
+ * `RangeError: Maximum call stack size exceeded`, no cycle involved. An
+ * explicit stack removes the limit rather than raising it.
+ *
+ * A node is skipped when it is already ON THE PATH from the root to itself,
+ * which is what a cycle is. That is deliberately narrower than skipping every
+ * node seen anywhere: the same node OBJECT placed in two different slots is not
+ * a cycle, and a walk that visited it once would report a subtree containing one
+ * duplicated id as containing none — which is exactly the question
+ * `insertionBreaksIdUniqueness` asks this walk, and the answer that would let
+ * `insertNode` build a forest addressing two positions by one id.
+ */
 export function walkNodes(
   nodes: BlockNode[],
   fn: (node: BlockNode, parent: BlockNode | undefined) => void,
-  parent?: BlockNode
+  options: WalkOptions = {}
 ): void {
-  // The forest reaches here from persisted data whether or not anything
-  // validated it — the blocks field admits any value whose `nodes` is an array
-  // — so an entry may be `null` or a primitive, and a slot's children may not
-  // be an array at all. Reading a property off either throws, and this walk is
-  // shared: a caller counting class references, one measuring the document and
-  // one rendering it all fail on the same malformed entry, each looking like a
-  // fault of its own.
-  //
-  // Skipped rather than reported, because a walk has nobody to report to. A
-  // caller that needs to know an entry was unreadable is asking a validation
-  // question, and validation is where that answer lives.
   if (!Array.isArray(nodes)) return;
+  const limit = options.maxNodes ?? Number.POSITIVE_INFINITY;
+  if (limit <= 0) return;
 
-  // Iterative rather than recursive, because the forest's DEPTH is not bounded
-  // by anything that has run before this. `MAX_DEPTH` is a validation rule, and
-  // a document reaches this walk whether or not validation ever passed on it —
-  // measured, a chain about ten thousand deep exits with
-  // `RangeError: Maximum call stack size exceeded`, with no cycle involved. An
-  // explicit stack removes the limit rather than raising it.
-  //
-  // `seen` closes the other way a walk fails to terminate: a slot list holding
-  // an ancestor. Recursion turned that into the same RangeError; an iterative
-  // walk without it would loop forever instead, which is worse. Neither shape
-  // can arrive from storage — `JSON.parse` mints a fresh object per node, so it
-  // cannot alias one — but both are constructible in process, which is the same
-  // range every other guard in this function covers.
-  //
-  // What that costs: a node object appearing twice in one forest is visited
-  // once. Only an in-process producer can build that, and for one the choice is
-  // between a single visit and a walk that does not finish.
-  const seen = new Set<unknown>();
+  const onPath = new Set<unknown>();
   const stack: PendingNode[] = [];
   for (let i = nodes.length - 1; i >= 0; i--) {
-    stack.push({ node: nodes[i], parent });
+    stack.push({ kind: "visit", node: nodes[i], parent: options.parent });
   }
 
+  let visited = 0;
   while (stack.length > 0) {
     const entry = stack.pop();
     if (entry === undefined) break;
-    const node = entry.node;
-    // `Array.isArray` is checked SEPARATELY because `typeof [] === "object"`,
-    // so the type test alone hands an array to `fn` as though it were a node.
-    // Every caller then reads its fields as `undefined` rather than failing:
-    // an id-uniqueness check sees `undefined` and compares it against other
-    // `undefined`s, a class reader finds no classes, a renderer finds no type.
-    // Silence in each case, from a value none of them can act on.
-    if (typeof node !== "object" || node === null || Array.isArray(node)) {
+    if (entry.kind === "leave") {
+      onPath.delete(entry.node);
       continue;
     }
-    if (seen.has(node)) continue;
-    seen.add(node);
+    if (!isWalkableNode(entry.node) || onPath.has(entry.node)) continue;
 
-    const block = node as BlockNode;
-    fn(block, entry.parent);
-    pushChildren(stack, block);
+    onPath.add(entry.node);
+    fn(entry.node, entry.parent);
+    visited++;
+    // Returning here rather than breaking out of the descent leaves the stack
+    // unread, which is the point: the budget bounds the traversal, not just the
+    // work done per node.
+    if (visited >= limit) return;
+
+    stack.push({ kind: "leave", node: entry.node });
+    pushChildren(stack, entry.node);
   }
 }
 

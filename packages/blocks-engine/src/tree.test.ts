@@ -112,6 +112,60 @@ describe("walkNodes / findNode / locateNode", () => {
     expect(visited.map(n => (n as BlockNode).id)).toEqual(["real"]);
   });
 
+  it("visits one node object placed in TWO slots twice", () => {
+    // The boundary of the cycle guard, and the reason it tracks the ancestor
+    // path rather than every node seen. Reusing one object in two slots is not
+    // a cycle — nothing recurses — so both placements are real.
+    //
+    // Load-bearing rather than cosmetic: `insertionBreaksIdUniqueness` asks
+    // this walk whether an incoming subtree already contains a duplicate id. A
+    // walk that visited the shared object once would report no duplicate, and
+    // `insertNode` would build a forest where one id addresses two positions.
+    const shared: BlockNode = { id: "dup", type: "t", version: 1, props: {} };
+    const host: BlockNode = {
+      id: "host",
+      type: "t",
+      version: 1,
+      props: {},
+      slots: { left: [shared], right: [shared] },
+    };
+
+    const visited: string[] = [];
+    walkNodes([host], n => visited.push(n.id));
+
+    expect(visited).toEqual(["host", "dup", "dup"]);
+  });
+
+  it("stops TRAVERSING once the node budget is spent, not just working", () => {
+    // A budget applied inside the callback bounds the work per node and nothing
+    // else: the walk has still queued and popped every remaining node, so a
+    // corrupt document costs time and memory proportional to the whole stored
+    // tree. That is invisible to an assertion on the result, which looks
+    // identical either way.
+    //
+    // So the tripwire is on the nodes PAST the budget: reading `slots` is what
+    // the walk does to descend, and a walk that stopped never reaches them.
+    let slotsRead = 0;
+    const roots = Array.from({ length: 50 }, (_, i) => ({
+      id: `n${i}`,
+      type: "t",
+      version: 1,
+      props: {},
+      get slots(): undefined {
+        slotsRead++;
+        return undefined;
+      },
+    })) as unknown as BlockNode[];
+
+    let visited = 0;
+    walkNodes(roots, () => visited++, { maxNodes: 10 });
+
+    expect(visited).toBe(10);
+    // Nine, not ten: the tenth node spends the budget and the walk returns
+    // before queueing its children, so its slots are never read either.
+    expect(slotsRead).toBe(9);
+  });
+
   it("still visits a repeated ID that is a DISTINCT object", () => {
     // The control for the cycle guard, and the boundary of what it costs. It
     // skips a node OBJECT already visited, not an id already seen — two sibling

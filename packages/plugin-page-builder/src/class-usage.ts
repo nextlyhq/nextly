@@ -89,34 +89,38 @@ export function classIdsUsedBy(stored: unknown): string[] {
   if (!Array.isArray(nodes)) return [];
 
   const ids = new Set<string>();
-  let nodesRead = 0;
-  walkNodes(nodes as BlockNode[], node => {
-    // Both bounds below are the COMPILER's, taken from the engine rather than
-    // chosen here, because the question is which classes this page renders. A
-    // reader that stopped somewhere else would answer about a different
-    // document than the one being served — reporting a reference the page does
-    // not apply, or omitting one it does.
-    //
-    // A cap on DISTINCT ids used to sit here instead, and it was the wrong
-    // quantity twice over. It let a corrupt array of repeats be scanned in full
-    // while never filling, since repeats add no distinct entry; and once it did
-    // fill, it dropped every later id — so a page mentioning many ids of
-    // deleted classes before a live one omitted the live one, which is the
-    // direction that gets a class deleted while a page still uses it. The two
-    // caps below bound the work by construction and drop nothing reachable.
-    if (nodesRead >= MAX_NODES) return;
-    nodesRead++;
-
-    const classes: unknown = (node as { classes?: unknown }).classes;
-    if (!Array.isArray(classes)) return;
-    // Bounds ENTRIES READ, not ids kept, and the two differ exactly where it
-    // matters: an array of a million repeats holds one distinct id, so a
-    // distinct-count bound never trips and the whole array is read.
-    const readable = Math.min(classes.length, MAX_CLASSES_PER_NODE);
-    for (let i = 0; i < readable; i++) {
-      const id: unknown = classes[i];
-      if (namesAClass(id)) ids.add(id);
-    }
-  });
+  // Both bounds are the COMPILER's, taken from the engine rather than chosen
+  // here, because the question is which classes this page renders. A reader
+  // that stopped somewhere else would answer about a different document than
+  // the one being served — reporting a reference the page does not apply, or
+  // omitting one it does.
+  //
+  // A cap on DISTINCT ids used to sit inside the callback instead, and it was
+  // the wrong quantity twice over. It let a corrupt array of repeats be scanned
+  // in full while never filling, since repeats add no distinct entry; and once
+  // it did fill it dropped every later id — so a page mentioning many ids of
+  // deleted classes before a live one omitted the live one, the direction that
+  // gets a class deleted while a page still uses it.
+  //
+  // The node bound is passed to the WALK rather than applied in the callback.
+  // A callback can only decline to do work; the walk has by then queued and
+  // popped every remaining node, so a corrupt document would still cost time
+  // and memory proportional to the whole stored tree on every page write.
+  walkNodes(
+    nodes as BlockNode[],
+    node => {
+      const classes: unknown = (node as { classes?: unknown }).classes;
+      if (!Array.isArray(classes)) return;
+      // Bounds ENTRIES READ, not ids kept, and the two differ exactly where it
+      // matters: an array of a million repeats holds one distinct id, so a
+      // distinct-count bound never trips and the whole array is read.
+      const readable = Math.min(classes.length, MAX_CLASSES_PER_NODE);
+      for (let i = 0; i < readable; i++) {
+        const id: unknown = classes[i];
+        if (namesAClass(id)) ids.add(id);
+      }
+    },
+    { maxNodes: MAX_NODES }
+  );
   return [...ids].sort();
 }
