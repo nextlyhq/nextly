@@ -11,8 +11,9 @@
   //   - pnpm fallow:audit = the diff, against origin/main. Same check the
   //                         agent gate runs before a commit.
   //
-  // CI runs neither: .github/workflows/code-hygiene.yml scans the whole
-  // repository against a baseline built from the pull request's base.
+  // In CI, .github/workflows/code-hygiene.yml runs a changed-files audit
+  // gate alongside a full-repository scan for dead-code, dupes, and health
+  // (excluding apps/playground).
   //
   // The lists below exist because a static reader cannot see every way this
   // repo reaches code: a path spelled inside a string, a package pulled in by
