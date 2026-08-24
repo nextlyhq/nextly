@@ -47,6 +47,7 @@ import type {
   DynamicSingleRecord,
   SingleSource,
 } from "../schemas/dynamic-singles/types";
+import { normalizeDbTimestamp } from "../shared/lib/date-formatting";
 
 /**
  * @public Read-only registry access to the app's Singles.
@@ -128,6 +129,15 @@ export interface PluginSingleRecord {
   /** The stable name. A Single's row may not exist; its slug always does. */
   slug: string;
   label: string;
+  /**
+   * Absent rather than null.
+   *
+   * `dynamic_singles.description` is nullable in all three dialects and the
+   * registry's deserializer preserves that through an unchecked cast to
+   * `string | undefined`, so the value really can be `null`. Publishing it as
+   * optional and normalizing at the seam means `record.description?.trim()`
+   * works, where a caller checking `!== undefined` on a null would have thrown.
+   */
   description?: string;
   /** The declaration, whether or not anybody has written to this Single. */
   fields: SerializedFieldConfig[];
@@ -182,37 +192,36 @@ export interface PluginSinglesService {
  * which is what makes copying members across deliberate work rather than
  * plumbing.
  *
- * Timestamps go through {@link toIsoString}, which is a conversion rather than
- * an assertion: the registry's own deserializer types the raw column as
- * `Date | string | number`, so what arrives is genuinely one of three shapes.
+ * Timestamps go through `normalizeDbTimestamp`, the same function the registry
+ * itself uses, rather than a conversion written here. A second implementation
+ * of one question does not stay agreed: this one had `Date.prototype.toISOString`,
+ * which PRESERVES the instant, while the canonical function re-interprets a
+ * Date's local components as UTC to undo the driver's local parsing. Measured,
+ * the two answers are five hours apart in a `+05` process and identical under
+ * UTC — so every test agreed with it and no test could have caught it.
  */
 /**
- * One timestamp, as an ISO string or null.
+ * One timestamp, normalized by the canonical function and then checked.
  *
- * `String(value)` was the first attempt and is wrong in two directions. On a
- * `Date` it produces `"Fri Jan 02 2026 03:04:05 GMT+0000"` — a valid string,
- * and NOT the ISO format the same column yields when the driver hands back
- * text, so the published format would depend on which dialect answered. On
- * anything else object-shaped it produces `"[object Object]"`, which is a
- * string that looks like data and is not.
+ * The normalization is NOT reimplemented here. `normalizeDbTimestamp` does it,
+ * including the part that is easy to get wrong and impossible to notice: for a
+ * `Date` it re-interprets the local components as UTC, undoing the shift a
+ * driver applied when it parsed a naive datetime. A `toISOString()` written
+ * here instead preserves that shift, and the two answers are five hours apart
+ * in a `+05` process while agreeing exactly under UTC — so a second
+ * implementation passes every test written on a UTC machine.
  *
- * Each accepted shape is converted on its own terms, and anything else answers
- * null. A value this cannot read is ABSENT rather than mangled: a caller can
- * see a null, and cannot see that `"[object Object]"` was never a timestamp.
+ * What IS done here is validating the result. The canonical function ends with
+ * a `String(value)` fallback for a value that is neither Date nor string, so an
+ * object arrives back as the literal text `[object Object]` — a string that
+ * looks like data. This surface publishes `string | null`, and a caller cannot
+ * tell that apart from a timestamp; null it can. That is a check on the answer
+ * rather than a second way of computing it.
  */
-function toIsoString(value: unknown): string | null {
-  if (value == null) return null;
-  if (value instanceof Date) {
-    // An invalid Date stringifies to "Invalid Date" and `toISOString` throws,
-    // so it is reported as absent rather than as either.
-    return Number.isNaN(value.getTime()) ? null : value.toISOString();
-  }
-  if (typeof value === "string") return value;
-  if (typeof value === "number") {
-    const asDate = new Date(value);
-    return Number.isNaN(asDate.getTime()) ? null : asDate.toISOString();
-  }
-  return null;
+function publishedTimestamp(value: unknown): string | null {
+  const normalized = normalizeDbTimestamp(value);
+  if (normalized === null) return null;
+  return Number.isNaN(Date.parse(normalized)) ? null : normalized;
 }
 
 function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
@@ -220,14 +229,14 @@ function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
     id: record.id,
     slug: record.slug,
     label: record.label,
-    description: record.description,
+    description: record.description ?? undefined,
     // Assignable without an assertion: `SerializedFieldConfig` declares only
     // members every `FieldConfig` arm already satisfies, which is what made
     // narrowing it honest in the first place.
     fields: record.fields,
     source: record.source,
-    createdAt: toIsoString(record.createdAt),
-    updatedAt: toIsoString(record.updatedAt),
+    createdAt: publishedTimestamp(record.createdAt),
+    updatedAt: publishedTimestamp(record.updatedAt),
   };
 }
 

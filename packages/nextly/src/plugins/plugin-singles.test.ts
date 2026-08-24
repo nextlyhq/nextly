@@ -4,6 +4,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { Logger } from "../shared/types";
 import { createPluginContext, PLUGIN_SERVICE_NAMES } from "./plugin-context";
+import { normalizeDbTimestamp } from "../shared/lib/date-formatting";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 
 /**
@@ -250,22 +251,28 @@ describe("the published record says what the registry can actually return", () =
     // and the registry's own deserializer types the raw column as
     // `Date | string | number`, so a Date reaching here is a shape the code
     // already admits — and it is the one that makes the conversion do work.
+    // Local components, so the canonical normalizer's UTC re-interpretation
+    // is actually exercised. A `new Date("...Z")` would agree with a naive
+    // `toISOString()` and prove nothing.
+    const stamp = new Date(2026, 0, 2, 3, 4, 5);
     const registry = {
       listSingles: async () => ({
-        data: [
-          { ...rowAsStored(), createdAt: new Date("2026-01-02T03:04:05Z") },
-        ],
+        data: [{ ...rowAsStored(), createdAt: stamp }],
         total: 1,
       }),
     } as unknown as SingleRegistryService;
 
     const [record] = (await wrapSinglesForPlugin(registry).list()).data;
 
-    // ISO, not `Date.prototype.toString()`. The same column yields ISO text
-    // when a driver hands back a string, so a `String(date)` conversion would
-    // make the published FORMAT depend on which dialect answered — different
-    // shape, same field, no error anywhere.
-    expect(record!.createdAt).toBe("2026-01-02T03:04:05.000Z");
+    // Asserted against the CANONICAL normalizer rather than against a literal.
+    // A literal here would pin whichever answer this file's implementation
+    // happened to give, which is exactly how a second implementation stays
+    // green while disagreeing with the first: `Date.prototype.toISOString`
+    // preserves the instant, while `normalizeDbTimestamp` re-interprets a
+    // Date's local components as UTC to undo the driver's local parsing. Those
+    // are five hours apart in a `+05` process and identical under UTC, so a
+    // literal written on a UTC machine cannot see the divergence at all.
+    expect(record!.createdAt).toBe(normalizeDbTimestamp(stamp));
   });
 
   it("reports an unreadable timestamp as absent rather than as text", async () => {
@@ -327,5 +334,39 @@ describe("the published record says what the registry can actually return", () =
       "source",
       "updatedAt",
     ]);
+  });
+});
+
+describe("a Single with no description", () => {
+  it("reports it absent rather than null", async () => {
+    // `dynamic_singles.description` is nullable in all three dialects and the
+    // registry's deserializer casts it to `string | undefined` without
+    // checking, so `null` reaches here. A caller writing
+    // `if (record.description !== undefined) record.description.trim()`
+    // compiles against the published type and throws on that value.
+    const registry = {
+      listSingles: async () => ({
+        data: [
+          {
+            id: "s1",
+            slug: "homepage",
+            label: "Homepage",
+            fields: [],
+            source: "code",
+            description: null,
+            createdAt: null,
+            updatedAt: null,
+          },
+        ],
+        total: 1,
+      }),
+    } as unknown as SingleRegistryService;
+
+    const [record] = (await wrapSinglesForPlugin(registry).list()).data;
+
+    expect(record!.description).toBeUndefined();
+    // Asserted separately: `toBeUndefined` passes for a missing key AND for a
+    // key holding undefined, and only one of those is what the type says.
+    expect(record!.description).not.toBeNull();
   });
 });
