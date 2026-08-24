@@ -22,7 +22,7 @@ name: Code hygiene
 #
 # WHOLE-REPO scans the whole repository at the PR branch HEAD, providing
 # complete visibility into dead code and duplication across all packages
-# (excluding apps/playground) in the GitHub Step Summary.
+# (excluding apps/playground) via GitHub Step Summary and a sticky PR comment.
 #
 # `templates/` is left out of both. Those four are fragments with no
 # package.json of their own, composed into a project by create-nextly-app at
@@ -36,8 +36,9 @@ on:
 
 permissions:
   contents: read
-  # The sticky comment and inline annotations the gate posts.
+  # The sticky comment and inline annotations the workflow posts.
   pull-requests: write
+  issues: write
   checks: write
 
 concurrency:
@@ -86,14 +87,58 @@ jobs:
           config: .fallowrc.jsonc
           gate: new-only
           fail-on-issues: true
-          comment: true
+          comment: false
           annotations: true
-          comment-id: code-hygiene
           # playground is a dev harness, not a published package. Excluding it
           # keeps the gate focused on the packages that ship to consumers and
           # prevents its intentional loose dependency declarations from
           # appearing as findings in unrelated pull requests.
           workspace: "!playground"
+      - name: Generate audit review envelope
+        if: always() && steps.audit.conclusion != 'skipped'
+        run: |
+          pnpm exec fallow audit \
+            --gate new-only \
+            --workspace "!playground" \
+            --config .fallowrc.jsonc \
+            --format review-github > /tmp/audit-review.json 2>/dev/null || true
+
+      - name: Post PR review comments for changed files
+        if: always() && steps.audit.conclusion != 'skipped' && github.event.pull_request.number != null
+        uses: actions/github-script@820762786026740c76f36085b0efc47a31fe5020 # v7.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const prNumber = context.issue.number;
+
+            if (!fs.existsSync('/tmp/audit-review.json')) return;
+            let review;
+            try {
+              review = JSON.parse(fs.readFileSync('/tmp/audit-review.json', 'utf8'));
+            } catch (err) {
+              return;
+            }
+
+            if (!review.comments || review.comments.length === 0) return;
+
+            try {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                commit_id: context.payload.pull_request.head.sha,
+                event: 'COMMENT',
+                body: review.body || '### 🛑 Fallow Audit: Issues found in changed files',
+                comments: review.comments.map(c => ({
+                  path: c.path,
+                  line: c.line,
+                  body: c.body,
+                })),
+              });
+            } catch (err) {
+              console.log('Could not post PR review threads:', err.message);
+            }
 
       # A degraded run reports nothing and reads exactly like a clean one, so
       # the states the action exposes for that are read rather than trusted.
@@ -181,8 +226,7 @@ jobs:
           done
           echo "crashed=$crashed" >> "$GITHUB_OUTPUT"
 
-      # The job summary is where this job says what it found. The sticky comment
-      # and the inline annotations belong to the Changed files job above.
+      # The job summary is where this job writes its output.
       - name: Write the job summary
         if: always() && steps.analyse.conclusion != 'skipped'
         run: |
@@ -198,6 +242,47 @@ jobs:
             pnpm exec fallow report --from "/tmp/head-$analysis.json" \
               --format github-summary >> "$GITHUB_STEP_SUMMARY"
           done
+
+      - name: Post or update whole-repo sticky comment
+        if: always() && steps.analyse.conclusion != 'skipped' && github.event.pull_request.number != null
+        uses: actions/github-script@820762786026740c76f36085b0efc47a31fe5020 # v7.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const prNumber = context.issue.number;
+            const commentMarker = '<!-- fallow:whole-repo-hygiene -->';
+
+            let commentBody = `${commentMarker}\n`;
+            if (process.env.GITHUB_STEP_SUMMARY && fs.existsSync(process.env.GITHUB_STEP_SUMMARY)) {
+              commentBody += fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, 'utf8');
+            } else {
+              commentBody += `## Whole-repository scan — PR branch current state\n\nFull scan completed for PR #${prNumber}.`;
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existingComment = comments.find(c => c.body && c.body.includes(commentMarker));
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: commentBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: commentBody,
+              });
+            }
 
       # Fails only if fallow encountered a tooling failure/crash.
       - name: Gate
