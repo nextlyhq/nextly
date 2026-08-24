@@ -1804,4 +1804,60 @@ test.describe("rounded geometry", () => {
 
     await expect(page.locator(BAND)).toHaveCount(0);
   });
+  test("keeps drawing under an ancestor whose overflow CANNOT clip", async ({
+    page,
+  }) => {
+    /*
+     * A computed `overflow` is not an overflow that clips. The property does not
+     * apply to every generated box, and the computed value says nothing about
+     * that — so an author who writes `overflow: hidden` where it has no effect
+     * would otherwise lose the whole overlay to a clip that does not exist.
+     *
+     * `display: contents` is the sharpest of the nine measured cases, because it
+     * fails twice over: the element generates NO BOX, so nothing clips AND
+     * `getBoundingClientRect` answers 0x0 — and a descendant compared against a
+     * zero-sized rectangle is outside it on every edge.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.borderRadius = "60px";
+      section.style.display = "contents";
+    });
+    await target.click();
+
+    const ancestor = await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      const style = getComputedStyle(section);
+      const box = section.getBoundingClientRect();
+      return {
+        display: style.display,
+        overflow: style.overflowX,
+        area: box.width * box.height,
+      };
+    });
+
+    /*
+     * The separating properties. The computed overflow really does say `hidden`,
+     * so a reader that trusted it would act — and the box really is empty, so
+     * acting would refuse every descendant on the rectangle alone, before the
+     * curve was ever consulted.
+     */
+    expect(ancestor.display).toBe("contents");
+    expect(ancestor.overflow).toBe("hidden");
+    expect(ancestor.area).toBe(0);
+
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
 });

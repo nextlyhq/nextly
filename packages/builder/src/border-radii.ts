@@ -321,16 +321,54 @@ function insideArc(dx: number, dy: number, radius: CornerRadius): boolean {
 }
 
 /**
- * How finely each corner arc is sampled when the INNER shape is itself rounded.
+ * The most samples one corner arc is ever cut into.
  *
- * A rounded child's extreme point in a corner is not its box corner — it is a
- * point on its own arc — so the two curves have to be compared along their
- * length rather than at one point. Sixty-four steps over a quarter turn leaves
- * the sampled chord within `r * (1 - cos(pi / 256))` of the true arc, which is
- * 0.08px on a 1000px radius. See `samplingBound`, which takes that off the
- * caller's allowance so the approximation can only ever refuse too much.
+ * A rounded inner shape's extreme point in a corner is not its box corner — it
+ * is a point on its own arc — so the two curves have to be compared along their
+ * length rather than at one point, and the comparison is only as good as the
+ * chord between samples.
+ *
+ * The count is DERIVED from the radius rather than fixed, because a fixed one is
+ * wrong at both ends: it wastes several dozen evaluations on a four-pixel corner
+ * and runs out of precision on a large one. A fixed sixty-four exceeds a
+ * half-pixel allowance somewhere above a 6,600px rendered half-axis — reachable
+ * on a large box, and more easily under an ancestor `scale`, where the allowance
+ * would go NEGATIVE and refuse two identical flush rectangles.
+ *
+ * The cap bounds the cost. At this many samples the chord stays within a quarter
+ * pixel of the arc out to a radius of some 210,000px, which no layout reaches;
+ * past it, `roundedInsideRounded` refuses rather than answering to a precision it
+ * cannot deliver.
  */
-const ARC_SAMPLES = 64;
+const MAX_ARC_SAMPLES = 512;
+
+/** The fewest, for a corner so small the chord is already the arc. */
+const MIN_ARC_SAMPLES = 4;
+
+/**
+ * How far a sampled chord can fall short of the arc it stands in for.
+ *
+ * The worst case sits half a step along, at `r * (1 - cos(theta / 2))` for a step
+ * of `theta`. Taken off the caller's allowance rather than ignored, so the
+ * approximation spends the slack instead of exceeding it.
+ */
+function chordError(radius: number, samples: number): number {
+  return radius * (1 - Math.cos(Math.PI / (4 * samples)));
+}
+
+/**
+ * The fewest samples that keep {@link chordError} within `target`.
+ *
+ * Inverting the expression above: a step of `2 * acos(1 - target / radius)`
+ * lands exactly on the target, and a quarter turn needs that many of them.
+ */
+function arcSamplesFor(radius: number, target: number): number {
+  if (!(radius > 0) || !(target > 0)) return MIN_ARC_SAMPLES;
+  const step = 2 * Math.acos(Math.max(-1, 1 - target / radius));
+  if (!(step > 0)) return MAX_ARC_SAMPLES;
+  const needed = Math.ceil(Math.PI / 2 / step);
+  return Math.min(MAX_ARC_SAMPLES, Math.max(MIN_ARC_SAMPLES, needed));
+}
 
 /** Which side of the box each corner sits on: -1 is left or top, 1 right or bottom. */
 const CORNER_SIGNS = {
@@ -340,13 +378,13 @@ const CORNER_SIGNS = {
   bottomLeft: { x: -1, y: 1 },
 } as const satisfies Record<keyof CornerRadii, { x: -1 | 1; y: -1 | 1 }>;
 
-/** How far the sampled chords can fall short of the arcs they stand in for. */
-function samplingBound(radii: CornerRadii): number {
+/** The largest half-axis anywhere on a shape, which is what bounds the error. */
+function largestRadius(radii: CornerRadii): number {
   let largest = 0;
   for (const corner of CORNERS) {
     largest = Math.max(largest, radii[corner].x, radii[corner].y);
   }
-  return largest * (1 - Math.cos(Math.PI / (4 * ARC_SAMPLES)));
+  return largest;
 }
 
 /**
@@ -364,7 +402,8 @@ function cornerInside(
   boxRadius: CornerRadius,
   clip: EdgeBounds,
   clipRadius: CornerRadius,
-  slack: number
+  slack: number,
+  samples: number
 ): boolean {
   // A square outer corner cuts nothing the straight-edge comparison has not
   // already answered.
@@ -373,7 +412,7 @@ function cornerInside(
   const sign = CORNER_SIGNS[corner];
   const centre = arcCentre(sign, box, own);
   const against = arcCentre(sign, clip, clipRadius);
-  const steps = own.x > 0 ? ARC_SAMPLES : 1;
+  const steps = own.x > 0 ? samples : 1;
   for (let step = 0; step < steps; step += 1) {
     const angle = (step / Math.max(1, steps - 1)) * (Math.PI / 2);
     const px = centre.x + sign.x * own.x * Math.cos(angle);
@@ -428,7 +467,23 @@ export function roundedInsideRounded(
   clipRadii: CornerRadii,
   slack: number
 ): boolean {
-  const allowance = slack - samplingBound(boxRadii);
+  const largest = largestRadius(boxRadii);
+  /*
+   * Half the allowance is spent on the approximation and half kept for the
+   * fractional measurements the slack exists for, so neither can consume the
+   * other.
+   */
+  const samples = arcSamplesFor(largest, slack / 2);
+  /*
+   * Past the cap the chords are further from the arcs than the whole allowance
+   * and this goes NEGATIVE, which is deliberate rather than a case to guard.
+   * A negative allowance makes every depth larger, so the comparison tightens
+   * instead of loosening: a shape sitting on the curve is refused while one
+   * comfortably inside is still accepted, which is exactly the right way to
+   * degrade. An explicit refusal here would throw away the second answer as
+   * well, and the arithmetic already delivers the first.
+   */
+  const allowance = slack - chordError(largest, samples);
   return CORNERS.every(corner =>
     cornerInside(
       corner,
@@ -436,7 +491,8 @@ export function roundedInsideRounded(
       boxRadii[corner],
       clip,
       clipRadii[corner],
-      allowance
+      allowance,
+      samples
     )
   );
 }

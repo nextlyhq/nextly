@@ -696,6 +696,48 @@ export function hasScrollbarGutter(
  * that clipping applies to the bands and the page alike, so it produces no
  * mismatch; only a clip between the block and the root does.
  */
+/**
+ * Computed `display` values whose generated box `overflow` does not clip.
+ *
+ * MEASURED across the catalog's display set in Chromium rather than read off a
+ * spec table, by giving each value `overflow: hidden` and a child pulled outside
+ * it, then reading the pixels. The list is wider than the inline box people
+ * reach for first, and two of the entries are not guessable:
+ *
+ * - The internal TABLE boxes take no clip — a row, a row group, a header group
+ *   and a footer group all paint a child straight through the edge — while
+ *   `table`, `inline-table` and `table-cell` all clip normally.
+ * - `contents` generates no box at all, so nothing clips AND
+ *   `getBoundingClientRect` answers 0x0 on it. A caller that skipped this entry
+ *   would compare a descendant against a zero-sized rectangle and conclude every
+ *   block is outside it.
+ *
+ * `ruby-base`, `ruby-base-container` and `ruby-text-container` are deliberately
+ * ABSENT: all three compute to plain `block` in Chromium, so they clip and an
+ * entry for them would describe a value that never arrives.
+ *
+ * The measurement had to force overflow with a NEGATIVE MARGIN rather than an
+ * oversized child, because table boxes size to their content: a wide child makes
+ * them grow to fit, and "not clipped" then means "never overflowed" — which read
+ * as six false entries on the first pass.
+ */
+const OVERFLOW_NEVER_CLIPS: ReadonlySet<string> = new Set([
+  "inline",
+  "inline list-item",
+  "table-row",
+  "table-row-group",
+  "table-header-group",
+  "table-footer-group",
+  "ruby",
+  "ruby-text",
+  "contents",
+]);
+
+/** Whether `overflow` establishes a clip on a box with this computed display. */
+export function overflowApplies(display: string): boolean {
+  return !OVERFLOW_NEVER_CLIPS.has(display);
+}
+
 /** A computed border width in pixels, or zero when the browser reports no number. */
 function edgeWidth(value: string): number {
   const parsed = Number.parseFloat(value);
@@ -753,6 +795,14 @@ function cutByAncestor(
   const clipsX = style.overflowX !== "visible";
   const clipsY = style.overflowY !== "visible";
   if (!clipsX && !clipsY) return false;
+  /*
+   * A computed `overflow` is not the same as an overflow that CLIPS. The
+   * property does not apply to every generated box, and the computed value says
+   * nothing about that — so an author who writes `overflow: hidden` on an inline
+   * span gets the declaration in the computed style and no clip on the page.
+   * Reading the first as the second cuts a descendant nothing removes.
+   */
+  if (!overflowApplies(style.display)) return false;
   /*
    * Overflow clips at the PADDING edge, and `getBoundingClientRect` reports the
    * BORDER box. On a container with a border the two differ by its width, so a

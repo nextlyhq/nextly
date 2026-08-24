@@ -519,6 +519,136 @@ describe("a ROUNDED shape inside a rounded one", () => {
   });
 });
 
+describe("the sampling allowance at extreme radii", () => {
+  it("still accepts two identical flush shapes at a huge rendered radius", () => {
+    /*
+     * A fixed sample count runs out of precision on a large shape: at
+     * sixty-four steps the chord falls further from the arc than the whole
+     * half-pixel allowance somewhere above a 6,600px rendered half-axis, the
+     * allowance goes NEGATIVE, and two identical flush rounded rectangles start
+     * failing containment — so the overlay vanishes on a block nothing removes.
+     *
+     * Reachable on a large box, and more easily under an ancestor `scale`, since
+     * these radii are in RENDERED pixels.
+     */
+    const huge = 40_000;
+    const clip = { top: 0, right: 100_000, bottom: 100_000, left: 0 };
+    const radii: CornerRadii = {
+      topLeft: { x: huge, y: huge },
+      topRight: { x: huge, y: huge },
+      bottomRight: { x: huge, y: huge },
+      bottomLeft: { x: huge, y: huge },
+    };
+    expect(roundedInsideRounded(clip, radii, clip, radii, 0.5)).toBe(true);
+  });
+
+  it("still refuses a shape that genuinely leaves the curve at that scale", () => {
+    /*
+     * The other half. Adapting the sample count must not turn into accepting
+     * everything large — a square-cornered block pushed into a huge arc is still
+     * cut, and reads as cut.
+     */
+    const huge = 40_000;
+    const clip = { top: 0, right: 100_000, bottom: 100_000, left: 0 };
+    const radii: CornerRadii = {
+      topLeft: { x: huge, y: huge },
+      topRight: { x: huge, y: huge },
+      bottomRight: { x: huge, y: huge },
+      bottomLeft: { x: huge, y: huge },
+    };
+    expect(roundedInsideRounded(clip, SQUARE_CORNERS, clip, radii, 0.5)).toBe(
+      false
+    );
+  });
+
+  it("spends the chord error out of the allowance, not on top of it", () => {
+    /*
+     * The reason the error is SUBTRACTED rather than merely bounded. Without it
+     * the guarantee slips: the caller asks to tolerate half a pixel, sampling
+     * can miss a violation by up to the chord error on top of that, and the two
+     * add up to more overhang than anyone allowed.
+     *
+     * At a 300,000px half-axis the sample count is capped, so the chord error is
+     * a substantial 0.353px and the effective allowance is 0.147px. A shape
+     * pushed out by 0.3px therefore sits BETWEEN the two: inside the raw slack,
+     * outside the allowance the error leaves. It has to be refused.
+     */
+    const huge = 300_000;
+    const clip = { top: 0, right: 1_000_000, bottom: 1_000_000, left: 0 };
+    const radii: CornerRadii = {
+      topLeft: { x: huge, y: huge },
+      topRight: { x: huge, y: huge },
+      bottomRight: { x: huge, y: huge },
+      bottomLeft: { x: huge, y: huge },
+    };
+    const pushedOut = (by: number) => ({ ...clip, top: -by, left: -by });
+
+    expect(roundedInsideRounded(pushedOut(0.3), radii, clip, radii, 0.5)).toBe(
+      false
+    );
+
+    /*
+     * The separating half: a displacement comfortably inside the remaining
+     * allowance is still accepted, so the refusal above is the error being spent
+     * and not a blanket refusal of large shapes.
+     */
+    expect(roundedInsideRounded(pushedOut(0.05), radii, clip, radii, 0.5)).toBe(
+      true
+    );
+  });
+
+  it("degrades toward refusing past the cap, without refusing everything", () => {
+    /*
+     * Past the sample cap the chords are further from the arcs than the whole
+     * allowance and it goes negative, which TIGHTENS every depth rather than
+     * loosening it. Both halves are asserted, because the useful behaviour is
+     * the pair:
+     *
+     * - a shape sitting ON the curve is refused, since nothing here can certify
+     *   it and answering "inside" would accept a shape the container cuts;
+     * - a shape comfortably INSIDE is still accepted, which a blanket refusal at
+     *   this point would have thrown away for no gain.
+     *
+     * It takes a rendered half-axis over 400,000px, which no layout produces on
+     * its own; `transform` is a catalog property, so an ancestor `scale` is the
+     * route that reaches it.
+     */
+    const absurd = 1_000_000;
+    const clip = { top: 0, right: 4_000_000, bottom: 4_000_000, left: 0 };
+    const radii: CornerRadii = {
+      topLeft: { x: absurd, y: absurd },
+      topRight: { x: absurd, y: absurd },
+      bottomRight: { x: absurd, y: absurd },
+      bottomLeft: { x: absurd, y: absurd },
+    };
+    expect(roundedInsideRounded(clip, radii, clip, radii, 0.5)).toBe(false);
+
+    const wellInside = {
+      top: 100_000,
+      right: 3_900_000,
+      bottom: 3_900_000,
+      left: 100_000,
+    };
+    expect(roundedInsideRounded(wellInside, radii, clip, radii, 0.5)).toBe(
+      true
+    );
+  });
+
+  it("keeps a small corner cheap", () => {
+    // The count is derived, so a four-pixel corner is not paid for at the rate a
+    // four-thousand-pixel one needs. Asserted through behaviour rather than by
+    // reaching for the private count: a tiny flush shape is still accepted.
+    const clip = { top: 0, right: 40, bottom: 20, left: 0 };
+    const tiny: CornerRadii = {
+      topLeft: { x: 4, y: 4 },
+      topRight: { x: 4, y: 4 },
+      bottomRight: { x: 4, y: 4 },
+      bottomLeft: { x: 4, y: 4 },
+    };
+    expect(roundedInsideRounded(clip, tiny, clip, tiny, 0.5)).toBe(true);
+  });
+});
+
 describe("stating the shape as a clip", () => {
   it("states the shape in the clipped element's own coordinates", () => {
     const band = { x: 10, y: 20, width: 100, height: 40 };
