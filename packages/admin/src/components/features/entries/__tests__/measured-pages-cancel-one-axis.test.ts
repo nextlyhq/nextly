@@ -13,16 +13,21 @@
  * no rule at all. The single source is therefore this check rather than a
  * value, which is why it reads the files instead of importing from them.
  *
- * WHAT THIS COVERS: the five files below and nothing else — the two editors
- * and the three skeletons that stand in for them.
+ * WHAT THIS COVERS: every `.ts` and `.tsx` under the admin's source, minus
+ * this file, whose fixtures are examples of the thing being forbidden.
  *
- * Singles is in the list because it had to be. `TranslationPanes` is shared by
- * both editors, and it stops padding where they go edge-to-edge; a Single
- * rendering into an unmeasured page would have been the one consumer still
- * expecting that padding, 64px wider than the pane holding it. Two editors
- * sharing a container cannot answer this differently.
+ * It covered five named files until a review pointed out that a class list
+ * extracted to a constant in a sixth still compiles — Tailwind scans literals
+ * across the whole source set — so the list would have gone green while the
+ * bleed came back. A list of files to check is a list someone has to remember
+ * to extend; scanning the tree is not.
+ *
+ * This is only affordable because the utility is used NOWHERE else in the
+ * admin: measured, every other occurrence is prose explaining its removal. If a
+ * legitimate use ever appears, it belongs in a named exclusion beside
+ * `THIS_FILE` with the reason, not in a widened pattern.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,14 +36,28 @@ import { describe, expect, it } from "vitest";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADMIN_SRC = resolve(HERE, "../../../..");
 
-/** The editor and both skeletons — the same layout at two moments. */
-const MEASURED = [
-  "components/features/entries/EntryForm/EntryForm.tsx",
-  "components/features/singles/SingleForm.tsx",
-  "pages/dashboard/entries/[slug]/create.tsx",
-  "pages/dashboard/entries/[slug]/[id]/index.tsx",
-  "pages/dashboard/singles/[slug]/index.tsx",
-];
+/**
+ * The one file allowed to contain these utilities: this one, whose fixtures are
+ * examples of the thing being forbidden.
+ *
+ * A single exclusion, and a self-evident one. Anything else is a finding.
+ */
+const THIS_FILE =
+  "components/features/entries/__tests__/measured-pages-cancel-one-axis.test.ts";
+
+/** Every `.ts`/`.tsx` under the admin's source, as paths relative to it. */
+function sourceFiles(dir = ""): string[] {
+  const here = resolve(ADMIN_SRC, dir);
+  const found: string[] = [];
+
+  for (const entry of readdirSync(here, { withFileTypes: true })) {
+    const path = dir ? `${dir}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) found.push(...sourceFiles(path));
+    else if (/\.tsx?$/.test(entry.name)) found.push(path);
+  }
+
+  return found;
+}
 
 /**
  * A negative inset that cancels the page's HORIZONTAL padding, in any variant,
@@ -74,14 +93,22 @@ function withoutComments(source: string): string {
 }
 
 describe("a measured entry page", () => {
-  it("reads the files it names", () => {
-    // Every assertion below is about file CONTENT, and an unreadable path has
-    // none — so it would pass by silence.
-    for (const path of MEASURED) {
-      expect(
-        readFileSync(resolve(ADMIN_SRC, path), "utf8").length,
-        `${path} is empty or unreadable`
-      ).toBeGreaterThan(0);
+  it("reads the whole admin, not a list someone maintains", () => {
+    // The population was a list of five files until a review pointed out the
+    // obvious: a class list extracted to a constant in a SIXTH file still
+    // compiles — Tailwind scans literals across the source set — and the list
+    // would not have seen it. There is no list now, so there is nothing to
+    // forget to update.
+    const files = sourceFiles();
+
+    expect(files.length).toBeGreaterThan(500);
+    for (const path of [
+      "components/features/entries/EntryForm/EntryForm.tsx",
+      "components/features/singles/SingleForm.tsx",
+      "pages/dashboard/entries/[slug]/create.tsx",
+      "pages/dashboard/singles/[slug]/index.tsx",
+    ]) {
+      expect(files, `${path} is not in the scan`).toContain(path);
     }
   });
 
@@ -124,17 +151,20 @@ describe("a measured entry page", () => {
     ).toBe(true);
   });
 
-  it("cancels the vertical inset only", () => {
-    const offenders = MEASURED.filter(path =>
-      HORIZONTAL_CANCEL.test(
-        withoutComments(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
-      )
-    );
+  it("cancels the vertical inset nowhere but here", () => {
+    const offenders = sourceFiles()
+      .filter(path => path !== THIS_FILE)
+      .filter(path =>
+        HORIZONTAL_CANCEL.test(
+          withoutComments(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
+        )
+      );
 
     expect(
       offenders,
-      `These cancel the page's horizontal inset, which a measured page does ` +
-        `not have — the content lands outside its own column:\n${offenders.join("\n")}`
+      `These cancel a page's horizontal inset. A measured page does not have ` +
+        `one — it spends the inset as grid columns — so the content lands ` +
+        `outside its own column:\n${offenders.join("\n")}`
     ).toEqual([]);
   });
 });
