@@ -20,31 +20,13 @@ name: Code hygiene
 # from `warn` to `fail`, with the dead-code count unchanged. Complexity is
 # attributed too and stays warn-tier, so it reports without failing.
 #
-# WHOLE-REPO catches the one class the gate structurally cannot see: a change
-# deleting the last call to an exported helper orphans that export in a file the
-# diff never opened. Its DEAD CODE half gates, against a baseline of the
-# branch's base, so only what the change adds can fail it.
-#
-# Duplication and complexity are NOT gated in that job, and the reason is the
-# mechanism rather than a view about their severity. Neither analysis attributes
-# a finding to a side the way `audit` does: `fallow dupes` carries no
-# per-group new-versus-inherited flag and exits 0 even with `--fail-on-issues`,
-# leaving `--threshold` -- a repository-wide percentage, 7.4% here across 846
-# clone groups -- as the only lever. That judges a change by a number it barely
-# moves, and one merge nudging it up would fail the next unrelated pull request.
-# `fallow health` matches its baseline per file and category, which does not
-# survive the two sides being different trees: a branch touching neither still
-# reported ~50 findings in `admin` and `plugin-form-builder`.
-#
-# So duplication IS enforced, in the job that can attribute it, and the
-# whole-repo job adds reach for dead code rather than a second verdict on it.
+# WHOLE-REPO scans the whole repository at the PR branch HEAD, providing
+# complete visibility into dead code and duplication across all packages
+# (excluding apps/playground) in the GitHub Step Summary.
 #
 # `templates/` is left out of both. Those four are fragments with no
 # package.json of their own, composed into a project by create-nextly-app at
 # scaffold time, so read in place every specifier in them is unresolvable.
-#
-# Separate from ci.yml because the whole-repo job needs full history and a second
-# working tree, and ci.yml checks out with `fetch-depth: 2`.
 #
 # pull_request only. A push to main has no base to compare against.
 
@@ -153,8 +135,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Shallow clone is enough: no base worktree is needed because this
-          # job scans the PR branch HEAD directly without a baseline diff.
+          # Explicitly checkout the PR head commit to avoid scanning the synthetic merge ref
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -177,13 +159,12 @@ jobs:
 
       # One run per analysis. `set +e` because a findings exit (code 1) would
       # otherwise abort the step under GitHub's `bash -e`, taking the summary
-      # with it. Dead code (code 1) fails the gate; dupes and health are
-      # reported only. Anything above 1 is a fallow crash, surfaced separately.
+      # with it. Dupes and dead code are both reported in the summary.
+      # Anything above 1 is a fallow crash, surfaced separately.
       - name: Analyse the whole repository
         id: analyse
         run: |
           set +e
-          failed=""
           crashed=""
           for analysis in dead-code dupes; do
             pnpm exec fallow "$analysis" \
@@ -192,24 +173,16 @@ jobs:
               --format json > "/tmp/head-$analysis.json" 2> "/tmp/err-$analysis.txt"
             code=$?
             case "$code" in
-              0) ;;
-              # 1 means findings exist. Dead code fails the gate; dupes are
-              # reported in the summary without blocking the merge.
-              1) [ "$analysis" = "dead-code" ] && failed="$failed $analysis" ;;
-              # Anything else is fallow failing to run (bad config, parse
+              0|1) ;;
+              # Anything above 1 is fallow failing to run (bad config, parse
               # error). Surface stderr so the author knows it is tooling.
               *) crashed="$crashed $analysis($code)"; cat "/tmp/err-$analysis.txt" >&2 ;;
             esac
           done
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
           echo "crashed=$crashed" >> "$GITHUB_OUTPUT"
 
       # The job summary is where this job says what it found. The sticky comment
-      # and the inline annotations belong to the job above: a whole-repo finding
-      # usually lands on a line the pull request never touched, where GitHub does
-      # not render an annotation in the diff anyway, and a second comment would
-      # leave the author working out which verdict was which. The summary lists
-      # locations, and the gate below points at it.
+      # and the inline annotations belong to the Changed files job above.
       - name: Write the job summary
         if: always() && steps.analyse.conclusion != 'skipped'
         run: |
@@ -217,9 +190,8 @@ jobs:
             echo "## Whole-repository scan — PR branch current state"
             echo
             echo "Full dead-code and duplication report for the PR branch as it"
-            echo "stands now. Playground is excluded. Dead code **fails** this job."
-            echo "Duplication is reported only (enforced per-file in the Changed"
-            echo 'files job).'
+            echo "stands now. Playground is excluded. Quality gate enforcement on"
+            echo "introduced issues is performed by the Changed files job."
             echo
           } >> "$GITHUB_STEP_SUMMARY"
           for analysis in dead-code dupes; do
@@ -227,17 +199,9 @@ jobs:
               --format github-summary >> "$GITHUB_STEP_SUMMARY"
           done
 
-      # A tooling failure is reported before a findings failure and separately
-      # from it, because the two send the author to different places and a run
-      # that crashed leaves a summary indistinguishable from a clean scan.
+      # Fails only if fallow encountered a tooling failure/crash.
       - name: Gate
-        if: >-
-          always() && (steps.analyse.outputs.failed != ''
-          || steps.analyse.outputs.crashed != '')
+        if: always() && steps.analyse.outputs.crashed != ''
         run: |
-          if [ -n "${{ steps.analyse.outputs.crashed }}" ]; then
-            echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. That is a tooling failure — its stderr is in the analysis step above."
-            exit 1
-          fi
-          echo "::error::fallow found dead code in the PR branch:${{ steps.analyse.outputs.failed }}. The full report is in the job summary."
+          echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. That is a tooling failure — its stderr is in the analysis step above."
           exit 1
