@@ -310,24 +310,24 @@ describe("request input the reader must survive", () => {
     // A cookie is request input whoever wrote it, and "%" alone makes
     // decodeURIComponent throw — which would answer a page request with a 500
     // rather than simply no preview.
-    const scope = await readPreviewScope({
+    const session = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => Promise.resolve({ get: () => ({ value: "%" }) }),
     });
 
-    expect(scope).toBeNull();
+    expect(session).toBeNull();
   });
 
   it("accepts synchronous cookies(), as Next 14 supplies", async () => {
     // The peer range covers Next 14, where these helpers are synchronous.
-    const scope = await readPreviewScope({
+    const session = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => ({ get: () => undefined }),
     });
 
-    expect(scope).toBeNull();
+    expect(session).toBeNull();
   });
 
   it("accepts a synchronous draftMode(), as Next 14 supplies", async () => {
@@ -361,29 +361,35 @@ describe("what a preview session may read", () => {
   it("reports the document the link named", async () => {
     const store = await sessionFor();
 
-    const scope = await readPreviewScope({
+    const session = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => Promise.resolve(store),
     });
 
-    expect(scope).toEqual(SCOPE);
+    expect(session?.scope).toEqual(SCOPE);
   });
 
   it("grants that document and refuses every other", async () => {
     const store = await sessionFor();
-    const scope = await readPreviewScope({
+    const session = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => Promise.resolve(store),
     });
 
-    expect(previewGrantsDraft(scope, SCOPE)).toBe(true);
+    expect(previewGrantsDraft(session?.scope ?? null, SCOPE)).toBe(true);
     expect(
-      previewGrantsDraft(scope, { collection: "pages", entryId: "entry-2" })
+      previewGrantsDraft(session?.scope ?? null, {
+        collection: "pages",
+        entryId: "entry-2",
+      })
     ).toBe(false);
     expect(
-      previewGrantsDraft(scope, { collection: "posts", entryId: "entry-1" })
+      previewGrantsDraft(session?.scope ?? null, {
+        collection: "posts",
+        entryId: "entry-1",
+      })
     ).toBe(false);
     // No session at all grants nothing, which is the default for every visitor.
     expect(previewGrantsDraft(null, SCOPE)).toBe(false);
@@ -394,23 +400,23 @@ describe("what a preview session may read", () => {
     // route once said yes, so revoking reaches sessions already in flight.
     const store = await sessionFor();
 
-    const scope = await readPreviewScope({
+    const session = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION + 1,
       cookies: () => Promise.resolve(store),
     });
 
-    expect(scope).toBeNull();
-    expect(previewGrantsDraft(scope, SCOPE)).toBe(false);
+    expect(session).toBeNull();
+    expect(previewGrantsDraft(session?.scope ?? null, SCOPE)).toBe(false);
   });
 
   it("reports nothing when there is no cookie", async () => {
-    const scope = await readPreviewScope({
+    const session = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => Promise.resolve({ get: () => undefined }),
     });
 
-    expect(scope).toBeNull();
+    expect(session).toBeNull();
   });
 });

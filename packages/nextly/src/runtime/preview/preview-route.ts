@@ -282,6 +282,21 @@ export interface PreviewScopeReaderConfig {
     | Promise<{ get: (name: string) => { value: string } | undefined }>;
 }
 
+/** What a verified preview cookie says about the request carrying it. */
+export interface PreviewSession {
+  /** The one document this request may preview. */
+  scope: PreviewTokenScope;
+  /**
+   * Who shared the link, when the token records it.
+   *
+   * Not an authenticated principal — the bearer is still anonymous. It is the
+   * identity the rendered document's FIELD rules are judged against, so a link
+   * shows what its sender can see rather than everything. Absent on a token
+   * minted before the claim existed.
+   */
+  minter?: string;
+}
+
 /**
  * What the current request is allowed to preview, if anything.
  *
@@ -292,7 +307,7 @@ export interface PreviewScopeReaderConfig {
  */
 export async function readPreviewScope(
   config: PreviewScopeReaderConfig = {}
-): Promise<PreviewTokenScope | null> {
+): Promise<PreviewSession | null> {
   const loadDefaults = () => import("./preview-route-defaults");
 
   const store = await (config.cookies
@@ -318,7 +333,11 @@ export async function readPreviewScope(
   const verified = await verifyPreviewToken(token, secret, {
     generation,
   });
-  return verified.valid ? verified.scope : null;
+  if (!verified.valid) return null;
+  return {
+    scope: verified.scope,
+    ...(verified.minter === undefined ? {} : { minter: verified.minter }),
+  };
 }
 
 /**

@@ -275,7 +275,15 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   const { token, expiresAt } = await signPreviewToken(
     { collection, entryId, ...(locale === undefined ? {} : { locale }) },
     previewSigningSecret(),
-    { generation, ...(ttlSeconds === undefined ? {} : { ttlSeconds }) }
+    {
+      generation,
+      // Recorded so the page renders through the SHARER's field-level
+      // permissions. Without it the render skips those rules entirely and the
+      // recipient sees fields the sharer cannot — which makes a link a way to
+      // read past your own permissions by sending one to yourself.
+      minter: auth.userId,
+      ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+    }
   );
 
   // The finished URL as well as the token.

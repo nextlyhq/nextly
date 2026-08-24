@@ -274,7 +274,27 @@ export interface ContentRouteConfig<TNode> {
  * A preview token names an entry, so `{ entryId: scope.entryId }` is the shape
  * to return when one backs the decision.
  */
-export type DraftGrant = boolean | { entryId: string };
+export type DraftGrant =
+  | boolean
+  | {
+      entryId: string;
+      /**
+       * Applied to the resolved document before it is rendered, when the grant
+       * carries one.
+       *
+       * A draft read is TRUSTED — that is what lets the working-draft overlay
+       * appear at all — and trust switches off field-level read rules along
+       * with row ones, because a single flag decides both. So the document that
+       * comes back carries every field, including any the person who granted
+       * this could not read themselves.
+       *
+       * The grant supplies the remedy rather than the route implementing one,
+       * because only the grant knows whose permissions the document should be
+       * seen through. This route just applies what it was handed, which keeps
+       * it free of any notion of who is previewing.
+       */
+      redact?: (document: Record<string, unknown>) => Promise<void>;
+    };
 
 /** The optional-catch-all route arg: `{ params: Promise<{ slug?: string[] }> }`. */
 export interface ContentRouteArgs {
@@ -455,8 +475,9 @@ function buildRoute<TNode>(
   ): Promise<void> {
     try {
       const { readPreviewScope } = await import("../preview/preview-route");
-      const scope = await readPreviewScope();
-      if (scope === null) return;
+      const session = await readPreviewScope();
+      if (session === null) return;
+      const { scope } = session;
       if (scope.collection !== context.collection) return;
 
       // Once per collection per process, and worded as a CONFIGURATION fact
@@ -583,6 +604,12 @@ function buildRoute<TNode>(
         trustedCollections,
       });
       if (!entry) continue;
+      // Before the document is handed to `render`, and before anything derived
+      // from it is computed, so nothing downstream can have read a field the
+      // grant means to withhold.
+      if (typeof grant === "object" && typeof grant.redact === "function") {
+        await grant.redact(entry);
+      }
       // No identity check here, deliberately. Both halves a grant has to
       // satisfy — that it names THIS entry, and that the entry lives at THIS
       // path — are settled inside `resolveContent`, which reads by the granted
