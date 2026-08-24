@@ -66,6 +66,13 @@ function formatDate(iso: string | null): string {
  * Left as its own hand-rolled row rather than `FieldShell`: it renders no
  * input, so there is nothing for a computed id or `aria-describedby` to
  * attach to — the label just names a static value.
+ *
+ * It carries no vertical padding of its own, and that absence is deliberate.
+ * The enclosing `FormSection` applies the rhythm to every direct child through
+ * `--nx-field-gap`, so the section's edge inset and the gap between two rows
+ * are one measurement. The two paddings would be additive, so a row that
+ * restored its own would render at double the gap while looking correct in
+ * isolation.
  */
 function ReadOnlyRow({
   label,

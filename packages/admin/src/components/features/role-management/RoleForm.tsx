@@ -104,7 +104,14 @@ export function RoleForm({ roleId }: RoleFormProps) {
             aria-labelledby="role-form-title"
             noValidate
           >
-            {/* Top section: Role Details (full width) */}
+            {/* Top section: Role Details (full width).
+
+                Neither this wrapper nor the Permissions one below pads itself
+                vertically. `SettingsSection` applies the rhythm to every direct
+                child through `--nx-field-gap`, and the two paddings are
+                additive, so a wrapper that restored its own would render at
+                double the gap on exactly the sections that already looked
+                correct. */}
             <SettingsSection label="Role Details">
               <div className="flex flex-col gap-6">
                 <RoleBasicInfo

@@ -188,7 +188,12 @@ export function ImageSizeForm({
             {/* Width + Height — two controls, one shared label/description, so
                 this stays a hand-rolled row rather than FieldShell: there is no
                 single control for one id/error pair to describe. Each Input
-                keeps its own FieldShell for error display. */}
+                keeps its own FieldShell for error display.
+
+                No vertical padding here, deliberately. The enclosing `SettingsSection` supplies the vertical rhythm to every
+                direct child through `--nx-field-gap`, so this row must not pad
+                itself: the two paddings are additive and a row that carried its
+                own would render at double the gap. */}
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-foreground">
                 Dimensions
