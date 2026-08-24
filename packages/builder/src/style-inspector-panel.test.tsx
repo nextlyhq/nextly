@@ -6,7 +6,7 @@
  * `style-inspector.ts` decides which sections a block offers and what each
  * property carries, and asserts that without a DOM. What is only true HERE is
  * the wiring: that a control shows the stored value, that an edit reaches
- * `editor.apply` as the op the store owns, that an emptied field CLEARS rather
+ * `editor.applyAll` as the op the store owns, that an emptied field CLEARS rather
  * than writing an empty value, and that a refusal is shown rather than
  * swallowed.
  *
@@ -95,7 +95,7 @@ function documentOf(styles?: NodeStyles): BlockDocument {
 function editorFor(
   document: BlockDocument,
   selectedId: string | null = "a"
-): EditorState & { apply: ReturnType<typeof vi.fn> } {
+): EditorState & { applyAll: ReturnType<typeof vi.fn> } {
   return {
     document,
     selectedId,
@@ -111,7 +111,7 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
-  } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
+  } as unknown as EditorState & { applyAll: ReturnType<typeof vi.fn> };
 }
 
 function mount(
@@ -275,12 +275,12 @@ describe("controls", () => {
     const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "12px" } });
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
 
     fireEvent.blur(field);
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
       kind: "update",
       id: "a",
       patch: {
@@ -306,7 +306,7 @@ describe("controls", () => {
     // Named for REMOVAL rather than set to an empty object: an op is
     // persisted, and `JSON.stringify` drops an undefined value, so the inverse
     // of the edit that added the first style has to say which key goes.
-    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
       kind: "update",
       id: "a",
       patch: {},
@@ -323,8 +323,8 @@ describe("controls", () => {
     fireEvent.change(field, { target: { value: "0.5" } });
     fireEvent.blur(field);
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
       patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } },
     });
   });
@@ -336,7 +336,7 @@ describe("controls", () => {
     fireEvent.change(field, { target: { value: "inherit" } });
     fireEvent.blur(field);
 
-    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
       patch: {
         styles: { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } },
       },
@@ -350,7 +350,7 @@ describe("controls", () => {
     fireEvent.change(field, { target: { value: "12 furlongs" } });
     fireEvent.blur(field);
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     // The message is the validator's rather than one written here, so a change
     // to how the catalog explains a length is carried straight to the author.
     expect(screen.getByRole("alert").textContent).toContain("is not a length");
@@ -413,8 +413,8 @@ describe("controls", () => {
     fireEvent.click(screen.getByLabelText("Border radius form"));
     fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
       kind: "update",
       id: "a",
       patch: {},
@@ -436,8 +436,8 @@ describe("controls", () => {
     fireEvent.click(screen.getByLabelText("Z index form"));
     fireEvent.click(screen.getByRole("option", { name: "Keyword" }));
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
       patch: {
         styles: {
           base: { [BASE_BREAKPOINT]: { position: { type: "relative" } } },
@@ -458,7 +458,7 @@ describe("controls", () => {
       })
     );
 
-    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
       kind: "update",
       id: "a",
       patch: {},
@@ -485,14 +485,14 @@ describe("controls", () => {
     // and an unreported refusal leaves the field reading as saved.
     register({ spacing: true });
     const editor = editorFor(documentOf());
-    editor.apply.mockReturnValue(null);
+    editor.applyAll.mockReturnValue(null);
     render(<StyleInspectorPanel editor={editor} />);
 
     const field = fieldsOf("padding").getByLabelText("Block start");
     fireEvent.change(field, { target: { value: "12px" } });
     fireEvent.blur(field);
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("alert").textContent).toContain(
       "could not be applied"
     );
@@ -527,7 +527,7 @@ describe("controls", () => {
     fireEvent.blur(field);
 
     // Left as text, so the catalog refuses it and says why.
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toContain("is not a number");
   });
 
@@ -548,7 +548,7 @@ describe("controls", () => {
     expect(fontSize.getByText("20px")).toBeDefined();
 
     fireEvent.click(fontSize.getByRole("button", { name: "Clear Font size" }));
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("names every ROOT form selector for its own property", () => {
@@ -573,7 +573,7 @@ describe("controls", () => {
     fireEvent.change(field, { target: { value: "1." } });
     fireEvent.blur(field);
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toBeDefined();
   });
 
@@ -652,7 +652,7 @@ describe("controls", () => {
     fireEvent.blur(field);
 
     // Refused as a value, not treated as a request to clear.
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toBeDefined();
   });
 
@@ -666,7 +666,7 @@ describe("controls", () => {
     fireEvent.change(field, { target: { value: "\u00a00.5" } });
     fireEvent.blur(field);
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toBeDefined();
   });
 
@@ -700,7 +700,7 @@ describe("controls", () => {
 
     fireEvent.change(field, { target: { value: "12 furlongs" } });
     fireEvent.blur(field);
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
 
     const describedBy = field.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
@@ -729,7 +729,7 @@ describe("controls", () => {
       padding.getByRole("button", { name: "Clear Padding block start" })
     );
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -753,7 +753,7 @@ describe("the site's host-fetch policy", () => {
 
     // The write is withheld, so the author never stores a value the page
     // would drop. Without the policy this call happens and the URL is saved.
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(field.getAttribute("aria-invalid")).toBe("true");
     const describedBy = field.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
@@ -772,7 +772,7 @@ describe("the site's host-fetch policy", () => {
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(field.getAttribute("aria-invalid")).not.toBe("true");
   });
 
@@ -786,7 +786,7 @@ describe("the site's host-fetch policy", () => {
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("carries the policy from the Inspector's Style tab, not just its own prop", () => {
@@ -803,7 +803,7 @@ describe("the site's host-fetch policy", () => {
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(field.getAttribute("aria-invalid")).toBe("true");
   });
 });
@@ -836,7 +836,7 @@ describe("a value the panel shows and could not remove", () => {
       padding.getByRole("button", { name: "Clear Padding block start" })
     );
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("shows a scalar no field can type, and clears it", () => {
@@ -856,7 +856,7 @@ describe("a value the panel shows and could not remove", () => {
 
     fireEvent.click(fontSize.getByRole("button", { name: "Clear Font size" }));
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("shows a value a SELECT has no item for, and clears it", () => {
@@ -876,7 +876,7 @@ describe("a value the panel shows and could not remove", () => {
       textAlign.getByRole("button", { name: "Clear Text align" })
     );
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("withholds the form selector on a property the block no longer offers", () => {
@@ -921,7 +921,7 @@ describe("a value the panel shows and could not remove", () => {
     fireEvent.change(field, { target: { value: "01" } });
     fireEvent.blur(field);
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect((field as HTMLInputElement).value).toBe("1");
   });
 
@@ -962,7 +962,7 @@ describe("a free-form value the panel must let an author repair", () => {
 
     // Repaired in place, which is the whole point: a select could only ever
     // have replaced the value with one of its three keywords.
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("still draws a SELECT for a value the keyword arm accepts", () => {
@@ -1017,7 +1017,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
     fireEvent.keyDown(field, { key: "ArrowUp" });
 
-    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
       kind: "update",
       id: "a",
       patch: {
@@ -1034,7 +1034,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
     fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
 
-    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
       patch: {
         styles: {
           base: { [BASE_BREAKPOINT]: { padding: { blockStart: "2px" } } },
@@ -1057,7 +1057,7 @@ describe("the numeric affordances a simple measurement earns", () => {
     fireEvent.keyDown(field, { key: "ArrowUp" });
     fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(field).toHaveProperty("value", "clamp(1rem, 2vw, 3rem)");
   });
 
@@ -1074,7 +1074,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
     fireEvent.keyDown(field, { key: "ArrowDown" });
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(field).toHaveProperty("value", "0px");
   });
@@ -1135,7 +1135,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
     fireEvent.keyDown(field, { key: "ArrowUp" });
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(field).toHaveProperty("value", "1e-3rem");
     expect(
       fieldsOf("padding").queryByLabelText("Unit for Padding block start")
@@ -1160,7 +1160,7 @@ describe("what the arrow keys do and do not claim", () => {
     fireEvent.change(field, { target: { value: "20px" } });
     fireEvent.keyDown(field, { key: "ArrowUp" });
 
-    expect(editor.apply.mock.calls[0]?.[0]).toMatchObject({
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
       patch: {
         styles: {
           base: { [BASE_BREAKPOINT]: { padding: { blockStart: "21px" } } },
@@ -1168,7 +1168,7 @@ describe("what the arrow keys do and do not claim", () => {
       },
     });
     // One op, not a commit of the draft followed by a step of the result.
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(field).toHaveProperty("value", "21px");
   });
 
@@ -1181,7 +1181,7 @@ describe("what the arrow keys do and do not claim", () => {
 
     fireEvent.keyDown(field, { key: "ArrowUp", isComposing: true });
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
   it.each(["altKey", "ctrlKey", "metaKey"])(
@@ -1195,7 +1195,7 @@ describe("what the arrow keys do and do not claim", () => {
 
       fireEvent.keyDown(field, { key: "ArrowUp", [modifier]: true });
 
-      expect(editor.apply).not.toHaveBeenCalled();
+      expect(editor.applyAll).not.toHaveBeenCalled();
     }
   );
 
@@ -1214,7 +1214,7 @@ describe("what the arrow keys do and do not claim", () => {
     fireEvent.click(padding.getByLabelText("Unit for Padding block start"));
     fireEvent.click(screen.getByRole("option", { name: "rem" }));
 
-    const written = editor.apply.mock.calls.at(-1)?.[0] as {
+    const written = editor.applyAll.mock.calls.at(-1)?.[0]?.[0] as {
       patch?: {
         styles?: Record<string, Record<string, Record<string, unknown>>>;
       };
@@ -1261,7 +1261,7 @@ describe("what the arrow keys do and do not claim", () => {
     const field = fieldsOf("padding").getByLabelText("Block start");
 
     expect(() => fireEvent.keyDown(field, { key: "ArrowUp" })).not.toThrow();
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 });
 
