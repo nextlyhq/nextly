@@ -1,4 +1,7 @@
-import { type RemotePattern } from "@nextlyhq/blocks-engine";
+import {
+  type DocumentLimits,
+  type RemotePattern,
+} from "@nextlyhq/blocks-engine";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 // Imported rather than read at runtime so it can never drift from the published
@@ -25,6 +28,21 @@ import { siteStyleSingle } from "./site-style-storage";
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
   enabled?: boolean;
+  /**
+   * The document limits pages are rendered under, when they are not the
+   * engine's defaults.
+   *
+   * Set the SAME value here and on `PageRenderer.limits` (or on the style
+   * context it reads). The renderer decides which nodes a page draws; this
+   * decides which nodes the class-usage record counts, and both ask the engine
+   * the same question through `selectNodes`. Handing them different bounds
+   * makes them answer about different documents — a class applied to a node the
+   * page renders would be missing from the record, and a usage-based delete
+   * reads that absence as "not used".
+   *
+   * Left unset, both use the engine defaults and agree by construction.
+   */
+  limits?: DocumentLimits;
   /**
    * Whether the editor shows its getting-started checklist. Default true.
    *
@@ -201,7 +219,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       services: {
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
-      collections: [pagesCollection(opts.pagePreviewPath)],
+      collections: [pagesCollection(opts.pagePreviewPath, opts.limits)],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated
       // defaults, because the storage existing is what the style studios and
