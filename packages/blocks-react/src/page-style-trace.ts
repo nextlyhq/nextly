@@ -126,8 +126,26 @@ export function pageStyleTrace(
    * crashes on open, before the renderer can show the placeholder it has for
    * exactly this.
    *
-   * `prepared` — the stage the pipeline itself calls the document to read, and
-   * the one the renderer compiles from.
+   * `deduped`, NOT `prepared`, and the difference between them is one pass:
+   * `pruneKnownPlaceholders`, which keeps only the slots a definition declares.
+   *
+   * That pass rests on a stated assumption — "a block never calls `renderSlot`
+   * for a region it does not declare" — and nothing enforces it. `renderSlot`
+   * reads `node.slots?.[name]` and never consults the resolver, so a block whose
+   * definition dropped a slot while stored documents still carry it, or a
+   * third-party block that renders a name it never declared, puts those children
+   * on the page anyway. The renderer knows this: it compiles its own style input
+   * from `deduped` through a DIFFERENT pass that walks every stored slot,
+   * precisely so their rules survive.
+   *
+   * Compiled from `prepared`, the trace therefore described a page missing
+   * markup the renderer draws. Measured on a block declaring no slots and
+   * rendering a stored one: the render path compiled the child's rule and the
+   * trace came back EMPTY, so every control on a visibly styled block reported
+   * having been set by nobody.
+   *
+   * Only this last pass is skipped. Sanitizing, migration, gating and address
+   * repair all still apply, which is what the preceding paragraphs are about.
    *
    * An earlier version took `migrated` on the reasoning that a node the reader
    * withholds is still selectable from a layers panel and still owed an account.
@@ -152,7 +170,7 @@ export function pageStyleTrace(
   // a document this format does not recognise.
   if (stages === null) return undefined;
   return resolvePageStylesWithTrace(
-    stages.prepared,
+    stages.deduped,
     // No stored artifact. One would be REUSED rather than recompiled, and a
     // reused sheet has no cascade to report — the caller would get `undefined`
     // for a document it can perfectly well compile.
