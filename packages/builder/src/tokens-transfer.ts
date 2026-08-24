@@ -33,6 +33,7 @@
  * @module tokens-transfer
  */
 import {
+  NEXTLY_EXTENSION,
   isPlainRecord,
   compileSiteSheet,
   dtcgToTokens,
@@ -338,9 +339,44 @@ function metadataLostAt(
   }
   const kept =
     key === "$description" ? typeof value === "string" : isPlainRecord(value);
-  if (kept) return undefined;
-  const wanted = key === "$description" ? "a string" : "an object";
-  return `"${path}" is not ${wanted}, so it was skipped and the token arrived without it.`;
+  if (!kept) {
+    const wanted = key === "$description" ? "a string" : "an object";
+    return `"${path}" is not ${wanted}, so it was skipped and the token arrived without it.`;
+  }
+  return key === "$extensions" ? vendorLostIn(value, path) : undefined;
+}
+
+/**
+ * What this system's OWN extension states and the reader will not take.
+ *
+ * The block as a whole being an object is not enough. `readToken` reads this
+ * vendor payload field by field — a `css.light` that is a string, a `kind` it
+ * recognises, a `css.dark` used only when it is a string too — and takes the
+ * native `$value` instead whenever any of that does not hold. A file stating a
+ * dark value as a number therefore imports looking entirely successful, with
+ * the light value only, and the next export writes a token the file did not
+ * describe.
+ *
+ * Only THIS vendor's key is read. Another tool's extensions are carried through
+ * untouched and are none of this site's business, so nothing here judges them.
+ */
+function vendorLostIn(value: unknown, path: string): string | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const own = value[NEXTLY_EXTENSION];
+  if (!isPlainRecord(own)) return undefined;
+  const at = `${path}.${NEXTLY_EXTENSION}`;
+  const css = own.css;
+  const usable = isPlainRecord(css) && typeof css.light === "string";
+  if (!usable) {
+    // The whole extension path is skipped and the token is read from its
+    // native value, which is a different token from the one stated here.
+    return own.css === undefined
+      ? undefined
+      : `"${at}.css" does not state a light value as a string, so this site's own values in it were skipped and the token was read from "$value" instead.`;
+  }
+  return css.dark === undefined || typeof css.dark === "string"
+    ? undefined
+    : `"${at}.css.dark" is not a string, so the token arrived with its light value only.`;
 }
 
 /** An object with named keys, which is what a group and a token both are. */
@@ -382,27 +418,7 @@ function mergeById(
    * and in practice in one.
    */
   const taken = new Map(wanted);
-  /*
-   * Rounds of refusals, until one removes nothing.
-   *
-   * An earlier version ran the two passes below ONCE, on the reasoning that
-   * removing tokens only shrinks the table, so nothing new can clash after the
-   * first pass. That is wrong, and wrong in the direction of accepting an
-   * invalid table: refusing an incoming token does not remove a row, it REVERTS
-   * that row to the name the site already had, and the name it reverts to can
-   * collide with something still accepted. Three coordinated renames reach it —
-   * one refusal forced by an untouched token, whose knock-on refusal restores a
-   * stored name beside an accepted token that had taken it — and the import
-   * reports success holding one name twice, which the next export cannot write.
-   *
-   * Each round that changes anything removes at least one entry from a finite
-   * map, so this terminates; in practice it settles in one.
-   */
-  for (;;) {
-    const before = taken.size;
-    refuseClashing(into, taken, refused);
-    if (taken.size === before) break;
-  }
+  resolveClashes(into, taken, refused);
 
   return {
     tokens: { ...into, tokens: applyAll(into.tokens, taken) },
@@ -412,51 +428,19 @@ function mergeById(
 }
 
 /**
- * ONE round of refusals against the table the import would produce.
- *
- * Two passes, and the order between them is the whole point.
- *
- * First remove what clashes with a token this file does not touch. Those
- * refusals are forced — the destination is not going to move — and removing
- * them can free tokens that were only blocked THROUGH them: a file bringing
- * `{id:"foo.bar", name:"taken"}` and `{id:"foo-bar", name:"usable"}` has the
- * first refused for its name, and the second shares a custom property only with
- * that first one, so it is importable the moment the first is gone. One pass
- * would discard it for a conflict that does not survive the pass.
- *
- * Then remove whatever still clashes, which by then is only tokens clashing
- * with EACH OTHER. A file holding two tokens that are one token here is a file
- * that contradicts itself, and there is no ground to prefer either, so both are
- * refused and both are named.
- *
- * Its own function because the caller asks a different question: this is what
- * ONE look at the proposal decides, and the caller is why one look is not
- * enough.
- */
-function refuseClashing(
-  into: SiteTokenSet,
-  taken: Map<string, SiteToken>,
-  refused: string[]
-): void {
-  for (const against of ["forced", "mutual"] as const) {
-    for (const identity of clashingIn(
-      applyAll(into.tokens, taken),
-      taken,
-      refused,
-      against
-    )) {
-      taken.delete(identity);
-    }
-  }
-}
-
-/**
  * One incoming token per identity, with the duplicates named.
  *
  * A file can name one token twice. `dtcgToTokens` returns both, because two
  * DTCG paths are two entries — but they compose one custom property here, so
- * only the last can land. Reported rather than dropped in silence: two tokens
- * going in and one arriving is precisely the loss this feature exists to show.
+ * only the last can be carried forward. Reported rather than dropped in
+ * silence: two tokens going in and one arriving is precisely the loss this
+ * feature exists to show.
+ *
+ * The message names which of the two was DROPPED and never says the other
+ * landed, because this choice is made before any clash is judged and the
+ * survivor can still be refused afterwards. Claiming it arrived produced a
+ * report that contradicted itself on the same import — "only `taken` was
+ * taken" beside "`taken` was not imported".
  */
 function oneEach(
   incoming: readonly SiteToken[],
@@ -468,7 +452,7 @@ function oneEach(
     const first = wanted.get(identity);
     if (first !== undefined) {
       refused.push(
-        `"${first.name}" and "${token.name}" are one token in that file — both carry the identity "${identity}" — so only "${token.name}" was taken.`
+        `"${first.name}" and "${token.name}" are one token in that file — both carry the identity "${identity}" — so "${first.name}" was dropped in favour of "${token.name}".`
       );
     }
     wanted.set(identity, token);
@@ -510,159 +494,240 @@ function applyAll(
 }
 
 /**
- * Which incoming identities cannot land, because the result would be invalid.
+ * Where every proposed row sits, so a refusal can be judged without a rescan.
  *
- * Three constraints, and they are different questions. A NAME belongs to one
- * token: the studio refuses a duplicate label outright, so admitting one
- * imports a state the editor cannot create. A name is also a PATH — a design
- * token file writes `brand.main` as a token `main` inside a group `brand` —
- * so a token named `brand` cannot sit beside one named `brand.main`, which
- * asks `brand` to be a token and a group at once. And a composed CUSTOM
- * PROPERTY belongs to one token too, which is not visible in the names at all:
- * `color.primary-dark` and `color-primary.dark` read as different tokens and
- * are the same property, so the emitter writes the first and refuses the
- * second.
+ * Refusing a rename does not remove its row — it puts the STORED row back, and
+ * that row's own name can collide with something still accepted. Judging that
+ * by re-reading the whole table once per refusal is quadratic, and a file whose
+ * renames form a long chain is exactly the shape that makes it so: measured at
+ * 24ms for 250 tokens, 70 for 500, 269 for 1000 and 1082 for 2000, on the main
+ * thread with the studio open.
  *
- * All three are the same failure from an author's side — an import that
- * reported success and lost a token on the way back out — and none of them is
- * implied by the others.
- *
- * Only INCOMING tokens are blocked. A clash the destination already had is not
- * this file's doing, and refusing the import for it would leave an author
- * unable to bring anything in until they had repaired something else.
+ * Indexed instead, because the consequences of a refusal are LOCAL: it can only
+ * disturb the keys the restored row occupies. A custom property is composed
+ * from the identity, which a refusal does not change, so those cannot cascade
+ * at all and are settled once.
  */
-function clashingIn(
-  proposed: readonly SiteToken[],
-  wanted: ReadonlyMap<string, SiteToken>,
-  refused: string[],
-  against: "forced" | "mutual"
-): Set<string> {
-  const block = (
-    clashes: readonly Clash[],
-    say: (token: SiteToken, key: string) => string
-  ) => blocking(clashes, wanted, refused, against, say);
-
-  return new Set([
-    ...block(
-      groupedBy(proposed, token => token.name),
-      (token, name) =>
-        `"${name}" is already the name of a different token on this site, so it was not imported. Rename one of them and try again.`
-    ),
-    ...block(
-      nestedUnder(proposed),
-      (token, above) =>
-        `"${token.name}" cannot be imported beside "${above}", which is a token on this site too. A design-token file writes "${above}" as either a token or a group holding others, never both, so a file exported with these two would lose one of them.`
-    ),
-    ...block(
-      groupedBy(proposed, token =>
-        // The prefix is the same string in front of every property, so it can
-        // neither create a collision nor prevent one — the same reason the
-        // studio's own collision check composes without it.
-        tokenCustomProperty(tokenIdentity(token), "")
-      ),
-      (token, property) =>
-        `"${token.name}" and another token here both become "${property}", so it was not imported. Two tokens cannot share one custom property.`
-    ),
-  ]);
+interface Placement {
+  /** identity -> the row currently proposed for it. */
+  readonly row: Map<string, SiteToken>;
+  /** an exact name -> the identities holding it. */
+  readonly named: Map<string, Set<string>>;
+  /** a group path -> the identities whose name is nested below it. */
+  readonly below: Map<string, Set<string>>;
+  /** a composed custom property -> the identities composing it. */
+  readonly property: Map<string, Set<string>>;
 }
 
-/** Tokens that cannot coexist, and the thing they are fighting over. */
-interface Clash {
-  readonly key: string;
-  readonly sharing: readonly SiteToken[];
-}
-
-/**
- * Which incoming participants in a clash to refuse, and what to say about it.
- *
- * One implementation for every constraint, taking the clashes already found.
- * What differs between them is how a group is FORMED — equal keys for two of
- * them, a path relation for the third — and the policy on top is identical:
- * which side is blocked, and when a clash is forced rather than resolvable.
- * Written out per constraint, that policy is how the three stop agreeing.
- */
-function blocking(
-  clashes: readonly Clash[],
-  wanted: ReadonlyMap<string, SiteToken>,
-  refused: string[],
-  against: "forced" | "mutual",
-  say: (token: SiteToken, key: string) => string
-): Set<string> {
-  const blocked = new Set<string>();
-  for (const { key, sharing } of clashes) {
-    // Whether this clash involves a token the file does not touch. If it does,
-    // the refusal is forced; if it does not, the incoming tokens are only
-    // clashing with each other and may still be freed by an earlier removal.
-    const untouched = sharing.some(token => !wanted.has(tokenIdentity(token)));
-    if (against === "forced" && !untouched) continue;
-    for (const token of sharing) {
-      const identity = tokenIdentity(token);
-      if (!wanted.has(identity)) continue;
-      blocked.add(identity);
-      refused.push(say(token, key));
-    }
-  }
-  return blocked;
-}
-
-/** Tokens sharing one key, where more than one holds it. */
-function groupedBy(
-  proposed: readonly SiteToken[],
-  keyOf: (token: SiteToken) => string
-): Clash[] {
-  const held = new Map<string, SiteToken[]>();
-  for (const token of proposed) group(held, keyOf(token), token);
-  const found: Clash[] = [];
-  for (const [key, sharing] of held) {
-    if (sharing.length > 1) found.push({ key, sharing });
+/** Every group path a name passes through on its way to its last segment. */
+function ancestorsOf(name: string): string[] {
+  const segments = name.split(".");
+  const found: string[] = [];
+  for (let cut = 1; cut < segments.length; cut++) {
+    found.push(segments.slice(0, cut).join("."));
   }
   return found;
 }
 
-/**
- * Tokens whose name sits on a path another token already occupies.
- *
- * Not the same question as two equal names, and not reachable from it: `brand`
- * and `brand.main` are different strings, so every key-based check accepts
- * both, and the loss appears only on the way back OUT — `place` walks to
- * `brand` looking for a group, finds a token, and drops the entry with an
- * issue. An import that reported success has quietly made the table
- * unexportable.
- *
- * Indexed by name rather than compared pair by pair. A name has a handful of
- * segments and a table can have thousands of tokens, and the quadratic form of
- * this runs on the main thread with the studio open — the same measurement that
- * decided how `applyAll` looks up its destination.
- */
-function nestedUnder(proposed: readonly SiteToken[]): Clash[] {
-  const at = new Map<string, SiteToken>();
-  for (const token of proposed) {
-    if (!at.has(token.name)) at.set(token.name, token);
-  }
-  const found: Clash[] = [];
-  for (const token of proposed) {
-    const segments = token.name.split(".");
-    // Every group this name passes through on its way to its own last segment.
-    for (let cut = 1; cut < segments.length; cut++) {
-      const above = segments.slice(0, cut).join(".");
-      const holder = at.get(above);
-      if (holder !== undefined) {
-        found.push({ key: above, sharing: [holder, token] });
-      }
-    }
-  }
-  return found;
+function hold(index: Map<string, Set<string>>, key: string, who: string): void {
+  const held = index.get(key);
+  if (held === undefined) index.set(key, new Set([who]));
+  else held.add(who);
 }
 
-/** Add a token to the list under a key, starting the list if it is the first. */
-function group(
-  index: Map<string, SiteToken[]>,
+function release(
+  index: Map<string, Set<string>>,
   key: string,
-  token: SiteToken
+  who: string
 ): void {
   const held = index.get(key);
-  if (held === undefined) index.set(key, [token]);
-  else held.push(token);
+  if (held === undefined) return;
+  held.delete(who);
+  if (held.size === 0) index.delete(key);
+}
+
+/** Put a row into every index that can report a conflict about it. */
+function occupy(at: Placement, token: SiteToken): void {
+  const identity = tokenIdentity(token);
+  at.row.set(identity, token);
+  hold(at.named, token.name, identity);
+  for (const above of ancestorsOf(token.name)) hold(at.below, above, identity);
+  // The prefix is the same string in front of every property, so it can neither
+  // create a collision nor prevent one — the same reason the studio's own
+  // collision check composes without it.
+  hold(at.property, tokenCustomProperty(identity, ""), identity);
+}
+
+/** Take a row back out of every index, leaving its identity unplaced. */
+function vacate(at: Placement, identity: string): void {
+  const token = at.row.get(identity);
+  if (token === undefined) return;
+  at.row.delete(identity);
+  release(at.named, token.name, identity);
+  for (const above of ancestorsOf(token.name)) {
+    release(at.below, above, identity);
+  }
+  release(at.property, tokenCustomProperty(identity, ""), identity);
+}
+
+/** One key some rows are fighting over, and which pass may settle it. */
+interface Key {
+  readonly kind: "name" | "property";
+  readonly value: string;
+}
+
+/**
+ * Who is fighting over one key, and what each of them should be told.
+ *
+ * A name carries TWO constraints and a row can break both at once, so the
+ * wording is per participant rather than per key: two rows with the same name
+ * are duplicates, and a row named `brand` beside one named `brand.main` asks
+ * `brand` to be a token and a group at the same time.
+ */
+function contestAt(
+  at: Placement,
+  key: Key
+): { holders: Set<string>; say: (identity: string) => string } | undefined {
+  if (key.kind === "property") {
+    const holders = at.property.get(key.value);
+    if (holders === undefined || holders.size < 2) return undefined;
+    return {
+      holders,
+      say: identity =>
+        `"${at.row.get(identity)?.name ?? identity}" and another token here both become "${key.value}", so it was not imported. Two tokens cannot share one custom property.`,
+    };
+  }
+  const same = at.named.get(key.value) ?? new Set<string>();
+  const nested = at.below.get(key.value) ?? new Set<string>();
+  const duplicated = same.size > 1;
+  const straddled = same.size > 0 && nested.size > 0;
+  if (!duplicated && !straddled) return undefined;
+  return {
+    holders: new Set([...same, ...nested]),
+    say: identity =>
+      same.has(identity) && duplicated
+        ? `"${key.value}" is already the name of a different token on this site, so it was not imported. Rename one of them and try again.`
+        : `"${at.row.get(identity)?.name ?? identity}" cannot be imported beside "${key.value}", which is a token on this site too. A design-token file writes "${key.value}" as either a token or a group holding others, never both, so a file exported with these two would lose one of them.`,
+  };
+}
+
+/**
+ * Refuse one incoming row, put the site's own back, and say where to look next.
+ *
+ * The restored row is not going to move again — it is what the site already
+ * had — so every conflict it creates is a forced one, which is why the cascade
+ * never has to revisit the mutual pass.
+ */
+function revert(
+  at: Placement,
+  taken: Map<string, SiteToken>,
+  stored: ReadonlyMap<string, SiteToken>,
+  identity: string,
+  work: Key[]
+): void {
+  taken.delete(identity);
+  vacate(at, identity);
+  const back = stored.get(identity);
+  if (back === undefined) return;
+  occupy(at, back);
+  work.push({ kind: "name", value: back.name });
+  for (const above of ancestorsOf(back.name)) {
+    work.push({ kind: "name", value: above });
+  }
+}
+
+/**
+ * Settle every conflict of ONE kind reachable from a worklist.
+ *
+ * `forced` means at least one row in the fight cannot move: the destination is
+ * not going to give the name up, so the refusal is unavoidable. Anything else
+ * is incoming rows clashing only with EACH OTHER, and those are left until the
+ * forced ones have finished, because a forced refusal can free a name and make
+ * a mutual clash disappear. Refusing both halves first would discard an import
+ * that a moment later had nothing wrong with it.
+ */
+function settle(
+  at: Placement,
+  taken: Map<string, SiteToken>,
+  stored: ReadonlyMap<string, SiteToken>,
+  refused: string[],
+  mode: "forced" | "mutual",
+  work: Key[]
+): void {
+  while (work.length > 0) {
+    const key = work.pop();
+    if (key === undefined) continue;
+    const fight = contestAt(at, key);
+    if (fight === undefined) continue;
+    // Only INCOMING rows can be refused. A clash the destination already had is
+    // not this file's doing, and refusing the import for it would leave an
+    // author unable to bring anything in until they had repaired something
+    // else entirely.
+    const movable = [...fight.holders].filter(identity => taken.has(identity));
+    if (movable.length === 0) continue;
+    if (movable.length < fight.holders.size !== (mode === "forced")) continue;
+    for (const identity of movable) {
+      refused.push(fight.say(identity));
+      revert(at, taken, stored, identity, work);
+    }
+  }
+}
+
+/** Every key some rows are currently fighting over. */
+function contestedKeys(at: Placement): Key[] {
+  const found: Key[] = [];
+  for (const [value, holders] of at.named) {
+    if (holders.size > 1 || at.below.has(value)) {
+      found.push({ kind: "name", value });
+    }
+  }
+  for (const [value, holders] of at.property) {
+    if (holders.size > 1) found.push({ kind: "property", value });
+  }
+  return found;
+}
+
+/**
+ * Remove from `taken` every incoming token the result could not hold, naming it.
+ *
+ * Three passes, and the order between them is the whole point. Forced refusals
+ * first, because they are unavoidable and can FREE a name that some other
+ * incoming token was only blocked by. Then the mutual ones, which by that point
+ * are tokens clashing with each other and nothing else — a file that
+ * contradicts itself, where there is no ground to prefer either, so both are
+ * refused and both are named. Then forced once more, because a mutual refusal
+ * also puts a stored row back.
+ *
+ * A fourth pass cannot be needed. Refusing a token only ever ADDS an immovable
+ * row to a key, so any conflict that appears afterwards has an immovable
+ * participant and is forced by construction; and freeing a key never creates a
+ * conflict at all.
+ */
+function resolveClashes(
+  into: SiteTokenSet,
+  taken: Map<string, SiteToken>,
+  refused: string[]
+): void {
+  const stored = new Map<string, SiteToken>();
+  for (const token of into.tokens) {
+    // First wins, matching the emitter and `applyAll`: where a table already
+    // holds one identity twice, the row the emitter would write is the row
+    // this judges.
+    const identity = tokenIdentity(token);
+    if (!stored.has(identity)) stored.set(identity, token);
+  }
+  const at: Placement = {
+    row: new Map(),
+    named: new Map(),
+    below: new Map(),
+    property: new Map(),
+  };
+  for (const token of applyAll(into.tokens, taken)) {
+    if (!at.row.has(tokenIdentity(token))) occupy(at, token);
+  }
+  settle(at, taken, stored, refused, "forced", contestedKeys(at));
+  settle(at, taken, stored, refused, "mutual", contestedKeys(at));
+  settle(at, taken, stored, refused, "forced", contestedKeys(at));
 }
 
 /** A file this site can hand to another tool, and what it could not carry. */

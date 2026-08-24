@@ -1029,3 +1029,143 @@ describe("vendor data that is written back CHANGED", () => {
     expect(result.text).toContain('"two"');
   });
 });
+
+describe("a cascade of refusals", () => {
+  it("settles a chain thousands of renames long", { timeout: 10_000 }, () => {
+    /*
+     * Each refusal frees the name the NEXT rename wants, so the chain is as
+     * deep as the file is long. Judging that by re-reading the whole table
+     * once per refusal is quadratic: 1082ms for 2000 tokens on the main
+     * thread, and roughly seventeen seconds for this input.
+     *
+     * The assertions below check the OUTCOME, which the slow form also got
+     * right. The budget is a coarse second net, and its limits belong here
+     * rather than left to read as a performance test:
+     *
+     * - it catches the shape this replaced, about seventeen seconds against
+     *   160ms now, so a machine several times slower still separates them;
+     * - it does NOT catch a merely slower one. Measured by breaking only the
+     *   propagation and leaving the indexes: 1.56 seconds, a tenfold
+     *   regression that passes this budget comfortably.
+     *
+     * A budget tight enough to catch that would be measuring the machine,
+     * which is the worse trade — so the gap is named rather than closed.
+     */
+    const n = 8000;
+    const into: SiteTokenSet = {
+      tokens: [
+        { name: "taken", kind: "number", values: { light: "0" } },
+        ...Array.from({ length: n }, (_, index) => ({
+          id: `id.${String(index)}`,
+          name: `n${String(index)}`,
+          kind: "number" as const,
+          values: { light: "1" },
+        })),
+      ],
+    };
+    const carrying = (id: string): unknown => ({
+      $type: "number",
+      $value: 1,
+      $extensions: { "com.nextlyhq.nextly": { id } },
+    });
+    const document: Record<string, unknown> = { taken: carrying("id.0") };
+    for (let index = 1; index < n; index++) {
+      document[`n${String(index - 1)}`] = carrying(`id.${String(index)}`);
+    }
+
+    const result = importDtcg(JSON.stringify(document), into);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // Every rename in the chain is refused, and the table is left exactly as
+    // it was — the correctness half, which the slow form also got right.
+    expect(result.imported).toBe(0);
+    expect(result.skipped).toHaveLength(n);
+    const names = result.tokens.tokens.map(token => token.name);
+    expect([...new Set(names)]).toEqual(names);
+  });
+});
+
+describe("this system's own extension, read field by field", () => {
+  it("names a dark value the reader will not take", () => {
+    // The reader uses the extension's CSS only when every field it needs holds:
+    // a `dark` that is not a string is dropped and the token imports with its
+    // light value, looking entirely successful.
+    const document = {
+      brand: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0] },
+        $extensions: {
+          "com.nextlyhq.nextly": {
+            css: { light: "#111111", dark: 42 },
+            kind: "color",
+          },
+        },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The control: the token DID import, so the loss is the reader's decision
+    // about one field rather than a document it could not read.
+    expect(result.tokens.tokens.map(token => token.name)).toEqual(["brand"]);
+    expect(result.tokens.tokens[0]?.values.dark).toBeUndefined();
+    expect(result.skipped.join(" ")).toContain("css.dark");
+  });
+
+  it("says nothing about an extension the reader takes whole", () => {
+    // The control. Reporting a well-formed payload would name a loss that did
+    // not happen, on every file this system exported itself.
+    const document = {
+      brand: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0] },
+        $extensions: {
+          "com.nextlyhq.nextly": {
+            css: { light: "#111111", dark: "#eeeeee" },
+            kind: "color",
+          },
+        },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tokens.tokens[0]?.values.dark).toBe("#eeeeee");
+    expect(result.skipped).toEqual([]);
+  });
+});
+
+describe("what the report says about a token named twice", () => {
+  it("does not claim the survivor landed when it did not", () => {
+    /*
+     * The choice between two entries carrying one identity is made BEFORE any
+     * clash is judged, and the survivor can still be refused. A message saying
+     * it "was taken" then sits in the same report as one saying it "was not
+     * imported", about the same token, on an import that changed nothing.
+     */
+    const into: SiteTokenSet = {
+      tokens: [{ name: "taken", kind: "number", values: { light: "0" } }],
+    };
+    const carrying = (id: string): unknown => ({
+      $type: "number",
+      $value: 1,
+      $extensions: { "com.nextlyhq.nextly": { id } },
+    });
+    const document = { first: carrying("shared"), taken: carrying("shared") };
+
+    const result = importDtcg(JSON.stringify(document), into);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.imported).toBe(0);
+    const said = result.skipped.join(" ");
+    // Both facts are still reported: which entry was dropped for the other,
+    // and that the survivor could not be imported either.
+    expect(said).toContain("dropped in favour of");
+    expect(said).toContain("was not imported");
+    // And nothing claims an arrival. This is the assertion that fails on the
+    // wording it replaced.
+    expect(said).not.toContain("was taken");
+  });
+});
