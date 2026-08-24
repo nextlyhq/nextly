@@ -105,8 +105,13 @@ const Tabs = Root;
  * settles the height rather than leaving two answers in the tree.
  *
  * Only APPEARANCE is promoted. Layout a caller chooses -- `w-full`,
- * `justify-start`, margins, `overflow-x-auto` -- stays on `className`, because
- * a variant names a decision this component owns and layout is the caller's.
+ * `justify-start`, margins -- stays on `className`, because a variant names a
+ * decision this component owns and layout is the caller's.
+ *
+ * Horizontal SCROLLING is the exception, and it moved to the `scrollable` prop
+ * for a reason rather than as tidying: a caller putting `overflow-x-auto` on the
+ * list makes the list itself the scroll container, which breaks the rail
+ * contract this file's other half depends on. See that prop.
  *
  * The arms are a named declaration rather than an object literal inside `cva`,
  * because `cva` does not expose its configuration on the function it returns —
@@ -155,15 +160,53 @@ const tabsListVariants = cva(
  */
 const TabsList = forwardRef<
   TabsListRef,
-  TabsListBaseProps & VariantProps<typeof tabsListVariants>
->(({ className, variant, ...props }, ref) => (
-  <List
-    ref={ref}
-    data-slot="tabs-list"
-    className={cn(tabsListVariants({ variant }), className)}
-    {...props}
-  />
-));
+  TabsListBaseProps &
+    VariantProps<typeof tabsListVariants> & {
+      /**
+       * Let a strip too wide for its container scroll sideways.
+       *
+       * The scroll container is a WRAPPER, never the list, and that is why this
+       * prop exists rather than callers reaching for `overflow-x-auto`
+       * themselves. Two things go wrong when the list is the scroller, and the
+       * second is why the obvious remedy is also wrong:
+       *
+       *  - Per the CSS overflow rules, `visible` computes to `auto` when the
+       *    other axis is neither `visible` nor `clip`, so `overflow-x` alone
+       *    always makes the element a VERTICAL scroll container too.
+       *  - `TabsTrigger` carries `-mb-0.5` so its 2px underline lands ON this
+       *    list's rail rather than below it. That pull-up puts content past the
+       *    content-box edge, which the new scroll container reports as vertical
+       *    overflow — so `overflow-y-hidden` would clip the 2px the underline is
+       *    made of, silencing a scrollbar by deleting the indicator.
+       *
+       * With the wrapper scrolling instead, the list keeps its rail and
+       * `w-max min-w-full` makes that rail span the full scroll width rather
+       * than stopping where the triggers do.
+       */
+      scrollable?: boolean;
+    }
+>(({ className, variant, scrollable = false, ...props }, ref) => {
+  const list = (
+    <List
+      ref={ref}
+      data-slot="tabs-list"
+      className={cn(
+        tabsListVariants({ variant }),
+        scrollable && "w-max min-w-full",
+        className
+      )}
+      {...props}
+    />
+  );
+
+  if (!scrollable) return list;
+
+  return (
+    <div data-slot="tabs-list-scroller" className="w-full overflow-x-auto">
+      {list}
+    </div>
+  );
+});
 TabsList.displayName = List.displayName;
 
 /**
