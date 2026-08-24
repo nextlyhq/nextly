@@ -144,4 +144,20 @@ describe("EntryPageFrame", () => {
       "contents"
     );
   });
+
+  it("reserves no space for a null trail either", () => {
+    // `null` is the other way a caller says "no trail" — a conditional that
+    // renders nothing yields it, and a strict `undefined` check would give
+    // that caller the 24px gap this slot exists to avoid.
+    render(
+      <ChromeSuppressionProvider>
+        <EntryPageFrame breadcrumbs={null}>
+          <p>body</p>
+        </EntryPageFrame>
+      </ChromeSuppressionProvider>
+    );
+
+    const trail = screen.getByTestId("page-container").firstElementChild;
+    expect(trail?.className).toBe("");
+  });
 });

@@ -299,6 +299,21 @@ export default function EditEntryPage({
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;
 
+  /**
+   * The page's measure, on every branch.
+   *
+   * `form` because an entry is a labelled form: an unbounded panel stretches a
+   * short text input across the whole of it. These early-return branches never
+   * reach `EntryPageFrame`, which carries the same reasoning for the branch
+   * that does, so they state it here rather than inheriting it.
+   *
+   * Every branch carries it — loading, each error state, and the editor —
+   * because they are the SAME page at different moments. Measuring only the
+   * editor would leave the skeleton full-width and reflow the page the instant
+   * data arrived, which reads as the layout breaking rather than as content
+   * appearing.
+   */
+
   // Missing slug error state
   if (!slug) {
     return (

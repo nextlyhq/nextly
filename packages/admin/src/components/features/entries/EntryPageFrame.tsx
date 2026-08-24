@@ -12,7 +12,7 @@ interface EntryPageFrameProps {
    *
    * Optional because the default entry form carries its own header chrome and
    * renders no trail here; the slot is still present in the tree so both
-   * callers reconcile identically.
+   * callers reconcile identically. `null` says the same thing as omitting it.
    */
   breadcrumbs?: ReactNode;
   children: ReactNode;
@@ -70,8 +70,11 @@ export function EntryPageFrame({ breadcrumbs, children }: EntryPageFrameProps) {
   // an empty one carries no gap: the default entry form passes no trail, and a
   // wrapper keeping its margin around nothing would push that editor down by
   // the height of a breadcrumb that is not there.
+  // `== null` deliberately, covering `null` as well as `undefined`: a caller
+  // whose trail is conditional renders `null`, and that is the same statement
+  // — there is nothing to put a gap around.
   const trailClass = framed
-    ? breadcrumbs === undefined
+    ? breadcrumbs == null
       ? undefined
       : "mb-6"
     : "hidden";

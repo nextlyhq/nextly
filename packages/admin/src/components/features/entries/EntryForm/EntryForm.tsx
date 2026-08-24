@@ -684,17 +684,24 @@ export function EntryForm({
                       className="mx-6 mt-3"
                     />
 
-                    <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+                    {/* `-my-8`, not `-m-8`. The vertical half still cancels
+                        `PageContainer`'s `py-8` so the editor's two columns
+                        reach the top and bottom of the panel. The horizontal
+                        half cancelled its `px-8`, and there is none left to
+                        cancel: a page that asks for a measure spends its inset
+                        as GRID COLUMNS, so the same negative margin now pulls
+                        the editor 32px past the content column on each side
+                        rather than back to the panel edge. Measured at a
+                        1600px viewport: 960px of editor in an 896px column.
+                        The two modal callers never had that padding either. */}
+                    <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
                       {/* Main column */}
                       <div className="flex-1 min-w-0 flex flex-col">
-                        {/* Why: the parent flex's @4xl/content:-m-8 already cancels
-                  PageContainer's px-8 padding so the form runs edge-to-edge
-                  once the panel is wide enough. Wrapping the system
-                  header / meta strip in another -mx-8 doubled the negative
-                  margin and pushed both bands ~32px past the page edges on
-                  each side — clipping the title's first character on the
-                  left and the rail toggle / right-edge buttons on the right.
-                  Letting them fill the Main column naturally fixes that. */}
+                        {/* No `-mx-8` here. These bands fill the Main column,
+                  which is already as wide as the content column allows;
+                  pulling them wider pushed both ~32px past the page edges
+                  and clipped the title's first character on the left and
+                  the rail toggle on the right. */}
                         <EntrySystemHeader
                           mode={mode}
                           titleField={titleField}
