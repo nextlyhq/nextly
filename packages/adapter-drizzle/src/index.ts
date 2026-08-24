@@ -123,6 +123,10 @@ export const version = "0.1.0";
  * @public
  */
 export { DrizzleAdapter } from "./adapter";
+export type {
+  TransactionCrudDelegator,
+  TransactionCrudForwarders,
+} from "./transaction-forwarders";
 export type { TableResolver } from "./types/core";
 
 // Why no F17 re-exports here: the main index follows a strict tree-shaking
