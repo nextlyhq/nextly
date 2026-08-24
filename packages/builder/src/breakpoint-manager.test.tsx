@@ -208,6 +208,48 @@ describe("the breakpoint trigger", () => {
     );
   });
 
+  it("does not resurrect an old write when the read returns to its old value", async () => {
+    /*
+     * The optimistic hold has to be CLEARED, not merely stopped being consulted.
+     *
+     * `resolveSiteStyle` hands back the host's config OBJECT when nothing is
+     * stored, and that reference is memoised — so a site that saves a set and
+     * later has the stored section cleared through the API or an import sees
+     * `value` return to the very object it was at the save. Left in state, the
+     * hold would match a second time and an old write would become authoritative
+     * over the truth the server and canvas had both moved back to.
+     *
+     * The same object is passed back deliberately: a fresh but equal one would
+     * not reproduce the defect, and the test would pass against the version that
+     * never clears.
+     */
+    const configObject = defined();
+    const other = empty();
+    const onSave = vi.fn((_next: BreakpointSet) => Promise.resolve(undefined));
+
+    const { rerender } = render(
+      <BreakpointManager value={configObject} onSave={onSave} ready />
+    );
+
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /save breakpoints|saving/i })
+    );
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+    // The read moves — the hold must be released here, permanently.
+    rerender(<BreakpointManager value={other} onSave={onSave} ready />);
+    // And then returns to the very object it was at the save.
+    rerender(<BreakpointManager value={configObject} onSave={onSave} ready />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Breakpoints: 2 defined" })
+      ).toBeDefined()
+    );
+  });
+
   it("seeds the dialog from the set it is given WHEN OPENED", () => {
     /*
      * Mounting the dialog only while open is what makes this true. Kept

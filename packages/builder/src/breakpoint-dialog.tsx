@@ -68,6 +68,20 @@ export interface BreakpointDialogProps {
   onSave: (next: BreakpointSet) => void | Promise<string | undefined>;
 }
 
+/**
+ * Whether a value can be awaited, without asking which realm made it.
+ *
+ * `instanceof Promise` is a check about one global constructor, and the values
+ * this has to recognise may not come from it.
+ */
+function isThenable(value: unknown): value is PromiseLike<string | undefined> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
 /** A draft row. Width is held as TEXT while editing. */
 interface DraftRow {
   /**
@@ -278,15 +292,26 @@ export function BreakpointDialog({
     if (issues.length > 0 || saving) return;
     setRefusal(undefined);
     const outcome = onSave(toSet(draft));
-    // A synchronous host is finished here, and awaiting its `undefined` would
-    // still cost a microtask — long enough to paint a disabled button that has
-    // nothing to wait for.
-    if (!(outcome instanceof Promise)) {
+    /*
+     * A THENABLE, not an `instanceof Promise`.
+     *
+     * The contract accepts a promise, and `instanceof` answers about one realm:
+     * a promise from another window or iframe, or a conforming implementation
+     * that is not the global constructor, fails the test. The dialog would then
+     * close as though the write were synchronous, and a refusal or rejection
+     * arriving afterwards would be neither shown nor handled — the exact loss
+     * the await exists to prevent, restored by the check meant to detect it.
+     *
+     * A synchronous host is still finished here, and awaiting its `undefined`
+     * would cost a microtask — long enough to paint a disabled button with
+     * nothing to wait for.
+     */
+    if (!isThenable(outcome)) {
       onOpenChange(false);
       return;
     }
     setSaving(true);
-    void outcome
+    void Promise.resolve(outcome)
       .then(message => {
         if (message === undefined) {
           onOpenChange(false);
@@ -311,8 +336,23 @@ export function BreakpointDialog({
       });
   };
 
+  /*
+   * Dismissal is refused while a save is in flight, for the reason the frozen
+   * fields are.
+   *
+   * Freezing the inputs left three ways out untouched — Cancel, the shared
+   * content's X, and Escape, all of which arrive here. Taken during a pending
+   * write, the dialog unmounts with the draft: a refusal that lands afterwards
+   * has nowhere to be shown, and reopening seeds from a read that has not
+   * caught up, so submitting that draft overwrites the write still in flight.
+   */
+  const requestOpenChange = (next: boolean): void => {
+    if (saving && !next) return;
+    onOpenChange(next);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Breakpoints</DialogTitle>
@@ -479,7 +519,8 @@ export function BreakpointDialog({
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              disabled={saving}
+              onClick={() => requestOpenChange(false)}
             >
               Cancel
             </Button>

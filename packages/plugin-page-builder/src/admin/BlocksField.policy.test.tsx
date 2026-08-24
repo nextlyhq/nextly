@@ -491,6 +491,35 @@ describe("what the breakpoint manager is told", () => {
     expect(refusal).toContain("configuration");
   });
 
+  it("does not count a config base row as a configured breakpoint", async () => {
+    /*
+     * A config carrying only the built-in `{ id: "base" }` row states no
+     * authored breakpoint. Counted, it refuses the one save that returns such a
+     * site to its base-only state — and tells the author to remove a config row
+     * the manager deliberately hides as built in, so the instruction cannot be
+     * followed from any screen they can reach.
+     */
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "base", label: "Base" }],
+          container: [],
+        },
+      },
+    };
+
+    openEditor();
+
+    const onSave = seen.breakpoints?.onSave as (
+      next: unknown
+    ) => Promise<string | undefined>;
+    expect(onSave).toBeDefined();
+
+    await expect(
+      onSave({ viewport: [], container: [] })
+    ).resolves.toBeUndefined();
+  });
+
   it("saves a NON-empty set, which is the control", async () => {
     // Without this, a callback that refused everything would satisfy the case
     // above and no breakpoint could ever be written.

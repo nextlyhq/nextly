@@ -143,6 +143,85 @@ describe("saving", () => {
     await waitFor(() => expect(saveButton().disabled).toBe(false));
   });
 
+  it("refuses dismissal while a save is in flight", async () => {
+    /*
+     * Freezing the fields left three ways out untouched — Cancel, the content's
+     * X, and Escape — all of which arrive through `onOpenChange`. Taken during a
+     * pending write, the dialog unmounts with the draft: a refusal landing
+     * afterwards has nowhere to be shown, and reopening seeds from a read that
+     * has not caught up.
+     *
+     * Escape is exercised as well as the button, because they are different
+     * paths to the same callback and guarding only the one with a `disabled`
+     * attribute would leave the keyboard route open.
+     */
+    let settle: (value: undefined) => void = () => {};
+    const onSave = vi.fn(
+      () =>
+        new Promise<undefined>(resolve => {
+          settle = resolve;
+        })
+    );
+    const onOpenChange = vi.fn();
+    open(stored(), onSave, onOpenChange);
+
+    fireEvent.click(saveButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" });
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    settle(undefined);
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("awaits a THENABLE that is not the global Promise", async () => {
+    /*
+     * `instanceof Promise` answers about one realm. A promise from another
+     * window or iframe, or a conforming implementation that is not the global
+     * constructor, fails it — and the dialog then closes as though the write
+     * were synchronous, so a refusal arriving afterwards is neither shown nor
+     * handled.
+     *
+     * The fixture is a bare thenable rather than a subclass, because a subclass
+     * still passes `instanceof` and would leave this green against the defect.
+     */
+    const notYet = (): void => {};
+    let settle: (value: string | undefined) => void = notYet;
+    const thenable = {
+      then(resolve: (value: string | undefined) => void) {
+        settle = resolve;
+      },
+    };
+    const onOpenChange = vi.fn();
+    open(
+      stored(),
+      vi.fn(() => thenable as never),
+      onOpenChange
+    );
+
+    fireEvent.click(saveButton());
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(saveButton().disabled).toBe(true);
+
+    /*
+     * The POPULATION before the property. Assimilating a thenable calls its
+     * `then` on a MICROTASK, so settling synchronously here would invoke the
+     * placeholder above and assert nothing — the refusal would never be
+     * delivered and the failure would read as the dialog ignoring it.
+     */
+    await waitFor(() => expect(settle).not.toBe(notYet));
+    settle("The server refused this.");
+
+    await waitFor(() =>
+      expect(screen.getByText("The server refused this.")).toBeDefined()
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("keeps the draft on screen when the save is REFUSED", async () => {
     /*
      * The case the whole change exists for. A refused write used to close the

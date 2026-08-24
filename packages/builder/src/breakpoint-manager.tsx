@@ -24,11 +24,7 @@ import { MonitorSmartphone } from "lucide-react";
 import * as React from "react";
 
 import { BreakpointDialog } from "./breakpoint-dialog";
-import {
-  BASE_BREAKPOINT,
-  type BreakpointDef,
-  type BreakpointSet,
-} from "./breakpoints";
+import { authoredBreakpoints, type BreakpointSet } from "./breakpoints";
 
 /**
  * Props for BreakpointManager.
@@ -58,35 +54,6 @@ export interface BreakpointManagerProps {
    * knows the manager exists is left wondering whether the feature was removed.
    */
   ready: boolean;
-}
-
-/**
- * The set with the built-in base removed from both axes.
- *
- * A stored set CAN carry a `base` row, and the plugin's own README documents a
- * host config that does — while `validateBreakpoints` reports the same id as
- * reserved, because the compiler claims it before reading any stored
- * definition. Passed through, the dialog renders it as an ordinary read-only
- * row and Save is disabled for as long as it is there: an author on the
- * documented configuration cannot save breakpoints at all until they delete a
- * row the interface presents as built in.
- *
- * Dropped here rather than made savable, because the two conventions are not
- * both right. `breakpointContexts` prepends the base context whether or not one
- * is stored, so a stored base row is redundant at best and shadowed at worst,
- * and the dialog is the one surface that must not offer to edit it.
- *
- * Applied to the DRAFT as well as the count. An earlier version excluded the
- * base from the count alone, which fixed the label and left the deadlock — the
- * same fact used in one of the two places that needed it.
- */
-function withoutBase(value: BreakpointSet): BreakpointSet {
-  const authored = (axis: readonly BreakpointDef[] | undefined) =>
-    (axis ?? []).filter(def => def?.id !== BASE_BREAKPOINT);
-  return {
-    viewport: authored(value.viewport),
-    container: authored(value.container),
-  };
 }
 
 /**
@@ -122,7 +89,23 @@ export function BreakpointManager({
   >(undefined);
   const stillStale =
     pendingWrite !== undefined && pendingWrite.sawAtSave === value;
-  const authored = withoutBase(stillStale ? pendingWrite.wrote : value);
+  /*
+   * CLEARED once the read moves, not merely stopped being consulted.
+   *
+   * Leaving it in state makes the release temporary rather than permanent:
+   * `resolveSiteStyle` hands back the host's config OBJECT when nothing is
+   * stored, and that reference is memoised — so a site that saves a set and
+   * later has the stored section cleared through the API or an import sees
+   * `value` return to the very object it was at the save, `sawAtSave === value`
+   * become true a second time, and an optimistic write resurrect over the truth
+   * the server and canvas have both moved back to.
+   */
+  React.useEffect(() => {
+    setPendingWrite(current =>
+      current !== undefined && current.sawAtSave !== value ? undefined : current
+    );
+  }, [value]);
+  const authored = authoredBreakpoints(stillStale ? pendingWrite.wrote : value);
   const count = authored.viewport.length + authored.container.length;
 
   const persist = async (next: BreakpointSet): Promise<string | undefined> => {

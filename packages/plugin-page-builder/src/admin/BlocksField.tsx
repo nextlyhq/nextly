@@ -46,6 +46,7 @@ import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
+  authoredBreakpoints,
   BlockToolbar,
   BreakpointManager,
   EditorCommandPalette,
@@ -503,10 +504,17 @@ function useBreakpointWriter(
    * empty stored set unrepresentable. Read from the config tier rather than from
    * the merged value, because the merged one cannot tell a stored set from a
    * defaulted one — which is the ambiguity being guarded.
+   *
+   * Through the SAME base filter the manager uses. A config carrying only the
+   * built-in `{ id: "base" }` row states no authored breakpoint, so counting it
+   * refuses the one save that returns such a site to its base-only state — and
+   * tells the author to remove a config row the manager deliberately hides as
+   * built in. Three surfaces now ask this question and all three ask it once.
    */
+  const configuredAuthored = authoredBreakpoints(configSiteStyle?.breakpoints);
   const configured =
-    (configSiteStyle?.breakpoints?.viewport?.length ?? 0) > 0 ||
-    (configSiteStyle?.breakpoints?.container?.length ?? 0) > 0;
+    configuredAuthored.viewport.length > 0 ||
+    configuredAuthored.container.length > 0;
 
   return useCallback(
     async (next: BreakpointSet): Promise<string | undefined> => {

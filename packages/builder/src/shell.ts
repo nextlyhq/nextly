@@ -125,6 +125,7 @@ export type { InsertPanelProps } from "./insert-panel";
  * would offer two ways to mount one feature that must agree about when the
  * saved set has actually been read.
  */
+export { authoredBreakpoints } from "./breakpoints";
 export { BreakpointManager } from "./breakpoint-manager";
 export type { BreakpointManagerProps } from "./breakpoint-manager";
 
