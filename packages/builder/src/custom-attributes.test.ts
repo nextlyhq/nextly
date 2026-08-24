@@ -481,3 +481,92 @@ describe("a bag holding two spellings of id", () => {
     expect(storedAttributes(rowsOf(bag), "", bag)).toEqual(bag);
   });
 });
+
+describe("renaming a row onto a name another row already holds", () => {
+  const stored = { "data-a": "one", "data-b": "two" };
+
+  it("blames the EDITED row, not the untouched one", () => {
+    /*
+     * First-wins alone got this backwards: the edited row sat earlier, looked
+     * fine, and the untouched row was marked the duplicate — so on rebuild the
+     * untouched row's old value overwrote the edit and `data-a` disappeared.
+     */
+    const rows = [
+      { name: "data-b", value: "edited", origin: "data-a" },
+      { name: "data-b", value: "two", origin: "data-b" },
+    ];
+    expect(rowProblem(rows, 0)).toEqual({ kind: "duplicate" });
+    expect(rowProblem(rows, 1)).toBeUndefined();
+    // And nothing is lost: the edited row falls back to what it replaced.
+    expect(storedAttributes(rows, "", stored)).toEqual(stored);
+  });
+
+  it("still uses first-wins between two rows the DOCUMENT supplied", () => {
+    // Neither is the author's doing, so there is no one to blame and the
+    // earlier spelling is kept — which is what the renderer does too.
+    const bag = { ID: "first", id: "second" };
+    const rows = rowsOf(bag);
+    expect(rowProblem(rows, 0)).toEqual({ kind: "use-css-id-field" });
+    expect(rowProblem(rows, 1)).toEqual({ kind: "duplicate" });
+  });
+});
+
+describe("the id a bag renders when it holds an empty spelling last", () => {
+  const node = (over: Record<string, unknown>): never =>
+    ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
+
+  it("takes the LAST variant even when it is empty", () => {
+    /*
+     * The renderer assigns each lowercased key in turn, so a trailing `ID: ""`
+     * leaves the element with `id=""`. Skipping the empty one kept `hero` and
+     * refused another block an id that does not render.
+     */
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { id: "hero", ID: "" } })],
+      "a"
+    );
+    expect(taken.has("hero")).toBe(false);
+  });
+
+  it("still takes it when the last variant holds something", () => {
+    // The control: last-wins, not empty-wins.
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { ID: "", id: "hero" } })],
+      "a"
+    );
+    expect(taken.has("hero")).toBe(true);
+  });
+});
+
+describe("an empty bag and no bag", () => {
+  it("are the same to `htmlUpdate`, so viewing writes nothing", () => {
+    /*
+     * The renderer asks `Object.keys(attributes).length > 0`, so `{}` behaves
+     * as absent. Treating them as different rewrote a node stored with `{}` the
+     * moment anyone opened the tab, putting an edit in the undo history for
+     * having looked at a panel.
+     */
+    expect(
+      htmlUpdate(
+        { cssId: "", attributes: undefined },
+        { cssId: "", attributes: {} }
+      )
+    ).toBeUndefined();
+    expect(
+      htmlUpdate(
+        { cssId: "", attributes: {} },
+        { cssId: "", attributes: undefined }
+      )
+    ).toBeUndefined();
+  });
+
+  it("still notices a bag that actually gained something", () => {
+    // The control: the equality must not swallow a real change.
+    expect(
+      htmlUpdate(
+        { cssId: "", attributes: { a: "1" } },
+        { cssId: "", attributes: {} }
+      )
+    ).toEqual({ patch: { attributes: { a: "1" } }, unset: [] });
+  });
+});

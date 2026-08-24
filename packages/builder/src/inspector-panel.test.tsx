@@ -16,7 +16,13 @@
  *
  * @module inspector-panel.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
@@ -792,5 +798,65 @@ describe("undo then redo, with the panel open", () => {
     expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
       "two"
     );
+  });
+});
+
+describe("the Advanced tab inside the entry's form", () => {
+  it("does not let Enter submit the form", () => {
+    /*
+     * The builder mounts inside the entry's `<form>`, and a single-line input
+     * with nothing stopping the key implicitly submits it — so typing an
+     * attribute and pressing Enter would save the whole entry. The CSS id field
+     * already prevented it; the two row inputs did not.
+     */
+    const editor = mount({ attributes: { "data-x": "1" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    for (const label of [
+      "CSS id",
+      "Name of attribute 1",
+      "Value of attribute 1",
+    ]) {
+      const event = createEvent.keyDown(screen.getByLabelText(label), {
+        key: "Enter",
+      });
+      fireEvent(screen.getByLabelText(label), event);
+      expect(event.defaultPrevented, label).toBe(true);
+    }
+    // And Enter still COMMITS, rather than merely being swallowed.
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("reports a refused save instead of showing a value nothing stored", () => {
+    /*
+     * `apply` answers `null` when the op is refused — a value past the
+     * document's byte limit is the reachable case — and the document is left
+     * alone. Ignoring that told the panel its own write had landed, so it
+     * stopped re-reading the document and went on showing the unsaved value.
+     */
+    register();
+    const editor = editorFor(documentOf({}));
+    editor.apply.mockReturnValue(null);
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+
+    expect(screen.getByRole("alert").textContent).toContain("size limit");
+  });
+
+  it("says nothing when the save DID land", () => {
+    // The control: a refusal shown on every successful edit would be worse
+    // than the silence it replaced.
+    const editor = mount({});
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

@@ -97,17 +97,31 @@ export function rowProblem(
    * matching the renderer's own iteration over the stored record — so position
    * is what the caller passes.
    */
-  const first = rows.findIndex(
-    other => !isBlankRow(other) && attributeKey(other.name) === key
-  );
-  if (first !== -1 && first !== index) return { kind: "duplicate" };
   /*
-   * ONE way to set an id, and it is the field above. The renderer accepts an
-   * `id` here — a document from elsewhere may carry one — but offering an
-   * author two routes to one identifier is the "two spellings of one question"
-   * problem wearing a UI, and the two do not even agree: the modelled field
-   * wins, so a value typed here would sit in the document doing nothing.
+   * Among rows sharing a key, exactly one is kept and the rest are duplicates.
+   * The one kept is a row that came from the DOCUMENT and still carries its
+   * own name — never a row the author has just renamed onto it.
+   *
+   * First-wins alone got this backwards in one direction: renaming the first
+   * row onto a name a later row already held left the edited row looking fine
+   * and blamed the untouched one, so on rebuild the untouched row's old value
+   * overwrote the edit and the name renamed FROM disappeared. Between two rows
+   * that both came from the document — two spellings of one name in an
+   * imported bag — first-wins is still the answer.
    */
+  const sharing = rows
+    .map((other, at) => ({ other, at }))
+    .filter(
+      ({ other }) => !isBlankRow(other) && attributeKey(other.name) === key
+    );
+  if (sharing.length > 1) {
+    const settled = sharing.filter(
+      ({ other }) =>
+        other.origin !== undefined && attributeKey(other.origin) === key
+    );
+    const keeps = (settled.length > 0 ? settled : sharing)[0]?.at;
+    if (keeps !== index) return { kind: "duplicate" };
+  }
   if (key === "id") return { kind: "use-css-id-field" };
   return undefined;
 }
@@ -283,7 +297,13 @@ function renderedIdIn(
   let found: string | undefined;
   for (const [name, value] of Object.entries(attributes)) {
     if (name.toLowerCase() !== "id") continue;
-    if (typeof value === "string" && value !== "") found = value;
+    /*
+     * The last variant wins whatever it holds, empty included: the renderer
+     * assigns each lowercased key in turn, so a trailing `ID: ""` leaves the
+     * element with `id=""`. Skipping it here kept an earlier value and
+     * refused another block an id that does not render.
+     */
+    if (typeof value === "string") found = value;
   }
   return found;
 }
@@ -348,8 +368,18 @@ function sameRecord(
   left: Readonly<Record<string, string>> | undefined,
   right: Readonly<Record<string, string>> | undefined
 ): boolean {
-  if (left === undefined || right === undefined) return left === right;
-  const names = Object.keys(left);
-  if (names.length !== Object.keys(right).length) return false;
-  return names.every(name => left[name] === right[name]);
+  /*
+   * An EMPTY bag and no bag are the same thing to a reader — the renderer
+   * asks `Object.keys(attributes).length > 0` — so they must compare equal
+   * here too. Treating them as different meant a node stored with `{}` was
+   * rewritten the moment anyone looked at the tab, putting an edit in the
+   * undo history for having opened a panel.
+   */
+  const held = (bag: Readonly<Record<string, string>> | undefined) =>
+    bag === undefined || Object.keys(bag).length === 0 ? undefined : bag;
+  const [a, b] = [held(left), held(right)];
+  if (a === undefined || b === undefined) return a === b;
+  const names = Object.keys(a);
+  if (names.length !== Object.keys(b).length) return false;
+  return names.every(name => a[name] === b[name]);
 }

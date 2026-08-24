@@ -29,6 +29,7 @@ import { Button, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
+  attributeKey,
   domIdsTaken,
   htmlUpdate,
   type HtmlFields,
@@ -89,6 +90,7 @@ export function AdvancedPanel({
    * beside it, in the same moment the valid attribute it replaced was deleted.
    */
   const lastWritten = React.useRef<HtmlFields | null>(null);
+  const [refusal, setRefusal] = React.useState<string | undefined>(undefined);
   React.useEffect(() => {
     const written = lastWritten.current;
     // Asked through the same function that decides whether a write is needed,
@@ -139,13 +141,46 @@ export function AdvancedPanel({
     };
     const update = htmlUpdate(wanted, { cssId, attributes });
     if (update === undefined) return;
-    lastWritten.current = wanted;
-    editor.apply({
+    const applied = editor.apply({
       kind: "update",
       id: nodeId,
       patch: update.patch,
       ...(update.unset.length > 0 ? { unset: update.unset } : {}),
     } as Parameters<EditorState["apply"]>[0]);
+    /*
+     * REFUSED ops leave the document alone — a value that pushes it past its
+     * byte limit is the reachable one — and `apply` says so by answering
+     * `null`. Marking the attempt as written before knowing would tell the
+     * effect below that the props it sees are this panel's own echo, so it
+     * would stop re-reading the document and the field would go on showing a
+     * value nothing stored.
+     */
+    if (applied === null) {
+      setRefusal(
+        "That change could not be saved — the page is at its size limit. Shorten the value and try again."
+      );
+      return;
+    }
+    setRefusal(undefined);
+    lastWritten.current = wanted;
+    /*
+     * REBASED onto what was stored. A row keeps the name it was loaded with so
+     * a later mistake can fall back to it — but once the rename has landed,
+     * that old name is no longer in the document, and falling back to it finds
+     * nothing and unsets the value the rename had just saved.
+     *
+     * Only the origins move; the names and values the author is looking at stay
+     * exactly as they are, so nothing shifts under a cursor.
+     */
+    setDraft(current => ({
+      ...current,
+      rows: current.rows.map(row =>
+        wanted.attributes !== undefined &&
+        wanted.attributes[attributeKey(row.name)] === row.value
+          ? { ...row, origin: attributeKey(row.name) }
+          : row
+      ),
+    }));
   };
 
   /*
@@ -193,6 +228,11 @@ export function AdvancedPanel({
 
   return (
     <div className="nx-inspector__fields">
+      {refusal === undefined ? null : (
+        <p className="nx-attributes__problem" role="alert">
+          {refusal}
+        </p>
+      )}
       <div className="nx-inspector__field">
         <Label htmlFor="nx-block-css-id">CSS id</Label>
         <Input
@@ -339,6 +379,17 @@ function AttributeRowFields({
   onCommit: () => void;
   onRemove: () => void;
 }): React.JSX.Element {
+  /*
+   * Enter COMMITS here; it must not reach the form above. The builder mounts
+   * inside the entry's `<form>`, and a single-line input with nothing
+   * stopping the key implicitly submits it — so typing an attribute and
+   * pressing Enter would save the whole entry.
+   */
+  const onEnter = (event: React.KeyboardEvent): void => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    onCommit();
+  };
   const nameId = `nx-attr-name-${String(index)}`;
   const valueId = `nx-attr-value-${String(index)}`;
   const problemId = `nx-attr-problem-${String(index)}`;
@@ -365,6 +416,7 @@ function AttributeRowFields({
           aria-invalid={problem === undefined ? undefined : true}
           onChange={event => onChange(index, { name: event.target.value })}
           onBlur={onCommit}
+          onKeyDown={onEnter}
         />
         <Input
           id={valueId}
@@ -372,6 +424,7 @@ function AttributeRowFields({
           aria-label={`Value of attribute ${position}`}
           onChange={event => onChange(index, { value: event.target.value })}
           onBlur={onCommit}
+          onKeyDown={onEnter}
         />
         <Button
           type="button"
