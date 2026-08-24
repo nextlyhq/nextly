@@ -1542,6 +1542,49 @@ describe("naming the place a value came from", () => {
     );
   });
 
+  it("names the CONTROL a descendant rule came from, not just the block", () => {
+    /*
+     * A rule reaches a control whose descendant selector is more specific than
+     * its own: with no hover value stored, `linkColorHover` displays the plain
+     * `a` declaration. Same node, same breakpoint, same state — so what differs
+     * is WHICH CONTROL wrote it, and "this block" leaves the author unable to
+     * find the field that actually holds the value.
+     *
+     * Named from the catalog rather than from the selector: ` a` is not a name
+     * an author has seen anywhere.
+     */
+    expect(
+      describeProvenance(
+        {
+          kind: "inherited",
+          entry: at({ property: "color", descendant: " a" }),
+          from: { kind: "node", id: "a" },
+        } as never,
+        editing as never,
+        "a:hover"
+      )?.text
+    ).toBe("Inherited from the Link color control");
+  });
+
+  it("still says 'this block' when the control's OWN rule won", () => {
+    /*
+     * The control. Naming a source whenever a descendant exists would relabel
+     * every link control on the page, including the ones displaying exactly what
+     * they wrote.
+     */
+    expect(
+      describeProvenance(
+        {
+          kind: "inherited",
+          entry: at({ property: "color", descendant: " a", breakpoint: "md" }),
+          from: { kind: "node", id: "a" },
+        } as never,
+        editing as never,
+        "a"
+      )?.text
+    ).toBe("Inherited from this block at Medium");
+  });
+
   it("says nothing at all for unset and for ambiguous", () => {
     // Both are cases where a dot would claim something the record does not say.
     expect(

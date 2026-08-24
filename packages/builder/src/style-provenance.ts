@@ -217,7 +217,7 @@ function reachesControl(entry: string, query: string): boolean {
  * Derived from the catalog rather than listed, so a property added there is
  * covered without an edit here.
  */
-function propertiesWriting(
+export function propertiesWriting(
   cssProperty: string,
   descendant: string | undefined
 ): string[] {

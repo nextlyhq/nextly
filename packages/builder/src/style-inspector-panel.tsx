@@ -101,7 +101,11 @@ import {
   unitChoicesFor,
   withUnit,
 } from "./style-numeric";
-import { styleProvenance, type StyleProvenance } from "./style-provenance";
+import {
+  propertiesWriting,
+  styleProvenance,
+  type StyleProvenance,
+} from "./style-provenance";
 import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
@@ -887,6 +891,7 @@ function StyleControlField({
         <ProvenanceDot
           provenance={provenanceOf(control.leaf)}
           editing={editing}
+          descendant={control.leaf.descendant}
         />
       </Label>
       <ControlValue
@@ -1393,11 +1398,14 @@ function writeStyleValue({
 function ProvenanceDot({
   provenance,
   editing,
+  descendant,
 }: {
   provenance: StyleProvenance | undefined;
   editing: EditedAddress;
+  /** The control's own descendant selector, to tell its rules from a sibling's. */
+  descendant: string | undefined;
 }): React.JSX.Element | null {
-  const described = describeProvenance(provenance, editing);
+  const described = describeProvenance(provenance, editing, descendant);
   if (described === null) return null;
   return (
     <span
@@ -1424,7 +1432,8 @@ function ProvenanceDot({
  */
 export function describeProvenance(
   provenance: StyleProvenance | undefined,
-  editing: EditedAddress
+  editing: EditedAddress,
+  controlDescendant?: string
 ): { kind: "authored" | "inherited"; text: string } | null {
   if (provenance === undefined) return null;
   if (provenance.kind === "authored") {
@@ -1433,8 +1442,72 @@ export function describeProvenance(
   if (provenance.kind !== "inherited") return null;
   return {
     kind: "inherited",
-    text: `Inherited from ${originName(provenance.from, provenance.entry, editing)}`,
+    text: `Inherited from ${originName(provenance.from, provenance.entry, editing, controlDescendant)}`,
   };
+}
+
+/**
+ * Which of FOUR things a `node` origin means, in the order they narrow.
+ *
+ * Split from {@link originName} because the other three tiers answer in one line
+ * each while this one is the whole question: an ancestor's rule, this block at
+ * another breakpoint, this block in another state, another control on this
+ * block, and only then this control's own value.
+ */
+function nodeOriginName(
+  originNodeId: string,
+  entry: StyleTraceEntry,
+  editing: EditedAddress,
+  controlDescendant: string | undefined
+): string {
+  if (originNodeId !== editing.nodeId) return "an enclosing block";
+  if (entry.breakpoint !== editing.breakpoint) {
+    return `this block at ${editing.labelOf(entry.breakpoint)}`;
+  }
+  if (entry.state !== editing.state) {
+    return `this block's ${entry.state} state`;
+  }
+  /*
+   * Same node, same address — so what differs is WHICH CONTROL wrote it. A rule
+   * reaches a control whose descendant selector is more specific than its own:
+   * `linkColorHover` displays the plain `a` declaration when no hover value
+   * exists. Told "this block", the author cannot find the field that actually
+   * holds it, which is the one thing this indicator is for.
+   */
+  return sourceControl(entry, controlDescendant) ?? "this block";
+}
+
+/**
+ * The control a declaration came from, when it was not this one.
+ *
+ * `undefined` when the declaration belongs to this control's own address.
+ *
+ * The catalog is asked rather than the selector rendered: ` a` is not a name an
+ * author has seen anywhere, while the property that writes it is the field they
+ * are looking at.
+ *
+ * The multiple-writers guard is NOT currently reachable, and that is recorded
+ * rather than left for someone to rediscover. Measured over the whole catalog,
+ * exactly one `(cssProperty, descendant)` pair has two writers —
+ * `background-image` with no descendant, from `background` and
+ * `backgroundGradient` — and nothing writes `background-image` at a descendant
+ * at all. So a differing descendant always resolves to one property today.
+ *
+ * It is kept because it is not redundant: nothing else stops this naming one of
+ * two writers arbitrarily, and a control labelled with a field the author did
+ * not touch is the failure this whole indicator exists to avoid. A catalog leaf
+ * added at a descendant would reach it on the day it lands.
+ */
+function sourceControl(
+  entry: StyleTraceEntry,
+  controlDescendant: string | undefined
+): string | undefined {
+  const mine = (controlDescendant ?? "").trim();
+  const theirs = (entry.descendant ?? "").trim();
+  if (mine === theirs) return undefined;
+  const writers = propertiesWriting(entry.property, entry.descendant);
+  if (writers.length !== 1) return undefined;
+  return `the ${fieldLabel(writers[0] ?? "")} control`;
 }
 
 /**
@@ -1489,7 +1562,8 @@ export interface EditedAddress {
 function originName(
   origin: StyleOrigin,
   entry: StyleTraceEntry,
-  editing: EditedAddress
+  editing: EditedAddress,
+  controlDescendant: string | undefined
 ): string {
   switch (origin.kind) {
     case "class":
@@ -1508,14 +1582,7 @@ function originName(
     case "page":
       return "the page";
     case "node":
-      if (origin.id !== editing.nodeId) return "an enclosing block";
-      if (entry.breakpoint !== editing.breakpoint) {
-        return `this block at ${editing.labelOf(entry.breakpoint)}`;
-      }
-      if (entry.state !== editing.state) {
-        return `this block's ${entry.state} state`;
-      }
-      return "this block";
+      return nodeOriginName(origin.id, entry, editing, controlDescendant);
   }
 }
 
