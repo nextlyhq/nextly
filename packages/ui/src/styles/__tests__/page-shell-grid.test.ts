@@ -69,12 +69,24 @@ describe("page shell stylesheet", () => {
 
   it("reads the measure through the custom property the component sets", () => {
     // `PageShell` writes `--nx-shell-measure` inline per `width`. If the
-    // template stopped reading it, every width would render at the fallback and
-    // the prop would silently do nothing — which the component test cannot
-    // detect, because the property would still be set correctly.
-    expect(flat).toContain(
-      "minmax(0, var(--nx-shell-measure, var(--nx-measure-form)))"
-    );
+    // template stopped reading it, every width would render at the declared
+    // default and the prop would silently do nothing — which the component test
+    // cannot detect, because the property would still be set correctly.
+    expect(flat).toContain("minmax(0, var(--nx-shell-measure))");
+  });
+
+  it("declares the measure token rather than leaning on a var() fallback", () => {
+    // A token read but never declared cannot be retuned by a theme: it resolves
+    // to whatever fallback the one call site happened to write, so a palette
+    // change moves every surface around it and leaves this one where it was.
+    // `admin-token-reachability` enforces that across the admin, and this keeps
+    // the pairing visible from the stylesheet's own suite.
+    expect(flat).toContain("--nx-shell-measure: var(--nx-measure-form);");
+
+    // The fallback form is what an undeclared token forces. Rejecting it here
+    // means a revert to that shape fails, rather than passing on the assertion
+    // above alone.
+    expect(flat).not.toContain("var(--nx-shell-measure, ");
   });
 
   it("puts ordinary children in the content column and Bleed in the full one", () => {
