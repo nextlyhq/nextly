@@ -360,6 +360,13 @@ export async function resolveContent(
     const result = await nextly.find({
       collection,
       where: { [slugField]: { equals: slug } },
+      // This filter is the route's own address for the page, not a query
+      // somebody sent. Without saying so, a site that puts a read rule on its
+      // slug field would have every enforced lookup refused by the guard that
+      // stops a caller bisecting a hidden value -- and the slug is in the URL
+      // of every page this route serves, so addressing by it discloses nothing
+      // the routing has not already published.
+      frameworkFilter: true,
       status: options.status ?? "published",
       limit: 1,
       sort: "id",
@@ -419,6 +426,13 @@ export async function resolveContent(
       const result = await nextly.find({
         collection,
         where: { [slugField]: { equals: slug } },
+        // This filter is the route's own address for the page, not a query
+        // somebody sent. Without saying so, a site that puts a read rule on its
+        // slug field would have every enforced lookup refused by the guard that
+        // stops a caller bisecting a hidden value -- and the slug is in the URL
+        // of every page this route serves, so addressing by it discloses nothing
+        // the routing has not already published.
+        frameworkFilter: true,
         // Lifecycle-aware publish scope — drives the query service's status
         // filter, so it also constrains a localized collection's companion
         // `_status` (a draft translation never leaks). A no-op on status-less

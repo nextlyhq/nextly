@@ -73,7 +73,11 @@ import {
   type ReadAccessRedactions,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
-import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
+import {
+  assertFilterableFields,
+  assertSortableField,
+  filterSearchableFields,
+} from "../../../shared/lib/filterable-fields";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -231,6 +235,25 @@ function collectionFieldsFor(collection: unknown): FieldDefinition[] {
     | Record<string, unknown>
     | undefined;
   return (schemaDefinition?.fields || record.fields || []) as FieldDefinition[];
+}
+
+/**
+ * Whether this read is trusted for FIELD contents, which is not the same as
+ * being trusted for rows.
+ *
+ * `overrideAccess` grants both, and a caller may deliberately hand the field
+ * half back with `enforceFieldAccess` — a preview link reads a never-published
+ * row as trusted while still hiding fields its recipient may not see. The
+ * filter, sort and search guards all protect field CONTENTS, so every one of
+ * them must follow the field decision rather than the row one. Asked in a
+ * single place because three callers agreeing today is not three callers that
+ * stay agreed.
+ */
+function fieldTrustOf(params: {
+  overrideAccess?: boolean;
+  enforceFieldAccess?: boolean;
+}): boolean {
+  return params.overrideAccess === true && params.enforceFieldAccess !== true;
 }
 
 export class CollectionQueryService extends BaseService {
@@ -405,6 +428,59 @@ export class CollectionQueryService extends BaseService {
    * the validated filter and a cleaned where without it (so the generic where-builder never sees
    * it). Shape: `{ _translated: { locale, state } }`, state ∈ missing|translated|draft|published.
    */
+  /**
+   * What a caller may select and order by, asked once for both read verbs.
+   *
+   * `listEntries` and `countEntries` ask the same question of the same request,
+   * and a count is the CLEANER oracle of the two -- it answers 1 or 0 for a
+   * guessed value and returns no row to redact -- so the two must not be able
+   * to drift. One method rather than a copy in each.
+   */
+  private assertQueryReadable(params: {
+    collectionName: string;
+    where?: WhereFilter;
+    sort?: string;
+    overrideAccess?: boolean;
+    frameworkFilter?: boolean;
+  }): void {
+    const opts = {
+      overrideAccess: fieldTrustOf(params),
+      frameworkFilter: params.frameworkFilter,
+    };
+    // `params.where` -- what the CALLER sent -- never the hook-settled
+    // predicate. A `beforeRead` or `beforeOperation` hook is trusted server
+    // code and narrows reads on purpose, sometimes by a protected column (a
+    // tenant scope is the ordinary case); judging its output would reject the
+    // very reads those hooks exist to make safe.
+    assertFilterableFields(
+      "collection",
+      params.collectionName,
+      params.where,
+      opts
+    );
+    assertSortableField("collection", params.collectionName, params.sort, opts);
+  }
+
+  /**
+   * The searchable fields this caller may actually be matched against.
+   *
+   * Narrowed rather than refused: the caller named no column, so dropping the
+   * ones they may not read answers exactly what they asked.
+   */
+  private searchableFieldsFor(
+    collectionName: string,
+    collectionMeta: Record<string, unknown>,
+    /** Field trust, as `assertQueryReadable` computes it -- never raw row trust. */
+    fieldTrusted?: boolean
+  ): string[] {
+    return filterSearchableFields(
+      "collection",
+      collectionName,
+      getSearchableFields(collectionMeta),
+      { overrideAccess: fieldTrusted }
+    );
+  }
+
   private extractTranslationStatusFilter(where: WhereFilter | undefined): {
     filter: TranslationStatusFilter | null;
     cleanedWhere: WhereFilter | undefined;
@@ -889,6 +965,15 @@ export class CollectionQueryService extends BaseService {
      */
     fieldAccessUser?: UserContext;
     /**
+     * This `where` was built by the framework from a route it was asked to
+     * render, not received from a request.
+     *
+     * Exempts it from `assertFilterableFields`, whose subject is a caller
+     * CHOOSING probe values against a field it may not read. Per-operation and
+     * never a config field, so a nested call cannot inherit it.
+     */
+    frameworkFilter?: boolean;
+    /**
      * Which collections a trusted read may reach as relationships are expanded,
      * asked per RELATED collection. Absent means every populated target inherits
      * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
@@ -978,6 +1063,14 @@ export class CollectionQueryService extends BaseService {
       // Shared context between all hooks in this request
       // Seed with caller's context if provided (e.g., from Direct API)
       const sharedContext: Record<string, unknown> = { ...params.context };
+
+      // BEFORE the hooks, deliberately. `resolveReadWhere` hands them the
+      // caller's own object, and a hook that narrows it IN PLACE -- adding a
+      // tenant predicate to the same reference -- would otherwise leave this
+      // "caller-only" check reading a predicate the caller never sent, and
+      // rejecting the read that hook exists to make safe. Running first is what
+      // makes "what the caller sent" true rather than intended.
+      this.assertQueryReadable(params);
 
       // The read hooks settle the filter before any seam or constraint touches
       // it, so `beforeOperation` and `beforeRead` both narrow the rows actually
@@ -1072,9 +1165,25 @@ export class CollectionQueryService extends BaseService {
         const minLength = getMinSearchLength(collectionMeta);
         if (params.search.trim().length >= minLength) {
           // Get searchable fields
-          const searchableFields = getSearchableFields(collectionMeta);
+          // Narrowed, not refused: the caller never named a column, so
+          // dropping the ones they may not read answers what they asked.
+          // Leaving them in lets `search=<guess>` probe a hidden value
+          // through which rows come back.
+          const searchableFields = this.searchableFieldsFor(
+            params.collectionName,
+            collectionMeta,
+            fieldTrustOf(params)
+          );
 
-          if (searchableFields.length > 0) {
+          if (searchableFields.length === 0) {
+            // Every searchable field carries a read rule, so this caller has
+            // nothing to be matched against. Adding NO condition would return
+            // and count every otherwise-visible row -- the exact opposite of a
+            // narrowed search, and a worse answer than the leak this narrowing
+            // exists to close. An unsatisfiable predicate is the honest reading
+            // of "matched against nothing".
+            whereConditions.push(sql`1 = 0`);
+          } else {
             // Determine database dialect for ILIKE vs LIKE
             const dialect = this.adapter?.dialect || "postgresql";
 
@@ -1104,12 +1213,6 @@ export class CollectionQueryService extends BaseService {
       // before them and turned into a companion EXISTS/NOT EXISTS condition.
       // Before the filter can reach SQL. Redaction runs on rows already chosen,
       // so it cannot answer a `where` that selected them BY a hidden value.
-      assertFilterableFields(
-        "collection",
-        params.collectionName,
-        listQueryWhere,
-        { overrideAccess: params.overrideAccess }
-      );
 
       const { filter: translationFilter, cleanedWhere: whereAfterTranslation } =
         this.extractTranslationStatusFilter(listQueryWhere);
@@ -1402,6 +1505,16 @@ export class CollectionQueryService extends BaseService {
             // totalPages then hides the tail of its own result set.
             status: params.status,
             overrideAccess: params.overrideAccess,
+            frameworkFilter: true,
+            // Not a caller, and not a second boundary. This count is THIS
+            // read's own continuation: the caller's filter was judged at the
+            // top of `listEntries`, and what arrives here is the settled
+            // predicate, which legitimately carries whatever a trusted
+            // `beforeRead` hook narrowed it by. Re-judging it would reject a
+            // list that was already allowed -- and the rejection is swallowed
+            // into `totalDocs = 0`, so the page would come back correct with a
+            // total that quietly said there was nothing.
+
             // The count must answer the same access question as the rows, or a
             // route-authorized update/delete-only caller gets its read gate
             // denied here and totalDocs silently falls back to 0 — breaking the
@@ -1946,6 +2059,15 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * This `where` was built by the framework from a route it was asked to
+     * render, not received from a request.
+     *
+     * Exempts it from `assertFilterableFields`, whose subject is a caller
+     * CHOOSING probe values against a field it may not read. Per-operation and
+     * never a config field, so a nested call cannot inherit it.
+     */
+    frameworkFilter?: boolean;
+    /**
      * Which collections a trusted read may reach as relationships are expanded,
      * asked per RELATED collection. Absent means every populated target inherits
      * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
@@ -2030,14 +2152,7 @@ export class CollectionQueryService extends BaseService {
 
       // A count is a cleaner oracle than a listing, not a lesser one: "how many
       // rows carry this value" answers 1 or 0 without returning a row at all.
-      assertFilterableFields(
-        "collection",
-        params.collectionName,
-        params.where,
-        {
-          overrideAccess: params.overrideAccess,
-        }
-      );
+      this.assertQueryReadable(params);
 
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
@@ -2144,9 +2259,25 @@ export class CollectionQueryService extends BaseService {
         const minLength = getMinSearchLength(collectionMeta);
         if (params.search.trim().length >= minLength) {
           // Get searchable fields
-          const searchableFields = getSearchableFields(collectionMeta);
+          // Narrowed, not refused: the caller never named a column, so
+          // dropping the ones they may not read answers what they asked.
+          // Leaving them in lets `search=<guess>` probe a hidden value
+          // through which rows come back.
+          const searchableFields = this.searchableFieldsFor(
+            params.collectionName,
+            collectionMeta,
+            fieldTrustOf(params)
+          );
 
-          if (searchableFields.length > 0) {
+          if (searchableFields.length === 0) {
+            // Every searchable field carries a read rule, so this caller has
+            // nothing to be matched against. Adding NO condition would return
+            // and count every otherwise-visible row -- the exact opposite of a
+            // narrowed search, and a worse answer than the leak this narrowing
+            // exists to close. An unsatisfiable predicate is the honest reading
+            // of "matched against nothing".
+            whereConditions.push(sql`1 = 0`);
+          } else {
             // Determine database dialect for ILIKE vs LIKE
             const dialect = this.adapter?.dialect || "postgresql";
 
