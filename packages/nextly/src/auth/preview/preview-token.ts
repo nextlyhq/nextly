@@ -155,6 +155,33 @@ export async function signPreviewToken(
     });
   }
 
+  // The TYPE makes this required and the type is not a boundary. A JavaScript
+  // caller omits it and compiles nothing; a typed one can pass `""`. Either way
+  // the claim below would be dropped, verification would read the result as a
+  // token minted before the claim existed, and the draft gate would omit
+  // redaction — rendering every field to whoever holds the link. That is the
+  // whole defect this claim closes, reachable through the front door.
+  //
+  // Refused rather than defaulted: there is no safe stand-in for "whose
+  // permissions is this seen through", and inventing one would authorize a view
+  // nobody asked for.
+  if (
+    typeof options.minter !== "string" ||
+    options.minter.trim().length === 0
+  ) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "minter",
+          code: "REQUIRED",
+          message:
+            "A preview token must record who minted it, so the page can be " +
+            "rendered through that person's field-level permissions.",
+        },
+      ],
+    });
+  }
+
   const ttlSeconds = options.ttlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   const issuedAt = Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + ttlSeconds;
@@ -166,7 +193,7 @@ export async function signPreviewToken(
     // `mnt`, not `sub`: the subject below names the DOCUMENT, and a reader that
     // mistook this for an authenticated principal would be reading a bearer
     // token as a session. It is a redaction basis and nothing more.
-    ...(options.minter === undefined ? {} : { mnt: options.minter }),
+    mnt: options.minter,
     gen: options.generation,
   })
     .setProtectedHeader({ alg: ALGORITHM })
