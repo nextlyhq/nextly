@@ -30,6 +30,12 @@ export function SettingsRowGroup({
   const labelId = useId();
 
   return (
+    // No vertical padding here, deliberately. `FormSection` applies the rhythm
+    // to every direct child through `--nx-field-gap`, and the two are additive:
+    // a group that also padded itself would render at double the gap on exactly
+    // the sections that already looked correct. The horizontal grid stays this
+    // component's own business — that is what makes it a labelled two-column
+    // group rather than a stacked field.
     <div
       role="group"
       aria-labelledby={labelId}
