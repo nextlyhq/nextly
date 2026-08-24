@@ -457,6 +457,66 @@ describe("what the breakpoint manager is told", () => {
     expect(seen.breakpoints?.ready).toBe(true);
   });
 
+  it("refuses an empty set while the host config states breakpoints", async () => {
+    /*
+     * `resolveSiteStyle` decides "was anything stored" with `hasBreakpoints`,
+     * which is `viewport.length > 0 || container.length > 0`. So writing an
+     * empty set succeeds, reads back as NOTHING STORED, and the config defaults
+     * return — the author removes every row, is told it saved, and watches them
+     * reappear.
+     *
+     * Refused with a reason rather than reported as saved. Representing
+     * "explicitly none" would take a stored-format change, which is not a
+     * decision this callback makes silently.
+     */
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+    };
+
+    openEditor();
+
+    const onSave = seen.breakpoints?.onSave as (
+      next: unknown
+    ) => Promise<string | undefined>;
+    expect(onSave).toBeDefined();
+
+    const refusal = await onSave({ viewport: [], container: [] });
+
+    expect(refusal).toBeDefined();
+    expect(refusal).toContain("configuration");
+  });
+
+  it("saves a NON-empty set, which is the control", async () => {
+    // Without this, a callback that refused everything would satisfy the case
+    // above and no breakpoint could ever be written.
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+    };
+
+    openEditor();
+
+    const onSave = seen.breakpoints?.onSave as (
+      next: unknown
+    ) => Promise<string | undefined>;
+
+    await expect(
+      onSave({
+        viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+        container: [],
+      })
+    ).resolves.toBeUndefined();
+  });
+
   it("is given the SAME breakpoints the canvas renders against", () => {
     /*
      * One derivation, not two. The manager edits the set the cascade was

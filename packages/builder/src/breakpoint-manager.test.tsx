@@ -10,7 +10,13 @@
  *
  * @module breakpoint-manager.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BreakpointManager } from "./breakpoint-manager";
@@ -107,6 +113,99 @@ describe("the breakpoint trigger", () => {
     expect(
       screen.getByRole("button", { name: "Breakpoints: 0 defined" })
     ).toBeDefined();
+  });
+
+  it("hides a stored base row, which would otherwise deadlock Save", () => {
+    /*
+     * The plugin's own README documents a host config carrying
+     * `{ id: "base", label: "Base" }`, and a stored set can carry one too —
+     * while `validateBreakpoints` reports that id as RESERVED, because the
+     * compiler claims it before reading any stored definition.
+     *
+     * Passed through, the dialog renders it as an ordinary read-only row and
+     * Save stays disabled for as long as it is there: an author on the
+     * documented configuration cannot save breakpoints at all until they delete
+     * a row the interface presents as built in.
+     *
+     * Asserted on Save being ENABLED rather than only on the row's absence. The
+     * absence is the mechanism; being able to save is the property, and a
+     * future change that hid the row while still validating it would pass an
+     * absence check and leave the deadlock exactly where it was.
+     */
+    const documented = {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      ],
+      container: [],
+    } as unknown as BreakpointSet;
+
+    render(<BreakpointManager value={documented} onSave={vi.fn()} ready />);
+
+    // The count follows the same rule, so the two cannot disagree. Asserted
+    // BEFORE opening: the dialog takes the page out of the accessibility tree
+    // behind it, so the trigger is unreachable while it is up.
+    expect(
+      screen.getByRole("button", { name: "Breakpoints: 1 defined" })
+    ).toBeDefined();
+
+    fireEvent.click(trigger());
+
+    expect(screen.queryAllByDisplayValue("base")).toHaveLength(0);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: /save breakpoints|saving/i,
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
+  });
+
+  it("answers from the set it just wrote, not the stale read", async () => {
+    /*
+     * A successful write resolves before the query it invalidates has
+     * refetched, and the read reports `isPending` rather than background
+     * fetching — so for a moment `value` is still the PREVIOUS set while the
+     * trigger is ready and the dialog will reopen.
+     *
+     * Seeded from `value` there, an author who saves and immediately reopens
+     * sees the old set, and saving that draft overwrites the write that had
+     * just succeeded.
+     *
+     * Driven by REMOVING a row rather than adding one, because removal needs a
+     * single unambiguous control and leaves a set that is still valid — an
+     * added row is three empty fields, and a draft that never became savable
+     * would leave this passing on a save that never happened.
+     */
+    // Typed so the recorded call has a readable argument: an untyped `vi.fn`
+    // records `[]`, and reading index 0 off it is a type error rather than the
+    // assertion this test is making.
+    const onSave = vi.fn((_next: BreakpointSet) => Promise.resolve(undefined));
+    render(<BreakpointManager value={defined()} onSave={onSave} ready />);
+
+    expect(
+      screen.getByRole("button", { name: "Breakpoints: 2 defined" })
+    ).toBeDefined();
+
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /save breakpoints|saving/i })
+    );
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0].viewport).toHaveLength(1);
+
+    /*
+     * `value` has NOT changed — the refetch has not landed — so the trigger
+     * must answer from what was written. Reading 2 here is the defect: it means
+     * the surface is still describing the set the write replaced.
+     */
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Breakpoints: 1 defined" })
+      ).toBeDefined()
+    );
   });
 
   it("seeds the dialog from the set it is given WHEN OPENED", () => {

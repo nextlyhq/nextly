@@ -225,11 +225,22 @@ export function BreakpointDialog({
     [draft]
   );
 
+  /*
+   * Every edit is refused while a save is in flight, and the fields say so.
+   *
+   * The request carries the draft as it was at the click. Left editable, a
+   * change made in the window before the promise settles is not in that
+   * request AND is discarded by the close that follows it — the author watches
+   * their own edit vanish into a save that reported success. Freezing the form
+   * is what makes "the set that was submitted" and "the set on screen" the same
+   * thing at every moment the dialog is open.
+   */
   const updateRow = (
     axis: BreakpointAxis,
     key: string,
     patch: Partial<DraftRow>
   ): void => {
+    if (saving) return;
     setDraft(current => ({
       ...current,
       [axis]: current[axis].map(row =>
@@ -239,6 +250,7 @@ export function BreakpointDialog({
   };
 
   const addRow = (axis: BreakpointAxis): void => {
+    if (saving) return;
     setDraft(current => ({
       ...current,
       [axis]: [
@@ -255,6 +267,7 @@ export function BreakpointDialog({
   };
 
   const removeRow = (axis: BreakpointAxis, key: string): void => {
+    if (saving) return;
     setDraft(current => ({
       ...current,
       [axis]: current[axis].filter(row => row.key !== key),
@@ -348,6 +361,7 @@ export function BreakpointDialog({
                       >
                         <Field
                           id={`${fieldId}-${row.key}-label`}
+                          readOnly={saving}
                           label="Name"
                           hideLabel={index > 0}
                           value={row.label}
@@ -371,7 +385,7 @@ export function BreakpointDialog({
                           // every style on every page that uses it, silently.
                           // Removing the breakpoint and adding a new one is
                           // the same operation with the loss made visible.
-                          readOnly={!row.isNew}
+                          readOnly={!row.isNew || saving}
                           hint={
                             row.isNew
                               ? undefined
@@ -381,6 +395,7 @@ export function BreakpointDialog({
                         />
                         <Field
                           id={`${fieldId}-${row.key}-width`}
+                          readOnly={saving}
                           label="Up to"
                           hideLabel={index > 0}
                           value={row.width}
@@ -401,6 +416,7 @@ export function BreakpointDialog({
                             index === 0 && "sm:mt-6"
                           )}
                           aria-label={`Remove ${row.label.trim() || "breakpoint"}`}
+                          disabled={saving}
                           onClick={() => removeRow(axis, row.key)}
                         >
                           <Trash2 className="size-4" />
@@ -415,7 +431,7 @@ export function BreakpointDialog({
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={atLimit}
+                    disabled={atLimit || saving}
                     onClick={() => addRow(axis)}
                   >
                     <Plus className="size-4" />

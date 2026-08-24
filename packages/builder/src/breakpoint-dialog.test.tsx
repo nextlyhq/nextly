@@ -110,6 +110,39 @@ describe("saving", () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 
+  it("freezes the form while a save is in flight", async () => {
+    /*
+     * The request carries the draft as it was at the click. Left editable, an
+     * edit made before the promise settles is not in that request AND is
+     * discarded by the close that follows it — the author watches their own
+     * change vanish into a save that reported success.
+     *
+     * Asserted on an attempted EDIT, not only on a disabled attribute: a field
+     * can be visibly disabled and still accept a programmatic change, and the
+     * property that matters is that the value does not move.
+     */
+    let settle: (value: undefined) => void = () => {};
+    const onSave = vi.fn(
+      () =>
+        new Promise<undefined>(resolve => {
+          settle = resolve;
+        })
+    );
+    open(stored(), onSave);
+
+    fireEvent.click(saveButton());
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    const width = screen.getByDisplayValue("991");
+    fireEvent.change(width, { target: { value: "640" } });
+
+    expect(screen.getByDisplayValue("991")).toBeDefined();
+    expect(screen.queryByDisplayValue("640")).toBeNull();
+
+    settle(undefined);
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+  });
+
   it("keeps the draft on screen when the save is REFUSED", async () => {
     /*
      * The case the whole change exists for. A refused write used to close the

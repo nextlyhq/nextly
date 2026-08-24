@@ -24,7 +24,11 @@ import { MonitorSmartphone } from "lucide-react";
 import * as React from "react";
 
 import { BreakpointDialog } from "./breakpoint-dialog";
-import { BASE_BREAKPOINT, type BreakpointSet } from "./breakpoints";
+import {
+  BASE_BREAKPOINT,
+  type BreakpointDef,
+  type BreakpointSet,
+} from "./breakpoints";
 
 /**
  * Props for BreakpointManager.
@@ -57,21 +61,32 @@ export interface BreakpointManagerProps {
 }
 
 /**
- * How many breakpoints the site defines, for the trigger's own label.
+ * The set with the built-in base removed from both axes.
  *
- * The base is not counted. It is not a definition an author added and cannot be
- * removed, so including it would report "1 breakpoint" for a site that has
- * defined none — the exact state the label exists to distinguish.
+ * A stored set CAN carry a `base` row, and the plugin's own README documents a
+ * host config that does — while `validateBreakpoints` reports the same id as
+ * reserved, because the compiler claims it before reading any stored
+ * definition. Passed through, the dialog renders it as an ordinary read-only
+ * row and Save is disabled for as long as it is there: an author on the
+ * documented configuration cannot save breakpoints at all until they delete a
+ * row the interface presents as built in.
+ *
+ * Dropped here rather than made savable, because the two conventions are not
+ * both right. `breakpointContexts` prepends the base context whether or not one
+ * is stored, so a stored base row is redundant at best and shadowed at worst,
+ * and the dialog is the one surface that must not offer to edit it.
+ *
+ * Applied to the DRAFT as well as the count. An earlier version excluded the
+ * base from the count alone, which fixed the label and left the deadlock — the
+ * same fact used in one of the two places that needed it.
  */
-function definedCount(value: BreakpointSet): number {
-  const axes = [value.viewport, value.container];
-  let count = 0;
-  for (const axis of axes) {
-    for (const def of axis ?? []) {
-      if (def?.id !== BASE_BREAKPOINT) count += 1;
-    }
-  }
-  return count;
+function withoutBase(value: BreakpointSet): BreakpointSet {
+  const authored = (axis: readonly BreakpointDef[] | undefined) =>
+    (axis ?? []).filter(def => def?.id !== BASE_BREAKPOINT);
+  return {
+    viewport: authored(value.viewport),
+    container: authored(value.container),
+  };
 }
 
 /**
@@ -84,7 +99,44 @@ export function BreakpointManager({
   ready,
 }: BreakpointManagerProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
-  const count = definedCount(value);
+  /*
+   * The set this surface last wrote, held until the read catches up.
+   *
+   * A successful write resolves before the query it invalidates has refetched,
+   * and `useSiteStyle` reports `isPending` rather than background fetching — so
+   * for a moment after saving, `value` is still the PREVIOUS set while the
+   * trigger is ready and the dialog will reopen. An author who saves and
+   * immediately reopens would be seeded from the old set, and saving that draft
+   * would overwrite the write that had just succeeded.
+   *
+   * Released by ANY change to `value`, not by `value` matching what was
+   * written. Waiting for a match cannot end if the server stored something
+   * different from what was sent — the surface would then show the submitted
+   * set forever and never the truth. Recording the value that was current at
+   * the save and yielding the moment it changes bounds this to exactly the
+   * window it exists for.
+   */
+  const [pendingWrite, setPendingWrite] = React.useState<
+    | { readonly wrote: BreakpointSet; readonly sawAtSave: BreakpointSet }
+    | undefined
+  >(undefined);
+  const stillStale =
+    pendingWrite !== undefined && pendingWrite.sawAtSave === value;
+  const authored = withoutBase(stillStale ? pendingWrite.wrote : value);
+  const count = authored.viewport.length + authored.container.length;
+
+  const persist = async (next: BreakpointSet): Promise<string | undefined> => {
+    // Narrowed rather than passed through: `onSave` may return nothing at all,
+    // and `void` is not `undefined` to the checker even though it is at runtime.
+    const answered = await onSave(next);
+    const outcome = typeof answered === "string" ? answered : undefined;
+    // Held only on success. A refused write changed nothing, so there is no
+    // newer set for the read to catch up to.
+    if (outcome === undefined) {
+      setPendingWrite({ wrote: next, sawAtSave: value });
+    }
+    return outcome;
+  };
 
   return (
     <>
@@ -132,8 +184,8 @@ export function BreakpointManager({
         <BreakpointDialog
           open
           onOpenChange={setOpen}
-          value={value}
-          onSave={onSave}
+          value={authored}
+          onSave={persist}
         />
       ) : null}
     </>
