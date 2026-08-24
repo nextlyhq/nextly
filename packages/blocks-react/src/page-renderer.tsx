@@ -147,8 +147,15 @@ export interface PageRendererProps {
  *
  * Two questions, two passes. `pruneNodes` is the shared walk, so their identity
  * behaviour cannot diverge even though what they keep does.
+ *
+ * Exported to the package rather than kept local because it is half the answer
+ * to "which tree does this page's sheet describe", and the editor's cascade read
+ * has to ask that same question. Rebuilding it there from `rendersOwnMarkup`
+ * would be a second implementation of one pass, which is the drift this file
+ * already argues against. Not on the public entry: it is an internal derivation,
+ * not a surface a host composes with.
  */
-function pruneRenderedPlaceholders(
+export function pruneRenderedPlaceholders(
   document: BlockDocument,
   resolver: BlockResolver
 ): BlockDocument {

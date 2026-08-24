@@ -27,7 +27,7 @@ import type {
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
-import { sharedStyleInputs } from "./page-renderer";
+import { pruneRenderedPlaceholders, sharedStyleInputs } from "./page-renderer";
 import { prepareDocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import { registeredBlocks } from "./resolver";
@@ -126,8 +126,14 @@ export function pageStyleTrace(
    * crashes on open, before the renderer can show the placeholder it has for
    * exactly this.
    *
-   * `deduped`, NOT `prepared`, and the difference between them is one pass:
-   * `pruneKnownPlaceholders`, which keeps only the slots a definition declares.
+   * `deduped` put through `pruneRenderedPlaceholders`, which is the derivation
+   * the renderer's own style input uses — NOT the pipeline's `prepared`, whose
+   * last pass is `pruneKnownPlaceholders`.
+   *
+   * The two pruning passes share their placeholder predicate and differ in one
+   * respect: `pruneKnownPlaceholders` walks only the slots a definition
+   * declares, and `pruneRenderedPlaceholders` walks every stored slot. That
+   * difference is the whole of what is wrong with `prepared` here.
    *
    * That pass rests on a stated assumption — "a block never calls `renderSlot`
    * for a region it does not declare" — and nothing enforces it. `renderSlot`
@@ -144,8 +150,22 @@ export function pageStyleTrace(
    * trace came back EMPTY, so every control on a visibly styled block reported
    * having been set by nobody.
    *
-   * Only this last pass is skipped. Sanitizing, migration, gating and address
-   * repair all still apply, which is what the preceding paragraphs are about.
+   * Skipping the pruning ALTOGETHER only swaps the error's direction, and that
+   * was measured too. A placeholder replaces its node and everything the node
+   * contained, so a healthy child of a broken parent reaches no markup: rendered
+   * through `PageRenderer`, a styled child under an unregistered block produces
+   * a page whose sheet does not carry its rule, while a trace compiled from
+   * `deduped` alone reports it. The panel would name a source for a control on a
+   * block that is not on the page.
+   *
+   * The renderer's remaining pass is not mirrored because it cannot apply here.
+   * Its drawless drop is taken only when a stored artifact covers the removed
+   * nodes' rules, and this compiles with no stored artifact by construction —
+   * so that branch is `visible` unchanged, and the renderer's style input
+   * reduces exactly to the derivation above.
+   *
+   * Sanitizing, migration, gating and address repair all still apply, which is
+   * what the following paragraphs are about.
    *
    * An earlier version took `migrated` on the reasoning that a node the reader
    * withholds is still selectable from a layers panel and still owed an account.
@@ -170,7 +190,7 @@ export function pageStyleTrace(
   // a document this format does not recognise.
   if (stages === null) return undefined;
   return resolvePageStylesWithTrace(
-    stages.deduped,
+    pruneRenderedPlaceholders(stages.deduped, resolver),
     // No stored artifact. One would be REUSED rather than recompiled, and a
     // reused sheet has no cascade to report — the caller would get `undefined`
     // for a document it can perfectly well compile.

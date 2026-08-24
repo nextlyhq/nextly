@@ -235,7 +235,16 @@ const SOURCE_MODULES: ReadonlyArray<{
     // as set by nobody. Published instead of shared, it would be a second public
     // way to build a compile context, which is what `compileContextFor` exists
     // to prevent.
-    internal: ["sharedStyleInputs"],
+    //
+    // `pruneRenderedPlaceholders` is the same shape and the same third caller.
+    // It answers "which tree does this page's sheet describe" for the nodes a
+    // placeholder replaced, and the editor's cascade read has to ask exactly
+    // that: pruned harder, the trace withholds an account of markup that is on
+    // the page; pruned less, it names a source for markup that is not. Rebuilt
+    // there from `rendersOwnMarkup` it would be a second implementation of one
+    // pass, which is the drift the pass's own docblock argues against. An
+    // internal derivation, not something a host composes with.
+    internal: ["pruneRenderedPlaceholders", "sharedStyleInputs"],
   },
   {
     name: "prepare-document",
