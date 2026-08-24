@@ -175,11 +175,18 @@ function shapeOf(
  *
  * The type letter is part of the text. `1` and `"1"` are different values and
  * must not compare equal for printing alike; so must `1` and `1n`.
+ *
+ * A string leaf is LENGTH-PREFIXED, which is what makes the encoding injective.
+ * Inserted verbatim, a string can forge the punctuation that separates parts:
+ * measured, `{ a: 'x,"b":sy' }` and `{ a: "x", b: "y" }` — one key against two
+ * — produced the identical text and `sharedValueAt` answered `same` for values
+ * that disagree. The length pins where the leaf ends, so no content can end it
+ * early.
  */
 function scalarShapeOf(value: unknown): string | null | undefined {
   if (value === undefined) return "\0unset";
   if (value === null) return "\0null";
-  if (typeof value === "string") return `s${value}`;
+  if (typeof value === "string") return `s${value.length}:${value}`;
   if (typeof value === "number") return `n${String(value)}`;
   if (typeof value === "bigint") return `i${String(value)}`;
   if (typeof value === "boolean") return `b${String(value)}`;
@@ -205,25 +212,57 @@ function listShapeOf(
 }
 
 /**
+ * The record's OWN enumerable keys, sorted, or `null` when there are more of
+ * them than the budget allows.
+ *
+ * Counted DURING enumeration rather than after it. `Object.keys(value).sort()`
+ * builds and sorts the whole list before anything can refuse it, so a value
+ * carrying hundreds of thousands of keys — which an import or a corrupt
+ * document can produce — costs all of that per node before the budget is
+ * consulted even once. Measured at 300,000 keys: the walk refused, having first
+ * enumerated and sorted every one of them.
+ *
+ * `for...in` reaches the prototype, so `Object.hasOwn` filters; the pair reads
+ * exactly what `Object.keys` would, one key at a time and interruptibly.
+ */
+function ownKeysWithin(
+  value: object,
+  budget: { left: number }
+): string[] | null {
+  const keys: string[] = [];
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
+    if (keys.length >= budget.left) return null;
+    keys.push(key);
+  }
+  return keys.sort();
+}
+
+/**
  * How a record's parts compare: its OWN data properties, keys sorted.
  *
- * `Object.keys` never reaches the prototype, so an inherited `toJSON`,
- * `toString` or accessor is not consulted. An OWN accessor is refused rather
- * than invoked — reading it would run author code during an inspection, and
- * treating two accessors as equal would hide a real difference behind them.
+ * The prototype is never reached, so an inherited `toJSON`, `toString` or
+ * accessor is not consulted. An OWN accessor is refused rather than invoked —
+ * reading it would run author code during an inspection, and treating two
+ * accessors as equal would hide a real difference behind them.
+ *
+ * Keys are length-prefixed for the same reason string leaves are: a key
+ * containing the punctuation between parts could otherwise forge a boundary.
  */
 function recordShapeOf(
   value: object,
   budget: { left: number },
   depth: number
 ): string | null {
+  const keys = ownKeysWithin(value, budget);
+  if (keys === null) return null;
   const parts: string[] = [];
-  for (const key of Object.keys(value).sort()) {
+  for (const key of keys) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !("value" in descriptor)) return null;
     const shape = shapeOf(descriptor.value, budget, depth + 1);
     if (shape === null) return null;
-    parts.push(`${JSON.stringify(key)}:${shape}`);
+    parts.push(`${key.length}:${key}=${shape}`);
   }
   return `{${parts.join(",")}}`;
 }

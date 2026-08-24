@@ -283,6 +283,54 @@ describe("the ops that change a whole selection", () => {
     ).toEqual({ kind: "mixed" });
   });
 
+  it("does not let a string leaf forge a record boundary", () => {
+    /*
+     * The encoding is compared as TEXT, so every variable-length part has to
+     * say where it ends or its content can impersonate the punctuation between
+     * parts. Measured on the unprefixed version: a one-key record whose value
+     * contained the separator produced the same text as a two-key record, and
+     * `sharedValueAt` answered `same` for values that plainly disagree.
+     *
+     * Length-prefixing pins the extent of every leaf and key, so no content can
+     * end one early.
+     */
+    // Built to respect the SORT: `blockEnd` precedes `blockStart`, so the forged
+    // text has to continue from `blockEnd`. A fixture ignoring that produces no
+    // collision even on the broken encoding, and passes while proving nothing.
+    const forging = { blockEnd: 'y,"blockStart":sx' };
+    const genuine = { blockEnd: "y", blockStart: "x" };
+
+    // Population before the property: these are different shapes — one key
+    // against two — which is exactly what the collision hid.
+    expect(Object.keys(forging)).toHaveLength(1);
+    expect(Object.keys(genuine)).toHaveLength(2);
+
+    expect(
+      sharedValueAt([padNode("a", forging), padNode("b", genuine)], PAD)
+    ).toEqual({ kind: "mixed" });
+  });
+
+  it("refuses a record too wide to compare without enumerating all of it", () => {
+    /*
+     * A corrupt or imported value can carry hundreds of thousands of keys.
+     * Building and sorting that list before consulting the budget does the work
+     * the budget exists to refuse — and a multi-selection repeats it per node.
+     *
+     * Asserted as the ANSWER rather than as a duration, because a timing
+     * assertion measures the machine. What this pins is that the walk refuses,
+     * which is the direction that keeps a wide value from reading as agreement.
+     */
+    const wide: Record<string, string> = {};
+    for (let index = 0; index < 20_000; index += 1) wide[`k${index}`] = "v";
+
+    // Population: the value really is over budget, so the refusal is about
+    // width rather than about some other property of the fixture.
+    expect(Object.keys(wide).length).toBeGreaterThan(10_000);
+    expect(
+      sharedValueAt([padNode("a", wide), padNode("b", wide)], PAD)
+    ).toEqual({ kind: "mixed" });
+  });
+
   it("still sees two separately built equal trees as the SAME", () => {
     /*
      * The control on all four above. A comparison that answered `mixed` for
