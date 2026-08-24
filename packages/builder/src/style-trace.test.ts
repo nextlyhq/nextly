@@ -400,3 +400,49 @@ describe("a node the reader would withhold", () => {
     expect((trace ?? []).map(entry => entry.value)).toContain("rebeccapurple");
   });
 });
+
+describe("a stored document with duplicate node ids", () => {
+  it("reports the surviving node's own declarations", () => {
+    /*
+     * Address repair runs AFTER gating, so a tree taken before it still holds
+     * both copies — and the compiler deliberately suppresses node-local rules
+     * for every node sharing an id, because they cannot be addressed separately.
+     * Compiled from that stage, the survivor's controls read as unset while its
+     * CSS is plainly on the page.
+     */
+    register();
+    const duplicated = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "same",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          styles: { base: { base: { color: "teal" } } },
+        },
+        {
+          id: "same",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          styles: { base: { base: { color: "olive" } } },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const trace = pageStyleTrace(
+      duplicated,
+      { breakpoints: BREAKPOINTS },
+      undefined
+    );
+
+    // The population first: an empty trace satisfies the search by vacuity.
+    expect(trace).toBeDefined();
+    expect(trace ?? []).not.toHaveLength(0);
+    expect((trace ?? []).some(entry => entry.origin.kind === "node")).toBe(
+      true
+    );
+  });
+});

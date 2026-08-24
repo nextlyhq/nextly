@@ -304,15 +304,21 @@ export function StyleInspectorPanel({
       state: inspection.state,
       breakpoint: inspection.breakpoint,
       /*
-       * What the BROWSER is applying, not what the panel is editing. The two are
-       * different facts: the edited breakpoint says where a write lands, while
-       * a narrow enough window has `@media` rules active regardless of it.
+       * What the BROWSER is applying, and ONLY that. The edited breakpoint is a
+       * different fact and travels separately in `breakpoint`: it says where a
+       * write lands, not what is on screen.
        *
-       * The edited breakpoint is still in the set even when its own query does
-       * not match, because a value authored there is what this control writes
-       * to and `styleOrigin` needs it present to call anything "authored here".
+       * An earlier version forced the edited breakpoint into this set so a value
+       * authored there could be called "authored here". That inverted the
+       * premise — a host editing `mobile` while the canvas sits at desktop width
+       * would have the mobile declaration reported as the visible winner, which
+       * is a value the browser is not showing.
+       *
+       * The consequence is deliberate: editing a breakpoint whose query does not
+       * match reports its controls as unset. That is the honest answer, because
+       * the dot describes what is DISPLAYED rather than what is stored.
        */
-      liveBreakpoints: [...new Set([...matched, inspection.breakpoint])],
+      liveBreakpoints: matched,
     });
   };
 

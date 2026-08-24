@@ -94,6 +94,45 @@ describe("the subject a provenance question is asked about", () => {
     expect(subject?.ancestors).toEqual([]);
   });
 
+  it.each([
+    ["a bare string", "card"],
+    ["a number", 7],
+    ["an object", { card: true }],
+    ["an array holding a non-string", ["ok", 3]],
+  ])("ignores `classes` stored as %s", (_label, classes) => {
+    /*
+     * A stored document is untrusted, and the compiler treats a `classes` that
+     * is not an array of strings as referencing no classes at all.
+     *
+     * The bare-string case is the one that bites rather than merely being
+     * untidy: `styleOrigin` tests membership with `.includes(origin.id)`, which a
+     * STRING answers too — by substring. A node storing `"card-primary"` would
+     * report `.card` as the winning origin for a class the canvas emitted no
+     * token for.
+     */
+    const nodes = [
+      { id: "n", type: "core/box", version: 1, props: {}, classes },
+    ] as unknown as BlockNode[];
+    const subject = styleSubjectFor(nodes, "n");
+    expect(subject).toBeDefined();
+    expect("classIds" in subject!).toBe(false);
+  });
+
+  it("keeps a well-formed class list, which is the point of checking", () => {
+    // The control. Refusing every shape would satisfy the cases above and take
+    // the "Inherited from .card" answer with it.
+    const nodes = [
+      {
+        id: "n",
+        type: "core/box",
+        version: 1,
+        props: {},
+        classes: ["cls-1", "cls-2"],
+      },
+    ] as unknown as BlockNode[];
+    expect(styleSubjectFor(nodes, "n")?.classIds).toEqual(["cls-1", "cls-2"]);
+  });
+
   it("answers undefined for a node the document does not hold", () => {
     /*
      * A real answer rather than a failure: a selection outlives the node it

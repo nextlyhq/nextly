@@ -39,13 +39,24 @@ type SubjectNode = Omit<StyleSubject, "ancestors">;
  * `classes` is passed through rather than defaulted to an empty array: the
  * engine reads `classIds` as optional, and an empty array and an absent one are
  * the same answer expressed twice.
+ *
+ * The SHAPE is checked rather than trusted, and that is not defensive habit. A
+ * stored document is untrusted, and the compiler treats a `classes` that is not
+ * an array as referencing no classes at all. Forwarded raw, a string would reach
+ * `styleOrigin`, whose membership test is `.includes(origin.id)` — which a
+ * STRING also answers, by substring. A node storing `classes: "card-primary"`
+ * would then report `.card` as the winning origin for a class the canvas emitted
+ * no token for.
  */
 function identityOf(node: BlockNode): SubjectNode {
   const subject: { -readonly [K in keyof SubjectNode]: SubjectNode[K] } = {
     nodeId: node.id,
     blockType: node.type,
   };
-  if (node.classes !== undefined) subject.classIds = node.classes;
+  const classes = node.classes;
+  if (Array.isArray(classes) && classes.every(id => typeof id === "string")) {
+    subject.classIds = classes;
+  }
   return subject;
 }
 

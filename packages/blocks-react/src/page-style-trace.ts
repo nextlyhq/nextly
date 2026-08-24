@@ -126,22 +126,22 @@ export function pageStyleTrace(
    * crashes on open, before the renderer can show the placeholder it has for
    * exactly this.
    *
-   * `migrated` rather than `prepared`: sanitised and migrated, and NOT gated.
-   * Withholding a node is right for what renders and wrong for what a panel
-   * explains, since a node the reader drops is still selectable from a layers
-   * panel with authored values an author is owed an account of.
+   * `prepared` — the stage the pipeline itself calls the document to read, and
+   * the one the renderer compiles from.
    *
-   * Measured, the two are OBSERVATIONALLY EQUAL here today, and saying so is
-   * more useful than implying the choice is load-bearing. A condition-gated
-   * node's declarations are dropped by the COMPILER before any pruning, and a
-   * node hidden at a breakpoint survives BOTH trees — it is kept and given
-   * visibility rules rather than removed. So no input currently distinguishes
-   * them, and no test claims to.
+   * An earlier version took `migrated` on the reasoning that a node the reader
+   * withholds is still selectable from a layers panel and still owed an account.
+   * Measured, that distinction buys NOTHING here: a condition-gated node's
+   * declarations are dropped by the compiler before any pruning, and a node
+   * hidden at a breakpoint survives both trees, being kept and given visibility
+   * rules rather than removed.
    *
-   * The wider tree is still the right one to hand over: it is the choice that
-   * stays correct if the compiler ever stops dropping gated declarations, and
-   * the narrower one would then silently start reporting those controls as set
-   * by nobody.
+   * What the earlier stage cost was real. Address repair happens AFTER gating,
+   * so `migrated` still holds duplicate node ids — and the compiler deliberately
+   * suppresses node-local rules for every node sharing one, because they cannot
+   * be addressed separately. The trace then reported the surviving node's
+   * controls as unset while its CSS was plainly on the page. A hypothetical
+   * benefit against a measured defect is not a trade.
    */
   const stages = prepareDocumentReadStages(input.document, {
     resolver,
@@ -152,7 +152,7 @@ export function pageStyleTrace(
   // a document this format does not recognise.
   if (stages === null) return undefined;
   return resolvePageStylesWithTrace(
-    stages.migrated,
+    stages.prepared,
     // No stored artifact. One would be REUSED rather than recompiled, and a
     // reused sheet has no cascade to report — the caller would get `undefined`
     // for a document it can perfectly well compile.

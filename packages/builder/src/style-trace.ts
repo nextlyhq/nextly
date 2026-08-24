@@ -57,6 +57,7 @@
 
 import type {
   BlockDocument,
+  DocumentLimits,
   RemotePatternInput,
   SiteSheetInput,
   StyleCompileContext,
@@ -101,6 +102,15 @@ export function pageStyleTrace(
      * host names none — the same default, not a second one.
      */
     readonly blocks?: BlockResolver;
+    /**
+     * The caps the canvas prepares and compiles under.
+     *
+     * The fourth input of this kind, after the site tier, the fetch policy and
+     * the resolver — every one of them a field the renderer reads and this
+     * wrapper silently defaulted. They fail the same way: the trace describes a
+     * compile the page never ran, and says so confidently.
+     */
+    readonly limits?: DocumentLimits;
   }
 ): readonly StyleTraceEntry[] | undefined {
   return compileTrace({
@@ -111,5 +121,6 @@ export function pageStyleTrace(
       ? {}
       : { remotePatterns: options.remotePatterns }),
     ...(options?.blocks === undefined ? {} : { blocks: options.blocks }),
+    ...(options?.limits === undefined ? {} : { limits: options.limits }),
   });
 }
