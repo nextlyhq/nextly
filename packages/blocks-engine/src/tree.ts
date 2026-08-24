@@ -22,6 +22,7 @@
  *   with a machine-readable path, not silently corrected here.
  */
 import type { BlockNode } from "./document";
+import { walkForest } from "./forest-walk";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
 export function newId(): string {
@@ -47,29 +48,6 @@ export interface TreePosition {
   slot?: string;
   index: number;
 }
-
-/**
- * One step of the walk: a list being read, or the moment a subtree ends.
- *
- * A LIST rather than a node, so a forest is never copied onto the stack to be
- * walked. Seeding one entry per top-level node would read the whole array and
- * allocate against it before any bound applied, which makes a budget powerless
- * against the cheapest oversized document there is: a very wide root array.
- * Holding the array with a cursor spends memory on DEPTH, not on width.
- *
- * The `leave` marker is what makes ancestry observable in an iterative walk. A
- * recursive one knows it has left a subtree because the call returns; a stack
- * has to be told, so each node queues its own marker BEFORE its children and
- * the marker is reached again only after every descendant.
- */
-type Frame =
-  | {
-      kind: "list";
-      nodes: readonly unknown[];
-      index: number;
-      parent: BlockNode | undefined;
-    }
-  | { kind: "leave"; node: unknown };
 
 /** How a caller narrows the walk. */
 export interface WalkOptions {
@@ -115,50 +93,6 @@ function toWalkOptions(
 ): WalkOptions {
   if (third === undefined) return {};
   return "id" in third ? { parent: third } : third;
-}
-
-/** Queue a node's slot children so they are read before the next sibling. */
-function pushChildren(stack: Frame[], node: BlockNode): void {
-  if (!node.slots) return;
-  const slots = Object.values(node.slots);
-  // Reversed, so the first slot ends up on top of the stack and is read first.
-  for (let s = slots.length - 1; s >= 0; s -= 1) {
-    const children = slots[s];
-    // A slot whose value is not an array is skipped rather than read. Persisted
-    // documents reach this walk unvalidated, and iterating a non-array throws.
-    if (!Array.isArray(children)) continue;
-    stack.push({ kind: "list", nodes: children, index: 0, parent: node });
-  }
-}
-
-/**
- * Take the next unread entry, discarding frames that are finished on the way.
- *
- * Leaving a subtree is what removes its node from the ancestor path, so that
- * happens here: it is a property of the stack unwinding rather than of any node
- * being visited.
- */
-function takeNext(
-  stack: Frame[],
-  onPath: Set<unknown>
-): { node: unknown; parent: BlockNode | undefined } | undefined {
-  while (stack.length > 0) {
-    const top = stack[stack.length - 1];
-    if (top === undefined) return undefined;
-    if (top.kind === "leave") {
-      stack.pop();
-      onPath.delete(top.node);
-      continue;
-    }
-    if (top.index >= top.nodes.length) {
-      stack.pop();
-      continue;
-    }
-    const node = top.nodes[top.index];
-    top.index += 1;
-    return { node, parent: top.parent };
-  }
-  return undefined;
 }
 
 /** Whether an entry is a value this walk can treat as a node. */
@@ -214,48 +148,32 @@ export function walkNodes(
   fn: (node: BlockNode, parent: BlockNode | undefined) => void,
   third?: BlockNode | WalkOptions
 ): void {
-  if (!Array.isArray(nodes)) return;
   const options = toWalkOptions(third);
   const limit = options.maxNodes ?? Number.POSITIVE_INFINITY;
   if (limit <= 0) return;
 
-  const onPath = new Set<unknown>();
-  // ONE frame for the whole top level. Reading the roots array through a cursor
-  // is what keeps a budget meaningful against a very wide forest: entries are
-  // taken one at a time and the walk returns the moment the budget is spent, so
-  // a million roots with a budget of ten reads ten of them.
-  const stack: Frame[] = [
-    { kind: "list", nodes, index: 0, parent: options.parent },
-  ];
-
-  // Every entry READ spends the budget, not every entry that turned out to be a
-  // node. Reading is the work being bounded, so a forest beginning with a long
-  // run of nulls or primitives would otherwise be traversed in full while the
-  // budget sat untouched — the callback never fires, and a bound counting
-  // callbacks cannot see it. `selectNodes` bounds the same quantity, for the
-  // same reason, and the two agreeing is what lets a caller reason about one
-  // budget rather than two.
-  //
-  // Checked BEFORE taking the next entry rather than after using it, so
-  // "entries read" is exactly what the number means.
   let read = 0;
-  for (;;) {
-    if (read >= limit) return;
-    const entry = takeNext(stack, onPath);
-    if (entry === undefined) return;
+  walkForest(nodes, entry => {
+    // Every entry READ spends the budget, not every entry that turned out to be
+    // a node. Reading is the work being bounded, so a forest beginning with a
+    // long run of nulls would otherwise be traversed in full while the budget
+    // sat untouched — the callback never fires, and a bound counting callbacks
+    // cannot see it. `selectNodes` bounds the same quantity for the same reason.
     read += 1;
+    if (!isWalkableNode(entry.node)) return read >= limit ? "stop" : "skip";
 
-    if (!isWalkableNode(entry.node)) continue;
-    if (onPath.has(entry.node)) {
+    // The shared walk does not descend into a node already on the path, so an
+    // entry reported twice at the same identity is the cycle closing. Reported
+    // rather than silently skipped: a READER tolerates one, a WRITER has to
+    // refuse, and the walk is the only place that knows.
+    if (entry.cycle) {
       options.onCycle?.(entry.node);
-      continue;
+      return read >= limit ? "stop" : "skip";
     }
 
-    onPath.add(entry.node);
-    fn(entry.node, entry.parent);
-    stack.push({ kind: "leave", node: entry.node });
-    pushChildren(stack, entry.node);
-  }
+    fn(entry.node, entry.parent ?? options.parent);
+    return read >= limit ? "stop" : "descend";
+  });
 }
 
 /** Find a node anywhere in the forest by id. */
@@ -263,53 +181,22 @@ export function findNode(
   nodes: BlockNode[],
   id: string
 ): BlockNode | undefined {
-  return findWithin(nodes, id, new Set());
-}
-
-/**
- * `findNode`, carrying the ancestors the current forest was reached through.
- *
- * The path is what makes a MISS terminate. A hit returns before descending
- * further, so a lookup for an id that is present has always worked even on a
- * cyclic document — which is exactly why this went unnoticed: the failure needs
- * an id that is ABSENT, and asking for one that is not there is the ordinary
- * case for any lookup that can miss.
- *
- * A node reached through itself is not descended into again; the back edge is
- * simply not followed, so the search still covers everything reachable without
- * a cycle.
- */
-function findWithin(
-  nodes: BlockNode[],
-  id: string,
-  path: ReadonlySet<unknown>
-): BlockNode | undefined {
-  if (!Array.isArray(nodes)) return undefined;
-  for (const node of nodes) {
-    // Persisted forests reach these primitives unvalidated, so an entry may be
-    // `null` or a primitive and reading `id` off one throws.
-    if (typeof node !== "object" || node === null) continue;
-    if (node.id === id) return node;
-    if (path.has(node) || !node.slots) continue;
-    const hit = findBelow(node, id, path);
-    if (hit) return hit;
-  }
-  return undefined;
-}
-
-/** Search a node's slots, with that node added to the ancestor path. */
-function findBelow(
-  node: BlockNode,
-  id: string,
-  path: ReadonlySet<unknown>
-): BlockNode | undefined {
-  const below: ReadonlySet<unknown> = new Set(path).add(node);
-  for (const children of Object.values(node.slots ?? {})) {
-    if (!Array.isArray(children)) continue;
-    const hit = findWithin(children, id, below);
-    if (hit) return hit;
-  }
-  return undefined;
+  let found: BlockNode | undefined;
+  walkForest(nodes, entry => {
+    // Persisted forests reach here unvalidated, so an entry may be `null` or a
+    // primitive and reading `id` off one throws.
+    if (!isWalkableNode(entry.node)) return "skip";
+    if (entry.node.id === id) {
+      found = entry.node;
+      // Abandons the walk with the stack unread. A recursive search noticed a
+      // cycle only AFTER descending to the repeated ancestor, so a cycle longer
+      // than the call stack exhausted it before the guard ever ran — machine
+      // depth was the real bound, not the guard.
+      return "stop";
+    }
+    return "descend";
+  });
+  return found;
 }
 
 /** A found node's placement: its parent (undefined at top level), slot, and index. */
@@ -340,37 +227,134 @@ export function locateNode(
   return found;
 }
 
-/** Immutably rebuild the forest, applying `fn` to every node (parents before children). */
+/**
+ * One step of an immutable rebuild: a source list being read, or a node whose
+ * slots are now built and can be assembled.
+ *
+ * `close` sits BELOW its slot frames, so it is reached only after every
+ * descendant has been rebuilt — which is what makes this a post-order walk
+ * without recursion. Depth then costs a frame rather than a stack level, and
+ * these primitives run on documents nothing validated.
+ */
+type BuildTask =
+  | { kind: "read"; source: readonly unknown[]; index: number; out: unknown[] }
+  | {
+      kind: "close";
+      source: unknown;
+      mapped: BlockNode;
+      built: Record<string, BlockNode[]>;
+      out: unknown[];
+    };
+
+/**
+ * Queue each of a node's slots for rebuilding, recording where each result goes.
+ *
+ * A slot whose stored value is not an array is left OUT of `built`, which is how
+ * `assembleSlots` knows to keep it exactly as it was.
+ */
+function queueSlotRebuilds(
+  stack: BuildTask[],
+  mapped: BlockNode,
+  built: Record<string, BlockNode[]>
+): void {
+  const names = Object.keys(mapped.slots ?? {});
+  // Reversed so the first slot is rebuilt first.
+  for (let i = names.length - 1; i >= 0; i -= 1) {
+    const name = names[i];
+    if (name === undefined) continue;
+    const children = mapped.slots?.[name];
+    if (!Array.isArray(children)) continue;
+    const into: BlockNode[] = [];
+    built[name] = into;
+    stack.push({ kind: "read", source: children, index: 0, out: into });
+  }
+}
+
+/**
+ * Immutably rebuild the forest, applying `fn` to every node.
+ *
+ * Three things it must not do, each learned from getting one of them wrong:
+ *
+ * A node reached through itself is DROPPED from its parent's list, not kept as
+ * a childless copy. Keeping it returns a forest carrying that node's id twice —
+ * `parent -> child -> parent` rebuilt as `[parent, child, parent]` — which makes
+ * every id lookup ambiguous and fails the validation the repair was for. The
+ * entry that closes the cycle is the one that cannot exist in a finite tree, so
+ * it is the one that goes.
+ *
+ * A malformed ENTRY is passed through untouched rather than mapped. `fn` is
+ * written for nodes and reads `id` off what it is given, so handing it a `null`
+ * throws — and a caller editing an unrelated field has no business failing over
+ * a neighbour it never named.
+ *
+ * A malformed SLOT VALUE is preserved exactly. Replacing it with an empty array
+ * would let any unrelated edit silently destroy stored content that a caller
+ * may still need to read or repair, which is a worse outcome than the throw it
+ * replaced: the throw was loud and lost nothing.
+ */
 function mapForest(
   nodes: BlockNode[],
-  fn: (node: BlockNode) => BlockNode,
-  path: ReadonlySet<unknown> = new Set()
+  fn: (node: BlockNode) => BlockNode
 ): BlockNode[] {
-  if (!Array.isArray(nodes)) return [];
-  return nodes.map(node => {
-    // Unvalidated entries reach here, and `fn` is written for nodes.
-    if (typeof node !== "object" || node === null) return node;
-    const mapped = fn(node);
-    if (!mapped.slots) return mapped;
-    // A node reached through itself CANNOT be rebuilt: the result would have to
-    // contain itself, and the attempt recurses until the stack runs out. The
-    // back edge is dropped instead, so the rebuild returns a finite forest with
-    // the cycle broken rather than failing the caller's operation outright.
-    //
-    // Dropping rather than keeping is the only option that terminates, and it
-    // is the repair a caller would want anyway: an immutable rebuild of a
-    // cyclic forest is not a thing that exists.
-    if (path.has(node)) {
-      const { slots: _cyclic, ...withoutSlots } = mapped;
-      return withoutSlots;
+  if (!Array.isArray(nodes)) return nodes;
+  const rebuilt: unknown[] = [];
+  const onPath = new Set<unknown>();
+  const stack: BuildTask[] = [
+    { kind: "read", source: nodes, index: 0, out: rebuilt },
+  ];
+
+  while (stack.length > 0) {
+    const top = stack[stack.length - 1];
+    if (top === undefined) break;
+
+    if (top.kind === "close") {
+      stack.pop();
+      onPath.delete(top.source);
+      top.out.push(assembleSlots(top.mapped, top.built));
+      continue;
     }
-    const below: ReadonlySet<unknown> = new Set(path).add(node);
-    const slots: Record<string, BlockNode[]> = {};
-    for (const [name, children] of Object.entries(mapped.slots)) {
-      slots[name] = mapForest(children, fn, below);
+    if (top.index >= top.source.length) {
+      stack.pop();
+      continue;
     }
-    return { ...mapped, slots };
-  });
+    const entry = top.source[top.index];
+    top.index += 1;
+
+    if (!isWalkableNode(entry)) {
+      top.out.push(entry);
+      continue;
+    }
+    // The cycle closes here: this entry is its own ancestor, so it is omitted.
+    if (onPath.has(entry)) continue;
+
+    const mapped = fn(entry);
+    if (mapped.slots === undefined) {
+      top.out.push(mapped);
+      continue;
+    }
+
+    onPath.add(entry);
+    const built: Record<string, BlockNode[]> = {};
+    stack.push({ kind: "close", source: entry, mapped, built, out: top.out });
+    queueSlotRebuilds(stack, mapped, built);
+  }
+
+  return rebuilt as BlockNode[];
+}
+
+/** Put the rebuilt slots back on a node, keeping any slot that was not rebuilt. */
+function assembleSlots(
+  mapped: BlockNode,
+  built: Record<string, BlockNode[]>
+): BlockNode {
+  const slots: Record<string, BlockNode[]> = {};
+  for (const [name, original] of Object.entries(mapped.slots ?? {})) {
+    // A slot absent from `built` held something this rebuild could not walk.
+    // Keeping the stored value is the point: an unrelated edit must not be the
+    // thing that destroys it.
+    slots[name] = built[name] ?? original;
+  }
+  return { ...mapped, slots };
 }
 
 /** Clamp an insertion index into a list's valid range. */
@@ -509,20 +493,18 @@ export function moveNode(
 
 /** Deep-clone a subtree, assigning fresh ids to every node (copy/paste, patterns). */
 export function reidSubtree(node: BlockNode): BlockNode {
-  return reidWithin(node, new Set());
+  // Rebuilt through the shared walk rather than by recursing here. It already
+  // knows how to drop a cycle-closing entry, leave a malformed slot alone and
+  // keep depth off the call stack, and a second traversal written here would be
+  // a second set of answers to the same three questions.
+  const [rebuilt] = mapForest([node], reidOne);
+  return rebuilt ?? node;
 }
 
-/**
- * `reidSubtree`, carrying the ancestors this node was reached through.
- *
- * A node reached through itself has its slots dropped rather than rebuilt. The
- * re-id'd copy would otherwise have to contain a copy of itself, which is not a
- * finite structure — the recursion simply runs the stack out. Breaking the back
- * edge yields a duplicable subtree instead of failing the duplicate.
- */
-function reidWithin(node: BlockNode, path: ReadonlySet<unknown>): BlockNode {
-  // Clone only this node's own fields; descendants are cloned by the recursive
-  // calls below, so cloning `slots` here too would deep-copy them twice.
+/** One node's own fields, freshly identified. Slots are the rebuild's job. */
+function reidOne(node: BlockNode): BlockNode {
+  // Clone only this node's own fields; descendants are cloned as the rebuild
+  // reaches them, so cloning `slots` here too would deep-copy them twice.
   const { slots, ...own } = node;
   const copy: BlockNode = { ...structuredClone(own), id: newId() };
   // A re-id'd node is a distinct element: it must not carry the original's DOM
@@ -539,19 +521,9 @@ function reidWithin(node: BlockNode, path: ReadonlySet<unknown>): BlockNode {
     if (Object.keys(attributes).length > 0) copy.attributes = attributes;
     else delete copy.attributes;
   }
-  if (slots && !path.has(node)) {
-    const below: ReadonlySet<unknown> = new Set(path).add(node);
-    const newSlots: Record<string, BlockNode[]> = {};
-    for (const [name, children] of Object.entries(slots)) {
-      if (!Array.isArray(children)) continue;
-      newSlots[name] = children.map(child =>
-        typeof child === "object" && child !== null
-          ? reidWithin(child, below)
-          : child
-      );
-    }
-    copy.slots = newSlots;
-  }
+  // Handed back so the rebuild knows this node HAS slots to descend into; it
+  // replaces them with the rebuilt lists.
+  if (slots !== undefined) copy.slots = slots;
   return copy;
 }
 

@@ -311,14 +311,89 @@ describe("a forest whose slots form a cycle", () => {
     const next = updateNode(nodes, nodes[0]!.id, { props: { touched: true } });
 
     expect(next[0]?.props).toEqual({ touched: true });
-    // Terminated, and returned a forest that is itself finite to walk.
-    expect(countNodes(next)).toBe(3);
+
+    // The entry that CLOSES the cycle is omitted, not kept as a childless copy.
+    // Keeping it returned `[parent, child, parent]` — the same id twice, which
+    // makes every id lookup ambiguous and fails the validation this repair
+    // exists to satisfy. A node count alone cannot see that; the ids can.
+    const ids: string[] = [];
+    walkNodes(next, node => ids.push(node.id));
+    expect(ids).toEqual([nodes[0]!.id, nodes[0]!.slots!.main![0]!.id]);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("duplicates and re-ids a cyclic subtree without recursing forever", () => {
     const nodes = cyclic();
     expect(() => duplicateNode(nodes, nodes[0]!.id)).not.toThrow();
     expect(() => reidSubtree(nodes[0]!)).not.toThrow();
+  });
+
+  it("terminates on a cycle LONGER than the call stack, not just a short one", () => {
+    // The two-node fixture above cannot establish this. A recursive walk
+    // notices a cycle only after descending to the repeated ancestor, so its
+    // guard is unreachable for any cycle deeper than the machine allows — a
+    // five-thousand-node chain closing on its root exited with a RangeError
+    // while the check sat unreached. Machine depth was the real bound.
+    //
+    // Sized past the measured limit so the test does not go quiet if a future
+    // engine grants a larger stack.
+    const DEEP = 5_000;
+    let root: BlockNode = makeNode("core/text", 1);
+    const leaf = root;
+    for (let i = 0; i < DEEP; i++) {
+      root = makeNode("core/box", 1, {}, { main: [root] });
+    }
+    leaf.slots = { main: [root] };
+
+    expect(findNode([root], "absent")).toBeUndefined();
+    expect(() => countNodes([root])).not.toThrow();
+    expect(() => treeDepth([root])).not.toThrow();
+    expect(() =>
+      updateNode([root], root.id, { props: { x: 1 } })
+    ).not.toThrow();
+    expect(() => reidSubtree(root)).not.toThrow();
+  });
+
+  it("rebuilds a forest nested deeper than the call stack allows", () => {
+    // The other axis, and the one a cycle guard does nothing for. An immutable
+    // rebuild recursed per level, so a deep ACYCLIC document — no cycle at all
+    // — exhausted the stack on an ordinary edit.
+    let root: BlockNode = makeNode("core/text", 1);
+    for (let i = 0; i < 20_000; i++) {
+      root = makeNode("core/box", 1, {}, { main: [root] });
+    }
+
+    const next = updateNode([root], root.id, { props: { deep: true } });
+
+    expect(next[0]?.props).toEqual({ deep: true });
+    expect(countNodes(next)).toBe(20_001);
+  });
+
+  it("keeps a malformed SLOT VALUE that an unrelated edit never named", () => {
+    // Rebuilding used to throw on these, which lost nothing. Replacing them
+    // with an empty array would be worse than the throw: an edit to a different
+    // field would silently destroy stored content a caller may still need to
+    // read or repair, and nothing would report it.
+    const holder = makeNode("core/box", 1);
+    holder.slots = { broken: { nope: true } as unknown as BlockNode[] };
+    const other = makeNode("core/text", 1);
+
+    const next = updateNode([holder, other], other.id, { props: { x: 1 } });
+
+    expect(next[0]?.slots?.broken).toEqual({ nope: true });
+  });
+
+  it("passes a malformed ENTRY through rather than mapping it", () => {
+    // `fn` is written for nodes and reads `id` off what it is handed, so a
+    // `null` neighbour would throw — failing an edit the caller made to a
+    // different node entirely.
+    const real = makeNode("core/text", 1);
+    const forest = [null, real] as unknown as BlockNode[];
+
+    const next = updateNode(forest, real.id, { props: { x: 1 } });
+
+    expect(next[0]).toBeNull();
+    expect(next[1]?.props).toEqual({ x: 1 });
   });
 
   it("still counts a REPEATED node that is not a cycle twice", () => {
