@@ -48,6 +48,24 @@ function WiredControl() {
 }
 
 describe("SettingsRow", () => {
+  it("supplies no vertical padding of its own", () => {
+    // `FormSection` now applies the rhythm to every direct child, so a row that
+    // also padded itself would double it on exactly the sections that were
+    // already correct. The horizontal grid stays this component's business —
+    // that is what makes it a two-column row rather than a stacked field.
+    const { container } = render(
+      <Harness>
+        <WiredControl />
+      </Harness>
+    );
+    // The row is the grid element itself, found by the two-column template that
+    // makes it a row rather than by its position in the tree.
+    const row = container.querySelector('[class*="md:grid-cols-[2fr_3fr]"]');
+
+    expect(row).not.toBeNull();
+    expect(row?.className).not.toMatch(/(^|\s)py-/);
+  });
+
   it("renders the label", () => {
     render(<Harness>{<WiredControl />}</Harness>);
     expect(screen.getByText("My Label")).toBeInTheDocument();

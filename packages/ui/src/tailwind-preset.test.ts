@@ -146,3 +146,121 @@ describe("the Tailwind v3 preset", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * The component-class selectors `theme.css` declares inside `@layer
+ * components`, read from the stylesheet rather than listed here so the guard
+ * below covers whichever ones exist rather than whichever ones someone
+ * remembered.
+ */
+function themeComponentSelectors(css: string): Set<string> {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const selectors = new Set<string>();
+  const open = source.indexOf("@layer components");
+  if (open === -1) return selectors;
+
+  let depth = 0;
+  for (let i = source.indexOf("{", open); i < source.length; i++) {
+    if (source[i] === "{") {
+      depth++;
+      if (depth >= 2) {
+        // The text between the previous brace or semicolon and this one is the
+        // selector of the rule being opened. At depth 2 it is a rule inside the
+        // layer; deeper still is an at-rule's body, whose rules count too.
+        const head = source.slice(0, i);
+        const from = Math.max(head.lastIndexOf("{"), head.lastIndexOf("}")) + 1;
+        const selector = head.slice(from).trim().replace(/\s+/g, " ");
+        if (selector.startsWith(".")) selectors.add(selector);
+      }
+    } else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  return selectors;
+}
+
+/**
+ * Every selector the preset registers through a plugin's `addComponents`.
+ *
+ * The preset is read through a widened view because it declares no `plugins`
+ * key today, and a property access typed against its literal shape would not
+ * compile. Widening rather than asserting keeps this readable on the day a
+ * plugin IS added — which is the day the guard below has to work. `theme` is
+ * named alongside it only to give the two types a property in common, without
+ * which TypeScript rejects the assignment as a weak-type mismatch.
+ */
+function presetComponentSelectors(): Set<string> {
+  const selectors = new Set<string>();
+  const withPlugins: { theme?: unknown; plugins?: unknown[] } = uiPreset;
+  const plugins: unknown[] = withPlugins.plugins ?? [];
+  for (const plugin of plugins) {
+    const run = typeof plugin === "function" ? plugin : undefined;
+    run?.({
+      addComponents: (rules: Record<string, unknown>) => {
+        for (const selector of Object.keys(rules)) selectors.add(selector);
+      },
+      addUtilities: (rules: Record<string, unknown>) => {
+        for (const selector of Object.keys(rules)) selectors.add(selector);
+      },
+      addBase: () => {},
+      addVariant: () => {},
+      theme: () => undefined,
+      config: () => undefined,
+      e: (value: string) => value,
+    });
+  }
+  return selectors;
+}
+
+describe("the boundary between the preset and the stylesheet", () => {
+  it("reads the component layer at all", () => {
+    // The guard below compares against this set, and an empty set exonerates
+    // every possible preset. A renamed layer or a moved stylesheet has to fail
+    // here rather than reporting that nothing is duplicated.
+    const selectors = themeComponentSelectors(themeCss);
+    expect(selectors.has(".nx-page-shell")).toBe(true);
+    expect(selectors.has(".nx-form-section-rows > *")).toBe(true);
+  });
+
+  it("reads rules, not the layer's own opening brace", () => {
+    // Depth is what separates a rule inside the layer from the layer itself,
+    // and a parser that mistook one for the other would collect `@layer
+    // components` as a selector and then agree with any preset at all.
+    const fixture = `
+      /* .nx-decoy in a comment */
+      @layer components {
+        .nx-real { color: red; }
+        @media (min-width: 40rem) {
+          .nx-nested { color: blue; }
+        }
+      }
+      .nx-outside { color: green; }
+    `;
+
+    expect([...themeComponentSelectors(fixture)].sort()).toEqual([
+      ".nx-nested",
+      ".nx-real",
+    ]);
+  });
+
+  it("registers no rule the stylesheet already declares", () => {
+    // One decision, one implementation. A component rule restated here would
+    // agree with the stylesheet on the day it was written and drift silently
+    // afterwards, because each copy reaches a different consumer and neither
+    // looks wrong on its own. The stylesheet is the implementation; this preset
+    // carries the token contract, and consumers import both.
+    const theme = themeComponentSelectors(themeCss);
+    const duplicated = [...presetComponentSelectors()]
+      .filter(selector => theme.has(selector))
+      .sort();
+
+    expect(
+      duplicated,
+      `These selectors are declared both in theme.css and by this preset, so ` +
+        `a change to either leaves the two build paths rendering ` +
+        `differently. Delete the copy here and let consumers import ` +
+        `theme.css:\n${duplicated.join("\n")}`
+    ).toEqual([]);
+  });
+});
