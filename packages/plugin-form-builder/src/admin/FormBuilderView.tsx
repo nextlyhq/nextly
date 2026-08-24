@@ -45,6 +45,7 @@ import {
   FormSettingsTab,
   type SpamDefaults,
 } from "./components/builder/FormSettingsTab";
+import { notificationsBlockingSave } from "./components/builder/notification-addresses";
 import {
   FormBuilderProvider,
   useFormBuilder,
@@ -237,6 +238,17 @@ function FormBuilderViewInner({
     // Check if there are fields
     if (fields.length === 0) {
       toast.error("Please add at least one field to the form");
+      return;
+    }
+
+    // A notification is written to the form as it is typed, so nothing between
+    // the editor and here refuses one. The sheet this replaced disabled its own
+    // commit for a blank name, and the field rejects a malformed address on
+    // blur — both preconditions move to this save, which is now the only
+    // commit, and both are answered by the module the editor itself asks.
+    const blocked = notificationsBlockingSave(notifications);
+    if (blocked) {
+      toast.error(blocked);
       return;
     }
 

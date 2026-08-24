@@ -30,6 +30,7 @@ import type {
 } from "./types";
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
+import { parseFieldRef } from "./utils/field-references";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -517,9 +518,12 @@ export function getFormBuilderConfig(
  * Plain strings (e.g. email addresses) are returned as-is.
  */
 function resolveFieldRef(ref: string, data: Record<string, unknown>): string {
-  const match = ref.match(/^\{\{(\w+)\}\}$/);
-  if (!match) return ref;
-  const value = data[match[1]];
+  // The pattern is shared with the admin, which decides whether a value is a
+  // reference at all. Written twice, a value the editor accepted and this did
+  // not would be delivered with its braces intact.
+  const name = parseFieldRef(ref);
+  if (name === null) return ref;
+  const value = data[name];
   return typeof value === "string" ? value : "";
 }
 
