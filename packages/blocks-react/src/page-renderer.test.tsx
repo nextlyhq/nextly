@@ -5397,7 +5397,7 @@ describe("a block that does not render a single element", () => {
       expect(html).toContain("<p>");
       const said = warn.mock.calls.map(call => String(call[0])).join("\n");
       expect(said).toContain("test/wrapped");
-      expect(said).toContain("returned a fragment rather than an element");
+      expect(said).toContain("returned a wrapper rather than an element");
     } finally {
       warn.mockRestore();
     }
@@ -5465,6 +5465,108 @@ describe("a block that does not render a single element", () => {
       expect(warn).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  });
+
+  it("warns about a React wrapper that is not a fragment", async () => {
+    /*
+     * `Suspense`, `StrictMode` and `Profiler` have symbol types like `Fragment`
+     * and render no element of their own, so the generated class has nowhere to
+     * go in any of them. Special-casing `Fragment` alone left the diagnostic
+     * silent about the rest — and a list of the wrappers that exist today is
+     * the instrument that falls behind as React adds more.
+     */
+    const suspended = defineBlock({
+      name: "test/suspense-root",
+      version: 1,
+      description: "Wraps its output in Suspense, against the contract.",
+      example: { props: {} },
+      defaultProps: {},
+      render: () => <Suspense fallback={null}>held</Suspense>,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(suspended as AnyBlockDefinition);
+      // Population first: it rendered, so this is a warning about working
+      // output rather than about a block that failed some other way.
+      expect(html).toContain("held");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/suspense-root");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns about output that is not an element at all", async () => {
+    /*
+     * The `none` branch, which nothing reached: a block returning a string
+     * renders visible output with no element to carry the class. Distinct from
+     * drawing nothing, which is a decision and is exempt below.
+     */
+    const bare = defineBlock({
+      name: "test/bare-string",
+      version: 1,
+      description: "Returns a string, against the contract.",
+      example: { props: {} },
+      defaultProps: {},
+      render: () => "just text" as never,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(bare as AnyBlockDefinition);
+      expect(html).toContain("just text");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/bare-string");
+      expect(said).toContain("returned no element");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing in a production runtime that DOES define `process`", async () => {
+    /*
+     * The ordinary production build, and the branch the absent-runtime test
+     * cannot reach: with `process` undefined the check exits at the first
+     * condition, so `NODE_ENV === "production"` is never evaluated. Both halves
+     * of that expression need a test or half of it is unmeasured.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubGlobal("process", { env: { NODE_ENV: "production" } });
+      await renderWith(wrapped as AnyBlockDefinition);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a block that DECLARES it draws nothing", async () => {
+    /*
+     * The declaration exemption on its own. A block that also RETURNS nothing
+     * is exempted by `rendersNothing(output)` whatever the declaration says, so
+     * a fixture doing both cannot tell the two apart — this one declares it
+     * draws nothing while returning a fragment, which only the declaration
+     * excuses.
+     */
+    const declares = defineBlock({
+      name: "test/declares-drawless",
+      version: 1,
+      description: "Says it draws nothing, and returns a fragment.",
+      example: { props: {} },
+      defaultProps: {},
+      rendersNothing: () => true,
+      render: () => <></>,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await renderWith(declares as AnyBlockDefinition);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
       warn.mockRestore();
     }
   });

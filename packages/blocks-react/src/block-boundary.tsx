@@ -1,11 +1,5 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
-import {
-  Fragment,
-  Suspense,
-  cloneElement,
-  isValidElement,
-  type ReactNode,
-} from "react";
+import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
@@ -428,7 +422,7 @@ function noHostRootReason(output: ReactNode): string | null {
       return null;
     case "none":
       return "returned no element";
-    case "fragment":
+    case "builtin":
     case "component":
       return "returned a wrapper rather than an element";
   }
@@ -449,15 +443,36 @@ function noHostRootReason(output: ReactNode): string | null {
  * prediction is a second model of something this already knows first-hand, and
  * the two drift; the artifact is the only witness.
  */
-type RootShape = "host" | "component" | "fragment" | "none";
+type RootShape = "host" | "component" | "builtin" | "none";
 
 function rootShapeOf(output: ReactNode): RootShape {
   if (!isValidElement(output)) return "none";
-  if (output.type === Fragment) return "fragment";
-  // A string type is a host element. Anything else React accepts here is a
-  // component, which may or may not render a host element of its own — which
-  // is exactly why the two policies below answer differently about it.
-  return typeof output.type === "string" ? "host" : "component";
+  // A string type is a host element, and the only shape that HAS a root.
+  if (typeof output.type === "string") return "host";
+  /*
+   * A SYMBOL type is one of React's own wrappers — `Fragment`, `Suspense`,
+   * `StrictMode`, `Profiler` — and none of them renders an element of its own,
+   * so the generated class has nowhere to go in any of them.
+   *
+   * Asked as "is it a symbol" rather than as a list of the wrappers that exist
+   * today, for the reason a list is the wrong instrument: React adds these, and
+   * a list falls behind silently in the direction of saying nothing. Nothing
+   * with a symbol type can be a host element, so widening this way adds no
+   * false positive.
+   */
+  if (typeof output.type === "symbol") return "builtin";
+  /*
+   * Everything else is a COMPONENT, and that is deliberately under-reporting.
+   * A function component may render a host element and forward `className`, so
+   * it cannot be called broken. React also spells several non-function
+   * constructs as objects — a context provider has no root, while `memo` and
+   * `forwardRef` wrap something that may well have one — and telling those
+   * apart means reading `$$typeof` against React's internal symbols. This check
+   * errs toward silence there rather than risking a warning on a working
+   * `memo`, because a diagnostic that is sometimes false is one people learn to
+   * scroll past.
+   */
+  return "component";
 }
 
 /**
@@ -488,8 +503,8 @@ function brokenRootReason(output: ReactNode): string | null {
       return null;
     case "none":
       return "returned no element";
-    case "fragment":
-      return "returned a fragment rather than an element";
+    case "builtin":
+      return "returned a wrapper rather than an element";
   }
 }
 
