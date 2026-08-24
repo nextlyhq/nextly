@@ -1,4 +1,4 @@
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, previewUrlFromTemplate, text } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
 /**
@@ -47,7 +47,27 @@ import { blocks } from "../fields/blocksHelper";
  * blocks field and no switcher, so one capability behaved differently depending
  * on who declared the collection.
  */
-export function pagesCollection() {
+/**
+ * Where a page is served on the site — declared only when the host says so.
+ *
+ * A default was the obvious choice and it is the wrong one, because minting a
+ * preview link now REFUSES when a collection declares no preview URL. Those two
+ * behaviours interact: without a declaration an editor is told, in words, that a
+ * developer needs to configure one; with a defaulted declaration the mint
+ * succeeds and the reviewer gets a 404 that looks like an expired link.
+ *
+ * So a default would make an existing installation — one that upgrades while
+ * still calling `pageBuilder()` and has mounted no preview route — strictly
+ * worse off than declaring nothing, by replacing an explanation with a silent
+ * failure. The plugin cannot install the host's route or its draft gate, and it
+ * cannot discover where pages are mounted: a host may serve them at `/`, at
+ * `/blocks`, or under a locale segment.
+ *
+ * Passing `pagePreviewPath` is therefore how a host states that it has done the
+ * wiring. It costs one line and it is the only signal available that the link
+ * will land.
+ */
+export function pagesCollection(previewPath?: string) {
   return defineCollection({
     slug: "pages",
     labels: { singular: "Page", plural: "Pages" },
@@ -60,6 +80,17 @@ export function pagesCollection() {
       blocks({ name: "content", label: "Page Builder" }),
     ],
     status: true,
-    admin: { useAsTitle: "title" },
+    admin: {
+      useAsTitle: "title",
+      // Present only when the host supplied a path. A code-first collection
+      // declares a FUNCTION — `urlTemplate` is the spelling a UI-created
+      // collection stores, since no column can hold a function — and the path is
+      // turned into one through the shared helper rather than a substitution
+      // written here, so a template and a function cannot resolve the same entry
+      // to two different addresses.
+      ...(previewPath === undefined
+        ? {}
+        : { preview: { url: previewUrlFromTemplate(previewPath) } }),
+    },
   });
 }

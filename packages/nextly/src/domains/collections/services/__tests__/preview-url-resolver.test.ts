@@ -307,3 +307,56 @@ describe("resolvePreviewUrl", () => {
     expect(seen).toEqual([entry]);
   });
 });
+
+describe("a site URL that carries its own query or fragment", () => {
+  // A tenant selector is the usual reason, and the settings schema accepts one.
+  // Dropping it would send the visitor to the same path on a different tenant —
+  // and would disagree with the minted link, which keeps it, so the reviewer's
+  // first request would arrive scoped correctly and the redirect would strip it.
+  it("carries the site URL's query onto the resolved path", () => {
+    const resolution = resolvePreviewUrl({
+      preview: { urlTemplate: "/{slug}" },
+      entry: { slug: "about" },
+      siteUrl: "https://site.example/base?tenant=a",
+    });
+
+    expect(resolution).toEqual({
+      status: "resolved",
+      url: "https://site.example/base/about?tenant=a",
+    });
+  });
+
+  it("carries the site URL's fragment when the path declares none", () => {
+    const resolution = resolvePreviewUrl({
+      preview: { urlTemplate: "/{slug}" },
+      entry: { slug: "about" },
+      siteUrl: "https://site.example#top",
+    });
+
+    expect(resolution).toMatchObject({ url: "https://site.example/about#top" });
+  });
+
+  // The authored path describes ONE document; the site URL describes the
+  // deployment. The narrower statement wins.
+  it("lets the authored path's own query win a conflict", () => {
+    const resolution = resolvePreviewUrl({
+      preview: { urlTemplate: "/{slug}?tenant=b" },
+      entry: { slug: "about" },
+      siteUrl: "https://site.example?tenant=a",
+    });
+
+    expect(resolution).toMatchObject({
+      url: "https://site.example/about?tenant=b",
+    });
+  });
+
+  it("still resolves a site URL with no query at all", () => {
+    const resolution = resolvePreviewUrl({
+      preview: { urlTemplate: "/{slug}" },
+      entry: { slug: "about" },
+      siteUrl: "https://site.example",
+    });
+
+    expect(resolution).toMatchObject({ url: "https://site.example/about" });
+  });
+});

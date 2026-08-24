@@ -73,3 +73,49 @@ describe("pages is built from blocks", () => {
     expect(fieldsOf().map(f => f.name)).not.toContain("body");
   });
 });
+
+describe("where a page previews", () => {
+  // Declared only when the host passes a path, and the reason is an interaction
+  // between two behaviours: minting a preview link REFUSES when a collection
+  // declares no preview URL. Without a declaration an editor is told a developer
+  // must configure one; with a defaulted declaration the mint succeeds and the
+  // reviewer gets a 404 that looks like an expired link. A default would
+  // therefore make an installation that has mounted no preview route strictly
+  // worse off than declaring nothing.
+  it("declares no preview until the host supplies a path", () => {
+    expect(pagesCollection().admin?.preview).toBeUndefined();
+  });
+
+  it("declares one once the host supplies a path", () => {
+    const preview = pagesCollection("/{slug}").admin?.preview;
+
+    expect(typeof preview?.url).toBe("function");
+  });
+
+  it("serves a host that mounted its pages at the root", () => {
+    const url = pagesCollection("/{slug}").admin?.preview?.url;
+
+    expect(url?.({ slug: "about" })).toBe("/about");
+  });
+
+  it("serves a host that mounted its pages under a prefix", () => {
+    const url = pagesCollection("/blocks/{slug}").admin?.preview?.url;
+
+    expect(url?.({ slug: "about" })).toBe("/blocks/about");
+  });
+
+  // An entry without a slug yet is not previewable, and becomes so once it has
+  // one. `null` is how the resolver is told that rather than building a URL with
+  // a hole in it.
+  it("declines an entry whose slug is not filled in yet", () => {
+    const url = pagesCollection("/{slug}").admin?.preview?.url;
+
+    expect(url?.({})).toBeNull();
+  });
+
+  it("escapes a slug that would otherwise change the path", () => {
+    const url = pagesCollection("/{slug}").admin?.preview?.url;
+
+    expect(url?.({ slug: "a/b" })).toBe("/a%2Fb");
+  });
+});
