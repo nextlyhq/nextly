@@ -433,11 +433,55 @@ function buildRoute<TNode>(
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
   /** Whether this request may see unpublished edits at one collection + slug. */
+  /**
+   * Say so when a valid preview credential reaches a route that cannot use it.
+   *
+   * Everything it can throw is swallowed. This runs on a path that is otherwise
+   * about to answer normally, so a failure to produce a DIAGNOSTIC must never
+   * become a failure to serve the page.
+   */
+  async function warnOnUnhonouredPreviewCookie(
+    context: ResolvedContext
+  ): Promise<void> {
+    try {
+      const { readPreviewScope } = await import("../preview/preview-route");
+      const scope = await readPreviewScope();
+      if (scope === null) return;
+      if (scope.collection !== context.collection) return;
+
+      console.warn(
+        `[nextly] A valid preview link for "${scope.collection}" reached a ` +
+          "content route that declares no `draft` hook, so the draft cannot " +
+          "be served and the visitor gets a 404 that looks like an expired " +
+          "link.\n" +
+          "  Add `draft: previewDraftGate()` to this route's config.\n" +
+          "  https://nextlyhq.com/docs/guides/draft-preview"
+      );
+    } catch {
+      // A diagnostic never breaks a request.
+    }
+  }
+
   async function draftForThisPath(
     context: ResolvedContext
   ): Promise<DraftGrant> {
     const decision = config.draft;
-    if (decision === undefined) return false;
+    if (decision === undefined) {
+      // A route with no gate is the normal, correct configuration for most
+      // pages, so this warns about ONE REQUEST rather than about the route: the
+      // request arriving with a preview credential this route can never honour.
+      // That request answers 404, which is indistinguishable from an expired
+      // link — and the person who sees it is a reviewer with no access to the
+      // logs and no way to tell the two apart.
+      //
+      // Development only. The production 404 stays uniform by design: making it
+      // distinguishable would turn the endpoint into an oracle for which
+      // entries exist in draft.
+      if (process.env.NODE_ENV !== "production") {
+        await warnOnUnhonouredPreviewCookie(context);
+      }
+      return false;
+    }
     return typeof decision === "function" ? decision(context) : decision;
   }
 
