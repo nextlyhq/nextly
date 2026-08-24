@@ -1100,3 +1100,66 @@ describe("a file describing one token twice", () => {
     expect(read.tokens[0]?.values).toEqual({ light: "#111", dark: "#eee" });
   });
 });
+
+describe("this system's own extension, on the way in", () => {
+  it("names a field this version does not read", () => {
+    /*
+     * Another vendor's block is carried through untouched; THIS one is consumed
+     * — deleted from what the token keeps, with only the fields the reader
+     * knows taken out of it. Anything else a producer wrote there is gone, and
+     * the next export writes a freshly generated block with no sign of it.
+     */
+    const read = dtcgToTokens({
+      one: {
+        $type: "number",
+        $value: 1,
+        $extensions: {
+          [NEXTLY_EXTENSION]: { id: "stable", future: "keep-me" },
+        },
+      },
+    });
+    expect(read.tokens[0]?.id).toBe("stable");
+    expect(read.issues.map(issue => issue.message).join(" ")).toContain(
+      "future"
+    );
+  });
+
+  it("reportsEveryFieldItWrites: a round trip carries no such report", () => {
+    /*
+     * What holds the list of read fields to the emitter. The report above is
+     * driven by a NAMED set, so a field added to the emitter and not to that
+     * set would be announced as dropped on every file this system writes —
+     * naming a loss that did not happen. This fails the moment the two drift.
+     */
+    const { document } = tokensToDtcg({
+      tokens: [
+        {
+          id: "color.primary",
+          name: "brand.main",
+          kind: "color",
+          values: { light: "#111111", dark: "#eeeeee" },
+        },
+        { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      ],
+    });
+    const read = dtcgToTokens(JSON.parse(JSON.stringify(document)));
+    expect(read.issues).toEqual([]);
+    expect(read.tokens).toHaveLength(2);
+  });
+
+  it("says nothing about ANOTHER vendor's fields", () => {
+    // The control: those are carried, not consumed, so nothing is lost and a
+    // report would fire on every file from every other tool.
+    const read = dtcgToTokens({
+      one: {
+        $type: "number",
+        $value: 1,
+        $extensions: { "com.figma": { anything: "at all" } },
+      },
+    });
+    expect(read.issues).toEqual([]);
+    expect(read.tokens[0]?.extensions).toEqual({
+      "com.figma": { anything: "at all" },
+    });
+  });
+});

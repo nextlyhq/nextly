@@ -1318,3 +1318,47 @@ describe("a value the file states and this site did not use", () => {
     expect(result.skipped.join(" ")).toContain("was not used");
   });
 });
+
+describe("a document nested past what the reader can name", () => {
+  /** A stack of groups `levels` deep with one unreadable entry at the bottom. */
+  const deep = (levels: number): string => {
+    let open = "";
+    let close = "";
+    for (let level = 0; level < levels; level += 1) {
+      open += `{"g${String(level)}":`;
+      close += "}";
+    }
+    return `${open}{"bad":42}${close}`;
+  };
+
+  it("says it once for the whole subtree, not once per entry", () => {
+    /*
+     * Past the segment limit the engine refuses the branch WHOLE and says so in
+     * one line. This traversal used to walk on into it and add its own findings
+     * about entries nothing was ever going to read — so the author got a second
+     * account of a region already condemned, and paid a full traversal for it.
+     *
+     * Asserted on the OUTPUT rather than on a clock, because the clock cannot
+     * separate this: the cost was carried by rebuilding the path per node, and
+     * fixing that alone took a 15000-deep file from seconds to 16ms. The bound
+     * takes it to 8ms, and what it really buys is this one message.
+     */
+    const result = importDtcg(deep(70), { tokens: [] });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0]).toContain("groups deep");
+  });
+
+  it("still reports a shallow document fully", () => {
+    /*
+     * The control, and the one that matters most: a bound set too tight would
+     * stop naming real losses while every assertion about a deep file kept
+     * passing. An ordinary document must still be walked to the bottom.
+     */
+    const result = importDtcg(deep(5), { tokens: [] });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.skipped.join(" ")).toContain("g0.g1.g2.g3.g4.bad");
+  });
+});

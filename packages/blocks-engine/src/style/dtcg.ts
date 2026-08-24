@@ -680,6 +680,7 @@ function readToken(
   // Carried, not consumed: everything except this vendor's own key goes back
   // out with the token, which is what the format requires of any tool.
   delete extensions[NEXTLY_EXTENSION];
+  reportUnreadFields(own, name, issues);
 
   const description =
     typeof node.$description === "string" ? node.$description : undefined;
@@ -789,6 +790,48 @@ function readToken(
   }
 
   return assemble(kind, { light });
+}
+
+/**
+ * The fields this reader takes out of its own extension.
+ *
+ * Named beside the reads below rather than inferred, because a field this list
+ * does not know is REPORTED as dropped: a field added to the reader and not to
+ * this list would name a loss that did not happen. `reportsEveryFieldItWrites`
+ * in the tests is what holds the two together — it round-trips this system's
+ * own export and requires no such report, so adding a field to the emitter
+ * without adding it here fails.
+ */
+const NEXTLY_FIELDS = new Set(["id", "css", "kind"]);
+
+/**
+ * Say which parts of this system's OWN extension were thrown away.
+ *
+ * Unlike another vendor's block, which is carried through untouched, this key is
+ * consumed: it is deleted from the extensions the token keeps, and only the
+ * fields above are read out of it. Anything else a producer wrote there — a
+ * newer version of this system, or a tool imitating it — is gone, and the next
+ * export writes a freshly generated block in its place with no sign that
+ * something was lost.
+ *
+ * Reported rather than preserved. Preserving would be better and is a change to
+ * what a `SiteToken` holds, since there is nowhere on the model today for a
+ * field this system does not understand; saying so is what can be done without
+ * that.
+ */
+function reportUnreadFields(
+  own: unknown,
+  name: string,
+  issues: ValidationIssue[]
+): void {
+  if (!isPlainObject(own)) return;
+  const dropped = Object.keys(own).filter(key => !NEXTLY_FIELDS.has(key));
+  if (dropped.length === 0) return;
+  issues.push(
+    issue(
+      `"${name}" carries ${dropped.map(key => `"${key}"`).join(", ")} in this system's own extension, which this version does not read, so it was not kept.`
+    )
+  );
 }
 
 /**

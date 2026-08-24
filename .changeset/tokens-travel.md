@@ -47,3 +47,8 @@ since it holds what the author typed, but when the two genuinely disagree the
 import now says so instead of discarding the file's value in silence. Only a
 real difference in the colour is reported, never a difference in how it is
 spelled, so a file exported from here never carries the warning.
+
+Also: a field this system does not read inside its own extension is now named
+rather than dropped in silence, and a document nested past the group limit is
+refused with one message instead of a second account of every entry inside the
+branch the engine had already rejected whole.
