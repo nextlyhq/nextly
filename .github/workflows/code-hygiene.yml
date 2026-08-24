@@ -240,7 +240,7 @@ jobs:
         run: |
           set +e
           crashed=""
-          for analysis in dead-code dupes health; do
+          for analysis in dead-code; do
             pnpm exec fallow "$analysis" \
               --workspace "!playground" \
               --config .fallowrc.jsonc \
@@ -262,13 +262,9 @@ jobs:
           {
             echo "## Whole-Repository Code Hygiene Summary"
             echo
-            echo "Full dead-code, duplication, and health/complexity report for the"
-            echo "PR branch as it stands now. Playground is excluded. Quality gate"
-            echo "enforcement on introduced issues is performed by the Changed files job."
+            echo "Full dead-code report for the PR branch as it stands now. Playground is excluded. Quality gate enforcement on introduced issues is performed by the Changed files job."
             echo
-            for analysis in dead-code dupes health; do
-              pnpm exec fallow report --from "/tmp/head-$analysis.json" --format github-summary
-            done
+            pnpm exec fallow report --from "/tmp/head-dead-code.json" --format github-summary
           } > "/tmp/whole-repo-summary.md"
           cat "/tmp/whole-repo-summary.md" >> "$GITHUB_STEP_SUMMARY"
 
