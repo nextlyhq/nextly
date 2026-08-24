@@ -74,6 +74,33 @@ describe("selectNodes", () => {
     expect(selection.nodes.map(entry => entry.node.id)).toEqual(["a", "b"]);
   });
 
+  it("does not call an EMPTY level past the depth bound a truncation", () => {
+    // A node at exactly `maxDepth` may declare an empty slot, which queues a
+    // level one deeper holding nothing. Nothing is omitted by refusing to
+    // descend into it, so reporting a stop would mark a structurally valid
+    // document incomplete forever — and a caller that refuses to record an
+    // incomplete answer would then never record this page at all.
+    const selection = selectNodes(
+      { nodes: [node("a", { empty: [] })] },
+      limits({ maxDepth: 1 })
+    );
+
+    expect(selection.nodes.map(entry => entry.node.id)).toEqual(["a"]);
+    expect(selection.stopped).toBeUndefined();
+  });
+
+  it("still reports a depth stop when the level past the bound HAS entries", () => {
+    // The control. A guard that skipped every level past the bound would
+    // satisfy the case above while silently dropping real nodes.
+    const selection = selectNodes(
+      { nodes: [node("a", { s: [node("a1")] })] },
+      limits({ maxDepth: 1 })
+    );
+
+    expect(selection.nodes.map(entry => entry.node.id)).toEqual(["a"]);
+    expect(selection.stopped?.reason).toBe("depth");
+  });
+
   it("reports WHY it stopped, and says nothing when it did not", () => {
     // A selection that truncated silently would make every absence ambiguous,
     // and absence is exactly what a safe-delete check reads. The absent

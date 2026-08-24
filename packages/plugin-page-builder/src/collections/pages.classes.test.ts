@@ -167,6 +167,21 @@ describe("the referenced-class record on a page write", () => {
     expect(publish).toEqual({ status: "published" });
   });
 
+  it("records an empty list for an ORDINARY content-free create", () => {
+    // The payload a REST or Direct API caller actually sends: no document, and
+    // no mention of the bookkeeping field. A new empty page references nothing,
+    // and that is a derived answer — recording it is what distinguishes the
+    // page from one predating the field, which blocks deletion until a rebuild.
+    //
+    // Distinct from the case below, whose payload carries a forged value and so
+    // cannot show that an untouched payload reaches this branch at all.
+    const data: Record<string, unknown> = { title: "New" };
+
+    runBeforeChange(data, { operation: "create" });
+
+    expect(data.usedClasses).toEqual([]);
+  });
+
   it("records nothing for a page CREATED without a document", () => {
     // Distinguished from the case above: a create has no stored row to fall
     // back to, and a page with no document genuinely references nothing. That
@@ -219,10 +234,13 @@ describe("the referenced-class record on a page write", () => {
       >;
     };
 
-    // Truncated by a depth bound the document exceeds: no record.
+    // Truncated by a depth bound the document exceeds: the record is written
+    // as UNKNOWN rather than omitted. Omitting only leaves the payload without
+    // it, and on an update the row would keep the PREVIOUS content's list —
+    // stale, and presented as current.
     const truncated = deepPage();
     runBeforeChange(truncated, {}, { ...DEFAULT_LIMITS, maxDepth: 2 });
-    expect("usedClasses" in truncated).toBe(false);
+    expect(truncated.usedClasses).toBeNull();
 
     // The control: the SAME document under the engine defaults is read whole,
     // so a record is written and carries the deepest class. Without this, a
@@ -249,12 +267,13 @@ describe("the referenced-class record on a page write", () => {
 });
 
 describe("a document the derivation cannot read", () => {
-  it("writes nothing rather than clearing the record or failing the save", () => {
+  it("marks the record UNKNOWN rather than guessing or failing the save", () => {
     // Three mistakes are available and they pull in different directions:
     // failing an author's save over a bookkeeping field, recording a list that
-    // is wrong, and storing one the hook did not derive. Removing the key
-    // avoids all three — the stored list stands, and the rebuild walk repairs
-    // it, which is the route a page written before this field existed takes.
+    // is wrong, and storing one the hook did not derive. Writing `null` avoids
+    // all three — and avoids a fourth that omitting the field does not, since
+    // an omitted field leaves the row holding the PREVIOUS content's list while
+    // the content it describes has just changed.
     const unreadable = {
       get nodes(): never {
         throw new Error("cannot read this document");
@@ -267,7 +286,9 @@ describe("a document the derivation cannot read", () => {
     };
 
     expect(() => runBeforeChange(data, { operation: "update" })).not.toThrow();
-    expect("usedClasses" in data).toBe(false);
+    // Explicitly unknown, not merely omitted: the row must not keep the value
+    // the caller sent, nor the one it already held.
+    expect(data.usedClasses).toBeNull();
   });
 
   it("still derives from a document it CAN read, so the guard is not swallowing everything", () => {

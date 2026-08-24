@@ -180,6 +180,12 @@ export function selectNodes(
   for (let at = 0; at < queue.length && stopped === undefined; at += 1) {
     const level = queue[at];
     if (level === undefined) continue;
+    // An EMPTY level past the depth bound truncates nothing, so it must not
+    // report a stop. A node sitting at exactly `maxDepth` with a declared empty
+    // slot queues one, and treating that as truncation would mark a
+    // structurally valid document incomplete forever — no usable record, and a
+    // rebuild reporting it undetermined on every run.
+    if (level.nodes.length === 0) continue;
     stopped =
       level.depth > limits.maxDepth
         ? { path: level.base, reason: "depth", limit: limits.maxDepth }

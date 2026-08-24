@@ -77,30 +77,33 @@ import { blocks } from "../fields/blocksHelper";
  * will land.
  */
 /**
- * Store a derived usage list, or remove the field when it is not the whole
- * answer.
+ * Store a derived usage list, or mark the record UNKNOWN when it is not the
+ * whole answer.
  *
- * An incomplete derivation must not be written. The record exists so a class
- * can be deleted safely, and a delete check reads a missing id as evidence the
- * class is unused — so a list truncated by a bound would licence exactly the
- * deletion it is there to prevent. An ABSENT record cannot be misread that way:
- * a page written before this field existed has none either, and the contract is
- * already that a page without a record blocks deletion until a rebuild gives it
- * one.
+ * An incomplete derivation must not be stored as a list. The record exists so a
+ * class can be deleted safely, and a delete check reads a missing id as
+ * evidence the class is unused — so a list truncated by a bound would licence
+ * exactly the deletion it is there to prevent.
  *
- * That leaves an oversized or unreadable document permanently without a record,
- * which is the honest outcome: its usage genuinely cannot be determined, and
- * saying so is better than a number nobody can qualify.
+ * `null` rather than removing the key, and the difference is the whole point on
+ * an UPDATE. Removing it only omits the field from the payload; the row keeps
+ * whatever it already held, so the PREVIOUS content's list stays authoritative
+ * for content that has since changed — a stale answer presented as a current
+ * one, which is worse than no answer. Writing `null` clears it and says
+ * "unknown" in the column itself.
+ *
+ * Unknown is a state the design already has a meaning for: a page written
+ * before this field existed holds nothing either, the rebuild treats any
+ * non-array as a record to replace, and a page without a usable record blocks
+ * deletion until one can be derived. So an oversized or unreadable document
+ * stays undeletable rather than silently miscounted, which is the honest
+ * outcome — its usage genuinely cannot be determined.
  */
 function record(
   data: Record<string, unknown>,
   usage: { ids: string[]; complete: boolean }
 ): void {
-  if (!usage.complete) {
-    delete data.usedClasses;
-    return;
-  }
-  data.usedClasses = usage.ids;
+  data.usedClasses = usage.complete ? usage.ids : null;
 }
 
 export function pagesCollection(
@@ -228,6 +231,15 @@ export function pagesCollection(
             if ("content" in data) {
               // The document is part of this write, so it is the authority.
               record(data, classUsageOf(data.content, limits));
+            } else if (context.operation === "create") {
+              // A page created without a document references nothing, and that
+              // is a derived answer rather than an absent one, so it is
+              // recorded. Ahead of the claimless branch below because an
+              // ORDINARY create carries neither the document nor this field —
+              // leaving it there would give every new empty page no record at
+              // all, indistinguishable from a page predating the field, and
+              // block deletion until someone ran a rebuild.
+              data.usedClasses = [];
             } else if (!("usedClasses" in data)) {
               // The write carries neither the document nor a claim about it, so
               // it has nothing to say here and must say nothing. Returning the
@@ -244,10 +256,6 @@ export function pagesCollection(
               // OLD page's class list against the NEW page's content, on the
               // most ordinary path there is.
               return data;
-            } else if (context.operation === "create") {
-              // A page created without a document references nothing, and that
-              // is a derivation rather than an absence of one.
-              data.usedClasses = [];
             } else if (isPlainRecord(context.originalData)) {
               // A patch that does not carry the document — a title-only save,
               // or a rebuild writing this field alone. The stored document is
@@ -259,10 +267,16 @@ export function pagesCollection(
               delete data.usedClasses;
             }
           } catch {
-            // Nothing readable can be derived, so nothing is written. Reachable
-            // from a caller that constructs the document in process and hands
-            // over an accessor that throws; a stored document cannot do this.
-            delete data.usedClasses;
+            // Nothing readable could be derived, which is the same state a
+            // truncated selection leaves: UNKNOWN rather than absent. Written
+            // as `null` for the same reason — on an update, omitting the field
+            // would leave the row holding the previous content's list, stale
+            // and presented as current.
+            //
+            // Reachable from a caller that constructs the document in process
+            // and hands over an accessor that throws; a stored document arrives
+            // from `JSON.parse` and cannot do this.
+            data.usedClasses = null;
           }
           return data;
         },
