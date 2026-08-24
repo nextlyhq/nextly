@@ -992,6 +992,10 @@ export class SingleQueryService extends BaseService {
       options.depth,
       {
         enforceFieldAccess: enforceRelatedFieldAccess,
+        // Beside the flag, never folded into `user`: a preview judges a related
+        // row's fields as the sharer while every hook goes on seeing the
+        // anonymous visitor who is actually asking.
+        fieldAccessUser: options.fieldAccessUser,
         // Always on, unlike field redaction: the authorization view must not be
         // shown a related row the response is going to withhold, or its rule
         // approves the document and the read's side effects run before the
@@ -1064,6 +1068,10 @@ export class SingleQueryService extends BaseService {
           // caller travels down to reach the related row's own rules.
           access: {
             enforceFieldAccess: enforceRelatedFieldAccess,
+            // Beside the flag, never folded into `user`: a preview judges a related
+            // row's fields as the sharer while every hook goes on seeing the
+            // anonymous visitor who is actually asking.
+            fieldAccessUser: options.fieldAccessUser,
             enforceCollectionAccess: true,
             user: options.user as Record<string, unknown> | undefined,
             overrideAccess: options.overrideAccess,

@@ -1205,6 +1205,10 @@ export class FieldGroupQueryService extends BaseService {
           enforceFieldAccess: access.enforceFieldAccess,
           enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
+          // Beside `user`, never folded into it. Dropping it here rebuilds a
+          // VALID context describing a different caller — one whose related
+          // rows are judged by nobody — which is silent and leaks.
+          fieldAccessUser: access.fieldAccessUser,
           overrideAccess: access.overrideAccess,
           // Narrows that bypass per RELATED collection. Absent means unchanged;
           // dropping it here would silently restore the full bypass.
