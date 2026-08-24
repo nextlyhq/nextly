@@ -84,6 +84,29 @@ export interface TokensPanelProps {
   /** An edit. The host owns the document and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
   /**
+   * The set the host holds RIGHT NOW, asked at the moment it is needed.
+   *
+   * Reading a file is asynchronous, and an author can edit a token while it is
+   * in flight. Merging into anything this panel captured earlier would discard
+   * that edit and persist the result — an edit made, seen, and silently undone
+   * by an import that was already running.
+   *
+   * A function rather than a value because the panel CANNOT observe the newest
+   * set: a host that has dispatched a state update has not necessarily
+   * re-rendered, so every form of "the latest props this component saw" is one
+   * commit behind for as long as that takes. The host is the only place that
+   * knows, so it is the host that answers.
+   *
+   * Answer it from a REF the host writes as it dispatches, not from a value
+   * captured when the function was made. This panel may hold an accessor a
+   * commit older than the newest render, which is harmless when the accessor
+   * reads a ref and is the whole defect when it reads a captured value.
+   *
+   * Required rather than defaulted to the `tokens` prop. That default would be
+   * exactly the stale read this exists to prevent, and it would be silent.
+   */
+  currentTokens: () => SiteTokenSet | undefined;
+  /**
    * The tokens something ELSE supplies, which the stored ones layer over.
    *
    * Needed because these two are not equally editable. A supplied token can be
@@ -123,6 +146,7 @@ export interface TokensPanelProps {
 export function TokensPanel({
   tokens,
   onChange,
+  currentTokens,
   supplied,
   issue,
   absence = "pending",
@@ -157,7 +181,7 @@ export function TokensPanel({
         <h2 className="nx-tokens__title">Tokens</h2>
         <ModeSwitch mode={mode} onMode={setMode} />
       </div>
-      <TokenTransfer tokens={tokens} onChange={onChange} />
+      <TokenTransfer onChange={onChange} currentTokens={currentTokens} />
       {issue === undefined ? null : (
         /*
          * A save that did not happen. `role="alert"` because it reports on an
@@ -223,11 +247,11 @@ export function TokensPanel({
  * the interesting ones. So it is shown until dismissed rather than flashed.
  */
 function TokenTransfer({
-  tokens,
   onChange,
+  currentTokens,
 }: {
-  tokens: SiteTokenSet;
   onChange: (tokens: SiteTokenSet) => void;
+  currentTokens: () => SiteTokenSet | undefined;
 }): React.JSX.Element {
   const id = React.useId();
   const [report, setReport] = React.useState<{
@@ -237,51 +261,47 @@ function TokenTransfer({
   } | null>(null);
 
   /*
-   * The set as it is NOW, read after the file comes back rather than captured
-   * before it goes out.
-   *
-   * Reading a file is asynchronous, and an author can edit a token while it is
-   * in flight. Merging into the set this render closed over would then discard
-   * that edit and persist the stale result — an edit made, seen, and silently
-   * undone by an import that was already running. A ref rather than a
-   * dependency because the read must see the latest value, not the value the
-   * callback was created with.
-   */
-  const current = React.useRef(tokens);
-  /*
-   * The CALLBACK as it is now, for the same reason the token set is.
+   * The CALLBACK as it is now.
    *
    * A read in flight outlives the render that began it, and the host can
    * re-render with a different `onChange` while it runs — in the page builder
    * that closure captures the baseline an import is diffed against, so calling
    * yesterday's callback diffs the new table against the old baseline and can
-   * persist code-supplied defaults as overrides. Keeping the set current and
-   * not the callback fixes half of one problem.
+   * persist code-supplied defaults as overrides.
+   *
+   * Published at COMMIT rather than during render. Both earlier forms were
+   * wrong in opposite directions: a passive effect runs AFTER the commit,
+   * leaving a window where a read resolves against the previous value, and
+   * assigning during render closes that one and opens another — a concurrent
+   * render later abandoned still ran the line, so a read resolving then calls a
+   * callback from a render that never happened. A layout effect runs when a
+   * render commits and only when it commits.
+   *
+   * That still leaves the gap between a host DISPATCHING an update and React
+   * committing it, which no ref written from this component can close. It is
+   * why the token set is asked for through `currentTokens` instead of kept
+   * here: the set is what an import would silently overwrite, and the callback
+   * is not — every value this one closes over comes from the site's own
+   * configuration rather than from anything an author edits mid-read.
    */
   const latestChange = React.useRef(onChange);
-  // Assigned during RENDER rather than from an effect. An effect runs after
-  // commit, so a read resolving between the commit of an edit and the effect
-  // that records it would still merge into the previous set — the window this
-  // ref exists to close, left open by the mechanism meant to close it. A ref is
-  // a mutable box rather than state, so writing the newest value this component
-  // has been given is idempotent and observed by nothing.
   /*
-   * Published at COMMIT, not during render.
+   * The ACCESSOR is kept the same way, and for a reason worth separating from
+   * the callback's: an `async` function closes over the props of the render
+   * that created it, so a read still in flight would go on asking the accessor
+   * it was born with. Held as a value that would be exactly the staleness this
+   * prop exists to remove, wearing a different shape.
    *
-   * Both earlier forms were wrong in opposite directions. A passive effect runs
-   * after the commit, leaving a window where a read resolves against the
-   * previous value. Assigning during render closes that one and opens another:
-   * a concurrent render that is later abandoned — a sibling suspending after
-   * this component — still ran this line, so a read resolving then merges into
-   * a table nobody was shown and calls a callback from a render that never
-   * happened.
-   *
-   * A layout effect runs when a render COMMITS and only when it commits, which
-   * is the property both windows were about.
+   * Being one commit behind is harmless HERE, which is what makes the ref
+   * enough. A stale closure over a value is stale; a stale closure over the
+   * host's own ref still reads whatever that ref holds now. That is the
+   * contract the prop asks for, and it is why the panel can stop trying to
+   * track the set itself.
    */
+  const latestCurrent = React.useRef(currentTokens);
   React.useLayoutEffect(() => {
-    current.current = tokens;
     latestChange.current = onChange;
+    latestCurrent.current = currentTokens;
   });
 
   /*
@@ -320,6 +340,30 @@ function TokenTransfer({
     []
   );
 
+  /**
+   * The set to work from, or `undefined` having already said why there is none.
+   *
+   * Every path here asks the HOST rather than reading a snapshot, because the
+   * panel cannot see an edit the host has dispatched and not yet re-rendered
+   * with. That matters most for the import, which merges into this set after a
+   * wait, and it is no less true of an export clicked immediately after an
+   * edit: both would otherwise describe a table the author has already changed.
+   *
+   * A guard over a value already in hand. The panel draws a note instead of a
+   * table when the set is absent, so this is not reachable today — and a guess
+   * here is the loss the whole path exists to prevent.
+   */
+  const workingSet = (doing: string): SiteTokenSet | undefined => {
+    const set = latestCurrent.current();
+    if (set !== undefined) return set;
+    setReport({
+      tone: "refused",
+      headline: `This site\u2019s tokens are no longer loaded, so there is nothing to ${doing}.`,
+      detail: [],
+    });
+    return undefined;
+  };
+
   const read = async (file: File): Promise<void> => {
     const mine = reads.current + 1;
     reads.current = mine;
@@ -344,7 +388,10 @@ function TokenTransfer({
       return;
     }
     if (mine !== reads.current) return;
-    const result = importDtcg(text, current.current);
+    // Asked HERE, after the wait, and never before it.
+    const into = workingSet("merge into");
+    if (into === undefined) return;
+    const result = importDtcg(text, into);
     if (!result.ok) {
       setReport({
         tone: "refused",
@@ -361,6 +408,12 @@ function TokenTransfer({
       detail: result.skipped,
     });
     latestChange.current(result.tokens);
+  };
+
+  /** Build an artefact from the set as it is NOW, or say there is none. */
+  const sendCurrent = (make: (set: SiteTokenSet) => ExportResult): void => {
+    const set = workingSet("write out");
+    if (set !== undefined) send(make(set));
   };
 
   const send = (made: ExportResult): void => {
@@ -419,7 +472,7 @@ function TokenTransfer({
         type="button"
         variant="ghost"
         size="sm"
-        onClick={() => send(exportDtcg(tokens))}
+        onClick={() => sendCurrent(exportDtcg)}
       >
         Export JSON
       </Button>
@@ -427,7 +480,7 @@ function TokenTransfer({
         type="button"
         variant="ghost"
         size="sm"
-        onClick={() => send(exportCss(tokens))}
+        onClick={() => sendCurrent(exportCss)}
       >
         Export CSS
       </Button>

@@ -24,7 +24,30 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { TokensPanel } from "./tokens-panel";
+import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
+
+/**
+ * The panel with a host that answers `currentTokens` from what it last passed.
+ *
+ * That is what a host WITHOUT a synchronous authority can manage, and it is
+ * enough for every test that does not put an edit and a file read in flight at
+ * the same moment. The ones that do supply their own, because the difference
+ * between the two is the whole point of the prop.
+ */
+type HostedPanelProps = Omit<TokensPanelProps, "currentTokens"> &
+  Partial<Pick<TokensPanelProps, "currentTokens">>;
+
+function Panel({
+  currentTokens,
+  ...props
+}: HostedPanelProps): React.JSX.Element {
+  return (
+    <TokensPanel
+      {...props}
+      currentTokens={currentTokens ?? (() => props.tokens)}
+    />
+  );
+}
 
 afterEach(cleanup);
 
@@ -68,7 +91,7 @@ const TOKENS: SiteTokenSet = {
  */
 function mount(tokens: SiteTokenSet | undefined) {
   const onChange = vi.fn();
-  render(<TokensPanel tokens={tokens} onChange={onChange} />);
+  render(<Panel tokens={tokens} onChange={onChange} />);
   return onChange;
 }
 
@@ -109,7 +132,7 @@ describe("what the studio draws", () => {
       ],
     };
     const { container } = render(
-      <TokensPanel tokens={unresolvable} onChange={vi.fn()} />
+      <Panel tokens={unresolvable} onChange={vi.fn()} />
     );
     const swatches = Array.from(
       container.querySelectorAll(".nx-tokens__swatch")
@@ -180,7 +203,7 @@ describe("editing a value", () => {
     const wrong: SiteTokenSet = {
       tokens: [{ name: "color.bad", kind: "color", values: { light: "16px" } }],
     };
-    render(<TokensPanel tokens={wrong} onChange={vi.fn()} />);
+    render(<Panel tokens={wrong} onChange={vi.fn()} />);
     expect(screen.getByText(/not a colour/)).toBeDefined();
   });
 });
@@ -259,7 +282,7 @@ describe("adding a token", () => {
 
   it("adds into a site that has no table at all", () => {
     const onChange = vi.fn();
-    render(<TokensPanel tokens={{ tokens: [] }} onChange={onChange} />);
+    render(<Panel tokens={{ tokens: [] }} onChange={onChange} />);
     fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
     expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).tokens.length).toBe(1);
   });
@@ -274,9 +297,7 @@ describe("a token the site's own code supplies", () => {
 
   function mountWith(tokens: SiteTokenSet, supplied: SiteTokenSet) {
     const onChange = vi.fn();
-    render(
-      <TokensPanel tokens={tokens} supplied={supplied} onChange={onChange} />
-    );
+    render(<Panel tokens={tokens} supplied={supplied} onChange={onChange} />);
     return onChange;
   }
 
@@ -339,7 +360,7 @@ describe("a save that did not happen", () => {
     // site holds the old value, so a validation failure, a missing permission
     // and a dropped network all look exactly like success.
     render(
-      <TokensPanel
+      <Panel
         tokens={TOKENS}
         onChange={vi.fn()}
         issue="You do not have permission to change site styles."
@@ -368,11 +389,9 @@ describe("removing a row does not carry state onto its successor", () => {
     // Keyed by position, deleting `color.a` shifts every following row and
     // React reuses the deleted row's component for `color.b` — so the
     // uncontrolled inputs keep the removed token's text.
-    const { rerender } = render(
-      <TokensPanel tokens={THREE} onChange={vi.fn()} />
-    );
+    const { rerender } = render(<Panel tokens={THREE} onChange={vi.fn()} />);
     const after: SiteTokenSet = { tokens: THREE.tokens.slice(1) };
-    rerender(<TokensPanel tokens={after} onChange={vi.fn()} />);
+    rerender(<Panel tokens={after} onChange={vi.fn()} />);
 
     expect(valueField("color.b")).toHaveProperty("value", "#222222");
     expect(valueField("color.c")).toHaveProperty("value", "#333333");
@@ -383,14 +402,12 @@ describe("removing a row does not carry state onto its successor", () => {
     // The sharper half: the confirm state belongs to the row component, so a
     // reused component hands the next token a live "Remove" button it never
     // asked for — one click from removing the wrong token.
-    const { rerender } = render(
-      <TokensPanel tokens={THREE} onChange={vi.fn()} />
-    );
+    const { rerender } = render(<Panel tokens={THREE} onChange={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Remove color.a" }));
     expect(screen.getByText(/loses that style/)).toBeDefined();
 
     const after: SiteTokenSet = { tokens: THREE.tokens.slice(1) };
-    rerender(<TokensPanel tokens={after} onChange={vi.fn()} />);
+    rerender(<Panel tokens={after} onChange={vi.fn()} />);
     expect(screen.queryByText(/loses that style/)).toBeNull();
   });
 });
@@ -400,20 +417,18 @@ describe("a reverted value reaches the field", () => {
     // The inputs are uncontrolled, so a prop change alone does not move them:
     // the panel would go on showing an override that storage and the canvas no
     // longer hold, with the author believing it was saved.
-    const { rerender } = render(
-      <TokensPanel tokens={TOKENS} onChange={vi.fn()} />
-    );
+    const { rerender } = render(<Panel tokens={TOKENS} onChange={vi.fn()} />);
     const typed: SiteTokenSet = {
       tokens: [
         { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
         ...TOKENS.tokens.slice(1),
       ],
     };
-    rerender(<TokensPanel tokens={typed} onChange={vi.fn()} />);
+    rerender(<Panel tokens={typed} onChange={vi.fn()} />);
     expect(valueField("color.ink")).toHaveProperty("value", "#ff0000");
 
     // Refused: the host puts the persisted set back.
-    rerender(<TokensPanel tokens={TOKENS} onChange={vi.fn()} />);
+    rerender(<Panel tokens={TOKENS} onChange={vi.fn()} />);
     expect(valueField("color.ink")).toHaveProperty("value", "#111111");
   });
 
@@ -429,20 +444,16 @@ describe("a reverted value reaches the field", () => {
         ...TOKENS.tokens.slice(1),
       ],
     };
-    const { rerender } = render(
-      <TokensPanel tokens={renamed} onChange={vi.fn()} />
-    );
+    const { rerender } = render(<Panel tokens={renamed} onChange={vi.fn()} />);
     expect(nameField("text.body")).toHaveProperty("value", "text.body");
-    rerender(<TokensPanel tokens={TOKENS} onChange={vi.fn()} />);
+    rerender(<Panel tokens={TOKENS} onChange={vi.fn()} />);
     expect(nameField("color.ink")).toHaveProperty("value", "color.ink");
   });
 });
 
 describe("no tokens to show, and why", () => {
   it("says a read is in flight while it is", () => {
-    render(
-      <TokensPanel tokens={undefined} onChange={vi.fn()} absence="pending" />
-    );
+    render(<Panel tokens={undefined} onChange={vi.fn()} absence="pending" />);
     expect(screen.getByText(/Reading this site/)).toBeDefined();
   });
 
@@ -450,9 +461,7 @@ describe("no tokens to show, and why", () => {
     // A 403 or an exhausted retry leaves the same `undefined`, and a panel
     // that reports it as loading describes a state the site is not in and
     // gives the author nothing to act on.
-    render(
-      <TokensPanel tokens={undefined} onChange={vi.fn()} absence="failed" />
-    );
+    render(<Panel tokens={undefined} onChange={vi.fn()} absence="failed" />);
     expect(screen.queryByText(/Reading this site/)).toBeNull();
     const said = screen.getByRole("alert");
     expect(said.textContent).toContain("could not be read");
@@ -589,6 +598,61 @@ describe("bringing a token file in", () => {
    * the comment at the call site rather than by a green test that cannot fail.
    */
 
+  it("merges into what the HOST holds, before React has re-rendered it", async () => {
+    /*
+     * The window a re-render cannot model. An author's edit reaches the host
+     * synchronously, but React commits the resulting render on its own
+     * schedule — so between the edit and that commit there is no version of
+     * "the latest props this panel saw" that has it. A file read resolving in
+     * there merges into the set from before the edit and persists it.
+     *
+     * So the panel is never re-rendered here. The only thing that changes is
+     * what the host ANSWERS, which is exactly what a host keeping its authority
+     * in a ref can offer and a prop cannot.
+     */
+    const onChange = vi.fn();
+    const held: { set: SiteTokenSet } = { set: TOKENS };
+    let resolveRead: ((text: string) => void) | undefined;
+    const slow = new File([FILE], "tokens.json", { type: "application/json" });
+    Object.defineProperty(slow, "text", {
+      value: () =>
+        new Promise<string>(resolve => {
+          resolveRead = resolve;
+        }),
+    });
+
+    render(
+      <Panel
+        tokens={TOKENS}
+        onChange={onChange}
+        currentTokens={() => held.set}
+      />
+    );
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [slow] },
+    });
+
+    held.set = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#ff0000" } },
+        ...TOKENS.tokens.slice(1),
+      ],
+    };
+
+    resolveRead?.(FILE);
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+
+    const merged = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(merged.tokens.find(t => t.name === "color.ink")?.values.light).toBe(
+      "#ff0000"
+    );
+    // The control: the file still arrived, so this is a merge rather than the
+    // edit simply being handed back.
+    expect(merged.tokens.map(t => t.name)).toContain("color.brand");
+  });
+
   it("merges into the set as it is NOW, not as it was when the read began", async () => {
     // Reading a file is asynchronous and an author can edit while it is in
     // flight. Merging into the set this render closed over discards that edit
@@ -604,9 +668,7 @@ describe("bringing a token file in", () => {
         }),
     });
 
-    const { rerender } = render(
-      <TokensPanel tokens={TOKENS} onChange={onChange} />
-    );
+    const { rerender } = render(<Panel tokens={TOKENS} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Import"), {
       target: { files: [slow] },
     });
@@ -619,7 +681,7 @@ describe("bringing a token file in", () => {
         ...TOKENS.tokens.slice(1),
       ],
     };
-    rerender(<TokensPanel tokens={edited} onChange={onChange} />);
+    rerender(<Panel tokens={edited} onChange={onChange} />);
 
     resolveRead?.(FILE);
     // The observable condition, not a turn of the loop: the import has
@@ -682,7 +744,7 @@ describe("bringing a token file in", () => {
         }),
     });
 
-    render(<TokensPanel tokens={TOKENS} onChange={onChange} />);
+    render(<Panel tokens={TOKENS} onChange={onChange} />);
     const input = screen.getByLabelText("Import");
 
     fireEvent.change(input, { target: { files: [slow] } });
@@ -753,9 +815,7 @@ describe("bringing a token file in", () => {
         }),
     });
 
-    const { unmount } = render(
-      <TokensPanel tokens={TOKENS} onChange={onChange} />
-    );
+    const { unmount } = render(<Panel tokens={TOKENS} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Import"), {
       target: { files: [slow] },
     });
@@ -816,7 +876,7 @@ describe("an export that could not be written", () => {
     // The tone decides how the report is announced, so calling this "done"
     // would headline "Saved ..." directly above a line saying nothing was, and
     // announce a failure as a passive status update.
-    render(<TokensPanel tokens={UNWRITABLE} onChange={vi.fn()} />);
+    render(<Panel tokens={UNWRITABLE} onChange={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
     const said = screen.getByRole("alert");
     expect(said.textContent).toContain("could not be written");
@@ -837,7 +897,7 @@ describe("an export that could not be written", () => {
         { name: "odd.one", kind: "custom", values: { light: "0" } },
       ],
     };
-    render(<TokensPanel tokens={partly} onChange={vi.fn()} />);
+    render(<Panel tokens={partly} onChange={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
     const said = screen.getByRole("status");
     expect(said.textContent).toContain("Saved tokens.json");
