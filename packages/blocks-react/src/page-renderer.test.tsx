@@ -5403,6 +5403,55 @@ describe("a block that does not render a single element", () => {
     }
   });
 
+  it("warns about a wrapper root that DOES forward the class to a child", async () => {
+    /*
+     * The fixture that separates wrapper DETECTION from style LOSS, which the
+     * fragment above cannot: it drops `className` entirely, so a message
+     * claiming its styles were lost and a message claiming its shape is wrong
+     * both pass against it.
+     *
+     * This block wraps, against the contract, and forwards the class to the
+     * child it wraps. Both halves are then measurable at once: the class is on
+     * the page, and the warning still fires — because the shape is what it
+     * reports, not a styling outcome it cannot know.
+     *
+     * The oracle is the RENDER. Asking the renderer a second time whether the
+     * class "would" land compares two derivations of one source and agrees with
+     * whichever is wrong; the served HTML is the only witness that the CSS
+     * matches something.
+     */
+    const forwarding = defineBlock({
+      name: "test/fragment-forwards",
+      version: 1,
+      description: "Wraps a child and forwards the class to it.",
+      example: { props: {} },
+      defaultProps: {},
+      render: ({ className }) => (
+        <>
+          <div className={className}>forwarded</div>
+        </>
+      ),
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(forwarding as AnyBlockDefinition);
+      // The class REACHED the DOM, so this block's compiled styles do apply.
+      expect(html).toContain("forwarded");
+      expect(html).toMatch(bothClasses("test/fragment-forwards"));
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      // Warned all the same: the shape is outside the contract, and the node's
+      // root fields still have nowhere to go.
+      expect(said).toContain("test/fragment-forwards");
+      expect(said).toContain("returned a wrapper rather than an element");
+      // And it must NOT tell this author their styles are gone. They are on the
+      // page two assertions above.
+      expect(said).not.toMatch(/styles do not apply|nowhere to go/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("says nothing about a block that renders one element", async () => {
     // The control that stops this warning firing on every conforming block.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

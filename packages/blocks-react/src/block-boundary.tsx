@@ -489,8 +489,13 @@ function rootShapeOf(output: ReactNode): RootShape {
  * direction is the opposite. A component that renders one host element and
  * forwards `className` is a legitimate shape whose compiled styles DO apply, so
  * warning about it would be false, and a diagnostic that is sometimes false is
- * one people learn to scroll past. Only shapes with nowhere for the class to go
- * at all are named: no element, or a fragment.
+ * one people learn to scroll past. Only shapes with no root element of their
+ * own are named: no element, or a wrapper.
+ *
+ * Naming a shape is not a claim that its styles are lost. A wrapper root can
+ * still forward the class to a child, and the warning above says so — what it
+ * reports is the shape, which is outside the contract whatever the block did
+ * with the class.
  */
 function brokenRootReason(output: ReactNode): string | null {
   switch (rootShapeOf(output)) {
@@ -514,8 +519,14 @@ function brokenRootReason(output: ReactNode): string | null {
  * `BlockRenderArgs.className` states the contract every block is handed: "The
  * generated class the block MUST place on its own root element. Blocks render a
  * single element and never wrap it, so styles target that element." A block
- * returning a Fragment, a list or a primitive has nowhere to put that class, so
- * its compiled styles never apply — it is already broken, and nothing said so.
+ * returning a Fragment, a list or a primitive gives that class no root element
+ * to sit on — it is already outside the contract, and nothing said so.
+ *
+ * NOT "its styles never apply", which is the stronger claim and is false for
+ * one real shape: a wrapper whose child takes the class renders it into the
+ * DOM, and the compiled CSS then matches normally. What that block loses is the
+ * node's ROOT FIELDS, which are attached here and have nowhere to go — so the
+ * warning is right and the diagnosis has to be the narrower one.
  *
  * The only signal today arrives through the placeholder above, which fires when
  * a DOCUMENT asks for `cssId` or an attribute. That blames the wrong party at
@@ -572,8 +583,21 @@ function warnNoHostRoot(
     if (declaresNothing || rendersNothing(output)) return;
     const shape = brokenRootReason(output);
     if (shape === null) return;
+    /*
+     * Says what is CERTAIN and nothing more. The class is handed to the block
+     * rather than attached here, so a wrapper root that forwards it to a child
+     * — `({ className }) => <><div className={className} /></>` — does get its
+     * compiled styles, on a page whose DOM carries the class. Telling that
+     * author their styles do not apply sends them hunting a failure that is not
+     * there, and a diagnostic people find wrong once is one they stop reading.
+     *
+     * What IS certain either way: the shape is outside the contract, the node
+     * has no root element of its own, and its root fields therefore have
+     * nowhere to go. The style consequence is stated as the condition it
+     * actually is.
+     */
     console.warn(
-      `[nextly] Block "${node.type}" ${shape}. Blocks render a single element and never wrap it, so the generated class has nowhere to go and this block's styles do not apply. Setting an id or an attribute on it will replace it with a placeholder.`
+      `[nextly] Block "${node.type}" ${shape}. Blocks render a single element and never wrap it: with no root element of its own, this block's styles apply only where the block itself placed the class, and setting an id or an attribute on the node will replace it with a placeholder.`
     );
   } catch {
     /*
