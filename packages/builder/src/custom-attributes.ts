@@ -277,6 +277,35 @@ function childNodesOf(node: BlockNode): BlockNode[] {
   );
 }
 
+/**
+ * The same bag without an `id` the CSS id field would shadow.
+ *
+ * Applied to whatever set is about to be stored, because the shadowing is a
+ * consequence of the ID rather than of the rows. Reducing the rows already
+ * drops it — `rowProblem` reports the row and `storedAttributes` skips it — but
+ * the rows are NOT always what gets written: when one of them is a mistake the
+ * stored bag is kept instead, and that bag still holds the old id. Without this
+ * the two fixes cancelled: setting a CSS id beside a mistyped row left the
+ * shadowed id in place, and clearing the CSS id later brought it back.
+ *
+ * Case-insensitive, for the reason the collision scan is: the renderer
+ * lowercases every key, so `ID` and `id` are one attribute on the page.
+ */
+export function withoutShadowedId(
+  attributes: Readonly<Record<string, string>> | undefined,
+  cssId: string
+): Record<string, string> | undefined {
+  if (attributes === undefined || cssId.trim() === "") {
+    return attributes === undefined ? undefined : { ...attributes };
+  }
+  const kept: Record<string, string> = {};
+  for (const [name, value] of Object.entries(attributes)) {
+    if (name.toLowerCase() === "id") continue;
+    kept[name] = value;
+  }
+  return Object.keys(kept).length === 0 ? undefined : kept;
+}
+
 /** What a node should hold, and what it holds now. */
 export interface HtmlFields {
   readonly cssId: string;

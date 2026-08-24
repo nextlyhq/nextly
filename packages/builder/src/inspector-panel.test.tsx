@@ -665,3 +665,34 @@ describe("a refused row survives its own commit", () => {
     );
   });
 });
+
+describe("a shadowed id and a mistyped row at the same time", () => {
+  it("still drops the shadowed id while holding the mistyped row", () => {
+    /*
+     * The two rules interacting. Holding the write because a row is a mistake
+     * must not also hold back dropping an id the new CSS id shadows: those are
+     * different reasons and only one is the author's to fix. Without this,
+     * clearing the CSS id later brought the old bag id back to life.
+     */
+    const editor = mount({ attributes: { id: "old", "data-x": "1" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    // Row 2 is `data-x` — rename it to something the page would drop.
+    const second = screen.getByLabelText("Name of attribute 2");
+    fireEvent.change(second, { target: { value: "onclick" } });
+    fireEvent.blur(second);
+    expect(editor.apply).not.toHaveBeenCalled();
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "new" } });
+    fireEvent.blur(field);
+
+    // The id commits, and the shadowed bag id goes with it — `data-x` is kept
+    // because the author is still fixing that row.
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "new", attributes: { "data-x": "1" } },
+    });
+  });
+});

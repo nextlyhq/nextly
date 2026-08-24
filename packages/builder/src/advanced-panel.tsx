@@ -38,6 +38,7 @@ import {
   rowProblem,
   rowsOf,
   storedAttributes,
+  withoutShadowedId,
   type AttributeRow,
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
@@ -143,9 +144,16 @@ export function AdvancedPanel({
     });
     const wanted = {
       cssId: keptId,
-      attributes: refused
-        ? attributes
-        : storedAttributes(next.rows, keptId, taken),
+      /*
+       * The shadowing is applied to WHICHEVER set is written. Holding the rows
+       * because one is a mistake must not also hold back dropping an id the
+       * new CSS id shadows — those are two different reasons and only one of
+       * them is the author's to fix.
+       */
+      attributes: withoutShadowedId(
+        refused ? attributes : storedAttributes(next.rows, keptId, taken),
+        keptId
+      ),
     };
     const update = htmlUpdate(wanted, { cssId, attributes });
     if (update === undefined) return;
