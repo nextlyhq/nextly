@@ -29,6 +29,20 @@ const AT: StyleAddress = {
   path: [],
 };
 
+/** The composite address the structural-comparison tests read. */
+const PAD: StyleAddress = { ...AT, property: "padding" };
+
+/** A node holding one value at {@link PAD}. */
+function padNode(id: string, padding: unknown): BlockNode {
+  return {
+    id,
+    type: "acme/box",
+    version: 1,
+    props: {},
+    styles: { base: { base: { padding } } },
+  } as unknown as BlockNode;
+}
+
 /** A node holding one value at {@link AT}, or nothing when none is given. */
 function node(id: string, fontSize?: unknown): BlockNode {
   return {
@@ -185,6 +199,142 @@ describe("the ops that change a whole selection", () => {
 
     const applied = applyOp(doc(node("a", "8px"), node("b")), ops[0] as never);
     expect(sizesOf(applied.document)).toEqual([undefined, undefined]);
+  });
+
+  it("reports MIXED when an inherited `toJSON` would decide the comparison", () => {
+    /*
+     * `JSON.stringify` invokes `toJSON` before a replacer sees the object, so a
+     * value carrying one through its prototype chose its own comparison text.
+     * Measured on the serialising version: two paddings differing at
+     * `blockStart` came back `same`, because the inherited `toJSON` returned a
+     * constant for both — the surface would have shown one block's value while
+     * the other held a different one, and the next edit would have overwritten
+     * it silently.
+     *
+     * The comparison walks OWN data properties now, so the prototype is never
+     * consulted and the real difference is seen.
+     */
+    const proto = {
+      toJSON() {
+        return { identical: true };
+      },
+    };
+    const a = Object.assign(Object.create(proto), { blockStart: "1px" });
+    const b = Object.assign(Object.create(proto), { blockStart: "2px" });
+
+    // Population first: these differ, and differ at a property the walk reads.
+    expect(a.blockStart).not.toBe(b.blockStart);
+    expect(sharedValueAt([padNode("a", a), padNode("b", b)], PAD)).toEqual({
+      kind: "mixed",
+    });
+  });
+
+  it("does not run a value's own accessor, and calls that a disagreement", () => {
+    /*
+     * An OWN getter has no value without being CALLED, and calling it runs
+     * author code during what is meant to be an inspection. Refused instead —
+     * and refused toward `mixed`, never `same`, because "Mixed" makes the
+     * control say so and makes typing a replacement, while a wrong "same" hides
+     * a difference behind the accessor.
+     */
+    let calls = 0;
+    const withGetter = {};
+    Object.defineProperty(withGetter, "blockStart", {
+      enumerable: true,
+      get() {
+        calls += 1;
+        return "1px";
+      },
+    });
+
+    expect(
+      sharedValueAt([padNode("a", withGetter), padNode("b", withGetter)], PAD)
+    ).toEqual({ kind: "mixed" });
+    // The property under test: it was never invoked. Two nodes holding the SAME
+    // object makes this the strongest form — even identity does not buy a
+    // `same` answer when the value cannot be read without running code.
+    expect(calls).toBe(0);
+  });
+
+  it("terminates on a cyclic value instead of looping", () => {
+    /*
+     * `JSON.stringify` threw on a cycle; a hand-rolled walk would loop forever.
+     * This is exported API now, so the value is whatever a caller passed rather
+     * than something that came out of a document.
+     */
+    const cyclic: Record<string, unknown> = { blockStart: "1px" };
+    cyclic.self = cyclic;
+
+    expect(
+      sharedValueAt([padNode("a", cyclic), padNode("b", cyclic)], PAD)
+    ).toEqual({
+      kind: "mixed",
+    });
+  });
+
+  it("does not confuse a number with the string that prints the same", () => {
+    // Types are part of the comparison: `1` and `"1"` are different values and
+    // a text-only shape would merge them.
+    expect(
+      sharedValueAt(
+        [padNode("a", { blockStart: 1 }), padNode("b", { blockStart: "1" })],
+        PAD
+      )
+    ).toEqual({ kind: "mixed" });
+  });
+
+  it("still sees two separately built equal trees as the SAME", () => {
+    /*
+     * The control on all four above. A comparison that answered `mixed` for
+     * everything would pass every one of them, and would make the surface
+     * useless: it exists to tell an author when a selection agrees.
+     */
+    expect(
+      sharedValueAt(
+        [
+          padNode("a", { blockStart: "1px", blockEnd: "2px" }),
+          // Same tree, keys assembled in the other order.
+          padNode("b", { blockEnd: "2px", blockStart: "1px" }),
+        ],
+        PAD
+      )
+    ).toEqual({ kind: "same", value: { blockStart: "1px", blockEnd: "2px" } });
+  });
+
+  it("asks the SITE about a token once for the whole selection", () => {
+    /*
+     * `kindOf` is the site's own lookup and may be expensive — a table read, a
+     * network-backed resolve. The value layer memoizes it for the span of ONE
+     * validation, so a batch used to ask once per node: measured at ten nodes,
+     * ten calls, for a token whose kind cannot vary by block.
+     *
+     * Sound to answer once because the question is not about the node:
+     * `kindOf` is handed a token NAME and nothing else.
+     */
+    let calls = 0;
+    const nodes = Array.from({ length: 10 }, (_, i) => node(`n${i}`));
+
+    const { refused, ops } = batchStyleWriteOps(
+      nodes,
+      AT,
+      {
+        $token: "space.large",
+      } as never,
+      {
+        tokens: {
+          kindOf: () => {
+            calls += 1;
+            return "dimension";
+          },
+        },
+      }
+    );
+
+    // Population before the property: all ten were really written, so this is
+    // one lookup serving ten writes rather than one write happening.
+    expect(refused).toBeUndefined();
+    expect(ops).toHaveLength(10);
+    expect(calls).toBe(1);
   });
 
   it("carries a warning the value layer reported about an ACCEPTED value", () => {

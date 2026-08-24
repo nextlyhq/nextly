@@ -31,6 +31,7 @@
 import type {
   BlockNode,
   StyleValue,
+  TokenKind,
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
@@ -63,11 +64,16 @@ export type SharedValue =
  * disagrees when there is nothing to disagree, and reporting a conflict for an
  * empty set would put "Mixed" on a panel describing no blocks.
  *
- * Compared by SERIALISED shape, because a style value is a tree — a padding is
- * four sides, a shadow is a record — and two blocks holding equal trees hold
- * equal values however separately those trees were built. Reference equality
- * would report every selection as mixed the moment the values came from
- * different nodes, which is always.
+ * Compared by STRUCTURE, because a style value is a tree — a padding is four
+ * sides, a shadow is a record — and two blocks holding equal trees hold equal
+ * values however separately those trees were built. Reference equality would
+ * report every selection as mixed the moment the values came from different
+ * nodes, which is always.
+ *
+ * A value this cannot compare answers MIXED, and that direction is the whole
+ * safety of the surface. "Mixed" makes the control say so and makes typing a
+ * replacement, which is safe; a wrong "same" shows one block's value while
+ * another holds a different one, and the next edit overwrites it silently.
  */
 export function sharedValueAt(
   nodes: readonly BlockNode[],
@@ -78,6 +84,10 @@ export function sharedValueAt(
   for (const node of nodes) {
     const value = readStyleValue(node.styles, address);
     const shape = shapeOf(value);
+    // Not comparable without running code this module does not own. Reported as
+    // a disagreement rather than skipped, so an unreadable value can never be
+    // the reason a selection looks unanimous.
+    if (shape === null) return { kind: "mixed" };
     if (first === undefined) {
       first = { value };
       firstShape = shape;
@@ -89,39 +99,133 @@ export function sharedValueAt(
 }
 
 /**
- * A stable string for a style value, for comparing two of them.
+ * How deep {@link shapeOf} will walk before refusing to compare.
  *
- * `JSON.stringify` on its own is not that: it writes object keys in insertion
- * order, so `{ top: 1, left: 2 }` and `{ left: 2, top: 1 }` — the same value
- * stored by two different code paths — would serialise differently and read as
- * a disagreement. Keys are sorted at every level so the text describes the
- * value rather than the order it was assembled in.
- *
- * `undefined` is given its own marker rather than being stringified, because
- * `JSON.stringify(undefined)` is itself `undefined` and would compare equal to
- * a failure to serialise. The marker leads with NUL so it cannot collide with
- * any serialisation of a real value — `JSON.stringify` never emits an
- * unescaped one.
- *
- * Written as the ESCAPE `\0`, never as the byte itself. A literal NUL in the
- * source makes the whole file binary to the tools that read it: `file` reports
- * `data` instead of TypeScript, and `rg`/`grep` answer "binary file matches"
- * and stop, so every symbol in this module goes missing from routine searches
- * unless the caller remembers `--text`. Shipped that way once and it hid the
- * module from its own callers. The runtime string is identical either way.
+ * The stack is the real limit and a cycle is the real reason: without this, a
+ * value referring to itself recursed until the budget ran out — ten thousand
+ * frames — and threw `RangeError` out of a comparison rather than answering.
  */
-function shapeOf(value: StyleValue | undefined): string {
+const MAX_VALUE_DEPTH = 32;
+
+/**
+ * A stable string for a style value, or `null` when it cannot be compared.
+ *
+ * Walks the value's OWN data properties rather than serialising it, and the
+ * difference is not stylistic. `JSON.stringify` calls `toJSON` before a
+ * replacer ever sees the object, so a value carrying an inherited `toJSON`
+ * decides its own comparison text: two paddings differing at `blockStart`
+ * measured as EQUAL through a prototype whose `toJSON` returned a constant,
+ * and `sharedValueAt` answered `same` for a selection that disagreed — the
+ * exact failure this module exists to prevent. A throwing `toJSON` escaped the
+ * read entirely, which in a panel is the panel.
+ *
+ * So nothing here runs code the value brought with it:
+ *
+ * - **Own properties only.** `Object.keys` never reaches the prototype, so an
+ *   inherited `toJSON`, `toString` or accessor is not consulted at all.
+ * - **Data properties only.** An OWN accessor is refused rather than invoked —
+ *   answering `null`, which the caller reads as a disagreement. Invoking it
+ *   would run author code during an inspection; treating two accessors as
+ *   equal would hide a real difference behind them.
+ * - **Keys sorted at every level**, so `{ top, left }` and `{ left, top }` —
+ *   the same value assembled by two code paths — read the same.
+ * - **Bounded in BOTH directions**, which is what terminates a cycle.
+ *   `JSON.stringify` threw on one; a hand-rolled walk loops, and this is
+ *   exported API now, so the value is whatever a caller passed. The budget
+ *   bounds how many values are read; the DEPTH bounds how deep the walk goes,
+ *   and only the second one stops a cycle — measured, because a budget of
+ *   10,000 alone recursed ten thousand frames deep on a two-node cycle and
+ *   exhausted the stack instead of answering.
+ *
+ * Types are part of the text: `1` and `"1"` are different values and must not
+ * compare equal because they print alike.
+ *
+ * `undefined` gets a marker leading with NUL, which no ordinary text produces,
+ * so it cannot collide with a real value's shape. Written as the ESCAPE `\0`,
+ * never as the byte itself — a literal NUL makes the whole file binary to the
+ * tools that read it: `file` reports `data` instead of TypeScript, and
+ * `rg`/`grep` answer "binary file matches" and stop, so every symbol here goes
+ * missing from routine searches unless the caller remembers `--text`. Shipped
+ * that way once and it hid the module from its own callers.
+ */
+function shapeOf(
+  value: unknown,
+  budget = { left: 10_000 },
+  depth = 0
+): string | null {
+  // A style value is shallow — a property holding sides, or corners, or a
+  // record of them — so this bound is far above anything a document produces
+  // and well below what the stack can take.
+  if (depth > MAX_VALUE_DEPTH) return null;
+  if (budget.left-- <= 0) return null;
+  const leaf = scalarShapeOf(value);
+  if (leaf !== undefined) return leaf;
+  return Array.isArray(value)
+    ? listShapeOf(value, budget, depth)
+    : recordShapeOf(value as object, budget, depth);
+}
+
+/**
+ * The text for a value with no PARTS, or `undefined` when it has parts.
+ *
+ * Three answers, and the third is why this is separate from the walk above: a
+ * string is the comparison, `null` refuses the comparison, and `undefined` says
+ * "this is a container, keep walking". Folding that into the walk made one
+ * function answer both what a leaf reads as and how a tree is assembled.
+ *
+ * The type letter is part of the text. `1` and `"1"` are different values and
+ * must not compare equal for printing alike; so must `1` and `1n`.
+ */
+function scalarShapeOf(value: unknown): string | null | undefined {
   if (value === undefined) return "\0unset";
-  return JSON.stringify(value, (_key, held: unknown) => {
-    if (typeof held !== "object" || held === null || Array.isArray(held)) {
-      return held;
-    }
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(held).sort()) {
-      sorted[key] = (held as Record<string, unknown>)[key];
-    }
-    return sorted;
-  });
+  if (value === null) return "\0null";
+  if (typeof value === "string") return `s${value}`;
+  if (typeof value === "number") return `n${String(value)}`;
+  if (typeof value === "bigint") return `i${String(value)}`;
+  if (typeof value === "boolean") return `b${String(value)}`;
+  // A function or a symbol is not a style value and has no comparable text.
+  // Refused rather than given one, so it cannot read as equal to anything.
+  if (typeof value !== "object") return null;
+  return undefined;
+}
+
+/** How a list's parts compare, by INDEX, which is the only order it has. */
+function listShapeOf(
+  value: readonly unknown[],
+  budget: { left: number },
+  depth: number
+): string | null {
+  const parts: string[] = [];
+  for (const entry of value) {
+    const shape = shapeOf(entry, budget, depth + 1);
+    if (shape === null) return null;
+    parts.push(shape);
+  }
+  return `[${parts.join(",")}]`;
+}
+
+/**
+ * How a record's parts compare: its OWN data properties, keys sorted.
+ *
+ * `Object.keys` never reaches the prototype, so an inherited `toJSON`,
+ * `toString` or accessor is not consulted. An OWN accessor is refused rather
+ * than invoked — reading it would run author code during an inspection, and
+ * treating two accessors as equal would hide a real difference behind them.
+ */
+function recordShapeOf(
+  value: object,
+  budget: { left: number },
+  depth: number
+): string | null {
+  const parts: string[] = [];
+  for (const key of Object.keys(value).sort()) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) return null;
+    const shape = shapeOf(descriptor.value, budget, depth + 1);
+    if (shape === null) return null;
+    parts.push(`${JSON.stringify(key)}:${shape}`);
+  }
+  return `{${parts.join(",")}}`;
 }
 
 /** What a batch edit would do, before anything is applied. */
@@ -195,8 +299,9 @@ export function batchStyleWriteOps(
   value: StyleValue,
   policy?: StylePolicy
 ): BatchStyleWrite {
+  const shared = batchPolicy(policy);
   return collect(nodes, node =>
-    styleWriteOp(node.id, node.styles, address, value, policy)
+    styleWriteOp(node.id, node.styles, address, value, shared)
   );
 }
 
@@ -212,9 +317,71 @@ export function batchStyleClearOps(
   address: StyleAddress,
   policy?: StylePolicy
 ): BatchStyleWrite {
+  const shared = batchPolicy(policy);
   return collect(nodes, node =>
-    styleClearOp(node.id, node.styles, address, policy)
+    styleClearOp(node.id, node.styles, address, shared)
   );
+}
+
+/**
+ * The caller's policy with its lookups answered once per BATCH.
+ *
+ * `tokens.kindOf` and `mayFetchUrl` are supplied by the site, and the value
+ * layer memoizes them for the span of ONE validation — so a ten-node selection
+ * asked the site ten times for the same answer. Measured: ten nodes, ten
+ * `kindOf` calls, for a token whose kind cannot vary by node.
+ *
+ * Sound because the question does not depend on the node. `kindOf` maps a token
+ * NAME to its kind and `mayFetchUrl` judges a URL; neither is handed anything
+ * about the block receiving the value, so an answer that differed between two
+ * nodes of one batch would be a site policy contradicting itself mid-gesture.
+ *
+ * Scoped to the batch and thrown away with it, rather than cached across calls:
+ * a site that adds a token between two gestures must be seen by the second one.
+ *
+ * Deliberately NOT solved by validating once and reusing the result. That needs
+ * the value layer to split validation from op-building — a second entry point
+ * into the code deciding what a valid write is, and two of those drift. The
+ * per-node validation that remains is a pure function of a small value and
+ * costs nothing measurable; what costs something is calling the SITE.
+ */
+function batchPolicy(policy: StylePolicy | undefined): StylePolicy | undefined {
+  if (policy === undefined) return policy;
+  const lookup = policy.tokens;
+  const mayFetch = policy.mayFetchUrl;
+  if (lookup === undefined && mayFetch === undefined) return policy;
+
+  const kinds = new Map<string, TokenKind | undefined>();
+  const urls = new Map<string, boolean>();
+  return {
+    ...policy,
+    ...(lookup === undefined
+      ? {}
+      : {
+          tokens: {
+            kindOf(name: string) {
+              // `has` rather than a truthy check: `undefined` is the answer for
+              // a token the site does not define, and it is the answer most
+              // worth not asking twice.
+              if (kinds.has(name)) return kinds.get(name);
+              const kind = lookup.kindOf(name);
+              kinds.set(name, kind);
+              return kind;
+            },
+          },
+        }),
+    ...(mayFetch === undefined
+      ? {}
+      : {
+          mayFetchUrl(url: string) {
+            const cached = urls.get(url);
+            if (cached !== undefined) return cached;
+            const allowed = mayFetch(url);
+            urls.set(url, allowed);
+            return allowed;
+          },
+        }),
+  };
 }
 
 /** The shared walk, so writing and clearing cannot come to differ. */
