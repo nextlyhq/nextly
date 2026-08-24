@@ -39,6 +39,7 @@
  *
  * @module plugins/plugin-singles
  */
+import { typeHasNestedFields } from "../collections/fields/guards";
 import type {
   ListSinglesOptions,
   SingleRegistryService,
@@ -92,7 +93,18 @@ export interface SerializedFieldConfig {
    */
   name?: string;
   type: string;
-  /** Nested fields, for the container types that have them. */
+  /**
+   * Nested fields, present only for the CONTAINER types.
+   *
+   * A contributed field type carries an index signature, so it may hold a
+   * `fields` option of any shape as its own private configuration — a record, a
+   * string, anything its plugin reads. Passing that through under this name
+   * would promise an array a caller can `.map()` and hand it something else.
+   *
+   * The projection therefore keeps `fields` only where the type is one the
+   * engine treats as a container AND the value really is an array, which is the
+   * same rule `fields-payload.ts` applies before walking nested fields.
+   */
   fields?: SerializedFieldConfig[];
 }
 
@@ -203,6 +215,23 @@ export interface PluginSinglesService {
  * plumbing.
  *
  */
+/**
+ * One field, reduced to what this surface can promise about it.
+ *
+ * Recursive, because a container's children are fields too and inherit the same
+ * uncertainty about their own `fields` option.
+ */
+function toSerializedField(
+  field: SerializedFieldConfig
+): SerializedFieldConfig {
+  const nested = field.fields;
+  if (!typeHasNestedFields(field.type) || !Array.isArray(nested)) {
+    const { fields: _dropped, ...rest } = field;
+    return rest;
+  }
+  return { ...field, fields: nested.map(toSerializedField) };
+}
+
 function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
   return {
     id: record.id,
@@ -210,9 +239,9 @@ function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
     label: record.label,
     description: record.description ?? undefined,
     // Assignable without an assertion: `SerializedFieldConfig` declares only
-    // members every `FieldConfig` arm already satisfies, which is what made
-    // narrowing it honest in the first place.
-    fields: record.fields,
+    // members every `FieldConfig` arm already satisfies. Each field is then
+    // reduced to what this surface can promise about it.
+    fields: record.fields.map(toSerializedField),
     source: record.source,
   };
 }

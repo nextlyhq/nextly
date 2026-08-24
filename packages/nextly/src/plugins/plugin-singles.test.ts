@@ -307,3 +307,83 @@ describe("a Single with no description", () => {
     expect(record!.description).not.toBeNull();
   });
 });
+
+describe("a contributed field carrying its own `fields` option", () => {
+  async function listFields(fields: unknown) {
+    const registry = {
+      listSingles: async () => ({
+        data: [
+          {
+            id: "s1",
+            slug: "homepage",
+            label: "Homepage",
+            fields,
+            source: "code",
+          },
+        ],
+        total: 1,
+      }),
+    } as unknown as SingleRegistryService;
+    return (await wrapSinglesForPlugin(registry).list()).data[0]!.fields;
+  }
+
+  it("drops a non-array `fields` rather than publishing it as a list", async () => {
+    // A contributed field type carries an index signature, so `fields` may hold
+    // anything its plugin reads — here a record. Published under a member typed
+    // as an array, a caller may legally `.map()` it and get a TypeError.
+    const published = await listFields([
+      { name: "chart", type: "acme/chart", fields: { series: "revenue" } },
+    ]);
+
+    expect(published[0]).not.toHaveProperty("fields");
+    expect(published[0]!.name).toBe("chart");
+  });
+
+  it("drops an ARRAY `fields` on a type that is not a container", async () => {
+    // The harder half: the value is an array, so an `Array.isArray` check alone
+    // passes it through — and its entries are the plugin's own configuration,
+    // not fields. The type is what decides, which is the rule
+    // `fields-payload.ts` applies before walking nested fields.
+    const published = await listFields([
+      { name: "chart", type: "acme/chart", fields: [{ some: "config" }] },
+    ]);
+
+    expect(published[0]).not.toHaveProperty("fields");
+  });
+
+  it("keeps nested fields for a container type, recursively", async () => {
+    // The positive control. Dropping `fields` everywhere would satisfy both
+    // assertions above while making the surface useless for its first
+    // consumer, which walks containers looking for a `blocks` field.
+    const published = await listFields([
+      {
+        name: "section",
+        type: "group",
+        fields: [
+          {
+            name: "inner",
+            type: "repeater",
+            fields: [{ name: "body", type: "blocks" }],
+          },
+        ],
+      },
+    ]);
+
+    expect(published[0]!.fields?.[0]?.fields?.[0]?.type).toBe("blocks");
+  });
+
+  it("drops a non-container's `fields` even when NESTED inside a container", async () => {
+    // The recursion matters: a contributed type sitting inside a group would
+    // otherwise be published with its private option intact, because only the
+    // top level had been reduced.
+    const published = await listFields([
+      {
+        name: "section",
+        type: "group",
+        fields: [{ name: "chart", type: "acme/chart", fields: { a: 1 } }],
+      },
+    ]);
+
+    expect(published[0]!.fields?.[0]).not.toHaveProperty("fields");
+  });
+});
