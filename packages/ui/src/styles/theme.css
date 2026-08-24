@@ -926,12 +926,11 @@
    * the gap between two fields are one decision and cannot drift apart — the
    * first child's top padding IS the card's top inset.
    *
-   * It replaces a delegation in which the section padded horizontally only and
-   * each row supplied its own vertical padding. Two shipped row idioms
-   * disagreed about that: one carried it, the other did not, so a section built
-   * from the second rendered its fields flush against the card's borders. The
-   * card cannot see which idiom it was handed, which is why the rhythm cannot
-   * be the caller's to supply. */
+   * The rhythm belongs to the section rather than to the rows it is handed. A
+   * section renders whatever children it is given, and cannot tell one row
+   * idiom from another; leaving each row to supply its own vertical padding
+   * makes the card's inset depend on which idiom the caller happened to reach
+   * for, and a row that supplies none renders flush against the borders. */
   --nx-field-gap: 1.25rem;
 
   /* Focus ring colors */
@@ -1173,21 +1172,20 @@
 @layer components {
   /* A form section's vertical rhythm, applied to every DIRECT child.
    *
-   * Plain CSS rather than a Tailwind utility on the element, for two reasons
-   * that both bit during this change. The parenthesised custom-property
-   * shorthand is v4-only, so a consumer compiling through the published v3
-   * `tailwind-preset` would emit no rule at all and the section would render
-   * flush again — silently, since nothing about the markup would look wrong.
-   * And an arbitrary-value token is EXTRACTED from any scanned file, including
-   * from a comment or a test string that merely names it, which is how a
-   * malformed variant of this rule once reached the compiled stylesheet and
-   * failed the whole sheet.
+   * Plain CSS rather than a Tailwind utility on the element, for two reasons.
+   * The parenthesised custom-property shorthand is v4-only, so the same class
+   * compiles to a rule under one Tailwind major and to nothing under the other,
+   * and the section renders flush wherever it compiles to nothing — silently,
+   * because the markup is identical either way. And an arbitrary-value token is
+   * EXTRACTED from any file the scanner reads, a comment or a test string
+   * included, so merely naming one of these utilities in prose emits its rule;
+   * a malformed spelling anywhere in the repository fails the whole stylesheet.
    *
-   * A rule shipped in the theme has neither problem: it is the same CSS under
-   * both Tailwind majors and there is no token for a scanner to find.
+   * A rule shipped in the theme has neither property: it is the same CSS under
+   * both majors, and there is no token for a scanner to find.
    *
-   * Children must not pad themselves. The two are additive, so a row carrying
-   * its own `py-*` doubles the rhythm on exactly the sections that were already
+   * Children must not pad themselves. The two paddings are additive, so a row
+   * carrying its own `py-*` doubles the rhythm on the sections that are already
    * correct. */
   .nx-form-section-rows > * {
     padding-block: var(--nx-field-gap);

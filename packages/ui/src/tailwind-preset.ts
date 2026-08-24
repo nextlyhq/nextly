@@ -17,6 +17,16 @@
  * Usage (Tailwind v4 with @config):
  *   Consumers define the equivalent @theme tokens in their CSS.
  *   This file serves as the reference contract.
+ *
+ * Scope: tokens and the utilities derived from them, and nothing else. The
+ * component classes the library writes into its own markup — `.nx-page-shell`,
+ * `.nx-bleed`, `.nx-form-section-rows` — are CSS rules rather than token
+ * mappings, and they ship in `theme.css` for every consumer alike. Restating
+ * one of them here would express a single decision in two places that agree
+ * until one of them is edited, and would still leave the others missing; the
+ * boundary holds for all of them or it holds for none. `theme.css` is
+ * therefore required alongside this preset, not an alternative to it, and
+ * `tailwind-preset.test.ts` fails if a component selector reappears here.
  */
 /**
  * The numbered shade scale for a color, mixed from its base the same way the v4
@@ -169,40 +179,6 @@ const uiPreset = {
       },
     },
   },
-  /**
-   * Component rules a class name alone cannot carry.
-   *
-   * Scanning a component discovers the CLASS it writes, never the rule behind
-   * it. So a bespoke selector shipped only in `theme.css` reaches a consumer
-   * who imports that stylesheet and nobody else — and the v3 path this preset
-   * exists for is exactly the case that does not: `presets: [uiPreset]` pulls
-   * in this object and no CSS at all.
-   *
-   * The failure is silent in the worst way. The class is present in the markup,
-   * every test asserting it passes, and the component renders with the spacing
-   * simply missing. Registering the rule here is what makes the preset a
-   * complete answer rather than half of one.
-   *
-   * Declared with `addComponents` rather than `addUtilities` so a consumer's own
-   * utility still wins: this is a default a component ships with, not a rule
-   * that should beat the caller.
-   */
-  plugins: [
-    ({
-      addComponents,
-    }: {
-      addComponents: (rules: Record<string, Record<string, string>>) => void;
-    }) => {
-      addComponents({
-        // Mirrors `.nx-form-section-rows > *` in theme.css. The two are one
-        // decision expressed for two build paths, so a change to either has to
-        // move both — `tailwind-preset.test.ts` pins them together.
-        ".nx-form-section-rows > *": {
-          paddingBlock: "var(--nx-field-gap)",
-        },
-      });
-    },
-  ],
 };
 
 // Exported both ways on purpose. CommonJS cannot represent a default-only
