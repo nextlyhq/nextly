@@ -107,6 +107,11 @@ jobs:
           comment: true
           annotations: true
           comment-id: code-hygiene
+          # playground is a dev harness, not a published package. Excluding it
+          # keeps the gate focused on the packages that ship to consumers and
+          # prevents its intentional loose dependency declarations from
+          # appearing as findings in unrelated pull requests.
+          workspace: "!playground"
 
       # A degraded run reports nothing and reads exactly like a clean one, so
       # the states the action exposes for that are read rather than trusted.
@@ -148,9 +153,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Full history so the base commit can be checked out as a second
-          # working tree below; a shallow clone has no object for it.
-          fetch-depth: 0
+          # Shallow clone is enough: no base worktree is needed because this
+          # job scans the PR branch HEAD directly without a baseline diff.
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Setup pnpm
@@ -165,73 +170,34 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The base tree lives outside the workspace so its own files are not
-      # analysed by the run below. It needs an install for the same resolution
-      # reason; the pnpm store is already warm, so this is mostly linking.
-      - name: Baseline the base commit
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          git worktree add /tmp/fallow-base "$BASE_SHA"
-          # Its own install, so imports resolve against what the base declared.
-          (cd /tmp/fallow-base && pnpm install --frozen-lockfile)
-          # Run from HERE, pointed at there. The base can predate this branch,
-          # so it can have neither the fallow devDependency nor .fallowrc.jsonc:
-          # `pnpm exec fallow` inside it fails outright, and a scan that found
-          # the binary would still read no config and baseline a different
-          # policy. Comparing two sides under different rules measures nothing.
-          #
-          # `--save-baseline` exits 1 when the tree it recorded has findings,
-          # which the base has by definition, and that is not a failure.
-          # Anything ABOVE 1 is fallow failing to run, which `|| true` would
-          # swallow: the baseline would be missing or truncated and every
-          # finding in the head would then read as introduced.
-          set +e
-          for analysis in dead-code dupes health; do
-            pnpm exec fallow "$analysis" \
-              --root /tmp/fallow-base \
-              --config "$GITHUB_WORKSPACE/.fallowrc.jsonc" \
-              --save-baseline "/tmp/base-$analysis.json"
-            code=$?
-            if [ "$code" -gt 1 ]; then
-              echo "::error::fallow $analysis failed to baseline the base commit (exit $code)."
-              exit 1
-            fi
-            # A missing file means the same thing whatever the exit code said.
-            if [ ! -s "/tmp/base-$analysis.json" ]; then
-              echo "::error::fallow $analysis exited $code but wrote no baseline."
-              exit 1
-            fi
-          done
-          set -e
+      # No baseline step: this job reports the full current state of the PR
+      # branch rather than a diff against main. Every finding in the repo is
+      # shown so the author can see the real picture, not just what their
+      # change added.
 
-      # One run per analysis, because a single `fallow --baseline` applies its
-      # baseline to dead code alone and the combined run then reports inherited
-      # duplication and complexity as though the change had added them.
-      #
-      # `set +e` because a findings exit would otherwise abort the step under
-      # GitHub's `bash -e`, taking the summary with it.
+      # One run per analysis. `set +e` because a findings exit (code 1) would
+      # otherwise abort the step under GitHub's `bash -e`, taking the summary
+      # with it. Dead code (code 1) fails the gate; dupes and health are
+      # reported only. Anything above 1 is a fallow crash, surfaced separately.
       - name: Analyse the whole repository
         id: analyse
         run: |
           set +e
           failed=""
           crashed=""
-          for analysis in dead-code dupes health; do
+          for analysis in dead-code dupes; do
             pnpm exec fallow "$analysis" \
-              --baseline "/tmp/base-$analysis.json" \
+              --workspace "!playground" \
+              --config .fallowrc.jsonc \
               --format json > "/tmp/head-$analysis.json" 2> "/tmp/err-$analysis.txt"
             code=$?
             case "$code" in
               0) ;;
-              # 1 is "found something", and only dead code turns that into a
-              # verdict. Every finding reaching here is absent from the base
-              # baseline, so an unchanged tree records nothing.
+              # 1 means findings exist. Dead code fails the gate; dupes are
+              # reported in the summary without blocking the merge.
               1) [ "$analysis" = "dead-code" ] && failed="$failed $analysis" ;;
-              # Anything else is fallow failing to run: a bad config, a parse
-              # error, a missing baseline. Reporting that as findings would send
-              # the author hunting for code that is not the problem, so it is
-              # surfaced separately and its stderr is not swallowed.
+              # Anything else is fallow failing to run (bad config, parse
+              # error). Surface stderr so the author knows it is tooling.
               *) crashed="$crashed $analysis($code)"; cat "/tmp/err-$analysis.txt" >&2 ;;
             esac
           done
@@ -248,15 +214,15 @@ jobs:
         if: always() && steps.analyse.conclusion != 'skipped'
         run: |
           {
-            echo "## Whole-repository scan"
+            echo "## Whole-repository scan — PR branch current state"
             echo
-            echo "Compared against a baseline of this branch's base, so only what"
-            echo "the change adds is listed. Dead code here FAILS this job."
-            echo "Duplication and complexity are reported here and enforced in"
-            echo 'the Changed files job, which can attribute them.'
+            echo "Full dead-code and duplication report for the PR branch as it"
+            echo "stands now. Playground is excluded. Dead code **fails** this job."
+            echo "Duplication is reported only (enforced per-file in the Changed"
+            echo 'files job).'
             echo
           } >> "$GITHUB_STEP_SUMMARY"
-          for analysis in dead-code dupes health; do
+          for analysis in dead-code dupes; do
             pnpm exec fallow report --from "/tmp/head-$analysis.json" \
               --format github-summary >> "$GITHUB_STEP_SUMMARY"
           done
@@ -270,8 +236,8 @@ jobs:
           || steps.analyse.outputs.crashed != '')
         run: |
           if [ -n "${{ steps.analyse.outputs.crashed }}" ]; then
-            echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. That is a tooling failure rather than a finding in the change — its stderr is in the analysis step above."
+            echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. That is a tooling failure — its stderr is in the analysis step above."
             exit 1
           fi
-          echo "::error::fallow reported dead code this change introduced:${{ steps.analyse.outputs.failed }}. The job summary lists it. This is the check the changed-files gate cannot make, so look for an export whose last caller the change removed, in a file it never opened."
+          echo "::error::fallow found dead code in the PR branch:${{ steps.analyse.outputs.failed }}. The full report is in the job summary."
           exit 1
