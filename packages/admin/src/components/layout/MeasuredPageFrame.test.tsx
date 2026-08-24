@@ -15,9 +15,9 @@ import { describe, expect, it } from "vitest";
 import {
   ChromeSuppressionProvider,
   useSuppressAdminChrome,
-} from "@admin/components/layout/ChromeSuppression";
+} from "./ChromeSuppression";
 
-import { EntryPageFrame } from "./EntryPageFrame";
+import { MeasuredPageFrame } from "./MeasuredPageFrame";
 
 /** A view that asks for the whole panel on mount, as an immersive plugin does. */
 function ImmersiveView() {
@@ -31,12 +31,14 @@ function ImmersiveView() {
 function renderIn(children: React.ReactNode) {
   return render(
     <ChromeSuppressionProvider>
-      <EntryPageFrame breadcrumbs={<nav>trail</nav>}>{children}</EntryPageFrame>
+      <MeasuredPageFrame breadcrumbs={<nav>trail</nav>}>
+        {children}
+      </MeasuredPageFrame>
     </ChromeSuppressionProvider>
   );
 }
 
-describe("EntryPageFrame", () => {
+describe("MeasuredPageFrame", () => {
   it("frames a view that asked for nothing, and measures the page", () => {
     renderIn(<p>framed body</p>);
 
@@ -103,9 +105,9 @@ describe("EntryPageFrame", () => {
     // shift the content's position and remount it.
     render(
       <ChromeSuppressionProvider>
-        <EntryPageFrame>
+        <MeasuredPageFrame>
           <p>default form</p>
-        </EntryPageFrame>
+        </MeasuredPageFrame>
       </ChromeSuppressionProvider>
     );
 
@@ -133,9 +135,9 @@ describe("EntryPageFrame", () => {
 
     render(
       <ChromeSuppressionProvider>
-        <EntryPageFrame>
+        <MeasuredPageFrame>
           <FormWithTakeoverField />
-        </EntryPageFrame>
+        </MeasuredPageFrame>
       </ChromeSuppressionProvider>
     );
 
@@ -151,9 +153,9 @@ describe("EntryPageFrame", () => {
     // that caller the 24px gap this slot exists to avoid.
     render(
       <ChromeSuppressionProvider>
-        <EntryPageFrame breadcrumbs={null}>
+        <MeasuredPageFrame breadcrumbs={null}>
           <p>body</p>
-        </EntryPageFrame>
+        </MeasuredPageFrame>
       </ChromeSuppressionProvider>
     );
 

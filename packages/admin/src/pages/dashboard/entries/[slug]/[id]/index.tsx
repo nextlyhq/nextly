@@ -19,7 +19,7 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { EntryPageFrame } from "@admin/components/features/entries/EntryPageFrame";
+import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -308,7 +308,7 @@ export default function EditEntryPage({
    *
    * `form` because an entry is a labelled form: an unbounded panel stretches a
    * short text input across the whole of it. These early-return branches never
-   * reach `EntryPageFrame`, which carries the same reasoning for the branch
+   * reach `MeasuredPageFrame`, which carries the same reasoning for the branch
    * that does, so they state it here rather than inheriting it.
    *
    * Every branch carries it — loading, each error state, and the editor —
@@ -467,7 +467,7 @@ export default function EditEntryPage({
 
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <EntryPageFrame
+        <MeasuredPageFrame
           breadcrumbs={
             <EditEntryBreadcrumbs
               collectionSlug={slug}
@@ -480,7 +480,7 @@ export default function EditEntryPage({
             path={customEditViewPath}
             props={customViewProps as unknown as Record<string, unknown>}
           />
-        </EntryPageFrame>
+        </MeasuredPageFrame>
       </QueryErrorBoundary>
     );
   }
@@ -499,7 +499,7 @@ export default function EditEntryPage({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <EntryPageFrame>
+      <MeasuredPageFrame>
         {/* Each injection slot gets a box of its own. Under the measured
             frame these are direct children of a CSS grid, and the rule that
             puts a child in the content column can only place a generated
@@ -536,7 +536,7 @@ export default function EditEntryPage({
             <PluginSlot path={afterEditPath} props={editInjectionProps} />
           </div>
         )}
-      </EntryPageFrame>
+      </MeasuredPageFrame>
     </QueryErrorBoundary>
   );
 }

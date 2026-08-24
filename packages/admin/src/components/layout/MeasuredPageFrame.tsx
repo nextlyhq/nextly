@@ -2,10 +2,10 @@
 
 import type { ReactNode } from "react";
 
-import { useSuppressedChrome } from "@admin/components/layout/ChromeSuppression";
-import { PageContainer } from "@admin/components/layout/page-container";
+import { useSuppressedChrome } from "./ChromeSuppression";
+import { PageContainer } from "./page-container";
 
-interface EntryPageFrameProps {
+interface MeasuredPageFrameProps {
   /**
    * Rendered above the content, but only when the page keeps its frame. An
    * immersive surface has no page to put a trail on.
@@ -19,7 +19,7 @@ interface EntryPageFrameProps {
 }
 
 /**
- * The frame an entry page renders in, decided in ONE place.
+ * The frame a measured content page renders in, decided in ONE place.
  *
  * An entry surface may take the window — a registered custom view, or a takeover
  * FIELD such as the page builder's, which asks from inside the default form.
@@ -33,8 +33,9 @@ interface EntryPageFrameProps {
  * which is the point — a list of them would drift as plugins added routes,
  * silently, because a missing entry still renders.
  *
- * Create and edit route the SAME registered component, and both also render the
- * default form, so the decision cannot live in any one of those four places: a
+ * Entries and Singles both use it, and entry create and edit route the SAME
+ * registered component while also rendering the default form, so the decision
+ * cannot live in any one of those places: a
  * copy in one is a copy that can disagree, and did — a view that took the
  * window while editing was framed and capped while creating the same record.
  *
@@ -48,7 +49,10 @@ interface EntryPageFrameProps {
  * Framed and immersive are the whole vocabulary; there is no third case for a
  * width to answer.
  */
-export function EntryPageFrame({ breadcrumbs, children }: EntryPageFrameProps) {
+export function MeasuredPageFrame({
+  breadcrumbs,
+  children,
+}: MeasuredPageFrameProps) {
   const framed = !useSuppressedChrome().has("pageFrame");
 
   // One tree in both states, differing only in props.

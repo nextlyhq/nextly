@@ -41,19 +41,25 @@ const MEASURED = [
 ];
 
 /**
- * A two-axis negative inset, in any variant and any position.
+ * A negative inset that cancels the page's HORIZONTAL padding, in any variant
+ * and any position.
+ *
+ * Both spellings, because both do it: `-m-8` cancels the horizontal axis as a
+ * side effect, and `-mx-8` beside a `-my-8` recreates it deliberately. An
+ * earlier version of this file matched only the first and carried a control
+ * asserting `-mx-8` was fine — which would have let exactly that pairing
+ * restore the 64px bleed with this test green.
  *
  * `-m-8` and `lg:-m-8` are the same mistake at different breakpoints; so is
  * `-m-8` written FIRST, where a `^` anchor is useless because the pattern has
  * already consumed `className="`. The opening quote is therefore a boundary
- * alongside whitespace and the variant colon, or a class reorder restores the
- * bleed while this stays green.
+ * alongside whitespace and the variant colon.
  *
  * Prose about it is not a mistake — the comment explaining why the horizontal
  * half is gone necessarily names it, which is why this reads a `className`
  * rather than the file.
  */
-const BOTH_AXES = /className="(?:[^"]*[\s:])?-m-8\b/;
+const HORIZONTAL_CANCEL = /className="(?:[^"]*[\s:])?-mx?-8\b/;
 
 describe("a measured entry page", () => {
   it("reads the files it names", () => {
@@ -70,25 +76,35 @@ describe("a measured entry page", () => {
   it("sees a two-axis inset when there is one", () => {
     // The control for the check itself: a pattern that matched nothing would
     // report every file clean, including one that had regressed.
-    expect(BOTH_AXES.test('<div className="flex lg:-m-8">')).toBe(true);
-    expect(BOTH_AXES.test('<div className="@4xl/content:-m-8">')).toBe(true);
+    expect(HORIZONTAL_CANCEL.test('<div className="flex lg:-m-8">')).toBe(true);
+    expect(HORIZONTAL_CANCEL.test('<div className="@4xl/content:-m-8">')).toBe(
+      true
+    );
     // First token, where a `^` anchor cannot help: the pattern has already
     // consumed `className="`, so the opening quote has to be a boundary too.
     // A class reorder would otherwise restore the bleed unseen.
-    expect(BOTH_AXES.test('<div className="-m-8 flex">')).toBe(true);
+    expect(HORIZONTAL_CANCEL.test('<div className="-m-8 flex">')).toBe(true);
     // And what it must not catch.
-    expect(BOTH_AXES.test('<div className="flex lg:-my-8">')).toBe(false);
-    expect(BOTH_AXES.test('<div className="-my-8 flex">')).toBe(false);
-    // `-mx-8` is a different utility; the boundary must not swallow it.
-    expect(BOTH_AXES.test('<div className="-mx-8">')).toBe(false);
-    expect(BOTH_AXES.test("{/* `-my-8`, not `-m-8`, because … */}")).toBe(
+    // The pairing that recreates the bleed one utility at a time.
+    expect(HORIZONTAL_CANCEL.test('<div className="-my-8 -mx-8">')).toBe(true);
+    expect(HORIZONTAL_CANCEL.test('<div className="@4xl/content:-mx-8">')).toBe(
+      true
+    );
+
+    // And what stays allowed: the vertical half alone, and any other size.
+    expect(HORIZONTAL_CANCEL.test('<div className="flex lg:-my-8">')).toBe(
       false
     );
+    expect(HORIZONTAL_CANCEL.test('<div className="-my-8 flex">')).toBe(false);
+    expect(HORIZONTAL_CANCEL.test('<div className="-mx-4">')).toBe(false);
+    expect(
+      HORIZONTAL_CANCEL.test("{/* `-my-8`, not `-m-8`, because … */}")
+    ).toBe(false);
   });
 
   it("cancels the vertical inset only", () => {
     const offenders = MEASURED.filter(path =>
-      BOTH_AXES.test(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
+      HORIZONTAL_CANCEL.test(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
     );
 
     expect(

@@ -23,6 +23,7 @@ import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
+import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
@@ -321,7 +322,12 @@ export default function SingleEditPage({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      {/* Through the shared frame rather than a bare container: translation
+          mode asks to suppress `pageFrame` from inside the form, and only this
+          component reacts to that. A page that declared its own measure here
+          would keep the two-pane translation surface inside a 56rem column
+          while the entry editor beside it took the whole panel. */}
+      <MeasuredPageFrame>
         <SingleForm
           // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
           // expects FieldConfig[] (discriminated). The runtime payload is the
@@ -348,7 +354,7 @@ export default function SingleEditPage({
           // via the consolidated dropdown in the system header.
           onViewApi={() => navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))}
         />
-      </PageContainer>
+      </MeasuredPageFrame>
     </QueryErrorBoundary>
   );
 }
