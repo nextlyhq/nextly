@@ -1365,6 +1365,50 @@ describe("where a control's value came from", () => {
     expect(dot?.getAttribute("aria-label")).toBe("Inherited from .card");
   });
 
+  it("refuses to style a block whose id another block also uses", () => {
+    /*
+     * The case that makes the two trees disagree, and the one edit here that
+     * could not mean what it appears to mean.
+     *
+     * Gating runs before deduplication, so a gated first duplicate leaves a
+     * LATER node owning that id in the prepared tree while every lookup in the
+     * stored document returns the first. Controls and writes would describe one
+     * block while the dots describe another, and a write is addressed by id so
+     * it lands on the first regardless of which one the panel displayed.
+     *
+     * Asserted on BOTH halves: the refusal is shown AND no control is drawn, so
+     * a panel that rendered the note above a live field would fail this.
+     */
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/box", version: 1, props: {} },
+        { id: "a", type: "acme/box", version: 1, props: {} },
+      ],
+    } as never);
+
+    const { container } = render(<StyleInspectorPanel editor={editor} />);
+
+    expect(
+      container.querySelector('[data-empty="duplicate-id"]')
+    ).not.toBeNull();
+    expect(container.querySelector("[data-property]")).toBeNull();
+  });
+
+  it("still styles a block whose id is unique, which is the control", () => {
+    // Without this, refusing EVERY block would satisfy the case above and take
+    // the whole panel with it.
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    const { container } = render(<StyleInspectorPanel editor={editor} />);
+
+    expect(container.querySelector('[data-empty="duplicate-id"]')).toBeNull();
+    expect(container.querySelector("[data-property]")).not.toBeNull();
+  });
+
   it("resolves the selected node in the CASCADE's tree, not the stored one", () => {
     /*
      * The two trees are not always the same document. Read-time repair changes

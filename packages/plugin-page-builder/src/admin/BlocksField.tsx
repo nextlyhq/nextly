@@ -642,6 +642,22 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * object's identity: rebuilt inline it is a fresh object on every render,
    * and the tree behind it is re-rendered on every selection and keystroke.
    */
+  /*
+   * The canvas's own render inputs, and the ONE place this surface derives a
+   * breakpoint set.
+   *
+   * `styleContext.breakpoints` is read three times over — by the canvas, by the
+   * cascade compiled below, and by the inspector — and all three must be the
+   * same set or the panel judges which declarations are LIVE against
+   * breakpoints the cascade was not compiled with. A second call to
+   * `siteBreakpoints` beside this one returns an equal set today and offers no
+   * error on the day the render context grows a tier this does not have.
+   *
+   * Memoised, and that also settles a churn problem: `siteBreakpoints` builds a
+   * fresh `{ viewport: [], container: [] }` when no site style is stored, so an
+   * inline call handed the inspector a new object every render and the panel
+   * re-subscribed a media query per breakpoint on every keystroke.
+   */
   const canvasRender = useMemo(
     () => ({
       styleContext: { breakpoints: siteBreakpoints(canvasSiteStyle) },
@@ -669,25 +685,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * declaration in the trace, so every value from a named class reads as set by
    * nobody, and a `url(...)` this host refuses reads as active.
    */
-  /*
-   * ONE breakpoint set object for the inspector, held across renders.
-   *
-   * `siteBreakpoints` returns a fresh `{ viewport: [], container: [] }` when no
-   * site style is stored, so passing the call inline handed the panel a new
-   * object on every render of this component — and the panel subscribes to a
-   * media query per breakpoint in an effect keyed on it. Every keystroke in the
-   * editor therefore tore down and rebuilt those listeners. Not a loop, and
-   * nothing visibly broke; it is churn on a path that runs on every edit.
-   *
-   * Memoised on the stored style rather than on the derived set, because the
-   * derived set is the thing that cannot be compared — a fresh empty object is
-   * never equal to the last one.
-   */
-  const inspectorBreakpoints = useMemo(
-    () => siteBreakpoints(canvasSiteStyle),
-    [canvasSiteStyle]
-  );
-
   const styleCascade = useMemo(
     () =>
       /*
@@ -812,7 +809,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             editor={editor}
             policy={stylePolicy}
             cascade={styleCascade}
-            breakpoints={inspectorBreakpoints}
+            breakpoints={canvasRender.styleContext.breakpoints}
             tokens={offerableTokens(
               canvasSiteStyle,
               siteStylePending,

@@ -34,6 +34,7 @@ import {
   findNode,
   isTokenRef,
   trimCssWhitespace,
+  walkNodes,
   type BreakpointId,
   type BreakpointSet,
   type ContrastResult,
@@ -254,6 +255,38 @@ export function StyleInspectorPanel({
       <div className="nx-style-inspector" data-empty="many-selected">
         <p className="nx-inspector__note">
           {editor.selection.ids.length} blocks selected. Select one to style it.
+        </p>
+      </div>
+    );
+  }
+
+  /*
+   * A block whose id is not unique cannot be styled, and saying so is the only
+   * honest answer this panel has.
+   *
+   * The compiler already reaches this conclusion for the same reason, and its
+   * words are worth keeping: a class is derived from the id, so two nodes
+   * sharing one share a class, and "writing corrupts a node the author did not
+   * touch". It refuses to emit their rules.
+   *
+   * The editor has to refuse for a second reason the compiler does not face. The
+   * cascade is read from the PREPARED tree, where read-time repair has already
+   * dropped the later duplicate — but gating runs first, so a gated first node
+   * leaves a LATER one owning that id there, while every lookup in the stored
+   * document returns the first. The controls would then show and write one
+   * block while the provenance dots describe another, and typing into a field
+   * would silently change a block that is not on screen.
+   *
+   * Refused rather than reconciled: pointing the controls at the rendered node
+   * would not help, because a write is addressed by id and would still land on
+   * the first. There is no edit here that means what it appears to mean.
+   */
+  if (editor.selectedId !== null && sharesItsId(editor, editor.selectedId)) {
+    return (
+      <div className="nx-style-inspector" data-empty="duplicate-id">
+        <p className="nx-inspector__note">
+          Another block on this page has the same id, so styles written here
+          could not be told apart. Give one of them a new id to style either.
         </p>
       </div>
     );
@@ -1602,6 +1635,25 @@ export function breakpointLabel(
     def => def.id === id && def.maxWidth === context.maxWidth
   );
   return survivor?.label ?? id;
+}
+
+/**
+ * Whether the stored document holds this id more than once.
+ *
+ * Asked of the STORED document rather than of the cascade's tree, which is the
+ * whole point: preparation drops the later duplicate, so the tree the
+ * declarations describe never contains one and could never report this.
+ *
+ * `walkNodes` rather than a walk written here — it is cycle-safe and
+ * depth-bounded, and it deliberately visits the same node object twice when it
+ * sits in two slots, which is precisely the shape being counted.
+ */
+function sharesItsId(editor: EditorState, id: string): boolean {
+  let seen = 0;
+  walkNodes(editor.document.nodes, node => {
+    if (node.id === id) seen += 1;
+  });
+  return seen > 1;
 }
 
 /** Which node, state and breakpoint the panel is editing, to say what DIFFERS. */
