@@ -319,6 +319,33 @@ describe("nested PageShell", () => {
     }
   });
 
+  it("keeps the caller's own style, dropping only the measure", async () => {
+    // Only `width` stops meaning anything when an ancestor owns the grid.
+    // Everything else the caller wrote is theirs, and losing it because a
+    // layout elsewhere in the tree added a shell is a defect they cannot see.
+    vi.resetModules();
+    const fresh = await import("./page-shell");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { container } = render(
+        <fresh.PageShell>
+          <fresh.PageShell width="wide" style={{ paddingTop: "7px" }}>
+            <p>inner</p>
+          </fresh.PageShell>
+        </fresh.PageShell>
+      );
+
+      const inner = container.querySelector<HTMLElement>(
+        "[data-slot='page-shell-nested']"
+      );
+      expect(inner?.style.paddingTop).toBe("7px");
+      // The measure would name a track that does not exist here.
+      expect(inner?.style.getPropertyValue("--nx-shell-measure")).toBe("");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("still owns the grid when shells are siblings rather than nested", async () => {
     // The negative control: the context must not leak across the tree, or two
     // ordinary pages rendered side by side would silently lose their inset.

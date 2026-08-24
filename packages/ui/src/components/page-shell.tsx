@@ -173,6 +173,21 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
       // the defect would arrive unreported. Watching the child list is what
       // makes the check a property of the rendered DOM rather than of when this
       // component happened to render.
+      //
+      // `childList` ALONE, deliberately, and this is the boundary of the check
+      // rather than an oversight. A child that stays mounted and mutates its
+      // own class or style to `display: contents` is not reported, because
+      // catching it needs `attributes` with `subtree: true` — MutationObserver
+      // cannot scope attributes to direct children — which fires on every
+      // descendant class change anywhere in the page. In an admin full of hover
+      // states, transitions and editor chrome that is continuous, and each
+      // notification re-runs `getComputedStyle` over every direct child.
+      //
+      // This is an advisory development warning: a miss costs only the report,
+      // while a check that makes every developer's page churn is one that gets
+      // deleted, taking its true positives with it. The mount-time pass above
+      // still catches `display: contents` present at first render, which is how
+      // it is almost always written.
       const observer = new MutationObserver(check);
       observer.observe(shell, { childList: true });
       return () => {
@@ -206,6 +221,12 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
           ref={attachRef}
           data-slot="page-shell-nested"
           className={className}
+          // The caller's own `style`, NOT the computed one. Only `width` stops
+          // meaning anything here, because the measure it selects has no grid
+          // to select a track in; everything else the caller wrote — spacing,
+          // positioning, their own custom properties — is theirs and must not
+          // vanish because an ancestor elsewhere in the tree added a shell.
+          style={style}
           {...props}
         >
           {children}
