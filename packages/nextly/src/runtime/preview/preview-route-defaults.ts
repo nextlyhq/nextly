@@ -93,45 +93,53 @@ export async function defaultCookies(): Promise<{
  * explain them.
  */
 export async function defaultRedirectTo(
-  scope: PreviewRedirectScope
+  scope: PreviewRedirectScope,
+  context?: { requestOrigin: string }
 ): Promise<string | null> {
   await getCachedNextly();
   const { previewDeclarationFor } = await import("../../api/preview-url");
   const collections = getService("collectionsHandler");
 
-  return resolvePreviewRedirect(scope, {
-    loadEntry: async (collection, entryId) => {
-      // The SAME service the mint-time authorization probe reads through, so
-      // the entry a link is authorized against and the entry its path is built
-      // from cannot diverge. The Direct API's `findByID` is not usable here: it
-      // takes no `status`, so a status-enabled collection filters it to
-      // published only and an entry that has never been published — precisely
-      // the entry a preview link is most often minted for — reports as missing.
-      const read = await collections.getEntry({
-        collectionName: collection,
-        entryId,
-        // No relationships. This read exists to produce a path, and every field
-        // a preview URL can be built from is scalar, so expanding would read
-        // further collections to answer a question none of them contribute to.
-        depth: 0,
-        // Trusted, because the caller is anonymous: whoever follows a preview
-        // link has no session. Authorization happened when the link was minted,
-        // against the gate that serves real reads, and the signed token carries
-        // that verdict. What this produces is a path and never content.
-        overrideAccess: true,
-        status: "all",
-        // The working draft's values, not the published row's. An editor who
-        // changed the slug on the draft is sharing the draft, so the published
-        // slug would send the reviewer to the entry's old address — or, for an
-        // entry never published, to no address at all.
-        includeWorkingDraft: true,
-      });
+  return resolvePreviewRedirect(
+    scope,
+    {
+      loadEntry: async (collection, entryId, locale) => {
+        // The SAME service the mint-time authorization probe reads through, so
+        // the entry a link is authorized against and the entry its path is built
+        // from cannot diverge. The Direct API's `findByID` is not usable here: it
+        // takes no `status`, so a status-enabled collection filters it to
+        // published only and an entry that has never been published — precisely
+        // the entry a preview link is most often minted for — reports as missing.
+        const read = await collections.getEntry({
+          collectionName: collection,
+          entryId,
+          // No relationships. This read exists to produce a path, and every field
+          // a preview URL can be built from is scalar, so expanding would read
+          // further collections to answer a question none of them contribute to.
+          depth: 0,
+          // Trusted, because the caller is anonymous: whoever follows a preview
+          // link has no session. Authorization happened when the link was minted,
+          // against the gate that serves real reads, and the signed token carries
+          // that verdict. What this produces is a path and never content.
+          overrideAccess: true,
+          status: "all",
+          // The token's locale, so a link minted for one translation resolves
+          // that translation's slug rather than the default language's.
+          ...(locale === undefined ? {} : { locale }),
+          // The working draft's values, not the published row's. An editor who
+          // changed the slug on the draft is sharing the draft, so the published
+          // slug would send the reviewer to the entry's old address — or, for an
+          // entry never published, to no address at all.
+          includeWorkingDraft: true,
+        });
 
-      if (!read.success || read.data === null) return null;
-      return read.data as Record<string, unknown>;
+        if (!read.success || read.data === null) return null;
+        return read.data as Record<string, unknown>;
+      },
+      loadDeclaration: previewDeclarationFor,
+      loadSiteUrl: async () =>
+        (await settingsService()).getSettings().then(s => s.siteUrl),
     },
-    loadDeclaration: previewDeclarationFor,
-    loadSiteUrl: async () =>
-      (await settingsService()).getSettings().then(s => s.siteUrl),
-  });
+    context?.requestOrigin
+  );
 }

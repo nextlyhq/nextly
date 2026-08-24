@@ -27,6 +27,32 @@ function deps(
 }
 
 describe("resolvePreviewRedirect", () => {
+  // A localized entry keeps its slug in a companion row per language. Reading
+  // without the token's locale resolves the DEFAULT language's slug, so the
+  // link redirects to a different translation — and the draft gate, which does
+  // carry the locale, then refuses the very draft the link was minted for.
+  it("reads the entry in the locale the token names", async () => {
+    const loadEntry = vi
+      .fn()
+      .mockResolvedValue({ id: "entry-1", slug: "a-propos" });
+    const d = deps({ loadEntry });
+
+    await resolvePreviewRedirect({ ...SCOPE, locale: "fr" }, d);
+
+    expect(loadEntry).toHaveBeenCalledWith("pages", "entry-1", "fr");
+  });
+
+  it("passes no locale when the token names none", async () => {
+    const loadEntry = vi
+      .fn()
+      .mockResolvedValue({ id: "entry-1", slug: "about" });
+    const d = deps({ loadEntry });
+
+    await resolvePreviewRedirect(SCOPE, d);
+
+    expect(loadEntry).toHaveBeenCalledWith("pages", "entry-1", undefined);
+  });
+
   it("reduces a resolved URL on the site's own origin to a site-relative path", async () => {
     expect(await resolvePreviewRedirect(SCOPE, deps())).toBe("/about");
   });
@@ -85,6 +111,51 @@ describe("resolvePreviewRedirect", () => {
     const d = deps({ loadSiteUrl: vi.fn().mockResolvedValue(null) });
 
     expect(await resolvePreviewRedirect(SCOPE, d)).toBe("/about");
+  });
+
+  // A collection may return an ABSOLUTE url, which `resolvePreviewUrl` passes
+  // through as `resolved` whether or not a site URL is set. On a fresh install
+  // there is then nothing configured to compare it against — but the request
+  // being served came from the site's own origin, which is the honest
+  // comparison and the one the route supplies.
+  it("accepts an absolute url on the requesting origin when no site url is set", async () => {
+    const d = deps({
+      loadSiteUrl: vi.fn().mockResolvedValue(null),
+      loadDeclaration: vi
+        .fn()
+        .mockResolvedValue({ url: () => "https://site.example/about" }),
+    });
+
+    expect(await resolvePreviewRedirect(SCOPE, d, "https://site.example")).toBe(
+      "/about"
+    );
+  });
+
+  it("still refuses an absolute url on another origin", async () => {
+    const d = deps({
+      loadSiteUrl: vi.fn().mockResolvedValue(null),
+      loadDeclaration: vi
+        .fn()
+        .mockResolvedValue({ url: () => "https://elsewhere.example/x" }),
+    });
+
+    expect(
+      await resolvePreviewRedirect(SCOPE, d, "https://site.example")
+    ).toBeNull();
+  });
+
+  // The configured site URL wins where both exist: an admin may be proxied, and
+  // the site's declared address is the deliberate answer.
+  it("prefers the configured site url over the requesting origin", async () => {
+    const d = deps({
+      loadDeclaration: vi
+        .fn()
+        .mockResolvedValue({ url: () => "https://site.example/about" }),
+    });
+
+    expect(
+      await resolvePreviewRedirect(SCOPE, d, "https://proxy.example")
+    ).toBe("/about");
   });
 
   // With no site URL there is no origin to compare against, so the site-relative

@@ -975,6 +975,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     permissions: config.permissions,
     security: config.security,
     admin: config.admin,
+    // Carried explicitly, because this object is ENUMERATED rather than spread:
+    // a field the sanitizer does not name is dropped before anything downstream
+    // can read it, and the omission is silent — the option typechecks, the app
+    // sets it, and the value simply never arrives.
+    preview: config.preview,
     localization: config.localization
       ? normalizeLocalization(config.localization)
       : undefined,

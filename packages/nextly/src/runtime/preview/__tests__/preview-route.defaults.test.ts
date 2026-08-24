@@ -16,11 +16,15 @@ import { createPreviewRoute } from "../preview-route";
 const TEST_SECRET = "preview-route-test-secret-at-least-32-chars!!";
 
 const enable = vi.fn();
+const generationReads = vi.fn();
 const defaultRedirectTo = vi.fn().mockResolvedValue("/about");
 
 vi.mock("../preview-route-defaults", () => ({
   defaultSecret: () => TEST_SECRET,
-  defaultGeneration: () => Promise.resolve(1),
+  defaultGeneration: () => {
+    generationReads();
+    return Promise.resolve(1);
+  },
   defaultDraftMode: () => Promise.resolve({ enable }),
   defaultCookies: () => Promise.resolve({ get: () => undefined }),
   defaultRedirectTo: (...args: unknown[]) => defaultRedirectTo(...args),
@@ -57,7 +61,10 @@ describe("createPreviewRoute with no arguments", () => {
     await GET(request(await tokenFor()));
 
     expect(defaultRedirectTo).toHaveBeenCalledWith(
-      expect.objectContaining({ collection: "pages", entryId: "entry-1" })
+      expect.objectContaining({ collection: "pages", entryId: "entry-1" }),
+      // The origin serving THIS request, so a resolver can judge an absolute
+      // preview URL on an installation that has configured no site URL.
+      { requestOrigin: "https://site.example" }
     );
   });
 
@@ -85,7 +92,8 @@ describe("createPreviewRoute with no arguments", () => {
     const response = await GET(request(await tokenFor()));
 
     expect(redirectTo).toHaveBeenCalledWith(
-      expect.objectContaining({ collection: "pages", entryId: "entry-1" })
+      expect.objectContaining({ collection: "pages", entryId: "entry-1" }),
+      { requestOrigin: "https://site.example" }
     );
     expect(response.headers.get("location")).toBe("/overridden");
   });
@@ -103,8 +111,31 @@ describe("createPreviewRoute with no arguments", () => {
     expect(response.status).toBe(404);
   });
 
-  // Same argument for the revocation counter: a route reading the override
-  // rejects a token minted under a generation that is no longer current.
+  // Reading the revocation counter is a database query. Anything that resolves
+  // it before a signature has been checked lets unauthenticated traffic force a
+  // settings read by sending arbitrary bytes — on this endpoint, and on every
+  // content request that consults a preview cookie.
+  it("does not read the revocation generation for a malformed token", async () => {
+    generationReads.mockClear();
+    const { GET } = createPreviewRoute();
+
+    const response = await GET(request("not-a-token"));
+
+    expect(response.status).toBe(404);
+    expect(generationReads).not.toHaveBeenCalled();
+  });
+
+  it("still reads it for a token whose signature checks out", async () => {
+    generationReads.mockClear();
+    const { GET } = createPreviewRoute();
+
+    await GET(request(await tokenFor()));
+
+    expect(generationReads).toHaveBeenCalled();
+  });
+
+  // Same argument as the secret: a route reading the override rejects a token
+  // minted under a generation that is no longer current.
   it("lets an explicit generation override the default", async () => {
     const { GET } = createPreviewRoute({ generation: 2 });
 

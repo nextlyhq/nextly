@@ -123,6 +123,15 @@ function item(body: { item?: unknown }): Record<string, unknown> {
   return body.item as Record<string, unknown>;
 }
 
+/** Mint once for the default entry and hand back the envelope's payload. */
+async function mintedData(): Promise<Record<string, unknown>> {
+  return item(
+    await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    )
+  );
+}
+
 describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => {
   // The button that mints this is shown whether or not a collection declares a
   // preview URL, and that is deliberate — a draft is shareable either way. What
@@ -199,6 +208,36 @@ describe("mintPreviewLink: the link it hands back", () => {
     expect(item(body).url).toMatch(
       /^https:\/\/site\.example\/next\/preview\?token=/
     );
+  });
+
+  // A site URL may legitimately carry a path, a query or a fragment — the
+  // settings schema accepts all three — and concatenating the route onto the end
+  // puts it inside whichever component came last, producing a link that never
+  // reaches the route and carries no token.
+  it("keeps a site url's own query instead of appending the route inside it", async () => {
+    getSettings.mockResolvedValue({
+      siteUrl: "https://site.example/base?tenant=a",
+    });
+
+    const url = new URL(String((await mintedData()).url));
+
+    expect(url.pathname).toBe("/base/api/preview");
+    expect(url.searchParams.get("tenant")).toBe("a");
+    expect(url.searchParams.get("token")).toBeTruthy();
+  });
+
+  it("mounts the route under a site url served from a sub-path", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "https://site.example/site" });
+
+    expect(new URL(String((await mintedData()).url)).pathname).toBe(
+      "/site/api/preview"
+    );
+  });
+
+  it("returns a null url for a site url that cannot be parsed", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "not a url" });
+
+    expect(await mintedData()).toMatchObject({ url: null });
   });
 
   it("does not double the separator when the site url carries a trailing slash", async () => {

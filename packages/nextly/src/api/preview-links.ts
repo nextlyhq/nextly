@@ -88,6 +88,46 @@ function previewSigningSecret(): string {
 }
 
 /**
+ * The link a reviewer opens, built with URL semantics rather than by
+ * concatenating strings.
+ *
+ * A configured site URL may legitimately carry a path, a query or a fragment —
+ * the settings schema accepts all three. Gluing the route onto the end of one
+ * puts the path INSIDE whichever component came last: a site URL of
+ * `https://site.example/base?tenant=a` becomes
+ * `https://site.example/base?tenant=a/api/preview?token=…`, which never reaches
+ * the preview route and arrives carrying no token at all. Asking the URL parser
+ * to place the pathname and the parameter cannot make that mistake, and it
+ * keeps a site URL's own query intact rather than silently discarding it.
+ *
+ * `null` when no site URL is configured. A relative URL would be resolved
+ * against whatever origin the admin is served from, which is not the site's on
+ * any deployment that separates them.
+ */
+function previewLinkUrl({
+  siteUrl,
+  route,
+  token,
+}: {
+  siteUrl: string | null;
+  route: string;
+  token: string;
+}): string | null {
+  if (siteUrl === null) return null;
+  try {
+    const base = new URL(siteUrl);
+    // Joined as PATHS, so a site URL mounted under a sub-path keeps it.
+    base.pathname = `${base.pathname.replace(/\/+$/, "")}${route}`;
+    base.searchParams.set("token", token);
+    return base.toString();
+  } catch {
+    // An unparseable site URL is a configuration fault the editor cannot act
+    // on, and answering with a broken link would be worse than answering none.
+    return null;
+  }
+}
+
+/**
  * POST /api/nextly/preview-links
  *
  * Mints a link scoped to one entry. Auth: `update` on that collection.
@@ -200,12 +240,13 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // withholding it would break preview outright on a site that never set a
   // URL, rather than degrading the one thing that needs the host.
   const settings = await (await settingsService()).getSettings();
-  const url =
-    settings.siteUrl === null
-      ? null
-      : `${settings.siteUrl.replace(/\/+$/, "")}${resolvePreviewRoute(
-          container.get<NextlyServiceConfig>("config")?.preview
-        )}?token=${encodeURIComponent(token)}`;
+  const url = previewLinkUrl({
+    siteUrl: settings.siteUrl,
+    route: resolvePreviewRoute(
+      container.get<NextlyServiceConfig>("config")?.preview
+    ),
+    token,
+  });
 
   return respondMutation("Preview link created", {
     token,

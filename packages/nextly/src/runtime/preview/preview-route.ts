@@ -23,6 +23,19 @@ import {
  * @module runtime/preview/preview-route
  */
 
+/**
+ * What the route can tell a redirect resolver about the request in hand.
+ *
+ * Only the origin, and only because a resolver otherwise has no way to judge an
+ * ABSOLUTE preview URL on an installation that has configured no site URL: the
+ * origin serving this request is the site's, and it is the one honest thing to
+ * compare against.
+ */
+export interface PreviewRedirectContext {
+  /** The origin this request was served from. */
+  requestOrigin: string;
+}
+
 /** The cookie carrying the preview token for the rest of the session. */
 export const PREVIEW_SCOPE_COOKIE = "__nextly_preview";
 
@@ -68,7 +81,8 @@ export interface PreviewRouteConfig {
    * how an app says so without having to throw.
    */
   redirectTo?: (
-    scope: PreviewTokenScope
+    scope: PreviewTokenScope,
+    context: PreviewRedirectContext
   ) => string | null | Promise<string | null>;
   /**
    * Reads and enables Next's draft mode. Injected so the route is testable.
@@ -154,17 +168,20 @@ function siteRelativeTarget(target: string, requestUrl: string): string | null {
 async function verificationInputs(config: {
   secret?: string;
   generation?: number | (() => number | Promise<number>);
-}): Promise<{ secret: string; generation: number }> {
+}): Promise<{
+  secret: string;
+  generation: number | (() => number | Promise<number>);
+}> {
   const defaults = await import("./preview-route-defaults");
 
-  const generation =
-    config.generation === undefined
-      ? await defaults.defaultGeneration()
-      : typeof config.generation === "function"
-        ? await config.generation()
-        : config.generation;
-
-  return { secret: config.secret ?? defaults.defaultSecret(), generation };
+  // The generation is handed on UNRESOLVED. Reading it is a database query, and
+  // the verifier needs it only after a token's signature has checked out — so
+  // resolving it here would put a settings read in front of every request
+  // carrying arbitrary bytes, including one that is about to be refused.
+  return {
+    secret: config.secret ?? defaults.defaultSecret(),
+    generation: config.generation ?? defaults.defaultGeneration,
+  };
 }
 
 export function createPreviewRoute(config: PreviewRouteConfig = {}): {
@@ -200,7 +217,9 @@ export function createPreviewRoute(config: PreviewRouteConfig = {}): {
       try {
         const redirectTo =
           config.redirectTo ?? (await loadDefaults()).defaultRedirectTo;
-        target = await redirectTo(verified.scope);
+        target = await redirectTo(verified.scope, {
+          requestOrigin: new URL(request.url).origin,
+        });
       } catch {
         return refuse();
       }

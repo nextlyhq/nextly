@@ -40,7 +40,8 @@ export interface PreviewRedirectDeps {
    */
   loadEntry: (
     collection: string,
-    entryId: string
+    entryId: string,
+    locale: string | undefined
   ) => Promise<Record<string, unknown> | null>;
   /** The collection's preview declaration, from whichever authoring path wrote it. */
   loadDeclaration: (
@@ -68,10 +69,16 @@ export interface PreviewRedirectScope {
  */
 export async function resolvePreviewRedirect(
   scope: PreviewRedirectScope,
-  deps: PreviewRedirectDeps
+  deps: PreviewRedirectDeps,
+  requestOrigin?: string
 ): Promise<string | null> {
   const [entry, preview, siteUrl] = await Promise.all([
-    deps.loadEntry(scope.collection, scope.entryId),
+    // The locale the token names, not the site's default. A localized entry's
+    // slug lives in its companion row, so reading without one resolves the
+    // DEFAULT language's slug and builds a path to a different translation —
+    // while the draft gate goes on comparing the token's locale, so the
+    // destination refuses the very draft the link was minted for.
+    deps.loadEntry(scope.collection, scope.entryId, scope.locale),
     deps.loadDeclaration(scope.collection),
     deps.loadSiteUrl(),
   ]);
@@ -109,10 +116,16 @@ export async function resolvePreviewRedirect(
   //
   // With no site URL configured there is no origin to compare against at all,
   // which is why the branch above checks the path's SHAPE instead.
-  if (siteUrl === null) return null;
+  // With no site URL configured, the origin serving this request is the only
+  // honest thing to compare an absolute declaration against — and it is the
+  // right one, because this resolver answers a route running ON the site.
+  // Rejecting outright would mean a fresh installation whose collection returns
+  // an absolute same-origin URL still gets a 404.
+  const comparisonOrigin = siteUrl ?? requestOrigin;
+  if (comparisonOrigin === undefined) return null;
   try {
     const target = new URL(resolution.url);
-    const site = new URL(siteUrl);
+    const site = new URL(comparisonOrigin);
     if (target.origin !== site.origin) return null;
     return `${target.pathname}${target.search}${target.hash}`;
   } catch {
