@@ -92,7 +92,8 @@ function readVerdict(result: {
  * `status: "all"` is the part a plain read cannot express: a Single with a
  * publish lifecycle otherwise filters to published only, so one that has never
  * been published reports as missing — exactly the document these gates exist
- * for.
+ * for. The working draft is asked for alongside it, so what is authorized here
+ * is the view the caller will actually be handed rather than the live one.
  */
 export async function singleDocumentReadable(
   slug: string,
@@ -106,6 +107,12 @@ export async function singleDocumentReadable(
     ...(actor === undefined ? {} : { authenticatedScope: actor }),
     ...(locale === undefined ? {} : { locale }),
     status: "all",
+    // The DRAFT, because that is the view the token hands out. Authorizing the
+    // live document instead leaves a custom rule that allows the published
+    // values and denies the pending ones bypassed entirely: the probe says yes
+    // about a document the bearer never receives, and consumption reads the
+    // working draft trusted without re-running the rule.
+    includeWorkingDraft: true,
   });
   return readVerdict(result);
 }

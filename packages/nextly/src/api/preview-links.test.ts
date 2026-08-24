@@ -45,6 +45,14 @@ let previewConfig: { route?: string } | undefined;
  */
 const localizedSingles = new Set<string>();
 
+/**
+ * Which singles carry a Draft / Published lifecycle, for the test in hand.
+ *
+ * A single without one has no pending version to preview, so minting is refused
+ * — which every other Single test would otherwise trip over.
+ */
+const statusSingles = new Set<string>();
+
 vi.mock("../init", () => ({
   // Carries findSingle, because the Single mint path reads the document through
   // the Direct API rather than the collections handler.
@@ -84,7 +92,10 @@ vi.mock("../di", () => ({
     // The registry fallback the localized probe reaches when the authored
     // config has nothing to say about this slug.
     getSingleBySlug: (slug: string) =>
-      Promise.resolve({ localized: localizedSingles.has(slug) }),
+      Promise.resolve({
+        localized: localizedSingles.has(slug),
+        status: statusSingles.has(slug),
+      }),
   })),
 }));
 
@@ -128,6 +139,7 @@ beforeEach(() => {
   // Nothing is localized unless a test says so, which keeps the unscoped grant
   // correct for the singles that genuinely have one document.
   localizedSingles.clear();
+  statusSingles.clear();
   // The default: the caller can see the entry they named AND may edit it, so
   // the draft the token hands out is one they could already open. Tests about
   // the entry gate override whichever half they are about.
@@ -191,6 +203,7 @@ describe("mintPreviewLink for a Single", () => {
     findSingle.mockResolvedValue({ id: "homepage" });
     singleReadable.mockResolvedValue(true);
     singleEditable.mockResolvedValue(true);
+    statusSingles.add("homepage");
   });
 
   /**
@@ -285,6 +298,57 @@ describe("mintPreviewLink for a Single", () => {
         "homepage",
         expect.objectContaining({ locale: "fr" })
       );
+    });
+  });
+
+  /**
+   * A Single with no Draft / Published lifecycle has no pending version, so a
+   * link would hand its recipient the CURRENT private document through a route
+   * that reads it trusted. The admin already withholds the control; this is the
+   * same rule for a caller reaching the endpoint directly.
+   */
+  describe("a single with no draft lifecycle", () => {
+    it("refuses to mint at all", async () => {
+      statusSingles.delete("homepage");
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(409);
+    });
+
+    it("signs nothing when it refuses", async () => {
+      statusSingles.delete("homepage");
+
+      const body = await json(
+        await mintPreviewLink(post({ single: "homepage" }))
+      );
+
+      expect(JSON.stringify(body)).not.toContain("eyJ");
+    });
+
+    // Refused before the trusted read that builds the redirect, so nothing
+    // loads a document the caller is not going to be given.
+    it("refuses before loading the document", async () => {
+      statusSingles.delete("homepage");
+
+      await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(findSingle).not.toHaveBeenCalled();
+    });
+  });
+
+  // The registry and the authored config can disagree — a metadata sync that
+  // fails deliberately keeps the previous registry row — and the read path
+  // consumes the registry. Believing the config alone reports a localized
+  // Single as unlocalized and signs an all-locales token.
+  describe("when the authored config and the registry disagree", () => {
+    it("treats a Single the registry calls localized as localized", async () => {
+      localizedSingles.add("homepage");
+      previewConfig = undefined;
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(400);
     });
   });
 

@@ -25,7 +25,6 @@ import { container, getService } from "../../di";
 import {
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
-  type PreviewRedirectScope,
 } from "../../domains/collections/services/preview-redirect-resolver";
 import { resolvePreviewSiteUrl } from "../../domains/preview/site-url";
 import { NextlyError } from "../../errors/nextly-error";

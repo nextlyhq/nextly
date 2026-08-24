@@ -318,16 +318,27 @@ async function callerFor(
  * then the registry — because a code-first Single is synced into the registry
  * and the two must not answer differently about the same document.
  */
-async function singleIsLocalized(slug: string): Promise<boolean> {
+async function singleFacts(
+  slug: string
+): Promise<{ localized: boolean; hasStatus: boolean }> {
   const authored = container
     .get<NextlyServiceConfig>("config")
     ?.singles?.find(s => s.slug === slug);
-  if (authored !== undefined) return authored.localized === true;
-
   const stored = await getService("singleRegistryService").getSingleBySlug(
     slug
   );
-  return stored?.localized === true;
+
+  // EITHER source saying yes is taken as yes, rather than the authored config
+  // answering alone. The two can disagree — a per-Single metadata sync that
+  // fails deliberately retains the previous registry row — and the read path
+  // consumes the registry, so a config-first answer reports a Single as
+  // unlocalized while every read still treats it as localized. That direction
+  // is the dangerous one: it accepts an omitted locale and signs a token whose
+  // absent claim covers every translation.
+  return {
+    localized: authored?.localized === true || stored?.localized === true,
+    hasStatus: authored?.status === true || stored?.status === true,
+  };
 }
 
 /**
@@ -361,7 +372,31 @@ async function mintForSingle(
   // the endpoint directly. Refused rather than widened: authorizing every
   // translation to honour the request would hand out the grant this exists to
   // withhold.
-  if (locale === undefined && (await singleIsLocalized(single))) {
+  const facts = await singleFacts(single);
+
+  // A Single with no Draft / Published lifecycle has no pending state to
+  // preview, so a link would hand its recipient the CURRENT private document
+  // rather than a draft — through a route that reads it trusted. The admin
+  // already withholds the control for exactly this; refusing here is the same
+  // rule for a caller that reaches the endpoint directly.
+  if (!facts.hasStatus) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message:
+        "This single has no draft/published lifecycle, so there is no " +
+        "pending version to preview.",
+      logContext: {
+        reason: "preview-link-single-has-no-status",
+        remedy:
+          "Add `status: true` to the single. Without it every save is live, " +
+          "so a preview link would show the published document rather than " +
+          "an unpublished change.",
+        single,
+      },
+    });
+  }
+
+  if (locale === undefined && facts.localized) {
     throw NextlyError.invalidInput({
       message:
         "A localized single needs a locale, so the link grants one " +
