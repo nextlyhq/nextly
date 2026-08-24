@@ -16,15 +16,37 @@
  * could reach it is for the site to render what the browser sent — which is
  * content that never passed the field-level read rules the draft route applies.
  *
+ * Reaching that draft needs a CREDENTIAL, not just an address. The site renders
+ * on its own origin, where the admin's session cookie does not travel and where
+ * the admin cannot set a cookie, so a bare URL arrives unauthenticated: the
+ * draft gate refuses it and the reader gets the published page, or a 404 where
+ * nothing is published yet. A signed preview token is the handoff, and it is
+ * the same one a shareable link uses — minted here for the editor themself,
+ * scoped to the one document, and short-lived because it is spent immediately
+ * rather than sent to anyone.
+ *
  * @module hooks/useEntryPreview
  */
 
 import { useCallback, useMemo } from "react";
 
+import { previewLinkApi } from "@admin/services/previewLinkApi";
 import {
   previewUrlApi,
   type PreviewUrlResolution,
 } from "@admin/services/previewUrlApi";
+
+/**
+ * How long a token minted for the editor's own preview stays valid.
+ *
+ * A quarter of the server's sharing default, because the two are spent
+ * differently: a shared link has to survive sitting in somebody's inbox, while
+ * this one is redeemed by the tab that is opening as it is issued. Long enough
+ * to read the page and follow a link or two; short enough that a token left in
+ * browser history stops being a key well before the day is out. Clicking
+ * Preview again mints a fresh one.
+ */
+const SELF_PREVIEW_TTL_SECONDS = 15 * 60;
 
 // ============================================================================
 // Types
@@ -144,6 +166,23 @@ type PreviewOutcome =
   | { kind: "close" };
 
 /**
+ * The document a preview could be authorized for, or `null` when there is none.
+ *
+ * The id is required as well as the row, and they are answered together because
+ * neither is usable alone: a draft is authorized by naming ONE document, so an
+ * entry that has never been saved has no name to give — and the caller needs
+ * both halves narrowed before it can ask for either.
+ */
+function previewTarget(
+  entry: Record<string, unknown> | null | undefined
+): { entry: Record<string, unknown>; entryId: string } | null {
+  if (!entry) return null;
+  const id = entry.id;
+  if (typeof id !== "string" || id === "") return null;
+  return { entry, entryId: id };
+}
+
+/**
  * Claims the browsing context the preview will land in.
  *
  * Its own function because everything here is forced by how browsers treat a
@@ -183,6 +222,44 @@ function outcomeOf(resolution: PreviewUrlResolution): PreviewOutcome {
   // slug, or ask an administrator to set the site URL.
   if (resolution.status === "notConfigured") return { kind: "close" };
   return { kind: "report", reason: resolution.status };
+}
+
+/**
+ * Turns "there is a page" into "there is a page this tab may see as a draft".
+ *
+ * The resolver answers only WHERE, and a bare address is not enough: the draft
+ * gate on the site refuses an unauthenticated request, so navigating to it
+ * shows the published page or a 404. A token is what carries draft mode across
+ * the origin boundary.
+ *
+ * Minted only once the address is known, so an entry with no page yet is never
+ * the reason a credential exists. That ordering is the reason the cheap
+ * read-only resolve still runs first rather than being folded into the mint.
+ *
+ * The minted URL replaces the resolved one rather than being added to it: the
+ * preview route derives the destination from the token's own scope, so the two
+ * cannot disagree about which document is being opened.
+ */
+async function authorizedOutcome(
+  resolution: PreviewUrlResolution,
+  collection: string,
+  entryId: string
+): Promise<PreviewOutcome> {
+  const outcome = outcomeOf(resolution);
+  if (outcome.kind !== "open") return outcome;
+
+  const link = await previewLinkApi.mint({
+    collection,
+    entryId,
+    ttlSeconds: SELF_PREVIEW_TTL_SECONDS,
+  });
+
+  // Assembled on the server or not at all: the site's address lives in settings
+  // the sharing roles cannot read. A null URL is the same missing setting the
+  // resolver reports as `noSiteUrl`, so it is reported as that rather than as a
+  // failure the editor cannot place.
+  if (link.url === null) return { kind: "report", reason: "noSiteUrl" };
+  return { kind: "open", url: link.url };
 }
 
 /**
@@ -267,7 +344,8 @@ export function useEntryPreview({
    * does it open in, and what did the server say to do with it.
    */
   const openPreview = useCallback(async () => {
-    if (!entry) {
+    const target = previewTarget(entry);
+    if (target === null) {
       onUnavailable?.("unavailable");
       return;
     }
@@ -282,9 +360,13 @@ export function useEntryPreview({
     try {
       const resolution = await previewUrlApi.resolve({
         collection: collection.name,
-        entry,
+        entry: target.entry,
       });
-      settle(claimed.target, outcomeOf(resolution), onUnavailable);
+      settle(
+        claimed.target,
+        await authorizedOutcome(resolution, collection.name, target.entryId),
+        onUnavailable
+      );
     } catch {
       // A failed request is reported like any other refusal, so the claimed tab
       // is closed on this path too rather than left blank.
