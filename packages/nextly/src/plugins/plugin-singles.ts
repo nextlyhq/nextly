@@ -75,14 +75,13 @@ import { normalizeDbTimestamp } from "../shared/lib/date-formatting";
  * Those three survive serialization and are what a consumer looking for a
  * particular field type needs.
  *
- * Deliberately NO index signature. One was tried and removed: it made every
- * remaining option reachable as `unknown`, which reads as generous and is the
- * opposite — a closed interface is not assignable to one carrying an index
- * signature, so the whole listing then needed an `as unknown as` to compile,
- * and a double assertion is exactly the thing that would have let the
- * overstated `FieldConfig` through in the first place. A consumer needing an
- * option beyond these three narrows the value itself, at the point where it
- * knows which field type it is holding and what that option should be.
+ * Deliberately no index signature. Adding one to keep the remaining options
+ * reachable as `unknown` reads as generous and costs more than it gives: a
+ * closed interface is not assignable to a type carrying an index signature, so
+ * the projection would need a double assertion to compile — and a double
+ * assertion is what lets an overstated type through unnoticed. A consumer
+ * needing an option beyond these three narrows the value itself, where it knows
+ * which field type it holds and what that option should be.
  */
 export interface SerializedFieldConfig {
   /**
@@ -211,17 +210,26 @@ export interface PluginSinglesService {
  * in a `+05` process while agreeing exactly under UTC — so a second
  * implementation passes every test written on a UTC machine.
  *
- * What IS done here is validating the result. The canonical function ends with
- * a `String(value)` fallback for a value that is neither Date nor string, so an
- * object arrives back as the literal text `[object Object]` — a string that
- * looks like data. This surface publishes `string | null`, and a caller cannot
- * tell that apart from a timestamp; null it can. That is a check on the answer
- * rather than a second way of computing it.
+ * What IS done here is checking the result against the format this surface
+ * publishes. The canonical function ends in a `String(value)` fallback for a
+ * value that is neither `Date` nor string, so an object comes back as the text
+ * `[object Object]` and the number `2026` comes back as `"2026"`. Both are
+ * strings a caller reads as a timestamp, and the second is worse than the
+ * first: `Date.parse("2026")` SUCCEEDS, parsing it as a year, so a check that
+ * only asked whether the value was parseable let it through.
+ *
+ * Matching the shape rather than testing parseability is what separates those.
+ * Every path through the canonical function that produced a real answer emits
+ * ISO UTC — `toISOString()` from the `Date` branch and from the offset-bearing
+ * string branch, and `${normalized}Z` from the naive-string branch, which
+ * replaces the space with `T` first. Only the fallback does not.
  */
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
 function publishedTimestamp(value: unknown): string | null {
   const normalized = normalizeDbTimestamp(value);
   if (normalized === null) return null;
-  return Number.isNaN(Date.parse(normalized)) ? null : normalized;
+  return ISO_UTC.test(normalized) ? normalized : null;
 }
 
 function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {

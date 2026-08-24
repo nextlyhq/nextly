@@ -121,11 +121,11 @@ describe("listing Singles creates nothing", () => {
   } as unknown as Logger;
 
   it("issues only read operations against the database", async () => {
-    // The boundary the founder ruling asked for, in place of a docblock
-    // promising it. A read-shaped call on the Single path is not free of side
-    // effects in general — the readable half of the preview check creates a
-    // Single's row when absent — so a plugin walking every Single to build an
-    // index would materialise every Single in the app while appearing to work.
+    // Listing must not bring Single content rows into existence. A read-shaped
+    // call on the Single path is not free of side effects in general: the
+    // readable half of the preview check creates a Single's row when absent, so
+    // a plugin walking every Single would materialise every Single in the app
+    // while appearing to work.
     const { adapter, ops } = recordingAdapter();
     const registry = new SingleRegistryService(adapter, silentLogger);
 
@@ -368,5 +368,51 @@ describe("a Single with no description", () => {
     // Asserted separately: `toBeUndefined` passes for a missing key AND for a
     // key holding undefined, and only one of those is what the type says.
     expect(record!.description).not.toBeNull();
+  });
+});
+
+describe("a timestamp the canonical normalizer cannot read", () => {
+  async function listWith(createdAt: unknown) {
+    const registry = {
+      listSingles: async () => ({
+        data: [
+          {
+            id: "s1",
+            slug: "homepage",
+            label: "Homepage",
+            fields: [],
+            source: "code",
+            createdAt,
+            updatedAt: null,
+          },
+        ],
+        total: 1,
+      }),
+    } as unknown as SingleRegistryService;
+    return (await wrapSinglesForPlugin(registry).list()).data[0]!;
+  }
+
+  it("rejects a number, which stringifies to a parseable non-timestamp", async () => {
+    // The case a parseability check cannot catch. `normalizeDbTimestamp`
+    // stringifies a value that is neither Date nor string, so `2026` becomes
+    // `"2026"` — and `Date.parse("2026")` SUCCEEDS, reading it as a year. A
+    // guard asking only "does this parse" publishes `"2026"` as a timestamp.
+    expect(Number.isNaN(Date.parse("2026"))).toBe(false);
+
+    expect((await listWith(2026)).createdAt).toBeNull();
+  });
+
+  it("rejects an object, which stringifies to [object Object]", async () => {
+    expect((await listWith({ nested: true })).createdAt).toBeNull();
+  });
+
+  it("still accepts the naive datetime shape the drivers produce", async () => {
+    // The negative control for the format check: a `YYYY-MM-DD HH:MM:SS` column
+    // value is what MySQL and Postgres hand back, and the canonical function
+    // turns it into ISO by replacing the space and appending `Z`. A stricter
+    // check than the formats that function can emit would reject real data.
+    const record = await listWith("2026-01-02 03:04:05");
+
+    expect(record.createdAt).toBe("2026-01-02T03:04:05Z");
   });
 });

@@ -2713,15 +2713,13 @@ async function initializePlugins(
    * A RECORD keyed by the name rather than a switch, because that makes the
    * mapping exhaustive by CONSTRUCTION: a name added to
    * `PLUGIN_SERVICE_NAMES` with no entry here fails to compile at this
-   * declaration, naming the missing key. A switch could only report it from a
-   * `default` arm, and before that it reported nothing at all — the context
-   * asked for a name this resolver did not handle, TypeScript saw nothing
-   * because the resolver is passed through a cast, and the mismatch surfaced
-   * as `Unknown service` when a plugin first read the property.
+   * declaration, naming the missing key. A `switch` can only report a missing
+   * name from its `default` arm, which is a runtime throw inside a running
+   * application rather than a build failure.
    *
-   * Each entry is a thunk so nothing is resolved until asked for. Several of
-   * these are lazy on the context side for the same reason, and eager lookups
-   * here would undo that.
+   * Each entry is a thunk so nothing is constructed until asked for. Several
+   * of these are lazy on the context side for the same reason, and eager
+   * lookups here would undo that.
    */
   const pluginServiceResolvers: Record<
     PluginServiceName,
