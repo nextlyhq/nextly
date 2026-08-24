@@ -20,9 +20,22 @@
  * missing from the list that preceded this, and a competing wrapper in either
  * would have gone unseen.
  *
- * The remaining blind spot is `UNMARKED`: a form body that renders no part of
- * the kit cannot be discovered, so it is named. That list is checked against
- * the derivation, so it cannot quietly hold files that no longer need naming.
+ * Two blind spots, both named rather than left to be found.
+ *
+ * `UNMARKED` is the first: a form body that renders no part of the kit cannot
+ * be discovered, so it is listed. That list is checked against the derivation,
+ * so it cannot quietly hold files that no longer need naming.
+ *
+ * The second is a measured PAGE that renders no part of the kit itself — one
+ * that renders `<WebhookForm>` and nothing else, where the element carrying a
+ * competing width would be the page's own wrapper. Marking such a page by its
+ * `<PageContainer width=` widens the population from form bodies to whole
+ * files, which then meets every toolbar and portalled dialog in them: measured,
+ * that produces six legitimate `max-w-*` uses across four settings pages, and
+ * keeping it green needs an exemption list that grows. The precise form of the
+ * check is the DIRECT CHILDREN of the measured container, and it belongs with
+ * the change that converts the remaining form pages, where there are real
+ * measured hosts to write it against.
  *
  * The negative-control block below exists because the check's own pattern
  * has a shape that could over-report: the shared field-half width utility in
