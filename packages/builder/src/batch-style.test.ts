@@ -187,12 +187,107 @@ describe("the ops that change a whole selection", () => {
     expect(sizesOf(applied.document)).toEqual([undefined, undefined]);
   });
 
-  it("reports a refused block rather than abandoning the batch", () => {
+  it("carries a warning the value layer reported about an ACCEPTED value", () => {
     /*
-     * Six blocks of four types do not accept the same properties, so refusing
-     * the whole gesture because one block cannot take a value would make the
-     * surface useless on exactly the mixed selections it exists for. The block
-     * that cannot take it is NAMED, and the rest still move.
+     * A warning is the validator explaining something about a value it took —
+     * here a token reference the supplied table does not define, which renders
+     * as nothing. `style-values` carries these for the reason its own comment
+     * gives: a surface that dropped them presents an accepted-with-reservations
+     * value as an unremarkable one. A batch that swallowed them would be the
+     * same edit explaining less about itself the more blocks it touched.
+     */
+    const { ops, refused, warnings } = batchStyleWriteOps(
+      [node("a"), node("b")],
+      AT,
+      { $token: "space.nosuch" } as never,
+      { tokens: { kindOf: () => undefined } }
+    );
+
+    // Population before the property: the write was ACCEPTED, so this is a
+    // warning about a value that is being stored rather than a refusal wearing
+    // a different name.
+    expect(refused).toBeUndefined();
+    expect(ops).toHaveLength(2);
+    expect(warnings.length).toBeGreaterThan(0);
+
+    /*
+     * Reported ONCE for a selection of two, not once per block. Every node is
+     * asked about the same value under the same policy, so repeating it is
+     * noise — and the count is what would silently grow with the selection if
+     * the deduplication were dropped.
+     */
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("keeps two findings that differ only in WHERE they are", () => {
+    /*
+     * The deduplication above is keyed on every field an issue carries, and
+     * this is why the key cannot be narrowed to `code`. A composite value can
+     * warn twice with the identical code and message about different
+     * sub-values — `unknown-token` at `/padding/blockStart` and at
+     * `/padding/blockEnd` — and merging those tells an author about one of the
+     * two tokens that will render as nothing.
+     *
+     * Measured rather than reasoned: keying on `code` alone leaves ONE warning
+     * here, and this assertion is what fails when it does.
+     */
+    const { refused, warnings } = batchStyleWriteOps(
+      [node("a"), node("b")],
+      { ...AT, property: "padding" },
+      {
+        blockStart: { $token: "space.a" },
+        blockEnd: { $token: "space.b" },
+      } as never,
+      { tokens: { kindOf: () => undefined } }
+    );
+
+    expect(refused).toBeUndefined();
+    // Both survive the selection AND the deduplication: two sub-values, two
+    // findings, however many blocks were asked.
+    expect(warnings).toHaveLength(2);
+    expect(warnings.map(w => w.path).sort()).toEqual([
+      "/padding/blockEnd",
+      "/padding/blockStart",
+    ]);
+    // The population that makes the assertion above about the KEY rather than
+    // about the codes: they are identical, so only the path separates them.
+    expect(new Set(warnings.map(w => w.code)).size).toBe(1);
+  });
+
+  it("reports no warning for a token the site DOES define", () => {
+    /*
+     * The control that makes the assertion above evidence. Without it, a batch
+     * layer that fabricated a warning for every write — or one whose fixture
+     * warns for some unrelated reason — passes exactly the same way.
+     */
+    const { refused, warnings } = batchStyleWriteOps(
+      [node("a"), node("b")],
+      AT,
+      { $token: "space.large" } as never,
+      { tokens: { kindOf: () => "dimension" } }
+    );
+
+    expect(refused).toBeUndefined();
+    expect(warnings).toEqual([]);
+  });
+
+  it("refuses the WHOLE selection, naming no block, when the value cannot be used", () => {
+    /*
+     * All-or-nothing, and the name of this test used to say the opposite.
+     *
+     * It described the shape the module was first designed with — the refusing
+     * block NAMED while the rest still moved — which is a partial batch, and
+     * the implementation deliberately does not do it. The assertions below
+     * always matched the real contract; only the explanation was left behind,
+     * and a maintainer following it would have reintroduced partial writes
+     * against a suite that kept passing.
+     *
+     * Why all-or-nothing is right here: every node is asked the SAME question,
+     * because `styleWriteOp` refuses on the VALUE and the POLICY rather than on
+     * anything about the receiving block. So a second answer would repeat the
+     * first, and writing the blocks that agreed while the rest did not would
+     * leave a selection half-styled from one gesture — with one undo entry that
+     * only takes back the half that landed.
      */
     /*
      * `padding` is a composite — four sides — so a bare string is refused by the

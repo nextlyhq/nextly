@@ -466,3 +466,23 @@ export {
   type StyleInspectionOptions,
   type StyleSection,
 } from "./style-inspector";
+
+/**
+ * What a SELECTION of blocks shares at one style address, and what changes it.
+ *
+ * The model half of batch editing, exported for the same reason the style
+ * inspection above is: a host drawing its own multi-selection surface — or an
+ * agent asked "do these six blocks agree on this padding" — needs the answer
+ * this package already computes rather than a second implementation of it. The
+ * shipped panel is behind the client banner in `./shell`.
+ *
+ * Headless by construction: it answers what a shared value MEANS and what ops
+ * would change it, and knows nothing about how either is drawn.
+ */
+export {
+  sharedValueAt,
+  batchStyleWriteOps,
+  batchStyleClearOps,
+  type SharedValue,
+  type BatchStyleWrite,
+} from "./batch-style";
