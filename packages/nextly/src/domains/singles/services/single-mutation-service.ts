@@ -45,7 +45,10 @@ import {
   isSuperAdminContext,
 } from "../../../services/access";
 import { expansionAccess } from "../../../services/collections/trust-bound";
-import { assumedBound } from "../../../services/collections/trust-grant";
+import {
+  assumedBound,
+  narrows,
+} from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import {
@@ -2373,7 +2376,7 @@ export class SingleMutationService extends BaseService {
           // before the narrowed override is consulted — so the bound would be
           // defeated by a status that was never asked for.
           status:
-            options.overrideAccess === true && options.trusted === undefined
+            options.overrideAccess === true && !narrows(options.trusted)
               ? "all"
               : undefined,
         }

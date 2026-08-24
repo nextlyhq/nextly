@@ -59,6 +59,30 @@ export function boundReaches(bound: TrustBound, collection: string): boolean {
 }
 
 /**
+ * Whether a bound actually NARROWS the bypass it accompanies.
+ *
+ * Distinct from "a bound is present", and the distinction is the whole reason
+ * this exists. Two values mean *reaches everything* — an absent bound, and
+ * {@link TRUSTS_EVERY_COLLECTION} — and only the second is a value. Deriving
+ * narrowing from presence therefore makes the constant behave differently from
+ * the absence it was introduced to replace, which is the one thing it must
+ * never do.
+ *
+ * The difference is observable rather than theoretical. `expansionStatusScope`
+ * withholds a widened lifecycle from a narrowed caller, so a read stating
+ * `TRUSTS_EVERY_COLLECTION` would stop inheriting `status: "all"` into its
+ * expansions while the identical read omitting the bound kept it — the same
+ * caller, the same intent, different rows.
+ *
+ * Asked here rather than at each site because the answer is needed at eleven of
+ * them across four services, and a copy of it drifts silently: two call sites
+ * would then disagree about which reads see unpublished rows.
+ */
+export function narrows(bound: TrustBound | undefined): boolean {
+  return bound !== undefined && bound !== TRUSTS_EVERY_COLLECTION;
+}
+
+/**
  * The bound to run an expansion under when the caller named none.
  *
  * Absence is a real state at the options layer and cannot be legislated away

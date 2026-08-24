@@ -59,8 +59,9 @@ import {
 } from "../../../services/collections/trust-bound";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
-  assumedBound,
   TRUSTS_EVERY_COLLECTION,
+  assumedBound,
+  narrows,
 } from "../../../services/collections/trust-grant";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
@@ -1023,7 +1024,7 @@ export class SingleQueryService extends BaseService {
         status: expansionStatusScope({
           status: options.status,
           overrideAccess: options.overrideAccess,
-          bounded: options.trusted !== undefined,
+          bounded: narrows(options.trusted),
         }),
       },
       strict,
@@ -1094,7 +1095,7 @@ export class SingleQueryService extends BaseService {
             status: expansionStatusScope({
               status: options.status,
               overrideAccess: options.overrideAccess,
-              bounded: options.trusted !== undefined,
+              bounded: narrows(options.trusted),
             }),
           },
           // Read errors otherwise become empty component values, which reads to a

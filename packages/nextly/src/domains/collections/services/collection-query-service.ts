@@ -61,7 +61,10 @@ import type {
   ComponentFieldFilter,
 } from "../../../services/collections/query-operators";
 import type { TrustBound } from "../../../services/collections/trust-grant";
-import { assumedBound } from "../../../services/collections/trust-grant";
+import {
+  assumedBound,
+  narrows,
+} from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -1629,7 +1632,7 @@ export class CollectionQueryService extends BaseService {
             status: expansionStatusScope({
               status: params.status,
               overrideAccess: params.overrideAccess,
-              bounded: params.trusted !== undefined,
+              bounded: narrows(params.trusted),
             }),
           }
         );
@@ -1679,7 +1682,7 @@ export class CollectionQueryService extends BaseService {
               status: expansionStatusScope({
                 status: params.status,
                 overrideAccess: params.overrideAccess,
-                bounded: params.trusted !== undefined,
+                bounded: narrows(params.trusted),
               }),
             },
           });
@@ -2869,7 +2872,7 @@ export class CollectionQueryService extends BaseService {
           status: expansionStatusScope({
             status: params.status,
             overrideAccess: params.overrideAccess,
-            bounded: params.trusted !== undefined,
+            bounded: narrows(params.trusted),
           }),
         }
       );
@@ -2911,7 +2914,7 @@ export class CollectionQueryService extends BaseService {
             status: expansionStatusScope({
               status: params.status,
               overrideAccess: params.overrideAccess,
-              bounded: params.trusted !== undefined,
+              bounded: narrows(params.trusted),
             }),
           },
         });
@@ -3109,7 +3112,7 @@ export class CollectionQueryService extends BaseService {
               status: expansionStatusScope({
                 status: params.status,
                 overrideAccess: params.overrideAccess,
-                bounded: params.trusted !== undefined,
+                bounded: narrows(params.trusted),
               }),
             };
             draftEntry = await this.relationshipService.expandRelationships(

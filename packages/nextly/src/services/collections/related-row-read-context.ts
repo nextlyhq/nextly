@@ -60,18 +60,15 @@ export interface RelatedRowReadContext {
    * its trusted set up front, and anything outside that set must be read as the
    * audience would read it.
    *
-   * **Required, and not nullable.** This was previously
-   * `((collection: string) => boolean) | undefined`, where `undefined` meant
-   * unbounded — so a context whose author had weighed the question and one
-   * whose author never saw it were the same value, and only the second was a
-   * bug. The two are now different words. Nothing about the runtime changed:
-   * `TRUSTS_EVERY_COLLECTION` reaches every target, exactly as the absent value
-   * used to.
+   * **Required, and not nullable.** A nullable bound would give one value to
+   * two different states — a context whose author weighed which collections the
+   * bypass should reach and answered "all of them", and one whose author never
+   * saw the question. Only the second is a defect, and nothing could tell them
+   * apart. `TRUSTS_EVERY_COLLECTION` is the first of those states said out loud;
+   * it reaches every target, so no read behaves differently for saying it.
    *
-   * The requirement is what does the work, not the constant. A route that
-   * forgets its bound no longer compiles, which is the failure mode this
-   * package has actually shipped — twice, on Singles and on collections, caught
-   * by a reviewer both times rather than by the type.
+   * The requirement is what does the work, not the constant: a context that
+   * does not answer the question does not compile.
    */
   trusted: TrustBound;
 

@@ -24,6 +24,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
 import type { TrustBound } from "../../../services/collections/trust-grant";
+import { narrows } from "../../../services/collections/trust-grant";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
@@ -252,9 +253,7 @@ export class CollectionBulkService extends BaseService {
       // it into every rejected target — whose drafts would then be COPIED into
       // the new row, outliving the refusal as data.
       const sourceStatus =
-        params.overrideAccess && params.trusted === undefined
-          ? "all"
-          : undefined;
+        params.overrideAccess && !narrows(params.trusted) ? "all" : undefined;
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,

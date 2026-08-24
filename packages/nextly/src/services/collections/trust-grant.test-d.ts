@@ -7,9 +7,9 @@
  * collections their bypass should reach and decided "all of them", and an author
  * who never saw the question. Both wrote nothing, and only the second was a bug.
  *
- * The failure that motivates it has shipped twice — the Singles route and the
- * collection routes both reached related rows with an unbounded bypass — and a
- * reviewer caught it both times. A reviewer is not a boundary.
+ * The failure it prevents is a route reaching related rows with an unbounded
+ * bypass: the route names one collection, the expansion reads the others, and
+ * nothing in the type obliges the caller to say whether that is intended.
  *
  * Every negative below is asked as a conditional type rather than with
  * `@ts-expect-error`, which suppresses ANY error on the line that follows and
