@@ -1171,6 +1171,28 @@
  * where the cap does not bind.
  */
 @layer components {
+  /* A form section's vertical rhythm, applied to every DIRECT child.
+   *
+   * Plain CSS rather than a Tailwind utility on the element, for two reasons
+   * that both bit during this change. The parenthesised custom-property
+   * shorthand is v4-only, so a consumer compiling through the published v3
+   * `tailwind-preset` would emit no rule at all and the section would render
+   * flush again — silently, since nothing about the markup would look wrong.
+   * And an arbitrary-value token is EXTRACTED from any scanned file, including
+   * from a comment or a test string that merely names it, which is how a
+   * malformed variant of this rule once reached the compiled stylesheet and
+   * failed the whole sheet.
+   *
+   * A rule shipped in the theme has neither problem: it is the same CSS under
+   * both Tailwind majors and there is no token for a scanner to find.
+   *
+   * Children must not pad themselves. The two are additive, so a row carrying
+   * its own `py-*` doubles the rhythm on exactly the sections that were already
+   * correct. */
+  .nx-form-section-rows > * {
+    padding-block: var(--nx-field-gap);
+  }
+
   .nx-page-shell {
     display: grid;
     /* The outer tracks are `minmax(gutter, 1fr)` rather than a fixed gutter so

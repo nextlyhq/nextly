@@ -84,15 +84,16 @@ describe("FormSection", () => {
     );
 
     const rows = container.querySelector('[data-slot^="card."] > div');
-    // Tailwind v4's parenthesis syntax for a custom property. The
-    // square-bracket `var()` spelling is a v3 form that v4 changed, and it
-    // compiles here to a literal `padding-block: var(...)` — invalid CSS that
-    // fails the whole stylesheet rather than dropping one rule, so the spelling
-    // is part of the contract and not a formatting preference.
-    expect(rows?.className).toContain("[&>*]:py-(--nx-field-gap)");
-    // Assembled rather than written whole, for the reason above: a complete
-    // arbitrary-value token anywhere in a scanned file becomes a real rule.
-    expect(rows?.className).not.toContain(`py-${"["}var(`);
+    // The rhythm is a plain CSS rule in the theme, keyed off this class, not a
+    // Tailwind utility on the element. That is what keeps it identical under the
+    // v3 preset this package also publishes — a v4-only spelling would emit no
+    // rule there and the section would render flush again with nothing to see.
+    expect(rows?.className).toContain("nx-form-section-rows");
+
+    // No arbitrary-value utility for the padding, in either Tailwind spelling.
+    // Both are version-dependent, and one of them is extracted by the scanner
+    // from any file that merely names it.
+    expect(rows?.className).not.toMatch(/py-[[(]/);
   });
 
   it("uses the shared Card for its container, not a hand-rolled one", () => {

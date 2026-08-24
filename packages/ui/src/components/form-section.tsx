@@ -61,13 +61,16 @@ export function FormSection({
             two fields, because they are the same measurement seen twice. Two
             tokens could drift apart with nothing to notice.
 
-            The value uses Tailwind v4's PARENTHESIS syntax for a custom
-            property. The square-bracket form containing `var()` is a v3 spelling
-            that v4 changed because it became ambiguous, and here it compiled to
-            a literal `padding-block: var(...)` — invalid CSS that took the whole
-            admin stylesheet down with it rather than merely dropping this
-            declaration. */}
-        <div className="divide-y divide-foreground/10 px-6 [&>*]:py-(--nx-field-gap)">
+            The rhythm itself is a plain CSS rule shipped in the theme
+            (`.nx-form-section-rows`) rather than a Tailwind utility here, so it
+            compiles identically under the v3 preset this package also publishes
+            and leaves no arbitrary-value token for a scanner to extract from a
+            file that merely names it.
+
+            A child must not pad itself: the two are additive, so a row carrying
+            its own `py-*` doubles the rhythm on exactly the sections that were
+            already correct. */}
+        <div className="nx-form-section-rows divide-y divide-foreground/10 px-6">
           {children}
         </div>
       </Card>

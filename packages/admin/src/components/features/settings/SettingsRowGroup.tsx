@@ -33,7 +33,7 @@ export function SettingsRowGroup({
     <div
       role="group"
       aria-labelledby={labelId}
-      className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 py-5 items-start"
+      className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 items-start"
     >
       <div className="flex flex-col">
         <span id={labelId} className="text-sm font-semibold text-foreground">

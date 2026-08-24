@@ -106,7 +106,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
           >
             {/* Top section: Role Details (full width) */}
             <SettingsSection label="Role Details">
-              <div className="flex flex-col gap-6 py-5">
+              <div className="flex flex-col gap-6">
                 <RoleBasicInfo
                   form={form}
                   isEditMode={isEditMode}
@@ -130,7 +130,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
 
             {/* Bottom section: Permissions (full width) */}
             <SettingsSection label="Permissions">
-              <div className="py-5 -mx-6">
+              <div className="-mx-6">
                 <p className="px-6 text-sm text-muted-foreground mb-4">
                   Choose what this role can do. Each tab groups a kind of
                   resource, and each column is an action it allows.

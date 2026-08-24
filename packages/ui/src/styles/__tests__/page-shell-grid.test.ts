@@ -43,6 +43,15 @@ describe("page shell stylesheet", () => {
     expect(flat).toContain("--nx-measure-wide: 72rem");
   });
 
+  it("ships the section rhythm as a rule, not only as a token", () => {
+    // The token alone is inert. The rule that spends it has to live in the theme
+    // too, or a consumer on the v3 preset compiles the component and gets no
+    // padding — the token resolves fine and nothing applies it.
+    expect(flat).toContain(
+      ".nx-form-section-rows > * { padding-block: var(--nx-field-gap); }"
+    );
+  });
+
   it("declares the section rhythm token FormSection reads", () => {
     // A missing custom property does not error: the padding utility that reads
     // it resolves to nothing and the section silently loses its rhythm again,

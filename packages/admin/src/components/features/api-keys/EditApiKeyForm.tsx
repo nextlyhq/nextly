@@ -77,7 +77,7 @@ function ReadOnlyRow({
   value: ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 py-5 items-start">
+    <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 items-start">
       <div className="flex flex-col">
         <span className="text-sm font-semibold text-foreground">{label}</span>
         {description && (
