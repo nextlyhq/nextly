@@ -264,6 +264,258 @@ describe("walkNodes / findNode / locateNode", () => {
   });
 });
 
+describe("a forest whose slots form a cycle", () => {
+  // A cycle reaches these primitives the same way every other malformed shape
+  // does: persisted documents are not required to have been validated, and an
+  // in-process producer can build one directly. None of these crashed on a
+  // document an author could make — they crashed on one the system admits.
+  //
+  // Measured before the fix, on the built package: `treeDepth` did not throw,
+  // it SPUN, which is the failure nobody attributes correctly. The rest exited
+  // with `RangeError: Maximum call stack size exceeded`.
+  function cyclic(): BlockNode[] {
+    const parent = makeNode("core/box", 1);
+    const child = makeNode("core/box", 1, {}, { main: [parent] });
+    parent.slots = { main: [child] };
+    return [parent];
+  }
+
+  it("counts a cyclic forest instead of exhausting its own queue", () => {
+    expect(countNodes(cyclic())).toBe(3);
+  });
+
+  it("measures depth instead of spinning forever", () => {
+    expect(treeDepth(cyclic())).toBe(3);
+  });
+
+  it("returns undefined for an ABSENT id rather than overflowing", () => {
+    // The half that hid this: a lookup for an id that is PRESENT returns before
+    // it can loop, so only a miss fails — and a miss is the ordinary case for
+    // any lookup that can have one.
+    // One forest, not two: `cyclic()` mints fresh ids per call, so an id taken
+    // from a second build is absent from the first by construction and would
+    // pass this whatever `findNode` did.
+    const nodes = cyclic();
+    expect(findNode(nodes, "nope")).toBeUndefined();
+    expect(findNode(nodes, nodes[0]!.id)).toBeDefined();
+  });
+
+  it("rebuilds through updateNode by breaking the back edge", () => {
+    // An immutable rebuild of a cyclic forest is not a thing that exists: the
+    // result would have to contain itself. Dropping the edge that closes the
+    // cycle is the only outcome that terminates, and it is the repair a caller
+    // wants — the operation succeeds on a finite forest.
+    // `updateNode` takes a PATCH, not a mapper — it merges the given fields
+    // onto the node whose id matches.
+    const nodes = cyclic();
+    const next = updateNode(nodes, nodes[0]!.id, { props: { touched: true } });
+
+    expect(next[0]?.props).toEqual({ touched: true });
+
+    // The entry that CLOSES the cycle is omitted, not kept as a childless copy.
+    // Keeping it returned `[parent, child, parent]` — the same id twice, which
+    // makes every id lookup ambiguous and fails the validation this repair
+    // exists to satisfy. A node count alone cannot see that; the ids can.
+    const ids: string[] = [];
+    walkNodes(next, node => ids.push(node.id));
+    expect(ids).toEqual([nodes[0]!.id, nodes[0]!.slots!.main![0]!.id]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("REFUSES to duplicate a cyclic subtree rather than adding an unusable clone", () => {
+    // The clone is rebuilt without the edge that closes the cycle, but the
+    // ORIGINAL stays in the forest and stays cyclic — so the result carries a
+    // structure `JSON.stringify` refuses and the page cannot be stored at all.
+    // "Did not throw" cannot see that, which is why the previous version of
+    // this test passed while the returned forest was still unusable.
+    //
+    // Refused rather than repaired: silently rebuilding the source would edit a
+    // node the caller never named, on an operation they asked to be additive.
+    const nodes = cyclic();
+
+    expect(duplicateNode(nodes, nodes[0]!.id)).toBe(nodes);
+  });
+
+  it("refuses a duplicate when a SIBLING branch carries the cycle", () => {
+    // The selected node is perfectly fine; the cycle is somewhere else in the
+    // forest. The result is equally unstorable, because `JSON.stringify`
+    // refuses the FOREST rather than the node — so a guard that inspected only
+    // the subtree being copied reported success and handed back something that
+    // cannot be persisted.
+    //
+    // The previous test cannot separate these implementations: it selects the
+    // cyclic node itself, so checking the subtree and checking the forest give
+    // the same answer.
+    const cyclic = makeNode("core/box", 1, {}, { main: [] });
+    cyclic.slots!.main.push(cyclic);
+    const target = makeNode("core/text", 1);
+    const forest = [cyclic, target];
+
+    expect(duplicateNode(forest, target.id)).toBe(forest);
+  });
+
+  it("still duplicates an ACYCLIC subtree, so the refusal is not blanket", () => {
+    // The control. A `duplicateNode` that refused everything would satisfy the
+    // case above while never duplicating anything for anyone.
+    const child = makeNode("core/text", 1);
+    const parent = makeNode("core/box", 1, {}, { main: [child] });
+
+    const next = duplicateNode([parent], parent.id);
+
+    expect(next).toHaveLength(2);
+    expect(next[1]?.id).not.toBe(parent.id);
+  });
+
+  it("re-ids a cyclic subtree into a fresh, SERIALIZABLE one", () => {
+    // "Does not throw" is satisfied by a fallback that returns the original
+    // node untouched — no new ids, still cyclic, still unstorable. So the
+    // assertions are the two things that separate a real rebuild from that:
+    // the ids changed, and the result can actually be written.
+    const source = cyclic()[0]!;
+
+    const copy = reidSubtree(source);
+
+    expect(copy.id).not.toBe(source.id);
+    expect(copy.slots?.main?.[0]?.id).not.toBe(source.slots?.main?.[0]?.id);
+    expect(() => JSON.stringify(copy)).not.toThrow();
+  });
+
+  it("keeps a malformed slots CONTAINER on an unrelated edit", () => {
+    // `slots: null` is not the same as absent. It has no entries to enumerate,
+    // so a rebuild that treated only `undefined` as absent replaced it with
+    // `{}` — stored content rewritten by an edit naming a different node.
+    const holder = makeNode("core/box", 1);
+    holder.slots = null as unknown as Record<string, BlockNode[]>;
+    const other = makeNode("core/text", 1);
+
+    const next = updateNode([holder, other], other.id, { props: { x: 1 } });
+
+    expect(next[0]?.slots).toBeNull();
+  });
+
+  it("terminates on a cycle LONGER than the call stack, not just a short one", () => {
+    // The two-node fixture above cannot establish this. A recursive walk
+    // notices a cycle only after descending to the repeated ancestor, so its
+    // guard is unreachable for any cycle deeper than the machine allows — a
+    // five-thousand-node chain closing on its root exited with a RangeError
+    // while the check sat unreached. Machine depth was the real bound.
+    //
+    // Sized past the measured limit so the test does not go quiet if a future
+    // engine grants a larger stack.
+    const DEEP = 5_000;
+    let root: BlockNode = makeNode("core/text", 1);
+    const leaf = root;
+    for (let i = 0; i < DEEP; i++) {
+      root = makeNode("core/box", 1, {}, { main: [root] });
+    }
+    leaf.slots = { main: [root] };
+
+    expect(findNode([root], "absent")).toBeUndefined();
+    expect(() => countNodes([root])).not.toThrow();
+    expect(() => treeDepth([root])).not.toThrow();
+    expect(() =>
+      updateNode([root], root.id, { props: { x: 1 } })
+    ).not.toThrow();
+    expect(() => reidSubtree(root)).not.toThrow();
+  });
+
+  it("rebuilds a forest nested deeper than the call stack allows", () => {
+    // The other axis, and the one a cycle guard does nothing for. An immutable
+    // rebuild recursed per level, so a deep ACYCLIC document — no cycle at all
+    // — exhausted the stack on an ordinary edit.
+    let root: BlockNode = makeNode("core/text", 1);
+    for (let i = 0; i < 20_000; i++) {
+      root = makeNode("core/box", 1, {}, { main: [root] });
+    }
+
+    const next = updateNode([root], root.id, { props: { deep: true } });
+
+    expect(next[0]?.props).toEqual({ deep: true });
+    expect(countNodes(next)).toBe(20_001);
+  });
+
+  it("keeps a malformed SLOT VALUE that an unrelated edit never named", () => {
+    // Rebuilding used to throw on these, which lost nothing. Replacing them
+    // with an empty array would be worse than the throw: an edit to a different
+    // field would silently destroy stored content a caller may still need to
+    // read or repair, and nothing would report it.
+    const holder = makeNode("core/box", 1);
+    holder.slots = { broken: { nope: true } as unknown as BlockNode[] };
+    const other = makeNode("core/text", 1);
+
+    const next = updateNode([holder, other], other.id, { props: { x: 1 } });
+
+    expect(next[0]?.slots?.broken).toEqual({ nope: true });
+  });
+
+  it("keeps a malformed slot whose NAME collides with Object.prototype", () => {
+    // Slot names come from unvalidated stored data. A plain object answers for
+    // keys it never had — `built["constructor"]` resolves
+    // `Object.prototype.constructor` — so a malformed slot deliberately left
+    // out of the rebuilt set came back as a FUNCTION and was then dropped by
+    // serialization. The stored value destroyed by an unrelated edit, which is
+    // the exact loss preserving it was meant to prevent.
+    const holder = makeNode("core/box", 1);
+    holder.slots = { constructor: { nope: true } as unknown as BlockNode[] };
+    const other = makeNode("core/text", 1);
+
+    const next = updateNode([holder, other], other.id, { props: { x: 1 } });
+
+    expect(next[0]?.slots?.constructor).toEqual({ nope: true });
+  });
+
+  it("keeps an own `__proto__` slot, which plain assignment would swallow", () => {
+    // The write-side twin of the `constructor` case. Reading through a `Map`
+    // fixed the lookup; the STORE was still `slots[name] = value`, and that is
+    // not a plain write for `__proto__` — it invokes the legacy prototype
+    // setter, so the stored value becomes the object's prototype and
+    // serialization emits `{}`. The constructor test stays green throughout,
+    // because it exercises the read and not the write.
+    const holder = makeNode("core/box", 1);
+    const slots: Record<string, BlockNode[]> = {};
+    Object.defineProperty(slots, "__proto__", {
+      value: { nope: true } as unknown as BlockNode[],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    holder.slots = slots;
+    const other = makeNode("core/text", 1);
+
+    const next = updateNode([holder, other], other.id, { props: { x: 1 } });
+
+    expect(JSON.stringify(next[0]?.slots)).toBe('{"__proto__":{"nope":true}}');
+  });
+
+  it("passes a malformed ENTRY through rather than mapping it", () => {
+    // `fn` is written for nodes and reads `id` off what it is handed, so a
+    // `null` neighbour would throw — failing an edit the caller made to a
+    // different node entirely.
+    const real = makeNode("core/text", 1);
+    const forest = [null, real] as unknown as BlockNode[];
+
+    const next = updateNode(forest, real.id, { props: { x: 1 } });
+
+    expect(next[0]).toBeNull();
+    expect(next[1]?.props).toEqual({ x: 1 });
+  });
+
+  it("still counts a REPEATED node that is not a cycle twice", () => {
+    // The boundary. One node object placed in two slots is two elements of this
+    // document and is not a cycle — a guard keyed on everything seen would
+    // report half the real size and pass a cap the document exceeds.
+    const shared = makeNode("core/text", 1);
+    const host = makeNode(
+      "core/box",
+      1,
+      {},
+      { left: [shared], right: [shared] }
+    );
+
+    expect(countNodes([host])).toBe(3);
+  });
+});
+
 describe("insertNode", () => {
   it("inserts at the top level with a clamped index", () => {
     const { nodes } = fixture();
