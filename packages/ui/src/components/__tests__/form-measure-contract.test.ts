@@ -75,14 +75,55 @@ const CONVERTED = [
 ];
 
 /**
- * A JSX opening tag, attributes included, spanning any number of lines.
+ * Every JSX opening tag in `source`, attributes included, spanning any number
+ * of lines.
  *
- * Matching the whole tag rather than a single line is what makes a
- * multi-line `className` visible: JSX wraps one attribute per line once an
- * element has more than two, so a line-scoped pattern never sees a class
- * that sits on its own line inside a tag that started several lines above.
+ * Reading the whole tag rather than a single line is what makes a multi-line
+ * `className` visible: JSX wraps one attribute per line once an element has
+ * more than two, so a line-scoped pattern never sees a class that sits on its
+ * own line inside a tag that started several lines above.
+ *
+ * Scanned character by character rather than matched with `<[A-Za-z][^>]*?>`,
+ * because that pattern ends the tag at the FIRST `>` — including the one in an
+ * arrow callback. `onSubmit={e => ...}` before `className` truncates the tag
+ * mid-attribute, and every class after it becomes invisible while the scan
+ * still reports a whole element. Brace depth and quote state are what separate
+ * a `>` that closes the tag from one that is part of an expression.
  */
-const ELEMENT = /<[A-Za-z][^>]*?>/gs;
+function openingTags(source: string): string[] {
+  const tags: string[] = [];
+
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] !== "<") continue;
+    if (!/[A-Za-z]/.test(source[i + 1] ?? "")) continue;
+
+    let depth = 0;
+    let quote = "";
+    for (let j = i + 1; j < source.length; j++) {
+      const c = source[j];
+
+      if (quote) {
+        if (c === quote) quote = "";
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+        continue;
+      }
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (c === ">" && depth === 0) {
+        tags.push(source.slice(i, j + 1));
+        i = j;
+        break;
+      }
+      // An unterminated tag ends the scan rather than swallowing the file.
+      if (c === "<" && depth === 0) break;
+    }
+  }
+
+  return tags;
+}
 
 /**
  * A `max-w-*` utility that could actually compete with the page's measure.
@@ -108,12 +149,41 @@ function tagNameOf(element: string): string {
 
 /** The opening tags in `source` that carry their own `max-w-*` utility. */
 function offendersIn(source: string): string[] {
-  return (source.match(ELEMENT) ?? []).filter(
+  return openingTags(source).filter(
     element => !EXEMPT_TAGS.has(tagNameOf(element)) && OWN_MEASURE.test(element)
   );
 }
 
 describe("converted form pages do not set their own measure", () => {
+  it("reads past an arrow callback to the classes after it", () => {
+    // The separating case for the scanner. A regex ending the tag at the first
+    // `>` stops inside `onSubmit={e => ...}`, so everything after it — the
+    // className this file exists to find — is never examined, and the scan
+    // reports a clean whole element.
+    const fixture = `
+      <form
+        onSubmit={e => handle(e)}
+        className="mx-auto max-w-[56rem]"
+      >
+        <span>body</span>
+      </form>
+    `;
+
+    expect(offendersIn(fixture)).toHaveLength(1);
+  });
+
+  it("does not mistake a `>` inside a string or a nested brace for the tag end", () => {
+    // The control for the control: a scanner that tracked neither quotes nor
+    // brace depth would end these tags early too, and pass the case above for
+    // the wrong reason.
+    const inString = `<p title="a > b" className="max-w-[40rem]">x</p>`;
+    const inBraces = `<div style={{ content: ">" }} className="max-w-[40rem]">x</div>`;
+
+    // `p` is exempt by tag name, so it is the TAG PARSE being checked here.
+    expect(openingTags(inString)).toHaveLength(1);
+    expect(offendersIn(inBraces)).toHaveLength(1);
+  });
+
   it("reads every listed file", () => {
     // Asserts the POPULATION before the verdict: a scan that read nothing
     // satisfies "no violations" perfectly, and this is what keeps that from

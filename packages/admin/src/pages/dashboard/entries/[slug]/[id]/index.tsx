@@ -15,11 +15,11 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
+import { CustomEntryView } from "@admin/components/features/entries/CustomEntryView";
 import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { useSuppressedChrome } from "@admin/components/layout/ChromeSuppression";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -233,7 +233,6 @@ export default function EditEntryPage({
   // Read here rather than at the branch that uses it: this component returns
   // early for loading and error states, and a hook after those runs
   // conditionally.
-  const suppressed = useSuppressedChrome();
 
   // Fetch enriched collection schema (component fields are populated)
   const {
@@ -447,54 +446,22 @@ export default function EditEntryPage({
       onCancel: handleCancel,
     };
 
-    /*
-     * A custom Edit view may take the window. The page frame is the innermost
-     * layer of admin chrome, so it is dropped from here rather than from the
-     * layout: suppressing the sidebars alone would leave the view stopping 32px
-     * short of every edge with a breadcrumb above it, which reads as a bug.
-     *
-     * The view asks for this on mount, so this branch reacts to what it asked
-     * for rather than deciding on its behalf. Nothing here knows which views are
-     * immersive, which is the point — a list of them would drift as plugins
-     * added routes, silently, because a missing entry still renders.
-     */
-    if (suppressed.has("pageFrame")) {
-      return (
-        <QueryErrorBoundary fallback={<PageErrorFallback />}>
-          <PluginSlot
-            path={customEditViewPath}
-            props={customViewProps as unknown as Record<string, unknown>}
-          />
-        </QueryErrorBoundary>
-      );
-    }
-
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        {/* A custom view that did NOT take the window is page CONTENT: it
-            renders under this breadcrumb, inside this frame. So the measure is
-            the page's, declared here, rather than the view's — a view that
-            declared its own would sit inside this container's padding and add
-            a second inset to it, which is the disagreement the shell exists to
-            end.
-
-            A view that wants the whole panel does not reach this branch at
-            all: it asks to suppress `pageFrame` on mount and is returned
-            above, without a container. Those two branches are the whole
-            vocabulary, so there is no third case for a width to answer. */}
-        <PageContainer width="form">
-          <div className="mb-6">
+        <CustomEntryView
+          breadcrumbs={
             <EditEntryBreadcrumbs
               collectionSlug={slug}
               collectionLabel={collectionLabel}
               entryTitle={entryTitle}
             />
-          </div>
+          }
+        >
           <PluginSlot
             path={customEditViewPath}
             props={customViewProps as unknown as Record<string, unknown>}
           />
-        </PageContainer>
+        </CustomEntryView>
       </QueryErrorBoundary>
     );
   }
