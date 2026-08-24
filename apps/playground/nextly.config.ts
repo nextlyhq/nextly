@@ -103,7 +103,17 @@ export default defineConfig({
     // The style defaults tier: the same object the public block routes hand to
     // `loadSiteStyle`, so the validator, the canvas and the published page all
     // read one statement of this site's breakpoints.
-    pageBuilder({ siteStyle: SITE_STYLE_DEFAULTS }),
+    //
+    // `pagePreviewPath` states where those pages are served, which is what lets
+    // an editor mint a shareable preview link for one. It has no default and
+    // cannot have one: the plugin can neither install this app's preview route
+    // nor discover that `(frontend)/[...slug]` is mounted at the site root, so
+    // passing it is the only signal available that a minted link will land.
+    // Without it every page-builder share is refused at the click.
+    pageBuilder({
+      siteStyle: SITE_STYLE_DEFAULTS,
+      pagePreviewPath: "/{slug}",
+    }),
     formBuilderPlugin,
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
