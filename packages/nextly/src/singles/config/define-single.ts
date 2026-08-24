@@ -51,6 +51,7 @@ import type {
   SingleLabel,
   SingleAdminOptions,
   SingleHooks,
+  SinglePreviewConfig,
 } from "./types";
 import { assertValidSingleConfig } from "./validate-single";
 
@@ -300,5 +301,11 @@ export function defineSingle(config: SingleConfigInput): SingleConfig {
 // Re-exports for Convenience
 // ============================================================
 
-export type { SingleConfig, SingleLabel, SingleAdminOptions, SingleHooks };
+export type {
+  SingleConfig,
+  SingleLabel,
+  SingleAdminOptions,
+  SingleHooks,
+  SinglePreviewConfig,
+};
 export type { SingleAccessControl };

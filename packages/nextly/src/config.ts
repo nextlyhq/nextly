@@ -36,6 +36,7 @@ export {
   type SingleAdminOptions,
   type SingleAccessControl,
   type SingleHooks,
+  type SinglePreviewConfig,
 } from "./singles/config/define-single";
 
 // Hook types for collection hooks
