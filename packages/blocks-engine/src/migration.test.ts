@@ -560,3 +560,64 @@ describe("resolving a reported pointer", () => {
     expect(nodeAtPointer(doc, "")).toBeUndefined();
   });
 });
+
+describe("a slot named by a stored `__proto__`", () => {
+  // Parsed rather than written as a literal: `{ __proto__: [...] }` in source
+  // sets the prototype instead of creating a key, so a literal fixture would
+  // never carry the own property this is about.
+  function docWithProtoSlot(): BlockDocument {
+    return JSON.parse(
+      JSON.stringify({
+        nodes: [
+          {
+            id: "host",
+            type: "core/box",
+            version: 1,
+            props: {},
+            slots: {
+              PLACEHOLDER: [
+                { id: "kept", type: "core/text", version: 1, props: {} },
+              ],
+              main: [{ id: "stale", type: "core/text", version: 1, props: {} }],
+            },
+          },
+        ],
+      }).replace('"PLACEHOLDER"', '"__proto__"')
+    ) as BlockDocument;
+  }
+
+  it("is a shape the fixture actually produces", () => {
+    // Positive control. Without it every assertion below would also pass on a
+    // fixture that never had the key, which is the same green a working
+    // rebuild produces.
+    const slots = docWithProtoSlot().nodes[0]!.slots!;
+
+    expect(Object.prototype.hasOwnProperty.call(slots, "__proto__")).toBe(true);
+  });
+
+  it("survives a migration that rewrites a DIFFERENT slot's node", () => {
+    const doc = docWithProtoSlot();
+
+    const result = migrateDocument(
+      doc,
+      source({
+        "core/box": { version: 1 },
+        "core/text": {
+          version: 2,
+          migrate: { 1: (p: Record<string, unknown>) => ({ ...p, v2: true }) },
+        },
+      })
+    );
+
+    const slots = result.doc.nodes[0]!.slots!;
+    // The migration was asked to touch `core/text` nodes. Both slots hold one,
+    // so a rebuild that lost the `__proto__` key would be deleting a node it
+    // had just migrated.
+    expect(Object.keys(slots)).toContain("__proto__");
+    expect(JSON.stringify(slots)).toContain("__proto__");
+    expect(Object.getPrototypeOf(slots)).toBe(Object.prototype);
+    // And the migration itself still happened, so this is not passing because
+    // nothing ran.
+    expect(result.doc.nodes[0]!.slots!.main[0]!.props).toEqual({ v2: true });
+  });
+});

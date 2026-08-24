@@ -20,9 +20,35 @@
  *   `makeNode`/`reidSubtree`, which mint fresh ids, so within a session ids are
  *   unique by construction; a hand-injected duplicate is caught by validation
  *   with a machine-readable path, not silently corrected here.
+ *
+ * ## Storability is not decided here
+ *
+ * A stored document can arrive in a state `JSON.stringify` refuses — a value
+ * that points back at its owner. Nothing in this module creates one; they come
+ * from an import, a restore, or a direct database write.
+ *
+ * **These primitives never refuse work because the DOCUMENT they were given is
+ * already unstorable.** They transform what they can reach and make no claim
+ * about whether the result can be saved. One place decides that, once, at the
+ * point of writing — `measureBytes` already answers it as
+ * `{ exceeded: true, reason: "unwritable" }`, and it answers for the whole
+ * class, including values a cycle check cannot see at all: `BigInt`, a
+ * function, a getter that throws.
+ *
+ * The rule earns its keep by being derivable rather than remembered. Three
+ * operations previously answered three different ways — rebuild, refuse,
+ * preserve — each reasoned correctly from its own case, and the fourth case had
+ * nothing to derive an answer from.
+ *
+ * What they DO refuse is an ARGUMENT that would break id-addressing: a subtree
+ * carrying a duplicate id, or an id already in the destination. That is a
+ * different question. It is about an invariant these primitives depend on to
+ * work at all, and it concerns caller-supplied input rather than the state the
+ * document was already in.
  */
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
+import { defineEntry, ownEntry } from "./safe-record";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
 export function newId(): string {
@@ -372,21 +398,10 @@ function assembleSlots(
     // Keeping the stored value is the point: an unrelated edit must not be the
     // thing that destroys it.
     const value = built.get(name) ?? original;
-    // DEFINED rather than assigned. Slot names come from unvalidated stored
-    // data, and plain assignment is not a plain write for all of them: an own
-    // `__proto__` slot invokes the legacy prototype setter instead of creating
-    // a property, so the stored value becomes the object's prototype and
-    // serialization emits `{}` — the slot silently emptied by an edit that
-    // named a different node.
-    //
-    // This is the write-side twin of reading through a `Map`. Fixing only the
-    // read left the one slot name that defeats the write.
-    Object.defineProperty(slots, name, {
-      value,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+    // DEFINED rather than assigned — the write-side twin of reading through a
+    // `Map` above. `safe-record` carries why; it is shared because fixing this
+    // one site left three others in the package with the plain-assignment form.
+    defineEntry(slots, name, value);
   }
   return { ...mapped, slots };
 }
@@ -414,10 +429,10 @@ function clampIndex(index: number, length: number): number {
  * walk reports is therefore the only account of it, and a second traversal
  * written here to look again would be a second definition of the same thing.
  *
- * Refusing matters more for the writer than tolerating does for the reader: a
- * top-level insert would return a forest that is itself cyclic, and an insert
- * into a parent reaches the recursive `mapForest`, which has no such tolerance
- * and exits with `RangeError: Maximum call stack size exceeded`.
+ * This refuses an incoming ARGUMENT, which is why it survives the rule that
+ * these primitives do not refuse an already-unstorable document: a cyclic
+ * subtree handed in by a caller ADDS a cycle to a forest that may not have had
+ * one, rather than declining to work on damage that was already there.
  */
 function insertionIsUnsafe(nodes: BlockNode[], node: BlockNode): boolean {
   const incoming = new Set<string>();
@@ -470,9 +485,15 @@ export function insertNode(
   return mapForest(nodes, current => {
     if (current.id !== parentId) return current;
     const slots = { ...(current.slots ?? {}) };
-    const children = [...(slots[slot] ?? [])];
+    // Read and written through `safe-record`, because `slot` is a name from
+    // outside this module and both halves fail on it independently. Reading
+    // `slots["__proto__"]` on a record without that key yields
+    // `Object.prototype` rather than `undefined`, so `?? []` does not fire and
+    // the spread throws; writing it invokes the prototype setter and stores
+    // nothing. Fixing either one alone leaves the other.
+    const children = [...(ownEntry(slots, slot) ?? [])];
     children.splice(clampIndex(index, children.length), 0, node);
-    slots[slot] = children;
+    defineEntry(slots, slot, children);
     return { ...current, slots };
   });
 }
@@ -487,10 +508,17 @@ export function removeNode(nodes: BlockNode[], id: string): BlockNode[] {
   const withoutTop = nodes.filter(node => node.id !== id);
   return mapForest(withoutTop, node => {
     if (!node.slots) return node;
-    const slots: Record<string, BlockNode[]> = {};
-    for (const [name, children] of Object.entries(node.slots)) {
-      slots[name] = children.filter(child => child.id !== id);
-    }
+    // `Object.fromEntries` rather than a loop assigning into a fresh object.
+    // Slot names come from stored data, and the loop form drops a `__proto__`
+    // slot — an edit that named a DIFFERENT node silently deleting stored
+    // content. `fromEntries` defines each key, so it keeps one. See
+    // `safe-record` for the two spellings that do not.
+    const slots = Object.fromEntries(
+      Object.entries(node.slots).map(([name, children]) => [
+        name,
+        children.filter(child => child.id !== id),
+      ])
+    );
     return { ...node, slots };
   });
 }
@@ -561,46 +589,18 @@ function reidOne(node: BlockNode): BlockNode {
   return copy;
 }
 
-/**
- * Whether a forest contains a node reached through itself.
- *
- * Asked of the walk rather than looked for here. `walkNodes` is cycle-TOLERANT
- * by design — a reader counting classes or measuring a document must answer
- * rather than fail — so a cycle is invisible in what it visits, and what the
- * walk REPORTS is the only account of it. A second traversal written here would
- * be a second definition of the same thing.
- */
-function isCyclic(nodes: BlockNode[]): boolean {
-  let cyclic = false;
-  walkNodes(nodes, () => undefined, {
-    onCycle: () => {
-      cyclic = true;
-    },
-  });
-  return cyclic;
-}
-
 /** Insert a re-id'd copy of a node immediately after the original. */
 export function duplicateNode(nodes: BlockNode[], id: string): BlockNode[] {
   const found = findNode(nodes, id);
   if (!found) return nodes;
-  // A cyclic subtree cannot be duplicated into a usable forest. The clone is
-  // rebuilt without the edge that closes the cycle, but the ORIGINAL is still
-  // in the forest and still cyclic — so the result carries a structure
-  // `JSON.stringify` refuses, and the page cannot be stored at all.
+  // No check that the forest can be serialized. This once refused outright when
+  // any part of the forest was cyclic, which made it the only primitive that
+  // declined work because of a defect elsewhere in the document — see the
+  // storability note on this module.
   //
-  // Refused rather than repaired, and the no-op contract these primitives share
-  // is what makes that safe to say: silently rebuilding the source would edit a
-  // node the caller never named, on an operation they asked to be additive.
-  // `insertNode` refuses a cyclic subtree for the same reason.
-  // The WHOLE forest, not just the subtree being copied. A cycle in a sibling
-  // branch leaves the result equally unstorable — `JSON.stringify` refuses the
-  // forest, not the node — so an operation reporting success while handing back
-  // something that cannot be persisted is the thing worth refusing.
-  //
-  // The forest was already in that state before the call, so this declines to
-  // ADD to a document that cannot be saved rather than claiming to repair one.
-  if (isCyclic(nodes)) return nodes;
+  // The clone is safe on its own terms regardless: `reidSubtree` rebuilds it
+  // without the edge that closes a cycle, so what gets inserted is acyclic even
+  // when its source was not.
   const location = locateNode(nodes, id);
   if (!location) return nodes;
   return insertNode(nodes, reidSubtree(found), {
