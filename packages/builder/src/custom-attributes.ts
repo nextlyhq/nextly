@@ -554,6 +554,11 @@ export function requestedId(draft: Draft, loaded: Draft): string {
   return draft.id === loaded.id ? draft.id : draft.id.trim();
 }
 
+/** Whether the author has left the id field exactly as it was loaded. */
+function untouchedId(draft: Draft, loaded: Draft): boolean {
+  return draft.id === loaded.id;
+}
+
 /**
  * What a draft wants the node to hold — the whole question of what to STORE.
  *
@@ -573,11 +578,24 @@ export function wantedFields(
 ): HtmlFields {
   const id = requestedId(draft, loaded);
   /*
-   * An empty box means the field should be GONE, not present and empty. The
-   * panel has no gesture that asks for `id=""` and the renderer would emit one,
-   * so `undefined` is the only thing an empty draft can honestly mean.
+   * An UNTOUCHED field wants whatever the node already holds, including an
+   * empty-but-present one. Reading an empty box as "remove it" made every other
+   * save carry `unset: ["cssId"]` along with it — bypassing the explicit
+   * removal the panel offers, and silently unshadowing the bag's `id` so the
+   * rendered anchor changed because an attribute was edited.
+   *
+   * Once the author HAS typed, an empty box means the field should be gone
+   * rather than present and empty: the panel has no gesture that asks for
+   * `id=""` while the renderer would emit one, so `undefined` is the only thing
+   * a cleared box can honestly mean.
    */
-  const keptId = id === "" ? undefined : taken.has(id) ? stored.cssId : id;
+  const keptId = untouchedId(draft, loaded)
+    ? stored.cssId
+    : id === ""
+      ? undefined
+      : taken.has(id)
+        ? stored.cssId
+        : id;
   return {
     cssId: keptId,
     /*

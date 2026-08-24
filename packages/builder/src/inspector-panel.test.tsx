@@ -1487,3 +1487,65 @@ describe("a node whose CSS id is present but empty", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
+
+describe("an empty id while an unrelated attribute is edited", () => {
+  it("is NOT removed as a side effect of that edit", () => {
+    /*
+     * The removal has to stay the author's explicit decision. Treating an
+     * untouched empty box as a request to drop the field meant any other save
+     * carried `unset: ["cssId"]` with it — bypassing the button, and silently
+     * unshadowing the bag's `id` so the rendered anchor changed because an
+     * attribute was edited.
+     */
+    const editor = mount({
+      cssId: "",
+      attributes: { id: "from-bag", "data-x": "1" },
+    } as unknown as Partial<BlockNode>);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    /*
+     * Row ONE, not two: `rowsOf` sorts by name, so `data-x` sits above `id`.
+     * Editing by position without checking which row it is has passed for the
+     * wrong reason here before.
+     */
+    const name = screen.getByLabelText("Name of attribute 1");
+    expect((name as HTMLInputElement).value).toBe("data-x");
+    const value = screen.getByLabelText("Value of attribute 1");
+    fireEvent.change(value, { target: { value: "2" } });
+    fireEvent.blur(value);
+
+    expect(editor.apply).toHaveBeenCalled();
+    const op = editor.apply.mock.calls.at(-1)?.[0] as {
+      patch: Record<string, unknown>;
+      unset?: string[];
+    };
+    expect(op.unset ?? []).not.toContain("cssId");
+    // The control: the edit itself DID land, so this is not passing on a write
+    // that never happened.
+    expect(op.patch["attributes"]).toMatchObject({ "data-x": "2" });
+  });
+
+  it("still reports a refused removal instead of doing nothing", () => {
+    /*
+     * `apply` answers `null` for any refused op — a document with duplicate
+     * node ids passes inspection and is refused by the store. The panel's other
+     * writer says so through the refusal line; the button silently did nothing.
+     */
+    register();
+    const editor = editorFor(
+      documentOf({ cssId: "" } as unknown as Partial<BlockNode>)
+    );
+    editor.apply.mockReturnValue(null);
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove the empty id" })
+    );
+
+    expect(editor.apply).toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be saved"
+    );
+  });
+});

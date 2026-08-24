@@ -49,6 +49,18 @@ import {
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
 
+/**
+ * What a refused write says, wherever it is refused.
+ *
+ * Names no single cause, because `apply` reports none: it answers `null` for
+ * ANY refused op — a value past the document's byte limit, but equally an
+ * update to a node a concurrent edit or an undo has removed, or a document
+ * carrying duplicate node ids. Telling an author their page is full when their
+ * block has gone sends them to fix the wrong thing.
+ */
+const REFUSED =
+  "That change could not be saved. A very long value can push the page past its size limit; otherwise the block may have changed since you opened this tab.";
+
 export interface AdvancedPanelProps {
   readonly nodeId: string;
   /**
@@ -224,9 +236,7 @@ export function AdvancedPanel({
      * page is full when their block has gone sends them to fix the wrong thing.
      */
     if (applied === null) {
-      setRefusal(
-        "That change could not be saved. A very long value can push the page past its size limit; otherwise the block may have changed since you opened this tab."
-      );
+      setRefusal(REFUSED);
       return;
     }
     setRefusal(undefined);
@@ -359,12 +369,20 @@ export function AdvancedPanel({
       { cssId, attributes }
     );
     if (update === undefined) return;
-    editor.apply({
+    const applied = editor.apply({
       kind: "update",
       id: nodeId,
       patch: update.patch,
       ...(update.unset.length > 0 ? { unset: update.unset } : {}),
     } as Parameters<EditorState["apply"]>[0]);
+    /*
+     * REFUSED ops answer `null`, and this button targets exactly the documents
+     * where that is reachable — an import can carry duplicate node ids, which
+     * pass this panel's own reading and are refused by the store. Discarding
+     * the answer presented a failure as a success, while the writer beside it
+     * reports the same refusal. One panel, one way of saying it.
+     */
+    setRefusal(applied === null ? REFUSED : undefined);
   };
 
   return (
