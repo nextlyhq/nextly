@@ -110,9 +110,15 @@ describe("EntryPageFrame", () => {
     );
 
     expect(screen.getByText("default form")).toBeDefined();
-    expect(screen.getByTestId("page-container").className).toContain(
-      "nx-page-shell"
-    );
+    const container = screen.getByTestId("page-container");
+    expect(container.className).toContain("nx-page-shell");
+
+    // The slot stays in the tree so both callers reconcile the same way, but
+    // it reserves no space: a margin around nothing pushes this editor down by
+    // the height of a breadcrumb it never renders.
+    const trail = container.firstElementChild;
+    expect(trail?.childNodes.length).toBe(0);
+    expect(trail?.className).toBe("");
   });
 
   it("drops the frame for a takeover field inside the default form", () => {

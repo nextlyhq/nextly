@@ -66,9 +66,19 @@ export function EntryPageFrame({ breadcrumbs, children }: EntryPageFrameProps) {
   // the container's own grid, padding and background stop applying while its
   // children lay out exactly as if it were not there. An immersive view
   // therefore reaches every edge, which is the whole point of asking.
+  // The slot is always in the tree so both callers reconcile identically, but
+  // an empty one carries no gap: the default entry form passes no trail, and a
+  // wrapper keeping its margin around nothing would push that editor down by
+  // the height of a breadcrumb that is not there.
+  const trailClass = framed
+    ? breadcrumbs === undefined
+      ? undefined
+      : "mb-6"
+    : "hidden";
+
   return (
     <PageContainer width="form" className={framed ? undefined : "contents"}>
-      <div className={framed ? "mb-6" : "hidden"}>{breadcrumbs}</div>
+      <div className={trailClass}>{breadcrumbs}</div>
       {children}
     </PageContainer>
   );
