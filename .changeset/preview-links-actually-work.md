@@ -86,4 +86,22 @@ In development, a content route that receives a valid preview link while declari
 identical 404, because one that varied by cause would let a stranger discover which entries have
 drafts.
 
+The preview mount is validated when configuration is read, rather than when an editor clicks "Copy
+shareable link". `preview.route` names where your app mounts `createPreviewRoute`, and a value that
+cannot produce a working link — one pointing at another origin, or carrying a query, a fragment or a
+`..` segment — stops the boot with a message naming the value and the remedy. Previously the first
+sign of a bad mount was an editor being refused a link, and the person who can fix it is not the
+person reading that message.
+
+It is resolved after plugin `setup` transformers run, so a mount a plugin adds or replaces is
+checked as the one a link is actually built from, and the normalised value is what the container
+carries: `"/api/preview/"` no longer means one thing where it is read and another where it is used.
+
+A mount carrying its own query is refused rather than accepted and mangled. The link's `token`
+parameter is appended to this path, so `"/api/preview?tenant=a"` was assigned as a pathname and
+handed out as `/api/preview%3Ftenant=a` — a link that reaches no route and carries no token. A `..`
+is refused for a related reason: it resolves against whatever base the link is built on, and a site
+URL carrying its own path is a different base from the origin, so the mount would not be the one the
+value names.
+
 New guide: **Draft Preview Links**.

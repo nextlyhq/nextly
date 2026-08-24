@@ -12,7 +12,6 @@
 
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import type { NextlyServiceConfig } from "../di/register";
-import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -87,23 +86,6 @@ export function buildServiceConfig(
     // non-default mount silently hands out links to `/api/preview`.
     if (serviceConfig.preview === undefined && nextlyConfig?.preview) {
       serviceConfig.preview = nextlyConfig.preview;
-    }
-
-    // Resolved HERE rather than only where a link is minted, because that is
-    // the boot-time failure the value's own contract promises: an unresolvable
-    // mount first surfaces as an editor being refused a link, at which point
-    // whoever can fix the configuration is not the person looking at it.
-    //
-    // It also NORMALISES. Applied to whatever survived the branch above — a
-    // caller-supplied block as much as the nested one — so the mount the
-    // container carries is the mount a link is built from, rather than two
-    // readings of the same string that a trailing slash or a dot segment can
-    // separate.
-    if (serviceConfig.preview !== undefined) {
-      serviceConfig.preview = {
-        ...serviceConfig.preview,
-        route: resolvePreviewRoute(serviceConfig.preview),
-      };
     }
 
     // If storagePlugins not explicitly provided, use from nextly.config.ts

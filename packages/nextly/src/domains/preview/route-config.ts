@@ -89,15 +89,63 @@ export function resolvePreviewRoute(config: PreviewConfig | undefined): string {
     });
   }
 
-  // The parser's pathname rather than the configured string, because the link
-  // builder assigns it as a pathname and that resolution happens there anyway:
-  // a configured `/api/../evil` would otherwise be reported as one path and
-  // linked as another.
+  // Refused rather than resolved here, because THIS function cannot see the
+  // base the value is joined under. A configured site URL may carry a path, and
+  // the link builder appends the mount to it — so `..` resolved against the
+  // origin gives one answer and resolved against `https://site.example/base`
+  // gives another. Resolving it here would pick the first and the link would
+  // use the second.
+  //
+  // A mount path names a route file, and a route file's path contains no `..`.
+  // So the escape is a configuration fault rather than a spelling to normalise,
+  // and refusing removes the divergence instead of choosing a side of it.
+  if (hasParentSegment(route)) {
+    throw NextlyError.invalidInput({
+      message: `preview.route must not contain a ".." segment — got "${route}".`,
+      logContext: {
+        reason: "preview-route-has-a-parent-segment",
+        remedy:
+          "It names where the route file is mounted, which is a literal path. " +
+          "A `..` resolves against whatever base the link is built on, and a " +
+          "configured site URL carrying its own path is a different base from " +
+          "the origin — so the mount would not be the one this value names.",
+        route,
+      },
+    });
+  }
+
+  // The parser's pathname rather than the configured string: it is what the
+  // link builder assigns, so percent-encoding and `.` segments are settled the
+  // same way in both places.
   //
   // Trailing slashes are common in a hand-written config and would otherwise
   // produce `/preview/?token=...`, which is a different path on a site that
   // distinguishes them.
   return parsed.pathname.replace(/\/+$/, "") || "/";
+}
+
+/**
+ * Whether the CONFIGURED value climbs out of wherever it is rooted.
+ *
+ * Read from the configured string rather than the parsed pathname, because the
+ * parser has already resolved every `..` by the time it hands one back — a
+ * check on `parsed.pathname` finds nothing and passes on every input, which is
+ * a guard that reads as coverage and is satisfied by absence.
+ *
+ * Decoded first, since the parser resolves `%2E%2E` as a segment too, and
+ * `\` alongside `/` because a special scheme normalises one to the other. The
+ * raw form is checked as well, so a value the decoder rejects is still judged
+ * on what it literally says.
+ */
+function hasParentSegment(route: string): boolean {
+  const forms = [route];
+  try {
+    forms.push(decodeURIComponent(route));
+  } catch {
+    // An undecodable escape is not a `..`; `new URL` keeps it literal, and the
+    // raw form above still answers for what is actually written.
+  }
+  return forms.some(form => form.split(/[/\\]/).includes(".."));
 }
 
 /**

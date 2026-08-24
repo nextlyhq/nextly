@@ -55,11 +55,28 @@ describe("resolvePreviewRoute", () => {
     );
   });
 
-  // Returned normalised rather than as configured. The link builder resolves
-  // `..` when it assigns the pathname, so a raw value would be reported as one
-  // path and linked as another.
-  it("resolves dot segments to the path the link will actually use", () => {
-    expect(resolvePreviewRoute({ route: "/api/../evil" })).toBe("/evil");
+  // Refused rather than resolved, because this function cannot see the base the
+  // value is joined under. With `siteUrl = "https://site.example/base"` the link
+  // builder appends the mount to that path, so `..` resolved here against the
+  // origin and resolved there against `/base` give different routes. Encoded
+  // and backslash spellings go the same way, because the URL parser resolves
+  // those as segments too.
+  it.each([
+    ["a parent segment", "/api/../evil"],
+    ["one that escapes the root", "/../preview"],
+    ["an encoded parent segment", "/api/%2E%2E/evil"],
+    ["a backslash-separated one", "/api/..%5Cevil"],
+  ])("refuses %s", (_label, bad) => {
+    expect(() => resolvePreviewRoute({ route: bad })).toThrow(NextlyError);
+    expect(() => resolvePreviewRoute({ route: bad })).toThrow(/"\.\." segment/);
+  });
+
+  // A single dot cannot escape anything, so it is normalised rather than
+  // refused — the same path whichever base it is joined under.
+  it("accepts a current-directory segment, which resolves to the same path", () => {
+    expect(resolvePreviewRoute({ route: "/api/./preview" })).toBe(
+      "/api/preview"
+    );
   });
 
   // A protocol-relative `//host` is a URL to another origin wearing a path's
