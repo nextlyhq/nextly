@@ -913,6 +913,14 @@
   --nx-measure-form: 56rem;
   --nx-measure-wide: 72rem;
 
+  /* The measure the content column is bounded to, declared here so a theme can
+   * retune it centrally and so the token resolves to a real value rather than
+   * to a `var()` fallback. `PageShell` overrides it INLINE per its `width`
+   * prop, which is what makes the three widths one grid template instead of
+   * three near-identical ones; this declaration is the value that applies when
+   * the grid is used without that component. */
+  --nx-shell-measure: var(--nx-measure-form);
+
   /* Focus ring colors */
   --nx-focus-ring: var(--nx-primary);
   --nx-focus-ring-offset: oklch(1 0 0);
@@ -1163,7 +1171,7 @@
      * container and there is no free space for it to distribute. */
     grid-template-columns:
       [full-start] minmax(var(--nx-gutter), 1fr)
-      [content-start] minmax(0, var(--nx-shell-measure, var(--nx-measure-form)))
+      [content-start] minmax(0, var(--nx-shell-measure))
       [content-end] minmax(var(--nx-gutter), 1fr)
       [full-end];
     align-content: start;
