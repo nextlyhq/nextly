@@ -77,7 +77,7 @@ export default function EditUserFieldPage() {
   // Invalid ID
   if (!fieldId) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <div>
           <div className="mb-6">
             <UserBreadcrumbs currentPage="fields-edit" />
@@ -100,7 +100,7 @@ export default function EditUserFieldPage() {
   // Loading state
   if (isLoading) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <div>
           <div className="mb-6">
             <UserBreadcrumbs currentPage="fields-edit" />
@@ -123,7 +123,7 @@ export default function EditUserFieldPage() {
   // Error state
   if (fetchError) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <div>
           <div className="mb-6">
             <UserBreadcrumbs currentPage="fields-edit" />
@@ -171,7 +171,7 @@ export default function EditUserFieldPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <div>
           <div className="mb-6">
             <UserBreadcrumbs currentPage="fields-edit" />

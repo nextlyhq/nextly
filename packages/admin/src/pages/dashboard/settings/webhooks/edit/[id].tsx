@@ -296,7 +296,7 @@ export default function EditWebhookPage() {
 
   if (!id) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...WEBHOOK_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -315,7 +315,7 @@ export default function EditWebhookPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...WEBHOOK_PAGE}>
           <EditWebhookContent id={id} />
         </SettingsLayout>

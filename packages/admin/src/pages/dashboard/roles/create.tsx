@@ -7,7 +7,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 export default function CreateRolePage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <RoleBreadcrumbs currentPage="create" />
 
         <RoleForm />

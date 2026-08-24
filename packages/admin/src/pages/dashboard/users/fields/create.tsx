@@ -46,7 +46,7 @@ export default function CreateUserFieldPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <div>
           <div className="mb-6">
             <UserBreadcrumbs currentPage="fields-create" />

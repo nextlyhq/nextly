@@ -16,8 +16,8 @@ import {
   Button,
   FieldShell,
   FormActions,
-  FormLayout,
   Input,
+  PageShell,
   toast,
   Tabs,
   TabsList,
@@ -351,10 +351,14 @@ function FormBuilderViewInner({
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────
-  // `FormLayout` owns the page measure, centring and padding, so nothing here
-  // hand-rolls a card, a width cap or a hack to escape either.
+  // A plugin view IS the page, and the admin's host container is generic — it
+  // cannot know that this particular view wants a reading measure while the
+  // page builder wants the whole panel. So the view declares its own shell,
+  // which is the same primitive a first-party page reaches through
+  // `PageContainer`. Nothing below hand-rolls a card, a width cap or a hack to
+  // escape either.
   return (
-    <FormLayout>
+    <PageShell width="form">
       {/* ── Page header ── */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">
@@ -568,7 +572,7 @@ function FormBuilderViewInner({
           )}
         </Button>
       </FormActions>
-    </FormLayout>
+    </PageShell>
   );
 }
 

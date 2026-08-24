@@ -22,6 +22,30 @@ import {
   type ImageSize,
 } from "@admin/services/imageSizesApi";
 
+/**
+ * The page in its refused state: one message, and the way back.
+ *
+ * Both refusals — no id in the route, and an id that resolves to nothing —
+ * render the identical page around a different sentence, so the page is
+ * written once and the sentence is the argument.
+ */
+function ImageSizeErrorPage({ message }: { message: string }) {
+  return (
+    <PageContainer width="form">
+      <SettingsLayout {...IMAGE_SIZES_PAGE}>
+        <Alert variant="destructive">
+          <AlertDescription>{message}</AlertDescription>
+        </Alert>
+        <div className="mt-4">
+          <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
+            <Button variant="outline">Back to Image Sizes</Button>
+          </Link>
+        </div>
+      </SettingsLayout>
+    </PageContainer>
+  );
+}
+
 export default function EditImageSizePage() {
   const { route } = useRouter();
   const [isPending, setIsPending] = useState(false);
@@ -79,27 +103,14 @@ export default function EditImageSizePage() {
   // Invalid ID
   if (!imageSizeId) {
     return (
-      <PageContainer>
-        <SettingsLayout {...IMAGE_SIZES_PAGE}>
-          <Alert variant="destructive">
-            <AlertDescription>
-              Invalid image size ID. Please go back and try again.
-            </AlertDescription>
-          </Alert>
-          <div className="mt-4">
-            <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
-              <Button variant="outline">Back to Image Sizes</Button>
-            </Link>
-          </div>
-        </SettingsLayout>
-      </PageContainer>
+      <ImageSizeErrorPage message="Invalid image size ID. Please go back and try again." />
     );
   }
 
   // Loading state
   if (isLoading) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...IMAGE_SIZES_PAGE}>
           <div className="space-y-6">
             <div className="flex items-center gap-4">
@@ -119,7 +130,7 @@ export default function EditImageSizePage() {
   // Error state
   if (fetchError) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...IMAGE_SIZES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription className="flex items-center justify-between">
@@ -154,26 +165,13 @@ export default function EditImageSizePage() {
   // Not found
   if (!imageSize) {
     return (
-      <PageContainer>
-        <SettingsLayout {...IMAGE_SIZES_PAGE}>
-          <Alert variant="destructive">
-            <AlertDescription>
-              Image size not found. It may have been deleted.
-            </AlertDescription>
-          </Alert>
-          <div className="mt-4">
-            <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
-              <Button variant="outline">Back to Image Sizes</Button>
-            </Link>
-          </div>
-        </SettingsLayout>
-      </PageContainer>
+      <ImageSizeErrorPage message="Image size not found. It may have been deleted." />
     );
   }
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...IMAGE_SIZES_PAGE}>
           <ImageSizeForm
             mode="edit"

@@ -1157,7 +1157,7 @@ export function FormNotificationsTab({ defaults }: FormNotificationsTabProps) {
   const initialNotification = sheetState.editing ?? createNotification();
 
   return (
-    // The measure belongs to `FormLayout` now, not to this tab.
+    // The measure belongs to the page's shell, not to this tab.
     <div>
       <div className="flex items-center justify-between mb-8 pb-4 border-b border-border">
         <div>

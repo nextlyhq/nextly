@@ -68,19 +68,6 @@ export interface FieldShellProps {
     | ((field: FieldShellRenderProps) => React.ReactNode);
 }
 
-/**
- * The page measure. "form" suits most pages; "wide" is opt-in for dense ones.
- * @experimental
- */
-export type FormMeasure = "form" | "wide";
-
-/** @experimental */
-export interface FormLayoutProps {
-  width?: FormMeasure;
-  className?: string;
-  children: React.ReactNode;
-}
-
 /** @experimental */
 export interface FormActionsProps {
   /**

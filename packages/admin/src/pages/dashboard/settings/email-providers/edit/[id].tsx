@@ -103,7 +103,7 @@ export default function EditEmailProviderPage() {
   // Invalid ID
   if (!providerId) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -123,7 +123,7 @@ export default function EditEmailProviderPage() {
   // Loading state
   if (isLoading) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
           <div className="space-y-6">
             <Skeleton className="h-12 w-full rounded-md" />
@@ -137,7 +137,7 @@ export default function EditEmailProviderPage() {
   // Error state
   if (fetchError) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
           <Alert variant="destructive">
             <AlertDescription className="flex items-center justify-between">
@@ -204,7 +204,7 @@ export default function EditEmailProviderPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout
           {...EMAIL_PROVIDER_PAGE}
           actions={

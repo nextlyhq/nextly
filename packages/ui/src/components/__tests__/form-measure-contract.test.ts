@@ -1,9 +1,9 @@
 /**
- * A converted form page must not set its own measure.
+ * A form component must not set its own measure.
  *
- * `FormLayout` owns width and padding so the eight form pages that were
- * converted onto it cannot answer the "how wide is a form" question eight
- * different ways again. The scan reads whole ELEMENTS rather than lines:
+ * The PAGE owns width and padding — `PageContainer` renders `PageShell` when a
+ * page asks for a measure — so the form components below cannot answer the
+ * "how wide is a form" question several different ways again. The scan reads whole ELEMENTS rather than lines:
  * JSX puts one attribute per line once an element carries more than two, so
  * a line-scoped search reports a multi-line element as conforming while it
  * carries the very class being looked for.
@@ -11,7 +11,7 @@
  * WHAT THIS COVERS, stated here because a green run is read where it is
  * printed and a reader has no other way to learn the scope: the fixed list
  * of files in `CONVERTED` below, and nothing else. A file that was converted
- * onto `FormLayout` but is absent from that list is UNCHECKED, not clean —
+ * onto the page's measure but is absent from that list is UNCHECKED, not clean —
  * this scan has no way to discover a form page on its own, so its silence
  * about a file it never opened is not evidence about that file. Extend the
  * list when a new page is converted; a passing suite does not do that for
@@ -35,10 +35,10 @@
  * strip in `FormBuilderView.tsx` carries `max-w-full` for exactly that
  * reason and is not a page re-declaring anything. And `SheetContent` /
  * text-flow tags (`p`, `span`) are excluded by name: a `Sheet` mounts into a
- * portal and its width governs a slide-out panel, not the page FormLayout
+ * portal and its width governs a slide-out panel, not the page the shell
  * measures — `FormNotificationsTab.tsx`'s notification editor is a fixed
  * 560px panel by design — and a paragraph's `max-w-*` caps a reading line
- * length, a typography concern FormLayout has never owned.
+ * length, a typography concern the page measure has never owned.
  *
  * BLIND SPOT, same shape as the file list above: an element on the
  * `EXEMPT_TAGS` list that was, despite its name, actually acting as the
@@ -57,7 +57,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../../../../../");
 
 /**
- * The form pages converted onto `FormLayout`.
+ * The form components whose page now owns the measure.
  *
  * This is the scan's entire population. See the file header: absence from
  * this list means unchecked, never means clean.
@@ -85,8 +85,7 @@ const CONVERTED = [
 const ELEMENT = /<[A-Za-z][^>]*?>/gs;
 
 /**
- * A `max-w-*` utility that could actually compete with `FormLayout`'s
- * measure.
+ * A `max-w-*` utility that could actually compete with the page's measure.
  *
  * Excludes the CSS-variable token form (the shared measure itself, written
  * as a max-width driven by a `var(...)` custom property) and

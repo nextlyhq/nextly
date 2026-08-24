@@ -234,7 +234,7 @@ export default function WebhookDeliveriesPage() {
 
   if (!id) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <SettingsLayout {...DELIVERIES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -253,7 +253,7 @@ export default function WebhookDeliveriesPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="wide">
         <SettingsLayout {...DELIVERIES_PAGE}>
           <DeliveriesContent id={id} />
         </SettingsLayout>
