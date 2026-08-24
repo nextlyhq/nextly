@@ -44,13 +44,13 @@
  * @module class-usage
  */
 import {
+  DEFAULT_LIMITS,
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASS_NAME_LENGTH,
-  MAX_NODES,
   isPlainRecord,
-  walkNodes,
+  selectNodes,
 } from "@nextlyhq/blocks-engine";
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import { readStoredJson } from "./stored-json";
 
@@ -82,45 +82,46 @@ function namesAClass(value: unknown): value is string {
  * is what lets a caller compare a stored list against a fresh one without
  * re-sorting or set arithmetic.
  */
-export function classIdsUsedBy(stored: unknown): string[] {
+export function classIdsUsedBy(
+  stored: unknown,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): string[] {
   const document = readStoredJson(stored);
   if (!isPlainRecord(document)) return [];
-  const nodes: unknown = document.nodes;
-  if (!Array.isArray(nodes)) return [];
+  if (!Array.isArray(document.nodes)) return [];
+
+  // WHICH nodes are read is the engine's, shared with the style compiler rather
+  // than reproduced here. The question is which classes this page RENDERS, so a
+  // reader that stopped anywhere else would answer about a different document
+  // than the one being served.
+  //
+  // Sharing the walk rather than the numbers is the part that matters. Both
+  // sides once stopped at `MAX_NODES` by different routes — depth-first here,
+  // level-order there — and equal limits reached by different walks select
+  // different nodes: a document whose first root nests deeply spends the whole
+  // budget inside it under one walk and reaches later top-level siblings under
+  // the other. The class on that sibling was rendered and uncounted, which is
+  // the under-count direction that lets a class in use be deleted.
+  //
+  // `limits` defaults to the engine's, which is what the compiler defaults to.
+  // A site compiling with raised limits has to pass the same ones here, or the
+  // two answer about different documents again — this parameter is how, and
+  // there is no way for this function to discover them on its own.
+  const selection = selectNodes(document, limits);
 
   const ids = new Set<string>();
-  // Both bounds are the COMPILER's, taken from the engine rather than chosen
-  // here, because the question is which classes this page renders. A reader
-  // that stopped somewhere else would answer about a different document than
-  // the one being served — reporting a reference the page does not apply, or
-  // omitting one it does.
-  //
-  // A cap on DISTINCT ids used to sit inside the callback instead, and it was
-  // the wrong quantity twice over. It let a corrupt array of repeats be scanned
-  // in full while never filling, since repeats add no distinct entry; and once
-  // it did fill it dropped every later id — so a page mentioning many ids of
-  // deleted classes before a live one omitted the live one, the direction that
-  // gets a class deleted while a page still uses it.
-  //
-  // The node bound is passed to the WALK rather than applied in the callback.
-  // A callback can only decline to do work; the walk has by then queued and
-  // popped every remaining node, so a corrupt document would still cost time
-  // and memory proportional to the whole stored tree on every page write.
-  walkNodes(
-    nodes as BlockNode[],
-    node => {
-      const classes: unknown = (node as { classes?: unknown }).classes;
-      if (!Array.isArray(classes)) return;
-      // Bounds ENTRIES READ, not ids kept, and the two differ exactly where it
-      // matters: an array of a million repeats holds one distinct id, so a
-      // distinct-count bound never trips and the whole array is read.
-      const readable = Math.min(classes.length, MAX_CLASSES_PER_NODE);
-      for (let i = 0; i < readable; i++) {
-        const id: unknown = classes[i];
-        if (namesAClass(id)) ids.add(id);
-      }
-    },
-    { maxNodes: MAX_NODES }
-  );
+  for (const entry of selection.nodes) {
+    const classes: unknown = (entry.node as { classes?: unknown }).classes;
+    if (!Array.isArray(classes)) continue;
+    // Bounds ENTRIES READ, not ids kept, and the two differ exactly where it
+    // matters: an array of a million repeats holds one distinct id, so a
+    // distinct-count bound never trips and the whole array is read. The cap is
+    // the compiler's, which applies this many of a node's list and no more.
+    const readable = Math.min(classes.length, MAX_CLASSES_PER_NODE);
+    for (let i = 0; i < readable; i++) {
+      const id: unknown = classes[i];
+      if (namesAClass(id)) ids.add(id);
+    }
+  }
   return [...ids].sort();
 }

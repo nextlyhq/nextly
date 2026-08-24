@@ -52,3 +52,18 @@ Its third parameter is now a `WalkOptions` object carrying the existing `parent`
 plus an optional `maxNodes`, which ends the traversal rather than only skipping
 work in the callback. Traversal order and the parent each callback receives are
 unchanged.
+
+The node selection both readers use is now one function, `selectNodes`, exported
+from the engine and consumed by the style compiler and by the class-usage
+record. They previously stopped at the same NUMBER by different walks, and equal
+limits reached by different walks select different nodes: a document whose first
+root nests deeply spends the whole budget inside it under a depth-first walk and
+reaches later top-level siblings under a level-ordered one. A class on such a
+sibling was styled and rendered while being absent from the record a safe-delete
+check reads.
+
+`insertNode` refuses a subtree containing a cycle. The shared walk is
+cycle-tolerant so that readers answer rather than fail, which makes the repeat
+invisible in what it visits; the walk now reports a skipped cycle, and the
+insertion guard refuses on it. Accepting one produced a cyclic forest at the top
+level and a `RangeError` when inserting into a parent.

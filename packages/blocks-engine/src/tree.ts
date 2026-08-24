@@ -73,6 +73,16 @@ export interface WalkOptions {
    * proportional to the whole stored tree. This ends the traversal.
    */
   maxNodes?: number;
+  /**
+   * Called for each node skipped because it is its own ancestor.
+   *
+   * The walk is the only place that knows — detecting a cycle is a property of
+   * having traversed — so it reports rather than leaving each caller to find
+   * out by traversing again. Readers ignore this and keep walking; a WRITER has
+   * to refuse, because a cycle it accepts becomes a forest that later recursive
+   * operations cannot traverse at all.
+   */
+  onCycle?: (node: BlockNode) => void;
 }
 
 /**
@@ -133,7 +143,7 @@ function isWalkableNode(node: unknown): node is BlockNode {
  * node seen anywhere: the same node OBJECT placed in two different slots is not
  * a cycle, and a walk that visited it once would report a subtree containing one
  * duplicated id as containing none — which is exactly the question
- * `insertionBreaksIdUniqueness` asks this walk, and the answer that would let
+ * `insertionIsUnsafe` asks this walk, and the answer that would let
  * `insertNode` build a forest addressing two positions by one id.
  */
 export function walkNodes(
@@ -159,7 +169,11 @@ export function walkNodes(
       onPath.delete(entry.node);
       continue;
     }
-    if (!isWalkableNode(entry.node) || onPath.has(entry.node)) continue;
+    if (!isWalkableNode(entry.node)) continue;
+    if (onPath.has(entry.node)) {
+      options.onCycle?.(entry.node);
+      continue;
+    }
 
     onPath.add(entry.node);
     fn(entry.node, entry.parent);
@@ -241,23 +255,45 @@ function clampIndex(index: number, length: number): number {
 }
 
 /**
- * True if inserting `node` into `nodes` would break id uniqueness — either the
- * incoming subtree carries a duplicate id WITHIN itself, or one of its ids
- * already lives in the destination forest. Both are rejected: collapsing
- * duplicate incoming ids into the set would let an internally malformed subtree
- * through and corrupt id-addressing after insertion.
+ * True if inserting `node` into `nodes` would produce a forest the primitives
+ * can no longer address or traverse.
+ *
+ * Three ways, and they are rejected together because the consequence is the
+ * same: the incoming subtree carries a duplicate id WITHIN itself, one of its
+ * ids already lives in the destination forest, or it contains a CYCLE.
+ *
+ * Collapsing duplicate incoming ids into the set would let an internally
+ * malformed subtree through and corrupt id-addressing after insertion.
+ *
+ * The cycle is asked of the walk rather than looked for here. `walkNodes` is
+ * cycle-TOLERANT by design — a reader counting classes or measuring a document
+ * must answer rather than fail — so a cycle is invisible in what it visits, and
+ * a guard reading only the visits would call a cyclic subtree clean. What the
+ * walk reports is therefore the only account of it, and a second traversal
+ * written here to look again would be a second definition of the same thing.
+ *
+ * Refusing matters more for the writer than tolerating does for the reader: a
+ * top-level insert would return a forest that is itself cyclic, and an insert
+ * into a parent reaches the recursive `mapForest`, which has no such tolerance
+ * and exits with `RangeError: Maximum call stack size exceeded`.
  */
-function insertionBreaksIdUniqueness(
-  nodes: BlockNode[],
-  node: BlockNode
-): boolean {
+function insertionIsUnsafe(nodes: BlockNode[], node: BlockNode): boolean {
   const incoming = new Set<string>();
   let internalDuplicate = false;
-  walkNodes([node], n => {
-    if (incoming.has(n.id)) internalDuplicate = true;
-    incoming.add(n.id);
-  });
-  if (internalDuplicate) return true;
+  let cyclic = false;
+  walkNodes(
+    [node],
+    n => {
+      if (incoming.has(n.id)) internalDuplicate = true;
+      incoming.add(n.id);
+    },
+    {
+      onCycle: () => {
+        cyclic = true;
+      },
+    }
+  );
+  if (cyclic || internalDuplicate) return true;
   let overlapsForest = false;
   walkNodes(nodes, n => {
     if (incoming.has(n.id)) overlapsForest = true;
@@ -280,7 +316,7 @@ export function insertNode(
   node: BlockNode,
   at: TreePosition
 ): BlockNode[] {
-  if (insertionBreaksIdUniqueness(nodes, node)) return nodes;
+  if (insertionIsUnsafe(nodes, node)) return nodes;
   if (at.parentId === undefined) {
     const next = [...nodes];
     next.splice(clampIndex(at.index, next.length), 0, node);

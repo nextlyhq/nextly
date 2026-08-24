@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_LIMITS,
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_NODES,
@@ -184,6 +185,90 @@ describe("what a document nobody validated costs", () => {
 
     expect(classIdsUsedBy(withClasses(repeats))).toEqual(["hero"]);
     expect(readsPastTheCap).toBe(0);
+  });
+
+  it("does not let a DEEP first root starve a later top-level sibling", () => {
+    // The failure a depth-first walk produced while carrying the same numeric
+    // cap as the compiler. Equal limits reached by different walks select
+    // different nodes: depth-first spends the whole budget inside the first
+    // root, so a class on a later top-level node is styled and rendered while
+    // being absent from the record a safe-delete check reads.
+    //
+    // A small explicit budget rather than the engine default, so the test is
+    // about the ORDER rather than about building five thousand nodes — and so
+    // it exercises the `limits` parameter a site with raised limits must pass.
+    let deep: Record<string, unknown> = {
+      id: "deep-leaf",
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes: ["buried"],
+    };
+    for (let i = 0; i < 20; i++) {
+      deep = {
+        id: `deep-${i}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+        classes: [`deep-${i}`],
+        slots: { main: [deep] },
+      };
+    }
+
+    const ids = classIdsUsedBy(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          deep,
+          {
+            id: "later",
+            type: "core/text",
+            version: 1,
+            props: {},
+            classes: ["still-in-use"],
+          },
+        ],
+      },
+      { maxNodes: 5, maxDepth: 50, maxBytes: DEFAULT_LIMITS.maxBytes }
+    );
+
+    expect(ids).toContain("still-in-use");
+  });
+
+  it("stops where the COMPILER stops on depth, not only on count", () => {
+    // The other half of matching the compiler's selection. It refuses to style
+    // anything below `maxDepth`, so a class applied there is not a reference
+    // the page renders — counting it would report a class as used on a page
+    // that never applies it, and block its deletion forever.
+    let nested: Record<string, unknown> = {
+      id: "too-deep",
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes: ["past-the-depth-bound"],
+    };
+    for (let i = 0; i < 4; i++) {
+      nested = {
+        id: `wrap-${i}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+        classes: [`wrap-${i}`],
+        slots: { main: [nested] },
+      };
+    }
+
+    const ids = classIdsUsedBy(
+      { formatVersion: 1, kind: "page", nodes: [nested] },
+      { maxNodes: 1000, maxDepth: 3, maxBytes: DEFAULT_LIMITS.maxBytes }
+    );
+
+    // `wrap-3` is the OUTERMOST node — the loop wraps from the inside out — so
+    // it sits at depth 1 and is selected; `wrap-0` is at depth 4 and is not.
+    expect(ids).toContain("wrap-3");
+    expect(ids).not.toContain("wrap-0");
+    expect(ids).not.toContain("past-the-depth-bound");
   });
 
   it("keeps a live id that appears after thousands of others", () => {

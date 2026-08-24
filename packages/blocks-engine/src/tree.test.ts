@@ -117,7 +117,7 @@ describe("walkNodes / findNode / locateNode", () => {
     // path rather than every node seen. Reusing one object in two slots is not
     // a cycle — nothing recurses — so both placements are real.
     //
-    // Load-bearing rather than cosmetic: `insertionBreaksIdUniqueness` asks
+    // Load-bearing rather than cosmetic: `insertionIsUnsafe` asks
     // this walk whether an incoming subtree already contains a duplicate id. A
     // walk that visited the shared object once would report no duplicate, and
     // `insertNode` would build a forest where one id addresses two positions.
@@ -249,6 +249,47 @@ describe("insertNode", () => {
     expect(insertNode(nodes, extra, { parentId: nodes[0]!.id, index: 0 })).toBe(
       nodes
     );
+  });
+
+  it("refuses a subtree containing a CYCLE, at the top level and in a slot", () => {
+    // The walk this guard uses is cycle-TOLERANT, because a reader counting
+    // classes or measuring a document has to answer rather than fail. That
+    // makes the repeat invisible in what the walk visits, so the guard learns
+    // of it from the walk's report rather than from the ids it saw.
+    //
+    // Both destinations are asserted because they fail differently and only one
+    // of them fails loudly. A top-level insert would simply return a cyclic
+    // forest; an insert into a parent reaches the recursive `mapForest`, which
+    // has no tolerance for one and exits with a RangeError.
+    const { nodes, section } = fixture();
+    const cyclic = makeNode("core/section", 1, {}, { children: [] });
+    cyclic.slots!.children.push(cyclic);
+
+    expect(insertNode(nodes, cyclic, { index: 0 })).toBe(nodes);
+    expect(
+      insertNode(nodes, cyclic, {
+        parentId: section.id,
+        slot: "children",
+        index: 0,
+      })
+    ).toBe(nodes);
+  });
+
+  it("still accepts a subtree that merely REPEATS a node object in two slots", () => {
+    // The control, and the boundary of the refusal. Two slots holding the same
+    // object is not a cycle, so the walk reports none — this must be refused
+    // for carrying a duplicate ID, not for being cyclic. Without it, a guard
+    // that refused everything the cycle path touches would pass the case above
+    // while rejecting valid inserts nobody would trace back to here.
+    const { nodes } = fixture();
+    const shared = makeNode("core/text", 1);
+    const host = makeNode("core/section", 1, {}, { children: [shared] });
+    host.slots!.other = [shared];
+
+    // Refused, and for the duplicate id: re-id the subtree and it is accepted,
+    // which a cycle-based refusal would not allow.
+    expect(insertNode(nodes, host, { index: 0 })).toBe(nodes);
+    expect(insertNode(nodes, reidSubtree(host), { index: 0 })).not.toBe(nodes);
   });
 
   it("rejects re-inserting a node whose id already lives in the forest", () => {

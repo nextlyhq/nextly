@@ -93,6 +93,18 @@ export {
 } from "./tree";
 export type { NodeLocation, TreePosition } from "./tree";
 
+// The node selection every reader of a stored document shares. Public because
+// the page-builder plugin's class-usage record has to stop exactly where the
+// style compiler stops: a class applied to a node the compiler styled but the
+// counter never reached is absent from the record a safe-delete check reads,
+// and absence there is indistinguishable from "not used".
+export { selectNodes } from "./select-nodes";
+export type {
+  NodeSelection,
+  SelectedNode,
+  SelectionStop,
+} from "./select-nodes";
+
 export { measureBytes, surveyDocument } from "./measure-bytes";
 // The nesting rule and the types it answers in. Exported together: a caller
 // that can ask the question must be able to name the verdict it gets back, and
