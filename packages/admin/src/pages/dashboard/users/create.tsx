@@ -223,6 +223,19 @@ export default function CreateUserPage(): ReactElement {
 
   const roles = rolesData?.items || [];
 
+  /**
+   * The page's measure, repeated on every branch on purpose.
+   *
+   * `form` because this page is a labelled form: an unbounded panel stretches a
+   * short text input across the whole of it, which is the reason the measure
+   * exists at all.
+   *
+   * Every branch carries it — loading, each error state, and the loaded page —
+   * because they are the SAME page at different moments. Measuring only the
+   * loaded one would leave the skeleton full-width and reflow the page the
+   * instant data arrived, which reads as the layout breaking rather than as
+   * content appearing.
+   */
   // Loading state: Fetching roles
   if (isLoadingRoles) {
     return (
