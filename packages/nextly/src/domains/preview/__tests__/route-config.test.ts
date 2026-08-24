@@ -31,6 +31,37 @@ describe("resolvePreviewRoute", () => {
     expect(resolvePreviewRoute({ route: "/preview/" })).toBe("/preview");
   });
 
+  // The link builder assigns this value as a PATHNAME, where `?` and `#` are
+  // percent-encoded rather than starting a query or a fragment. A value
+  // carrying either is handed out as `/api/preview%3Ftenant=a`, which reaches
+  // no route and carries no token — so it is refused here, where an operator
+  // can still read why, rather than silently dropped.
+  it.each([
+    ["a query", "/api/preview?tenant=a"],
+    ["a fragment", "/api/preview#section"],
+    ["both", "/api/preview?tenant=a#section"],
+  ])("refuses a mount path carrying %s", (_label, bad) => {
+    expect(() => resolvePreviewRoute({ route: bad })).toThrow(NextlyError);
+    expect(() => resolvePreviewRoute({ route: bad })).toThrow(
+      /no query or fragment/i
+    );
+  });
+
+  // An encoded `%3F` is a character in a path, not a separator, and the parser
+  // is what tells them apart. Refusing it too would reject a legitimate mount.
+  it("accepts an encoded question mark, which is a path character", () => {
+    expect(resolvePreviewRoute({ route: "/api/%3Fpreview" })).toBe(
+      "/api/%3Fpreview"
+    );
+  });
+
+  // Returned normalised rather than as configured. The link builder resolves
+  // `..` when it assigns the pathname, so a raw value would be reported as one
+  // path and linked as another.
+  it("resolves dot segments to the path the link will actually use", () => {
+    expect(resolvePreviewRoute({ route: "/api/../evil" })).toBe("/evil");
+  });
+
   // A protocol-relative `//host` is a URL to another origin wearing a path's
   // clothes, which is why matching a leading slash is not enough on its own.
   it.each([

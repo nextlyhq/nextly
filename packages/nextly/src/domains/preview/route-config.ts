@@ -19,8 +19,10 @@ export interface PreviewConfig {
   /**
    * Where this application mounts `createPreviewRoute`.
    *
-   * Site-relative, and validated as such. Defaults to `/api/preview`, which is
-   * where the scaffold puts the route file.
+   * A mount PATH: site-relative, and carrying no query or fragment of its own,
+   * because the link's `token` parameter is appended to it. Validated as such
+   * when the configuration is read. Defaults to `/api/preview`, which is where
+   * the scaffold puts the route file.
    *
    * @default "/api/preview"
    */
@@ -47,8 +49,9 @@ const RESOLUTION_BASE = "https://preview.invalid";
 
 export function resolvePreviewRoute(config: PreviewConfig | undefined): string {
   const route = config?.route ?? DEFAULT_PREVIEW_ROUTE;
+  const parsed = parseSiteRelative(route);
 
-  if (!route.startsWith("/") || !isSameOrigin(route)) {
+  if (parsed === null) {
     // `invalidInput` rather than `validation`: this is one malformed
     // configuration value at boot, not a set of field errors from a request,
     // and the message is what an operator reads to fix their config.
@@ -66,16 +69,50 @@ export function resolvePreviewRoute(config: PreviewConfig | undefined): string {
     });
   }
 
+  // Refused rather than dropped. The link builder assigns this value as a
+  // PATHNAME, where a `?` is percent-encoded rather than starting a query — so
+  // `/api/preview?tenant=a` is handed out as `/api/preview%3Ftenant=a`, which
+  // reaches no route and carries no token. Dropping the query silently would
+  // hide the same mistake behind a link that happens to work, leaving the
+  // operator believing a parameter is being sent that never is.
+  if (parsed.search !== "" || parsed.hash !== "") {
+    throw NextlyError.invalidInput({
+      message: `preview.route must be a path with no query or fragment — got "${route}".`,
+      logContext: {
+        reason: "preview-route-carries-a-query-or-fragment",
+        remedy:
+          "It names where the route file is mounted, and the link's own " +
+          "`token` parameter is appended to it. A mount path that carries " +
+          "one of its own has nowhere to put it.",
+        route,
+      },
+    });
+  }
+
+  // The parser's pathname rather than the configured string, because the link
+  // builder assigns it as a pathname and that resolution happens there anyway:
+  // a configured `/api/../evil` would otherwise be reported as one path and
+  // linked as another.
+  //
   // Trailing slashes are common in a hand-written config and would otherwise
   // produce `/preview/?token=...`, which is a different path on a site that
   // distinguishes them.
-  return route.replace(/\/+$/, "") || "/";
+  return parsed.pathname.replace(/\/+$/, "") || "/";
 }
 
-function isSameOrigin(route: string): boolean {
+/**
+ * The route as the browser's parser sees it, or `null` if it leaves this origin.
+ *
+ * The caller needs the parsed URL rather than a verdict, because the query, the
+ * fragment and the resolved pathname are all read from it — parsing twice would
+ * let the check and the value it vouches for drift apart.
+ */
+function parseSiteRelative(route: string): URL | null {
+  if (!route.startsWith("/")) return null;
   try {
-    return new URL(route, RESOLUTION_BASE).origin === RESOLUTION_BASE;
+    const parsed = new URL(route, RESOLUTION_BASE);
+    return parsed.origin === RESOLUTION_BASE ? parsed : null;
   } catch {
-    return false;
+    return null;
   }
 }
