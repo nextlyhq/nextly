@@ -61,6 +61,7 @@ import * as React from "react";
 
 import {
   clipPathOf,
+  scaleCornerRadii,
   SQUARE_CORNERS,
   usedCornerRadii,
   type CornerRadii,
@@ -168,12 +169,16 @@ function boxesOf(style: CSSStyleDeclaration): {
  * A scale that is zero on either axis leaves nothing to resolve against and no
  * band to draw; `describable` refuses that block anyway, and answering square
  * here keeps this from dividing by it on the way to that refusal.
+ *
+ * UNDEFINED when a corner cannot be resolved at all — a percentage inside a
+ * `calc()` stays unresolved in the computed value — which the caller treats as a
+ * shape it cannot describe rather than as a square one.
  */
 function radiiOf(
   style: CSSStyleDeclaration,
   border: Rect,
   scale: Scale
-): CornerRadii {
+): CornerRadii | undefined {
   if (!(scale.x > 0) || !(scale.y > 0)) return SQUARE_CORNERS;
   return usedCornerRadii(
     {
@@ -448,12 +453,35 @@ export function SpacingOverlay({
       x: boxes.borderWidths.left + boxes.borderWidths.right,
       y: boxes.borderWidths.top + boxes.borderWidths.bottom,
     };
+    /*
+     * Through `canvasContentRect` rather than a rectangle read here: this
+     * package reads a rectangle in one place, so chrome measured one way cannot
+     * disagree with chrome measured another at a scroll offset.
+     */
+    const border = canvasContentRect(block, root);
+    const scaledBy: Scale = { x: scale.x, y: scale.y };
+    const radii = radiiOf(style, border, scaledBy);
+    /*
+     * A block whose own radii cannot be resolved is a shape this cannot
+     * describe, and drawing nothing is the answer it already gives for every
+     * other one. Deciding it here rather than inside `describable` keeps that
+     * predicate over the four values it is handed.
+     */
     if (
+      radii === undefined ||
       !describable(
         layoutFragments(block),
         style.position,
         hasScrollbarGutter(block, borders),
-        clippedByAncestor(block, root),
+        /*
+         * The block's own curve goes in with it: a rounded block flush inside an
+         * equally rounded clipping container is not cut, while its bounding
+         * rectangle's corners are outside every one of that container's arcs.
+         *
+         * Scaled, because the clip walk compares rendered rectangles while the
+         * radii are resolved in layout pixels.
+         */
+        clippedByAncestor(block, root, scaleCornerRadii(radii, scaledBy)),
         scale
       )
     ) {
@@ -467,13 +495,6 @@ export function SpacingOverlay({
      * asking for it separately would be a second answer to one question.
      */
     const layerBox = canvasContentRect(root, root);
-    /*
-     * Through `canvasContentRect` rather than a rectangle read here: this
-     * package reads a rectangle in one place, so chrome measured one way cannot
-     * disagree with chrome measured another at a scroll offset.
-     */
-    const border = canvasContentRect(block, root);
-    const scaledBy: Scale = { x: scale.x, y: scale.y };
     apply(
       spacingBands({
         border,
@@ -489,7 +510,7 @@ export function SpacingOverlay({
         // Resolved against the LAYOUT box, which is why the scale goes in with
         // it: a rounded block's bands have to be cut to the curve, and the curve
         // is stated in the units the author declared it in.
-        radii: radiiOf(style, border, scaledBy),
+        radii,
       }),
       layerBox
     );

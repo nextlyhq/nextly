@@ -32,11 +32,11 @@
  * @module spacing-bands
  */
 
-import type { CornerRadii, RoundedInset } from "./border-radii";
+import type { CornerRadii, RoundedShape } from "./border-radii";
 import {
   insetCornerRadii,
   isSquare,
-  roundedInsetOf,
+  roundedShapeIn,
   scaleCornerRadii,
 } from "./border-radii";
 import type { EdgeLengths, Rect, Scale } from "./geometry";
@@ -85,10 +85,10 @@ export interface SpacingBand {
    * where the margin box is a plain rectangle whatever the corners do, so
    * nothing there is drawn over ground the block does not occupy.
    *
-   * Present as INSETS rather than a rectangle because the shape is a different
-   * rectangle from the band, and the band is what carries the clip.
+   * Stated in the BAND's own coordinates, because that is what a `clip-path` on
+   * the band is resolved against.
    */
-  readonly clip?: RoundedInset;
+  readonly clip?: RoundedShape;
 }
 
 /** Everything the placement needs, and nothing that has to be read from a DOM. */
@@ -262,9 +262,9 @@ function clipWithin(
   band: Rect,
   shape: Rect,
   radii: CornerRadii
-): RoundedInset | undefined {
+): RoundedShape | undefined {
   if (isSquare(radii)) return undefined;
-  return roundedInsetOf(band, shape, radii);
+  return roundedShapeIn(band, shape, radii);
 }
 
 /** A rectangle reduced on each side, never past zero in either dimension. */
@@ -503,19 +503,73 @@ export function sameBands(
   if (left.length !== right.length) return false;
   return left.every((one, index) => {
     const other = right[index];
-    return (
-      other !== undefined &&
-      one.box === other.box &&
-      one.side === other.side &&
-      one.label === other.label &&
-      one.negative === other.negative &&
-      one.rect.x === other.rect.x &&
-      one.rect.y === other.rect.y &&
-      one.rect.width === other.rect.width &&
-      one.rect.height === other.rect.height
-    );
+    return other !== undefined && sameBand(one, other);
   });
 }
+
+/**
+ * Whether two bands describe the same thing.
+ *
+ * Every field, not a subset. A band that MOVED without resizing, a label that
+ * changed while the geometry held, and a curve that changed while both held are
+ * all real changes an author has to see, and a comparison skipping any of them
+ * freezes the overlay in exactly the case it exists to report.
+ */
+function sameBand(one: SpacingBand, other: SpacingBand): boolean {
+  return (
+    one.box === other.box &&
+    one.side === other.side &&
+    one.label === other.label &&
+    one.negative === other.negative &&
+    sameRect(one.rect, other.rect) &&
+    sameClip(one.clip, other.clip)
+  );
+}
+
+/** Whether two rectangles are the same rectangle. */
+function sameRect(one: Rect, other: Rect): boolean {
+  return (
+    one.x === other.x &&
+    one.y === other.y &&
+    one.width === other.width &&
+    one.height === other.height
+  );
+}
+
+/**
+ * Whether two bands are cut to the same shape.
+ *
+ * Compared because NOTHING else here changes when only the radius does. An
+ * author dragging `border-radius` moves no band rectangle, no label and no
+ * sign, so a comparison over those fields alone reports the bands equal, the
+ * caller keeps the array it already had, and the fill stays cut to the curve the
+ * block used to have — which is the case this clip exists for.
+ */
+function sameClip(
+  left: RoundedShape | undefined,
+  right: RoundedShape | undefined
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height &&
+    CLIP_CORNERS.every(
+      corner =>
+        left.radii[corner].x === right.radii[corner].x &&
+        left.radii[corner].y === right.radii[corner].y
+    )
+  );
+}
+
+/** The four corners, named so the comparison above cannot silently skip one. */
+const CLIP_CORNERS = [
+  "topLeft",
+  "topRight",
+  "bottomRight",
+  "bottomLeft",
+] as const satisfies readonly (keyof CornerRadii)[];
 
 /**
  * Boxes that CSS gives no margin, whatever the computed style reports.

@@ -39,3 +39,10 @@ its overflow can sit within all four of that container's straight edges and stil
 removed by the curve; the overlay accepted it and drew bands across the part that is not
 rendered. It now tests the corner itself rather than declining every rounded container, so the
 ordinary rounded card keeps its overlay.
+
+Two further cases the curve reaches. A block rounded to match the container it fills is not cut
+at all, while its bounding rectangle's corners sit outside every one of that container's arcs, so
+the overlay used to vanish on the ordinary nested rounded card; the block's own curve is now part
+of the comparison. And an overlay already on screen now notices a radius change on its own —
+nothing else about a band moves when only the corner does, so it previously kept painting the
+curve the block used to have until something else happened to move it.

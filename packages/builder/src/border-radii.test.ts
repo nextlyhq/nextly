@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  boundsInsideRounded,
   clipPathOf,
   insetCornerRadii,
   isSquare,
-  roundedInsetOf,
+  roundedInsideRounded,
+  roundedShapeIn,
   scaleCornerRadii,
   SQUARE_CORNERS,
   usedCornerRadii,
   type CornerRadii,
+  type CornerRadius,
   type DeclaredRadii,
 } from "./border-radii";
 
@@ -35,40 +36,87 @@ function declare(all: string | Partial<DeclaredRadii>): DeclaredRadii {
     : { ...none, ...all };
 }
 
+/**
+ * The resolved radii, or a failure naming the input.
+ *
+ * `usedCornerRadii` answers `undefined` for a value it cannot resolve, and a
+ * test that let that through would compare `undefined` to `undefined` and pass
+ * while resolving nothing.
+ */
+function used(declared: DeclaredRadii, box = BOX): CornerRadii {
+  const radii = usedCornerRadii(declared, box);
+  if (radii === undefined) {
+    throw new Error(`unresolved: ${JSON.stringify(declared)}`);
+  }
+  return radii;
+}
+
 describe("resolving the computed value", () => {
   it("takes a length as the same number on both axes", () => {
-    expect(usedCornerRadii(declare("8px"), BOX).topLeft).toEqual({
+    expect(used(declare("8px")).topLeft).toEqual({
       x: 8,
       y: 8,
     });
   });
 
   it("resolves a percentage per AXIS, against different lengths", () => {
-    const radii = usedCornerRadii(declare({ topLeft: "50%" }), BOX);
+    const radii = used(declare({ topLeft: "50%" }));
     // 50% of a 200-wide, 100-tall box is 100 across and 50 down. One number for
     // both would be right only on a square box, which is why BOX is not one.
     expect(radii.topLeft).toEqual({ x: 100, y: 50 });
   });
 
   it("reads the two-value form an elliptical corner serializes as", () => {
-    const radii = usedCornerRadii(declare({ topLeft: "10px 30px" }), BOX);
+    const radii = used(declare({ topLeft: "10px 30px" }));
     expect(radii.topLeft).toEqual({ x: 10, y: 30 });
   });
 
   it("mixes a length and a percentage within one corner", () => {
-    const radii = usedCornerRadii(declare({ topLeft: "10px 20%" }), BOX);
+    const radii = used(declare({ topLeft: "10px 20%" }));
     expect(radii.topLeft).toEqual({ x: 10, y: 20 });
   });
 
-  it("answers zero for a value it cannot parse", () => {
-    // A `NaN` here would poison every comparison downstream into silently
-    // answering false, which reads as "nothing is clipped" rather than as an error.
-    const radii = usedCornerRadii(declare({ topLeft: "" }), BOX);
-    expect(radii.topLeft).toEqual({ x: 0, y: 0 });
+  it("reads an EMPTY value as square rather than as unknown", () => {
+    /*
+     * The one unreadable case that is not unknown. A computed style never
+     * reports a supported longhand as blank, so a blank one means the engine has
+     * no such property — and an engine without `border-radius` draws a square
+     * corner, which is what zero says.
+     *
+     * Refusing it instead would blank the overlay in every renderer that does
+     * not implement the property, jsdom included.
+     */
+    expect(used(declare({ topLeft: "" })).topLeft).toEqual({ x: 0, y: 0 });
+  });
+
+  it("answers UNDEFINED for a percentage inside a math function", () => {
+    /*
+     * Reachable, and measured: a percentage inside `calc()` still depends on the
+     * box, so the computed longhand stays `"calc(10% + 5px)"` where
+     * `calc(10px + 5px)` resolves to `"15px"`. The catalog accepts a `calc()`
+     * length, so an author reaches this from the inspector.
+     */
+    expect(
+      usedCornerRadii(declare({ topLeft: "calc(10% + 5px)" }), BOX)
+    ).toBeUndefined();
+    // The control: a math function the browser DID resolve arrives as a plain
+    // length and must not be refused with it.
+    expect(used(declare({ topLeft: "15px" })).topLeft).toEqual({
+      x: 15,
+      y: 15,
+    });
+  });
+
+  it("refuses the whole box when any ONE corner is unresolvable", () => {
+    // The shape is refused, not the corner: three known corners and one unknown
+    // is still a shape that cannot be drawn.
+    expect(
+      usedCornerRadii(declare({ bottomLeft: "min(10px, 5%)" }), BOX)
+    ).toBeUndefined();
   });
 
   it("leaves radii that already fit alone", () => {
-    const radii = usedCornerRadii(declare("20px"), BOX);
+    const radii = used(declare("20px"));
     expect(radii.topRight).toEqual({ x: 20, y: 20 });
   });
 });
@@ -80,7 +128,7 @@ describe("the overlap reduction CSS applies and the computed value does not", ()
      * its corners at 50, not at the 200 the computed value reports. The tightest
      * side is the 100-tall one, whose two radii sum to 400, so f = 0.25.
      */
-    const radii = usedCornerRadii(declare("200px"), BOX);
+    const radii = used(declare("200px"));
     expect(radii.topLeft).toEqual({ x: 50, y: 50 });
     expect(radii.bottomRight).toEqual({ x: 50, y: 50 });
   });
@@ -95,14 +143,13 @@ describe("the overlap reduction CSS applies and the computed value does not", ()
      * leave this at 200, since nothing about the top-left corner alone is too
      * big for a 200-wide box.
      */
-    const radii = usedCornerRadii(declare({ topLeft: "200px" }), BOX);
+    const radii = used(declare({ topLeft: "200px" }));
     expect(radii.topLeft).toEqual({ x: 100, y: 100 });
   });
 
   it("carries the factor to corners that were not themselves too big", () => {
-    const radii = usedCornerRadii(
-      declare({ topLeft: "150px", topRight: "150px", bottomLeft: "10px" }),
-      BOX
+    const radii = used(
+      declare({ topLeft: "150px", topRight: "150px", bottomLeft: "10px" })
     );
     /*
      * Four sides constrain, and the tightest wins: top gives 200/300, right
@@ -137,7 +184,7 @@ describe("the overlap reduction CSS applies and the computed value does not", ()
      * a side is constrained by the half-axes running ALONG it, so a corner that
      * is wide and shallow loads the horizontal sides and spares the vertical.
      */
-    const radii = usedCornerRadii(declare(declared), BOX);
+    const radii = used(declare(declared));
     const corner = Object.keys(declared)[0] as keyof CornerRadii;
     const declaredMajor = 150;
     expect([side, radii[corner].x + radii[corner].y]).toEqual([
@@ -151,18 +198,18 @@ describe("the overlap reduction CSS applies and the computed value does not", ()
 
   it("does not divide by a side with no curve on it", () => {
     // Every side sums to zero here, and `L / 0` would reduce the box by Infinity.
-    expect(usedCornerRadii(declare("0px"), BOX)).toEqual(SQUARE_CORNERS);
+    expect(used(declare("0px"))).toEqual(SQUARE_CORNERS);
   });
 
   it("squares every corner on a box with no width", () => {
-    const radii = usedCornerRadii(declare("20px"), { width: 0, height: 100 });
+    const radii = used(declare("20px"), { width: 0, height: 100 });
     expect(radii.topLeft).toEqual({ x: 0, y: 0 });
   });
 });
 
 describe("the padding box's curve", () => {
   it("takes each border width off the half-axis running alongside it", () => {
-    const outer = usedCornerRadii(declare("40px"), BOX);
+    const outer = used(declare("40px"));
     const inner = insetCornerRadii(outer, {
       top: 4,
       right: 8,
@@ -176,7 +223,7 @@ describe("the padding box's curve", () => {
   });
 
   it("squares a corner whose border is thicker than its curve", () => {
-    const inner = insetCornerRadii(usedCornerRadii(declare("6px"), BOX), {
+    const inner = insetCornerRadii(used(declare("6px")), {
       top: 10,
       right: 10,
       bottom: 10,
@@ -199,14 +246,14 @@ describe("the padding box's curve", () => {
      * giving 80. The engine draws 90, so this asserts BOTH the number and that
      * it is not the other one.
      */
-    const outer = usedCornerRadii(declare({ topLeft: "100px" }), BOX);
+    const outer = used(declare({ topLeft: "100px" }));
     expect(outer.topLeft).toEqual({ x: 100, y: 100 });
 
     const border = { top: 10, right: 10, bottom: 10, left: 10 };
     const inner = insetCornerRadii(outer, border);
     expect(inner.topLeft).toEqual({ x: 90, y: 90 });
 
-    const otherOrder = usedCornerRadii(declare({ topLeft: "90px" }), {
+    const otherOrder = used(declare({ topLeft: "90px" }), {
       width: BOX.width - 20,
       height: BOX.height - 20,
     });
@@ -217,7 +264,7 @@ describe("the padding box's curve", () => {
 
 describe("moving radii into rendered pixels", () => {
   it("scales each half-axis by its own axis", () => {
-    const scaled = scaleCornerRadii(usedCornerRadii(declare("10px"), BOX), {
+    const scaled = scaleCornerRadii(used(declare("10px")), {
       x: 2,
       y: 0.5,
     });
@@ -266,14 +313,18 @@ const CURVED: CornerRadii = {
 describe("whether a rectangle fits inside a rounded one", () => {
   it("accepts a box clear of every corner", () => {
     const box = { top: 160, right: 400, bottom: 240, left: 300 };
-    expect(boundsInsideRounded(box, CLIP, CURVED, 0.5)).toBe(true);
+    expect(roundedInsideRounded(box, SQUARE_CORNERS, CLIP, CURVED, 0.5)).toBe(
+      true
+    );
   });
 
   it("rejects a box that pokes through the arc", () => {
     // Top-left arc centre is (260, 140). The box corner at (210, 110) sits
     // (50, 30) inside it: (50/60)^2 + (30/40)^2 = 1.26, which is outside.
     const box = { top: 110, right: 400, bottom: 240, left: 210 };
-    expect(boundsInsideRounded(box, CLIP, CURVED, 0.5)).toBe(false);
+    expect(roundedInsideRounded(box, SQUARE_CORNERS, CLIP, CURVED, 0.5)).toBe(
+      false
+    );
   });
 
   it("accepts a box INSIDE the corner's square but inside its arc too", () => {
@@ -295,7 +346,9 @@ describe("whether a rectangle fits inside a rounded one", () => {
       (dx / CURVED.topLeft.x) ** 2 + (dy / CURVED.topLeft.y) ** 2
     ).toBeLessThan(1);
 
-    expect(boundsInsideRounded(box, CLIP, CURVED, 0.5)).toBe(true);
+    expect(roundedInsideRounded(box, SQUARE_CORNERS, CLIP, CURVED, 0.5)).toBe(
+      true
+    );
   });
 
   it("tests each corner independently", () => {
@@ -312,16 +365,18 @@ describe("whether a rectangle fits inside a rounded one", () => {
     };
     expect(inset).toBe(6);
     for (const [name, box] of Object.entries(corners)) {
-      expect([name, boundsInsideRounded(box, CLIP, CURVED, 0.5)]).toEqual([
+      expect([
         name,
-        false,
-      ]);
+        roundedInsideRounded(box, SQUARE_CORNERS, CLIP, CURVED, 0.5),
+      ]).toEqual([name, false]);
     }
   });
 
   it("accepts everything when the corners are square", () => {
     const flush = { top: 100, right: 500, bottom: 300, left: 200 };
-    expect(boundsInsideRounded(flush, CLIP, SQUARE_CORNERS, 0.5)).toBe(true);
+    expect(
+      roundedInsideRounded(flush, SQUARE_CORNERS, CLIP, SQUARE_CORNERS, 0.5)
+    ).toBe(true);
   });
 
   it("forgives an overhang past the ARC no bigger than the slack", () => {
@@ -338,31 +393,175 @@ describe("whether a rectangle fits inside a rounded one", () => {
      * than the half-pixel allowance.
      */
     const grazing = { top: 111.416, right: 400, bottom: 240, left: 217.274 };
-    expect(boundsInsideRounded(grazing, CLIP, CURVED, 0.5)).toBe(true);
+    expect(
+      roundedInsideRounded(grazing, SQUARE_CORNERS, CLIP, CURVED, 0.5)
+    ).toBe(true);
     // The separating half: with no allowance the same box IS outside the curve,
     // so the acceptance above is the slack's doing and not the box's.
-    expect(boundsInsideRounded(grazing, CLIP, CURVED, 0)).toBe(false);
+    expect(roundedInsideRounded(grazing, SQUARE_CORNERS, CLIP, CURVED, 0)).toBe(
+      false
+    );
+  });
+});
+
+describe("a ROUNDED shape inside a rounded one", () => {
+  it("accepts a block flush inside an equally rounded container", () => {
+    /*
+     * The nested rounded card, and the case a rectangle comparison gets wrong.
+     * The block fills the clip exactly and is not cut anywhere — while its
+     * bounding rectangle's corners sit outside every one of the container's
+     * arcs, which is what a test reading only the rectangle would refuse.
+     */
+    const flush = { top: 100, right: 500, bottom: 300, left: 200 };
+    expect(roundedInsideRounded(flush, CURVED, CLIP, CURVED, 0.5)).toBe(true);
+
+    // The separating half: the SAME box with square corners IS refused, so the
+    // acceptance above is the block's own curve and not a widened allowance.
+    expect(roundedInsideRounded(flush, SQUARE_CORNERS, CLIP, CURVED, 0.5)).toBe(
+      false
+    );
+  });
+
+  it("accepts a block rounded MORE than the container it sits in", () => {
+    const flush = { top: 100, right: 500, bottom: 300, left: 200 };
+    const rounder: CornerRadii = {
+      topLeft: { x: 90, y: 60 },
+      topRight: { x: 90, y: 60 },
+      bottomRight: { x: 90, y: 60 },
+      bottomLeft: { x: 90, y: 60 },
+    };
+    expect(roundedInsideRounded(flush, rounder, CLIP, CURVED, 0.5)).toBe(true);
+  });
+
+  it("still refuses a rounded block whose curve leaves the container's", () => {
+    /*
+     * A block rounded too gently for the corner it is pushed into. Without this
+     * the fix for the flush case would be "accept anything with a radius", which
+     * reopens the defect the corner test exists for.
+     */
+    const pushed = { top: 110, right: 400, bottom: 240, left: 210 };
+    const gentle: CornerRadii = {
+      topLeft: { x: 4, y: 4 },
+      topRight: { x: 4, y: 4 },
+      bottomRight: { x: 4, y: 4 },
+      bottomLeft: { x: 4, y: 4 },
+    };
+    expect(roundedInsideRounded(pushed, gentle, CLIP, CURVED, 0.5)).toBe(false);
+  });
+
+  it.each<[string, CornerRadius]>([
+    ["40px / 0", { x: 40, y: 0 }],
+    ["0 / 40px", { x: 0, y: 40 }],
+  ])("reads a corner declared %s as the box corner", (_label, topLeft) => {
+    /*
+     * `border-radius: 40px / 0` draws a right angle: an ellipse with a zero
+     * half-axis has no interior, so the block's extreme point there is its box
+     * CORNER rather than a point along a curve.
+     *
+     * BOTH orientations, because they fail differently and only one of them
+     * fails at all. Zeroing just the axis that is zero leaves `0 / 40px`
+     * sampling a point forty pixels DOWN from the corner and missing the
+     * incursion entirely, while `40px / 0` still happens to sweep through the
+     * corner and gives the right answer for the wrong reason.
+     */
+    const pushed = { top: 110, right: 400, bottom: 240, left: 210 };
+    const degenerate: CornerRadii = { ...SQUARE_CORNERS, topLeft };
+    expect(roundedInsideRounded(pushed, degenerate, CLIP, CURVED, 0.5)).toBe(
+      false
+    );
+    // And it agrees with the square reading, which is what the browser draws.
+    expect(
+      roundedInsideRounded(pushed, SQUARE_CORNERS, CLIP, CURVED, 0.5)
+    ).toBe(false);
+  });
+
+  it("samples the arc rather than only its two ends", () => {
+    /*
+     * A block whose corner arc is INSIDE the container's curve at both of its
+     * endpoints and outside it in between. Testing only the ends — the cheap
+     * thing to write, and the thing that looks sufficient — accepts a block the
+     * container visibly cuts.
+     *
+     * The fixture was found by searching the parameter space rather than
+     * reasoned out, because the case needs a wide shallow container arc against
+     * a wide shallow block arc and does not turn up by picking round numbers.
+     * Both halves are asserted below, so it cannot drift into a fixture where an
+     * endpoint is already outside and the test passes for the wrong reason.
+     */
+    const wide: CornerRadii = {
+      ...SQUARE_CORNERS,
+      topLeft: { x: 130, y: 24 },
+    };
+    const own: CornerRadii = { ...SQUARE_CORNERS, topLeft: { x: 60, y: 8 } };
+    const box = { top: 102, right: 400, bottom: 240, left: 230 };
+
+    /** How far past the container's top-left arc a point on the block's is. */
+    const reach = (angle: number): number => {
+      const cx = box.left + own.topLeft.x;
+      const cy = box.top + own.topLeft.y;
+      const px = cx - own.topLeft.x * Math.cos(angle);
+      const py = cy - own.topLeft.y * Math.sin(angle);
+      const dx = CLIP.left + wide.topLeft.x - px;
+      const dy = CLIP.top + wide.topLeft.y - py;
+      if (dx <= 0 || dy <= 0) return 0;
+      return (dx / wide.topLeft.x) ** 2 + (dy / wide.topLeft.y) ** 2;
+    };
+
+    // Both ENDS of the block's arc are inside the container's curve.
+    expect(reach(0)).toBeLessThan(1);
+    expect(reach(Math.PI / 2)).toBeLessThan(1);
+    // Somewhere in between, it is not.
+    expect(
+      Math.max(...[0.2, 0.3, 0.4, 0.5].map(f => reach(f * Math.PI)))
+    ).toBeGreaterThan(1);
+
+    expect(roundedInsideRounded(box, own, CLIP, wide, 0.5)).toBe(false);
   });
 });
 
 describe("stating the shape as a clip", () => {
-  it("measures each inset from the band to the shape", () => {
+  it("states the shape in the clipped element's own coordinates", () => {
     const band = { x: 10, y: 20, width: 100, height: 40 };
     const shape = { x: 20, y: 25, width: 70, height: 20 };
-    expect(roundedInsetOf(band, shape, SQUARE_CORNERS)).toEqual({
-      top: 5,
-      left: 10,
-      right: 20,
-      bottom: 15,
+    // A `clip-path` resolves against the element carrying it, so the shape is
+    // offset by the difference between the two origins and keeps its own size.
+    expect(roundedShapeIn(band, shape, SQUARE_CORNERS)).toEqual({
+      x: 10,
+      y: 5,
+      width: 70,
+      height: 20,
       radii: SQUARE_CORNERS,
     });
   });
 
-  it("writes the horizontal radii before the vertical ones", () => {
+  it("writes a PATH rather than an inset, so nothing renormalises it", () => {
     /*
-     * The two lists are easy to transpose and impossible to notice once
-     * transposed, because they differ only on an elliptical corner — so the
-     * fixture makes every corner elliptical and every corner distinct.
+     * `inset(... round ...)` resolves its radii the way `border-radius` does,
+     * which includes the overlap reduction against the inset rectangle —
+     * measured, a 180x80 element under `inset(0 round 90px)` is cut at 80. A
+     * padding-box curve that legitimately exceeds its own box would be silently
+     * shrunk, and that case is reachable: an outer corner of 100 less a 10px
+     * border leaves 90 on a padding box 80 tall, and the engine draws the 90.
+     */
+    const value = clipPathOf({
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 80,
+      radii: { ...SQUARE_CORNERS, topLeft: { x: 90, y: 90 } },
+    });
+    expect(value.startsWith("path(")).toBe(true);
+    expect(value).not.toContain("inset(");
+    // The radius survives at its full size rather than being clamped to the box.
+    expect(value).toContain("A 90 90");
+  });
+
+  it("writes each corner's own radii, in path order", () => {
+    /*
+     * Every corner elliptical and every corner distinct, because a transposed
+     * pair of half-axes is invisible on a circular corner and the arcs are
+     * written in the order the outline is walked rather than the order the
+     * shorthand lists them.
      */
     const radii: CornerRadii = {
       topLeft: { x: 1, y: 5 },
@@ -370,19 +569,23 @@ describe("stating the shape as a clip", () => {
       bottomRight: { x: 3, y: 7 },
       bottomLeft: { x: 4, y: 8 },
     };
-    expect(clipPathOf({ top: 0, right: 0, bottom: 0, left: 0, radii })).toBe(
-      "inset(0px 0px 0px 0px round 1px 2px 3px 4px / 5px 6px 7px 8px)"
+    expect(clipPathOf({ x: 0, y: 0, width: 100, height: 50, radii })).toBe(
+      'path("M 1 0 L 98 0 A 2 6 0 0 1 100 6 L 100 43 A 3 7 0 0 1 97 50 ' +
+        'L 4 50 A 4 8 0 0 1 0 42 L 0 5 A 1 5 0 0 1 1 0 Z")'
     );
   });
 
-  it("writes the edges in the order CSS reads them", () => {
+  it("offsets the whole outline by the shape's origin", () => {
+    // A band is rarely at the clipped element's own origin, and a path written
+    // as if it were lands the curve in the wrong corner.
     const value = clipPathOf({
-      top: 1,
-      right: 2,
-      bottom: 3,
-      left: 4,
+      x: 7,
+      y: 11,
+      width: 20,
+      height: 30,
       radii: SQUARE_CORNERS,
     });
-    expect(value.startsWith("inset(1px 2px 3px 4px round")).toBe(true);
+    expect(value).toContain("M 7 11");
+    expect(value).toContain("27 41");
   });
 });

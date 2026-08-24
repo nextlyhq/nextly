@@ -127,12 +127,27 @@ interface BoxSize {
 /**
  * One computed `<length-percentage>` against the length it is a fraction of.
  *
- * Anything unparseable answers zero rather than propagating a `NaN`, which would
- * poison every comparison downstream into silently answering false.
+ * Answers UNDEFINED rather than zero for anything it cannot read, and the
+ * difference is the whole point: zero means a square corner, and a value this
+ * cannot resolve is a corner of UNKNOWN shape. Reading the second as the first
+ * is what makes a rounded block draw square bands.
+ *
+ * It is reachable. A percentage inside a math function stays unresolved in the
+ * computed value because it still depends on the box — measured, `border-radius:
+ * calc(10% + 5px)` computes as `"calc(10% + 5px)"` while `calc(10px + 5px)`
+ * computes as `"15px"` — and the catalog accepts a `calc()` length.
+ *
+ * An EMPTY value is the one unreadable case that is not unknown. A computed
+ * style never reports a supported longhand as blank, so a blank one means the
+ * engine has no such property — and an engine with no `border-radius` draws a
+ * square corner, which is exactly what zero says. Treating it as unknown instead
+ * would refuse every block in any renderer that does not implement the
+ * property, jsdom included.
  */
-function lengthAgainst(token: string, basis: number): number {
+function lengthAgainst(token: string, basis: number): number | undefined {
+  if (token === "") return 0;
   const parsed = Number.parseFloat(token);
-  if (!Number.isFinite(parsed)) return 0;
+  if (!Number.isFinite(parsed)) return undefined;
   const length = token.endsWith("%") ? (parsed / 100) * basis : parsed;
   // A negative radius is invalid CSS and never computes, but the floor costs
   // nothing and keeps a hand-built input from producing an inverted corner.
@@ -146,14 +161,14 @@ function lengthAgainst(token: string, basis: number): number {
  * so `50%` is half the width horizontally and half the height vertically, and
  * only a length comes out equal on both.
  */
-function parseCorner(value: string, box: BoxSize): CornerRadius {
+function parseCorner(value: string, box: BoxSize): CornerRadius | undefined {
   const tokens = value.trim().split(/\s+/);
   const horizontal = tokens[0] ?? "0";
   const vertical = tokens[1] ?? horizontal;
-  return {
-    x: lengthAgainst(horizontal, box.width),
-    y: lengthAgainst(vertical, box.height),
-  };
+  const x = lengthAgainst(horizontal, box.width);
+  const y = lengthAgainst(vertical, box.height);
+  if (x === undefined || y === undefined) return undefined;
+  return { x, y };
 }
 
 /**
@@ -201,17 +216,27 @@ function mapCorners(
  * `box` is the BORDER box, in the same units the declarations are in — unscaled
  * CSS pixels. Handing it a post-transform rectangle resolves every percentage
  * against the rendered size, which is right only while the scale is one.
+ *
+ * UNDEFINED when any corner cannot be resolved, which callers are expected to
+ * treat as a shape they cannot describe rather than as a square one.
  */
 export function usedCornerRadii(
   declared: DeclaredRadii,
   box: BoxSize
-): CornerRadii {
-  const resolved: CornerRadii = {
-    topLeft: parseCorner(declared.topLeft, box),
-    topRight: parseCorner(declared.topRight, box),
-    bottomRight: parseCorner(declared.bottomRight, box),
-    bottomLeft: parseCorner(declared.bottomLeft, box),
-  };
+): CornerRadii | undefined {
+  const topLeft = parseCorner(declared.topLeft, box);
+  const topRight = parseCorner(declared.topRight, box);
+  const bottomRight = parseCorner(declared.bottomRight, box);
+  const bottomLeft = parseCorner(declared.bottomLeft, box);
+  if (
+    topLeft === undefined ||
+    topRight === undefined ||
+    bottomRight === undefined ||
+    bottomLeft === undefined
+  ) {
+    return undefined;
+  }
+  const resolved: CornerRadii = { topLeft, topRight, bottomRight, bottomLeft };
   const factor = reductionFactor(resolved, box);
   if (factor >= 1) return resolved;
   return mapCorners(resolved, corner => ({
@@ -296,95 +321,196 @@ function insideArc(dx: number, dy: number, radius: CornerRadius): boolean {
 }
 
 /**
- * Whether a rectangle lies inside a ROUNDED one.
+ * How finely each corner arc is sampled when the INNER shape is itself rounded.
  *
- * The caller is expected to have compared the two rectangles first: this asks
- * only the question the rectangular comparison cannot, which is whether a box
- * inside all four straight edges still pokes through one of the four arcs.
- *
- * `slack` is subtracted from each depth rather than from the rectangles, so it
- * means the same thing here as it does there — how far a box may overhang before
- * the overhang is real rather than a rounding artefact of two fractional
- * measurements.
+ * A rounded child's extreme point in a corner is not its box corner — it is a
+ * point on its own arc — so the two curves have to be compared along their
+ * length rather than at one point. Sixty-four steps over a quarter turn leaves
+ * the sampled chord within `r * (1 - cos(pi / 256))` of the true arc, which is
+ * 0.08px on a 1000px radius. See `samplingBound`, which takes that off the
+ * caller's allowance so the approximation can only ever refuse too much.
  */
-export function boundsInsideRounded(
+const ARC_SAMPLES = 64;
+
+/** Which side of the box each corner sits on: -1 is left or top, 1 right or bottom. */
+const CORNER_SIGNS = {
+  topLeft: { x: -1, y: -1 },
+  topRight: { x: 1, y: -1 },
+  bottomRight: { x: 1, y: 1 },
+  bottomLeft: { x: -1, y: 1 },
+} as const satisfies Record<keyof CornerRadii, { x: -1 | 1; y: -1 | 1 }>;
+
+/** How far the sampled chords can fall short of the arcs they stand in for. */
+function samplingBound(radii: CornerRadii): number {
+  let largest = 0;
+  for (const corner of CORNERS) {
+    largest = Math.max(largest, radii[corner].x, radii[corner].y);
+  }
+  return largest * (1 - Math.cos(Math.PI / (4 * ARC_SAMPLES)));
+}
+
+/**
+ * Whether one corner of the inner shape stays inside the matching corner of the
+ * outer one.
+ *
+ * A corner with a zero half-axis is square on BOTH axes — an ellipse with no
+ * interior cuts nothing — so its radii are zeroed together before sampling
+ * rather than one at a time, which would otherwise put the sampled point a
+ * radius away from the box corner it should be at.
+ */
+function cornerInside(
+  corner: keyof CornerRadii,
   box: EdgeBounds,
+  boxRadius: CornerRadius,
   clip: EdgeBounds,
-  radii: CornerRadii,
+  clipRadius: CornerRadius,
   slack: number
 ): boolean {
-  const left = (radius: number): number =>
-    clip.left + radius - box.left - slack;
-  const right = (radius: number): number =>
-    box.right - (clip.right - radius) - slack;
-  const top = (radius: number): number => clip.top + radius - box.top - slack;
-  const bottom = (radius: number): number =>
-    box.bottom - (clip.bottom - radius) - slack;
+  // A square outer corner cuts nothing the straight-edge comparison has not
+  // already answered.
+  if (clipRadius.x <= 0 || clipRadius.y <= 0) return true;
+  const own = boxRadius.x > 0 && boxRadius.y > 0 ? boxRadius : SQUARE;
+  const sign = CORNER_SIGNS[corner];
+  const centre = arcCentre(sign, box, own);
+  const against = arcCentre(sign, clip, clipRadius);
+  const steps = own.x > 0 ? ARC_SAMPLES : 1;
+  for (let step = 0; step < steps; step += 1) {
+    const angle = (step / Math.max(1, steps - 1)) * (Math.PI / 2);
+    const px = centre.x + sign.x * own.x * Math.cos(angle);
+    const py = centre.y + sign.y * own.y * Math.sin(angle);
+    const dx = sign.x * (px - against.x) - slack;
+    const dy = sign.y * (py - against.y) - slack;
+    if (!insideArc(dx, dy, clipRadius)) return false;
+  }
+  return true;
+}
 
-  return (
-    insideArc(left(radii.topLeft.x), top(radii.topLeft.y), radii.topLeft) &&
-    insideArc(right(radii.topRight.x), top(radii.topRight.y), radii.topRight) &&
-    insideArc(
-      right(radii.bottomRight.x),
-      bottom(radii.bottomRight.y),
-      radii.bottomRight
-    ) &&
-    insideArc(
-      left(radii.bottomLeft.x),
-      bottom(radii.bottomLeft.y),
-      radii.bottomLeft
+/**
+ * Where a corner's arc is centred: one radius in along each axis from it.
+ *
+ * The same arithmetic for the inner shape and the outer one, which is the point
+ * — the two are compared in the same frame, and a sign written out twice is a
+ * sign that can be written differently twice.
+ */
+function arcCentre(
+  sign: { readonly x: -1 | 1; readonly y: -1 | 1 },
+  bounds: EdgeBounds,
+  radius: CornerRadius
+): { readonly x: number; readonly y: number } {
+  return {
+    x: sign.x < 0 ? bounds.left + radius.x : bounds.right - radius.x,
+    y: sign.y < 0 ? bounds.top + radius.y : bounds.bottom - radius.y,
+  };
+}
+
+/**
+ * Whether one rounded rectangle lies inside another.
+ *
+ * The caller is expected to have compared the two rectangles first: this asks
+ * only the question the rectangular comparison cannot, which is whether a shape
+ * inside all four straight edges still pokes through one of the four arcs.
+ *
+ * The INNER shape's own curve is part of the question, not a detail. A rounded
+ * block flush inside an equally rounded clipping container is not cut at all,
+ * while its bounding rectangle's corners lie outside every one of that
+ * container's arcs — so a test that reads only the rectangle refuses the
+ * ordinary nested rounded card and takes the whole overlay with it.
+ *
+ * `slack` means the same thing here as it does for the straight edges: how far a
+ * shape may overhang before the overhang is real rather than a rounding artefact
+ * of two fractional measurements. The sampling bound comes off it, so the
+ * approximation spends the allowance rather than exceeding it.
+ */
+export function roundedInsideRounded(
+  box: EdgeBounds,
+  boxRadii: CornerRadii,
+  clip: EdgeBounds,
+  clipRadii: CornerRadii,
+  slack: number
+): boolean {
+  const allowance = slack - samplingBound(boxRadii);
+  return CORNERS.every(corner =>
+    cornerInside(
+      corner,
+      box,
+      boxRadii[corner],
+      clip,
+      clipRadii[corner],
+      allowance
     )
   );
 }
 
 /**
- * A rounded rectangle expressed as insets from the rectangle it clips.
+ * A rounded rectangle in the coordinate space of the element it clips.
  *
  * The shape a band must be cut to is the block's rounded box, which is a
- * different rectangle from the band — so it cannot be stated in the band's own
- * terms without saying how far each of its edges is from the shape's. That is
- * exactly the form `clip-path: inset()` takes, and stating it here rather than
- * building the CSS keeps the arithmetic testable without a browser.
+ * different rectangle from the band — so it is stated relative to the band's own
+ * origin, which is what a `clip-path` is resolved against.
  */
-export interface RoundedInset {
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-  readonly left: number;
+export interface RoundedShape {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
   readonly radii: CornerRadii;
 }
 
-/** Where `shape` sits inside `clipped`, as one inset per edge. */
-export function roundedInsetOf(
+/** Where `shape` sits inside `clipped`, in `clipped`'s own coordinates. */
+export function roundedShapeIn(
   clipped: Rect,
   shape: Rect,
   radii: CornerRadii
-): RoundedInset {
+): RoundedShape {
   return {
-    top: shape.y - clipped.y,
-    left: shape.x - clipped.x,
-    right: clipped.x + clipped.width - (shape.x + shape.width),
-    bottom: clipped.y + clipped.height - (shape.y + shape.height),
+    x: shape.x - clipped.x,
+    y: shape.y - clipped.y,
+    width: shape.width,
+    height: shape.height,
     radii,
   };
 }
 
 /**
- * A rounded inset as the `clip-path` value that cuts a band's fill to it.
+ * The shape as the `clip-path` value that cuts a band's fill to it.
  *
- * Built here rather than at the call site so the shape and its CSS spelling stay
- * in one module: the two radius lists are written horizontal-then-vertical
- * across a solidus, an order that is easy to transpose and impossible to notice
- * once transposed, since it is wrong only on an elliptical corner.
+ * A PATH rather than `inset(... round ...)`, and that is not a style choice.
+ * `inset()` resolves its radii the way `border-radius` does, which includes the
+ * overlap reduction against the inset rectangle — so a padding-box curve that
+ * legitimately exceeds its own box is silently shrunk by the browser and the
+ * clip stops following the element's real edge.
+ *
+ * That case is exactly the one this module documents: an outer corner of 100
+ * less a 10px border leaves an inner curve of 90 on a padding box only 80 tall,
+ * and the engine draws the 90. Measured — a 180x80 element under
+ * `inset(0 round 90px)` is cut at 80, so the two disagree wherever a border is
+ * thick enough to matter. A path states the arcs outright and is not
+ * renormalised.
+ *
+ * An arc with a zero radius is drawn as a straight line by the SVG path
+ * grammar, so a square corner needs no special case and every shape is written
+ * the same way.
  */
-export function clipPathOf(inset: RoundedInset): string {
-  const px = (value: number): string =>
-    `${String(Math.round(value * 100) / 100)}px`;
-  const corners = CORNERS.map(corner => inset.radii[corner]);
-  const horizontal = corners.map(corner => px(corner.x)).join(" ");
-  const vertical = corners.map(corner => px(corner.y)).join(" ");
-  const edges = [inset.top, inset.right, inset.bottom, inset.left]
-    .map(px)
-    .join(" ");
-  return `inset(${edges} round ${horizontal} / ${vertical})`;
+export function clipPathOf(shape: RoundedShape): string {
+  const n = (value: number): string => String(Math.round(value * 100) / 100);
+  const { radii } = shape;
+  const left = shape.x;
+  const top = shape.y;
+  const right = shape.x + shape.width;
+  const bottom = shape.y + shape.height;
+  const arc = (radius: CornerRadius, x: number, y: number): string =>
+    `A ${n(radius.x)} ${n(radius.y)} 0 0 1 ${n(x)} ${n(y)}`;
+  const steps = [
+    `M ${n(left + radii.topLeft.x)} ${n(top)}`,
+    `L ${n(right - radii.topRight.x)} ${n(top)}`,
+    arc(radii.topRight, right, top + radii.topRight.y),
+    `L ${n(right)} ${n(bottom - radii.bottomRight.y)}`,
+    arc(radii.bottomRight, right - radii.bottomRight.x, bottom),
+    `L ${n(left + radii.bottomLeft.x)} ${n(bottom)}`,
+    arc(radii.bottomLeft, left, bottom - radii.bottomLeft.y),
+    `L ${n(left)} ${n(top + radii.topLeft.y)}`,
+    arc(radii.topLeft, left + radii.topLeft.x, top),
+    "Z",
+  ];
+  return `path("${steps.join(" ")}")`;
 }

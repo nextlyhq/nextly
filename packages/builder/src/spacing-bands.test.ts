@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { RoundedShape } from "./border-radii";
 import { SQUARE_CORNERS } from "./border-radii";
 import type { Rect } from "./geometry";
 import {
@@ -576,6 +577,77 @@ describe("comparing two band lists", () => {
      * exactly the case it exists to report.
      */
     expect(sameBands([one()], [one(over)])).toBe(false);
+  });
+
+  /** A clip whose every field can be varied one at a time. */
+  const clipOf = (over: Partial<RoundedShape> = {}): RoundedShape => ({
+    x: 0,
+    y: 0,
+    width: 10,
+    height: 20,
+    radii: {
+      topLeft: { x: 1, y: 2 },
+      topRight: { x: 3, y: 4 },
+      bottomRight: { x: 5, y: 6 },
+      bottomLeft: { x: 7, y: 8 },
+    },
+    ...over,
+  });
+
+  it.each<[string, RoundedShape | undefined]>([
+    ["a clip appearing", clipOf()],
+    ["the clip's origin", clipOf({ x: 9 })],
+    ["the clip's size", clipOf({ width: 99 })],
+    [
+      "one corner's horizontal radius",
+      clipOf({
+        radii: {
+          topLeft: { x: 99, y: 2 },
+          topRight: { x: 3, y: 4 },
+          bottomRight: { x: 5, y: 6 },
+          bottomLeft: { x: 7, y: 8 },
+        },
+      }),
+    ],
+    [
+      "one corner's vertical radius",
+      clipOf({
+        radii: {
+          topLeft: { x: 1, y: 2 },
+          topRight: { x: 3, y: 4 },
+          bottomRight: { x: 5, y: 6 },
+          bottomLeft: { x: 7, y: 99 },
+        },
+      }),
+    ],
+  ])("notices %s, which nothing else reports", (_label, clip) => {
+    /*
+     * NOTHING else here changes when only the radius does. An author dragging
+     * `border-radius` moves no band rectangle, no label and no sign — so a
+     * comparison over those fields alone reports the bands equal, the caller
+     * keeps the array it already had, and the fill stays cut to the curve the
+     * block used to have.
+     *
+     * The control comes with it: the two bands are otherwise identical, so a
+     * `false` here can only be the clip.
+     */
+    expect(sameBands([one()], [one()])).toBe(true);
+    expect(sameBands([one()], [one({ clip })])).toBe(false);
+  });
+
+  it("notices a clip being REMOVED, not only added", () => {
+    // Rounding a block and then squaring it again are the same author gesture
+    // in two directions, and an implementation that only compared where both
+    // clips exist would freeze on the way back.
+    expect(sameBands([one({ clip: clipOf() })], [one()])).toBe(false);
+  });
+
+  it("says two bands with the SAME clip are the same", () => {
+    // The other half: a comparison that always reported a difference would
+    // rebuild the overlay on every measure and defeat the check entirely.
+    expect(
+      sameBands([one({ clip: clipOf() })], [one({ clip: clipOf() })])
+    ).toBe(true);
   });
 });
 

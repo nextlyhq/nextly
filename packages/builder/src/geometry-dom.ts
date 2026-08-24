@@ -20,11 +20,11 @@
  * @module geometry-dom
  */
 
-import type { EdgeBounds } from "./border-radii";
+import type { CornerRadii, EdgeBounds } from "./border-radii";
 import {
-  boundsInsideRounded,
   insetCornerRadii,
   isSquare,
+  roundedInsideRounded,
   scaleCornerRadii,
   usedCornerRadii,
 } from "./border-radii";
@@ -702,7 +702,11 @@ function edgeWidth(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export function clippedByAncestor(element: Element, root: Element): boolean {
+export function clippedByAncestor(
+  element: Element,
+  root: Element,
+  radii: CornerRadii
+): boolean {
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
   const box = element.getBoundingClientRect();
@@ -712,7 +716,7 @@ export function clippedByAncestor(element: Element, root: Element): boolean {
     node !== null && node !== root;
     node = node.parentElement
   ) {
-    if (cutByAncestor(node, box, view, root)) return true;
+    if (cutByAncestor(node, box, radii, view, root)) return true;
   }
   return false;
 }
@@ -729,6 +733,7 @@ export function clippedByAncestor(element: Element, root: Element): boolean {
 function cutByAncestor(
   node: Element,
   box: DOMRect,
+  radii: CornerRadii,
   view: Window,
   root: Element
 ): boolean {
@@ -791,7 +796,15 @@ function cutByAncestor(
   if (!scale.describable) return true;
   const clip = clipEdges(outer, style, scale);
   if (cutByEdges(box, clip, clipsX, clipsY)) return true;
-  return cutByCorner(box, clip, style, scale, clipsX && clipsY, CLIP_SLACK_PX);
+  return cutByCorner(
+    box,
+    radii,
+    clip,
+    style,
+    scale,
+    clipsX && clipsY,
+    CLIP_SLACK_PX
+  );
 }
 
 /**
@@ -861,6 +874,7 @@ function cutByEdges(
  */
 function cutByCorner(
   box: DOMRect,
+  radii: CornerRadii,
   clip: EdgeBounds,
   style: CSSStyleDeclaration,
   scale: RenderedScale,
@@ -886,6 +900,12 @@ function cutByCorner(
       height: (clip.bottom - clip.top) / scale.y + borderSpan(style, "y"),
     }
   );
+  /*
+   * A radius this cannot resolve is a clip of UNKNOWN shape, and the block is
+   * refused rather than treated as sitting inside a square one — the same answer
+   * this module gives for every other geometry it cannot describe.
+   */
+  if (outer === undefined) return true;
   const inner = scaleCornerRadii(
     insetCornerRadii(outer, {
       top: edgeWidth(style.borderTopWidth),
@@ -896,7 +916,14 @@ function cutByCorner(
     scale
   );
   if (isSquare(inner)) return false;
-  return !boundsInsideRounded(box, clip, inner, slack);
+  /*
+   * The block's OWN curve is part of the comparison. A rounded block flush
+   * inside an equally rounded container is not cut at all, while its bounding
+   * rectangle's corners lie outside every one of that container's arcs — so
+   * reading only the rectangle refuses the ordinary nested rounded card and
+   * takes the whole overlay with it.
+   */
+  return !roundedInsideRounded(box, radii, clip, inner, slack);
 }
 
 /** The two border widths an axis loses, in unscaled CSS pixels. */

@@ -1656,4 +1656,152 @@ test.describe("rounded geometry", () => {
 
     await expect(page.locator(BAND)).not.toHaveCount(0);
   });
+  test("keeps drawing for a rounded block FLUSH inside a rounded container", async ({
+    page,
+  }) => {
+    /*
+     * The nested rounded card, and the case a rectangular comparison gets wrong
+     * in the opposite direction from the corner test above.
+     *
+     * A block whose curve matches the container it fills is not cut anywhere —
+     * but its BOUNDING RECTANGLE's corners lie outside every one of that
+     * container's arcs, so a check that reads only the rectangle refuses it and
+     * takes the whole overlay with it.
+     *
+     * The two boxes are given the same SIZE as well as the same radius, and that
+     * is not tidiness. CSS reduces the radii to fit the box, so the same
+     * declaration on two differently-sized boxes produces two different curves:
+     * on the seeded 1280x48 section a declared 60px is drawn at 24, while the
+     * 1280x24 child inside it is drawn at 12 — and that child really is cut.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.borderRadius = "60px";
+      section.style.padding = "0px";
+      section.style.height = "200px";
+      const child = document.querySelector(
+        '[data-nx-node="hx-nested-text"]'
+      ) as HTMLElement;
+      child.style.marginBottom = "24px";
+      // Matched to the container it fills, which is how the pattern is authored.
+      child.style.borderRadius = "60px";
+      child.style.height = "200px";
+    });
+    await target.click();
+
+    const geometry = await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      const child = document.querySelector(
+        '[data-nx-node="hx-nested-text"]'
+      ) as HTMLElement;
+      const outer = section.getBoundingClientRect();
+      const box = child.getBoundingClientRect();
+      const radius = Number.parseFloat(
+        getComputedStyle(section).borderTopLeftRadius
+      );
+      const dx = outer.left + radius - box.left;
+      const dy = outer.top + radius - box.top;
+      return {
+        cornerReach: (dx / radius) ** 2 + (dy / radius) ** 2,
+        sameBox:
+          Math.abs(box.left - outer.left) < 1.5 &&
+          Math.abs(box.top - outer.top) < 1.5 &&
+          Math.abs(box.right - outer.right) < 1.5 &&
+          Math.abs(box.bottom - outer.bottom) < 1.5,
+        sameRadius:
+          getComputedStyle(section).borderTopLeftRadius ===
+          getComputedStyle(child).borderTopLeftRadius,
+      };
+    });
+
+    /*
+     * The separating properties, asserted so this cannot pass for a reason other
+     * than the one it names. The two boxes coincide and carry the same
+     * declaration — so CSS reduces both by the same factor and the two curves
+     * are the same curve — while the block's RECTANGULAR corner is outside the
+     * container's arc, which is precisely what the earlier implementation
+     * refused on.
+     */
+    expect(geometry.sameBox).toBe(true);
+    expect(geometry.sameRadius).toBe(true);
+    expect(geometry.cornerReach).toBeGreaterThan(1);
+
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
+  test("draws nothing under an ancestor whose curve cannot be read", async ({
+    page,
+  }) => {
+    /*
+     * A radius the computed value does not resolve is a clip of UNKNOWN shape,
+     * and the block is refused rather than treated as sitting inside a square
+     * one — the same answer this package gives for every other geometry it
+     * cannot describe.
+     *
+     * Reachable, and measured: a percentage inside a math function still depends
+     * on the box, so `border-radius: calc(10% + 5px)` stays exactly that in the
+     * computed value where `calc(10px + 5px)` resolves to `15px`. The catalog
+     * accepts a `calc()` length, so an author reaches this from the inspector.
+     *
+     * The control comes first, with the resolvable form of the same declaration:
+     * a block clear of the corners keeps its bands, so the emptiness afterwards
+     * is the value being unreadable and not the shape being wrong.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.padding = "40px";
+      section.style.borderRadius = "calc(10px + 5px)";
+    });
+    await target.click();
+
+    const resolved = await page.evaluate(
+      () =>
+        getComputedStyle(
+          document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+        ).borderTopLeftRadius
+    );
+    // The control's radius really did resolve, so the bands below are drawn
+    // under a curve this can read.
+    expect(resolved).toBe("15px");
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).style.borderRadius = "calc(10% + 5px)";
+    });
+
+    const unresolved = await page.evaluate(
+      () =>
+        getComputedStyle(
+          document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+        ).borderTopLeftRadius
+    );
+    /*
+     * The separating property: the browser really did leave this unresolved. A
+     * version of Chromium that resolved it would make the refusal below wrong
+     * rather than merely untested, and this says so loudly instead.
+     */
+    expect(unresolved).toBe("calc(10% + 5px)");
+
+    await expect(page.locator(BAND)).toHaveCount(0);
+  });
 });
