@@ -70,6 +70,10 @@ import {
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
+  usePreviewLink,
+  type UsePreviewLinkOptions,
+} from "@admin/hooks/usePreviewLink";
+import {
   computeMainFields,
   takeoverControllerNames,
   takeoverTypesFromBranding,
@@ -235,6 +239,24 @@ export interface SingleFormProps {
  * }
  * ```
  */
+/**
+ * What a Single's preview link is minted against.
+ *
+ * A Single is addressed by slug and has exactly one document, so there is no id
+ * to wait for — unlike an entry, whose link cannot be minted until it has been
+ * saved once. The locale is forwarded so a link minted while editing one
+ * translation opens that translation, and it is spread rather than assigned
+ * because an explicit `undefined` is not the same as an absent key here: absent
+ * means "every locale", which is the correct grant for a Single that is not
+ * localized.
+ */
+function singlePreviewTarget(
+  slug: string,
+  locale: string | undefined
+): UsePreviewLinkOptions {
+  return { single: slug, ...(locale === undefined ? {} : { locale }) };
+}
+
 export function SingleForm({
   schema,
   document,
@@ -411,6 +433,8 @@ export function SingleForm({
   // When true, EntrySystemHeader shows Save Draft / Update split, and
   // EntryMetaStrip / DocumentPanel surface the status pill.
   const hasStatus = schema.status === true;
+
+  const previewLink = usePreviewLink(singlePreviewTarget(schema.slug, locale));
 
   // Auto-fill slug from title — same form-level pattern as EntryForm. The
   // title input lives in EntrySystemHeader (not TextInput) so the slug
@@ -632,6 +656,14 @@ export function SingleForm({
                         locale={locale}
                         onLocaleChange={onLocaleChange}
                         localized={schema.localized === true}
+                        /* A Single has a draft lifecycle, so it has drafts worth
+                   sharing. The control is offered whenever the Single carries
+                   that lifecycle; whether a link can actually be minted is the
+                   server's call, and it refuses with a message naming what is
+                   missing rather than handing out one that 404s. */
+                        isLinkAvailable={hasStatus}
+                        onCopyLink={() => previewLink.mutate()}
+                        isCopyingLink={previewLink.isPending}
                         toolbarSlot={
                           <EntryFormToolbarSlots
                             context="single"

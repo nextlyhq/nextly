@@ -9,14 +9,18 @@
 import { useMutation } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
-import { previewLinkApi } from "@admin/services/previewLinkApi";
+import {
+  previewLinkApi,
+  type PreviewLinkRequest,
+} from "@admin/services/previewLinkApi";
 
-export interface UsePreviewLinkOptions {
-  collection: string;
-  entryId: string;
-  /** Restricts the link to one locale. Absent means every locale. */
-  locale?: string;
-}
+/**
+ * What to mint a link for: one collection entry, or one Single.
+ *
+ * The union is the endpoint's own, restated here so the two cannot drift into
+ * accepting different shapes.
+ */
+export type UsePreviewLinkOptions = PreviewLinkRequest;
 
 /**
  * Copy text to the clipboard, reporting whether it worked.
@@ -42,18 +46,13 @@ async function copyToClipboard(text: string): Promise<boolean> {
  * carries an expiry, so a value cached in the page would be handed out after it
  * had stopped working.
  */
-export function usePreviewLink({
-  collection,
-  entryId,
-  locale,
-}: UsePreviewLinkOptions) {
+export function usePreviewLink(target: UsePreviewLinkOptions) {
   return useMutation({
     mutationFn: async (): Promise<{ url: string; copied: boolean }> => {
-      const link = await previewLinkApi.mint({
-        collection,
-        entryId,
-        ...(locale === undefined ? {} : { locale }),
-      });
+      // Passed through as the union it arrived as. Destructuring and rebuilding
+      // it here would be a second place that decides which fields a mint
+      // request carries, and the two would drift the moment one gains a field.
+      const link = await previewLinkApi.mint(target);
 
       // The server answers `null` only when it can find the site's address
       // NOWHERE — neither the Site URL setting nor the application's own
