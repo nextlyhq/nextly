@@ -719,3 +719,63 @@ describe("ids on a node the page gates behind a condition", () => {
     expect([...taken]).toEqual(["hero"]);
   });
 });
+
+describe("a refused rename beside a rename onto its origin", () => {
+  const stored = { "data-a": "1", "data-b": "2" };
+
+  it("does not let the accepted row overwrite what the refused one keeps", () => {
+    /*
+     * `{ "data-a": "1", "data-b": "2" }` with the first row renamed to
+     * `onclick` (refused, so it keeps `data-a`) and the second renamed onto
+     * `data-a`. The duplicate check saw only ONE live `data-a` and accepted the
+     * second row, which then overwrote the value the first was preserving —
+     * `{ "data-a": "2" }`, with `data-b` gone and the refused row's promise to
+     * keep what it replaced quietly broken.
+     */
+    const rows = [
+      { name: "onclick", value: "1", origin: "data-a" },
+      { name: "data-a", value: "2", origin: "data-b" },
+    ];
+    expect(storedAttributes(rows, "", stored)).toEqual(stored);
+  });
+
+  it("says WHY the accepted row will not land", () => {
+    // The author has to be told, or the row simply looks fine and does nothing.
+    const rows = [
+      { name: "onclick", value: "1", origin: "data-a" },
+      { name: "data-a", value: "2", origin: "data-b" },
+    ];
+    expect(rowProblem(rows, 1)).toEqual({ kind: "duplicate" });
+  });
+
+  it("still accepts a rename onto a name nothing is holding", () => {
+    // The control: the reservation must not swallow ordinary renames.
+    const rows = [
+      { name: "onclick", value: "1", origin: "data-a" },
+      { name: "data-c", value: "2", origin: "data-b" },
+    ];
+    expect(rowProblem(rows, 1)).toBeUndefined();
+    expect(storedAttributes(rows, "", stored)).toEqual({
+      "data-a": "1",
+      "data-c": "2",
+    });
+  });
+
+  it("still accepts a rename onto a name another row is VACATING", () => {
+    /*
+     * The second control, and the one that says only REFUSED rows hold their
+     * origins. Both rows here land, so `data-a` is genuinely freed by the first
+     * and genuinely taken by the second; treating every row's origin as held
+     * would refuse an ordinary pair of renames and look exactly like the fix.
+     */
+    const rows = [
+      { name: "data-c", value: "1", origin: "data-a" },
+      { name: "data-a", value: "2", origin: "data-b" },
+    ];
+    expect(rowProblem(rows, 1)).toBeUndefined();
+    expect(storedAttributes(rows, "", stored)).toEqual({
+      "data-c": "1",
+      "data-a": "2",
+    });
+  });
+});

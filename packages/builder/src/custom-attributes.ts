@@ -117,16 +117,9 @@ export function rowProblem(
 ): RowProblem | undefined {
   const row = rows[index];
   if (row === undefined || isBlankRow(row)) return undefined;
+  const alone = soloProblem(row);
+  if (alone !== undefined) return alone;
   const key = attributeKey(row.name);
-  if (!isAllowedAttribute(key)) return { kind: "not-allowed" };
-  /*
-   * The editor's own NAMESPACE, asked as a prefix rather than as a list of
-   * the markers that exist today. The renderer drops these while it is
-   * rendering for the editor, so accepting one here would store a name that
-   * never appears — and a list is a thing to keep in sync, which this one
-   * already fell behind on once.
-   */
-  if (key.startsWith(EDITOR_NAMESPACE)) return { kind: "reserved" };
   /*
    * Located by INDEX, never by object identity. A row is a plain value the UI
    * rebuilds on every keystroke, so two rows holding the same name and value
@@ -161,8 +154,60 @@ export function rowProblem(
     const keeps = (settled.length > 0 ? settled : sharing)[0]?.at;
     if (keeps !== index) return { kind: "duplicate" };
   }
+  /*
+   * The keys refused rows are HOLDING count as taken too.
+   *
+   * A refused row keeps what it replaced, so its origin is still in the stored
+   * record even though no row on screen carries that name. Judging collisions
+   * on the live names alone therefore accepted a second row renamed onto it —
+   * and the write, which places the preserved value first, was then overwritten
+   * by that row. `{ "data-a": "1", "data-b": "2" }` with one row refused onto
+   * `onclick` and the other renamed to `data-a` stored `{ "data-a": "2" }`:
+   * `data-b` gone, and the promise the refused row makes quietly broken.
+   *
+   * Reported rather than resolved in the write, because the author is the only
+   * one who can say which of the two they meant. Both rows keep their origins
+   * until they do, so the document is left exactly as it was.
+   */
+  if (heldByRefusedRows(rows).has(key)) return { kind: "duplicate" };
   if (key === "id") return { kind: "use-css-id-field" };
   return undefined;
+}
+
+/**
+ * What is wrong with a row judged ALONE, before any sibling is looked at.
+ *
+ * Separated because the answer is needed while deciding what the siblings even
+ * occupy, and asking the whole question there would be asking it of itself.
+ */
+function soloProblem(row: AttributeRow): RowProblem | undefined {
+  const key = attributeKey(row.name);
+  if (!isAllowedAttribute(key)) return { kind: "not-allowed" };
+  /*
+   * The editor's own NAMESPACE, asked as a prefix rather than as a list of
+   * the markers that exist today. The renderer drops these while it is
+   * rendering for the editor, so accepting one here would store a name that
+   * never appears — and a list is a thing to keep in sync, which this one
+   * already fell behind on once.
+   */
+  if (key.startsWith(EDITOR_NAMESPACE)) return { kind: "reserved" };
+  return undefined;
+}
+
+/**
+ * The stored keys that rows refused on their own terms will hold on to.
+ *
+ * Read from `soloProblem` rather than `rowProblem`, which would ask this
+ * function while this function was answering it.
+ */
+function heldByRefusedRows(rows: readonly AttributeRow[]): Set<string> {
+  const held = new Set<string>();
+  for (const row of rows) {
+    if (isBlankRow(row)) continue;
+    if (soloProblem(row) === undefined) continue;
+    if (row.origin !== undefined) held.add(row.origin);
+  }
+  return held;
 }
 
 /** What to tell the author about a row that will not land. */
