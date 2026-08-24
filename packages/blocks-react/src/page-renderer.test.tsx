@@ -5356,11 +5356,17 @@ describe("a block that does not render a single element", () => {
    * "The generated class the block MUST place on its own root element. Blocks
    * render a single element and never wrap it, so styles target that element."
    *
-   * A block returning a Fragment has nowhere to put that class, so its compiled
-   * styles never apply — it is already broken. Until now the only signal came
-   * from the placeholder, which fires when a DOCUMENT asks for `cssId` or an
+   * A block returning a Fragment has no root element of its own for that class,
+   * so it is already outside the contract. Until now the only signal came from
+   * the placeholder, which fires when a DOCUMENT asks for `cssId` or an
    * attribute: the page author who set an anchor watched the block vanish,
    * while the block author never heard about it.
+   *
+   * NOT "its compiled styles never apply", which is the stronger claim and is
+   * false for a shape tested directly below: `test/fragment-forwards` places
+   * the supplied class on a child, and the assertions there read it back out of
+   * the served HTML. What such a block certainly loses is the node's ROOT
+   * FIELDS, which the renderer attaches to a root element it does not have.
    */
   const wrapped = defineBlock<{ value: string }>({
     name: "test/wrapped",

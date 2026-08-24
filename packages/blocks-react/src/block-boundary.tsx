@@ -466,8 +466,9 @@ function rootShapeOf(output: ReactNode): RootShape {
   if (typeof output.type === "string") return "host";
   /*
    * React's own wrappers — a fragment, a suspense boundary, a context provider
-   * or consumer — create no element of their own, so the generated class has
-   * nowhere to go in any of them.
+   * or consumer — create no element of their own, so none of them is a root the
+   * generated class can be attached to. Whether the block forwarded that class
+   * to a child is a separate question, and not one this classification answers.
    *
    * ASKED rather than restated. `renderable.ts` already separates those from
    * `memo`, `forwardRef` and `lazy`, which wrap a component that may well
