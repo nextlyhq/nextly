@@ -383,39 +383,25 @@ function mergeById(
    */
   const taken = new Map(wanted);
   /*
-   * TWO passes, and the order between them is the whole point.
+   * Rounds of refusals, until one removes nothing.
    *
-   * First remove what clashes with a token this file does not touch. Those
-   * refusals are forced — the destination is not going to move — and removing
-   * them can free tokens that were only blocked THROUGH them: a file bringing
-   * `{id:"foo.bar", name:"taken"}` and `{id:"foo-bar", name:"usable"}` has the
-   * first refused for its name, and the second shares a custom property only
-   * with that first one, so it is importable the moment the first is gone. One
-   * pass would discard it for a conflict that does not survive the pass.
+   * An earlier version ran the two passes below ONCE, on the reasoning that
+   * removing tokens only shrinks the table, so nothing new can clash after the
+   * first pass. That is wrong, and wrong in the direction of accepting an
+   * invalid table: refusing an incoming token does not remove a row, it REVERTS
+   * that row to the name the site already had, and the name it reverts to can
+   * collide with something still accepted. Three coordinated renames reach it —
+   * one refusal forced by an untouched token, whose knock-on refusal restores a
+   * stored name beside an accepted token that had taken it — and the import
+   * reports success holding one name twice, which the next export cannot write.
    *
-   * Then remove whatever still clashes, which by then is only tokens clashing
-   * with EACH OTHER. A file holding two tokens that are one token here is a
-   * file that contradicts itself, and there is no ground to prefer either, so
-   * both are refused and both are named.
-   *
-   * Two passes suffice rather than a loop: removing tokens only ever shrinks
-   * the table, so nothing new can clash after the first pass.
+   * Each round that changes anything removes at least one entry from a finite
+   * map, so this terminates; in practice it settles in one.
    */
-  for (const identity of clashingIn(
-    applyAll(into.tokens, taken),
-    taken,
-    refused,
-    "forced"
-  )) {
-    taken.delete(identity);
-  }
-  for (const identity of clashingIn(
-    applyAll(into.tokens, taken),
-    taken,
-    refused,
-    "mutual"
-  )) {
-    taken.delete(identity);
+  for (;;) {
+    const before = taken.size;
+    refuseClashing(into, taken, refused);
+    if (taken.size === before) break;
   }
 
   return {
@@ -423,6 +409,45 @@ function mergeById(
     landed: taken.size,
     refused,
   };
+}
+
+/**
+ * ONE round of refusals against the table the import would produce.
+ *
+ * Two passes, and the order between them is the whole point.
+ *
+ * First remove what clashes with a token this file does not touch. Those
+ * refusals are forced — the destination is not going to move — and removing
+ * them can free tokens that were only blocked THROUGH them: a file bringing
+ * `{id:"foo.bar", name:"taken"}` and `{id:"foo-bar", name:"usable"}` has the
+ * first refused for its name, and the second shares a custom property only with
+ * that first one, so it is importable the moment the first is gone. One pass
+ * would discard it for a conflict that does not survive the pass.
+ *
+ * Then remove whatever still clashes, which by then is only tokens clashing
+ * with EACH OTHER. A file holding two tokens that are one token here is a file
+ * that contradicts itself, and there is no ground to prefer either, so both are
+ * refused and both are named.
+ *
+ * Its own function because the caller asks a different question: this is what
+ * ONE look at the proposal decides, and the caller is why one look is not
+ * enough.
+ */
+function refuseClashing(
+  into: SiteTokenSet,
+  taken: Map<string, SiteToken>,
+  refused: string[]
+): void {
+  for (const against of ["forced", "mutual"] as const) {
+    for (const identity of clashingIn(
+      applyAll(into.tokens, taken),
+      taken,
+      refused,
+      against
+    )) {
+      taken.delete(identity);
+    }
+  }
 }
 
 /**
@@ -763,21 +788,47 @@ function holdsOnlyJson(value: unknown, seen = new Set<unknown>()): boolean {
   if (seen.has(value)) return true;
   seen.add(value);
   if (Array.isArray(value)) {
-    return value.every(item => holdsOnlyJson(item, seen));
+    /*
+     * Index by index rather than through `every`, which SKIPS holes. A sparse
+     * array has none of its missing elements visited, so it passes vacuously
+     * while `JSON.stringify` writes each hole as `null` — vendor data coming
+     * back CHANGED rather than missing, which is the one shape a walk over the
+     * values it can SEE cannot notice.
+     *
+     * Reading the index is all it takes: a hole reads as `undefined`, which is
+     * not a leaf and not an object, so the same call that judges every other
+     * element refuses it. An explicit `undefined` is refused with it, and
+     * rightly — `JSON.stringify` turns that into `null` too.
+     */
+    for (let index = 0; index < value.length; index++) {
+      if (!holdsOnlyJson(value[index], seen)) return false;
+    }
+    return true;
   }
-  /*
-   * A PLAIN record, not merely an object. A `Map` or a `Set` has no own
-   * enumerable keys, so walking its values finds nothing and it looks safe —
-   * and `JSON.stringify` writes it as `{}`, erasing everything it held. The
-   * same trap the engine's own `isPlainRecord` exists for, and the reason that
-   * one reads the prototype rather than counting keys.
-   */
+  return recordHoldsJson(value, seen);
+}
+
+/**
+ * Whether a non-array object is what it appears to be, contents included.
+ *
+ * Its own question because an object can MISREPRESENT itself in two ways an
+ * array cannot, and both are answered before any of its contents matter:
+ *
+ * A `Map` or a `Set` has no own enumerable keys, so walking its values finds
+ * nothing and it looks perfectly safe — and `JSON.stringify` writes it as
+ * `{}`, erasing everything it held. That is the trap the engine's own
+ * `isPlainRecord` exists for, and the reason it reads the prototype rather
+ * than counting keys.
+ *
+ * A `toJSON` method means the written form is something OTHER than the value,
+ * so a reader gets back something that was never stored — the loss being looked
+ * for, whether or not the substitute is itself writable.
+ */
+function recordHoldsJson(value: object, seen: Set<unknown>): boolean {
   if (!isPlainRecord(value)) return false;
-  // `toJSON` means the written form is something OTHER than the value, so a
-  // reader gets back something that was never stored — the loss being looked
-  // for, whether or not the substitute is itself writable.
-  if (typeof (value as { toJSON?: unknown }).toJSON === "function")
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
     return false;
+  }
   return Object.values(value).every(item => holdsOnlyJson(item, seen));
 }
 

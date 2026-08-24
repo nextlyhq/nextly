@@ -936,3 +936,96 @@ describe("the export guard covers the CONVERSION too", () => {
     expect(result.skipped.join(" ")).toContain("cannot be written to a file");
   });
 });
+
+describe("a refusal can create the next clash", () => {
+  it("settles a cascade of THREE coordinated renames", () => {
+    /*
+     * The separating case for one round versus many. `id.a` is refused because
+     * an untouched token already holds `taken`; that refusal reverts `id.a` to
+     * `alpha`, which forces `id.c` out; and THAT refusal restores the stored
+     * `gamma` beside the still-accepted `id.d`. Nothing in a single round looks
+     * at the table the second refusal produced.
+     */
+    const into: SiteTokenSet = {
+      tokens: [
+        { id: "id.a", name: "alpha", kind: "number", values: { light: "1" } },
+        { id: "id.c", name: "gamma", kind: "number", values: { light: "2" } },
+        { name: "taken", kind: "number", values: { light: "3" } },
+      ],
+    };
+    const carrying = (id: string, value: number) => ({
+      $type: "number",
+      $value: value,
+      $extensions: { "com.nextlyhq.nextly": { id } },
+    });
+    const document = {
+      taken: carrying("id.a", 9),
+      alpha: carrying("id.c", 8),
+      gamma: carrying("id.d", 7),
+    };
+
+    const result = importDtcg(JSON.stringify(document), into);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // No name twice. Asserted as a SET comparison rather than a count, because
+    // a table holding one name twice has the same length as a correct one.
+    const names = result.tokens.tokens.map(token => token.name);
+    expect([...new Set(names)]).toEqual(names);
+    expect(result.imported).toBe(0);
+
+    // The property all of that exists for: what survives can be written out.
+    expect(exportDtcg(result.tokens).skipped).toEqual([]);
+  });
+});
+
+describe("vendor data that is written back CHANGED", () => {
+  it("refuses a sparse array, which JSON fills with nulls", () => {
+    const sparse: unknown[] = [];
+    sparse.length = 2;
+    sparse[1] = "here";
+    const tokens: SiteTokenSet = {
+      tokens: [
+        {
+          name: "foo",
+          kind: "number",
+          values: { light: "1" },
+          extensions: { "com.figma": { order: sparse } },
+        },
+      ],
+    };
+
+    // The control on the fixture: `every` never VISITS the hole, which is
+    // exactly why a walk over the values it can see could not notice this, and
+    // `JSON.stringify` then invents a value that was never stored.
+    let visited = 0;
+    sparse.every(() => {
+      visited += 1;
+      return true;
+    });
+    expect(sparse.length).toBe(2);
+    expect(visited).toBe(1);
+    expect(JSON.stringify(sparse)).toBe('[null,"here"]');
+
+    const result = exportDtcg(tokens);
+    expect(result.skipped.join(" ")).toContain("foo");
+  });
+
+  it("still writes a DENSE array untouched", () => {
+    // The control. An array is ordinary vendor data and refusing one would
+    // report a loss on every file carrying a list.
+    const tokens: SiteTokenSet = {
+      tokens: [
+        {
+          name: "foo",
+          kind: "number",
+          values: { light: "1" },
+          extensions: { "com.figma": { order: [1, "two", null] } },
+        },
+      ],
+    };
+    const result = exportDtcg(tokens);
+    expect(result.skipped).toEqual([]);
+    expect(result.text).toContain('"two"');
+  });
+});
