@@ -4,7 +4,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { Logger } from "../shared/types";
 import { createPluginContext, PLUGIN_SERVICE_NAMES } from "./plugin-context";
-import { normalizeDbTimestamp } from "../shared/lib/date-formatting";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 
 /**
@@ -177,10 +176,10 @@ describe("the context's service names and the resolver that answers them", () =>
   });
 
   it("exposes singles by ACCESSING the property, not by listing keys", () => {
-    // The assertion that was missing, and its absence is why a broken feature
-    // shipped green: `Object.keys(ctx.services)` reports a getter WITHOUT
-    // invoking it, so an enumeration passes while every real read throws
-    // `Unknown service`. Reading the property is the whole point.
+    // `ctx.services` members are getters, and `Object.keys` reports a getter
+    // WITHOUT invoking it — so enumerating the object passes even when every
+    // real read throws `Unknown service`. Only reading the property exercises
+    // the resolver behind it.
     const asked: string[] = [];
     const registry = { listSingles: async () => ({ data: [], total: 0 }) };
     const getServiceFn = ((name: string) => {
@@ -234,78 +233,18 @@ describe("the published record says what the registry can actually return", () =
     return result.data[0]!;
   }
 
-  it("reports timestamps as the strings they are", async () => {
-    // `DynamicSingleRecord` declares these `Date`, and the value is a string,
-    // so `record.createdAt.getTime()` compiled and threw. Asserting the TYPE
-    // of the value rather than its content: the content was never wrong.
+  it("does not carry timestamps, which the registry cannot answer per dialect", async () => {
+    // `normalizeDbTimestamp`, which the registry uses, documents itself as
+    // assuming every `Date` is naive and always un-offsetting, and names
+    // `dbTimestampToInstant` as the dialect-aware alternative "safe for
+    // SQLite". SQLite's columns are epoch-backed, so its driver already holds
+    // the correct instant and un-offsetting shifts it by the server timezone —
+    // wrong on one dialect of three, and only on a non-UTC server, so it reads
+    // as correct wherever it is checked.
     const record = await listOne();
 
-    expect(typeof record.createdAt).toBe("string");
-    expect(record.createdAt).toBe("2026-08-24T20:00:00.000Z");
-  });
-
-  it("converts a timestamp that arrives as a Date, rather than passing it on", async () => {
-    // The assertion above does NOT separate a projection from a pass-through:
-    // its fixture already holds a string, so forwarding the row untouched
-    // satisfies it. `normalizeDbTimestamp` is typed `unknown -> string | null`
-    // and the registry's own deserializer types the raw column as
-    // `Date | string | number`, so a Date reaching here is a shape the code
-    // already admits — and it is the one that makes the conversion do work.
-    // Local components, so the canonical normalizer's UTC re-interpretation
-    // is actually exercised. A `new Date("...Z")` would agree with a naive
-    // `toISOString()` and prove nothing.
-    const stamp = new Date(2026, 0, 2, 3, 4, 5);
-    const registry = {
-      listSingles: async () => ({
-        data: [{ ...rowAsStored(), createdAt: stamp }],
-        total: 1,
-      }),
-    } as unknown as SingleRegistryService;
-
-    const [record] = (await wrapSinglesForPlugin(registry).list()).data;
-
-    // Asserted against the CANONICAL normalizer rather than against a literal.
-    // A literal here would pin whichever answer this file's implementation
-    // happened to give, which is exactly how a second implementation stays
-    // green while disagreeing with the first: `Date.prototype.toISOString`
-    // preserves the instant, while `normalizeDbTimestamp` re-interprets a
-    // Date's local components as UTC to undo the driver's local parsing. Those
-    // are five hours apart in a `+05` process and identical under UTC, so a
-    // literal written on a UTC machine cannot see the divergence at all.
-    expect(record!.createdAt).toBe(normalizeDbTimestamp(stamp));
-  });
-
-  it("reports an unreadable timestamp as absent rather than as text", async () => {
-    // `String(value)` on an object produces "[object Object]" — a string that
-    // looks like data and is not, and one a caller cannot tell from a real
-    // timestamp. Null is visible; mangled text is not.
-    const registry = {
-      listSingles: async () => ({
-        data: [{ ...rowAsStored(), createdAt: { nested: true } }],
-        total: 1,
-      }),
-    } as unknown as SingleRegistryService;
-
-    const [record] = (await wrapSinglesForPlugin(registry).list()).data;
-
-    expect(record!.createdAt).toBeNull();
-  });
-
-  it("keeps a null timestamp null instead of stringifying it", async () => {
-    // The other side of the same conversion. `normalizeDbTimestamp` returns
-    // `string | null`, and a naive `String(value)` turns the null half into the
-    // four-character string "null" — which is truthy, parses as a date to
-    // `Invalid Date`, and is worse than the absence it replaced.
-    const registry = {
-      listSingles: async () => ({
-        data: [{ ...rowAsStored(), createdAt: null }],
-        total: 1,
-      }),
-    } as unknown as SingleRegistryService;
-
-    const [record] = (await wrapSinglesForPlugin(registry).list()).data;
-
-    expect(record!.createdAt).toBeNull();
+    expect(record).not.toHaveProperty("createdAt");
+    expect(record).not.toHaveProperty("updatedAt");
   });
 
   it("does not carry `admin`, whose preview URL cannot survive storage", async () => {
@@ -325,14 +264,12 @@ describe("the published record says what the registry can actually return", () =
     const record = await listOne();
 
     expect(Object.keys(record).sort()).toEqual([
-      "createdAt",
       "description",
       "fields",
       "id",
       "label",
       "slug",
       "source",
-      "updatedAt",
     ]);
   });
 });
@@ -368,51 +305,5 @@ describe("a Single with no description", () => {
     // Asserted separately: `toBeUndefined` passes for a missing key AND for a
     // key holding undefined, and only one of those is what the type says.
     expect(record!.description).not.toBeNull();
-  });
-});
-
-describe("a timestamp the canonical normalizer cannot read", () => {
-  async function listWith(createdAt: unknown) {
-    const registry = {
-      listSingles: async () => ({
-        data: [
-          {
-            id: "s1",
-            slug: "homepage",
-            label: "Homepage",
-            fields: [],
-            source: "code",
-            createdAt,
-            updatedAt: null,
-          },
-        ],
-        total: 1,
-      }),
-    } as unknown as SingleRegistryService;
-    return (await wrapSinglesForPlugin(registry).list()).data[0]!;
-  }
-
-  it("rejects a number, which stringifies to a parseable non-timestamp", async () => {
-    // The case a parseability check cannot catch. `normalizeDbTimestamp`
-    // stringifies a value that is neither Date nor string, so `2026` becomes
-    // `"2026"` — and `Date.parse("2026")` SUCCEEDS, reading it as a year. A
-    // guard asking only "does this parse" publishes `"2026"` as a timestamp.
-    expect(Number.isNaN(Date.parse("2026"))).toBe(false);
-
-    expect((await listWith(2026)).createdAt).toBeNull();
-  });
-
-  it("rejects an object, which stringifies to [object Object]", async () => {
-    expect((await listWith({ nested: true })).createdAt).toBeNull();
-  });
-
-  it("still accepts the naive datetime shape the drivers produce", async () => {
-    // The negative control for the format check: a `YYYY-MM-DD HH:MM:SS` column
-    // value is what MySQL and Postgres hand back, and the canonical function
-    // turns it into ISO by replacing the space and appending `Z`. A stricter
-    // check than the formats that function can emit would reject real data.
-    const record = await listWith("2026-01-02 03:04:05");
-
-    expect(record.createdAt).toBe("2026-01-02T03:04:05Z");
   });
 });

@@ -5,12 +5,12 @@
  * in them" since plugins existed. There was no counterpart for Singles, so a
  * plugin asking the same question about them had no way to ask it.
  *
- * That gap is not cosmetic and it has cost real work twice. Singles are reached
- * through a different service with a different shape, so every capability that
- * cuts across content has to be taught about them SEPARATELY — and each one is
- * taught late, after the capability has already shipped believing it was
- * complete. Preview was one. Enumerating documents to find references is
- * another.
+ * The gap is structural rather than an omission of naming. Singles are reached
+ * through a different service with a different shape, so a capability that
+ * cuts across content has to handle them SEPARATELY — and a capability written
+ * against collections alone covers half the app while reporting success.
+ * Preview had the same shape; so does enumerating documents to find
+ * references.
  *
  * ## Deliberately read-only, and deliberately narrow
  *
@@ -47,7 +47,6 @@ import type {
   DynamicSingleRecord,
   SingleSource,
 } from "../schemas/dynamic-singles/types";
-import { normalizeDbTimestamp } from "../shared/lib/date-formatting";
 
 /**
  * @public Read-only registry access to the app's Singles.
@@ -142,15 +141,27 @@ export interface PluginSingleRecord {
   fields: SerializedFieldConfig[];
   /** Where it came from: declared in code, built in the UI, or built in. */
   source: SingleSource;
-  /**
-   * ISO strings, or null — NOT `Date`.
-   *
-   * `normalizeDbTimestamp` returns `string | null` and the registry casts the
-   * result to `Date`. This reports what the value is.
-   */
-  createdAt: string | null;
-  updatedAt: string | null;
 }
+
+/*
+ * `createdAt` and `updatedAt` are deliberately ABSENT.
+ *
+ * The registry stores them by passing the driver's value through
+ * `normalizeDbTimestamp`, whose own contract says it "assumes every `Date` is
+ * naive and always un-offsets" and points at `dbTimestampToInstant` as the
+ * dialect-aware alternative that is "safe for SQLite". SQLite's columns are
+ * epoch-backed, so its driver already builds the correct instant and
+ * un-offsetting it a second time shifts it by the server's timezone.
+ *
+ * Publishing them here would republish that as plugin API, correct on two
+ * dialects of three and silently wrong on the third — and wrong only on a
+ * non-UTC server, so it would read as correct wherever it was checked.
+ * Recovering the instant needs the dialect, which belongs with the registry
+ * that already knows it rather than being plumbed to a caller that does not.
+ *
+ * Nothing this surface exists for reads them. A member omitted can be added
+ * once the registry can answer correctly; one published cannot be withdrawn.
+ */
 
 /** What a plugin gets back from listing Singles. */
 export interface PluginSinglesResult {
@@ -191,47 +202,7 @@ export interface PluginSinglesService {
  * which is what makes copying members across deliberate work rather than
  * plumbing.
  *
- * Timestamps go through `normalizeDbTimestamp`, the same function the registry
- * itself uses, rather than a conversion written here. A second implementation
- * of one question does not stay agreed: this one had `Date.prototype.toISOString`,
- * which PRESERVES the instant, while the canonical function re-interprets a
- * Date's local components as UTC to undo the driver's local parsing. Measured,
- * the two answers are five hours apart in a `+05` process and identical under
- * UTC — so every test agreed with it and no test could have caught it.
  */
-/**
- * One timestamp, normalized by the canonical function and then checked.
- *
- * The normalization is NOT reimplemented here. `normalizeDbTimestamp` does it,
- * including the part that is easy to get wrong and impossible to notice: for a
- * `Date` it re-interprets the local components as UTC, undoing the shift a
- * driver applied when it parsed a naive datetime. A `toISOString()` written
- * here instead preserves that shift, and the two answers are five hours apart
- * in a `+05` process while agreeing exactly under UTC — so a second
- * implementation passes every test written on a UTC machine.
- *
- * What IS done here is checking the result against the format this surface
- * publishes. The canonical function ends in a `String(value)` fallback for a
- * value that is neither `Date` nor string, so an object comes back as the text
- * `[object Object]` and the number `2026` comes back as `"2026"`. Both are
- * strings a caller reads as a timestamp, and the second is worse than the
- * first: `Date.parse("2026")` SUCCEEDS, parsing it as a year, so a check that
- * only asked whether the value was parseable let it through.
- *
- * Matching the shape rather than testing parseability is what separates those.
- * Every path through the canonical function that produced a real answer emits
- * ISO UTC — `toISOString()` from the `Date` branch and from the offset-bearing
- * string branch, and `${normalized}Z` from the naive-string branch, which
- * replaces the space with `T` first. Only the fallback does not.
- */
-const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
-
-function publishedTimestamp(value: unknown): string | null {
-  const normalized = normalizeDbTimestamp(value);
-  if (normalized === null) return null;
-  return ISO_UTC.test(normalized) ? normalized : null;
-}
-
 function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
   return {
     id: record.id,
@@ -243,8 +214,6 @@ function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
     // narrowing it honest in the first place.
     fields: record.fields,
     source: record.source,
-    createdAt: publishedTimestamp(record.createdAt),
-    updatedAt: publishedTimestamp(record.updatedAt),
   };
 }
 
