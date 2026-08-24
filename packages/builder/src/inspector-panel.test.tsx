@@ -384,13 +384,16 @@ describe("InspectorPanel advanced fields", () => {
     // Named to the field, so a screen reader reaches the reason with it.
     expect(name.getAttribute("aria-describedby")).toBe(said.id);
     expect(name.getAttribute("aria-invalid")).toBe("true");
-    // And the value the page would drop is not written to the document.
-    expect(editor.apply).toHaveBeenCalledWith({
-      kind: "update",
-      id: "a",
-      patch: {},
-      unset: ["attributes"],
-    });
+    /*
+     * And NOTHING is written. Renaming `data-x` to `onclick` means the author
+     * typed something wrong, not that they want `data-x` removed — writing the
+     * reduced set would delete it, and the row showing the mistake would be
+     * replaced by the now-empty stored value, so the attribute and the reason
+     * for the refusal would disappear together.
+     */
+    expect(editor.apply).not.toHaveBeenCalled();
+    // The row and its explanation are still on screen for the author to fix.
+    expect((name as HTMLInputElement).value).toBe("onclick");
   });
 
   it("says an id attribute loses to the CSS id field", () => {
@@ -588,5 +591,77 @@ describe("the Advanced tab keeps what the author typed", () => {
       patch: { cssId: "new" },
       unset: ["attributes"],
     });
+  });
+});
+
+describe("a refused row survives its own commit", () => {
+  it("keeps the draft and the stored attribute when a rename is refused", () => {
+    /*
+     * The failure this closes needs the panel to RE-RENDER after a write, which
+     * a spy-only editor never does. Here the parent is re-rendered with the
+     * stored attributes unchanged, which is what a real store does when nothing
+     * was written — and the refused row, its explanation, and the attribute it
+     * replaced must all still be there.
+     */
+    const editor = mount({ attributes: { "data-x": "1" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const name = screen.getByLabelText("Name of attribute 1");
+    fireEvent.change(name, { target: { value: "onclick" } });
+    fireEvent.blur(name);
+
+    // Nothing written, so `data-x` is still the stored value.
+    expect(editor.apply).not.toHaveBeenCalled();
+    // The draft the author is fixing is still on screen, with its reason.
+    expect((name as HTMLInputElement).value).toBe("onclick");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "does not put that attribute"
+    );
+  });
+
+  it("still commits a CSS id while a row is refused", () => {
+    // The id is a separate field, and holding it hostage to an unrelated typo
+    // in the rows below would be its own surprise.
+    const editor = mount({ attributes: { "data-x": "1" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const name = screen.getByLabelText("Name of attribute 1");
+    fireEvent.change(name, { target: { value: "onclick" } });
+    fireEvent.blur(name);
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "hero" },
+    });
+  });
+
+  it("refuses an id another block already holds, and writes nothing", () => {
+    // The engine reports this only as a warning and the field's validation
+    // discards warnings, so without refusing here it saves and publishes.
+    register();
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/heading", version: 1, props: {} },
+        { id: "b", type: "acme/heading", version: 1, props: {}, cssId: "hero" },
+      ],
+    } as unknown as BlockDocument);
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "already uses that id"
+    );
   });
 });

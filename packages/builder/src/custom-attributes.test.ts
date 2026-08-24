@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   attributeKey,
   domIdsTaken,
+  holdsTheWrite,
   htmlUpdate,
   problemMessage,
   rowProblem,
@@ -165,7 +166,7 @@ describe("names the editor needs for itself", () => {
      * clicked and treats the other as its own chrome, so a block carrying
      * either sends a click to the wrong block or swallows it.
      */
-    for (const name of ["data-nx-node", "data-nx-chrome"]) {
+    for (const name of ["data-nx-node", "data-nx-prop", "data-nx-chrome"]) {
       // The control: the renderer DOES allow it, so this refusal is the
       // editor's own narrowing rather than the shared rule showing through.
       expect(isAllowedAttribute(name), name).toBe(true);
@@ -284,5 +285,56 @@ describe("the op that stores the two fields", () => {
       patch: { cssId: "hero", attributes: { a: "1" } },
       unset: [],
     });
+  });
+});
+
+describe("an id spelled with capitals in the bag", () => {
+  const node = (over: Record<string, unknown>): never =>
+    ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
+
+  it("counts as taken, because the renderer lowercases it", () => {
+    /*
+     * A stored `{ ID: "hero" }` renders as `id="hero"` — HTML attribute names
+     * are ASCII case-insensitive and the renderer lowercases every key before
+     * writing. A scan reading only the exact key `id` misses it, and another
+     * block is then allowed to take the same id.
+     */
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { ID: "hero" } })],
+      "a"
+    );
+    expect(taken.has("hero")).toBe(true);
+  });
+
+  it("takes the LAST spelling, as the renderer's own loop does", () => {
+    // It assigns each lowercased key in turn, so a later one replaces an
+    // earlier one. This editor never writes two spellings; an import can.
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { ID: "first", id: "second" } })],
+      "a"
+    );
+    expect(taken.has("second")).toBe(true);
+    expect(taken.has("first")).toBe(false);
+  });
+});
+
+describe("which problems hold the write", () => {
+  it("holds for a mistake, and not for a shadowed id", () => {
+    /*
+     * Renaming `data-x` to `onclick` is a typo, and writing the reduced set
+     * would delete `data-x` — which renaming does not ask for. A row the CSS id
+     * shadows is not a mistake: the value could never reach the page, and
+     * holding the write for it would stop an author setting a CSS id at all
+     * while such a row existed.
+     */
+    for (const kind of [
+      "not-allowed",
+      "reserved",
+      "duplicate",
+      "duplicate-dom-id",
+    ] as const) {
+      expect(holdsTheWrite({ kind }), kind).toBe(true);
+    }
+    expect(holdsTheWrite({ kind: "overridden-by-css-id" })).toBe(false);
   });
 });

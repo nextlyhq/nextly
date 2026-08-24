@@ -18,7 +18,11 @@
  * @module custom-attributes
  */
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE, isAllowedAttribute } from "@nextlyhq/blocks-react";
+import {
+  NODE_ID_ATTRIBUTE,
+  PROP_ATTRIBUTE,
+  isAllowedAttribute,
+} from "@nextlyhq/blocks-react";
 
 import { CHROME_ATTRIBUTE } from "./canvas";
 
@@ -38,10 +42,21 @@ export interface AttributeRow {
  * click to the wrong block or swallow it. That is an editing surface the
  * renderer cannot see, which is why this narrowing lives here and not there.
  *
- * Taken from the two modules that define them rather than written out, so
- * renaming either moves this with it.
+ * ALL THREE, which is the point: the first version of this reserved two and
+ * missed `data-nx-prop`, the marker inline editing reads to decide which
+ * property a click makes editable. On a block with more than one inline
+ * property, an author's value matching another property makes the whole root
+ * editable and commits its text into the wrong property; a value matching none
+ * disables inline editing on that root entirely.
+ *
+ * Taken from the modules that define them rather than written out, so renaming
+ * any of them moves this with it.
  */
-const RESERVED_FOR_THE_EDITOR = new Set([NODE_ID_ATTRIBUTE, CHROME_ATTRIBUTE]);
+const RESERVED_FOR_THE_EDITOR = new Set([
+  NODE_ID_ATTRIBUTE,
+  PROP_ATTRIBUTE,
+  CHROME_ATTRIBUTE,
+]);
 
 /** Why a row will not reach the page, or `undefined` when it will. */
 export type RowProblem =
@@ -111,6 +126,24 @@ export function rowProblem(
     return { kind: "duplicate-dom-id" };
   }
   return undefined;
+}
+
+/**
+ * Whether a problem is the author's to FIX before anything is stored.
+ *
+ * Most are: a name the page would drop, a name the editor needs, a second row
+ * setting a name another row sets, an id another block holds. Each means the
+ * author has typed something wrong, and writing the reduced set would delete
+ * whatever the row used to hold — renaming `data-x` to `onclick` would remove
+ * `data-x`, which is not what renaming asks for.
+ *
+ * One is not: a row the CSS id field shadows is not a mistake, it is a
+ * consequence of the field beside it, and dropping it is exactly right — the
+ * value could never reach the page anyway, and holding the whole write for it
+ * would mean an author could not set a CSS id while such a row existed.
+ */
+export function holdsTheWrite(problem: RowProblem): boolean {
+  return problem.kind !== "overridden-by-css-id";
 }
 
 /** What to tell the author about a row that will not land. */
@@ -201,19 +234,38 @@ export function domIdsTaken(
       if (typeof node.cssId === "string" && node.cssId !== "") {
         taken.add(node.cssId);
       }
-      const own = node.attributes;
-      if (
-        own !== undefined &&
-        typeof own["id"] === "string" &&
-        own["id"] !== ""
-      ) {
-        taken.add(own["id"]);
-      }
+      const fromBag = renderedIdIn(node.attributes);
+      if (fromBag !== undefined) taken.add(fromBag);
     }
     for (const child of childNodesOf(node)) visit(child);
   };
   for (const node of nodes) visit(node);
   return taken;
+}
+
+/**
+ * The `id` the renderer would emit from an attribute bag, if any.
+ *
+ * Read case-INSENSITIVELY, because that is how the renderer reads it: HTML
+ * attribute names are ASCII case-insensitive and it lowercases every key before
+ * writing, so a stored `{ ID: "hero" }` renders as `id="hero"`. A scan looking
+ * only at the exact key `id` misses it, and another block is then allowed to
+ * take the same id — producing the collision this exists to prevent.
+ *
+ * The LAST variant wins, matching the renderer's own loop: it assigns each
+ * lowercased key in turn, so a later one replaces an earlier one. This editor
+ * never writes two spellings, but an import or a script can.
+ */
+function renderedIdIn(
+  attributes: Readonly<Record<string, string>> | undefined
+): string | undefined {
+  if (attributes === undefined) return undefined;
+  let found: string | undefined;
+  for (const [name, value] of Object.entries(attributes)) {
+    if (name.toLowerCase() !== "id") continue;
+    if (typeof value === "string" && value !== "") found = value;
+  }
+  return found;
 }
 
 /** Every node nested inside one, across all of its slots. */

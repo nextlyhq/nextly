@@ -30,7 +30,9 @@ import * as React from "react";
 
 import {
   domIdsTaken,
+  holdsTheWrite,
   htmlUpdate,
+  type HtmlFields,
   isBlankRow,
   problemMessage,
   rowProblem,
@@ -77,10 +79,27 @@ export function AdvancedPanel({
     rows: rowsOf(attributes),
   });
 
-  // The stored values win whenever they change underneath the panel — an undo,
-  // or an edit applied from somewhere else. Without this the fields would go on
-  // showing what the document no longer holds.
+  /*
+   * What this panel last WROTE, so it can tell its own echo from a real change.
+   *
+   * The stored values must win when they change underneath the panel — an undo,
+   * or an edit from somewhere else — or the fields go on showing what the
+   * document no longer holds. But a write of our own comes back through the
+   * same props, and resetting on that throws away whatever the author has typed
+   * since: a row renamed to a refused name lost its text AND the explanation
+   * beside it, in the same moment the valid attribute it replaced was deleted.
+   */
+  const lastWritten = React.useRef<HtmlFields | null>(null);
   React.useEffect(() => {
+    const written = lastWritten.current;
+    // Asked through the same function that decides whether a write is needed,
+    // so "unchanged" means one thing here and there rather than two.
+    if (
+      written !== null &&
+      htmlUpdate(written, { cssId, attributes }) === undefined
+    ) {
+      return;
+    }
     const stored = { id: cssId, rows: rowsOf(attributes) };
     setDraft(stored);
     setSettled(stored);
@@ -107,11 +126,30 @@ export function AdvancedPanel({
     // what the author typed, with the reason beside it, and the document keeps
     // what it had.
     const keptId = id !== "" && taken.has(id) ? cssId : id;
-    const update = htmlUpdate(
-      { cssId: keptId, attributes: storedAttributes(next.rows, keptId, taken) },
-      { cssId, attributes }
-    );
+    /*
+     * A row the page would drop is not a request to DELETE what is stored.
+     * Renaming `data-x` to `onclick` means the author has typed something
+     * wrong, not that they want `data-x` gone — and writing the reduced set
+     * would remove it while the row showing the mistake was replaced by the
+     * empty stored value, so both the attribute and its explanation vanished.
+     *
+     * So the attributes are left exactly as they are until every row can land.
+     * The id still commits: it is a separate field and holding it hostage to an
+     * unrelated typo would be its own surprise.
+     */
+    const refused = next.rows.some((_row, index) => {
+      const problem = rowProblem(next.rows, index, keptId, taken);
+      return problem !== undefined && holdsTheWrite(problem);
+    });
+    const wanted = {
+      cssId: keptId,
+      attributes: refused
+        ? attributes
+        : storedAttributes(next.rows, keptId, taken),
+    };
+    const update = htmlUpdate(wanted, { cssId, attributes });
     if (update === undefined) return;
+    lastWritten.current = wanted;
     editor.apply({
       kind: "update",
       id: nodeId,
