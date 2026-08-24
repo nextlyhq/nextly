@@ -341,6 +341,104 @@ describe("a denied field and the where clause (integration)", () => {
     expect(addressed.data!.docs.map(d => String(d.title))).toEqual(["about"]);
   });
 
+  it("refuses the snake_case spelling of the denied sort field", async () => {
+    // The ORDER BY path resolves a sort against the field NAME or its snake_case
+    // COLUMN, so `secret_answer` and `secretAnswer` address the same hidden
+    // column while looking like different strings. A guard keyed on the raw
+    // spelling refuses one and waves the other through.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "vaultsb",
+          access: { read: () => true, create: () => true, update: () => true },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "secretAnswer", access: { read: () => false } }),
+          ],
+        }),
+      ],
+    });
+    const h = current.getService(
+      "collectionsHandler"
+    ) as unknown as ReadHandler;
+    await h.createEntry(
+      { collectionName: "vaultsb", overrideAccess: true },
+      { title: "one", secretAnswer: "a" }
+    );
+
+    const refused = await h.listEntries({
+      collectionName: "vaultsb",
+      overrideAccess: false,
+      sort: "secret_answer",
+    });
+
+    expect(refused.success).toBe(false);
+    expect(JSON.stringify(refused)).toContain("FIELD_NOT_SORTABLE");
+  });
+
+  it("matches nothing when every searchable field is protected", async () => {
+    // Narrowing the searchable set to empty must not drop the search CONDITION:
+    // with no predicate the query returns every otherwise-visible row, which is
+    // the opposite of a narrowed search and worse than the leak it closes.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "vaultsc",
+          access: { read: () => true, create: () => true, update: () => true },
+          // BOTH, because auto-detection carries `slug` as well as `title`.
+          // Protecting only `title` leaves the row matchable through `slug` and
+          // the empty case this test is about is never reached -- measured: the
+          // first version of this test returned 1 row for exactly that reason.
+          fields: [
+            text({ name: "slug", access: { read: () => false } }),
+            text({ name: "title", access: { read: () => false } }),
+          ],
+        }),
+      ],
+    });
+    const h = current.getService(
+      "collectionsHandler"
+    ) as unknown as ReadHandler;
+    await h.createEntry(
+      { collectionName: "vaultsc", overrideAccess: true },
+      { title: "one" }
+    );
+
+    const hit = await h.listEntries({
+      collectionName: "vaultsc",
+      overrideAccess: false,
+      search: "one",
+    });
+
+    expect(hit.success).toBe(true);
+    expect(hit.data!.docs).toHaveLength(0);
+  });
+
+  it("reports a real total when the framework addresses by a ruled field", async () => {
+    // `listEntries` counts by re-entering `countEntries` with the SETTLED
+    // predicate. Without carrying the decision, the count re-judged an input
+    // the list had already allowed, and the rejection was swallowed into
+    // `totalDocs = 0` -- a correct page with a total saying there was nothing.
+    current = await boot();
+    const h = current.getService(
+      "collectionsHandler"
+    ) as unknown as ReadHandler;
+
+    const listed = await h.listEntries({
+      collectionName: VAULTS,
+      overrideAccess: false,
+      where: { codename: { equals: "alpha" } },
+      frameworkFilter: true,
+    });
+
+    expect(listed.success).toBe(true);
+    expect(listed.data!.docs).toHaveLength(1);
+    expect(
+      (listed.data as unknown as { totalDocs?: number }).totalDocs,
+      "the total must agree with the page it describes"
+    ).toBe(1);
+  });
+
   it("lets a trusted caller filter on it", async () => {
     // `overrideAccess` means the caller has already decided who is asking, and
     // internal reads legitimately filter on fields no end user may see.

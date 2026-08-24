@@ -15,6 +15,7 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import { toCamelCase } from "./case-conversion";
 import { getFieldFunctions, type FieldFunctions } from "./field-level-registry";
 
 type EntityKind = "collection" | "single";
@@ -78,6 +79,21 @@ function carriesReadRule(fn: FieldFunctions | undefined): boolean {
   return Object.values(fn.fields ?? {}).some(carriesReadRule);
 }
 
+/**
+ * Every spelling a query may reach one field by.
+ *
+ * The registry is keyed by field NAME, and the ORDER BY path resolves a sort
+ * against either the name or its snake_case COLUMN (`f.name === sortField ||
+ * f.column === sortFieldSnake`). So `sort=secret_answer` addresses the same
+ * hidden column as `sort=secretAnswer` while looking like a different string,
+ * and a guard keyed on the raw spelling refuses one and waves the other
+ * through. Judging both closes the alias without needing the schema here.
+ */
+function spellings(name: string): string[] {
+  const camel = toCamelCase(name);
+  return camel === name ? [name] : [name, camel];
+}
+
 /** Field names the caller may not use to select or order rows. */
 function protectedFields(
   kind: EntityKind,
@@ -86,7 +102,9 @@ function protectedFields(
 ): string[] {
   const fns = getFieldFunctions(kind, slug);
   if (!fns) return [];
-  return [...names].filter(name => carriesReadRule(fns[name])).sort();
+  return [...names]
+    .filter(name => spellings(name).some(n => carriesReadRule(fns[n])))
+    .sort();
 }
 
 function refuse(fields: string[], at: "where" | "sort"): never {
