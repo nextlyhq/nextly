@@ -151,3 +151,69 @@ describe("what a document nobody validated costs", () => {
     expect(classIdsUsedBy(withClasses(many))).toHaveLength(MAX_NAMED_CLASSES);
   });
 });
+
+describe("what it must never do", () => {
+  // The property the write hook's placement rests on. It runs BEFORE the page
+  // row is written, so a throw here fails the author's save over a bookkeeping
+  // field — and the hook is only allowed to sit there while this holds.
+  //
+  // Asserted over a table rather than one shape, because the risk is a shape
+  // nobody thought of: every entry is a document the blocks field admits, since
+  // it accepts any value whose `nodes` is an array and validates nothing below.
+  const cyclic: Record<string, unknown> = { nodes: [] };
+  (cyclic.nodes as unknown[]).push({ id: "a", classes: [], self: cyclic });
+
+  const hostile: [string, unknown][] = [
+    ["null", null],
+    ["undefined", undefined],
+    ["a number", 7],
+    ["a string", "x"],
+    ["no nodes at all", {}],
+    ["nodes that are not an array", { nodes: 5 }],
+    ["a null node", { nodes: [null] }],
+    // A MISSING entry is a separate shape from a null one, and it is the one a
+    // guard written against `null` alone lets through: reading a property off
+    // `undefined` throws, where reading one off a number or a string does not.
+    // So the two primitive cases below cannot evidence that half of the guard —
+    // these are what do.
+    //
+    // Neither shape survives JSON: `stringify` writes both an explicit
+    // `undefined` and a hole as `null`, and `[1,,2]` is not parseable at all.
+    // They arrive from a producer that builds the document IN PROCESS — a
+    // structured clone keeps `undefined` — which is the same range the write
+    // hook's own catch covers, and the reason this is asserted rather than
+    // argued away.
+    ["an undefined node", { nodes: [undefined] }],
+    ["a sparse nodes array", { nodes: [, ,] }],
+    ["a primitive node", { nodes: [7] }],
+    [
+      "classes that are not an array",
+      { nodes: [{ id: "a", classes: "hero" }] },
+    ],
+    ["a sparse classes array", { nodes: [{ id: "a", classes: [, , "hero"] }] }],
+    [
+      "a node whose slots are not arrays",
+      { nodes: [{ id: "a", slots: { main: 5 } }] },
+    ],
+    ["a document that references itself", cyclic],
+    [
+      "a null prototype",
+      Object.assign(Object.create(null), {
+        nodes: [{ id: "a", classes: ["h"] }],
+      }),
+    ],
+  ];
+
+  it.each(hostile)("answers rather than throwing for %s", (_what, document) => {
+    expect(() => classIdsUsedBy(document)).not.toThrow();
+  });
+
+  it("still reads a well-formed document, so the table is not passing on refusal", () => {
+    // The control. Every case above would pass for a function that returned an
+    // empty list unconditionally, which is the shape that would satisfy them
+    // all while recording nothing.
+    expect(
+      classIdsUsedBy({ nodes: [{ id: "a", classes: ["hero", "card"] }] })
+    ).toEqual(["card", "hero"]);
+  });
+});

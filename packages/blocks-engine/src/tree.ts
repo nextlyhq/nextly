@@ -54,7 +54,20 @@ export function walkNodes(
   fn: (node: BlockNode, parent: BlockNode | undefined) => void,
   parent?: BlockNode
 ): void {
+  // The forest reaches here from persisted data whether or not anything
+  // validated it — the blocks field admits any value whose `nodes` is an array
+  // — so an entry may be `null` or a primitive, and a slot's children may not
+  // be an array at all. Reading a property off either throws, and this walk is
+  // shared: a caller counting class references, one measuring the document and
+  // one rendering it all fail on the same malformed entry, each looking like a
+  // fault of its own.
+  //
+  // Skipped rather than reported, because a walk has nobody to report to. A
+  // caller that needs to know an entry was unreadable is asking a validation
+  // question, and validation is where that answer lives.
+  if (!Array.isArray(nodes)) return;
   for (const node of nodes) {
+    if (typeof node !== "object" || node === null) continue;
     fn(node, parent);
     if (node.slots) {
       for (const children of Object.values(node.slots)) {

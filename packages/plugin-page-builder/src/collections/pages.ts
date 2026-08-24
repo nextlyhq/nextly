@@ -107,12 +107,14 @@ export function pagesCollection() {
       // arranged to avoid, because a confidently wrong count is worse than a
       // slow one.
       //
-      // Safe on a `before*` phase only because `classIdsUsedBy` is TOTAL: it
-      // reads persisted data nothing is guaranteed to have validated, and it
-      // answers rather than throwing for every malformed shape that reaches
-      // storage. That property is tested, not assumed — if it is ever weakened,
-      // this hook stops being safe here and belongs on `afterChange` with the
-      // second write and the window that comes with it.
+      // Safe on a `before*` phase only while this cannot fail the write, and
+      // that is arranged here rather than assumed of the derivation.
+      // `classIdsUsedBy` answers rather than throwing for every shape that
+      // reaches STORAGE — a stored document arrives from `JSON.parse` and
+      // carries no accessor that can throw — and a table of those shapes is
+      // asserted beside it. An in-process caller can still hand over an object
+      // that throws on being read, which storage cannot produce, so the catch
+      // below closes the remaining distance rather than trusting the range.
       beforeChange: [
         (context: HookContext) => {
           const { data } = context;
@@ -121,7 +123,24 @@ export function pagesCollection() {
           // touches the title alone must leave the record as it is rather than
           // deriving an empty list from a `content` this write never carried.
           if (!("content" in data)) return data;
-          data.usedClasses = classIdsUsedBy(data.content);
+          try {
+            data.usedClasses = classIdsUsedBy(data.content);
+          } catch {
+            // The record is LEFT ALONE rather than cleared. Two things must not
+            // happen here and they pull in opposite directions: failing the
+            // author's save over a bookkeeping field, and recording a list that
+            // is wrong. Writing an empty one would do the second — and an
+            // under-count is the direction that gets a class deleted, so it is
+            // the more expensive of the two mistakes.
+            //
+            // Leaving it means the previous list stands and the rebuild walk
+            // repairs it, which is the same route a page written before this
+            // field existed takes.
+            //
+            // Reachable only from a caller that constructs the document in
+            // process: a stored one arrives from `JSON.parse` and carries no
+            // accessor that can throw.
+          }
           return data;
         },
       ],

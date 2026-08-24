@@ -34,3 +34,8 @@ record is not. The walk is total over persisted data: a malformed document
 contributes what it can read instead of failing an author's save, and it keeps
 the readable entries of a partly-malformed class list because under-counting is
 the direction that gets a class deleted.
+
+`walkNodes` now skips an entry that is not an object and a slot whose children
+are not an array, rather than throwing. It is shared by everything that reads a
+document, so one malformed entry previously broke counting, measuring and
+rendering alike — each looking like a fault of its own.

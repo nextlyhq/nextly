@@ -94,3 +94,40 @@ describe("the referenced-class record on a page write", () => {
     expect(() => runBeforeChange(null)).not.toThrow();
   });
 });
+
+describe("a document the derivation cannot read", () => {
+  it("leaves the record alone rather than clearing it or failing the save", () => {
+    // Two mistakes are available and they pull opposite ways: failing an
+    // author's save over a bookkeeping field, and recording a list that is
+    // wrong. Clearing would be the second, and an under-count is the direction
+    // that gets a class deleted — so the previous list stands and the rebuild
+    // walk repairs it.
+    const unreadable = {
+      get nodes(): never {
+        throw new Error("cannot read this document");
+      },
+    };
+    const data: Record<string, unknown> = {
+      title: "Home",
+      content: unreadable,
+      usedClasses: ["hero"],
+    };
+
+    expect(() => runBeforeChange(data)).not.toThrow();
+    expect(data.usedClasses).toEqual(["hero"]);
+  });
+
+  it("still derives from a document it CAN read, so the guard is not swallowing everything", () => {
+    // The control. A hook that caught unconditionally and never wrote would
+    // satisfy the case above while recording nothing for any page.
+    const data: Record<string, unknown> = {
+      title: "Home",
+      content: { nodes: [{ id: "n1", classes: ["hero"] }] },
+      usedClasses: ["stale"],
+    };
+
+    runBeforeChange(data);
+
+    expect(data.usedClasses).toEqual(["hero"]);
+  });
+});
