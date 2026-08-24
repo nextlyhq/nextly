@@ -15,11 +15,11 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
-import { CustomEntryView } from "@admin/components/features/entries/CustomEntryView";
 import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { EntryPageFrame } from "@admin/components/features/entries/EntryPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -80,7 +80,7 @@ function CreateEntryBreadcrumbs({
  */
 function CreateEntryPageSkeleton() {
   return (
-    <PageContainer>
+    <PageContainer width="form">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading collection...
@@ -181,7 +181,7 @@ export default function CreateEntryPage({
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             No collection was specified in the URL.
@@ -204,7 +204,7 @@ export default function CreateEntryPage({
   // Error state
   if (error) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load collection:{" "}
@@ -223,7 +223,7 @@ export default function CreateEntryPage({
   // Collection not found
   if (!collection) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Collection &quot;{slug}&quot; not found.
@@ -272,7 +272,7 @@ export default function CreateEntryPage({
 
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <CustomEntryView
+        <EntryPageFrame
           breadcrumbs={
             <CreateEntryBreadcrumbs
               collectionSlug={slug}
@@ -281,7 +281,7 @@ export default function CreateEntryPage({
           }
         >
           <CustomEditView {...customViewProps} />
-        </CustomEntryView>
+        </EntryPageFrame>
       </QueryErrorBoundary>
     );
   }
@@ -290,14 +290,14 @@ export default function CreateEntryPage({
   // form, not the header chrome.
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <EntryPageFrame>
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           mode="create"
           onSuccess={handleSuccess}
           onCancel={handleCancel}
         />
-      </PageContainer>
+      </EntryPageFrame>
     </QueryErrorBoundary>
   );
 }

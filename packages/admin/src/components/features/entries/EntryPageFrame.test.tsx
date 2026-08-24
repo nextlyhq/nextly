@@ -17,7 +17,7 @@ import {
   useSuppressAdminChrome,
 } from "@admin/components/layout/ChromeSuppression";
 
-import { CustomEntryView } from "./CustomEntryView";
+import { EntryPageFrame } from "./EntryPageFrame";
 
 /** A view that asks for the whole panel on mount, as an immersive plugin does. */
 function ImmersiveView() {
@@ -31,14 +31,12 @@ function ImmersiveView() {
 function renderIn(children: React.ReactNode) {
   return render(
     <ChromeSuppressionProvider>
-      <CustomEntryView breadcrumbs={<nav>trail</nav>}>
-        {children}
-      </CustomEntryView>
+      <EntryPageFrame breadcrumbs={<nav>trail</nav>}>{children}</EntryPageFrame>
     </ChromeSuppressionProvider>
   );
 }
 
-describe("CustomEntryView", () => {
+describe("EntryPageFrame", () => {
   it("frames a view that asked for nothing, and measures the page", () => {
     renderIn(<p>framed body</p>);
 
@@ -96,5 +94,48 @@ describe("CustomEntryView", () => {
     // would also read "view 1" if a second mount replaced the first.
     expect(mounts).toBe(1);
     expect(screen.getByText("view 1")).toBeDefined();
+  });
+
+  it("frames content that renders no trail", () => {
+    // The default entry form carries its own header chrome and passes no
+    // breadcrumbs. The slot still renders, so this caller and the custom-view
+    // caller reconcile identically — a slot that appeared only sometimes would
+    // shift the content's position and remount it.
+    render(
+      <ChromeSuppressionProvider>
+        <EntryPageFrame>
+          <p>default form</p>
+        </EntryPageFrame>
+      </ChromeSuppressionProvider>
+    );
+
+    expect(screen.getByText("default form")).toBeDefined();
+    expect(screen.getByTestId("page-container").className).toContain(
+      "nx-page-shell"
+    );
+  });
+
+  it("drops the frame for a takeover field inside the default form", () => {
+    // `BlocksField` asks from INSIDE the form rather than as a registered
+    // view, so the default branch has to honour the request too. A page that
+    // declared a measure without honouring it would hand the page builder a
+    // 56rem column to work in.
+    function FormWithTakeoverField() {
+      useSuppressAdminChrome({ layers: ["pageFrame"], canExit: false });
+      return <p>builder canvas</p>;
+    }
+
+    render(
+      <ChromeSuppressionProvider>
+        <EntryPageFrame>
+          <FormWithTakeoverField />
+        </EntryPageFrame>
+      </ChromeSuppressionProvider>
+    );
+
+    expect(screen.getByText("builder canvas")).toBeDefined();
+    expect(screen.getByTestId("page-container").className).toContain(
+      "contents"
+    );
   });
 });

@@ -15,11 +15,11 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
-import { CustomEntryView } from "@admin/components/features/entries/CustomEntryView";
 import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { EntryPageFrame } from "@admin/components/features/entries/EntryPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -87,7 +87,7 @@ function EditEntryBreadcrumbs({
  */
 function EditEntryPageSkeleton() {
   return (
-    <PageContainer>
+    <PageContainer width="form">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading entry...
@@ -302,7 +302,7 @@ export default function EditEntryPage({
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             No collection was specified in the URL.
@@ -320,7 +320,7 @@ export default function EditEntryPage({
   // Missing ID error state
   if (!id) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             No entry ID was specified in the URL.
@@ -353,7 +353,7 @@ export default function EditEntryPage({
   // Error state
   if (error) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load entry:{" "}
@@ -372,7 +372,7 @@ export default function EditEntryPage({
   // Collection not found
   if (!collection) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Collection &quot;{slug}&quot; not found.
@@ -390,7 +390,7 @@ export default function EditEntryPage({
   // Entry not found
   if (!entry) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Entry &quot;{id}&quot; not found in collection &quot;{slug}&quot;.
@@ -448,7 +448,7 @@ export default function EditEntryPage({
 
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <CustomEntryView
+        <EntryPageFrame
           breadcrumbs={
             <EditEntryBreadcrumbs
               collectionSlug={slug}
@@ -461,7 +461,7 @@ export default function EditEntryPage({
             path={customEditViewPath}
             props={customViewProps as unknown as Record<string, unknown>}
           />
-        </CustomEntryView>
+        </EntryPageFrame>
       </QueryErrorBoundary>
     );
   }
@@ -480,7 +480,7 @@ export default function EditEntryPage({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <EntryPageFrame>
         {beforeEditPath && (
           <PluginSlot path={beforeEditPath} props={editInjectionProps} />
         )}
@@ -506,7 +506,7 @@ export default function EditEntryPage({
         {afterEditPath && (
           <PluginSlot path={afterEditPath} props={editInjectionProps} />
         )}
-      </PageContainer>
+      </EntryPageFrame>
     </QueryErrorBoundary>
   );
 }

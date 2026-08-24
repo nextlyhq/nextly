@@ -226,7 +226,7 @@ export default function CreateUserPage(): ReactElement {
   // Loading state: Fetching roles
   if (isLoadingRoles) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         {/* Accessibility: Announce loading state to screen readers */}
         <div className="sr-only" role="status" aria-live="polite">
           Loading roles...
@@ -252,7 +252,7 @@ export default function CreateUserPage(): ReactElement {
   // Error state: Failed to fetch roles
   if (rolesError) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription className="flex items-center justify-between">
             <span>
@@ -283,7 +283,7 @@ export default function CreateUserPage(): ReactElement {
   if (invite) {
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <PageContainer>
+        <PageContainer width="form">
           <div className="mb-6">
             <UserBreadcrumbs currentPage="create" />
           </div>
@@ -305,7 +305,7 @@ export default function CreateUserPage(): ReactElement {
   // Main render: Form loaded successfully
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <div className="mb-6">
           <UserBreadcrumbs currentPage="create" />
         </div>

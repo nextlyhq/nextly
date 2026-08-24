@@ -263,7 +263,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: Invalid user ID
   if (!userId) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>{USER_MESSAGES.INVALID_USER_ID}</AlertDescription>
         </Alert>
@@ -279,7 +279,7 @@ export default function EditUserPage(): ReactElement {
   // Loading state: Fetching user data
   if (isLoadingUser || isLoadingRoles) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         {/* Accessibility: Announce loading state to screen readers */}
         <div className="sr-only" role="status" aria-live="polite">
           Loading user data
@@ -306,7 +306,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: Failed to fetch user
   if (userError) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription className="flex items-center justify-between">
             <span>
@@ -336,7 +336,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: User not found
   if (!user) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>{USER_MESSAGES.USER_NOT_FOUND}</AlertDescription>
         </Alert>
@@ -351,7 +351,7 @@ export default function EditUserPage(): ReactElement {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         {/* Breadcrumbs */}
         <div className="mb-6">
           <UserBreadcrumbs currentPage="edit" />

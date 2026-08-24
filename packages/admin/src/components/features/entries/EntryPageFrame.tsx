@@ -5,20 +5,26 @@ import type { ReactNode } from "react";
 import { useSuppressedChrome } from "@admin/components/layout/ChromeSuppression";
 import { PageContainer } from "@admin/components/layout/page-container";
 
-interface CustomEntryViewProps {
+interface EntryPageFrameProps {
   /**
-   * Rendered above the view, but only when the page keeps its frame. An
-   * immersive view has no page to put a trail on.
+   * Rendered above the content, but only when the page keeps its frame. An
+   * immersive surface has no page to put a trail on.
+   *
+   * Optional because the default entry form carries its own header chrome and
+   * renders no trail here; the slot is still present in the tree so both
+   * callers reconcile identically.
    */
-  breadcrumbs: ReactNode;
+  breadcrumbs?: ReactNode;
   children: ReactNode;
 }
 
 /**
- * The frame a plugin's entry view renders in, decided in ONE place.
+ * The frame an entry page renders in, decided in ONE place.
  *
- * A custom view may take the window. The page frame is the innermost layer of
- * admin chrome, so it is dropped from here rather than from the layout:
+ * An entry surface may take the window — a registered custom view, or a takeover
+ * FIELD such as the page builder's, which asks from inside the default form.
+ * The page frame is the innermost layer of admin chrome, so it is dropped from
+ * here rather than from the layout:
  * suppressing the sidebars alone would leave the view stopping 32px short of
  * every edge with a breadcrumb above it, which reads as a bug.
  *
@@ -27,10 +33,14 @@ interface CustomEntryViewProps {
  * which is the point — a list of them would drift as plugins added routes,
  * silently, because a missing entry still renders.
  *
- * Create and edit route the SAME registered component, so the decision cannot
- * live in either route: a copy in one of them is a copy that can disagree, and
- * did — a view that took the window while editing was framed and capped while
- * creating the same record.
+ * Create and edit route the SAME registered component, and both also render the
+ * default form, so the decision cannot live in any one of those four places: a
+ * copy in one is a copy that can disagree, and did — a view that took the
+ * window while editing was framed and capped while creating the same record.
+ *
+ * The default form matters as much as the custom one. `BlocksField` suppresses
+ * `pageFrame` from inside it, and a page that declares a measure without
+ * honouring that would hand the page builder a 56rem column to work in.
  *
  * A framed view is page CONTENT, so the measure is the page's, declared here.
  * A view that declared its own would sit inside this container's padding and
@@ -38,10 +48,7 @@ interface CustomEntryViewProps {
  * Framed and immersive are the whole vocabulary; there is no third case for a
  * width to answer.
  */
-export function CustomEntryView({
-  breadcrumbs,
-  children,
-}: CustomEntryViewProps) {
+export function EntryPageFrame({ breadcrumbs, children }: EntryPageFrameProps) {
   const framed = !useSuppressedChrome().has("pageFrame");
 
   // One tree in both states, differing only in props.
