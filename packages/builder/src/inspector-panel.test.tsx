@@ -29,6 +29,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { InspectorPanel } from "./inspector-panel";
+import { applyOp } from "./ops";
 import type { EditorState } from "./editor-state";
 
 afterEach(() => {
@@ -351,10 +352,17 @@ describe("InspectorPanel advanced fields", () => {
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "  " } });
     fireEvent.blur(field);
+    /*
+     * `unset`, never `undefined`. `applyOp` refuses an undefined patch value —
+     * the key disappears when the op is stored, so a replayed edit would do
+     * nothing — and the op below is checked against the REAL store in the
+     * control beneath this describe, not only against a spy.
+     */
     expect(editor.apply).toHaveBeenCalledWith({
       kind: "update",
       id: "a",
-      patch: { cssId: undefined },
+      patch: {},
+      unset: ["cssId"],
     });
   });
 
@@ -380,7 +388,8 @@ describe("InspectorPanel advanced fields", () => {
     expect(editor.apply).toHaveBeenCalledWith({
       kind: "update",
       id: "a",
-      patch: { attributes: undefined },
+      patch: {},
+      unset: ["attributes"],
     });
   });
 
@@ -437,5 +446,147 @@ describe("InspectorPanel advanced fields", () => {
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
       "Hero title"
     );
+  });
+});
+
+/**
+ * The ops the Advanced tab emits, applied for REAL.
+ *
+ * The tests above drive a spy, which records an op and never judges it — so an
+ * op the store would refuse looks identical there to one it accepts. That is
+ * how `{ cssId: undefined }` passed review here: the panel appeared to clear an
+ * id, `applyOp` threw on the undefined value, and the document kept the old one
+ * while the field showed it gone.
+ *
+ * So these hand the recorded op to the real `applyOp` and assert what the
+ * DOCUMENT holds afterwards. A shape the store rejects fails here.
+ */
+describe("the Advanced tab's ops, through the real store", () => {
+  const nodeWith = (node: Partial<BlockNode>): BlockNode =>
+    ({
+      id: "a",
+      type: "acme/heading",
+      version: 1,
+      props: {},
+      ...node,
+    }) as BlockNode;
+
+  const applyRecorded = (
+    editor: { apply: ReturnType<typeof vi.fn> },
+    before: BlockNode
+  ): BlockNode => {
+    const op = editor.apply.mock.calls.at(-1)?.[0] as never;
+    const applied = applyOp(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [before],
+      } as unknown as BlockDocument,
+      op
+    );
+    return applied.document.nodes[0] as BlockNode;
+  };
+
+  it("actually REMOVES a cleared css id", () => {
+    const before = nodeWith({ cssId: "hero" });
+    const editor = mount({ cssId: "hero" });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.blur(field);
+
+    // The control: the op was recorded at all, so an empty call list cannot
+    // satisfy the assertion below.
+    expect(editor.apply).toHaveBeenCalled();
+    expect(applyRecorded(editor, before).cssId).toBeUndefined();
+  });
+
+  it("actually REMOVES the last attribute", () => {
+    const before = nodeWith({ attributes: { "data-x": "1" } });
+    const editor = mount({ attributes: { "data-x": "1" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove data-x" }));
+
+    expect(editor.apply).toHaveBeenCalled();
+    expect(applyRecorded(editor, before).attributes).toBeUndefined();
+  });
+
+  it("actually WRITES an id the author typed", () => {
+    // The positive control on the pair above: the same route that removes must
+    // be shown to store, or "undefined afterwards" would pass on a store that
+    // never writes anything.
+    const before = nodeWith({});
+    const editor = mount({});
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+
+    expect(applyRecorded(editor, before).cssId).toBe("hero");
+  });
+});
+
+/**
+ * The two ways a draft used to be lost, and the shadowed id it left behind.
+ */
+describe("the Advanced tab keeps what the author typed", () => {
+  const openAdvanced = () => {
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+  };
+
+  it("commits a draft when the tab is switched away", () => {
+    /*
+     * The tabs activate on `mousedown` and unmount the inactive tab's content,
+     * so the panel is removed before the browser delivers `blur` — and the
+     * draft went with it, silently. Typing an id and clicking Style must not
+     * throw the id away.
+     */
+    const editor = mount({});
+    openAdvanced();
+    fireEvent.change(screen.getByLabelText("CSS id"), {
+      target: { value: "hero" },
+    });
+    // No blur: the tab is clicked with the field still focused, which is what
+    // an author does.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "hero" },
+    });
+  });
+
+  it("does not commit when nothing was typed", () => {
+    // The control: an unmount that always wrote would put an empty edit in the
+    // undo history every time an author looked at this tab.
+    const editor = mount({ cssId: "hero" });
+    openAdvanced();
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("drops an id attribute the CSS id now shadows", () => {
+    /*
+     * Setting a CSS id used to patch only `cssId`, leaving the shadowed
+     * attribute stored — so clearing the CSS id later brought a stale id back
+     * to life on a block the author thought had none.
+     */
+    const editor = mount({ attributes: { id: "old" } });
+    openAdvanced();
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "new" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "new" },
+      unset: ["attributes"],
+    });
   });
 });

@@ -14,6 +14,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   attributeKey,
+  domIdsTaken,
+  htmlUpdate,
   problemMessage,
   rowProblem,
   rowsOf,
@@ -151,5 +153,136 @@ describe("what the author is told", () => {
     expect(problemMessage({ kind: "overridden-by-css-id" })).toContain(
       "CSS id"
     );
+  });
+});
+
+describe("names the editor needs for itself", () => {
+  it("refuses the canvas markers, which the RENDERER has no reason to refuse", () => {
+    /*
+     * Both are `data-` attributes, so the render-safe rule admits them — rightly,
+     * because on a published page they are ordinary author data. They are not
+     * ordinary in the editor: the canvas reads one to decide which block was
+     * clicked and treats the other as its own chrome, so a block carrying
+     * either sends a click to the wrong block or swallows it.
+     */
+    for (const name of ["data-nx-node", "data-nx-chrome"]) {
+      // The control: the renderer DOES allow it, so this refusal is the
+      // editor's own narrowing rather than the shared rule showing through.
+      expect(isAllowedAttribute(name), name).toBe(true);
+      expect(rowProblem([row(name)], 0, ""), name).toEqual({
+        kind: "reserved",
+      });
+    }
+  });
+
+  it("still allows an ordinary data attribute", () => {
+    // The control that stops the reservation swallowing the namespace it sits
+    // in: `data-` is the feature, and only these two names are taken.
+    expect(rowProblem([row("data-nx-something-else")], 0, "")).toBeUndefined();
+    expect(rowProblem([row("data-analytics")], 0, "")).toBeUndefined();
+  });
+});
+
+describe("an id another block already uses", () => {
+  it("refuses it, and says why two would be a problem", () => {
+    const taken = new Set(["hero"]);
+    expect(rowProblem([row("id", "hero")], 0, "", taken)).toEqual({
+      kind: "duplicate-dom-id",
+    });
+    expect(problemMessage({ kind: "duplicate-dom-id" })).toContain(
+      "two possible targets"
+    );
+  });
+
+  it("allows an id nobody else holds", () => {
+    // The control: the check must be about THIS value, not about ids in general.
+    expect(
+      rowProblem([row("id", "unique")], 0, "", new Set(["hero"]))
+    ).toBeUndefined();
+  });
+});
+
+describe("which ids a document already holds", () => {
+  const node = (over: Record<string, unknown>): never =>
+    ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
+
+  it("reads BOTH the modelled field and the attribute bag", () => {
+    // They become the same page-wide identifier, so a check reading one of them
+    // would let the other collide silently.
+    const taken = domIdsTaken(
+      [
+        node({ id: "b", cssId: "from-field" }),
+        node({ id: "c", attributes: { id: "from-bag" } }),
+      ],
+      "a"
+    );
+    expect([...taken].sort()).toEqual(["from-bag", "from-field"]);
+  });
+
+  it("skips the node being edited, and descends into slots", () => {
+    const taken = domIdsTaken(
+      [
+        node({ id: "a", cssId: "mine" }),
+        node({
+          id: "b",
+          slots: { main: [node({ id: "d", cssId: "nested" })] },
+        }),
+      ],
+      "a"
+    );
+    // Its own id is not a collision with itself.
+    expect(taken.has("mine")).toBe(false);
+    // And a block inside a slot is still on the page.
+    expect(taken.has("nested")).toBe(true);
+  });
+});
+
+describe("the op that stores the two fields", () => {
+  const fields = (
+    cssId: string,
+    attributes?: Record<string, string>
+  ): { cssId: string; attributes: Record<string, string> | undefined } => ({
+    cssId,
+    attributes,
+  });
+
+  it("says nothing when nothing changed", () => {
+    // An op that rewrites a value to itself is an undo entry that undoes
+    // nothing, and an author pressing undo gets a step that does nothing.
+    expect(
+      htmlUpdate(fields("hero", { a: "1" }), fields("hero", { a: "1" }))
+    ).toBeUndefined();
+    expect(htmlUpdate(fields(""), fields(""))).toBeUndefined();
+  });
+
+  it("UNSETS rather than patching undefined", () => {
+    /*
+     * `applyOp` refuses `undefined` as a patch value and says why: the key
+     * disappears when the op is stored, so a replayed edit would do nothing.
+     */
+    expect(htmlUpdate(fields(""), fields("hero"))).toEqual({
+      patch: {},
+      unset: ["cssId"],
+    });
+    expect(htmlUpdate(fields("hero"), fields("hero", { a: "1" }))).toEqual({
+      patch: {},
+      unset: ["attributes"],
+    });
+  });
+
+  it("does not unset a field the node never had", () => {
+    // Setting an id on a block with no attributes must not carry an instruction
+    // to remove attributes it does not have.
+    expect(htmlUpdate(fields("hero"), fields(""))).toEqual({
+      patch: { cssId: "hero" },
+      unset: [],
+    });
+  });
+
+  it("writes both when both changed", () => {
+    expect(htmlUpdate(fields("hero", { a: "1" }), fields("old"))).toEqual({
+      patch: { cssId: "hero", attributes: { a: "1" } },
+      unset: [],
+    });
   });
 });

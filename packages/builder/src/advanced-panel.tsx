@@ -7,21 +7,21 @@
  * the Content tab — and neither is a style. They are the escape hatch: the way
  * an author reaches the rendered element itself, for an anchor to link to, a
  * `data-` attribute an analytics script reads, or an `aria-` attribute the
- * block's own markup does not offer. Every editor that has this puts it behind
- * its own heading for the same reason, and the surface this replaces did too.
+ * block's own markup does not offer.
  *
- * ## The rules are the RENDERER's, and are asked rather than repeated
+ * ## ONE writer for both fields
  *
- * `custom-attributes.ts` holds that reasoning. What matters here is that this
- * panel shows a row as refused for exactly the reasons the page would drop it,
- * so an author is never told something saved and then finds it missing.
+ * They are written by a single function, because they decide each other. A
+ * `cssId` beats an `id` in the attribute bag, so setting one changes whether
+ * the other lands — and two commit paths, one per field, disagreed about that:
+ * committing rows dropped the shadowed `id` and committing the id did not, so
+ * clearing the id later brought a stale one back to life.
  *
- * ## Warnings wait for the author to stop typing
+ * ## Removal is `unset`, never `undefined`
  *
- * A refusal shown mid-keystroke says `data-` is not allowed while the author is
- * two characters into typing `data-x`. `useDeferredValue` lets the character
- * land first, which is the same reason the editor this replaces deferred its
- * own validation.
+ * `applyOp` refuses `undefined` as a patch value and says why: the key
+ * disappears when the op is stored, so a replayed edit would silently do
+ * nothing. Clearing a field is `unset`, which survives being written down.
  *
  * @module advanced-panel
  */
@@ -29,6 +29,8 @@ import { Button, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
+  domIdsTaken,
+  htmlUpdate,
   isBlankRow,
   problemMessage,
   rowProblem,
@@ -45,76 +47,121 @@ export interface AdvancedPanelProps {
   readonly editor: EditorState;
 }
 
-/**
- * The panel, holding the author's rows while they are being edited.
- *
- * Rows are LOCAL state rather than derived per render, because a half-typed row
- * has no home in the document: a name with no value yet, or a name that is not
- * allowed, is not something to store. The document is written on commit, and
- * the stored value is what comes back if the panel is remounted.
- */
+/** The draft an author is editing, before any of it is written down. */
+interface Draft {
+  readonly id: string;
+  readonly rows: readonly AttributeRow[];
+}
+
 export function AdvancedPanel({
   nodeId,
   cssId,
   attributes,
   editor,
 }: AdvancedPanelProps): React.JSX.Element {
-  const [idDraft, setIdDraft] = React.useState(cssId);
-  const [rows, setRows] = React.useState<AttributeRow[]>(() =>
-    rowsOf(attributes)
-  );
+  const [draft, setDraft] = React.useState<Draft>(() => ({
+    id: cssId,
+    rows: rowsOf(attributes),
+  }));
+  /*
+   * What the author has FINISHED typing, and the only thing verdicts are read
+   * from. Judging every keystroke tells someone two characters into `data-x`
+   * that `da` is not allowed, and `useDeferredValue` does not prevent that —
+   * it schedules a background render immediately and catches up whenever
+   * React has capacity, so intermediate values are judged and shown exactly as
+   * they would be without it. Settling on blur is the behaviour the panel
+   * actually wanted, and it says what it does.
+   */
+  const [settled, setSettled] = React.useState<Draft>({
+    id: cssId,
+    rows: rowsOf(attributes),
+  });
 
   // The stored values win whenever they change underneath the panel — an undo,
   // or an edit applied from somewhere else. Without this the fields would go on
   // showing what the document no longer holds.
   React.useEffect(() => {
-    setIdDraft(cssId);
-  }, [cssId]);
-  React.useEffect(() => {
-    setRows(rowsOf(attributes));
-  }, [attributes]);
+    const stored = { id: cssId, rows: rowsOf(attributes) };
+    setDraft(stored);
+    setSettled(stored);
+  }, [cssId, attributes]);
+
+  const taken = React.useMemo(
+    () => domIdsTaken(editor.document.nodes, nodeId),
+    [editor.document, nodeId]
+  );
 
   /*
-   * Judged against the SETTLED text, so a refusal does not appear while a name
-   * is still being typed. The rows themselves stay live — the input must show
-   * every keystroke — and only the verdict lags.
+   * Read at write time rather than closed over. The panel commits from an
+   * unmount cleanup — see below — which runs after the render that removed it,
+   * so a closure captured earlier would write a draft the author has since
+   * changed.
    */
-  const settled = React.useDeferredValue(rows);
-  const settledId = React.useDeferredValue(idDraft);
+  const latest = React.useRef<Draft>(draft);
+  latest.current = draft;
+  const write = React.useRef<(next: Draft) => void>(() => {});
 
-  const commitId = (): void => {
-    if (idDraft.trim() === cssId) return;
+  write.current = (next: Draft): void => {
+    const id = next.id.trim();
+    // An id another block holds is not written at all: the field keeps showing
+    // what the author typed, with the reason beside it, and the document keeps
+    // what it had.
+    const keptId = id !== "" && taken.has(id) ? cssId : id;
+    const update = htmlUpdate(
+      { cssId: keptId, attributes: storedAttributes(next.rows, keptId, taken) },
+      { cssId, attributes }
+    );
+    if (update === undefined) return;
     editor.apply({
       kind: "update",
       id: nodeId,
-      // Removed rather than stored empty: a node that never had an id and one
-      // whose id was cleared are the same node, and an empty string would
-      // render as `id=""`.
-      patch: { cssId: idDraft.trim() === "" ? undefined : idDraft.trim() },
-    });
+      patch: update.patch,
+      ...(update.unset.length > 0 ? { unset: update.unset } : {}),
+    } as Parameters<EditorState["apply"]>[0]);
   };
 
-  const commitRows = (next: readonly AttributeRow[]): void => {
-    editor.apply({
-      kind: "update",
-      id: nodeId,
-      patch: { attributes: storedAttributes(next, idDraft) },
-    });
+  /*
+   * Committed when the panel GOES AWAY, not only on blur.
+   *
+   * The inspector's tabs activate on `mousedown` and unmount the inactive tab's
+   * content, so an author who types an attribute and clicks Style has this
+   * panel removed before the browser delivers the blur — and the draft was
+   * lost with it, silently. Selecting another block does the same through the
+   * key on this element.
+   */
+  React.useEffect(
+    () => () => {
+      write.current(latest.current);
+    },
+    []
+  );
+
+  const settle = (next: Draft): void => {
+    setSettled(next);
+    write.current(next);
   };
 
   const change = (index: number, part: Partial<AttributeRow>): void => {
-    setRows(current =>
-      current.map((row, at) => (at === index ? { ...row, ...part } : row))
-    );
+    setDraft(current => ({
+      ...current,
+      rows: current.rows.map((row, at) =>
+        at === index ? { ...row, ...part } : row
+      ),
+    }));
   };
 
   const remove = (index: number): void => {
-    const next = rows.filter((_row, at) => at !== index);
-    setRows(next);
-    // Immediately, with no blur to wait for: removal is a decision rather than
-    // a value being typed, and there is nothing to coalesce.
-    commitRows(next);
+    const next: Draft = {
+      ...draft,
+      rows: draft.rows.filter((_row, at) => at !== index),
+    };
+    setDraft(next);
+    // Immediately: removal is a decision rather than a value being typed, and
+    // there is nothing to coalesce.
+    settle(next);
   };
+
+  const idProblem = idProblemOf(settled.id, cssId, taken);
 
   return (
     <div className="nx-inspector__fields">
@@ -122,27 +169,41 @@ export function AdvancedPanel({
         <Label htmlFor="nx-block-css-id">CSS id</Label>
         <Input
           id="nx-block-css-id"
-          value={idDraft}
+          value={draft.id}
           placeholder="none"
-          onChange={event => setIdDraft(event.target.value)}
-          // Committed on blur and on Enter, matching every other text field
-          // here: an op per keystroke would make one undo remove one letter.
-          onBlur={commitId}
+          aria-describedby={
+            idProblem === undefined ? undefined : "nx-css-id-problem"
+          }
+          aria-invalid={idProblem === undefined ? undefined : true}
+          onChange={event =>
+            setDraft(current => ({ ...current, id: event.target.value }))
+          }
+          onBlur={() => settle(latest.current)}
           onKeyDown={event => {
             if (event.key !== "Enter") return;
             event.preventDefault();
-            commitId();
+            settle(latest.current);
           }}
         />
-        <p className="nx-inspector__hint">
-          Becomes this block&rsquo;s <code>id</code>, so a link can point at it.
-          It must be different from every other block&rsquo;s.
-        </p>
+        {idProblem === undefined ? (
+          <p className="nx-inspector__hint">
+            Becomes this block&rsquo;s <code>id</code>, so a link can point at
+            it. It must be different from every other block&rsquo;s.
+          </p>
+        ) : (
+          <p
+            className="nx-attributes__problem"
+            id="nx-css-id-problem"
+            role="alert"
+          >
+            {idProblem}
+          </p>
+        )}
       </div>
 
       <fieldset className="nx-attributes">
         <legend className="nx-attributes__legend">Attributes</legend>
-        {rows.length === 0 ? (
+        {draft.rows.length === 0 ? (
           <p className="nx-inspector__note">No attributes on this block.</p>
         ) : (
           <>
@@ -161,7 +222,7 @@ export function AdvancedPanel({
               <span>Value</span>
             </div>
             <ul className="nx-attributes__rows">
-              {rows.map((row, index) => (
+              {draft.rows.map((row, index) => (
                 <AttributeRowFields
                   // Keyed by POSITION, not by name: a name is what the author is
                   // editing, so keying on it would remount the input on every
@@ -169,9 +230,9 @@ export function AdvancedPanel({
                   key={`${nodeId}:${String(index)}`}
                   row={row}
                   index={index}
-                  problem={problemOf(settled, index, settledId, rows)}
+                  problem={problemOf(settled, index, draft, taken)}
                   onChange={change}
-                  onCommit={() => commitRows(rows)}
+                  onCommit={() => settle(latest.current)}
                   onRemove={() => remove(index)}
                 />
               ))}
@@ -182,7 +243,12 @@ export function AdvancedPanel({
           type="button"
           variant="ghost"
           size="sm"
-          onClick={() => setRows([...rows, { name: "", value: "" }])}
+          onClick={() =>
+            setDraft(current => ({
+              ...current,
+              rows: [...current.rows, { name: "", value: "" }],
+            }))
+          }
         >
           Add attribute
         </Button>
@@ -191,25 +257,36 @@ export function AdvancedPanel({
   );
 }
 
+/** Why the CSS id will not be written, or `undefined`. */
+function idProblemOf(
+  id: string,
+  stored: string,
+  taken: ReadonlySet<string>
+): string | undefined {
+  const trimmed = id.trim();
+  if (trimmed === "" || trimmed === stored) return undefined;
+  return taken.has(trimmed)
+    ? "Another block on this page already uses that id. Two elements with one id give a link, a label and a style rule two possible targets."
+    : undefined;
+}
+
 /**
- * The verdict for one row, read from the settled text but keyed to the live one.
+ * The verdict for one row, read from the settled draft but keyed to the live one.
  *
- * `useDeferredValue` can hand back a row list one keystroke behind the one being
- * rendered, and a verdict read at an index that no longer holds the same row
- * would be attached to the wrong input. So the row is compared before the
- * verdict is used, and a stale pair simply says nothing yet.
+ * A row the author is still typing has no verdict yet, so a settled list that
+ * no longer matches the live one at this position simply says nothing.
  */
 function problemOf(
-  settled: readonly AttributeRow[],
+  settled: Draft,
   index: number,
-  settledId: string,
-  live: readonly AttributeRow[]
+  live: Draft,
+  taken: ReadonlySet<string>
 ): string | undefined {
-  const behind = settled[index];
-  const now = live[index];
+  const behind = settled.rows[index];
+  const now = live.rows[index];
   if (behind === undefined || now === undefined) return undefined;
   if (behind.name !== now.name) return undefined;
-  const problem = rowProblem(settled, index, settledId);
+  const problem = rowProblem(settled.rows, index, settled.id.trim(), taken);
   return problem === undefined ? undefined : problemMessage(problem);
 }
 
@@ -232,13 +309,9 @@ function AttributeRowFields({
   const valueId = `nx-attr-value-${String(index)}`;
   const problemId = `nx-attr-problem-${String(index)}`;
   /*
-   * The visible labels are short because they sit inline beside the fields, and
-   * short labels REPEAT: "Name" is also the block's own name field a few
-   * hundred pixels above, and every row here would announce "Name" again. A
-   * screen reader reading the page in order would hear one word for several
-   * different things.
-   *
-   * So the accessible name is made unique per row while still CONTAINING the
+   * The visible headings are short because they sit over the columns, and short
+   * words REPEAT: "Name" is also the block's own name field above the tabs. So
+   * the accessible name is made unique per row while still CONTAINING the
    * visible word, which is what lets someone say "name" to a voice control and
    * have it match what they can see.
    */

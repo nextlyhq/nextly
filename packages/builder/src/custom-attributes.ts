@@ -17,7 +17,10 @@
  *
  * @module custom-attributes
  */
-import { isAllowedAttribute } from "@nextlyhq/blocks-react";
+import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { NODE_ID_ATTRIBUTE, isAllowedAttribute } from "@nextlyhq/blocks-react";
+
+import { CHROME_ATTRIBUTE } from "./canvas";
 
 /** One row of the attributes editor, as the author is typing it. */
 export interface AttributeRow {
@@ -25,11 +28,28 @@ export interface AttributeRow {
   readonly value: string;
 }
 
+/**
+ * Names the EDITOR needs, which the renderer has no reason to refuse.
+ *
+ * Both are `data-` attributes, so the render-safe rule admits them — correctly,
+ * because on a published page they are ordinary author data. They are not
+ * ordinary HERE: the canvas reads one to decide which block was clicked and
+ * treats the other as its own chrome, so a block carrying either can send a
+ * click to the wrong block or swallow it. That is an editing surface the
+ * renderer cannot see, which is why this narrowing lives here and not there.
+ *
+ * Taken from the two modules that define them rather than written out, so
+ * renaming either moves this with it.
+ */
+const RESERVED_FOR_THE_EDITOR = new Set([NODE_ID_ATTRIBUTE, CHROME_ATTRIBUTE]);
+
 /** Why a row will not reach the page, or `undefined` when it will. */
 export type RowProblem =
   | { readonly kind: "not-allowed" }
+  | { readonly kind: "reserved" }
   | { readonly kind: "duplicate" }
-  | { readonly kind: "overridden-by-css-id" };
+  | { readonly kind: "overridden-by-css-id" }
+  | { readonly kind: "duplicate-dom-id" };
 
 /**
  * HTML attribute names are ASCII case-insensitive; React props are not.
@@ -61,12 +81,14 @@ export function isBlankRow(row: AttributeRow): boolean {
 export function rowProblem(
   rows: readonly AttributeRow[],
   index: number,
-  cssId: string
+  cssId: string,
+  takenIds: ReadonlySet<string> = new Set()
 ): RowProblem | undefined {
   const row = rows[index];
   if (row === undefined || isBlankRow(row)) return undefined;
   const key = attributeKey(row.name);
   if (!isAllowedAttribute(key)) return { kind: "not-allowed" };
+  if (RESERVED_FOR_THE_EDITOR.has(key)) return { kind: "reserved" };
   /*
    * Located by INDEX, never by object identity. A row is a plain value the UI
    * rebuilds on every keystroke, so two rows holding the same name and value
@@ -83,6 +105,11 @@ export function rowProblem(
   if (key === "id" && cssId.trim() !== "") {
     return { kind: "overridden-by-css-id" };
   }
+  // An `id` set through the bag is the same page-wide identifier as one set in
+  // the field beside it, so it collides with other blocks the same way.
+  if (key === "id" && takenIds.has(row.value.trim())) {
+    return { kind: "duplicate-dom-id" };
+  }
   return undefined;
 }
 
@@ -91,10 +118,14 @@ export function problemMessage(problem: RowProblem): string {
   switch (problem.kind) {
     case "not-allowed":
       return "This site does not put that attribute on a page. Names starting with “data-” or “aria-” are open, along with role, title, lang and dir.";
+    case "reserved":
+      return "The editor uses that name to find blocks on the canvas, so setting it here would make clicking this block select the wrong one. Pick another name.";
     case "duplicate":
       return "Another row already sets this attribute, and only the first is used. Attribute names ignore capitals, so “Data-X” and “data-x” are one name.";
     case "overridden-by-css-id":
       return "The CSS id above sets this element’s id, and it wins over this row, so this value would not be used. Clear the CSS id, or set the id there instead.";
+    case "duplicate-dom-id":
+      return "Another block on this page already uses that id. Two elements with one id give a link, a label and a style rule two possible targets.";
   }
 }
 
@@ -124,7 +155,8 @@ export function rowsOf(
  */
 export function storedAttributes(
   rows: readonly AttributeRow[],
-  cssId: string
+  cssId: string,
+  takenIds: ReadonlySet<string> = new Set()
 ): Record<string, string> | undefined {
   const kept: Record<string, string> = {};
   rows.forEach((row, index) => {
@@ -136,8 +168,114 @@ export function storedAttributes(
      * answer for both stored an attribute under the empty name.
      */
     if (isBlankRow(row)) return;
-    if (rowProblem(rows, index, cssId) !== undefined) return;
+    if (rowProblem(rows, index, cssId, takenIds) !== undefined) return;
     kept[attributeKey(row.name)] = row.value;
   });
   return Object.keys(kept).length === 0 ? undefined : kept;
+}
+
+/**
+ * Every DOM id the document already uses, other than one node's own.
+ *
+ * A rendered id must be unique across the page: two elements answering to one
+ * `id` give a fragment link, a `<label for>` and a CSS selector two possible
+ * targets, and which one wins is the document order rather than anything the
+ * author chose.
+ *
+ * The engine already detects this — `validateDomIds` reports `duplicate-dom-id`
+ * — but only as a WARNING in forgiving mode, and the field's own validation
+ * discards warnings, so a duplicate saves and publishes with nothing said. This
+ * is the editor refusing it while the author still has the keyboard, which is
+ * the only moment they can act on it.
+ *
+ * Both sources are read, because both become the same attribute: the modelled
+ * `cssId` and the `id` an author can put in the attribute bag.
+ */
+export function domIdsTaken(
+  nodes: readonly BlockNode[],
+  exceptNodeId: string
+): Set<string> {
+  const taken = new Set<string>();
+  const visit = (node: BlockNode): void => {
+    if (node.id !== exceptNodeId) {
+      if (typeof node.cssId === "string" && node.cssId !== "") {
+        taken.add(node.cssId);
+      }
+      const own = node.attributes;
+      if (
+        own !== undefined &&
+        typeof own["id"] === "string" &&
+        own["id"] !== ""
+      ) {
+        taken.add(own["id"]);
+      }
+    }
+    for (const child of childNodesOf(node)) visit(child);
+  };
+  for (const node of nodes) visit(node);
+  return taken;
+}
+
+/** Every node nested inside one, across all of its slots. */
+function childNodesOf(node: BlockNode): BlockNode[] {
+  const slots = node.slots;
+  if (slots === undefined) return [];
+  return Object.values(slots).flatMap(held =>
+    Array.isArray(held) ? held : []
+  );
+}
+
+/** What a node should hold, and what it holds now. */
+export interface HtmlFields {
+  readonly cssId: string;
+  readonly attributes: Readonly<Record<string, string>> | undefined;
+}
+
+/**
+ * The smallest update that makes a node hold `wanted`, or nothing to do.
+ *
+ * Its own question, and a pure one: deciding what an author's draft SHOULD
+ * become is about attribute rules, and saying so as an op is about the patch
+ * contract. Both live away from the component, which then only has to hand over
+ * two values and apply what comes back.
+ *
+ * Removal is spelled `unset`, never `undefined` as a patch value: `applyOp`
+ * refuses that and says why — the key disappears when the op is stored, so a
+ * replayed edit would silently do nothing.
+ *
+ * Only what CHANGED is named. An op that unsets a field the node never had, or
+ * rewrites one to the value it already holds, is an undo entry that undoes
+ * nothing — and an author pressing undo for their last edit gets a step that
+ * does nothing instead.
+ */
+export function htmlUpdate(
+  wanted: HtmlFields,
+  stored: HtmlFields
+): { patch: Record<string, unknown>; unset: string[] } | undefined {
+  const sameId = wanted.cssId === stored.cssId;
+  const sameAttributes = sameRecord(wanted.attributes, stored.attributes);
+  if (sameId && sameAttributes) return undefined;
+
+  const patch: Record<string, unknown> = {};
+  const unset: string[] = [];
+  if (!sameId) {
+    if (wanted.cssId === "") unset.push("cssId");
+    else patch["cssId"] = wanted.cssId;
+  }
+  if (!sameAttributes) {
+    if (wanted.attributes === undefined) unset.push("attributes");
+    else patch["attributes"] = wanted.attributes;
+  }
+  return { patch, unset };
+}
+
+/** Whether two attribute records hold the same names and values. */
+function sameRecord(
+  left: Readonly<Record<string, string>> | undefined,
+  right: Readonly<Record<string, string>> | undefined
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  const names = Object.keys(left);
+  if (names.length !== Object.keys(right).length) return false;
+  return names.every(name => left[name] === right[name]);
 }

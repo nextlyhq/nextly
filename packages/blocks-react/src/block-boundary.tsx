@@ -182,9 +182,6 @@ function withNodeAttributes(
   if (typeof output.type !== "string") return output;
 
   const extra: Record<string, string> = {};
-  // Written before the author's own attributes so it cannot be overwritten by
-  // one: the editor's address for a node is not a value the document may set.
-  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = node.id;
   if (attributes) {
     for (const [name, value] of Object.entries(attributes)) {
       if (!isAllowedAttribute(name)) continue;
@@ -203,6 +200,18 @@ function withNodeAttributes(
   // The modelled field wins over an attribute of the same name: `cssId` is what
   // the editor writes, and the attribute bag is the escape hatch beside it.
   if (cssId !== undefined) extra.id = cssId;
+  /*
+   * LAST, so it cannot be overwritten. This was written first, with a comment
+   * saying that made it safe — the opposite of what the code did: the author's
+   * loop ran afterwards and assigning the same key simply replaced it. A
+   * document could therefore hand every block the same address, or one block
+   * another's, and the editor's hit-testing reads exactly this value to decide
+   * which block was clicked.
+   *
+   * It is the editor's address for a node, not a value the document may set, so
+   * the position enforces that rather than a note asking the loop above to.
+   */
+  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = node.id;
 
   return Object.keys(extra).length > 0 ? cloneElement(output, extra) : output;
 }
