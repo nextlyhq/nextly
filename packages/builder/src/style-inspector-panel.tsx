@@ -1447,12 +1447,25 @@ export function describeProvenance(
 }
 
 /**
- * Which of FOUR things a `node` origin means, in the order they narrow.
+ * What a `node` origin means, composed from EVERY axis that differs.
  *
  * Split from {@link originName} because the other three tiers answer in one line
- * each while this one is the whole question: an ancestor's rule, this block at
- * another breakpoint, this block in another state, another control on this
- * block, and only then this control's own value.
+ * each while this one is the whole question: an ancestor's rule, another control
+ * on this block, another breakpoint, another state, and only then this control's
+ * own value.
+ *
+ * Composed rather than narrowed. An earlier version returned on the FIRST
+ * differing axis, which is a complete answer only when exactly one differs — and
+ * two differ in an ordinary case: editing hover at Tablet, a value arriving from
+ * base at Mobile was labelled "this block at Mobile", which is a real address
+ * that does not hold the value. The author goes to hover at Mobile, finds
+ * nothing, and the indicator has actively misdirected them. Naming a wrong
+ * address is worse than naming a vague one.
+ *
+ * The CONTROL leads rather than trails, because it is the subject of the phrase
+ * the other two qualify: "the Link color control at Medium in its hover state"
+ * is an address read in one direction, where a trailing control name would read
+ * as a second, competing subject.
  */
 function nodeOriginName(
   originNodeId: string,
@@ -1461,20 +1474,20 @@ function nodeOriginName(
   controlDescendant: string | undefined
 ): string {
   if (originNodeId !== editing.nodeId) return "an enclosing block";
-  if (entry.breakpoint !== editing.breakpoint) {
-    return `this block at ${editing.labelOf(entry.breakpoint)}`;
-  }
-  if (entry.state !== editing.state) {
-    return `this block's ${entry.state} state`;
-  }
   /*
-   * Same node, same address — so what differs is WHICH CONTROL wrote it. A rule
-   * reaches a control whose descendant selector is more specific than its own:
-   * `linkColorHover` displays the plain `a` declaration when no hover value
+   * A rule reaches a control whose descendant selector is more specific than its
+   * own: `linkColorHover` displays the plain `a` declaration when no hover value
    * exists. Told "this block", the author cannot find the field that actually
    * holds it, which is the one thing this indicator is for.
    */
-  return sourceControl(entry, controlDescendant) ?? "this block";
+  const parts = [sourceControl(entry, controlDescendant) ?? "this block"];
+  if (entry.breakpoint !== editing.breakpoint) {
+    parts.push(`at ${editing.labelOf(entry.breakpoint)}`);
+  }
+  if (entry.state !== editing.state) {
+    parts.push(`in its ${entry.state} state`);
+  }
+  return parts.join(" ");
 }
 
 /**

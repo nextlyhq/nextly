@@ -1538,7 +1538,30 @@ describe("naming the place a value came from", () => {
 
   it("names the STATE a same-node value came from", () => {
     expect(nameFor({ kind: "node", id: "a" }, at({ state: "hover" }))).toBe(
-      "Inherited from this block's hover state"
+      "Inherited from this block in its hover state"
+    );
+  });
+
+  it("names BOTH axes when both differ, not just the first", () => {
+    /*
+     * The defect a first-match answer produces, and it needs no unusual document
+     * to reach: editing hover at Tablet, a value arriving from base at Mobile.
+     * Labelled "this block at Mobile", the author goes to hover at Mobile —
+     * a real address that does not hold the value — finds nothing, and the
+     * indicator has misdirected rather than merely under-informed them.
+     *
+     * The separating property is asserted directly: the state has to APPEAR, so
+     * a label that merely happens to name the breakpoint cannot satisfy this.
+     */
+    const label = nameFor(
+      { kind: "node", id: "a" },
+      at({ breakpoint: "md", state: "hover" })
+    );
+
+    expect(label).toContain("Medium");
+    expect(label).toContain("hover");
+    expect(label).toBe(
+      "Inherited from this block at Medium in its hover state"
     );
   });
 
