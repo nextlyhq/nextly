@@ -25,6 +25,7 @@
  *
  * @module advanced-panel
  */
+import { registeredBlocks } from "@nextlyhq/blocks-react";
 import { Button, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -36,6 +37,7 @@ import {
   problemMessage,
   rebasedRows,
   rowProblem,
+  requestedId,
   rowsOf,
   sameDraft,
   wantedFields,
@@ -133,7 +135,7 @@ export function AdvancedPanel({
   }, [cssId, attributes]);
 
   const taken = React.useMemo(
-    () => domIdsTaken(editor.document.nodes, nodeId),
+    () => domIdsTaken(editor.document.nodes, nodeId, registeredBlocks()),
     [editor.document, nodeId]
   );
 
@@ -163,6 +165,9 @@ export function AdvancedPanel({
       return;
     }
     const stored = { cssId, attributes };
+    // Read BEFORE `loaded` moves below, or it compares the draft against the
+    // value this very write is about to record and always agrees.
+    const asked = requestedId(next, loaded.current);
     const wanted = wantedFields(next, loaded.current, stored, taken);
     const update = htmlUpdate(wanted, stored);
     // Edited, but to something the document already holds — a value typed back
@@ -212,10 +217,19 @@ export function AdvancedPanel({
      */
     const landed = wanted.cssId;
     loaded.current = { id: landed, rows: rebasedRows(next.rows, wanted) };
+    /*
+     * The FIELD only follows when the author's own id is the one that landed.
+     *
+     * A refused id — one another block already holds — is kept out of the write
+     * while staying in the field with its reason beside it, so `wanted.cssId`
+     * is the value the node already had rather than anything the author typed.
+     * Rebasing the field onto that replaced the text they were fixing, and took
+     * the collision message with it, because an unrelated attribute saved.
+     */
     setDraft(current => ({
       // Unless the author has typed since, in which case theirs is newer than
       // anything this write knows about.
-      id: current.id === next.id ? landed : current.id,
+      id: current.id === next.id && landed === asked ? landed : current.id,
       rows: rebasedRows(current.rows, wanted),
     }));
   };

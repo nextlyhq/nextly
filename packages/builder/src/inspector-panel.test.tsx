@@ -1299,3 +1299,59 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
     expect(screen.queryByLabelText("CSS id")).not.toBeNull();
   });
 });
+
+describe("a refused id while an unrelated attribute saves", () => {
+  it("keeps the author's id and its reason on screen", () => {
+    /*
+     * A colliding id is held out of the write while staying in the field, so
+     * `wanted.cssId` is the value the node ALREADY had. Rebasing the field onto
+     * what landed therefore replaced the text the author was fixing with the
+     * old id, and took the collision message with it — because an unrelated
+     * attribute happened to save.
+     */
+    register();
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/heading",
+          version: 1,
+          props: {},
+          attributes: { "data-x": "1" },
+        },
+        { id: "b", type: "acme/heading", version: 1, props: {}, cssId: "hero" },
+      ],
+    } as unknown as BlockDocument);
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+    // The control: refused, and both the text and the reason are present to be
+    // lost by what follows.
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect((field as HTMLInputElement).value).toBe("hero");
+
+    const value = screen.getByLabelText("Value of attribute 1");
+    fireEvent.change(value, { target: { value: "2" } });
+    fireEvent.blur(value);
+
+    // The attribute saved, and ONLY the attribute.
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { attributes: { "data-x": "2" } },
+    });
+    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
+      "hero"
+    );
+    expect(
+      screen
+        .queryAllByRole("alert")
+        .some(each => each.textContent?.includes("already uses that id"))
+    ).toBe(true);
+  });
+});
