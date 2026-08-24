@@ -114,6 +114,28 @@ function route(nextly: TestNextly["nextly"], token?: string) {
   });
 }
 
+/**
+ * The route answered NOT FOUND, rather than merely throwing.
+ *
+ * `.rejects.toThrow()` cannot tell the intended 404 from any other failure on
+ * the way — a query guard refusing the lookup, a fixture that never booted, a
+ * misspelled collection. Every refusal in this file is a NEGATIVE assertion,
+ * and a negative assertion satisfied by the wrong error reads as coverage while
+ * seeing nothing.
+ *
+ * Measured rather than argued: this collection declares a read rule on its slug
+ * field, and for a period every one of these cases passed because a filter
+ * guard was rejecting the slug lookup outright — the enforced route answered no
+ * page at all, and the assertions could not tell that from the entry being
+ * correctly absent.
+ *
+ * Next signals the not-found boundary by throwing a string-tagged error rather
+ * than a typed one, so the tag is what there is to match.
+ */
+async function expectNotFound(page: Promise<unknown>): Promise<void> {
+  await expect(page).rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404/);
+}
+
 describe("createContentRoute driven by previewDraftGate", () => {
   it("serves a never-published entry to the visitor whose token names it", async () => {
     current = await createTestNextly({ collections: [pages()] });
@@ -145,9 +167,9 @@ describe("createContentRoute driven by previewDraftGate", () => {
       data: { slug: "unreleased", title: "Unreleased", status: "draft" },
     });
 
-    await expect(
+    await expectNotFound(
       route(current.nextly).ContentPage({ params: { slug: ["unreleased"] } })
-    ).rejects.toThrow();
+    );
   });
 
   // One link is a key to ONE document. A token minted for entry A must not open
@@ -170,11 +192,11 @@ describe("createContentRoute driven by previewDraftGate", () => {
       { generation: GENERATION, minter: await sharer(current.nextly) }
     );
 
-    await expect(
+    await expectNotFound(
       route(current.nextly, token).ContentPage({
         params: { slug: ["entry-b"] },
       })
-    ).rejects.toThrow();
+    );
   });
 
   // The leak this whole change exists to close. A draft read is TRUSTED so the
@@ -267,11 +289,11 @@ describe("createContentRoute driven by previewDraftGate", () => {
       { generation: GENERATION, minter: "user-that-never-existed" }
     );
 
-    await expect(
+    await expectNotFound(
       route(current.nextly, token).ContentPage({
         params: { slug: ["unreleased"] },
       })
-    ).rejects.toThrow();
+    );
   });
   // A path decided from a REDACTED value is decided from an absence. Once the
   // draft is judged by the sharer, a read rule on the slug field removes it
