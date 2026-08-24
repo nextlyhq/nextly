@@ -30,7 +30,6 @@ import * as React from "react";
 
 import {
   domIdsTaken,
-  holdsTheWrite,
   htmlUpdate,
   type HtmlFields,
   isBlankRow,
@@ -38,7 +37,6 @@ import {
   rowProblem,
   rowsOf,
   storedAttributes,
-  withoutShadowedId,
   type AttributeRow,
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
@@ -99,6 +97,14 @@ export function AdvancedPanel({
       written !== null &&
       htmlUpdate(written, { cssId, attributes }) === undefined
     ) {
+      /*
+       * CONSUMED, not merely matched. Left in place, the marker goes on
+       * describing a state the document may return to — undo then redo lands
+       * back on it, this branch returns again, and the panel keeps showing the
+       * undone value while a later blur writes from that stale draft and erases
+       * the redone edit. One echo, one write.
+       */
+      lastWritten.current = null;
       return;
     }
     const stored = { id: cssId, rows: rowsOf(attributes) };
@@ -127,33 +133,9 @@ export function AdvancedPanel({
     // what the author typed, with the reason beside it, and the document keeps
     // what it had.
     const keptId = id !== "" && taken.has(id) ? cssId : id;
-    /*
-     * A row the page would drop is not a request to DELETE what is stored.
-     * Renaming `data-x` to `onclick` means the author has typed something
-     * wrong, not that they want `data-x` gone — and writing the reduced set
-     * would remove it while the row showing the mistake was replaced by the
-     * empty stored value, so both the attribute and its explanation vanished.
-     *
-     * So the attributes are left exactly as they are until every row can land.
-     * The id still commits: it is a separate field and holding it hostage to an
-     * unrelated typo would be its own surprise.
-     */
-    const refused = next.rows.some((_row, index) => {
-      const problem = rowProblem(next.rows, index, keptId, taken);
-      return problem !== undefined && holdsTheWrite(problem);
-    });
     const wanted = {
       cssId: keptId,
-      /*
-       * The shadowing is applied to WHICHEVER set is written. Holding the rows
-       * because one is a mistake must not also hold back dropping an id the
-       * new CSS id shadows — those are two different reasons and only one of
-       * them is the author's to fix.
-       */
-      attributes: withoutShadowedId(
-        refused ? attributes : storedAttributes(next.rows, keptId, taken),
-        keptId
-      ),
+      attributes: storedAttributes(next.rows, keptId, attributes ?? {}),
     };
     const update = htmlUpdate(wanted, { cssId, attributes });
     if (update === undefined) return;
@@ -276,7 +258,7 @@ export function AdvancedPanel({
                   key={`${nodeId}:${String(index)}`}
                   row={row}
                   index={index}
-                  problem={problemOf(settled, index, draft, taken)}
+                  problem={problemOf(settled, index, draft)}
                   onChange={change}
                   onCommit={() => settle(latest.current)}
                   onRemove={() => remove(index)}
@@ -325,14 +307,20 @@ function idProblemOf(
 function problemOf(
   settled: Draft,
   index: number,
-  live: Draft,
-  taken: ReadonlySet<string>
+  live: Draft
 ): string | undefined {
   const behind = settled.rows[index];
   const now = live.rows[index];
   if (behind === undefined || now === undefined) return undefined;
   if (behind.name !== now.name) return undefined;
-  const problem = rowProblem(settled.rows, index, settled.id.trim(), taken);
+  /*
+   * Every row problem is about the NAME, which is why the reason below is wired
+   * to that input alone. A colliding id used to be the exception — a good name
+   * with a value another block held — and it no longer reaches a row at all:
+   * an id belongs in the field above, and that field carries its own collision
+   * message on the one input whose value it is about.
+   */
+  const problem = rowProblem(settled.rows, index);
   return problem === undefined ? undefined : problemMessage(problem);
 }
 
@@ -371,7 +359,8 @@ function AttributeRowFields({
           placeholder="data-example"
           aria-label={`Name of attribute ${position}`}
           // Named so a screen reader reaches the reason with the field, rather
-          // than leaving it as text that happens to sit nearby.
+          // than leaving it as text that happens to sit nearby — and only when
+          // the NAME is the thing that is wrong.
           aria-describedby={problem === undefined ? undefined : problemId}
           aria-invalid={problem === undefined ? undefined : true}
           onChange={event => onChange(index, { name: event.target.value })}

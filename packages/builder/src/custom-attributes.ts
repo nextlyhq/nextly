@@ -30,6 +30,18 @@ import { CHROME_ATTRIBUTE } from "./canvas";
 export interface AttributeRow {
   readonly name: string;
   readonly value: string;
+  /**
+   * The name this row was LOADED with, when it came from the document.
+   *
+   * Kept so a row that cannot land does not delete what it replaced. Renaming
+   * `data-x` to `onclick` means the author typed something wrong, not that they
+   * want `data-x` gone — and without an origin the only way to avoid deleting
+   * it was to hold the whole write, which then blocked removing an unrelated
+   * row beside it.
+   *
+   * Absent on a row the author added, which has nothing to fall back to.
+   */
+  readonly origin?: string;
 }
 
 /**
@@ -63,8 +75,7 @@ export type RowProblem =
   | { readonly kind: "not-allowed" }
   | { readonly kind: "reserved" }
   | { readonly kind: "duplicate" }
-  | { readonly kind: "overridden-by-css-id" }
-  | { readonly kind: "duplicate-dom-id" };
+  | { readonly kind: "use-css-id-field" };
 
 /**
  * HTML attribute names are ASCII case-insensitive; React props are not.
@@ -95,9 +106,7 @@ export function isBlankRow(row: AttributeRow): boolean {
  */
 export function rowProblem(
   rows: readonly AttributeRow[],
-  index: number,
-  cssId: string,
-  takenIds: ReadonlySet<string> = new Set()
+  index: number
 ): RowProblem | undefined {
   const row = rows[index];
   if (row === undefined || isBlankRow(row)) return undefined;
@@ -117,33 +126,15 @@ export function rowProblem(
     other => !isBlankRow(other) && attributeKey(other.name) === key
   );
   if (first !== -1 && first !== index) return { kind: "duplicate" };
-  if (key === "id" && cssId.trim() !== "") {
-    return { kind: "overridden-by-css-id" };
-  }
-  // An `id` set through the bag is the same page-wide identifier as one set in
-  // the field beside it, so it collides with other blocks the same way.
-  if (key === "id" && takenIds.has(row.value.trim())) {
-    return { kind: "duplicate-dom-id" };
-  }
+  /*
+   * ONE way to set an id, and it is the field above. The renderer accepts an
+   * `id` here — a document from elsewhere may carry one — but offering an
+   * author two routes to one identifier is the "two spellings of one question"
+   * problem wearing a UI, and the two do not even agree: the modelled field
+   * wins, so a value typed here would sit in the document doing nothing.
+   */
+  if (key === "id") return { kind: "use-css-id-field" };
   return undefined;
-}
-
-/**
- * Whether a problem is the author's to FIX before anything is stored.
- *
- * Most are: a name the page would drop, a name the editor needs, a second row
- * setting a name another row sets, an id another block holds. Each means the
- * author has typed something wrong, and writing the reduced set would delete
- * whatever the row used to hold — renaming `data-x` to `onclick` would remove
- * `data-x`, which is not what renaming asks for.
- *
- * One is not: a row the CSS id field shadows is not a mistake, it is a
- * consequence of the field beside it, and dropping it is exactly right — the
- * value could never reach the page anyway, and holding the whole write for it
- * would mean an author could not set a CSS id while such a row existed.
- */
-export function holdsTheWrite(problem: RowProblem): boolean {
-  return problem.kind !== "overridden-by-css-id";
 }
 
 /** What to tell the author about a row that will not land. */
@@ -155,10 +146,8 @@ export function problemMessage(problem: RowProblem): string {
       return "The editor uses that name to find blocks on the canvas, so setting it here would make clicking this block select the wrong one. Pick another name.";
     case "duplicate":
       return "Another row already sets this attribute, and only the first is used. Attribute names ignore capitals, so “Data-X” and “data-x” are one name.";
-    case "overridden-by-css-id":
-      return "The CSS id above sets this element’s id, and it wins over this row, so this value would not be used. Clear the CSS id, or set the id there instead.";
-    case "duplicate-dom-id":
-      return "Another block on this page already uses that id. Two elements with one id give a link, a label and a style rule two possible targets.";
+    case "use-css-id-field":
+      return "Set this block’s id in the CSS id field above. An id written here is not used while that field has a value, and it is the field the rest of the editor reads.";
   }
 }
 
@@ -173,7 +162,7 @@ export function rowsOf(
   attributes: Readonly<Record<string, string>> | undefined
 ): AttributeRow[] {
   return Object.entries(attributes ?? {})
-    .map(([name, value]) => ({ name, value }))
+    .map(([name, value]) => ({ name, value, origin: name }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
@@ -189,7 +178,7 @@ export function rowsOf(
 export function storedAttributes(
   rows: readonly AttributeRow[],
   cssId: string,
-  takenIds: ReadonlySet<string> = new Set()
+  stored: Readonly<Record<string, string>> = {}
 ): Record<string, string> | undefined {
   const kept: Record<string, string> = {};
   rows.forEach((row, index) => {
@@ -201,8 +190,27 @@ export function storedAttributes(
      * answer for both stored an attribute under the empty name.
      */
     if (isBlankRow(row)) return;
-    if (rowProblem(rows, index, cssId, takenIds) !== undefined) return;
-    kept[attributeKey(row.name)] = row.value;
+    const problem = rowProblem(rows, index);
+    if (problem === undefined) {
+      kept[attributeKey(row.name)] = row.value;
+      return;
+    }
+    /*
+     * A row that cannot land KEEPS what it replaced, rather than deleting it.
+     * The author has typed something wrong, and the row is on screen with the
+     * reason — removing the attribute underneath it as well would take away
+     * work they never asked to lose. A row they ADDED has no origin, so there
+     * is nothing to keep and nothing is written.
+     *
+     * The one exception is an id the field above now owns: keeping it would let
+     * the renderer fall back to it the moment that field is cleared, which is
+     * the value coming back from the dead.
+     */
+    if (problem.kind === "use-css-id-field" && cssId.trim() !== "") return;
+    const origin = row.origin;
+    if (origin === undefined) return;
+    const had = stored[origin];
+    if (had !== undefined) kept[origin] = had;
   });
   return Object.keys(kept).length === 0 ? undefined : kept;
 }
@@ -231,11 +239,17 @@ export function domIdsTaken(
   const taken = new Set<string>();
   const visit = (node: BlockNode): void => {
     if (node.id !== exceptNodeId) {
-      if (typeof node.cssId === "string" && node.cssId !== "") {
-        taken.add(node.cssId);
-      }
-      const fromBag = renderedIdIn(node.attributes);
-      if (fromBag !== undefined) taken.add(fromBag);
+      /*
+       * ONE id per node, because the renderer emits one: the modelled field
+       * wins over the bag. Adding both refused another block the bag's value
+       * even though that id never reaches the page.
+       */
+      const modelled =
+        typeof node.cssId === "string" && node.cssId !== ""
+          ? node.cssId
+          : undefined;
+      const rendered = modelled ?? renderedIdIn(node.attributes);
+      if (rendered !== undefined) taken.add(rendered);
     }
     for (const child of childNodesOf(node)) visit(child);
   };
@@ -275,35 +289,6 @@ function childNodesOf(node: BlockNode): BlockNode[] {
   return Object.values(slots).flatMap(held =>
     Array.isArray(held) ? held : []
   );
-}
-
-/**
- * The same bag without an `id` the CSS id field would shadow.
- *
- * Applied to whatever set is about to be stored, because the shadowing is a
- * consequence of the ID rather than of the rows. Reducing the rows already
- * drops it — `rowProblem` reports the row and `storedAttributes` skips it — but
- * the rows are NOT always what gets written: when one of them is a mistake the
- * stored bag is kept instead, and that bag still holds the old id. Without this
- * the two fixes cancelled: setting a CSS id beside a mistyped row left the
- * shadowed id in place, and clearing the CSS id later brought it back.
- *
- * Case-insensitive, for the reason the collision scan is: the renderer
- * lowercases every key, so `ID` and `id` are one attribute on the page.
- */
-export function withoutShadowedId(
-  attributes: Readonly<Record<string, string>> | undefined,
-  cssId: string
-): Record<string, string> | undefined {
-  if (attributes === undefined || cssId.trim() === "") {
-    return attributes === undefined ? undefined : { ...attributes };
-  }
-  const kept: Record<string, string> = {};
-  for (const [name, value] of Object.entries(attributes)) {
-    if (name.toLowerCase() === "id") continue;
-    kept[name] = value;
-  }
-  return Object.keys(kept).length === 0 ? undefined : kept;
 }
 
 /** What a node should hold, and what it holds now. */

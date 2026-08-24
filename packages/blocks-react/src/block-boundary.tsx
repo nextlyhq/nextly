@@ -85,6 +85,32 @@ function slotNodes(node: BlockNode, name: string): BlockNode[] {
 const ALLOWED_ATTRIBUTE_NAMES = new Set(["id", "title", "lang", "dir"]);
 
 /**
+ * A name HTML can carry, which is the XML `Name` production.
+ *
+ * Mirrors React's own attribute-name validation rather than a narrower rule of
+ * this project's own: refusing a name React WOULD render is a false alarm on
+ * correct input, and this predicate is what an editor asks before telling an
+ * author their attribute is unusable. The unicode ranges are that production's,
+ * so a non-ASCII `data-` name is accepted exactly where the DOM accepts it.
+ */
+/** The first character of an XML `Name`. */
+const NAME_START =
+  "[:A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD]";
+
+/**
+ * Every LATER character, combining ranges first.
+ *
+ * Order matters only to a reader: with a base character immediately before a
+ * combining range, the two read as one combined character rather than as two
+ * alternatives, and a linter says so. Leading with the combining ranges keeps
+ * the set identical and the intent unambiguous.
+ */
+const NAME_CHAR =
+  "[\\u0300-\\u036F\\u203F-\\u2040\\u00B7\\-.0-9:A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD]";
+
+const ATTRIBUTE_NAME = new RegExp(`^${NAME_START}${NAME_CHAR}*$`, "u");
+
+/**
  * Whether an author-supplied attribute may reach the DOM.
  *
  * `data-*` and `aria-*` are open by prefix: both are namespaces defined to carry
@@ -99,6 +125,11 @@ const ALLOWED_ATTRIBUTE_NAMES = new Set(["id", "title", "lang", "dir"]);
  * author sets an attribute, sees it saved, and never sees it on the page.
  */
 export function isAllowedAttribute(name: string): boolean {
+  // SYNTAX first, because the open prefixes below admit anything after them.
+  // `data-x foo` and `data-x"` start with `data-` and are not attribute names:
+  // React refuses them and renders nothing, so a check that stopped at the
+  // prefix let a value be stored that could never appear on a page.
+  if (!ATTRIBUTE_NAME.test(name)) return false;
   const lower = name.toLowerCase();
   if (lower === "role") return true;
   if (lower.startsWith("data-") || lower.startsWith("aria-")) return true;

@@ -677,10 +677,15 @@ describe("a shadowed id and a mistyped row at the same time", () => {
     const editor = mount({ attributes: { id: "old", "data-x": "1" } });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
 
-    // Row 2 is `data-x` — rename it to something the page would drop.
-    const second = screen.getByLabelText("Name of attribute 2");
-    fireEvent.change(second, { target: { value: "onclick" } });
-    fireEvent.blur(second);
+    /*
+     * Rows are shown in NAME order, so `data-x` is the first and `id` the
+     * second — an earlier version of this test edited the row it did not mean
+     * and passed for the wrong reason.
+     */
+    const first = screen.getByLabelText("Name of attribute 1");
+    expect((first as HTMLInputElement).value).toBe("data-x");
+    fireEvent.change(first, { target: { value: "onclick" } });
+    fireEvent.blur(first);
     expect(editor.apply).not.toHaveBeenCalled();
 
     const field = screen.getByLabelText("CSS id");
@@ -694,5 +699,98 @@ describe("a shadowed id and a mistyped row at the same time", () => {
       id: "a",
       patch: { cssId: "new", attributes: { "data-x": "1" } },
     });
+  });
+});
+
+describe("the panel's own write does not fight the document", () => {
+  it("removes one row while another is mistyped", () => {
+    /*
+     * Holding the whole write for a mistyped row used to mean this Remove did
+     * nothing: the row vanished locally, no op removed it, and leaving the tab
+     * brought it back. Origin tracking lets the mistyped row keep what it
+     * replaced without freezing everything beside it.
+     */
+    const editor = mount({ attributes: { "data-a": "1", "data-b": "2" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const first = screen.getByLabelText("Name of attribute 1");
+    expect((first as HTMLInputElement).value).toBe("data-a");
+    fireEvent.change(first, { target: { value: "onclick" } });
+    fireEvent.blur(first);
+    expect(editor.apply).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove data-b" }));
+
+    // `data-b` is gone and `data-a` survives its own bad rename.
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { attributes: { "data-a": "1" } },
+    });
+  });
+
+  it("points an id row at the field above rather than storing it", () => {
+    // One route to an identifier. The renderer accepts an `id` here, so a
+    // document from elsewhere can carry one — it is shown, explained, and not
+    // rewritten under a new value.
+    mount({ attributes: { id: "from-a-file" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.getByRole("alert").textContent).toContain("CSS id field");
+  });
+});
+
+describe("undo then redo, with the panel open", () => {
+  it("follows the document back to the redone value", () => {
+    /*
+     * The panel skips re-reading the document when the incoming props are its
+     * own write echoing back, or a local draft would be wiped by every save.
+     * The marker for that has to be CONSUMED once matched: left in place it
+     * goes on describing a state the document can return to, and a redo lands
+     * exactly there — so the panel keeps showing the undone value while a later
+     * blur writes from that stale draft and erases the redone edit.
+     */
+    register();
+    const withId = (cssId?: string): BlockDocument =>
+      ({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "a",
+            type: "acme/heading",
+            version: 1,
+            props: {},
+            ...(cssId === undefined ? {} : { cssId }),
+          },
+        ],
+      }) as unknown as BlockDocument;
+
+    const editor = editorFor(withId("one"));
+    const { rerender } = render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "two" } });
+    fireEvent.blur(field);
+    expect(editor.apply).toHaveBeenCalled();
+
+    // The write echoes back through the document.
+    rerender(<InspectorPanel editor={editorFor(withId("two"))} />);
+    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
+      "two"
+    );
+
+    // Undo.
+    rerender(<InspectorPanel editor={editorFor(withId("one"))} />);
+    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
+      "one"
+    );
+
+    // Redo — the field must follow, not sit on the undone value.
+    rerender(<InspectorPanel editor={editorFor(withId("two"))} />);
+    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
+      "two"
+    );
   });
 });

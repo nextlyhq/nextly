@@ -15,7 +15,6 @@ import { describe, expect, it } from "vitest";
 import {
   attributeKey,
   domIdsTaken,
-  holdsTheWrite,
   htmlUpdate,
   problemMessage,
   rowProblem,
@@ -42,7 +41,6 @@ describe("the editor asks the renderer, and does not restate it", () => {
       "title",
       "lang",
       "dir",
-      "id",
       "onclick",
       "href",
       "src",
@@ -50,9 +48,20 @@ describe("the editor asks the renderer, and does not restate it", () => {
       "class",
       "srcdoc",
     ]) {
-      const refused = rowProblem([row(name)], 0, "") !== undefined;
+      const refused = rowProblem([row(name)], 0) !== undefined;
       expect(refused, name).toBe(!isAllowedAttribute(name));
     }
+  });
+
+  it("refuses `id` even though the renderer allows it", () => {
+    // A deliberate editor narrowing, like the canvas markers: there is a
+    // field for an id above, and offering two routes to one identifier is
+    // the "two spellings of one question" problem wearing a UI. Asserted
+    // here so its absence from the loop above reads as a decision.
+    expect(isAllowedAttribute("id")).toBe(true);
+    expect(rowProblem([row("id")], 0)).toEqual({
+      kind: "use-css-id-field",
+    });
   });
 
   it("has something to test", () => {
@@ -69,8 +78,8 @@ describe("two rows that are one attribute", () => {
     // lowercases before writing, so these are one attribute on the page.
     expect(attributeKey("Data-X")).toBe(attributeKey("data-x"));
     const rows = [row("data-x", "first"), row("Data-X", "second")];
-    expect(rowProblem(rows, 0, "")).toBeUndefined();
-    expect(rowProblem(rows, 1, "")).toEqual({
+    expect(rowProblem(rows, 0)).toBeUndefined();
+    expect(rowProblem(rows, 1)).toEqual({
       kind: "duplicate",
     });
   });
@@ -80,14 +89,14 @@ describe("two rows that are one attribute", () => {
     // which value survives; the first is the one the renderer keeps.
     const rows = [row("data-x"), row("data-x")];
     const reported = rows.filter(
-      (_each, index) => rowProblem(rows, index, "") !== undefined
+      (_each, index) => rowProblem(rows, index) !== undefined
     );
     expect(reported).toHaveLength(1);
   });
 });
 
-describe("an id the CSS id field already owns", () => {
-  it("says the row will not be used", () => {
+describe("an id in the bag, with a field for it above", () => {
+  it("always points the author at the field", () => {
     /*
      * The renderer resolves this in favour of `cssId` and says so: the modelled
      * field wins over an attribute of the same name. That is the right
@@ -95,17 +104,17 @@ describe("an id the CSS id field already owns", () => {
      * types an id, sees it saved, and the page carries a different one.
      */
     const rows = [row("id", "from-the-bag")];
-    expect(rowProblem(rows, 0, "from-the-field")).toEqual({
-      kind: "overridden-by-css-id",
+    expect(rowProblem(rows, 0)).toEqual({
+      kind: "use-css-id-field",
     });
+    // And with no CSS id set either: one route to an identifier, not two.
+    expect(rowProblem(rows, 0)).toEqual({ kind: "use-css-id-field" });
   });
 
-  it("allows the row when no CSS id is set", () => {
-    // The control. `id` is on the renderer's allowlist, so the bag is a valid
-    // way to set one when the dedicated field is empty.
-    const rows = [row("id", "from-the-bag")];
-    expect(rowProblem(rows, 0, "")).toBeUndefined();
-    expect(rowProblem(rows, 0, "   ")).toBeUndefined();
+  it("still allows every OTHER name", () => {
+    // The control: the rule is about `id` alone, not about the bag.
+    expect(rowProblem([row("data-x")], 0)).toBeUndefined();
+    expect(rowProblem([row("title")], 0)).toBeUndefined();
   });
 });
 
@@ -135,8 +144,8 @@ describe("what gets stored", () => {
     const rows = [row("data-b", "two"), row("data-a", "one")];
     const stored = storedAttributes(rows, "");
     expect(rowsOf(stored)).toEqual([
-      { name: "data-a", value: "one" },
-      { name: "data-b", value: "two" },
+      { name: "data-a", value: "one", origin: "data-a" },
+      { name: "data-b", value: "two", origin: "data-b" },
     ]);
   });
 });
@@ -150,10 +159,8 @@ describe("what the author is told", () => {
     expect(said).toContain("aria-");
   });
 
-  it("tells the author how to resolve an overridden id", () => {
-    expect(problemMessage({ kind: "overridden-by-css-id" })).toContain(
-      "CSS id"
-    );
+  it("tells the author where an id belongs", () => {
+    expect(problemMessage({ kind: "use-css-id-field" })).toContain("CSS id");
   });
 });
 
@@ -170,7 +177,7 @@ describe("names the editor needs for itself", () => {
       // The control: the renderer DOES allow it, so this refusal is the
       // editor's own narrowing rather than the shared rule showing through.
       expect(isAllowedAttribute(name), name).toBe(true);
-      expect(rowProblem([row(name)], 0, ""), name).toEqual({
+      expect(rowProblem([row(name)], 0), name).toEqual({
         kind: "reserved",
       });
     }
@@ -179,27 +186,8 @@ describe("names the editor needs for itself", () => {
   it("still allows an ordinary data attribute", () => {
     // The control that stops the reservation swallowing the namespace it sits
     // in: `data-` is the feature, and only these two names are taken.
-    expect(rowProblem([row("data-nx-something-else")], 0, "")).toBeUndefined();
-    expect(rowProblem([row("data-analytics")], 0, "")).toBeUndefined();
-  });
-});
-
-describe("an id another block already uses", () => {
-  it("refuses it, and says why two would be a problem", () => {
-    const taken = new Set(["hero"]);
-    expect(rowProblem([row("id", "hero")], 0, "", taken)).toEqual({
-      kind: "duplicate-dom-id",
-    });
-    expect(problemMessage({ kind: "duplicate-dom-id" })).toContain(
-      "two possible targets"
-    );
-  });
-
-  it("allows an id nobody else holds", () => {
-    // The control: the check must be about THIS value, not about ids in general.
-    expect(
-      rowProblem([row("id", "unique")], 0, "", new Set(["hero"]))
-    ).toBeUndefined();
+    expect(rowProblem([row("data-nx-something-else")], 0)).toBeUndefined();
+    expect(rowProblem([row("data-analytics")], 0)).toBeUndefined();
   });
 });
 
@@ -318,23 +306,59 @@ describe("an id spelled with capitals in the bag", () => {
   });
 });
 
-describe("which problems hold the write", () => {
-  it("holds for a mistake, and not for a shadowed id", () => {
+describe("a name inside an open prefix that HTML cannot carry", () => {
+  it("refuses it, because the page would carry nothing", () => {
     /*
-     * Renaming `data-x` to `onclick` is a typo, and writing the reduced set
-     * would delete `data-x` — which renaming does not ask for. A row the CSS id
-     * shadows is not a mistake: the value could never reach the page, and
-     * holding the write for it would stop an author setting a CSS id at all
-     * while such a row existed.
+     * `data-x foo` starts with `data-` and is not an attribute name. React
+     * refuses it and renders nothing, so a check stopping at the prefix let a
+     * value be stored that could never appear — the saved-but-absent failure
+     * this whole surface exists to prevent.
      */
-    for (const kind of [
-      "not-allowed",
-      "reserved",
-      "duplicate",
-      "duplicate-dom-id",
-    ] as const) {
-      expect(holdsTheWrite({ kind }), kind).toBe(true);
+    for (const name of ["data-x foo", 'data-x"', "data-x=y", "aria-a<b"]) {
+      expect(isAllowedAttribute(name), name).toBe(false);
+      expect(rowProblem([row(name)], 0), name).toEqual({
+        kind: "not-allowed",
+      });
     }
-    expect(holdsTheWrite({ kind: "overridden-by-css-id" })).toBe(false);
+  });
+
+  it("still accepts names the DOM does carry, including non-ASCII", () => {
+    // The control, and the reason the rule mirrors React's own production
+    // rather than a narrower one: refusing a name that WOULD render is a false
+    // alarm on correct input.
+    for (const name of ["data-x", "aria-label", "data-æøå", "data-x1"]) {
+      expect(isAllowedAttribute(name), name).toBe(true);
+    }
+  });
+});
+
+describe("a row that cannot land keeps what it replaced", () => {
+  const stored = { "data-x": "1", "data-y": "2" };
+
+  it("does not delete the attribute behind a mistyped rename", () => {
+    // Renaming means the author typed something wrong, not that they want the
+    // old attribute gone.
+    const rows = [
+      { name: "onclick", value: "1", origin: "data-x" },
+      { name: "data-y", value: "2", origin: "data-y" },
+    ];
+    expect(storedAttributes(rows, "", stored)).toEqual(stored);
+  });
+
+  it("still removes a DIFFERENT row while one is mistyped", () => {
+    /*
+     * The interaction that an earlier design got wrong: holding the whole write
+     * for a mistyped row meant clicking Remove on an unrelated row did nothing,
+     * and the attribute came back when the panel was reopened.
+     */
+    const rows = [{ name: "onclick", value: "1", origin: "data-x" }];
+    expect(storedAttributes(rows, "", stored)).toEqual({ "data-x": "1" });
+  });
+
+  it("writes nothing for a mistyped row the author ADDED", () => {
+    // Nothing to keep: it never had a stored value behind it.
+    expect(
+      storedAttributes([{ name: "onclick", value: "1" }], "", stored)
+    ).toBeUndefined();
   });
 });
