@@ -64,4 +64,32 @@ draft is per-visitor, and one cached draft is served to everyone who asks next.
 `createPublicSingleRoute` refuses the hook outright for that reason.
 
 The Single editor offers "Copy shareable link" on the same terms as the entry editor, including the
-refusal that names what a developer must add when no preview URL is declared.
+refusal that names what a developer must add when no preview URL is declared. On a localized Single
+the link is scoped to the language being edited — including the DEFAULT language, where the editor
+represents the active locale as "none". An absent locale claim is not "the default language": it
+authorizes every locale, so a link minted that way would open translations that have never been
+published.
+
+Minting evaluates the Single's own stored access rules, not just the coarse per-slug permission.
+Owner-only, role-based and custom rules are decided against the loaded document and can deny a
+caller who holds the permission — and a link is a bearer credential for the draft, so authorizing it
+on the permission alone handed out a view the real update path refuses. That evaluation is now one
+function shared with version history, which gates the same kind of disclosure for the same reason.
+
+**`createSingleRoute` and `createSinglePage` gain `trustedCollections`, and it defaults to nothing.**
+A draft grant names ONE document and says nothing about what that document points at, so the
+trusted read it triggers no longer spreads to everything the Single populates — a target reached
+through a relationship is read the way an anonymous visitor would read it unless you name it:
+
+```ts
+createSinglePage({
+  slug: "landing-page",
+  field: "hero",
+  trustedCollections: ["posts"],
+  draft: previewSingleDraftGate(),
+});
+```
+
+This is the same option, with the same meaning, that `createContentRoute` already carries. It only
+ever narrows, and it applies to `createPublicSingleRoute` too — a public Single page that populates
+relationships and needs them read as trusted must now name those collections.

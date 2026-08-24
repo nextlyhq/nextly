@@ -30,6 +30,8 @@ import { z } from "zod";
 
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
+import { previewLinkLocale } from "@admin/components/features/entries/EntryForm/entry-address";
+import type { PreviewLinkLocale } from "@admin/components/features/entries/EntryForm/entry-address";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -244,17 +246,25 @@ export interface SingleFormProps {
  *
  * A Single is addressed by slug and has exactly one document, so there is no id
  * to wait for — unlike an entry, whose link cannot be minted until it has been
- * saved once. The locale is forwarded so a link minted while editing one
- * translation opens that translation, and it is spread rather than assigned
- * because an explicit `undefined` is not the same as an absent key here: absent
- * means "every locale", which is the correct grant for a Single that is not
- * localized.
+ * saved once.
+ *
+ * The locale comes from `previewLinkLocale`, the same resolver the entry editor
+ * uses, rather than from the active locale directly. That distinction is the
+ * whole point: on a localized Single opened in its DEFAULT language the active
+ * locale reads as `undefined`, and an absent claim is not "the default
+ * language" — `previewTokenCovers` treats it as covering EVERY locale, so the
+ * recipient could open every other unpublished translation with it. Absent is
+ * the correct grant only when the Single is not localized at all, which is the
+ * case that resolver answers `unscoped` for.
  */
 function singlePreviewTarget(
   slug: string,
-  locale: string | undefined
+  linkLocale: PreviewLinkLocale
 ): UsePreviewLinkOptions {
-  return { single: slug, ...(locale === undefined ? {} : { locale }) };
+  return {
+    single: slug,
+    ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
+  };
 }
 
 export function SingleForm({
@@ -434,8 +444,6 @@ export function SingleForm({
   // EntryMetaStrip / DocumentPanel surface the status pill.
   const hasStatus = schema.status === true;
 
-  const previewLink = usePreviewLink(singlePreviewTarget(schema.slug, locale));
-
   // Auto-fill slug from title — same form-level pattern as EntryForm. The
   // title input lives in EntrySystemHeader (not TextInput) so the slug
   // generator must be mounted at the form level to see its keystrokes.
@@ -469,6 +477,24 @@ export function SingleForm({
     defaultLocale,
     enabled: localizationEnabled,
   } = useLocalization();
+
+  // Resolved through the shared rule rather than read off the active locale: on
+  // a localized Single in its default language that value is `undefined`, and a
+  // token minted with no locale claim grants every translation. `unresolved`
+  // withholds the control below rather than minting one of those.
+  const linkLocale = previewLinkLocale({
+    localized: schema.localized === true,
+    locale,
+    defaultLocale,
+  });
+
+  // No site URL is computed here. A link that travels by email or chat has to
+  // name a host, and the server is the only place that can: `settings` is a
+  // system resource the `editor` and `author` presets cannot read, and those
+  // are exactly the roles that share preview links.
+  const previewLink = usePreviewLink(
+    singlePreviewTarget(schema.slug, linkLocale)
+  );
 
   // The per-locale translation-status map, read once and shared by the header
   // adapter and the language panel: two reads of the same document key would
@@ -661,7 +687,9 @@ export function SingleForm({
                    that lifecycle; whether a link can actually be minted is the
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
-                        isLinkAvailable={hasStatus}
+                        isLinkAvailable={
+                          hasStatus && linkLocale.kind !== "unresolved"
+                        }
                         onCopyLink={() => previewLink.mutate()}
                         isCopyingLink={previewLink.isPending}
                         toolbarSlot={
