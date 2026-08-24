@@ -238,3 +238,103 @@ describe("preview tokens", () => {
     });
   });
 });
+
+describe("a token that names a Single", () => {
+  // A Single has a draft lifecycle but no entry id — it is addressed by slug
+  // and there is exactly one of it. Squeezing that into `{collection, entryId}`
+  // would mean inventing an id that names nothing, and `previewTokenCovers`
+  // comparing two made-up values.
+  it("round-trips a single scope", async () => {
+    const { token } = await signPreviewToken(
+      { kind: "single", single: "homepage" },
+      TEST_SECRET,
+      { generation: GENERATION }
+    );
+
+    const verified = await verifyPreviewToken(token, TEST_SECRET, {
+      generation: GENERATION,
+    });
+
+    expect(verified.valid && verified.scope).toEqual({
+      kind: "single",
+      single: "homepage",
+    });
+  });
+
+  it("round-trips a single scope restricted to one locale", async () => {
+    const { token } = await signPreviewToken(
+      { kind: "single", single: "homepage", locale: "fr" },
+      TEST_SECRET,
+      { generation: GENERATION }
+    );
+
+    const verified = await verifyPreviewToken(token, TEST_SECRET, {
+      generation: GENERATION,
+    });
+
+    expect(verified.valid && verified.scope).toEqual({
+      kind: "single",
+      single: "homepage",
+      locale: "fr",
+    });
+  });
+
+  it("does not cover a different single", () => {
+    expect(
+      previewTokenCovers(
+        { kind: "single", single: "homepage" },
+        { kind: "single", single: "footer" }
+      )
+    ).toBe(false);
+  });
+
+  // The two kinds must not satisfy each other. A single named `pages` and a
+  // collection named `pages` are different documents, and a comparison that
+  // ignored the kind would let one link open the other.
+  it("does not cover a collection entry, nor the reverse", () => {
+    expect(
+      previewTokenCovers(
+        { kind: "single", single: "pages" },
+        { collection: "pages", entryId: "pages" }
+      )
+    ).toBe(false);
+    expect(
+      previewTokenCovers(
+        { collection: "pages", entryId: "pages" },
+        { kind: "single", single: "pages" }
+      )
+    ).toBe(false);
+  });
+
+  it("refuses an empty single slug at the mint, as it does an empty locale", async () => {
+    await expect(
+      signPreviewToken({ kind: "single", single: "" }, TEST_SECRET, {
+        generation: GENERATION,
+      })
+    ).rejects.toThrow();
+  });
+});
+
+describe("tokens minted before the scope gained a kind", () => {
+  // The load-bearing compatibility case. Every outstanding link was signed
+  // without a `kind` claim, and an editor who shared one last week must not
+  // find it dead because the type grew a discriminant.
+  it("still verifies as an entry scope", async () => {
+    // Signed through the same signer, which omits `kind` for an entry scope —
+    // so this is byte-identical to what the previous version produced.
+    const { token } = await signPreviewToken(
+      { collection: "pages", entryId: "7" },
+      TEST_SECRET,
+      { generation: GENERATION }
+    );
+
+    const verified = await verifyPreviewToken(token, TEST_SECRET, {
+      generation: GENERATION,
+    });
+
+    expect(verified.valid && verified.scope).toEqual({
+      collection: "pages",
+      entryId: "7",
+    });
+  });
+});

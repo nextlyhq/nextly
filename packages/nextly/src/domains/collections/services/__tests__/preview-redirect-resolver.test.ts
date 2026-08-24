@@ -10,7 +10,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   resolvePreviewRedirect,
+  resolveSinglePreviewRedirect,
   type PreviewRedirectDeps,
+  type SinglePreviewRedirectDeps,
 } from "../preview-redirect-resolver";
 
 const SCOPE = { collection: "pages", entryId: "entry-1" };
@@ -182,5 +184,92 @@ describe("resolvePreviewRedirect", () => {
     });
 
     expect(await resolvePreviewRedirect(SCOPE, d)).toBeNull();
+  });
+});
+
+describe("resolveSinglePreviewRedirect", () => {
+  function singleDeps(
+    overrides: Partial<SinglePreviewRedirectDeps> = {}
+  ): SinglePreviewRedirectDeps {
+    return {
+      loadSingle: vi.fn().mockResolvedValue({ path: "welcome" }),
+      loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
+      loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
+      ...overrides,
+    };
+  }
+
+  it("answers the path the declaration names", async () => {
+    expect(
+      await resolveSinglePreviewRedirect({ single: "homepage" }, singleDeps())
+    ).toBe("/");
+  });
+
+  it("reads the Single in the locale the token names", async () => {
+    const loadSingle = vi.fn().mockResolvedValue({ path: "accueil" });
+
+    await resolveSinglePreviewRedirect(
+      { single: "homepage", locale: "fr" },
+      singleDeps({ loadSingle })
+    );
+
+    expect(loadSingle).toHaveBeenCalledWith("homepage", "fr");
+  });
+
+  it("can derive the path from the Single's own document", async () => {
+    const d = singleDeps({
+      loadDeclaration: vi.fn().mockResolvedValue({
+        url: (doc: Record<string, unknown>) => `/${String(doc.path)}`,
+      }),
+    });
+
+    expect(await resolveSinglePreviewRedirect({ single: "landing" }, d)).toBe(
+      "/welcome"
+    );
+  });
+
+  it("returns null when the Single declares no preview", async () => {
+    const d = singleDeps({
+      loadDeclaration: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(
+      await resolveSinglePreviewRedirect({ single: "homepage" }, d)
+    ).toBeNull();
+  });
+
+  // A Single is not deleted the way an entry is, but it can be dropped from the
+  // configuration — and a link minted before that points at nothing.
+  it("returns null when the Single can no longer be read", async () => {
+    const d = singleDeps({ loadSingle: vi.fn().mockResolvedValue(null) });
+
+    expect(
+      await resolveSinglePreviewRedirect({ single: "homepage" }, d)
+    ).toBeNull();
+  });
+
+  // The same refusal the entry path makes, reached through the SAME reduction
+  // rather than a second origin comparison written beside it.
+  it("refuses an absolute url on another origin", async () => {
+    const d = singleDeps({
+      loadDeclaration: vi
+        .fn()
+        .mockResolvedValue({ url: () => "https://elsewhere.example/x" }),
+    });
+
+    expect(
+      await resolveSinglePreviewRedirect({ single: "homepage" }, d)
+    ).toBeNull();
+  });
+
+  it("works with no site url configured, as a fresh install has none", async () => {
+    const d = singleDeps({
+      loadSiteUrl: vi.fn().mockResolvedValue(null),
+      loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/about" }),
+    });
+
+    expect(await resolveSinglePreviewRedirect({ single: "homepage" }, d)).toBe(
+      "/about"
+    );
   });
 });

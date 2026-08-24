@@ -38,6 +38,7 @@ export type {
   SingleRoute,
   SingleRouteConfig,
   SingleContext,
+  SingleDraftRequest,
   SingleDocument,
   NextlySingleReader,
 } from "./single-route";

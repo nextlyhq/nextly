@@ -20,22 +20,39 @@
 import { z } from "zod";
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
-import { signPreviewToken } from "../auth/preview/preview-token";
+import {
+  signPreviewToken,
+  type PreviewTokenScope,
+} from "../auth/preview/preview-token";
 import { buildUserContext } from "../auth/user-context";
 import { container, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
-import { resolvePreviewRedirect } from "../domains/collections/services/preview-redirect-resolver";
-import { hasPreviewConfigured } from "../domains/collections/services/preview-url-resolver";
+import {
+  resolvePreviewRedirect,
+  resolveSinglePreviewRedirect,
+} from "../domains/collections/services/preview-redirect-resolver";
+import {
+  hasPreviewConfigured,
+  type PreviewDeclaration,
+} from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
+import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
-import { assertEntryPreviewable } from "./preview-access";
-import { previewDeclarationFor } from "./preview-url";
+import {
+  assertEntryPreviewable,
+  assertSinglePreviewable,
+} from "./preview-access";
+import {
+  loadSingleForPreview,
+  previewDeclarationFor,
+  singlePreviewDeclarationFor,
+} from "./preview-url";
 import { respondMutation } from "./response-shapes";
 import {
   requireRouteCollectionAccess,
@@ -55,12 +72,32 @@ import { nextlyValidationFromZod } from "./zod-to-nextly-error";
  */
 const MAX_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-const mintSchema = z.object({
-  collection: z.string().min(1),
-  entryId: z.string().min(1),
-  locale: z.string().min(1).optional(),
-  ttlSeconds: z.number().int().positive().max(MAX_TTL_SECONDS).optional(),
-});
+/**
+ * What a mint request may name: ONE collection entry, or ONE Single.
+ *
+ * A union rather than three optional fields, so "both" and "neither" are
+ * unrepresentable rather than validated afterwards. Naming both is not a
+ * narrower request — they are different documents — and honouring one silently
+ * would mint a credential for a document the caller may not have meant.
+ *
+ * The entry variant is unchanged, so every existing caller keeps working.
+ */
+const mintSchema = z.union([
+  z.object({
+    collection: z.string().min(1),
+    entryId: z.string().min(1),
+    single: z.undefined().optional(),
+    locale: z.string().min(1).optional(),
+    ttlSeconds: z.number().int().positive().max(MAX_TTL_SECONDS).optional(),
+  }),
+  z.object({
+    single: z.string().min(1),
+    collection: z.undefined().optional(),
+    entryId: z.undefined().optional(),
+    locale: z.string().min(1).optional(),
+    ttlSeconds: z.number().int().positive().max(MAX_TTL_SECONDS).optional(),
+  }),
+]);
 
 async function settingsService(): Promise<GeneralSettingsService> {
   await getCachedNextly();
@@ -131,15 +168,310 @@ function previewLinkUrl({
 }
 
 /**
+ * The two loaders both redirect resolvers need identically.
+ *
+ * The document loaders genuinely differ — one reads an entry by id through the
+ * collections handler, the other reads a Single by slug through the Direct API —
+ * but where the DECLARATION and the site URL come from does not, and writing
+ * that twice is how the two paths start disagreeing about which settings read
+ * they trust.
+ */
+function sharedRedirectDeps(declaration: PreviewDeclaration | undefined): {
+  loadDeclaration: () => Promise<PreviewDeclaration | undefined>;
+  loadSiteUrl: () => Promise<string | null>;
+} {
+  return {
+    // Already resolved by the caller, so this hands the value back rather than
+    // fetching it again.
+    loadDeclaration: () => Promise.resolve(declaration),
+    loadSiteUrl: async () =>
+      resolvePreviewSiteUrl(
+        await (await settingsService()).getSettings().then(s => s.siteUrl)
+      ),
+  };
+}
+
+/**
+ * The one refusal both mint paths make, and the two causes it distinguishes.
+ *
+ * Written once because the DECISION is one decision — "there is nowhere for
+ * this link to open" — while only the noun and the remedy differ. Two copies
+ * would drift in the wording, and the wording is the whole value of it: this is
+ * the message an editor reads instead of finding out from a reviewer that the
+ * link 404s.
+ *
+ * The two causes are kept apart because they name different people. An
+ * unconfigured collection or Single is a developer's job; a document whose
+ * address cannot be built yet is usually one empty field the editor can fill.
+ * Telling an editor to "ask a developer" about their own unfilled slug sends
+ * them to the wrong person.
+ */
+function refuseUnservableLink(args: {
+  subject: "collection" | "single";
+  name: string;
+  declared: boolean;
+}): never {
+  const { subject, name, declared } = args;
+  const noun = subject === "single" ? "single" : "collection";
+
+  throw NextlyError.conflict({
+    reason: "state",
+    message: declared
+      ? `This ${subject === "single" ? "single" : "entry"} has no preview ` +
+        "address yet, so a shared link would have nowhere to open. Filling in " +
+        "the fields its preview URL is built from — usually the slug — makes " +
+        "it shareable."
+      : `This ${noun} has no preview URL configured, so a shared link would ` +
+        "have nowhere to open. A developer can add one before links can be " +
+        "shared.",
+    logContext: {
+      reason: declared
+        ? `preview-link-${subject}-has-no-preview-target`
+        : `preview-link-${subject}-has-no-preview-url`,
+      remedy: declared
+        ? "The preview declaration returned no address for this document. A " +
+          "`url` function answering null, or a `urlTemplate` whose placeholder " +
+          "field is empty, both mean 'not previewable yet'."
+        : "Add `admin.preview.url` (code-first) or `admin.preview.urlTemplate` " +
+          "(UI-created). It answers where the document is served on the site, " +
+          "which nothing outside the application can know.",
+      [noun]: name,
+    },
+  });
+}
+
+/**
+ * Sign a scope and answer with the link, which is identical for both paths.
+ *
+ * The generation is read here rather than by each caller, so a link minted for
+ * a Single and one minted for an entry cannot end up recorded against different
+ * revocation generations — which would make "revoke everything" miss one kind.
+ */
+async function respondWithPreviewLink(
+  scope: PreviewTokenScope,
+  ttlSeconds?: number
+): Promise<Response> {
+  const generation = await (
+    await settingsService()
+  ).getPreviewTokenGeneration();
+
+  const { token, expiresAt } = await signPreviewToken(
+    scope,
+    previewSigningSecret(),
+    { generation, ...(ttlSeconds === undefined ? {} : { ttlSeconds }) }
+  );
+
+  const settings = await (await settingsService()).getSettings();
+
+  return respondMutation("Preview link created", {
+    token,
+    url: previewLinkUrl({
+      siteUrl: resolvePreviewSiteUrl(settings.siteUrl),
+      route: resolvePreviewRoute(
+        container.get<NextlyServiceConfig>("config")?.preview
+      ),
+      token,
+    }),
+    expiresAt: expiresAt.toISOString(),
+  });
+}
+
+/**
+ * Who is asking, resolved the one way both mint paths must resolve it.
+ *
+ * An API key is authorized on the grants stamped on the KEY, never on its
+ * owner's roles. Without that distinction the probe resolves the owner's RBAC —
+ * including a super-admin bypass — so a key holding `update-*` but not `read-*`
+ * would mint a link on the strength of an account that can read, handing out a
+ * bearer credential for a document the key itself may not fetch.
+ *
+ * Shared rather than derived per call site: an entry link and a Single link
+ * confer the same kind of credential, so a difference in who they think is
+ * asking would be a difference in who can obtain one.
+ */
+async function callerFor(
+  auth: Awaited<ReturnType<typeof requireRouteCollectionAccess>>
+): Promise<{
+  user: UserContext;
+  actor: AuthenticatedScope | undefined;
+}> {
+  const roles = await resolveRoleSlugs(auth);
+  return {
+    user: buildUserContext({
+      claims: auth.claims,
+      id: auth.userId,
+      name: auth.userName,
+      email: auth.userEmail,
+      roles,
+    }),
+    actor:
+      auth.authMethod === "api-key"
+        ? { actorType: "apiKey", permissions: auth.permissions }
+        : undefined,
+  };
+}
+
+/**
+ * Whether this Single carries translations.
+ *
+ * Read the way its preview declaration is read — the authored config first,
+ * then the registry — because a code-first Single is synced into the registry
+ * and the two must not answer differently about the same document.
+ */
+async function singleFacts(
+  slug: string
+): Promise<{ localized: boolean; hasStatus: boolean }> {
+  const authored = container
+    .get<NextlyServiceConfig>("config")
+    ?.singles?.find(s => s.slug === slug);
+  const stored = await getService("singleRegistryService").getSingleBySlug(
+    slug
+  );
+
+  // EITHER source saying yes is taken as yes, rather than the authored config
+  // answering alone. The two can disagree — a per-Single metadata sync that
+  // fails deliberately retains the previous registry row — and the read path
+  // consumes the registry, so a config-first answer reports a Single as
+  // unlocalized while every read still treats it as localized. That direction
+  // is the dangerous one: it accepts an omitted locale and signs a token whose
+  // absent claim covers every translation.
+  return {
+    localized: authored?.localized === true || stored?.localized === true,
+    hasStatus: authored?.status === true || stored?.status === true,
+  };
+}
+
+/**
+ * Mint a link scoped to one Single.
+ *
+ * Two gates, because the route's own is one axis short of what the token hands
+ * out. `requireRouteCollectionAccess` answers the coarse RBAC question — may
+ * this caller update this slug — while a Single's STORED rules (owner-only,
+ * role based, custom) are evaluated against the loaded document and can deny a
+ * caller who holds that permission. A link minted on the permission alone is a
+ * bearer credential for a draft the real update path refuses to show them.
+ *
+ * That the token's subject and the gate's subject are the same document does
+ * not close it: the divergence here is between a PERMISSION and a stored RULE,
+ * not between a collection and a row.
+ */
+async function mintForSingle(
+  req: Request,
+  args: { single: string; locale?: string; ttlSeconds?: number }
+): Promise<Response> {
+  const { single, locale, ttlSeconds } = args;
+
+  const auth = await requireRouteCollectionAccess(req, "update", single);
+  // Booted first because the gate below resolves services from the container,
+  // and on a cold process the permission lookup itself needs them registered.
+  await getCachedNextly();
+
+  // An unscoped token covers EVERY translation, which on a localized Single is
+  // a grant over drafts nobody authorized — the admin resolves a locale before
+  // it offers the control, and this is the same rule for a caller that reaches
+  // the endpoint directly. Refused rather than widened: authorizing every
+  // translation to honour the request would hand out the grant this exists to
+  // withhold.
+  const facts = await singleFacts(single);
+
+  // A Single with no Draft / Published lifecycle has no pending state to
+  // preview, so a link would hand its recipient the CURRENT private document
+  // rather than a draft — through a route that reads it trusted. The admin
+  // already withholds the control for exactly this; refusing here is the same
+  // rule for a caller that reaches the endpoint directly.
+  if (!facts.hasStatus) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message:
+        "This single has no draft/published lifecycle, so there is no " +
+        "pending version to preview.",
+      logContext: {
+        reason: "preview-link-single-has-no-status",
+        remedy:
+          "Add `status: true` to the single. Without it every save is live, " +
+          "so a preview link would show the published document rather than " +
+          "an unpublished change.",
+        single,
+      },
+    });
+  }
+
+  if (locale === undefined && facts.localized) {
+    throw NextlyError.invalidInput({
+      message:
+        "A localized single needs a locale, so the link grants one " +
+        "translation rather than every one of them.",
+      logContext: {
+        reason: "preview-link-single-locale-required",
+        remedy:
+          "Name the translation being shared. A token with no locale claim " +
+          "covers every locale, including translations that have never been " +
+          "published.",
+        single,
+      },
+    });
+  }
+
+  // The Single's STORED rules, against the real document, in the TRANSLATION
+  // the token will name. Runs before anything is signed and before the trusted
+  // read below, so a refused caller reaches neither.
+  const { user, actor } = await callerFor(auth);
+  await assertSinglePreviewable(single, locale, user, actor);
+
+  const declaration = await singlePreviewDeclarationFor(single);
+
+  // Resolved for THIS Single, not merely checked for a declaration, for the
+  // same reason the entry path does it: a `url` answering null means "not
+  // previewable yet", and minting on the strength of a declaration alone hands
+  // out a link that 404s at the redirect.
+  const target = hasPreviewConfigured(declaration)
+    ? await resolveSinglePreviewRedirect(
+        { single, ...(locale === undefined ? {} : { locale }) },
+        {
+          loadSingle: loadSingleForPreview,
+          ...sharedRedirectDeps(declaration),
+        }
+      )
+    : null;
+
+  if (target === null) {
+    refuseUnservableLink({
+      subject: "single",
+      name: single,
+      declared: hasPreviewConfigured(declaration),
+    });
+  }
+
+  return respondWithPreviewLink(
+    { kind: "single", single, ...(locale === undefined ? {} : { locale }) },
+    ttlSeconds
+  );
+}
+
+/**
  * POST /api/nextly/preview-links
  *
- * Mints a link scoped to one entry. Auth: `update` on that collection.
+ * Mints a link scoped to one entry, or to one Single. Auth: `update` on the
+ * collection, or on the Single's own slug.
  */
 export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   const body: unknown = await req.json().catch(() => undefined);
   const parsed = mintSchema.safeParse(body);
   if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
-  const { collection, entryId, locale, ttlSeconds } = parsed.data;
+  const { locale, ttlSeconds } = parsed.data;
+
+  // A Single takes its own path from here. It shares the refusal and the link
+  // assembly and nothing else: it is addressed by slug with no id, so there is
+  // no entry to authorize by row and no by-id read to make.
+  if (parsed.data.single !== undefined) {
+    return mintForSingle(req, {
+      single: parsed.data.single,
+      ...(locale === undefined ? {} : { locale }),
+      ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+    });
+  }
+
+  const { collection, entryId } = parsed.data;
 
   // The gate is per COLLECTION, so a caller who may edit posts cannot mint a
   // link into a collection they have no access to by naming it here.
@@ -155,35 +487,14 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // read. Booted first because that gate resolves services from the container,
   // and on a cold process the permission lookup itself needs them registered.
   await getCachedNextly();
-  const roles = await resolveRoleSlugs(auth);
-
-  // An API key is authorized on the grants stamped on the KEY, never on its
-  // owner's roles. Without this the probe resolves the owner's RBAC — including
-  // a super-admin bypass — so a key holding `update-*` but not `read-*` would
-  // mint a link on the strength of an account that can read, handing out a
-  // bearer credential for a document the key itself may not fetch.
-  const actor: AuthenticatedScope | undefined =
-    auth.authMethod === "api-key"
-      ? { actorType: "apiKey", permissions: auth.permissions }
-      : undefined;
+  const { user, actor } = await callerFor(auth);
   // Authorized through the gate that serves collection reads and writes, so the
   // verdict here is the verdict the bearer's own read will reach. It asks two
   // questions the previous by-id probe could not express: whether the entry is
   // visible at all INCLUDING one never published, and whether this caller may
   // edit it — which is what the draft overlay requires before surfacing the
   // working draft the token hands out.
-  await assertEntryPreviewable(
-    collection,
-    entryId,
-    buildUserContext({
-      claims: auth.claims,
-      id: auth.userId,
-      name: auth.userName,
-      email: auth.userEmail,
-      roles,
-    }),
-    actor
-  );
+  await assertEntryPreviewable(collection, entryId, user, actor);
 
   // Refused BEFORE a token is signed, because a link that cannot land is worse
   // than no link: the reviewer who opens it sees a 404 indistinguishable from
@@ -233,80 +544,23 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
           // Already resolved above, so this hands back the value rather than
           // fetching it again — the resolver takes a loader and this call site
           // happens to have the answer.
-          loadDeclaration: () => Promise.resolve(declaration),
-          loadSiteUrl: async () =>
-            resolvePreviewSiteUrl(
-              await (await settingsService()).getSettings().then(s => s.siteUrl)
-            ),
+          ...sharedRedirectDeps(declaration),
         }
       )
     : null;
 
   if (target === null) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message: hasPreviewConfigured(declaration)
-        ? "This entry has no preview address yet, so a shared link would have " +
-          "nowhere to open. Filling in the fields its preview URL is built " +
-          "from — usually the slug — makes it shareable."
-        : "This collection has no preview URL configured, so a shared link " +
-          "would have nowhere to open. A developer can add one to the " +
-          "collection before links can be shared.",
-      logContext: {
-        reason: hasPreviewConfigured(declaration)
-          ? "preview-link-entry-has-no-preview-target"
-          : "preview-link-collection-has-no-preview-url",
-        remedy: hasPreviewConfigured(declaration)
-          ? "The collection's preview declaration returned no address for this " +
-            "entry. A `url` function answering null, or a `urlTemplate` whose " +
-            "placeholder field is empty, both mean 'not previewable yet'."
-          : "Add `admin.preview.url` (code-first) or `admin.preview.urlTemplate` " +
-            "(UI-created) to this collection. It answers where an entry is served " +
-            "on the site, which nothing outside the application can know.",
-        collection,
-      },
+    refuseUnservableLink({
+      subject: "collection",
+      name: collection,
+      declared: hasPreviewConfigured(declaration),
     });
   }
 
-  const generation = await (
-    await settingsService()
-  ).getPreviewTokenGeneration();
-
-  const { token, expiresAt } = await signPreviewToken(
+  return respondWithPreviewLink(
     { collection, entryId, ...(locale === undefined ? {} : { locale }) },
-    previewSigningSecret(),
-    { generation, ...(ttlSeconds === undefined ? {} : { ttlSeconds }) }
+    ttlSeconds
   );
-
-  // The finished URL as well as the token.
-  //
-  // Both halves are visible from here and from nowhere else. The site URL lives
-  // in settings, which the `editor` and `author` presets cannot read; the mount
-  // lives in the application's config, which the browser cannot see at all. So
-  // the admin had no way to build this correctly and assumed a default, which
-  // is why an application that mounted the route elsewhere handed its reviewers
-  // a link that answered 404.
-  //
-  // `null` when no site URL is set, never a relative URL: a relative one would
-  // be resolved against whatever origin the admin is served from, which is not
-  // the site. The token is still returned, because it is what the link is —
-  // withholding it would break preview outright on a site that never set a
-  // URL, rather than degrading the one thing that needs the host.
-  const settings = await (await settingsService()).getSettings();
-  const siteUrl = resolvePreviewSiteUrl(settings.siteUrl);
-  const url = previewLinkUrl({
-    siteUrl,
-    route: resolvePreviewRoute(
-      container.get<NextlyServiceConfig>("config")?.preview
-    ),
-    token,
-  });
-
-  return respondMutation("Preview link created", {
-    token,
-    url,
-    expiresAt: expiresAt.toISOString(),
-  });
 });
 
 /**
