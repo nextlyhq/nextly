@@ -122,6 +122,34 @@ jobs:
 
             if (!review.comments || review.comments.length === 0) return;
 
+            // Fetch existing review comments on this PR to prevent duplicate threads
+            let existingComments = [];
+            try {
+              const res = await github.rest.pulls.listReviewComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                per_page: 100,
+              });
+              existingComments = res.data || [];
+            } catch (err) {
+              console.log('Warning: could not fetch existing review comments:', err.message);
+            }
+
+            // Filter out comments that are already present on the same file & line
+            const newComments = review.comments.filter(c => {
+              return !existingComments.some(existing =>
+                existing.path === c.path &&
+                (existing.line === c.line || existing.original_line === c.line) &&
+                existing.body && (existing.body.trim() === c.body.trim() || existing.body.includes(c.body.trim()))
+              );
+            });
+
+            if (newComments.length === 0) {
+              console.log('All audit review comments are already present on this PR. Skipping duplicate review creation.');
+              return;
+            }
+
             try {
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
@@ -130,12 +158,13 @@ jobs:
                 commit_id: context.payload.pull_request.head.sha,
                 event: 'COMMENT',
                 body: review.body || '### 🛑 Fallow Audit: Issues found in changed files',
-                comments: review.comments.map(c => ({
+                comments: newComments.map(c => ({
                   path: c.path,
                   line: c.line,
                   body: c.body,
                 })),
               });
+              console.log(`Successfully posted ${newComments.length} new audit review comment(s).`);
             } catch (err) {
               console.log('Could not post PR review threads:', err.message);
             }
