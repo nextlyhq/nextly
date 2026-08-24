@@ -168,7 +168,9 @@ export function ResponseViewer({
     }
   }, [data]);
 
-  const headerEntries = Object.entries(headers ?? {});
+  // Memoised so `headerText` can depend on it. Rebuilt on every render, the
+  // array is a new identity each time and any memo keyed on it never holds.
+  const headerEntries = useMemo(() => Object.entries(headers ?? {}), [headers]);
 
   /**
    * The headers as text, in the form they arrived in.
@@ -179,8 +181,7 @@ export function ResponseViewer({
    */
   const headerText = useMemo(
     () => headerEntries.map(([name, value]) => `${name}: ${value}`).join("\n"),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- entries are rebuilt each render from `headers`
-    [headers]
+    [headerEntries]
   );
 
   /**
@@ -262,9 +263,13 @@ export function ResponseViewer({
       onValueChange={value => setTab(value as ResponseTab)}
       className="@container/response flex h-full min-h-0 flex-col"
     >
-      {/* Always rendered, with placeholders holding the width. The metrics used
-          to appear with the first reply, so the header reflowed at the moment
-          somebody was reading it. */}
+      {/* Always rendered, and every value reserves the width its populated form
+          needs. The metrics used to appear with the first reply, so the header
+          reflowed at the moment somebody was reading it -- and a placeholder
+          alone does not fix that: an em dash is narrower than `200`, `123ms`
+          and `5.8 KB`, so at pane widths between the two intrinsic widths the
+          row still wrapped on arrival and pushed the toolbar down. The mono
+          face advances every glyph equally, so `ch` reserves exactly. */}
       <div
         data-testid="response-meta"
         // Wraps rather than clipping. The pane is resizable, and its minimum
@@ -273,30 +278,35 @@ export function ResponseViewer({
         className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-1 border-b border-border px-6 py-2"
       >
         <Metric label="Status">
-          {status === undefined ? (
-            <span className="font-mono text-sm text-muted-foreground">—</span>
-          ) : (
-            <>
-              <span
-                className={cn(
-                  "h-1.5 w-1.5 rounded-full",
-                  statusDotTone(status)
-                )}
-              />
-              <span
-                className={cn(
-                  "font-mono text-sm font-semibold",
-                  statusTone(status)
-                )}
-              >
-                {status}
-              </span>
-            </>
-          )}
+          {/* Drawn at every moment, coloured only once there is a status. Built
+              conditionally, the dot and its gap are 14px that arrive with the
+              first reply. */}
+          <span
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full",
+              status === undefined ? "bg-transparent" : statusDotTone(status)
+            )}
+          />
+          <span
+            className={cn(
+              // 3ch: an HTTP status code is always three digits, so this
+              // reserves the exact width rather than an estimate of it.
+              "min-w-[3ch] font-mono text-sm font-semibold",
+              status === undefined
+                ? "text-muted-foreground"
+                : statusTone(status)
+            )}
+          >
+            {status ?? "—"}
+          </span>
         </Metric>
         <div className="h-4 w-px bg-border" />
         <Metric label="Latency">
-          <span className="font-mono text-sm font-semibold text-foreground">
+          {/* 6ch holds `9999ms`. Past ten seconds the value outgrows its
+              reservation and the row can reflow again, which is a real change
+              in the content rather than the empty-to-populated step this
+              reserves against. */}
+          <span className="min-w-[6ch] font-mono text-sm font-semibold text-foreground">
             {time === undefined ? "—" : `${time}ms`}
           </span>
         </Metric>
@@ -304,7 +314,9 @@ export function ResponseViewer({
         {/* Beside latency because they are the pair traded against each other
             when tuning depth and limit. */}
         <Metric label="Size">
-          <span className="font-mono text-sm font-semibold text-foreground">
+          {/* 9ch holds the widest form `formatBytes` produces below a gigabyte:
+              `1023.9 KB` and `123.45 MB` are both nine characters. */}
+          <span className="min-w-[9ch] font-mono text-sm font-semibold text-foreground">
             {size === undefined ? "—" : formatBytes(size)}
           </span>
         </Metric>
@@ -312,7 +324,10 @@ export function ResponseViewer({
 
       {/* Stacks below a narrow pane so the tabs and the copy control stay
           reachable instead of overflowing the card's clipped edge. */}
-      <div className="flex shrink-0 flex-col gap-1 border-b border-border bg-muted/30 px-6 py-1.5 @sm/response:flex-row @sm/response:items-center @sm/response:justify-between @sm/response:gap-2">
+      <div
+        data-testid="response-toolbar"
+        className="flex shrink-0 flex-col gap-1 border-b border-border bg-muted/30 px-6 py-1.5 @sm/response:flex-row @sm/response:items-center @sm/response:justify-between @sm/response:gap-2"
+      >
         <TabsList variant="ghost">
           <TabsTrigger value="body" size="sm">
             Body

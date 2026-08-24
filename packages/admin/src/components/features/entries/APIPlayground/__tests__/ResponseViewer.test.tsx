@@ -43,8 +43,9 @@ describe("ResponseViewer", () => {
 
   it("holds a place for the metrics before the first send", () => {
     render(<ResponseViewer data={undefined} code={code} />);
-    // Always present, so the header does not gain three values and reflow at
-    // the moment a reply lands.
+    // That the row exists and reads as empty. jsdom computes no layout, so
+    // whether the row keeps its width once the values arrive is measured in
+    // e2e/tests/api-playground-metrics.spec.ts, not here.
     expect(screen.getByTestId("response-meta")).toHaveTextContent("—");
   });
 
