@@ -46,6 +46,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { AdvancedPanel } from "./advanced-panel";
 import type { EditorState } from "./editor-state";
 import {
   fieldLabel,
@@ -104,6 +105,14 @@ export interface InspectorPanelProps {
 const INSPECTOR_TABS = [
   { value: "content", label: "Content" },
   { value: "style", label: "Style" },
+  /*
+   * Last, and named for what it is rather than for what it holds. An author
+   * reaching for a `data-` attribute or an anchor id is leaving the modelled
+   * surface behind, and putting that beside Content would invite it as an
+   * ordinary next step. Every editor with this surface separates it the same
+   * way, and the one this replaces did too.
+   */
+  { value: "advanced", label: "Advanced" },
 ] as const;
 
 export function InspectorPanel({
@@ -241,6 +250,20 @@ export function InspectorPanel({
             state={styleState}
             breakpoint={breakpoint}
             tokens={tokens}
+          />
+        </TabsContent>
+
+        <TabsContent value="advanced">
+          <AdvancedPanel
+            // Keyed by node, so a half-typed attribute does not travel to the
+            // next block the way an uncommitted name would. The panel holds
+            // rows locally; without this an author would select another block
+            // and find this one's unsaved row waiting there.
+            key={`${inspection.nodeId}:advanced`}
+            nodeId={inspection.nodeId}
+            cssId={inspection.html.cssId}
+            attributes={inspection.html.attributes}
+            editor={editor}
           />
         </TabsContent>
       </Tabs>

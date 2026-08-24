@@ -300,3 +300,142 @@ describe("InspectorPanel with several blocks selected", () => {
     ]);
   });
 });
+
+/**
+ * The Advanced tab: the block's `id` and the attributes an author may add.
+ *
+ * `custom-attributes.ts` decides which rows may land and asserts that without a
+ * DOM. What is only true HERE is the wiring — that a refusal is shown against
+ * the field it belongs to, that an edit reaches `editor.apply`, and that what
+ * the page would drop is never stored.
+ */
+describe("InspectorPanel advanced fields", () => {
+  const openAdvanced = () => {
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+  };
+
+  it("shows the block's stored id and attributes", () => {
+    mount({ cssId: "hero", attributes: { "data-x": "1" } });
+    openAdvanced();
+
+    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
+      "hero"
+    );
+    expect(
+      (screen.getByLabelText("Name of attribute 1") as HTMLInputElement).value
+    ).toBe("data-x");
+  });
+
+  it("commits an id through the editor, so undo covers it", () => {
+    const editor = mount({});
+    openAdvanced();
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "hero" } });
+    // Nothing yet: an op per keystroke would make one undo remove one letter.
+    expect(editor.apply).not.toHaveBeenCalled();
+    fireEvent.blur(field);
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "hero" },
+    });
+  });
+
+  it("REMOVES an id rather than storing an empty one", () => {
+    // A node that never had an id and one whose id was cleared are the same
+    // node; an empty string would render as `id=""`.
+    const editor = mount({ cssId: "hero" });
+    openAdvanced();
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "  " } });
+    fireEvent.blur(field);
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: undefined },
+    });
+  });
+
+  it("says why a refused attribute will not reach the page, and stores nothing", () => {
+    /*
+     * The whole point of the surface. Without it an author types `onclick`,
+     * watches it save, and finds the page without it — the renderer drops the
+     * name and nothing anywhere says so.
+     */
+    const editor = mount({ attributes: { "data-x": "1" } });
+    openAdvanced();
+
+    const name = screen.getByLabelText("Name of attribute 1");
+    fireEvent.change(name, { target: { value: "onclick" } });
+    fireEvent.blur(name);
+
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("does not put that attribute");
+    // Named to the field, so a screen reader reaches the reason with it.
+    expect(name.getAttribute("aria-describedby")).toBe(said.id);
+    expect(name.getAttribute("aria-invalid")).toBe("true");
+    // And the value the page would drop is not written to the document.
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { attributes: undefined },
+    });
+  });
+
+  it("says an id attribute loses to the CSS id field", () => {
+    /*
+     * The renderer resolves this in favour of `cssId` and says so. That is the
+     * right precedence and it is invisible from here: without this the author
+     * sets an id, sees it saved, and the page carries the other one.
+     */
+    mount({ cssId: "from-the-field", attributes: { id: "from-the-bag" } });
+    openAdvanced();
+
+    expect(screen.getByRole("alert").textContent).toContain("CSS id");
+  });
+
+  it("says nothing about an attribute that WILL reach the page", () => {
+    // The control: a refusal shown on a valid row would make the surface noise,
+    // and every assertion above would still pass.
+    mount({ cssId: "hero", attributes: { "data-x": "1" } });
+    openAdvanced();
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("gives every row a distinct name, and does not collide with the block's", () => {
+    /*
+     * The visible labels are short because they sit inline, and short labels
+     * repeat: "Name" is also the block's own name field above the tabs. Two
+     * rows plus that one would announce the same word three times for three
+     * different things, and a voice-control user saying "name" would have no
+     * way to pick.
+     */
+    mount({ attributes: { "data-a": "1", "data-b": "2" } });
+    openAdvanced();
+
+    expect(
+      (screen.getByLabelText("Name of attribute 1") as HTMLInputElement).value
+    ).toBe("data-a");
+    expect(
+      (screen.getByLabelText("Name of attribute 2") as HTMLInputElement).value
+    ).toBe("data-b");
+    // The block's own field is still reachable by its own label, which is what
+    // an ambiguous name would break — `getByLabelText` throws on two matches.
+    expect(screen.getByLabelText("Name")).toHaveProperty("id", "nx-block-name");
+    // Each Remove is named too, for the same reason.
+    expect(screen.getByRole("button", { name: "Remove data-a" })).toBeDefined();
+  });
+
+  it("keeps the identity fields above the tabs", () => {
+    // The Advanced tab must not have moved the block's own name into it: the
+    // name answers "which of six headings is this" under every tab.
+    mount({ name: "Hero title" });
+    openAdvanced();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "Hero title"
+    );
+  });
+});

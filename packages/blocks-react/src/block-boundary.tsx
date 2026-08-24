@@ -91,8 +91,14 @@ const ALLOWED_ATTRIBUTE_NAMES = new Set(["id", "title", "lang", "dir"]);
  * author data and accessibility semantics, neither can name a destination or
  * execute anything, and closing them would defeat the feature the field exists
  * for. `role` is the ARIA sibling of `aria-*` and belongs with them.
+ *
+ * EXPORTED so an editor offering this field can ask it rather than restate it.
+ * The list above already says the render-safe set lives here and only here; a
+ * second copy in an editor would drift, and it would drift silently in the
+ * worse direction — the editor accepting a name this loop then skips, so the
+ * author sets an attribute, sees it saved, and never sees it on the page.
  */
-function isAllowedAttribute(name: string): boolean {
+export function isAllowedAttribute(name: string): boolean {
   const lower = name.toLowerCase();
   if (lower === "role") return true;
   if (lower.startsWith("data-") || lower.startsWith("aria-")) return true;

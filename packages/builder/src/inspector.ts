@@ -80,12 +80,35 @@ export interface BlockIdentity {
   readonly locked: boolean;
 }
 
+/**
+ * The block's HTML surface: what it renders AS, rather than what it holds.
+ *
+ * Read here with everything else the inspector shows, so one function reads the
+ * document and the panels read the function. A panel reaching back for the node
+ * itself would be a second reader of the same selection, free to disagree with
+ * this one about which node is selected.
+ */
+export interface BlockHtml {
+  /** The element's `id`, empty when the author has not set one. */
+  readonly cssId: string;
+  /**
+   * The author's own attributes, absent when there are none.
+   *
+   * Absent rather than empty, because the node itself distinguishes them: a
+   * block that never had attributes and one whose last was removed both store
+   * nothing, and an empty record here would invite writing one back.
+   */
+  readonly attributes: Readonly<Record<string, string>> | undefined;
+}
+
 /** The selected block, as something to edit. */
 export interface BlockInspection {
   readonly nodeId: string;
   readonly blockName: string;
   /** What the block IS, beside what it holds. */
   readonly identity: BlockIdentity;
+  /** What the block renders as, beside what it holds. */
+  readonly html: BlockHtml;
   /** What to title the panel: the block's label, or its name. */
   readonly label: string;
   /**
@@ -244,6 +267,16 @@ export function inspectSelection(
     nodeId: node.id,
     blockName: node.type,
     identity: { name: node.name ?? "", locked: node.locked === true },
+    /*
+     * Narrowed HERE rather than trusted. A stored document can hold anything
+     * the database returned — the engine's validator reports these but does not
+     * rewrite them — so a `cssId` that is not a string, or an `attributes`
+     * that is an array or null, must not reach a control typed for neither.
+     */
+    html: {
+      cssId: typeof node.cssId === "string" ? node.cssId : "",
+      attributes: isStringRecord(node.attributes) ? node.attributes : undefined,
+    },
     // The same name the palette offered and the layers panel shows. Reading
     // `editor.label ?? node.type` here instead was a second rule that agreed
     // only for blocks which declare a label: an unlabelled third-party block
@@ -251,6 +284,22 @@ export function inspectSelection(
     label: blockLabel(node.type),
     props,
   };
+}
+
+/**
+ * Whether a stored value is the string map the attribute field is typed as.
+ *
+ * Checked value by value rather than by shape alone: `typeof x === "object"`
+ * admits an array and `null`, and a record of numbers passes any check that
+ * stops at the container.
+ */
+function isStringRecord(
+  value: unknown
+): value is Readonly<Record<string, string>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value).every(each => typeof each === "string");
 }
 
 /**

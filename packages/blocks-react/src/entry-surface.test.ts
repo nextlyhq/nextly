@@ -281,6 +281,9 @@ describe("the root entry", () => {
       "defineBlock",
       "emptyDataProvider",
       "fetchPolicyLabel",
+      // The render-safe attribute rule. Public because the editor offering that
+      // field asks it rather than keeping a copy that would drift.
+      "isAllowedAttribute",
       "migrationSourceFor",
       "prepareDocumentForRead",
       "preparePageForRead",
