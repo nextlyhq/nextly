@@ -1154,6 +1154,103 @@ test.describe("spacing values on the canvas", () => {
     await expect(page.locator(band("margin", "bottom"))).toHaveCount(0);
   });
 
+  test("drops the band when a STRONG own scale moves the edge", async ({
+    page,
+  }) => {
+    /*
+     * The case that separates converting the displacement by the ancestors from
+     * converting it by the composed scale. The displacement is already in the
+     * parent's coordinates — the element's own transform is what produced it —
+     * so multiplying by that transform again counts it twice.
+     *
+     * Measured on a 100px block under `scaleY(0.01)`: each vertical edge moves
+     * 49.5 rendered pixels, while the composed conversion answers 0.495, which
+     * is under the half-pixel threshold and would call a plainly moved edge
+     * stationary. The pinned-edge test above cannot catch this — its
+     * displacement is exactly zero, so both multipliers agree there.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.marginTop = "28px";
+    });
+    await block.click();
+    await expect(page.locator(band("margin", "top"))).toHaveCount(1);
+
+    /*
+     * The scale is chosen rather than picked, and it is what makes this test
+     * separate at all. The wrong conversion answers `displacement * scale`, so
+     * the two implementations only disagree while that product is under the
+     * half-pixel threshold — and the displacement is about half the block's
+     * height, which the seed's own padding puts at 120. A tenth of a percent
+     * clears it with room; a hundredth of the box, tried first, did not, and
+     * both implementations dropped the bands for the same reason.
+     */
+    const OWN_SCALE = 0.001;
+    const moved = await block.evaluate((node, value) => {
+      const el = node as HTMLElement;
+      const before = el.getBoundingClientRect().top;
+      el.style.transform = `scaleY(${String(value)})`;
+      return Math.abs(el.getBoundingClientRect().top - before);
+    }, OWN_SCALE);
+    // The separating property, asserted BOTH ways: the edge really moves far,
+    // and the wrong conversion of that same displacement lands under the
+    // threshold — so the two implementations must disagree here.
+    expect(moved).toBeGreaterThan(5);
+    expect(moved * OWN_SCALE).toBeLessThan(0.5);
+
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
+  });
+
+  test("draws a retained margin band at its FULL height, not the scaled one", async ({
+    page,
+  }) => {
+    /*
+     * A transform does not scale the space a margin reserves. With the top edge
+     * pinned the band survives, and it has to cover the real gap: measured, a
+     * block with `margin-top: 28px` under a pinning transform leaves 28 rendered
+     * pixels above it, while the composed scale would draw 14 and name half the
+     * space it points at.
+     *
+     * The pinned-edge test asserts the band EXISTS and stops there, so it stays
+     * green against the halved geometry. This one reads the rectangle.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.evaluate(node => {
+      (node as HTMLElement).style.marginTop = "28px";
+    });
+    await block.click();
+
+    const before = await page.locator(band("margin", "top")).boundingBox();
+    if (before === null) throw new Error("the margin band has no box");
+    expect(Math.abs(before.height - 28)).toBeLessThan(TOLERANCE);
+
+    await block.evaluate(node => {
+      const el = node as HTMLElement;
+      const shift = (el.getBoundingClientRect().height / 2) * (1 - 0.5);
+      el.style.transform = `translateY(${String(-shift)}px) scaleY(0.5)`;
+    });
+    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
+      const el = node as HTMLElement;
+      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+    });
+
+    const after = await page.locator(band("margin", "top")).boundingBox();
+    if (after === null) throw new Error("the margin band was dropped");
+    expect(Math.abs(after.height - 28)).toBeLessThan(TOLERANCE);
+    // And the number still reads what the author typed.
+    await expect(page.locator(band("margin", "top"))).toHaveText("28");
+  });
+
   test("the bands take no pointer events, so a covered block stays clickable", async ({
     page,
   }) => {

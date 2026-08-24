@@ -413,6 +413,9 @@ export function SpacingOverlay({
         // Composed from the real transform between the block and the root, so
         // a scaled ancestor counts and no rounded layout value is involved.
         scale: { x: scale.x, y: scale.y },
+        // Margins take the ancestors' scale ALONE — a transform does not scale
+        // the space a margin reserves, only the box it is drawn beside.
+        marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
       }),
       layerBox
     );

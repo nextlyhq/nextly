@@ -93,6 +93,21 @@ export interface SpacingGeometry {
   readonly padding: EdgeLengths;
   /** The scale `border` was measured at. See the module docblock. */
   readonly scale: Scale;
+  /**
+   * The scale a MARGIN renders at, which is not always the one above.
+   *
+   * Padding and border widths lie inside the element's own transform and render
+   * scaled with it, so `scale` is right for them. A margin does not: it is laid
+   * out in the PARENT's coordinates, and the element's own transform moves only
+   * its own rendering. Measured — a 100px block with `margin-top: 28px` under a
+   * transform that pins its top edge leaves a real gap of 28 rendered pixels,
+   * while the composed scale would draw the band 14 high and name the space
+   * beside it wrongly by half.
+   *
+   * Equal to {@link scale} for the ordinary element that carries no transform of
+   * its own, which is why this is easy to miss.
+   */
+  readonly marginScale: Scale;
 }
 
 const SIDES: readonly SpacingSide[] = ["top", "right", "bottom", "left"];
@@ -140,14 +155,20 @@ export function spacingBands(
    * right only while the transform is uniform, and `scale(2, 0.5)` is a single
    * legal value that makes it wrong on one axis.
    */
-  const scaled = (edges: EdgeLengths): EdgeLengths => ({
-    top: edges.top * scale.y,
-    right: edges.right * scale.x,
-    bottom: edges.bottom * scale.y,
-    left: edges.left * scale.x,
-  });
+  const scaledBy =
+    (by: Scale) =>
+    (edges: EdgeLengths): EdgeLengths => ({
+      top: edges.top * by.y,
+      right: edges.right * by.x,
+      bottom: edges.bottom * by.y,
+      left: edges.left * by.x,
+    });
+  const scaled = scaledBy(scale);
 
-  const margin = scaled(geometry.margin);
+  // Margins take the ancestors' scale alone. See `marginScale`: the element's
+  // own transform renders its box smaller without touching the space its margin
+  // reserves, so the two boxes genuinely scale differently.
+  const margin = scaledBy(geometry.marginScale)(geometry.margin);
   const padding = scaled(geometry.padding);
   const bands: SpacingBand[] = [];
 

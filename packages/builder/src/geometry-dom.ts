@@ -244,6 +244,20 @@ export interface RenderedScale {
    * question this way rather than refining a proxy again.
    */
   readonly selfMoved: MovedEdges;
+  /**
+   * The composition ABOVE the element, excluding its own transform.
+   *
+   * Margins are measured with this and padding with the composed scale, because
+   * the two live in different spaces. Padding is inside the element's own
+   * transform and renders scaled with it; a margin is laid out in the PARENT's
+   * coordinates, and the element's own transform never touches the space it
+   * reserves.
+   *
+   * Measured: a 100px block with `margin-top: 28px` and a transform pinning its
+   * top edge leaves a real gap of 28 rendered pixels above it, not 14 — so a
+   * band drawn at the composed scale is half the size of the space it names.
+   */
+  readonly ancestor: { readonly x: number; readonly y: number };
 }
 
 /** Which physical edges are drawn away from where they were laid out. */
@@ -275,6 +289,7 @@ const EDGE_STILL_PX = 0.5;
 const IDENTITY_SCALE: RenderedScale = {
   x: 1,
   y: 1,
+  ancestor: { x: 1, y: 1 },
   describable: true,
   selfMoved: NO_EDGE_MOVED,
 };
@@ -301,6 +316,15 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
    * its square while the page was scaled by it once.
    */
   let own: DOMMatrix | null = null;
+  /*
+   * The composition ABOVE the element, accumulated in the same walk.
+   *
+   * Margins need it and padding does not, because they live in different
+   * spaces: padding is inside the element's own transform and renders scaled
+   * with it, while a margin is laid out in the PARENT's coordinates and the
+   * element's own transform never touches it.
+   */
+  let ancestors = new view.DOMMatrix();
   for (
     let node: Element | null = element;
     node !== null && node !== root;
@@ -313,6 +337,7 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
     // the composed answer and the element's own cannot disagree about which
     // declaration was seen.
     if (node === element) own = step;
+    else ancestors = step.multiply(ancestors);
     matrix = step.multiply(matrix);
   }
 
@@ -343,8 +368,10 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
     Math.abs(matrix.c) < AXIS_ALIGNED_TOLERANCE;
   const describable = axisAligned && matrix.a > 0 && matrix.d > 0;
   const scale = { x: matrix.a, y: matrix.d };
+  const ancestor = { x: ancestors.a, y: ancestors.d };
   return {
     ...scale,
+    ancestor,
     describable,
     /*
      * Only asked where the composed scale is usable, because deriving the
@@ -357,49 +384,44 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
           own,
           transformOriginOf(view.getComputedStyle(element)),
           untransformedBox(element, scale),
-          scale
+          ancestor
         )
       : { top: true, right: true, bottom: true, left: true },
   };
 }
 
 /**
- * Which axes a single element's own transform actually displaces.
+ * Which physical edges a single element's own transform draws away from layout.
  *
- * Asked of the MATRIX rather than of the declaration, because a declaration
- * that moves nothing is ordinary: `scale(1)`, `translate(0)`, `translateY(0)`
- * and `rotate(360deg)` all compute to a non-`none` transform and all serialize
- * to exactly `matrix(1, 0, 0, 1, 0, 0)`. They are the resting state of every
- * hover animation, so reading presence rather than effect blanks the margins of
- * a large share of real pages.
+ * Asked of the MATRIX rather than of the declaration, because a declaration that
+ * moves nothing is ordinary: `scale(1)`, `translate(0)`, `translateY(0)` and
+ * `rotate(360deg)` all compute to a non-`none` transform and all serialize to
+ * exactly `matrix(1, 0, 0, 1, 0, 0)`. They are the resting state of every hover
+ * animation, so reading presence rather than effect blanks the margins of a
+ * large share of real pages.
  *
- * `a` and `d` are the per-axis scales and `e`/`f` the per-axis translations, so
- * each axis is decided by its own two terms. A rotation or a skew mixes the
- * axes and moves both; anything not flat in 2D is not decidable by these terms
- * at all, and both are reported moved rather than guessed at.
+ * Asked PER EDGE rather than per axis, because a transform is applied about
+ * `transform-origin` and a translate composed with a scale pins one edge while
+ * moving the other. Measured, `translateY(-25px) scaleY(0.5)` on a 100px block
+ * renders its top edge exactly where layout put it and moves only the bottom —
+ * and that needs `transform` alone, which IS a catalog property.
  *
- * The tolerance is the same one the axis-aligned test uses and is there for the
- * same reason: an engine may serialize a geometric identity with a residue
- * instead of normalizing it away. It is far below any displacement a person
- * could author or see.
+ * An earlier version answered per axis and argued the pinned case could not
+ * arise, on the grounds that `transform-origin` is not authorable here. That
+ * trace was right and the conclusion drawn from it was too wide: proving one
+ * MECHANISM unreachable is not proving the STATE unreachable, and composing two
+ * functions of one property reaches it. The note is kept because the shape of
+ * the error is worth more than the correction — the question to ask of an
+ * unreachability argument is what ELSE produces the state.
  *
- * PER AXIS RATHER THAN PER EDGE, which is a deliberate bound and not an
- * oversight. A transform is applied about `transform-origin`, so an origin
- * anchored to one side leaves that side's edge stationary and moves only the
- * far one — under `transform-origin: top` and `scaleY(0.5)`, measured, the top
- * edge does not move at all and its margin stays perfectly describable.
+ * `a` and `d` are the per-axis scales and `e`/`f` the per-axis translations,
+ * which is why each edge is decided by the two terms of its own axis. A rotation
+ * or a skew mixes the axes and moves every edge; anything not flat in 2D is not
+ * decidable by these terms at all, and all four are reported moved rather than
+ * guessed at.
  *
- * That state is not reachable here. `transform` is a catalog property and
- * `transform-origin` is NOT, so every transform this system can author is
- * applied about the initial `50% 50%` — and measured under that origin,
- * `scaleY(0.5)` moves the top edge as well as the bottom, which is exactly what
- * an axis answers. Per edge would additionally have to read and resolve the
- * origin and the untransformed box on every measure, paying for a case the
- * catalog cannot produce.
- *
- * Should `transform-origin` ever join the catalog, this becomes conservative
- * rather than wrong: an anchored edge keeps its band today and would lose it,
- * which is the safe direction to be imprecise in.
+ * There is no grain below an edge, which is the point of asking whether an edge
+ * RENDERS WHERE IT LAYS OUT rather than refining a proxy for a fourth time.
  */
 function edgesMovedBy(
   own: DOMMatrix | null,
@@ -426,6 +448,15 @@ function edgesMovedBy(
    * about what an author can see: a tenth of a local pixel under a tenfold
    * ancestor scale is a visible pixel on screen, and the same displacement
    * inside a shrunken ancestor is not.
+   *
+   * Converted by the ANCESTOR scale, never the composed one. The displacement
+   * above is already expressed in the parent's coordinates — the element's own
+   * transform is what produced it — so multiplying by that transform again
+   * counts it twice and understates the movement by exactly the factor doing
+   * the moving. Measured, a 100px block under `scaleY(0.01)` displaces each
+   * vertical edge by 49.5 rendered pixels while the composed conversion answers
+   * 0.495, which is under the threshold and would call a plainly moved edge
+   * stationary.
    */
   const moved = (
     o: number,
