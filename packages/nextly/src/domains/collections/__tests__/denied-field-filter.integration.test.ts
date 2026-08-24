@@ -30,6 +30,10 @@ type ReadHandler = {
     success: boolean;
     data: { docs: Record<string, unknown>[] } | null;
   }>;
+  countEntries: (p: Record<string, unknown>) => Promise<{
+    success: boolean;
+    data: unknown;
+  }>;
   createEntry: (
     p: Record<string, unknown>,
     data: Record<string, unknown>
@@ -121,6 +125,25 @@ describe("a denied field and the where clause (integration)", () => {
     // MORE rows than asked for, which is safe and lies to the caller; naming the
     // field discloses only that it is restricted, which its absence from every
     // response already says.
+    expect(refused.success).toBe(false);
+    expect(JSON.stringify(refused)).toContain("FIELD_NOT_FILTERABLE");
+  });
+
+  it("refuses the same filter on a count", async () => {
+    // A count is a CLEANER oracle than a listing, not a lesser one: it answers
+    // 1 or 0 for a guessed value and hands back no row to redact, so a guard
+    // that covered only the listing would leave the shorter path open.
+    current = await boot();
+    const h = current.getService(
+      "collectionsHandler"
+    ) as unknown as ReadHandler;
+
+    const refused = await h.countEntries({
+      collectionName: VAULTS,
+      overrideAccess: false,
+      where: { codename: { equals: "alpha" } },
+    });
+
     expect(refused.success).toBe(false);
     expect(JSON.stringify(refused)).toContain("FIELD_NOT_FILTERABLE");
   });

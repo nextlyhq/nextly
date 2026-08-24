@@ -1977,6 +1977,17 @@ export class CollectionQueryService extends BaseService {
         return accessDenied;
       }
 
+      // A count is a cleaner oracle than a listing, not a lesser one: "how many
+      // rows carry this value" answers 1 or 0 without returning a row at all.
+      assertFilterableFields(
+        "collection",
+        params.collectionName,
+        params.where,
+        {
+          overrideAccess: params.overrideAccess,
+        }
+      );
+
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
       );
