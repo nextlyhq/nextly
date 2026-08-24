@@ -1075,11 +1075,32 @@
   justify-content: center;
 }
 
-.nx-spacing-overlay__band[data-box="margin"] {
+/*
+ * The fill is a pseudo-element rather than the band's own background, because on
+ * a rounded block it has to be CLIPPED and the value chip must not be.
+ *
+ * A block with `border-radius` curves away from the rectangle its bands are cut
+ * from, so a full-width strip paints colour into the transparent corner OUTSIDE
+ * the rendered border — a band is read as a measurement, and one covering ground
+ * the block does not occupy states a measurement that is false. The component
+ * supplies the curve as `--nx-spacing-clip`; a square block sets nothing and the
+ * fallback leaves the fill uncut.
+ *
+ * Clipping the band itself would take the chip with it, and the chip
+ * deliberately overflows the band it names.
+ */
+.nx-spacing-overlay__band::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  clip-path: var(--nx-spacing-clip, none);
+}
+
+.nx-spacing-overlay__band[data-box="margin"]::before {
   background-color: color-mix(in srgb, var(--nx-chart-4) 22%, transparent);
 }
 
-.nx-spacing-overlay__band[data-box="padding"] {
+.nx-spacing-overlay__band[data-box="padding"]::before {
   background-color: color-mix(in srgb, var(--nx-chart-3) 22%, transparent);
 }
 
@@ -1091,7 +1112,7 @@
  * ordinary space and says the opposite of what is happening; a hatch reads as
  * the element being pulled over its neighbour, which it is.
  */
-.nx-spacing-overlay__band[data-box="margin"][data-negative] {
+.nx-spacing-overlay__band[data-box="margin"][data-negative]::before {
   background-color: transparent;
   background-image: repeating-linear-gradient(
     45deg,
@@ -1113,6 +1134,12 @@
  * centred on the band it names.
  */
 .nx-spacing-overlay__value {
+  /*
+   * Positioned so it paints ABOVE the fill. The fill is an absolutely positioned
+   * pseudo-element, which takes the positioned-descendants layer and would
+   * otherwise be painted over this in-flow text whatever the source order says.
+   */
+  position: relative;
   padding: 0 3px;
   border-radius: 2px;
   background-color: var(--nx-background);

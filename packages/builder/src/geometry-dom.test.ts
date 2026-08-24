@@ -23,6 +23,7 @@ import {
   frameInsetOf,
   canvasRootFrom,
   hasScrollbarGutter,
+  overflowApplies,
 } from "./geometry-dom";
 
 /**
@@ -309,4 +310,66 @@ describe("hasScrollbarGutter", () => {
 
     frame.remove();
   });
+});
+
+describe("whether overflow clips at all", () => {
+  /*
+   * MEASURED in Chromium across the catalog's display set, by giving each value
+   * `overflow: hidden` and a child pulled outside it with a negative margin,
+   * then reading the pixels.
+   *
+   * The negative margin matters: an OVERSIZED child makes a table box grow to
+   * fit, so "not clipped" would really mean "never overflowed" — which read as
+   * six false entries on the first pass.
+   */
+  it.each([
+    "inline",
+    "inline list-item",
+    "table-row",
+    "table-row-group",
+    "table-header-group",
+    "table-footer-group",
+    "ruby",
+    "ruby-text",
+    "contents",
+  ])("says a %s box takes no clip", display => {
+    expect(overflowApplies(display)).toBe(false);
+  });
+
+  it.each([
+    "block",
+    "inline-block",
+    "flow-root",
+    "list-item",
+    "flow-root list-item",
+    "flex",
+    "inline-flex",
+    "grid",
+    "inline-grid",
+    "table",
+    "inline-table",
+    "table-cell",
+    "table-column",
+    "table-column-group",
+    "table-caption",
+  ])("says a %s box does clip", display => {
+    /*
+     * The control half, and it carries the surprises: `table` and `table-cell`
+     * clip normally while the row boxes between them do not, so a rule written
+     * as "anything table-ish" would be wrong in both directions.
+     */
+    expect(overflowApplies(display)).toBe(true);
+  });
+
+  it.each(["ruby-base", "ruby-base-container", "ruby-text-container"])(
+    "does not carry an entry for %s, which never arrives",
+    display => {
+      /*
+       * All three compute to plain `block` in Chromium, so the computed value
+       * this is asked about is never the declared one. An entry for them would
+       * describe a value no element reports.
+       */
+      expect(overflowApplies(display)).toBe(true);
+    }
+  );
 });

@@ -59,8 +59,16 @@
 
 import * as React from "react";
 
+import {
+  clipPathOf,
+  scaleCornerRadii,
+  SQUARE_CORNERS,
+  usedCornerRadii,
+  type CornerRadii,
+} from "./border-radii";
 import { CANVAS_ROOT_CLASS, nodeElement, nodeElements } from "./canvas";
 import type { EditorState } from "./editor-state";
+import type { Rect, Scale } from "./geometry";
 import {
   canvasContentRect,
   canvasRootFrom,
@@ -142,6 +150,69 @@ function boxesOf(style: CSSStyleDeclaration): {
       left: lengthOf(style.borderLeftWidth),
     },
   };
+}
+
+/**
+ * The block's USED border-box corner radii, in LAYOUT pixels.
+ *
+ * A percentage radius resolves against the border box's own size, and the size
+ * that governs is the one the element was LAID OUT at rather than the one it is
+ * drawn at — `border-radius: 50%` on a block under `scale(2)` is half its layout
+ * width, which then renders doubled like everything else inside the transform.
+ *
+ * That layout size is the measured rectangle divided back out by the scale it
+ * was measured at, rather than a second reading from the element. `offsetWidth`
+ * would answer the same question in whole pixels only, and `getComputedStyle`
+ * reports whichever box `box-sizing` selects — so both are a second answer to a
+ * question `renderedScale` has already answered exactly.
+ *
+ * A scale that is zero on either axis leaves nothing to resolve against and no
+ * band to draw; `describable` refuses that block anyway, and answering square
+ * here keeps this from dividing by it on the way to that refusal.
+ *
+ * UNDEFINED when a corner cannot be resolved at all — a percentage inside a
+ * `calc()` stays unresolved in the computed value — which the caller treats as a
+ * shape it cannot describe rather than as a square one.
+ */
+function radiiOf(
+  style: CSSStyleDeclaration,
+  border: Rect,
+  scale: Scale
+): CornerRadii | undefined {
+  if (!(scale.x > 0) || !(scale.y > 0)) return SQUARE_CORNERS;
+  return usedCornerRadii(
+    {
+      topLeft: style.borderTopLeftRadius,
+      topRight: style.borderTopRightRadius,
+      bottomRight: style.borderBottomRightRadius,
+      bottomLeft: style.borderBottomLeftRadius,
+    },
+    { width: border.width / scale.x, height: border.height / scale.y }
+  );
+}
+
+/**
+ * The band's box, plus the clip its FILL takes when the block is rounded.
+ *
+ * The clip travels as a custom property rather than as this element's own
+ * `clip-path` because the band carries the value chip, and the chip
+ * deliberately overflows the band it names — the case where a number is hardest
+ * to guess is the case where the space is too small to hold it. Clipping the
+ * element would take the number with it, so the stylesheet applies the property
+ * to the fill alone.
+ */
+function bandStyle(band: SpacingBand): React.CSSProperties {
+  const box: React.CSSProperties = {
+    left: band.rect.x,
+    top: band.rect.y,
+    width: band.rect.width,
+    height: band.rect.height,
+  };
+  if (band.clip === undefined) return box;
+  return {
+    ...box,
+    "--nx-spacing-clip": clipPathOf(band.clip),
+  } as React.CSSProperties;
 }
 
 /**
@@ -382,12 +453,35 @@ export function SpacingOverlay({
       x: boxes.borderWidths.left + boxes.borderWidths.right,
       y: boxes.borderWidths.top + boxes.borderWidths.bottom,
     };
+    /*
+     * Through `canvasContentRect` rather than a rectangle read here: this
+     * package reads a rectangle in one place, so chrome measured one way cannot
+     * disagree with chrome measured another at a scroll offset.
+     */
+    const border = canvasContentRect(block, root);
+    const scaledBy: Scale = { x: scale.x, y: scale.y };
+    const radii = radiiOf(style, border, scaledBy);
+    /*
+     * A block whose own radii cannot be resolved is a shape this cannot
+     * describe, and drawing nothing is the answer it already gives for every
+     * other one. Deciding it here rather than inside `describable` keeps that
+     * predicate over the four values it is handed.
+     */
     if (
+      radii === undefined ||
       !describable(
         layoutFragments(block),
         style.position,
         hasScrollbarGutter(block, borders),
-        clippedByAncestor(block, root),
+        /*
+         * The block's own curve goes in with it: a rounded block flush inside an
+         * equally rounded clipping container is not cut, while its bounding
+         * rectangle's corners are outside every one of that container's arcs.
+         *
+         * Scaled, because the clip walk compares rendered rectangles while the
+         * radii are resolved in layout pixels.
+         */
+        clippedByAncestor(block, root, scaleCornerRadii(radii, scaledBy)),
         scale
       )
     ) {
@@ -403,19 +497,20 @@ export function SpacingOverlay({
     const layerBox = canvasContentRect(root, root);
     apply(
       spacingBands({
-        // Through `canvasContentRect` rather than a rectangle read here: this
-        // package reads a rectangle in one place, so chrome measured one way
-        // cannot disagree with chrome measured another at a scroll offset.
-        border: canvasContentRect(block, root),
+        border,
         borderWidths: boxes.borderWidths,
         margin: boxes.margin,
         padding: boxes.padding,
         // Composed from the real transform between the block and the root, so
         // a scaled ancestor counts and no rounded layout value is involved.
-        scale: { x: scale.x, y: scale.y },
+        scale: scaledBy,
         // Margins take the ancestors' scale ALONE — a transform does not scale
         // the space a margin reserves, only the box it is drawn beside.
         marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
+        // Resolved against the LAYOUT box, which is why the scale goes in with
+        // it: a rounded block's bands have to be cut to the curve, and the curve
+        // is stated in the units the author declared it in.
+        radii,
       }),
       layerBox
     );
@@ -578,12 +673,7 @@ export function SpacingOverlay({
           data-box={band.box}
           data-side={band.side}
           data-negative={band.negative ? "" : undefined}
-          style={{
-            left: band.rect.x,
-            top: band.rect.y,
-            width: band.rect.width,
-            height: band.rect.height,
-          }}
+          style={bandStyle(band)}
         >
           <span className="nx-spacing-overlay__value">{band.label}</span>
         </div>
