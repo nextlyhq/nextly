@@ -1,4 +1,5 @@
 import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import type { HookContext } from "nextly";
 import {
   defineCollection,
@@ -75,7 +76,21 @@ import { blocks } from "../fields/blocksHelper";
  * wiring. It costs one line and it is the only signal available that the link
  * will land.
  */
-export function pagesCollection(previewPath?: string) {
+export function pagesCollection(
+  previewPath?: string,
+  // The limits the PAGE is rendered under, when the host raised them.
+  //
+  // `PageRenderer` takes `limits`, falling back to `styleContext.limits` and
+  // then to the engine defaults, so a host can render more of a document than
+  // the defaults select. The usage record has to select the SAME nodes or a
+  // class applied to a node the page renders is absent from the record a
+  // safe-delete check reads — the two now share one selection, and this is what
+  // stops them invoking it with different bounds.
+  //
+  // Positional because `previewPath` already is; a third argument here is the
+  // point to convert both into one options object.
+  limits?: DocumentLimits
+) {
   return defineCollection({
     slug: "pages",
     labels: { singular: "Page", plural: "Pages" },
@@ -156,12 +171,16 @@ export function pagesCollection(previewPath?: string) {
       // read, which storage cannot produce, so the catch below closes the
       // remaining distance rather than trusting the range.
       //
-      // It reads `originalData` on a patch that omits the document, which the
-      // update paths supply from the row this write is changing. That makes the
-      // stored document the authority for a write that does not carry one, so
-      // this field cannot be set to anything the hook did not derive — and a
-      // list computed elsewhere from a document that has since been replaced is
-      // recomputed rather than believed.
+      // It reads `originalData` — the row this write is changing — only when a
+      // write CLAIMS a value for this field without carrying the document that
+      // would justify it. That is a rebuild writing the field alone, or a
+      // caller inventing one, and both are answered the same way: the stored
+      // document decides, so a list computed elsewhere from content that has
+      // since been replaced is recomputed rather than believed, and no caller
+      // can set this field to anything the hook did not derive.
+      //
+      // A write claiming NOTHING is left alone entirely, which is a different
+      // thing from deriving an answer for it.
       beforeChange: [
         (context: HookContext) => {
           const { data } = context;
@@ -181,7 +200,23 @@ export function pagesCollection(previewPath?: string) {
             // that gets a live class deleted.
             if ("content" in data) {
               // The document is part of this write, so it is the authority.
-              data.usedClasses = classIdsUsedBy(data.content);
+              data.usedClasses = classIdsUsedBy(data.content, limits);
+            } else if (!("usedClasses" in data)) {
+              // The write carries neither the document nor a claim about it, so
+              // it has nothing to say here and must say nothing. Returning the
+              // field ABSENT is not the same as leaving it alone: on a
+              // drafts-enabled collection, publishing sends `status` by itself
+              // and the mutation service folds the promoted draft UNDER the
+              // post-hook payload, so any value written here replaces the one
+              // the draft accumulated. The draft's record was derived from the
+              // draft's document, which is precisely the content being
+              // published, and this hook cannot see it — `originalData` is the
+              // outgoing LIVE row.
+              //
+              // So deriving from the stored document here would publish the
+              // OLD page's class list against the NEW page's content, on the
+              // most ordinary path there is.
+              return data;
             } else if (context.operation === "create") {
               // A page created without a document references nothing, and that
               // is a derivation rather than an absence of one.
@@ -192,7 +227,10 @@ export function pagesCollection(previewPath?: string) {
               // read in the same operation as this write, so a list derived
               // from a document that has since changed is replaced by one
               // derived from what is actually stored, rather than accepted.
-              data.usedClasses = classIdsUsedBy(context.originalData.content);
+              data.usedClasses = classIdsUsedBy(
+                context.originalData.content,
+                limits
+              );
             } else {
               delete data.usedClasses;
             }

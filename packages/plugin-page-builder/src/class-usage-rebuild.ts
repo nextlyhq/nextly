@@ -39,6 +39,8 @@
  *
  * @module class-usage-rebuild
  */
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
+
 import { classIdsUsedBy } from "./class-usage";
 import { readStoredJson } from "./stored-json";
 
@@ -146,6 +148,15 @@ function recordMatches(stored: unknown, derived: readonly string[]): boolean {
 export async function rebuildClassUsage(args: {
   store: PageUsageStore;
   collection?: string;
+  /**
+   * The limits pages are rendered under, when they are not the defaults.
+   *
+   * The same value the plugin and `PageRenderer` are given. A rebuild deriving
+   * under different bounds than the write hook would rewrite every page to a
+   * list the hook then disagrees with, and the two would take turns correcting
+   * each other on every save.
+   */
+  limits?: DocumentLimits;
 }): Promise<RebuildReport> {
   const collection = args.collection ?? "pages";
   let scanned = 0;
@@ -163,7 +174,7 @@ export async function rebuildClassUsage(args: {
     for (const item of result.items) {
       if (!isStoredPage(item)) continue;
       scanned++;
-      const derived = classIdsUsedBy(item.content);
+      const derived = classIdsUsedBy(item.content, args.limits);
       if (recordMatches(item.usedClasses, derived)) continue;
       await args.store.update({
         collection,

@@ -48,10 +48,13 @@ on them. Tracking the ancestor path rather than every node seen keeps one node
 object placed in two slots visited twice, which is what lets an insert still
 detect a duplicate ID inside an incoming subtree.
 
-Its third parameter is now a `WalkOptions` object carrying the existing `parent`
-plus an optional `maxNodes`, which ends the traversal rather than only skipping
-work in the callback. Traversal order and the parent each callback receives are
-unchanged.
+Its third parameter now accepts a `WalkOptions` object — `parent`, `maxNodes`
+and `onCycle` — and still accepts a bare parent node, so a caller compiled
+against the previous signature keeps working. `maxNodes` ends the traversal
+rather than only skipping work in the callback, and the walk holds each list
+with a cursor instead of seeding one stack entry per top-level node, so the
+budget bounds a very wide root array too. Traversal order and the parent each
+callback receives are unchanged.
 
 The node selection both readers use is now one function, `selectNodes`, exported
 from the engine and consumed by the style compiler and by the class-usage
@@ -67,3 +70,16 @@ cycle-tolerant so that readers answer rather than fail, which makes the repeat
 invisible in what it visits; the walk now reports a skipped cycle, and the
 insertion guard refuses on it. Accepting one produced a cyclic forest at the top
 level and a `RangeError` when inserting into a parent.
+
+The page-builder plugin, its pages collection and `rebuildClassUsage` take the
+document `limits` pages are rendered under. `PageRenderer` already accepted
+them, so a host raising them rendered more of a document than the usage record
+counted — a class on a node the page draws was missing from the list a
+safe-delete check reads. Left unset, every side uses the engine defaults and
+agrees by construction.
+
+The page-save hook leaves a write that says nothing about `usedClasses`
+completely alone. On a drafts-enabled collection, publishing sends `status` by
+itself and the mutation service folds the promoted draft UNDER the post-hook
+payload, so a value derived here from the outgoing live row replaced the record
+the draft accumulated from the very content being published.

@@ -138,32 +138,69 @@ describe("walkNodes / findNode / locateNode", () => {
 
   it("stops TRAVERSING once the node budget is spent, not just working", () => {
     // A budget applied inside the callback bounds the work per node and nothing
-    // else: the walk has still queued and popped every remaining node, so a
-    // corrupt document costs time and memory proportional to the whole stored
-    // tree. That is invisible to an assertion on the result, which looks
-    // identical either way.
+    // else: the walk has still reached every remaining node, so a corrupt
+    // document costs time proportional to the whole stored tree. That is
+    // invisible to an assertion on the result, which looks identical either way.
     //
-    // So the tripwire is on the nodes PAST the budget: reading `slots` is what
-    // the walk does to descend, and a walk that stopped never reaches them.
-    let slotsRead = 0;
-    const roots = Array.from({ length: 50 }, (_, i) => ({
+    // The tripwire is on the ROOT ARRAY rather than on descendants, and that
+    // distinction is the whole test. A walk that seeds one stack entry per
+    // top-level node reads the entire array before any bound applies, so a
+    // budget is powerless against the cheapest oversized document there is — a
+    // very wide root array — while a test watching only descendants reports it
+    // as bounded.
+    let readsPastTheBudget = 0;
+    const roots: unknown[] = Array.from({ length: 200 }, (_, i) => ({
       id: `n${i}`,
       type: "t",
       version: 1,
       props: {},
-      get slots(): undefined {
-        slotsRead++;
-        return undefined;
+    }));
+    const watched = new Proxy(roots, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key) && Number(key) >= 10) {
+          readsPastTheBudget += 1;
+        }
+        return Reflect.get(target, key, receiver);
       },
-    })) as unknown as BlockNode[];
+    }) as unknown as BlockNode[];
 
     let visited = 0;
-    walkNodes(roots, () => visited++, { maxNodes: 10 });
+    walkNodes(watched, () => visited++, { maxNodes: 10 });
 
     expect(visited).toBe(10);
-    // Nine, not ten: the tenth node spends the budget and the walk returns
-    // before queueing its children, so its slots are never read either.
-    expect(slotsRead).toBe(9);
+    expect(readsPastTheBudget).toBe(0);
+  });
+
+  it("still accepts a bare parent NODE as its third argument", () => {
+    // The shape this function published before it took options. A caller
+    // compiled against it passes a node, and nothing at runtime would reject
+    // one: the option lookup would simply miss and every top-level callback
+    // would receive `undefined` as its parent — a wrong answer rather than an
+    // error, which is the failure worth keeping a compatibility path for.
+    const parent = makeNode("core/section", 1);
+    const seen: (string | undefined)[] = [];
+
+    walkNodes(
+      [makeNode("core/text", 1)],
+      (_node, got) => seen.push(got?.id),
+      parent
+    );
+
+    expect(seen).toEqual([parent.id]);
+  });
+
+  it("reports a cycle it skipped, so a writer can refuse what a reader tolerates", () => {
+    // The reader keeps walking; the report is how the insertion guard learns of
+    // a repeat the walk deliberately hid from it.
+    const cyclic = makeNode("core/section", 1, {}, { children: [] });
+    cyclic.slots!.children.push(cyclic);
+    const reported: string[] = [];
+
+    walkNodes([cyclic], () => undefined, {
+      onCycle: node => reported.push(node.id),
+    });
+
+    expect(reported).toEqual([cyclic.id]);
   });
 
   it("still visits a repeated ID that is a DISTINCT object", () => {

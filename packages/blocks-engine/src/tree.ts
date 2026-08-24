@@ -49,15 +49,26 @@ export interface TreePosition {
 }
 
 /**
- * One step of the walk: a node to visit, or the moment its subtree ends.
+ * One step of the walk: a list being read, or the moment a subtree ends.
  *
- * The `leave` marker is what makes ancestry observable in an iterative walk.
- * A recursive one knows it has left a subtree because the call returns; a
- * stack has to be told, so each node queues its own marker BEFORE its children
- * and the marker therefore pops after every descendant.
+ * A LIST rather than a node, so a forest is never copied onto the stack to be
+ * walked. Seeding one entry per top-level node would read the whole array and
+ * allocate against it before any bound applied, which makes a budget powerless
+ * against the cheapest oversized document there is: a very wide root array.
+ * Holding the array with a cursor spends memory on DEPTH, not on width.
+ *
+ * The `leave` marker is what makes ancestry observable in an iterative walk. A
+ * recursive one knows it has left a subtree because the call returns; a stack
+ * has to be told, so each node queues its own marker BEFORE its children and
+ * the marker is reached again only after every descendant.
  */
-type PendingNode =
-  | { kind: "visit"; node: unknown; parent: BlockNode | undefined }
+type Frame =
+  | {
+      kind: "list";
+      nodes: readonly unknown[];
+      index: number;
+      parent: BlockNode | undefined;
+    }
   | { kind: "leave"; node: unknown };
 
 /** How a caller narrows the walk. */
@@ -68,9 +79,9 @@ export interface WalkOptions {
    * Stop after visiting this many nodes.
    *
    * A bound the caller applies in its own callback is not this: the callback
-   * can decline to do work, but the walk has already queued and popped every
-   * remaining node, so a corrupt document still costs time and memory
-   * proportional to the whole stored tree. This ends the traversal.
+   * can decline to do work, but the walk has already reached every remaining
+   * node, so a corrupt document still costs time proportional to the whole
+   * stored tree. This ends the traversal.
    */
   maxNodes?: number;
   /**
@@ -86,25 +97,64 @@ export interface WalkOptions {
 }
 
 /**
- * Queue a node's slot children so that popping them restores written order.
+ * The third argument in either of its accepted forms.
  *
- * Both loops run backwards for that reason: a stack returns what went on last,
- * so pushing in order would hand a caller the document mirrored — slot by slot
- * and sibling by sibling.
- *
- * A slot whose value is not an array is skipped rather than read. Persisted
- * documents reach this walk unvalidated, and iterating a non-array throws.
+ * `walkNodes` published a bare `parent` here before it took options, and a
+ * caller compiled against that signature passes a node. Rejecting it is not an
+ * option a type can enforce at runtime: the property lookup would simply miss
+ * and every top-level callback would receive `undefined` as its parent, which
+ * is a wrong answer rather than an error. The two shapes have no property in
+ * common, so `id` separates them exactly.
  */
-function pushChildren(stack: PendingNode[], node: BlockNode): void {
+function toWalkOptions(
+  third: BlockNode | WalkOptions | undefined
+): WalkOptions {
+  if (third === undefined) return {};
+  return "id" in third ? { parent: third } : third;
+}
+
+/** Queue a node's slot children so they are read before the next sibling. */
+function pushChildren(stack: Frame[], node: BlockNode): void {
   if (!node.slots) return;
   const slots = Object.values(node.slots);
-  for (let s = slots.length - 1; s >= 0; s--) {
+  // Reversed, so the first slot ends up on top of the stack and is read first.
+  for (let s = slots.length - 1; s >= 0; s -= 1) {
     const children = slots[s];
+    // A slot whose value is not an array is skipped rather than read. Persisted
+    // documents reach this walk unvalidated, and iterating a non-array throws.
     if (!Array.isArray(children)) continue;
-    for (let i = children.length - 1; i >= 0; i--) {
-      stack.push({ kind: "visit", node: children[i], parent: node });
-    }
+    stack.push({ kind: "list", nodes: children, index: 0, parent: node });
   }
+}
+
+/**
+ * Take the next unread entry, discarding frames that are finished on the way.
+ *
+ * Leaving a subtree is what removes its node from the ancestor path, so that
+ * happens here: it is a property of the stack unwinding rather than of any node
+ * being visited.
+ */
+function takeNext(
+  stack: Frame[],
+  onPath: Set<unknown>
+): { node: unknown; parent: BlockNode | undefined } | undefined {
+  while (stack.length > 0) {
+    const top = stack[stack.length - 1];
+    if (top === undefined) return undefined;
+    if (top.kind === "leave") {
+      stack.pop();
+      onPath.delete(top.node);
+      continue;
+    }
+    if (top.index >= top.nodes.length) {
+      stack.pop();
+      continue;
+    }
+    const node = top.nodes[top.index];
+    top.index += 1;
+    return { node, parent: top.parent };
+  }
+  return undefined;
 }
 
 /** Whether an entry is a value this walk can treat as a node. */
@@ -135,40 +185,50 @@ function isWalkableNode(node: unknown): node is BlockNode {
  * nothing that has run before this. `MAX_DEPTH` is a validation rule, and a
  * document arrives whether or not validation ever passed on it — measured, a
  * chain about ten thousand deep exited a recursive walk with
- * `RangeError: Maximum call stack size exceeded`, no cycle involved. An
- * explicit stack removes the limit rather than raising it.
+ * `RangeError: Maximum call stack size exceeded`, no cycle involved.
  *
  * A node is skipped when it is already ON THE PATH from the root to itself,
  * which is what a cycle is. That is deliberately narrower than skipping every
  * node seen anywhere: the same node OBJECT placed in two different slots is not
  * a cycle, and a walk that visited it once would report a subtree containing one
  * duplicated id as containing none — which is exactly the question
- * `insertionIsUnsafe` asks this walk, and the answer that would let
- * `insertNode` build a forest addressing two positions by one id.
+ * `insertionIsUnsafe` asks this walk, and the answer that would let `insertNode`
+ * build a forest addressing two positions by one id.
  */
 export function walkNodes(
   nodes: BlockNode[],
   fn: (node: BlockNode, parent: BlockNode | undefined) => void,
-  options: WalkOptions = {}
+  parent?: BlockNode
+): void;
+export function walkNodes(
+  nodes: BlockNode[],
+  fn: (node: BlockNode, parent: BlockNode | undefined) => void,
+  options?: WalkOptions
+): void;
+export function walkNodes(
+  nodes: BlockNode[],
+  fn: (node: BlockNode, parent: BlockNode | undefined) => void,
+  third?: BlockNode | WalkOptions
 ): void {
   if (!Array.isArray(nodes)) return;
+  const options = toWalkOptions(third);
   const limit = options.maxNodes ?? Number.POSITIVE_INFINITY;
   if (limit <= 0) return;
 
   const onPath = new Set<unknown>();
-  const stack: PendingNode[] = [];
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    stack.push({ kind: "visit", node: nodes[i], parent: options.parent });
-  }
+  // ONE frame for the whole top level. Reading the roots array through a cursor
+  // is what keeps a budget meaningful against a very wide forest: entries are
+  // taken one at a time and the walk returns the moment the budget is spent, so
+  // a million roots with a budget of ten reads ten of them.
+  const stack: Frame[] = [
+    { kind: "list", nodes, index: 0, parent: options.parent },
+  ];
 
   let visited = 0;
-  while (stack.length > 0) {
-    const entry = stack.pop();
-    if (entry === undefined) break;
-    if (entry.kind === "leave") {
-      onPath.delete(entry.node);
-      continue;
-    }
+  for (;;) {
+    const entry = takeNext(stack, onPath);
+    if (entry === undefined) return;
+
     if (!isWalkableNode(entry.node)) continue;
     if (onPath.has(entry.node)) {
       options.onCycle?.(entry.node);
@@ -177,8 +237,8 @@ export function walkNodes(
 
     onPath.add(entry.node);
     fn(entry.node, entry.parent);
-    visited++;
-    // Returning here rather than breaking out of the descent leaves the stack
+    visited += 1;
+    // Returning rather than breaking out of the descent leaves the stack
     // unread, which is the point: the budget bounds the traversal, not just the
     // work done per node.
     if (visited >= limit) return;

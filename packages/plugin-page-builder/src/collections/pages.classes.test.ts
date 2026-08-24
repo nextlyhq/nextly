@@ -10,6 +10,9 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
+
 import { pagesCollection } from "./pages";
 
 /**
@@ -22,10 +25,11 @@ import { pagesCollection } from "./pages";
  */
 function runBeforeChange(
   data: unknown,
-  rest: Record<string, unknown> = {}
+  rest: Record<string, unknown> = {},
+  limits?: DocumentLimits
 ): unknown {
   const hooks = (
-    pagesCollection() as unknown as {
+    pagesCollection(undefined, limits) as unknown as {
       hooks?: { beforeChange?: ((context: unknown) => unknown)[] };
     }
   ).hooks;
@@ -102,7 +106,12 @@ describe("the referenced-class record on a page write", () => {
     // MySQL, whose drivers parse it, and as plain `text` on SQLite, whose
     // driver does not. A reader that handled only the parsed shape would report
     // every page on SQLite as referencing nothing.
-    const patch: Record<string, unknown> = { title: "Renamed" };
+    // Carries a CLAIM about the field — as a rebuild write does — which is what
+    // sends the hook to the stored document rather than leaving the write alone.
+    const patch: Record<string, unknown> = {
+      title: "Renamed",
+      usedClasses: ["stale"],
+    };
 
     runBeforeChange(patch, {
       operation: "update",
@@ -134,6 +143,30 @@ describe("the referenced-class record on a page write", () => {
     expect(patch).toEqual({ title: "Renamed" });
   });
 
+  it("leaves a write that claims NOTHING about the field completely alone", () => {
+    // Publishing an accumulated draft is this shape: the caller sends `status`
+    // by itself. The mutation service runs this hook first and then folds the
+    // promoted draft UNDER the post-hook payload, so anything written here
+    // replaces the record the draft accumulated — and the draft's record was
+    // derived from the very content being published, which this hook cannot
+    // see, because `originalData` is the outgoing LIVE row.
+    //
+    // Deriving from the stored document here would therefore publish the OLD
+    // page's class list against the NEW page's content, on the most ordinary
+    // path there is. Absence is the only correct answer.
+    const publish: Record<string, unknown> = { status: "published" };
+
+    runBeforeChange(publish, {
+      operation: "update",
+      originalData: {
+        content: { nodes: [{ id: "n1", classes: ["from-the-old-live-row"] }] },
+      },
+    });
+
+    expect("usedClasses" in publish).toBe(false);
+    expect(publish).toEqual({ status: "published" });
+  });
+
   it("records nothing for a page CREATED without a document", () => {
     // Distinguished from the case above: a create has no stored row to fall
     // back to, and a page with no document genuinely references nothing. That
@@ -146,6 +179,45 @@ describe("the referenced-class record on a page write", () => {
     runBeforeChange(data, { operation: "create" });
 
     expect(data.usedClasses).toEqual([]);
+  });
+
+  it("derives under the LIMITS the page is rendered with, not the defaults", () => {
+    // `PageRenderer` takes `limits`, so a host can render more of a document
+    // than the engine defaults select. The record has to select the same nodes:
+    // a class on a node the page draws but this never reached is absent from
+    // the list a safe-delete check reads, and absence there means "not used".
+    //
+    // Asserted in BOTH directions on one document, because a raised bound that
+    // changed nothing would satisfy a one-sided version of this test whatever
+    // it was wired to.
+    const deepPage = () => {
+      let nested: Record<string, unknown> = {
+        id: "deep",
+        type: "core/text",
+        version: 1,
+        props: {},
+        classes: ["only-visible-when-raised"],
+      };
+      for (let i = 0; i < 3; i++) {
+        nested = {
+          id: `wrap-${i}`,
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: [`wrap-${i}`],
+          slots: { main: [nested] },
+        };
+      }
+      return { title: "Home", content: { nodes: [nested] } };
+    };
+
+    const shallow = deepPage() as Record<string, unknown>;
+    runBeforeChange(shallow, {}, { ...DEFAULT_LIMITS, maxDepth: 2 });
+    expect(shallow.usedClasses).not.toContain("only-visible-when-raised");
+
+    const raised = deepPage() as Record<string, unknown>;
+    runBeforeChange(raised, {}, { ...DEFAULT_LIMITS, maxDepth: 10 });
+    expect(raised.usedClasses).toContain("only-visible-when-raised");
   });
 
   it("does not fail the write for a document nobody validated", () => {
