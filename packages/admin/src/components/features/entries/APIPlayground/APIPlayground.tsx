@@ -690,7 +690,7 @@ export function APIPlayground({
                 <Label className="text-sm font-medium text-foreground">
                   Request body (JSON)
                 </Label>
-                <div className="min-h-0 flex-1 border border-input">
+                <div className="min-h-0 flex-1 rounded-md border border-input">
                   <Suspense
                     fallback={
                       <div className="h-full w-full animate-pulse bg-muted/30" />
