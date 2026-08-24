@@ -159,6 +159,37 @@ function normalizeDescendant(value: string | undefined): string {
 }
 
 /**
+ * Whether a PAGE declaration lands on this block at all.
+ *
+ * `styleOrigin` treats every page-origin entry as reaching every subject, which
+ * is right for the question it answers and wrong for this one. The page's own
+ * settings compile onto the page ROOT, so a non-inherited property written there
+ * — padding, width, a background colour — styles that root element and nothing
+ * inside it. Reported unfiltered, a block control shows "Inherited from the
+ * page" for a value the browser is not applying to it.
+ *
+ * A page entry carrying a DESCENDANT selector is the case that genuinely
+ * reaches: `.page a` styles the links inside, this block's included, which is
+ * the same rule `reachesThroughAncestor` applies to an ancestor's declarations.
+ *
+ * **What this deliberately gives up.** A property that truly inherits — `color`,
+ * the font properties — set on the page IS visibly active on this block, and
+ * that case is now reported as unset rather than as coming from the page.
+ * Separating it needs to know which properties inherit, which the catalog does
+ * not declare; this module's own `unset` docblock already states that limit for
+ * an ancestor's declarations and says the knowledge belongs to the engine that
+ * owns the cascade. Answering the two cases differently here would be a second,
+ * partial model of CSS inheritance in the layer that reads the output.
+ *
+ * Quiet where it cannot tell, rather than confidently wrong, which is the same
+ * judgement `ambiguous` makes one level up.
+ */
+function landsOnTheBlock(entry: StyleTraceEntry): boolean {
+  if (entry.origin.kind !== "page") return true;
+  return normalizeDescendant(entry.descendant) !== "";
+}
+
+/**
  * Whether a recorded declaration reaches the element this control addresses.
  *
  * Exact equality is too narrow, because a descendant selector carries the
@@ -262,8 +293,10 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   // this only removes the declarations that belong to a different control, so
   // nothing here re-implements tier order, breakpoint axes or specificity.
   const wanted = normalizeDescendant(query.descendant);
-  const candidates = query.trace.filter(entry =>
-    reachesControl(normalizeDescendant(entry.descendant), wanted)
+  const candidates = query.trace.filter(
+    entry =>
+      reachesControl(normalizeDescendant(entry.descendant), wanted) &&
+      landsOnTheBlock(entry)
   );
   const ask = (state: StyleState): StyleTraceEntry | undefined =>
     styleOrigin(candidates, query.subject, {

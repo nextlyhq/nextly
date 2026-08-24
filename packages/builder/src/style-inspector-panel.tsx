@@ -283,6 +283,7 @@ export function StyleInspectorPanel({
    */
   const editing: EditedAddress = {
     nodeId: inspection.nodeId,
+    blockType: subject?.blockType,
     state: inspection.state,
     breakpoint: inspection.breakpoint,
     labelOf: id => breakpointLabel(breakpoints, id),
@@ -1393,6 +1394,8 @@ function breakpointLabel(
 /** Which node, state and breakpoint the panel is editing, to say what DIFFERS. */
 export interface EditedAddress {
   readonly nodeId: string;
+  /** The selected block's type, to tell its own defaults from an ancestor's. */
+  readonly blockType: string | undefined;
   readonly state: StyleState;
   readonly breakpoint: BreakpointId;
   /** A breakpoint's author-facing name, for saying which one a value came from. */
@@ -1427,7 +1430,16 @@ function originName(
     case "class":
       return `.${origin.slug}`;
     case "blockType":
-      return "this block's defaults";
+      /*
+       * The same four-way problem the `node` case has, and it arrives by the
+       * same route: `reachesThroughAncestor` asks `reachesNode` about each
+       * ancestor, and that matches a `blockType` origin against the ANCESTOR's
+       * type. So a descendant rule from an enclosing block's defaults reaches
+       * this control carrying that block's type, not this one's.
+       */
+      return origin.type === editing.blockType
+        ? "this block's defaults"
+        : "an enclosing block's defaults";
     case "page":
       return "the page";
     case "node":

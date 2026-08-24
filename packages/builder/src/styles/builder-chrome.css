@@ -1528,10 +1528,17 @@
   /* Aligned to the text rather than the line box, so it sits with the label's
      letters instead of riding the descender space below them. */
   vertical-align: middle;
-  /* Never a pointer target of its own: the label it sits inside is the control's
-     own click affordance, and a dot that swallowed the press would stop the
-     label focusing its field. */
-  pointer-events: none;
+  /*
+   * Pointer-REACHABLE, deliberately. The dot carries its meaning in a `title`,
+   * and `pointer-events: none` removes the span from hit testing — so the hover
+   * lands on the surrounding label instead and shows that label's own summary,
+   * or nothing. The one path a mouse user has to the answer is closed by the
+   * very property meant to keep the dot out of the way.
+   *
+   * Nothing is lost by leaving it hittable. The dot sits INSIDE the control's
+   * `<label>`, and a press on any of a label's content still activates the
+   * label, so the field is focused either way.
+   */
 }
 
 .nx-style-inspector__provenance[data-provenance="authored"] {

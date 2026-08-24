@@ -402,3 +402,60 @@ describe("several interaction states matching at once", () => {
     );
   });
 });
+
+describe("a declaration the PAGE wrote", () => {
+  const subject = { nodeId: "a", blockType: "acme/box", ancestors: [] };
+  const query = (trace: readonly unknown[]) =>
+    styleProvenance({
+      trace: trace as never,
+      subject,
+      cssProperty: "padding-top",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+  const pageEntry = (over: Record<string, unknown> = {}) =>
+    ({
+      origin: { kind: "page" },
+      property: "padding-top",
+      value: "8px",
+      state: "base",
+      breakpoint: "base",
+      ...over,
+    }) as never;
+
+  it("does NOT reach a block when it lands on the page root alone", () => {
+    /*
+     * The page's own settings compile onto the page ROOT, so a non-inherited
+     * property written there styles that element and nothing inside it. Reported
+     * unfiltered, a block control says "Inherited from the page" for a value the
+     * browser is not applying to it — and padding is exactly such a property.
+     */
+    expect(query([pageEntry()]).kind).toBe("unset");
+  });
+
+  it("DOES reach a block through a descendant selector", () => {
+    /*
+     * The separating half. `.page a` styles the links inside, this block's
+     * included — the same rule an ancestor's declarations are held to — so
+     * filtering every page origin would be as wrong in the other direction.
+     */
+    const result = styleProvenance({
+      trace: [pageEntry({ descendant: " a", property: "color" })] as never,
+      subject,
+      cssProperty: "color",
+      descendant: "a",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+    expect(result.kind).toBe("inherited");
+  });
+
+  it("leaves every other origin alone", () => {
+    // The filter is about page origins specifically. A node's own declaration
+    // carries no descendant either, and must still be found.
+    const own = pageEntry({ origin: { kind: "node", id: "a" } });
+    expect(query([own]).kind).toBe("authored");
+  });
+});

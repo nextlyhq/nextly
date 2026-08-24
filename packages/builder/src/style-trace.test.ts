@@ -235,6 +235,53 @@ describe("the SHARED inputs the page is compiled from", () => {
     );
   });
 
+  it("applies the SITE's own fetch predicate on a site-only compile", () => {
+    /*
+     * The renderer's site-only construction copies `siteInput.mayFetchUrl`
+     * explicitly, and dropping it here would let the trace keep a `url(...)` the
+     * site refuses and report it as active on a page that never fetched it. The
+     * host's `remotePatterns` are a different tier's answer and do not stand in.
+     */
+    register();
+    const refusing = {
+      ...(site as unknown as Record<string, unknown>),
+      mayFetchUrl: () => false,
+    } as never;
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          styles: {
+            base: {
+              base: { background: { url: "https://cdn.example/a.png" } },
+            },
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const refused = pageStyleTrace(document, undefined, refusing);
+    const allowed = pageStyleTrace(document, undefined, {
+      ...(site as unknown as Record<string, unknown>),
+      mayFetchUrl: () => true,
+    } as never);
+
+    /*
+     * The population, and the separating half together: the permissive compile
+     * MUST produce the url declaration, or the refusing one proving absent shows
+     * only that nothing was written either way.
+     */
+    const urls = (entries: readonly { value: string }[] | undefined) =>
+      (entries ?? []).filter(entry => entry.value.includes("cdn.example"));
+    expect(urls(allowed)).not.toHaveLength(0);
+    expect(urls(refused)).toHaveLength(0);
+  });
+
   it("answers undefined when nothing names a breakpoint to compile against", () => {
     // A real answer rather than a failure, and the caller is documented not to
     // read it as "nothing is authored".

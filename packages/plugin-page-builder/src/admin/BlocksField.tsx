@@ -671,13 +671,35 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const styleTrace = useMemo(
     () =>
-      pageStyleTrace(
-        editor.document,
-        canvasRender.styleContext,
-        siteSheet(canvasSiteStyle),
-        remotePatterns
-      ),
-    [editor.document, canvasRender, canvasSiteStyle, remotePatterns]
+      /*
+       * Withheld on exactly the states the CANVAS is withheld on, and for the
+       * same reason one level over. While the stored tier is unread
+       * `useSiteStyle` answers with the host's config defaults, so a trace
+       * compiled from it describes a cascade that is not the page's: a class the
+       * site adds is missing, one it overrides is wrong, and the dots say so
+       * confidently.
+       *
+       * A FAILED read is the worse half and is not a passing state. `pending`
+       * goes false while the value falls back to defaults, so gating on pending
+       * alone would leave the inspector permanently certain about a tier nobody
+       * has read. No dots is the honest answer; a fabricated origin is not.
+       */
+      siteStylePending || siteStyleError !== undefined
+        ? undefined
+        : pageStyleTrace(
+            editor.document,
+            canvasRender.styleContext,
+            siteSheet(canvasSiteStyle),
+            remotePatterns
+          ),
+    [
+      editor.document,
+      canvasRender,
+      canvasSiteStyle,
+      remotePatterns,
+      siteStylePending,
+      siteStyleError,
+    ]
   );
 
   useCheckpoints({ name, control, document: editor.document });

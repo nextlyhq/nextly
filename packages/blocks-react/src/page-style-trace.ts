@@ -81,7 +81,21 @@ export function pageStyleTrace(
       ? { ...input.styleContext, ...shared }
       : shared.breakpoints === undefined
         ? undefined
-        : { ...shared, breakpoints: shared.breakpoints };
+        : {
+            ...shared,
+            breakpoints: shared.breakpoints,
+            /*
+             * The site's OWN predicate, copied exactly as the renderer's
+             * site-only construction copies it. Dropped, a `url(...)` the site
+             * refuses stays in the trace and is reported as active on a page
+             * that never fetched it — and the host's `remotePatterns` do not
+             * stand in for it, because they are a different tier's answer to a
+             * different question.
+             */
+            ...(input.site?.mayFetchUrl === undefined
+              ? {}
+              : { mayFetchUrl: input.site.mayFetchUrl }),
+          };
   if (merged === undefined) return undefined;
   const { context } = effectiveCompile({
     styleContext: merged,

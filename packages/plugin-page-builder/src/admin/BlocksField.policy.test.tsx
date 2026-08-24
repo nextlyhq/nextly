@@ -394,3 +394,57 @@ describe("the shell mock", () => {
     expect(seen.canvas).toBeDefined();
   });
 });
+
+describe("what the inspector is told about provenance", () => {
+  it("withholds the trace while the stored style is still arriving", () => {
+    /*
+     * The same reason the canvas is held back, one surface over. While the read
+     * is pending `useSiteStyle` answers with the host's config defaults, so a
+     * cascade compiled from it is not the page's: a class the site adds is
+     * missing and one it overrides is wrong. The dots would say where a value
+     * came from, confidently and incorrectly, and then change under the author.
+     */
+    siteStyleRead = { data: undefined, isPending: true, error: null };
+
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.trace).toBeUndefined();
+  });
+
+  it("withholds it after a FAILED read, which is not a passing state", () => {
+    /*
+     * The half that a `pending` check alone gets wrong. On failure `pending`
+     * goes false while the value falls back to the defaults, so the inspector
+     * would become permanently certain about a tier nobody has read.
+     */
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("nope"),
+    };
+
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.trace).toBeUndefined();
+  });
+
+  /*
+   * There is deliberately NO positive control here, and that is worth stating
+   * rather than leaving as an absence.
+   *
+   * The obvious one — "and a trace IS passed once the read has answered" —
+   * cannot be built in this harness: the shell is mocked but the block registry
+   * is real and empty, so no node resolves, nothing compiles, and the trace is
+   * `undefined` whatever the gate does. A control asserting otherwise would fail
+   * for a reason unrelated to gating, and one asserting `undefined` would pass
+   * against a gate that was never applied.
+   *
+   * What establishes that the two assertions above are not vacuous is
+   * break-verification: with the pending/error gate removed, BOTH fail, because
+   * the trace becomes defined in exactly those states. That is stronger evidence
+   * than a control here would have been, since it exercises the gate itself
+   * rather than a proxy for it.
+   */
+});

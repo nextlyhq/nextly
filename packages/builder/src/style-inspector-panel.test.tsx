@@ -1467,6 +1467,7 @@ describe("naming the place a value came from", () => {
    */
   const editing = {
     nodeId: "a",
+    blockType: "acme/box",
     state: "base" as never,
     breakpoint: BASE_BREAKPOINT,
     labelOf: (id: string) => (id === "md" ? "Medium" : id),
@@ -1499,6 +1500,19 @@ describe("naming the place a value came from", () => {
       "Inherited from this block's defaults"
     );
     expect(nameFor({ kind: "page" })).toBe("Inherited from the page");
+  });
+
+  it("separates an ENCLOSING block's defaults from this block's", () => {
+    /*
+     * The same route the `node` case takes: `reachesThroughAncestor` matches a
+     * `blockType` origin against the ANCESTOR's type, so a descendant rule from
+     * an enclosing block's defaults arrives carrying that block's type. Told
+     * "this block's defaults", an author goes looking in the wrong block's
+     * definition.
+     */
+    expect(nameFor({ kind: "blockType", type: "acme/section" })).toBe(
+      "Inherited from an enclosing block's defaults"
+    );
   });
 
   it("separates an ENCLOSING block from this one", () => {
