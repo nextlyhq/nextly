@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockNode } from "./document";
 import { countNodes, treeDepth } from "./limits";
+import { measureBytes } from "./measure-bytes";
 import {
   duplicateNode,
   findNode,
@@ -322,36 +323,188 @@ describe("a forest whose slots form a cycle", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("REFUSES to duplicate a cyclic subtree rather than adding an unusable clone", () => {
-    // The clone is rebuilt without the edge that closes the cycle, but the
-    // ORIGINAL stays in the forest and stays cyclic — so the result carries a
-    // structure `JSON.stringify` refuses and the page cannot be stored at all.
-    // "Did not throw" cannot see that, which is why the previous version of
-    // this test passed while the returned forest was still unusable.
+  it("duplicates inside a cyclic forest, and the CLONE is acyclic", () => {
+    // These primitives do not decline work because the document they were given
+    // is already unstorable; storability is decided once, at the write. So the
+    // duplicate happens, and what has to be true is about the CLONE: it is a
+    // real second copy, and `reidSubtree` rebuilt it without the edge that
+    // closed the cycle.
     //
-    // Refused rather than repaired: silently rebuilding the source would edit a
-    // node the caller never named, on an operation they asked to be additive.
+    // Asserted as reachability from the clone rather than as "did not throw".
+    // The absence of a throw is satisfied by a `duplicateNode` that returns its
+    // argument, which is precisely the implementation this must separate from.
     const nodes = cyclic();
+    const originalId = nodes[0]!.id;
 
-    expect(duplicateNode(nodes, nodes[0]!.id)).toBe(nodes);
+    const next = duplicateNode(nodes, originalId);
+
+    const topIds = next.map(node => node.id);
+    expect(topIds).toHaveLength(2);
+    expect(topIds[0]).toBe(originalId);
+    expect(topIds[1]).not.toBe(originalId);
+
+    // The clone's own subtree terminates without the walk reporting a cycle.
+    // `walkNodes` is cycle-tolerant, so a cyclic clone would still finish here —
+    // what distinguishes them is `onCycle` firing, not the walk completing.
+    let cloneCycles = 0;
+    walkNodes([next[1]!], () => undefined, {
+      onCycle: () => {
+        cloneCycles += 1;
+      },
+    });
+    expect(cloneCycles).toBe(0);
   });
 
-  it("refuses a duplicate when a SIBLING branch carries the cycle", () => {
-    // The selected node is perfectly fine; the cycle is somewhere else in the
-    // forest. The result is equally unstorable, because `JSON.stringify`
-    // refuses the FOREST rather than the node — so a guard that inspected only
-    // the subtree being copied reported success and handed back something that
-    // cannot be persisted.
+  it("duplicates a healthy node when a SIBLING branch carries the cycle", () => {
+    // The selected node is fine; the damage is elsewhere in the forest. Under
+    // the old whole-forest refusal this returned the forest untouched, so an
+    // author could not copy a healthy block because some other block was
+    // corrupt.
     //
-    // The previous test cannot separate these implementations: it selects the
-    // cyclic node itself, so checking the subtree and checking the forest give
-    // the same answer.
-    const cyclic = makeNode("core/box", 1, {}, { main: [] });
-    cyclic.slots!.main.push(cyclic);
+    // This case is kept because it separates implementations the previous test
+    // cannot: that one selects the cyclic node itself, so inspecting the
+    // subtree and inspecting the forest give the same answer.
+    const looped = makeNode("core/box", 1, {}, { main: [] });
+    looped.slots!.main.push(looped);
     const target = makeNode("core/text", 1);
-    const forest = [cyclic, target];
+    const forest = [looped, target];
 
-    expect(duplicateNode(forest, target.id)).toBe(forest);
+    const next = duplicateNode(forest, target.id);
+
+    expect(next).not.toBe(forest);
+    expect(next).toHaveLength(3);
+    // The copy sits immediately after its original and carries a fresh id.
+    expect(next[1]!.id).toBe(target.id);
+    expect(next[2]!.id).not.toBe(target.id);
+    expect(next[2]!.type).toBe("core/text");
+  });
+
+  it("answers the same way whether the target is TOP-LEVEL or NESTED", () => {
+    // One primitive must not give two answers decided by where the caller
+    // pointed it. The nested path rebuilds through `mapForest`, which drops a
+    // cycle-closing entry; the top-level path copied the array instead, so the
+    // same duplicate removed an unrelated cycle or left it standing depending
+    // on the target's depth.
+    //
+    // Both fixtures share a shape so DEPTH is the only difference between them.
+    function siblingCycle(nested: boolean): {
+      forest: BlockNode[];
+      targetId: string;
+    } {
+      const looped = makeNode("core/box", 1, {}, { main: [] });
+      looped.slots!.main.push(looped);
+      const target = makeNode("core/text", 1);
+      if (!nested) return { forest: [looped, target], targetId: target.id };
+      const host = makeNode("core/box", 1, {}, { main: [target] });
+      return { forest: [looped, host], targetId: target.id };
+    }
+
+    const results = [false, true].map(nested => {
+      const { forest, targetId } = siblingCycle(nested);
+      const next = duplicateNode(forest, targetId);
+      let cycles = 0;
+      walkNodes(next, () => undefined, {
+        onCycle: () => {
+          cycles += 1;
+        },
+      });
+      return { duplicated: next !== forest, cycles };
+    });
+
+    // Both duplicated rather than refusing, and both say the same thing about
+    // the unrelated cycle. The equality is the property; the absolute value is
+    // asserted too, so two equally broken implementations cannot satisfy it.
+    expect(results[0]!.duplicated).toBe(true);
+    expect(results[1]!.duplicated).toBe(true);
+    expect(results[0]!.cycles).toBe(results[1]!.cycles);
+    expect(results[0]!.cycles).toBe(0);
+  });
+
+  it("keeps a malformed slot VALUE while dropping the cycle edge", () => {
+    // The distinction the whole rule turns on, asserted as a PAIR because
+    // either half alone reads as a policy about damage in general. A cycle edge
+    // cannot round-trip through storage, so dropping it loses nothing a caller
+    // could have saved. A malformed value writes and reads back unchanged, so
+    // dropping that would destroy content the edit never named.
+    const looped = makeNode("core/box", 1, {}, { main: [] });
+    looped.slots!.main.push(looped);
+    const odd = makeNode("core/box", 1, {}, {});
+    // Not an array — the shape unvalidated stored documents actually arrive in.
+    odd.slots = { broken: "kept" as unknown as BlockNode[] };
+    const target = makeNode("core/text", 1);
+
+    const next = duplicateNode([looped, odd, target], target.id);
+
+    let cycles = 0;
+    walkNodes(next, () => undefined, {
+      onCycle: () => {
+        cycles += 1;
+      },
+    });
+    expect(cycles).toBe(0);
+    expect(next[1]!.slots).toEqual({ broken: "kept" });
+  });
+
+  it("relocates a node whose own subtree is already cyclic", () => {
+    // The insertion guard refuses a cyclic ARGUMENT so a caller cannot add a
+    // cycle to a healthy forest. A move is not that: the subtree came out of
+    // the document, and refusing it meant a damaged block could never be moved
+    // — the one thing an author might reasonably do to get it out of the way.
+    //
+    // `moveNode` is atomic, so a refused re-insert returns the ORIGINAL forest.
+    // That is why this asserts the node arrived at its destination rather than
+    // merely that something changed: an implementation that still refuses
+    // returns a forest identical to the input, and "no throw" cannot see it.
+    const selfLoop = makeNode("core/box", 1, {}, { main: [] });
+    selfLoop.slots!.main.push(selfLoop);
+    const dest = makeNode("core/box", 1, {}, { main: [] });
+
+    const next = moveNode([selfLoop, dest], selfLoop.id, {
+      parentId: dest.id,
+      slot: "main",
+      index: 0,
+    });
+
+    expect(next).toHaveLength(1);
+    expect(next[0]!.id).toBe(dest.id);
+    expect(next[0]!.slots!.main).toHaveLength(1);
+    expect(next[0]!.slots!.main[0]!.id).toBe(selfLoop.id);
+    // Relocated, and the edge that could never have been stored is gone with
+    // it, so the document the author is left with can actually be saved.
+    let cycles = 0;
+    walkNodes(next, () => undefined, {
+      onCycle: () => {
+        cycles += 1;
+      },
+    });
+    expect(cycles).toBe(0);
+  });
+
+  it("hands an unstorable document to the writer, which still refuses", () => {
+    // The refusal MOVED to the write; it did not disappear. The fixture is a
+    // malformed slot VALUE holding a back-reference to its owner — the case a
+    // cycle check cannot see, because the loop runs through a value that is not
+    // a slot array, and the case that must therefore still be preserved.
+    //
+    // A plain cycle would NOT serve here: the rebuild drops that edge, so the
+    // result is storable and the assertion would be about the wrong thing.
+    const holder = makeNode("core/box", 1, {}, {});
+    const value: Record<string, unknown> = {};
+    value.back = holder;
+    holder.slots = { bad: value as unknown as BlockNode[] };
+    const target = makeNode("core/text", 1);
+
+    const nodes = duplicateNode([holder, target], target.id);
+
+    // The operation did its work rather than declining, which is what separates
+    // this from an implementation that refuses and hands back the same forest.
+    expect(nodes).toHaveLength(3);
+    const verdict = measureBytes({ nodes }, 1_000_000);
+
+    // Matched as a whole rather than field by field: `reason` exists only on
+    // the refusing arm of `ByteMeasurement`, so reading it after a separate
+    // `exceeded` assertion does not narrow and does not compile.
+    expect(verdict).toMatchObject({ exceeded: true, reason: "unwritable" });
   });
 
   it("still duplicates an ACYCLIC subtree, so the refusal is not blanket", () => {
@@ -870,5 +1023,79 @@ describe("counting helpers", () => {
     expect(treeDepth(nodes)).toBe(2);
     expect(countNodes([])).toBe(0);
     expect(treeDepth([])).toBe(0);
+  });
+});
+
+describe("a record keyed by a stored `__proto__`", () => {
+  // `JSON.parse` creates `__proto__` as an OWN property, which is what makes
+  // this reachable at all: the key survives into `Object.entries`, so a rebuild
+  // sees it and then loses it on the way out. A document literal written here
+  // would NOT reproduce it — `{ __proto__: [...] }` in source sets the
+  // prototype instead of creating a key — so these fixtures are parsed.
+  function parsedSlots(): Record<string, BlockNode[]> {
+    return JSON.parse(
+      JSON.stringify({ main: [], other: [] }).replace('"main"', '"__proto__"')
+    ) as Record<string, BlockNode[]>;
+  }
+
+  it("is a shape the fixture actually produces", () => {
+    // The positive control. Without it, every assertion below could be passing
+    // because the fixture never had a `__proto__` key in the first place, and a
+    // rebuild that dropped it would look identical to one that kept it.
+    const slots = parsedSlots();
+
+    expect(Object.keys(slots)).toContain("__proto__");
+    expect(Object.prototype.hasOwnProperty.call(slots, "__proto__")).toBe(true);
+  });
+
+  it("survives removeNode, which rebuilds every slot of every node", () => {
+    const doomed = makeNode("core/text", 1);
+    const slots = parsedSlots();
+    slots.other = [doomed];
+    const parent = makeNode("core/box", 1, {}, slots);
+
+    const next = removeNode([parent], doomed.id);
+
+    // The slot the caller never mentioned is still there, and still a slot —
+    // not swallowed into the prototype, where `Object.keys` and
+    // `JSON.stringify` would both report it gone.
+    expect(Object.keys(next[0]!.slots!)).toContain("__proto__");
+    expect(JSON.stringify(next[0]!.slots)).toContain("__proto__");
+    expect(Object.getPrototypeOf(next[0]!.slots!)).toBe(Object.prototype);
+    // And the edit that was actually requested happened.
+    expect(next[0]!.slots!.other).toHaveLength(0);
+  });
+
+  it("survives insertNode targeting a different slot", () => {
+    const slots = parsedSlots();
+    const parent = makeNode("core/box", 1, {}, slots);
+    const added = makeNode("core/text", 1);
+
+    const next = insertNode([parent], added, {
+      parentId: parent.id,
+      slot: "other",
+      index: 0,
+    });
+
+    expect(Object.keys(next[0]!.slots!)).toContain("__proto__");
+    expect(next[0]!.slots!.other).toHaveLength(1);
+  });
+
+  it("can be the slot being written to, without becoming the prototype", () => {
+    // The direction the spread does not cover: the destination record has no
+    // own `__proto__` to shadow the inherited setter, so plain assignment here
+    // creates no key at all and silently retargets the object's prototype.
+    const parent = makeNode("core/box", 1, {}, { other: [] });
+    const added = makeNode("core/text", 1);
+
+    const next = insertNode([parent], added, {
+      parentId: parent.id,
+      slot: "__proto__",
+      index: 0,
+    });
+
+    expect(Object.keys(next[0]!.slots!)).toContain("__proto__");
+    expect(Object.getPrototypeOf(next[0]!.slots!)).toBe(Object.prototype);
+    expect(next[0]!.slots!.__proto__).toHaveLength(1);
   });
 });
