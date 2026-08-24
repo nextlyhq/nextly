@@ -55,19 +55,25 @@ export function usePreviewLink({
         ...(locale === undefined ? {} : { locale }),
       });
 
-      // The server answers `null` when no site URL is configured, and that is
-      // not something to paper over. A relative URL here would be resolved
-      // against the ADMIN's origin, which is not the site's on any deployment
-      // that separates them — and a link to the wrong host is worse than no
-      // link, because it looks like it worked.
+      // The server answers `null` only when it can find the site's address
+      // NOWHERE — neither the Site URL setting nor the application's own
+      // `NEXT_PUBLIC_APP_URL` — and that is not something to paper over. A
+      // relative URL here would be resolved against the ADMIN's origin, which is
+      // not the site's on any deployment that separates them, and a link to the
+      // wrong host is worse than no link because it looks like it worked.
+      //
+      // Both remedies are named because either one settles it, and they belong
+      // to different people: an administrator can fill in the setting without a
+      // deploy, while the environment variable is a developer's to set.
       // `== null` catches an absent field as well as an explicit null. The
       // contract says `string | null`, but a response that simply omits it —
       // an older server, a proxy that reshapes JSON — must not reach the
       // clipboard as the string "undefined".
       if (link.url == null) {
         throw new Error(
-          "No site URL is configured, so a preview link has nowhere to point. " +
-            "An administrator can set one in Settings."
+          "This site has no address configured, so a preview link has nowhere " +
+            "to point. An administrator can set the Site URL in Settings, or a " +
+            "developer can set NEXT_PUBLIC_APP_URL."
         );
       }
 
@@ -121,9 +127,9 @@ export function usePreviewLink({
       );
     },
     onError: (error: unknown) => {
-      // The thrown message rather than a fixed one: "no site URL is configured"
-      // names something an administrator can act on, and collapsing it into
-      // "couldn't create a preview link" hides the only remedy there is.
+      // The thrown message rather than a fixed one: it names what is missing and
+      // who can supply it, and collapsing it into "couldn't create a preview
+      // link" hides the only remedies there are.
       toast.error(
         error instanceof Error
           ? error.message

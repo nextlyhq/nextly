@@ -23,7 +23,7 @@ export interface PreviewLink {
   /** The signed token. */
   token: string;
   /**
-   * The finished link, or `null` when no site URL is configured.
+   * The finished link, or `null` when the site's address is configured nowhere.
    *
    * Assembled on the server, which is the only place both halves are visible:
    * the site URL lives in settings the sharing roles cannot read, and the
