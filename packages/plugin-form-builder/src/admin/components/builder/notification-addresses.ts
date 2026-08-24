@@ -1,4 +1,5 @@
 import type { FormNotification } from "../../../types";
+import { parseFieldRef } from "../../../utils/field-references";
 
 /**
  * Deliberately loose email shape check (something@something.tld): the goal is
@@ -6,18 +7,14 @@ import type { FormNotification } from "../../../types";
  */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** A `{{field}}` reference, which resolves per submission at send time. */
-const FIELD_REF_PATTERN = /^\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}$/;
-
 export function isValidEmail(value: string): boolean {
   return EMAIL_PATTERN.test(value.trim());
 }
 
-export function parseFieldRef(value: string | undefined): string | null {
-  if (!value) return null;
-  const match = value.match(FIELD_REF_PATTERN);
-  return match ? match[1] : null;
-}
+// Re-exported rather than re-implemented. Whether a value is a field reference
+// is the SEND path's question — a value the editor treats as one and delivery
+// does not goes out with its braces intact — so both read the same parser.
+export { parseFieldRef };
 
 /** The address fields a notification can get wrong. */
 export type AddressField = "senderEmail" | "to" | "replyTo";
@@ -95,4 +92,38 @@ export function badAddressMessage(
   return names.length === 1
     ? `${names[0]} has an invalid email address`
     : `${names.length} notifications have invalid email addresses`;
+}
+
+/**
+ * The one reason a save must refuse the notifications, or `null`.
+ *
+ * A single question so the save has a single branch. Naming comes first: an
+ * address complaint that says "Untitled notification" twice cannot be acted on,
+ * whereas a named rule can then be pointed at.
+ */
+export function notificationsBlockingSave(
+  notifications: readonly FormNotification[]
+): string | null {
+  const unnamed = unnamedNotificationCount(notifications);
+  if (unnamed > 0) {
+    return unnamed === 1
+      ? "A notification needs a name"
+      : `${unnamed} notifications need a name`;
+  }
+  return badAddressMessage(notifications);
+}
+
+/**
+ * Rules a save must refuse for having no name.
+ *
+ * The sheet this editor replaced disabled its own commit while the name was
+ * blank. There is no commit here any more — the page's action bar is the only
+ * one — so the precondition moves to it rather than disappearing with the
+ * button that used to carry it. A nameless rule leaves its summary and its
+ * menu labelled with nothing.
+ */
+export function unnamedNotificationCount(
+  notifications: readonly FormNotification[]
+): number {
+  return notifications.filter(n => !n.name.trim()).length;
 }

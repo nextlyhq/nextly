@@ -15,6 +15,7 @@ import {
   addressError,
   addressErrorsIn,
   badAddressMessage,
+  notificationsBlockingSave,
   notificationsWithBadAddresses,
 } from "./notification-addresses";
 
@@ -49,6 +50,15 @@ describe("one address", () => {
     expect(addressError("replyTo", "{{email}}")).toBeUndefined();
     // And the same spelling IS an error where a reference is not accepted.
     expect(addressError("to", "{{email}}")).toBeDefined();
+  });
+
+  it("recognises only the spelling the send path resolves", () => {
+    // `resolveFieldRef` matches `{{name}}` exactly. A value this exempted but
+    // delivery did not resolve would reach the mail provider with its braces
+    // intact, so the two read one parser and this pins the agreement.
+    expect(addressError("replyTo", "{{ email }}")).toBeDefined();
+    expect(addressError("replyTo", "{{my-field}}")).toBeDefined();
+    expect(addressError("replyTo", "{{my_field}}")).toBeUndefined();
   });
 });
 
@@ -113,5 +123,29 @@ describe("what a save must refuse", () => {
         aNotification({ id: "n2", name: "Receipt", senderEmail: "bad" }),
       ])
     ).toBe("2 notifications have invalid email addresses");
+  });
+
+  it("refuses a nameless rule, and says so before the address", () => {
+    // The sheet disabled its own commit while the name was blank; there is no
+    // commit there any more, so the precondition lives here. Naming comes
+    // first because an address complaint about "Untitled notification" names
+    // nothing the author can go and fix.
+    expect(
+      notificationsBlockingSave([aNotification({ name: "  ", to: "nope" })])
+    ).toBe("A notification needs a name");
+
+    expect(
+      notificationsBlockingSave([
+        aNotification({ name: "" }),
+        aNotification({ id: "n2", name: "" }),
+      ])
+    ).toBe("2 notifications need a name");
+  });
+
+  it("falls through to the address once every rule is named", () => {
+    expect(notificationsBlockingSave([aNotification({ to: "nope" })])).toBe(
+      "Admin notification has an invalid email address"
+    );
+    expect(notificationsBlockingSave([aNotification()])).toBeNull();
   });
 });

@@ -45,7 +45,7 @@ import {
   FormSettingsTab,
   type SpamDefaults,
 } from "./components/builder/FormSettingsTab";
-import { badAddressMessage } from "./components/builder/notification-addresses";
+import { notificationsBlockingSave } from "./components/builder/notification-addresses";
 import {
   FormBuilderProvider,
   useFormBuilder,
@@ -241,14 +241,14 @@ function FormBuilderViewInner({
       return;
     }
 
-    // A notification's address fields are validated as they are left, but the
-    // rule is written to the form as it is typed — so leaving a malformed one
-    // and pressing Save here would persist it, and the delivery path would
-    // hand it to the mail provider. The same function the field uses answers
-    // for every rule, so the two cannot disagree about what is valid.
-    const badAddress = badAddressMessage(notifications);
-    if (badAddress) {
-      toast.error(badAddress);
+    // A notification is written to the form as it is typed, so nothing between
+    // the editor and here refuses one. The sheet this replaced disabled its own
+    // commit for a blank name, and the field rejects a malformed address on
+    // blur — both preconditions move to this save, which is now the only
+    // commit, and both are answered by the module the editor itself asks.
+    const blocked = notificationsBlockingSave(notifications);
+    if (blocked) {
+      toast.error(blocked);
       return;
     }
 
