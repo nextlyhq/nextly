@@ -13,9 +13,17 @@
  * gate that stops at the permission therefore authorizes a disclosure the real
  * operation would refuse.
  *
- * `routeAuthorized: true` throughout: the caller's route already ran the coarse
- * RBAC check, and this flag skips ONLY that. The stored rules still run, which
- * is the part these functions exist for.
+ * **`routeAuthorized` is the CALLER's to state, and it is required.** It tells
+ * `checkSingleAccess` that the route already ran the coarse RBAC gate FOR THIS
+ * OPERATION, so the check is skipped as redundant. Whether that is true depends
+ * on which gate the caller's route ran, not on anything visible here: version
+ * history reaches the read probe behind a `read` gate, while minting a preview
+ * link reaches it behind an `update` gate — and passing `true` there would skip
+ * a `read` permission check that never ran, handing a bearer token for the draft
+ * to a caller holding `update` and no read grant at all.
+ *
+ * Required rather than defaulted for that reason. A default is a polarity this
+ * module cannot know, and the wrong one is silent.
  *
  * @module domains/singles/services/single-document-access
  */
@@ -36,6 +44,23 @@ export interface SingleAccessSubject {
    * admin does not inherit that owner's stored rules.
    */
   actor?: AuthenticatedScope;
+  /**
+   * Whether the caller's route already ran the RBAC gate for the operation
+   * being probed here — read for {@link singleDocumentReadable}, update for
+   * {@link singleDocumentEditable}.
+   *
+   * `true` skips that one check as redundant. State it from what the route
+   * actually gated, never from what is convenient: a route that gated `update`
+   * has authorized nothing about `read`.
+   */
+  routeAuthorized: boolean;
+  /**
+   * Which translation is being authorized. A localized Single is a different
+   * document per language, and an owner-only or custom rule can answer
+   * differently for each — so a probe that reads the default translation
+   * authorizes a document the caller may not be asking about.
+   */
+  locale?: string;
 }
 
 /**
@@ -71,14 +96,15 @@ function readVerdict(result: {
  */
 export async function singleDocumentReadable(
   slug: string,
-  { user, actor }: SingleAccessSubject
+  { user, actor, routeAuthorized, locale }: SingleAccessSubject
 ): Promise<boolean> {
   const singles = getService("singleEntryService");
   const result = await singles.get(slug, {
     user,
     overrideAccess: false,
-    routeAuthorized: true,
+    routeAuthorized,
     ...(actor === undefined ? {} : { authenticatedScope: actor }),
+    ...(locale === undefined ? {} : { locale }),
     status: "all",
   });
   return readVerdict(result);
@@ -98,7 +124,7 @@ export async function singleDocumentReadable(
  */
 export async function singleDocumentEditable(
   slug: string,
-  { user, actor }: SingleAccessSubject
+  { user, actor, routeAuthorized }: SingleAccessSubject
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
   const record = await registry.getSingleBySlug(slug);
@@ -116,7 +142,7 @@ export async function singleDocumentEditable(
     operation: "update",
     user,
     overrideAccess: false,
-    routeAuthorized: true,
+    routeAuthorized,
     rbacAccessControlService: getService("rbacAccessControlService"),
     // Stateless evaluator for the Single's stored rules; it holds no
     // per-request state, so constructing one here matches the write path.

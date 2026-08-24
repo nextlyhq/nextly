@@ -312,6 +312,25 @@ async function callerFor(
 }
 
 /**
+ * Whether this Single carries translations.
+ *
+ * Read the way its preview declaration is read — the authored config first,
+ * then the registry — because a code-first Single is synced into the registry
+ * and the two must not answer differently about the same document.
+ */
+async function singleIsLocalized(slug: string): Promise<boolean> {
+  const authored = container
+    .get<NextlyServiceConfig>("config")
+    ?.singles?.find(s => s.slug === slug);
+  if (authored !== undefined) return authored.localized === true;
+
+  const stored = await getService("singleRegistryService").getSingleBySlug(
+    slug
+  );
+  return stored?.localized === true;
+}
+
+/**
  * Mint a link scoped to one Single.
  *
  * Two gates, because the route's own is one axis short of what the token hands
@@ -336,11 +355,33 @@ async function mintForSingle(
   // and on a cold process the permission lookup itself needs them registered.
   await getCachedNextly();
 
-  // The Single's STORED rules, against the real document. Runs before anything
-  // is signed and before the trusted read below, so a refused caller reaches
-  // neither.
+  // An unscoped token covers EVERY translation, which on a localized Single is
+  // a grant over drafts nobody authorized — the admin resolves a locale before
+  // it offers the control, and this is the same rule for a caller that reaches
+  // the endpoint directly. Refused rather than widened: authorizing every
+  // translation to honour the request would hand out the grant this exists to
+  // withhold.
+  if (locale === undefined && (await singleIsLocalized(single))) {
+    throw NextlyError.invalidInput({
+      message:
+        "A localized single needs a locale, so the link grants one " +
+        "translation rather than every one of them.",
+      logContext: {
+        reason: "preview-link-single-locale-required",
+        remedy:
+          "Name the translation being shared. A token with no locale claim " +
+          "covers every locale, including translations that have never been " +
+          "published.",
+        single,
+      },
+    });
+  }
+
+  // The Single's STORED rules, against the real document, in the TRANSLATION
+  // the token will name. Runs before anything is signed and before the trusted
+  // read below, so a refused caller reaches neither.
   const { user, actor } = await callerFor(auth);
-  await assertSinglePreviewable(single, user, actor);
+  await assertSinglePreviewable(single, locale, user, actor);
 
   const declaration = await singlePreviewDeclarationFor(single);
 

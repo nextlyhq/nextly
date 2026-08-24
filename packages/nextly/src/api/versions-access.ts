@@ -223,6 +223,9 @@ async function canUpdateLiveSingle(
   // is this gate's own.
   return singleDocumentEditable(slug, {
     user,
+    // A version-label edit is a route-authorized `update`, so the coarse gate
+    // for the operation being probed here has already run.
+    routeAuthorized: true,
     ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
   });
 }
@@ -298,6 +301,10 @@ async function canReadLiveSingle(
   // Shared with draft preview for the reason the update gate above gives.
   return singleDocumentReadable(slug, {
     user,
+    // The version route gates on `read` before reaching here, so the coarse
+    // read check has run and re-running it would reject a scoped API key by
+    // resolving its creator's roles.
+    routeAuthorized: true,
     ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
   });
 }

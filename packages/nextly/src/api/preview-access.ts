@@ -169,12 +169,31 @@ export async function assertEntryPreviewable(
  */
 export async function assertSinglePreviewable(
   single: string,
+  locale: string | undefined,
   user: UserContext,
   actor?: AuthenticatedScope
 ): Promise<void> {
-  const subject = { user, ...(actor === undefined ? {} : { actor }) };
+  const identity = {
+    user,
+    ...(actor === undefined ? {} : { actor }),
+    // The TRANSLATION the token will name, so the rules are evaluated against
+    // the document the bearer actually receives. A localized Single is a
+    // different document per language, and an owner-only or custom rule can
+    // answer differently for each — authorizing the default translation and
+    // then signing another is authorizing something else.
+    ...(locale === undefined ? {} : { locale }),
+  };
 
-  if (!(await singleDocumentReadable(single, subject))) {
+  if (
+    !(await singleDocumentReadable(single, {
+      ...identity,
+      // FALSE, and this is the whole point. The mint route gated `update`, so
+      // nothing has checked this caller's READ permission — and skipping it as
+      // redundant would hand a bearer token for the draft to someone holding
+      // `update` with no read grant at all.
+      routeAuthorized: false,
+    }))
+  ) {
     throw NextlyError.forbidden({
       logContext: { reason: "preview-link-single-not-visible", single },
     });
@@ -183,7 +202,14 @@ export async function assertSinglePreviewable(
   // The token's view is the DRAFT, and the draft overlay surfaces a pending
   // working draft only to a caller trusted to EDIT the document. Reading the
   // published one proves nothing about that.
-  if (!(await singleDocumentEditable(single, subject))) {
+  if (
+    !(await singleDocumentEditable(single, {
+      ...identity,
+      // TRUE here: the mint route ran exactly this gate, so the coarse update
+      // check is the redundant one this flag exists to skip.
+      routeAuthorized: true,
+    }))
+  ) {
     throw NextlyError.forbidden({
       logContext: { reason: "preview-link-single-not-editable", single },
     });

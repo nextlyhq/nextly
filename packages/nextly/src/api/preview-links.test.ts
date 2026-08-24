@@ -37,6 +37,14 @@ const {
 /** The application's `preview` config for the test in hand. */
 let previewConfig: { route?: string } | undefined;
 
+/**
+ * Which singles the config reports as localized, for the test in hand.
+ *
+ * A set rather than a flag because the endpoint asks per slug, and a single
+ * boolean would answer for a single it was never asked about.
+ */
+const localizedSingles = new Set<string>();
+
 vi.mock("../init", () => ({
   // Carries findSingle, because the Single mint path reads the document through
   // the Direct API rather than the collections handler.
@@ -70,7 +78,14 @@ vi.mock("../domains/singles/services/single-document-access", () => ({
 
 vi.mock("../di", () => ({
   container: { get: vi.fn(), has: vi.fn().mockReturnValue(false) },
-  getService: vi.fn(() => ({ getEntry, canUpdateEntry })),
+  getService: vi.fn(() => ({
+    getEntry,
+    canUpdateEntry,
+    // The registry fallback the localized probe reaches when the authored
+    // config has nothing to say about this slug.
+    getSingleBySlug: (slug: string) =>
+      Promise.resolve({ localized: localizedSingles.has(slug) }),
+  })),
 }));
 
 vi.mock("../lib/env", () => ({
@@ -110,6 +125,9 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Nothing is localized unless a test says so, which keeps the unscoped grant
+  // correct for the singles that genuinely have one document.
+  localizedSingles.clear();
   // The default: the caller can see the entry they named AND may edit it, so
   // the draft the token hands out is one they could already open. Tests about
   // the entry gate override whichever half they are about.
@@ -222,6 +240,96 @@ describe("mintPreviewLink for a Single", () => {
       await mintPreviewLink(post({ single: "homepage" }));
 
       expect(findSingle).not.toHaveBeenCalled();
+    });
+
+    /**
+     * `routeAuthorized` tells the checker that the coarse RBAC gate for THIS
+     * operation already ran, so it is skipped as redundant. The mint route gated
+     * `update` and nothing else — so claiming it for the READ probe would skip a
+     * permission check that never happened, and a caller holding `update` with
+     * no read grant would be handed a bearer token for the draft.
+     */
+    it("does not claim a read gate the mint route never ran", async () => {
+      await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(singleReadable).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ routeAuthorized: false })
+      );
+    });
+
+    // The other half, and the reason this is a per-call-site decision rather
+    // than one polarity for both: the update gate DID run, so re-running it
+    // would reject a scoped API key by resolving its creator's roles instead.
+    it("does claim the update gate it did run", async () => {
+      await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(singleEditable).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ routeAuthorized: true })
+      );
+    });
+
+    // The token names one translation; the probe must judge that one. A custom
+    // read rule can allow the default document and deny the requested locale,
+    // and authorizing the default while signing the other authorizes nothing
+    // about what the bearer receives.
+    it("authorizes the translation the token will name", async () => {
+      await mintPreviewLink(post({ single: "homepage", locale: "fr" }));
+
+      expect(singleReadable).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ locale: "fr" })
+      );
+      expect(singleEditable).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ locale: "fr" })
+      );
+    });
+  });
+
+  /**
+   * An absent locale claim covers EVERY translation. On a localized Single that
+   * is a grant over drafts nobody authorized, so the endpoint refuses rather
+   * than widening the probe to match — honouring the request would hand out the
+   * very grant the refusal exists to withhold.
+   */
+  describe("a localized single with no locale named", () => {
+    it("refuses rather than minting a token covering every translation", async () => {
+      localizedSingles.add("homepage");
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(400);
+    });
+
+    it("signs nothing when it refuses", async () => {
+      localizedSingles.add("homepage");
+
+      const body = await json(
+        await mintPreviewLink(post({ single: "homepage" }))
+      );
+
+      expect(JSON.stringify(body)).not.toContain("eyJ");
+    });
+
+    it("mints once a translation is named", async () => {
+      localizedSingles.add("homepage");
+
+      const response = await mintPreviewLink(
+        post({ single: "homepage", locale: "fr" })
+      );
+
+      expect(response.status).toBe(200);
+    });
+
+    // The negative control. An unlocalized Single has exactly one document, so
+    // an absent claim is the CORRECT grant there — a rule that always demanded
+    // a locale would refuse every link for every non-localized Single.
+    it("still mints unscoped for a single that is not localized", async () => {
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(200);
     });
   });
 
