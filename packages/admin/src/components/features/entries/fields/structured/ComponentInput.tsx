@@ -17,20 +17,6 @@
  */
 
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import {
   Button,
   Card,
   CardContent,
@@ -43,10 +29,7 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import type { FieldConfig } from "nextly/config";
-import {
-  readFieldGroupType,
-  writeFieldGroupType,
-} from "nextly/field-group-type";
+import { readFieldGroupType } from "nextly/field-group-type";
 import { useCallback, useMemo, useState } from "react";
 import {
   useFieldArray,
@@ -63,6 +46,13 @@ import { FieldRenderer } from "../FieldRenderer";
 
 import { ComponentRow } from "./ComponentRow";
 import { ComponentSelector } from "./ComponentSelector";
+import {
+  useSortableFieldArray,
+  getFieldArrayConstraints,
+  SortableFieldArrayContainer,
+  RowLimitNotice,
+} from "./field-array-helpers";
+import { createDefaultFieldValues } from "./nested-field-defaults";
 
 // ============================================================
 // Types
@@ -192,78 +182,42 @@ function getAvailableComponentSlugs(
   return field.components || [];
 }
 
-/**
- * Creates default values for a new component instance.
- */
-function createDefaultComponentValues(
-  fields: FieldConfig[] | undefined,
-  componentType?: string
-): Record<string, unknown> {
-  const defaultValues: Record<string, unknown> = {};
+interface ComponentSubFieldListProps {
+  fields: FieldConfig[];
+  basePath: string;
+  disabled?: boolean;
+  readOnly?: boolean;
+  emptyMessage?: string;
+}
 
-  // Multi-component mode records which field group the row is. Written through the accessor so
-  // the row carries whichever spelling this version of the core writes, rather than pinning one
-  // here that a storage rename would leave unreadable.
-  if (componentType) {
-    writeFieldGroupType(defaultValues, componentType);
-  }
-
-  if (!fields) return defaultValues;
-
-  for (const subField of fields) {
-    // Only process fields with names
-    if (!("name" in subField) || !subField.name) continue;
-
-    const fieldName = (subField as { name: string }).name;
-
-    // Use field's defaultValue if defined
-    if ("defaultValue" in subField && subField.defaultValue !== undefined) {
-      defaultValues[fieldName] =
-        typeof subField.defaultValue === "function"
-          ? subField.defaultValue({})
-          : subField.defaultValue;
-    } else {
-      // Set sensible defaults based on field type
-      const subFieldType = subField.type as string;
-      switch (subFieldType) {
-        case "checkbox":
-          defaultValues[fieldName] = false;
-          break;
-        case "number":
-          defaultValues[fieldName] = null;
-          break;
-        case "repeater":
-          defaultValues[fieldName] = [];
-          break;
-        case "group":
-          if ("fields" in subField) {
-            defaultValues[fieldName] = createDefaultComponentValues(
-              subField.fields as FieldConfig[],
-              undefined
-            );
-          } else {
-            defaultValues[fieldName] = {};
-          }
-          break;
-        case "component":
-          // Nested components default to null (single) or [] (repeatable)
-          if ("repeatable" in subField && subField.repeatable) {
-            defaultValues[fieldName] = [];
-          } else {
-            defaultValues[fieldName] = null;
-          }
-          break;
-        default:
-          // A contributed field type reaches here, since the cases above name
-          // only the built-ins. Forcing null discarded the default its schema
-          // author declared and submitted an explicit empty over it.
-          defaultValues[fieldName] =
-            (subField as { defaultValue?: unknown }).defaultValue ?? null;
-      }
-    }
-  }
-
-  return defaultValues;
+function ComponentSubFieldList({
+  fields,
+  basePath,
+  disabled,
+  readOnly,
+  emptyMessage,
+}: ComponentSubFieldListProps) {
+  return (
+    <>
+      {fields.map((subField, idx) => {
+        if (!("name" in subField) || !subField.name) return null;
+        return (
+          <FieldRenderer
+            key={(subField as { name: string }).name || idx}
+            field={subField}
+            basePath={basePath}
+            disabled={disabled}
+            readOnly={readOnly}
+          />
+        );
+      })}
+      {fields.length === 0 && emptyMessage && (
+        <p className="text-sm text-muted-foreground text-center py-3">
+          {emptyMessage}
+        </p>
+      )}
+    </>
+  );
 }
 
 // ============================================================
@@ -331,23 +285,13 @@ function SingleComponentNonRepeatable({
                 {field.admin.description}
               </p>
             )}
-            {componentFields.map((subField, idx) => {
-              if (!("name" in subField) || !subField.name) return null;
-              return (
-                <FieldRenderer
-                  key={(subField as { name: string }).name || idx}
-                  field={subField}
-                  basePath={name}
-                  disabled={disabled}
-                  readOnly={readOnly}
-                />
-              );
-            })}
-            {componentFields.length === 0 && (
-              <p className="text-sm text-muted-foreground text-center py-3">
-                No fields configured.
-              </p>
-            )}
+            <ComponentSubFieldList
+              fields={componentFields}
+              basePath={name}
+              disabled={disabled}
+              readOnly={readOnly}
+              emptyMessage="No fields configured."
+            />
           </div>
         )}
       </div>
@@ -387,23 +331,13 @@ function SingleComponentNonRepeatable({
               {field.admin.description}
             </p>
           )}
-          {componentFields.map((subField, idx) => {
-            if (!("name" in subField) || !subField.name) return null;
-            return (
-              <FieldRenderer
-                key={(subField as { name: string }).name || idx}
-                field={subField}
-                basePath={name}
-                disabled={disabled}
-                readOnly={readOnly}
-              />
-            );
-          })}
-          {componentFields.length === 0 && (
-            <p className="text-sm text-muted-foreground text-center py-4">
-              No fields configured for this field group.
-            </p>
-          )}
+          <ComponentSubFieldList
+            fields={componentFields}
+            basePath={name}
+            disabled={disabled}
+            readOnly={readOnly}
+            emptyMessage="No fields configured for this field group."
+          />
         </div>
       )}
     </div>
@@ -445,10 +379,9 @@ function MultiComponentNonRepeatable({
   const handleTypeChange = useCallback(
     (newType: string) => {
       const newSchema = componentSchemas[newType];
-      const defaultValues = createDefaultComponentValues(
-        newSchema?.fields,
-        newType
-      );
+      const defaultValues = createDefaultFieldValues(newSchema?.fields, {
+        componentType: newType,
+      });
       setValue(name, defaultValues, { shouldDirty: true });
     },
     [componentSchemas, name, setValue]
@@ -517,18 +450,12 @@ function MultiComponentNonRepeatable({
         {/* Component Fields */}
         {currentType && currentFields.length > 0 && (
           <div className="space-y-4 pt-2  border-t border-border">
-            {currentFields.map((subField, idx) => {
-              if (!("name" in subField) || !subField.name) return null;
-              return (
-                <FieldRenderer
-                  key={(subField as { name: string }).name || idx}
-                  field={subField}
-                  basePath={name}
-                  disabled={disabled}
-                  readOnly={readOnly}
-                />
-              );
-            })}
+            <ComponentSubFieldList
+              fields={currentFields}
+              basePath={name}
+              disabled={disabled}
+              readOnly={readOnly}
+            />
           </div>
         )}
 
@@ -583,33 +510,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
   });
 
   // Sensor setup for drag-and-drop
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
-
-  // Handle drag end - reorder items
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-
-      if (over && active.id !== over.id) {
-        const oldIndex = items.findIndex(item => item.id === active.id);
-        const newIndex = items.findIndex(item => item.id === over.id);
-
-        if (oldIndex !== -1 && newIndex !== -1) {
-          move(oldIndex, newIndex);
-        }
-      }
-    },
-    [items, move]
-  );
+  const { sensors, handleDragEnd } = useSortableFieldArray(items, move);
 
   // Handle adding a new row
   const handleAdd = useCallback(
@@ -622,9 +523,9 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
         fieldsForDefaults = singleComponentFields;
       }
 
-      const defaultValues = createDefaultComponentValues(
+      const defaultValues = createDefaultFieldValues(
         fieldsForDefaults,
-        isMultiMode ? componentType : undefined
+        isMultiMode && componentType ? { componentType } : undefined
       );
 
       append(
@@ -638,18 +539,14 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
   const [selectorOpen, setSelectorOpen] = useState(false);
 
   // Constraints
-  const canAdd =
-    !disabled &&
-    !readOnly &&
-    (field.maxRows === undefined || items.length < field.maxRows);
-
-  const canRemove =
-    !disabled &&
-    !readOnly &&
-    (field.minRows === undefined || items.length > field.minRows);
-
-  // Check if sorting is enabled
-  const isSortable = field.admin?.isSortable !== false;
+  const { canAdd, canRemove, isSortable } = getFieldArrayConstraints({
+    count: items.length,
+    minRows: field.minRows,
+    maxRows: field.maxRows,
+    isSortable: field.admin?.isSortable,
+    disabled,
+    readOnly,
+  });
 
   // Labels
   const singularLabel = field.label || "Field Group";
@@ -658,60 +555,55 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div className={cn("space-y-3", field.admin?.className)}>
       {/* Sortable List */}
-      <DndContext
+      <SortableFieldArrayContainer
+        items={items}
         sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
+        handleDragEnd={handleDragEnd}
+        isSortable={isSortable}
+        disabled={disabled}
+        readOnly={readOnly}
       >
-        <SortableContext
-          items={items.map(item => item.id)}
-          strategy={verticalListSortingStrategy}
-          disabled={!isSortable || disabled || readOnly}
-        >
-          <div className="space-y-3">
-            {items.map((item, index) => {
-              const itemData = item as Record<string, unknown>;
-              const itemComponentType = readFieldGroupType(itemData);
+        {items.map((item, index) => {
+          const itemData = item as Record<string, unknown>;
+          const itemComponentType = readFieldGroupType(itemData);
 
-              // Get fields for this row
-              let rowFields: FieldConfig[];
-              let rowLabel: string;
+          // Get fields for this row
+          let rowFields: FieldConfig[];
+          let rowLabel: string;
 
-              if (isMultiMode && itemComponentType && componentSchemas) {
-                const schema = componentSchemas[itemComponentType];
-                rowFields = schema?.fields || [];
-                rowLabel = schema?.label || itemComponentType;
-              } else if (!isMultiMode && singleComponentFields) {
-                rowFields = singleComponentFields;
-                rowLabel = singularLabel;
-              } else {
-                rowFields = [];
-                rowLabel = "Unknown";
-              }
+          if (isMultiMode && itemComponentType && componentSchemas) {
+            const schema = componentSchemas[itemComponentType];
+            rowFields = schema?.fields || [];
+            rowLabel = schema?.label || itemComponentType;
+          } else if (!isMultiMode && singleComponentFields) {
+            rowFields = singleComponentFields;
+            rowLabel = singularLabel;
+          } else {
+            rowFields = [];
+            rowLabel = "Unknown";
+          }
 
-              return (
-                <ComponentRow
-                  key={item.id}
-                  id={item.id}
-                  index={index}
-                  label={rowLabel}
-                  componentType={itemComponentType}
-                  fields={rowFields}
-                  basePath={`${name}.${index}`}
-                  data={itemData}
-                  control={control}
-                  onRemove={() => remove(index)}
-                  canRemove={canRemove}
-                  disabled={disabled}
-                  readOnly={readOnly}
-                  initCollapsed={field.admin?.initCollapsed}
-                  isSortable={isSortable}
-                />
-              );
-            })}
-          </div>
-        </SortableContext>
-      </DndContext>
+          return (
+            <ComponentRow
+              key={item.id}
+              id={item.id}
+              index={index}
+              label={rowLabel}
+              componentType={itemComponentType}
+              fields={rowFields}
+              basePath={`${name}.${index}`}
+              data={itemData}
+              control={control}
+              onRemove={() => remove(index)}
+              canRemove={canRemove}
+              disabled={disabled}
+              readOnly={readOnly}
+              initCollapsed={field.admin?.initCollapsed}
+              isSortable={isSortable}
+            />
+          );
+        })}
+      </SortableFieldArrayContainer>
 
       {/* Empty State */}
       {items.length === 0 && (
@@ -766,22 +658,13 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
         </div>
       )}
 
-      {/* Min Rows Warning */}
-      {field.minRows !== undefined &&
-        items.length < field.minRows &&
-        items.length > 0 && (
-          <p className="text-sm text-warning-600 dark:text-warning-500">
-            Minimum {field.minRows} {pluralLabel.toLowerCase()} required.
-            Currently have {items.length}.
-          </p>
-        )}
-
-      {/* Max Rows Info */}
-      {field.maxRows !== undefined && items.length >= field.maxRows && (
-        <p className="text-sm text-muted-foreground">
-          Maximum {field.maxRows} {pluralLabel.toLowerCase()} reached.
-        </p>
-      )}
+      {/* Min / Max Rows Notices */}
+      <RowLimitNotice
+        count={items.length}
+        minRows={field.minRows}
+        maxRows={field.maxRows}
+        label={pluralLabel}
+      />
     </div>
   );
 }

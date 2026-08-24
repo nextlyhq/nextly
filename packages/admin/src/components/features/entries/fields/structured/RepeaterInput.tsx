@@ -11,20 +11,6 @@
  */
 
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import {
   Button,
   Card,
   CardContent,
@@ -46,6 +32,13 @@ import {
 import { Plus, ChevronDown, ChevronRight } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import {
+  useSortableFieldArray,
+  getFieldArrayConstraints,
+  SortableFieldArrayContainer,
+  RowLimitNotice,
+} from "./field-array-helpers";
+import { createDefaultFieldValues } from "./nested-field-defaults";
 import { RepeaterRow, type RenderFieldFunction } from "./RepeaterRow";
 
 // ============================================================
@@ -107,69 +100,6 @@ export interface RepeaterInputProps<
    * ```
    */
   renderField?: RenderFieldFunction<TFieldValues>;
-}
-
-// ============================================================
-// Helpers
-// ============================================================
-
-/**
- * Creates default values for a new repeater row based on field definitions.
- *
- * @param fields - Sub-field configurations
- * @returns Object with default values for each field
- */
-function createDefaultRowValues(
-  fields: FieldConfig[] | undefined
-): Record<string, unknown> {
-  const defaultValues: Record<string, unknown> = {};
-
-  if (!fields) return defaultValues;
-
-  for (const subField of fields) {
-    // Only process fields with names (skip layout-only fields)
-    if (!("name" in subField) || !subField.name) continue;
-
-    // Get the field name (TypeScript needs help here after the type guard)
-    const fieldName = (subField as { name: string }).name;
-
-    // Use field's defaultValue if defined
-    if ("defaultValue" in subField && subField.defaultValue !== undefined) {
-      // Handle function default values
-      defaultValues[fieldName] =
-        typeof subField.defaultValue === "function"
-          ? subField.defaultValue({})
-          : subField.defaultValue;
-    } else {
-      // Set sensible defaults based on field type
-      switch (subField.type) {
-        case "checkbox":
-          defaultValues[fieldName] = false;
-          break;
-        case "number":
-          defaultValues[fieldName] = null;
-          break;
-        case "repeater":
-          defaultValues[fieldName] = [];
-          break;
-        case "group":
-          // Recursively create defaults for group fields
-          if ("fields" in subField) {
-            defaultValues[fieldName] = createDefaultRowValues(
-              subField.fields as FieldConfig[]
-            );
-          } else {
-            defaultValues[fieldName] = {};
-          }
-          break;
-        default:
-          // String fields, relationships, etc. default to empty/null
-          defaultValues[fieldName] = null;
-      }
-    }
-  }
-
-  return defaultValues;
 }
 
 // ============================================================
@@ -248,55 +178,25 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
   });
 
   // Sensor setup for drag-and-drop
-  // PointerSensor: mouse/touch with 8px activation distance to prevent accidental drags
-  // KeyboardSensor: Arrow keys for accessibility (WCAG 2.2 compliance)
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
-
-  // Handle drag end - reorder items
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-
-      if (over && active.id !== over.id) {
-        const oldIndex = items.findIndex(item => item.id === active.id);
-        const newIndex = items.findIndex(item => item.id === over.id);
-
-        if (oldIndex !== -1 && newIndex !== -1) {
-          move(oldIndex, newIndex);
-        }
-      }
-    },
-    [items, move]
-  );
+  const { sensors, handleDragEnd } = useSortableFieldArray(items, move);
 
   // Handle adding a new row
   const handleAdd = useCallback(() => {
-    const defaultValues = createDefaultRowValues(field.fields as FieldConfig[]);
+    const defaultValues = createDefaultFieldValues(
+      field.fields as FieldConfig[]
+    );
     append(defaultValues as TFieldValues[FieldArrayPath<TFieldValues>][number]);
   }, [append, field.fields]);
 
   // Constraints
-  const canAdd =
-    !disabled &&
-    !readOnly &&
-    (field.maxRows === undefined || items.length < field.maxRows);
-
-  const canRemove =
-    !disabled &&
-    !readOnly &&
-    (field.minRows === undefined || items.length > field.minRows);
-
-  // Check if sorting is enabled
-  const isSortable = field.admin?.isSortable !== false;
+  const { canAdd, canRemove, isSortable } = getFieldArrayConstraints({
+    count: items.length,
+    minRows: field.minRows,
+    maxRows: field.maxRows,
+    isSortable: field.admin?.isSortable,
+    disabled,
+    readOnly,
+  });
 
   // Labels
   const singularLabel = field.labels?.singular || "Item";
@@ -346,36 +246,31 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
         <CollapsibleContent>
           <CardContent className="p-3 space-y-3">
             {/* Sortable List */}
-            <DndContext
+            <SortableFieldArrayContainer
+              items={items}
               sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
+              handleDragEnd={handleDragEnd}
+              isSortable={isSortable}
+              disabled={disabled}
+              readOnly={readOnly}
             >
-              <SortableContext
-                items={items.map(item => item.id)}
-                strategy={verticalListSortingStrategy}
-                disabled={!isSortable || disabled || readOnly}
-              >
-                <div className="space-y-3">
-                  {items.map((item, index) => (
-                    <RepeaterRow
-                      key={item.id}
-                      id={item.id}
-                      index={index}
-                      field={field}
-                      basePath={`${name}.${index}`}
-                      data={item as Record<string, unknown>}
-                      control={control}
-                      onRemove={() => remove(index)}
-                      canRemove={canRemove}
-                      disabled={disabled}
-                      readOnly={readOnly}
-                      renderField={renderField}
-                    />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
+              {items.map((item, index) => (
+                <RepeaterRow
+                  key={item.id}
+                  id={item.id}
+                  index={index}
+                  field={field}
+                  basePath={`${name}.${index}`}
+                  data={item as Record<string, unknown>}
+                  control={control}
+                  onRemove={() => remove(index)}
+                  canRemove={canRemove}
+                  disabled={disabled}
+                  readOnly={readOnly}
+                  renderField={renderField}
+                />
+              ))}
+            </SortableFieldArrayContainer>
 
             {/* Empty State */}
             {items.length === 0 && (
@@ -401,22 +296,13 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
               </Button>
             )}
 
-            {/* Min Rows Warning */}
-            {field.minRows !== undefined &&
-              items.length < field.minRows &&
-              items.length > 0 && (
-                <p className="text-sm text-warning-600 dark:text-warning-500">
-                  Minimum {field.minRows} {pluralLabel.toLowerCase()} required.
-                  Currently have {items.length}.
-                </p>
-              )}
-
-            {/* Max Rows Info */}
-            {field.maxRows !== undefined && items.length >= field.maxRows && (
-              <p className="text-sm text-muted-foreground">
-                Maximum {field.maxRows} {pluralLabel.toLowerCase()} reached.
-              </p>
-            )}
+            {/* Min / Max Rows Notices */}
+            <RowLimitNotice
+              count={items.length}
+              minRows={field.minRows}
+              maxRows={field.maxRows}
+              label={pluralLabel}
+            />
           </CardContent>
         </CollapsibleContent>
       </Collapsible>
