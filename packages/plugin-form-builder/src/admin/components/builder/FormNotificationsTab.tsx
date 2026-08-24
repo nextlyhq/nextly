@@ -275,7 +275,11 @@ function NotificationCard({
           aria-expanded={expanded}
           aria-controls={editorId}
           className="flex min-w-0 flex-1 items-center gap-3 rounded-none py-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          aria-label={`${expanded ? "Collapse" : "Edit"} notification ${notification.name}`}
+          // The NAME stays put while the state changes. `aria-expanded` above
+          // already says open or closed, and a control whose name moves with
+          // its state is one a screen-reader user cannot refer to twice — and
+          // one no test can hold a handle on across a click.
+          aria-label={`Edit notification ${notification.name}`}
         >
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-2">
