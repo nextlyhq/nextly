@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "../document";
 import {
+  MAX_BLOCK_TYPE_LENGTH,
   MAX_BREAKPOINTS_PER_AXIS,
   MAX_BREAKPOINT_ID_LENGTH,
 } from "../document";
@@ -9,7 +10,11 @@ import { DEFAULT_LIMITS } from "../limits";
 import { validate } from "../validation";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
-import { compilePageCss, MAX_SCANNED_KEYS } from "./compile-page";
+import {
+  compilePageCss,
+  MAX_SCANNED_KEYS,
+  MAX_SCOPE_LENGTH,
+} from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import {
   nodeClassName,
@@ -258,6 +263,46 @@ describe("cascade tiers", () => {
         `${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} { color: #333 }`,
       ].join("\n")
     );
+  });
+
+  it("refuses a block type longer than the cap, so two cannot compile apart", () => {
+    // The type grammar constrains the ALPHABET and not the length, so a type of
+    // megabytes of valid characters satisfies it and is copied into a selector
+    // for every rule its defaults produce.
+    //
+    // The PAIR is what matters, not the single refusal. The page-artifact stamp
+    // keeps at most `MAX_VALUE_LENGTH` characters of any string it reads, and
+    // sends each block type through that same reduction — so two overlong types
+    // agreeing to the truncation point and differing after it once stamped
+    // alike while emitting DIFFERENT selectors, and a stored stylesheet built
+    // for one was served for the other. Under the cap both emit nothing, which
+    // makes identical output the honest answer rather than a collision.
+    const shared = `core/${"a".repeat(MAX_BLOCK_TYPE_LENGTH)}`;
+    // The document has to USE the type, or the base is narrowed away before the
+    // cap is ever consulted and both sides emit nothing whatever the cap says.
+    const cssFor = (type: string) =>
+      css(doc([node("n1", {}, { type })]), {
+        ...CTX,
+        blockBases: { [type]: { base: { base: { color: "#222" } } } },
+      });
+
+    const first = cssFor(`${shared}b`);
+    expect(first).toBe(cssFor(`${shared}c`));
+    expect(first).not.toContain("nx-bt-");
+  });
+
+  it("still writes a block type at the cap", () => {
+    // A cap that took the boundary with it would be a different rule from the
+    // one documented, and the off-by-one is invisible to any test supplying a
+    // type well clear of it.
+    const atCap = `core/${"a".repeat(MAX_BLOCK_TYPE_LENGTH - "core/".length)}`;
+    expect(atCap.length).toBe(MAX_BLOCK_TYPE_LENGTH);
+
+    const out = css(doc([node("n1", {}, { type: atCap })]), {
+      ...CTX,
+      blockBases: { [atCap]: { base: { base: { color: "#222" } } } },
+    });
+    expect(out).toContain("nx-bt-");
   });
 
   it("puts a whole tier before the next, so a node beats a wider default", () => {
@@ -1616,5 +1661,30 @@ describe("the node walk is bounded by what it reads", () => {
     ];
     const out = compilePageCss(doc(nodes), CTX);
     expect(out.css).not.toContain("#f00");
+  });
+});
+
+describe("the page scope", () => {
+  // The scope prefixes every rule the page emits, so an oversized one is copied
+  // once per rule rather than once per sheet — and it was the last emitted
+  // string with no cap, which is what `EMITTABLE_STRING_BOUNDS` promises there
+  // are none of.
+  it("is refused past its bound, so the sheet is unscoped rather than enormous", () => {
+    const out = css(doc([node("n1", { base: { base: { color: "#111" } } })]), {
+      ...CTX,
+      scope: "s".repeat(MAX_SCOPE_LENGTH + 1),
+    });
+    expect(out).not.toContain("s".repeat(MAX_SCOPE_LENGTH + 1));
+  });
+
+  it("still writes a scope AT the bound, so the refusal is not blanket", () => {
+    // The control. A compiler that dropped every scope would satisfy the case
+    // above and silently unscope every page.
+    const atBound = "s".repeat(MAX_SCOPE_LENGTH);
+    const out = css(doc([node("n1", { base: { base: { color: "#111" } } })]), {
+      ...CTX,
+      scope: atBound,
+    });
+    expect(out).toContain(atBound);
   });
 });

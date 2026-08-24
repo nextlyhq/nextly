@@ -216,9 +216,57 @@ export interface RenderedScale {
   readonly y: number;
   /** False for a rotation, a skew, a reflection, or a collapse to zero. */
   readonly describable: boolean;
+  /**
+   * The axes the element's OWN transform moves or rescales, if any.
+   *
+   * Separated from the composed scale because the two do OPPOSITE things to a
+   * margin. **A transform does not affect layout.** An ancestor's transform
+   * scales the whole subtree it lays out, gaps included, so a margin inside one
+   * really does render smaller and `x`/`y` above are right to apply. The
+   * element's own transform moves only its rendering, while the space its
+   * margin reserves stays where the untransformed box left it.
+   *
+   * Measured on a 100px block with a 20px margin, reading the gap between the
+   * rendered border edge and the next sibling on each axis:
+   *
+   * | transform on the block | vertical gap | horizontal gap |
+   * | --- | --- | --- |
+   * | none | 20 | 20 |
+   * | `scale(1)`, `translate(0)`, `rotate(360deg)` | 20 | 20 |
+   * | `translateY(40px)` | **−20** | 20 |
+   * | `translateX(30px)` | 20 | **−10** |
+   * | `scaleY(0.5)` | **70** | 20 |
+   * | `scaleX(0.5)` | 20 | **70** |
+   *
+   * Two things follow, and each rules out a simpler answer.
+   *
+   * PER AXIS, because a transform on one axis leaves the other's margin exactly
+   * where it was — and a lift like `translateY(-4px)` is a common hover state
+   * whose left and right bands stay perfectly good.
+   *
+   * By the MATRIX, not by the presence of a declaration. `scale(1)`,
+   * `translate(0)`, `translateY(0)` and `rotate(360deg)` all compute to a
+   * non-`none` transform and all serialize to exactly
+   * `matrix(1, 0, 0, 1, 0, 0)`; they move nothing, and they are the resting
+   * state of every hover animation, so treating them as displacement would
+   * blank the margins of a large share of real pages.
+   *
+   * The negatives in that table are why an axis this reports is DECLINED rather
+   * than corrected: the block is drawn over the neighbour its margin is holding
+   * away, so no rectangle beside the rendered border edge describes it and no
+   * factor applied to `20` produces one.
+   */
+  readonly selfMoved: { readonly x: boolean; readonly y: boolean };
 }
 
-const IDENTITY_SCALE: RenderedScale = { x: 1, y: 1, describable: true };
+const NOT_MOVED = { x: false, y: false } as const;
+
+const IDENTITY_SCALE: RenderedScale = {
+  x: 1,
+  y: 1,
+  describable: true,
+  selfMoved: NOT_MOVED,
+};
 
 /** Below this, an off-diagonal matrix term is serialization noise, not a rotation. */
 const AXIS_ALIGNED_TOLERANCE = 1e-9;
@@ -241,6 +289,7 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
    * transform here would apply it a second time — the bands would be scaled by
    * its square while the page was scaled by it once.
    */
+  let own: DOMMatrix | null = null;
   for (
     let node: Element | null = element;
     node !== null && node !== root;
@@ -248,7 +297,12 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
   ) {
     const declared = view.getComputedStyle(node).transform;
     if (declared === "" || declared === "none") continue;
-    matrix = new view.DOMMatrix(declared).multiply(matrix);
+    const step = new view.DOMMatrix(declared);
+    // Kept from the walk that is already happening rather than read again, so
+    // the composed answer and the element's own cannot disagree about which
+    // declaration was seen.
+    if (node === element) own = step;
+    matrix = step.multiply(matrix);
   }
 
   /*
@@ -280,6 +334,56 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
     x: matrix.a,
     y: matrix.d,
     describable: axisAligned && matrix.a > 0 && matrix.d > 0,
+    selfMoved: axesMovedBy(own),
+  };
+}
+
+/**
+ * Which axes a single element's own transform actually displaces.
+ *
+ * Asked of the MATRIX rather than of the declaration, because a declaration
+ * that moves nothing is ordinary: `scale(1)`, `translate(0)`, `translateY(0)`
+ * and `rotate(360deg)` all compute to a non-`none` transform and all serialize
+ * to exactly `matrix(1, 0, 0, 1, 0, 0)`. They are the resting state of every
+ * hover animation, so reading presence rather than effect blanks the margins of
+ * a large share of real pages.
+ *
+ * `a` and `d` are the per-axis scales and `e`/`f` the per-axis translations, so
+ * each axis is decided by its own two terms. A rotation or a skew mixes the
+ * axes and moves both; anything not flat in 2D is not decidable by these terms
+ * at all, and both are reported moved rather than guessed at.
+ *
+ * The tolerance is the same one the axis-aligned test uses and is there for the
+ * same reason: an engine may serialize a geometric identity with a residue
+ * instead of normalizing it away. It is far below any displacement a person
+ * could author or see.
+ *
+ * PER AXIS RATHER THAN PER EDGE, which is a deliberate bound and not an
+ * oversight. A transform is applied about `transform-origin`, so an origin
+ * anchored to one side leaves that side's edge stationary and moves only the
+ * far one — under `transform-origin: top` and `scaleY(0.5)`, measured, the top
+ * edge does not move at all and its margin stays perfectly describable.
+ *
+ * That state is not reachable here. `transform` is a catalog property and
+ * `transform-origin` is NOT, so every transform this system can author is
+ * applied about the initial `50% 50%` — and measured under that origin,
+ * `scaleY(0.5)` moves the top edge as well as the bottom, which is exactly what
+ * an axis answers. Per edge would additionally have to read and resolve the
+ * origin and the untransformed box on every measure, paying for a case the
+ * catalog cannot produce.
+ *
+ * Should `transform-origin` ever join the catalog, this becomes conservative
+ * rather than wrong: an anchored edge keeps its band today and would lose it,
+ * which is the safe direction to be imprecise in.
+ */
+function axesMovedBy(own: DOMMatrix | null): { x: boolean; y: boolean } {
+  if (own === null) return { ...NOT_MOVED };
+  const off = (value: number): boolean =>
+    Math.abs(value) > AXIS_ALIGNED_TOLERANCE;
+  if (!own.is2D || off(own.b) || off(own.c)) return { x: true, y: true };
+  return {
+    x: off(own.a - 1) || off(own.e),
+    y: off(own.d - 1) || off(own.f),
   };
 }
 

@@ -8,8 +8,8 @@
 import { describe, expect, it } from "vitest";
 
 import * as publicEntry from "../index";
-import { compileStyleValues } from "./declarations";
-import type { SiteToken } from "./site-tokens";
+import { compileStyleValues, safeTokenPrefix } from "./declarations";
+import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import {
   checkTokenKind,
   DARK_MODE_ATTRIBUTE,
@@ -18,6 +18,9 @@ import {
   emitFontFaces,
   emitTokenBlocks,
   isTokenName,
+  MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
+  MAX_TOKEN_SELECTOR_LENGTH,
   renameSiteToken,
   tokenIdentity,
   tokenValueFetches,
@@ -331,6 +334,116 @@ describe("the token name grammar", () => {
       "/styles"
     );
     expect(reference.declarations).toEqual([]);
+  });
+
+  it("refuses a name longer than the cap, on both sides of the reference", () => {
+    // The grammar bounds the ALPHABET and not the length, so without a cap a
+    // name of megabytes of valid characters is scanned in full on every compile
+    // and copied into a `var()` on every rule referencing it.
+    //
+    // Both sides are asserted because the whole value of one grammar is that the
+    // table and the reference agree: a table that refused an overlong name while
+    // a reference still emitted it would write `var(--site-...)` against a custom
+    // property nothing defines, and report nothing.
+    const overlong = "a".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+    expect(isTokenName(overlong)).toBe(false);
+
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [{ name: overlong, kind: "color", values: { light: "#000" } }],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+
+    const reference = compileStyleValues(
+      { color: { $token: overlong } },
+      "/styles"
+    );
+    expect(reference.declarations).toEqual([]);
+  });
+
+  it("emits nothing for two different overlong names, so they cannot compile apart", () => {
+    // This is the property the page-artifact stamp depends on. That stamp keeps
+    // at most `MAX_VALUE_LENGTH` characters of any string it reads, which is
+    // sound only while no string the compiler EMITS can be longer. A token name
+    // is the one that could: it reaches CSS in full through `tokenCustomProperty`.
+    //
+    // So the pair matters, not the single case. Two names agreeing to the
+    // stamp's truncation point and differing after it once produced different
+    // CSS under one identifier, and the stored sheet was then reused for the
+    // wrong one indefinitely. Under the cap both emit nothing, so identical
+    // output is the honest answer rather than a collision.
+    const shared = "a".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+    const first = `${shared}b`;
+    const second = `${shared}c`;
+
+    const cssFor = (name: string) =>
+      emitTokenBlocks(
+        { tokens: [{ name, kind: "color", values: { light: "#000" } }] },
+        SCOPE
+      ).css;
+
+    expect(cssFor(first)).toBe(cssFor(second));
+    expect(cssFor(first)).toBe("");
+  });
+
+  it("still writes a renamed token whose DISPLAY name is past the cap", () => {
+    // A token's identity is `id ?? name`, so a renamed one emits under its id
+    // and its display name reaches no stylesheet. Holding that name to the
+    // emission cap would delete a working token from the sheet the moment an
+    // author gave it a long label — a rename is supposed to cost nothing, which
+    // is the whole reason identity is pinned separately from the name.
+    const longLabel = "a".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            id: "color.primary",
+            name: longLabel,
+            kind: "color",
+            values: { light: "#000" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(issues).toEqual([]);
+    expect(css).toContain("color-primary");
+  });
+
+  it("refuses a token whose IDENTITY is past the cap", () => {
+    // The other side, and the one that reaches CSS: with no id the name IS the
+    // identity, so the cap applies to it here and to nothing else.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "a".repeat(MAX_TOKEN_NAME_LENGTH + 1),
+            kind: "color",
+            values: { light: "#000" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("accepts a name exactly at the cap", () => {
+    // A cap that took the boundary with it would be a different rule from the
+    // one documented, and the off-by-one is invisible in any test that only
+    // supplies a name well clear of it.
+    const atCap = "a".repeat(MAX_TOKEN_NAME_LENGTH);
+    expect(atCap.length).toBe(MAX_TOKEN_NAME_LENGTH);
+    expect(isTokenName(atCap)).toBe(true);
+
+    const reference = compileStyleValues(
+      { color: { $token: atCap } },
+      "/styles"
+    );
+    expect(reference.declarations).not.toEqual([]);
   });
 
   it("keeps accepting the names the default set uses", () => {
@@ -891,5 +1004,135 @@ describe("a token's stable identity", () => {
 
     expect(css).toBe("");
     expect(issues.some(i => i.message.includes("id"))).toBe(true);
+  });
+});
+
+describe("renaming a token whose identity the rules have made unusable", () => {
+  // The upgrade path. A site stored before the cap existed can hold a token
+  // with no id and an overlong name, so its identity is now unemittable and the
+  // token has stopped rendering. Carrying that identity through a rename pins
+  // it forever: the editor accepts the new label and the token still emits
+  // nothing, with no remaining way to repair it from the UI.
+  const overlong = "a".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+
+  it("re-pins the identity to the new name, so the token can be repaired", () => {
+    const renamed = renameSiteToken(
+      { name: overlong, kind: "color", values: { light: "#000" } },
+      "color.primary"
+    );
+    expect(renamed.id).toBeUndefined();
+
+    const { css, issues } = emitTokenBlocks({ tokens: [renamed] }, SCOPE);
+    expect(issues).toEqual([]);
+    expect(css).toContain("color-primary");
+  });
+
+  it("keeps a working DEEP identity pinned, because depth is a label rule", () => {
+    // An identity never becomes DTCG groups — only a label does — so the depth
+    // bound does not reach it. A legacy id with more parts than a label may
+    // carry is still emittable, and clearing it on rename would move an
+    // identity every stored reference reads.
+    const deepId = Array.from(
+      { length: MAX_TOKEN_NAME_SEGMENTS + 1 },
+      () => "a"
+    ).join(".");
+    expect(deepId.length).toBeLessThanOrEqual(MAX_TOKEN_NAME_LENGTH);
+
+    const renamed = renameSiteToken(
+      {
+        id: deepId,
+        name: "old.label",
+        kind: "color",
+        values: { light: "#000" },
+      },
+      "color.primary"
+    );
+    expect(renamed.id).toBe(deepId);
+  });
+
+  it("refuses a token whose id is not a string, rather than throwing", () => {
+    // Persisted settings arrive unvalidated and `RegExp.test` coerces, so a
+    // stored number satisfies the grammar and then travels on as a number —
+    // reaching a place that assumes a string and taking the whole compile with
+    // it. One malformed settings entry must cost its own token, not the page.
+    // The ID specifically, because that is what becomes the custom property: a
+    // non-string name travels only into a message, while a non-string id
+    // reaches the composer and throws there. A fixture with both wrong is
+    // caught by the identity guard and says nothing about which one ran.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            id: 123,
+            name: "color.primary",
+            kind: "color",
+            values: { light: "#000" },
+          } as never,
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("still never moves a WORKING identity, which is what rename protects", () => {
+    // The control, and the property that matters more than the repair: every
+    // stored `$token` reads the identity, so moving one that resolves is the
+    // defect this function exists to prevent. Without this, a rename that
+    // always re-pinned would satisfy the case above and silently break renames.
+    const renamed = renameSiteToken(
+      { name: "color.brand", kind: "color", values: { light: "#000" } },
+      "color.primary"
+    );
+    expect(renamed.id).toBe("color.brand");
+  });
+});
+
+describe("a stored prefix that is not a string", () => {
+  it("falls back with a warning rather than aborting the compile", () => {
+    // Persisted settings are JSON, so `null` reaches here as a value rather
+    // than as the absence the signature suggests — and this function's whole
+    // purpose is that one bad setting costs the tokens, not the page.
+    expect(safeTokenPrefix(null as never).prefix).toBe("--site-");
+    expect(safeTokenPrefix(null as never).warning).toBeDefined();
+  });
+
+  it("still returns the default for an ABSENT prefix, with no warning", () => {
+    // The control: absence is not a malformed setting, so it must not report
+    // one. Without this, a build that warned on everything would satisfy the
+    // case above.
+    expect(safeTokenPrefix(undefined).prefix).toBe("--site-");
+    expect(safeTokenPrefix(undefined).warning).toBeUndefined();
+  });
+});
+
+describe("the selector token blocks are written under", () => {
+  const oneToken: SiteTokenSet = {
+    tokens: [
+      { name: "color.primary", kind: "color", values: { light: "#000" } },
+    ],
+  };
+
+  it("refuses an oversized selector rather than writing under a cut one", () => {
+    // The selector is the caller's and goes into the sheet verbatim, once per
+    // block. Truncating it would be worse than refusing: a selector cut in half
+    // is a different selector, so the site's values would land on whatever it
+    // happens to match.
+    const { css, issues } = emitTokenBlocks(
+      oneToken,
+      `.${"s".repeat(MAX_TOKEN_SELECTOR_LENGTH)}`
+    );
+    expect(css).toBe("");
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("still writes under a selector at the bound", () => {
+    // The control. A guard refusing every selector would satisfy the case above
+    // and emit no tokens at all, anywhere.
+    const atBound = "s".repeat(MAX_TOKEN_SELECTOR_LENGTH);
+    const { css, issues } = emitTokenBlocks(oneToken, atBound);
+    expect(issues).toEqual([]);
+    expect(css).toContain(atBound);
   });
 });

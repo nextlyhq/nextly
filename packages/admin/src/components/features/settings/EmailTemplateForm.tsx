@@ -67,7 +67,6 @@ import {
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
-import { useTheme } from "@admin/context/providers/ThemeProvider";
 import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import {
   useEmailTemplates,
@@ -1345,7 +1344,6 @@ export function EmailTemplateForm({
   const slugTouchedRef = useRef(false);
   const editorWrapRef = useRef<HTMLDivElement>(null);
   const htmlEditorViewRef = useRef<EditorView | null>(null);
-  const { resolvedTheme } = useTheme();
 
   const [railTab, setRailTab] = useState<RailTab>("variables");
   const [railOpen, setRailOpen] = useState(true);
@@ -1832,7 +1830,6 @@ export function EmailTemplateForm({
                           htmlEditorViewRef.current = view;
                         }}
                         language="html"
-                        theme={resolvedTheme === "dark" ? "dark" : "light"}
                         disabled={isPending}
                         readOnly={false}
                         minHeight={380}

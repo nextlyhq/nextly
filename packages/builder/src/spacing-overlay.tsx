@@ -76,6 +76,7 @@ import {
   sameBands,
   spacingApplies,
   spacingBands,
+  type EdgeApplicability,
   type EdgeLengths,
   type SpacingBand,
 } from "./spacing-bands";
@@ -190,6 +191,60 @@ export function isReplaced(element: Element): boolean {
    * lower-cased local name is the spelling that holds for both.
    */
   return REPLACED_TAGS.has(element.localName.toLowerCase());
+}
+
+/**
+ * The spacing this block can actually be drawn with, on each side.
+ *
+ * Two separate reasons zero a side, and they are both here so that no caller
+ * can apply one and forget the other.
+ *
+ * The first is what CSS gives the generated box. `display: table-row` and the
+ * internal ruby boxes take no margin, everything internal to a table except a
+ * cell takes no padding, and a non-replaced inline box takes no block-axis
+ * margin — while the computed style answers with whatever the author declared,
+ * so reading it unconditionally draws bands for space that does not exist.
+ *
+ * The second is whether a band could be PUT there. A transform does not affect
+ * layout: an ancestor's transform scales the subtree it lays out, gaps
+ * included, so a margin inside one really does render smaller and `scale` is
+ * right to apply it — but the block's OWN transform moves only its rendering,
+ * while the space its margin reserves stays where the untransformed box left
+ * it. Measured, a 100px block with `margin-bottom: 20px` under `scale(2)`
+ * leaves a gap of MINUS eighty pixels, drawn over the neighbour that margin is
+ * holding away, so no rectangle beside the rendered border edge describes it.
+ *
+ * That second reason is applied PER AXIS, because the sides are independent:
+ * `translateY(-4px)` — an ordinary hover lift — moves the top and bottom
+ * margins and leaves the left and right ones exactly where they were. See
+ * `selfMoved`, which reads the matrix rather than the declaration, so an
+ * identity-valued transform keeps every band.
+ *
+ * Padding is subject only to the first reason. It lies INSIDE the transform and
+ * renders scaled with the box, so those bands stay correct on both axes.
+ */
+function drawableBoxes(
+  style: CSSStyleDeclaration,
+  block: Element,
+  scale: RenderedScale
+): { margin: EdgeLengths; padding: EdgeLengths; borderWidths: EdgeLengths } {
+  const applies = spacingApplies(
+    style.display,
+    style.writingMode,
+    isReplaced(block)
+  );
+  const margin: EdgeApplicability = {
+    top: applies.margin.top && !scale.selfMoved.y,
+    bottom: applies.margin.bottom && !scale.selfMoved.y,
+    left: applies.margin.left && !scale.selfMoved.x,
+    right: applies.margin.right && !scale.selfMoved.x,
+  };
+  const measured = boxesOf(style);
+  return {
+    borderWidths: measured.borderWidths,
+    margin: applicableEdges(measured.margin, margin),
+    padding: applicableEdges(measured.padding, applies.padding),
+  };
 }
 
 /**
@@ -320,29 +375,12 @@ export function SpacingOverlay({
       return;
     }
 
-    /*
-     * Zeroed where the generated box cannot have them. `display: table-row` and
-     * the internal ruby boxes take no margin, and everything internal to a table
-     * except a cell takes no padding — but the computed style still answers with
-     * whatever the author declared, so reading it unconditionally draws bands
-     * for space that does not exist.
-     */
-    const applies = spacingApplies(
-      style.display,
-      style.writingMode,
-      isReplaced(block)
-    );
-    const measured = boxesOf(style);
-    const boxes = {
-      borderWidths: measured.borderWidths,
-      margin: applicableEdges(measured.margin, applies.margin),
-      padding: applicableEdges(measured.padding, applies.padding),
-    };
+    const scale = renderedScale(block, root);
+    const boxes = drawableBoxes(style, block, scale);
     const borders = {
       x: boxes.borderWidths.left + boxes.borderWidths.right,
       y: boxes.borderWidths.top + boxes.borderWidths.bottom,
     };
-    const scale = renderedScale(block, root);
     if (
       !describable(
         layoutFragments(block),

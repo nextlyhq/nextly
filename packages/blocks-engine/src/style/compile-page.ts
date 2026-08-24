@@ -31,6 +31,7 @@ import {
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   STYLE_STATES,
+  isBlockType,
 } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { DEFAULT_LIMITS } from "../limits";
@@ -204,6 +205,17 @@ function readClassSlug(value: unknown): unknown {
 /** A compiled page stylesheet. */
 export interface CompiledPageCss {
   css: string;
+  /**
+   * The scope these selectors were actually written under, or `undefined` when
+   * they were written unscoped.
+   *
+   * Returned rather than assumed to equal the requested one, because a scope
+   * this compiler cannot write is dropped and the sheet compiled global. A
+   * caller recording the REQUESTED scope then stores an artifact claiming an
+   * isolation its CSS does not have — and the renderer attaches that class, so
+   * the rules reach whatever else is on the page.
+   */
+  scope?: string;
   /**
    * What was not written, and why. Every entry names a value that is in the
    * document and absent from the stylesheet, so "my style did nothing" always
@@ -498,16 +510,18 @@ export function breakpointContexts(
   return contexts;
 }
 
+/**
+ * The longest page scope this compiler will write into a selector.
+ *
+ * A scope keeps two documents rendered into one DOM apart, so it prefixes every
+ * rule the page emits — an oversized one is therefore copied once per rule
+ * rather than once per sheet. Generous against anything a host would pass: a
+ * scope is an element id or a short generated token.
+ */
+export const MAX_SCOPE_LENGTH = 128;
+
 /** The breakpoint id meaning "no media query" in a stored style envelope. */
 export const BASE_BREAKPOINT = "base";
-
-/**
- * The grammar a block type has to match before it reaches a selector.
- *
- * The same shape document validation requires of `node.type`, restated here
- * because compilation is the path that does not assume validation ran.
- */
-const BLOCK_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
  * The scope written as a class selector, or nothing when it cannot be one.
@@ -538,7 +552,15 @@ function scopeSelector(
   // NOT split a class: a renderer attaching `region\u00a0one` attaches one
   // valid class, so rejecting it here would drop the scope for a document whose
   // scope was fine and send it back to the selector every other document shares.
-  if (scope === "" || /[ \t\n\f\r]/.test(scope)) {
+  // Bounded as well as shaped. The scope is a caller's string and every rule
+  // this compiler writes carries it, so an oversized one is copied into the
+  // sheet once per rule — and it is the last emitted string with no cap, which
+  // `EMITTABLE_STRING_BOUNDS` is only honest about while none remain.
+  if (
+    scope === "" ||
+    scope.length > MAX_SCOPE_LENGTH ||
+    /[ \t\n\f\r]/.test(scope)
+  ) {
     warnings.push({
       path: "/scope",
       code: "invalid-scope",
@@ -1133,6 +1155,11 @@ export function compilePageCss(
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   const mayFetchUrl = ctx.mayFetchUrl;
   const scope = scopeSelector(ctx.scope, warnings);
+  // What was WRITTEN, which is not always what was asked for: a scope this
+  // compiler refuses is dropped and the sheet compiled global, and a caller that
+  // recorded the request would store an artifact claiming an isolation its own
+  // selectors do not carry.
+  const effectiveScope = scope === "" ? undefined : ctx.scope;
   const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
 
   const nodes = documentNodes(
@@ -1209,7 +1236,7 @@ export function compilePageCss(
     // rather than escaped into something safe: a type that is not a namespaced
     // slug is not a type this engine can style, and quietly renaming it would
     // emit a class no renderer will ever put on an element.
-    if (!BLOCK_TYPE_RE.test(type)) {
+    if (!isBlockType(type)) {
       pushBoundedWarning(warningAllowance, warnings, {
         path: pointer("/blockBases", type),
         code: "invalid-node-type",
@@ -1596,6 +1623,7 @@ export function compilePageCss(
   }
 
   return {
+    ...(effectiveScope === undefined ? {} : { scope: effectiveScope }),
     css: serializeRules(rules),
     warnings,
     classes: attributeClasses,

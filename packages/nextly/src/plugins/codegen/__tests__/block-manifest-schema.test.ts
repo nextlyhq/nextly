@@ -392,11 +392,13 @@ describe("the published JSON Schema", () => {
                   "type": "object",
                 },
                 "name": {
+                  "maxLength": 128,
                   "pattern": "^(?!(?:nextly\\/component-instance)$)[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
                   "type": "string",
                 },
                 "parent": {
                   "items": {
+                    "maxLength": 128,
                     "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
                     "type": "string",
                   },
@@ -416,6 +418,7 @@ describe("the published JSON Schema", () => {
                     "properties": {
                       "allow": {
                         "items": {
+                          "maxLength": 128,
                           "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/(?:[a-z0-9]+(?:-[a-z0-9]+)*|\\*)$",
                           "type": "string",
                         },

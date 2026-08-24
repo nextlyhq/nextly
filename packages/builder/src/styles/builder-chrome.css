@@ -428,6 +428,30 @@
 }
 
 /*
+ * The chequerboard every swatch is painted over, defined ONCE.
+ *
+ * A colour surface needs something behind it that says "nothing here", and that
+ * something has to read as absence rather than as a colour — which is what the
+ * chequerboard is for, and why a translucent swatch shows it through.
+ *
+ * Fixed greys rather than theme tokens, and deliberately: the pattern is the
+ * standard rendering of "no colour" and stops meaning that if it moves with the
+ * theme, since a themed chequerboard is just another colour behind the swatch.
+ * `@nextlyhq/ui`'s own ColorPicker makes the identical call for the identical
+ * visual. Stated once here so the exemption is one decision rather than one per
+ * swatch, and so a second surface cannot drift from the first.
+ */
+:root {
+  /*
+   * On ONE line, and held there: the design linter scans by line, so a wrapped
+   * value would put the colours on a different line from the exemption that
+   * covers them and the rule would be reported despite being marked.
+   */
+  /* prettier-ignore */
+  --nx-checkerboard: repeating-conic-gradient(#c8c8c8 0% 25%, #ffffff 0% 50%); /* design-lint-ok: the chequerboard is the standard rendering of "no colour" and must not move with the theme — the same fixed greys ui's own ColorPicker uses */
+}
+
+/*
  * The swatch, over a chequerboard so a translucent colour reads as translucent
  * rather than as a lighter opaque one.
  *
@@ -436,9 +460,9 @@
  * colour set paints nothing and shows the chequerboard alone, which is the
  * honest appearance for a value this panel cannot resolve.
  *
- * design-lint-ok: the chequerboard greys are the standard rendering of "no
- * colour here" and must not move with the theme, exactly as the picker's own
- * are.
+ * The chequerboard itself is `--nx-checkerboard`, declared once above, so the
+ * decision to keep it off the theme is made in one place rather than restated
+ * by every swatch that shows it.
  */
 .nx-style-inspector__swatch {
   /*
@@ -457,8 +481,7 @@
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
   background-image:
-    linear-gradient(var(--nx-swatch), var(--nx-swatch)),
-    repeating-conic-gradient(#c8c8c8 0% 25%, #ffffff 0% 50%); /* design-lint-ok: the chequerboard is the standard rendering of "no colour", and must not move with the theme — the same fixed greys ui's own ColorPicker uses */
+    linear-gradient(var(--nx-swatch), var(--nx-swatch)), var(--nx-checkerboard);
   background-size:
     100% 100%,
     0.5rem 0.5rem;
@@ -1099,5 +1122,179 @@
   line-height: 1.4;
   /* So a column of values does not jitter as digits change under a drag. */
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/*
+ * The tokens studio.
+ *
+ * A table in a rail that is narrower than a table wants to be, so the row is a
+ * grid rather than columns: the swatch and the actions take what they need and
+ * the two fields share what is left, which keeps a long token name from
+ * pushing the remove button out of reach.
+ */
+.nx-tokens {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  min-height: 0;
+}
+
+.nx-tokens__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.nx-tokens__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+/*
+ * Two states of one property, drawn as one segmented control rather than two
+ * adjacent buttons: they share a border and split the width, so the pair reads
+ * as a single choice with one side taken.
+ */
+.nx-tokens__modes {
+  display: inline-flex;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.nx-tokens__modes button {
+  padding: 0.125rem 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.nx-tokens__modes button[aria-pressed="true"] {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-tokens__modes button:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: -2px;
+}
+
+/* The count rides the tab label, so a tab says how much is behind it. */
+.nx-tokens__count {
+  margin-inline-start: 0.25rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-tokens__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nx-tokens__list ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-tokens__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nx-tokens__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/*
+ * The value a mode INHERITS from light, rather than one it states. Dimmed so
+ * the table shows at a glance which rows have a dark value of their own, and
+ * which are following — a distinction the value text alone cannot carry,
+ * because an inherited value and an identical explicit one read the same.
+ */
+.nx-tokens__value[data-inherited] {
+  color: var(--nx-muted-foreground);
+  font-style: italic;
+}
+
+.nx-tokens__swatch {
+  /*
+   * Declared here and overridden from the element's style attribute when there
+   * is a colour to paint, so the sheet is self-contained: a rule referencing a
+   * property nothing in CSS defines reads as broken to anything analysing the
+   * stylesheet on its own.
+   */
+  --nx-swatch: transparent;
+  flex: 0 0 auto;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background-image:
+    linear-gradient(var(--nx-swatch), var(--nx-swatch)), var(--nx-checkerboard);
+  background-size:
+    100% 100%,
+    0.375rem 0.375rem;
+}
+
+.nx-tokens__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/*
+ * The confirmation replaces the action column and needs the whole row: it
+ * carries a sentence as well as two buttons, and the rail is narrow. Placed on
+ * the CONTAINER, because the paragraph inside it is a flex child rather than a
+ * grid item and `grid-column` on it does nothing — the warning and both buttons
+ * would compete for the action column and squeeze the fields beside them.
+ */
+.nx-tokens__confirm {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+/*
+ * Spans the row, because a refusal or a warning is about the whole token and
+ * not about whichever field the author last touched.
+ */
+.nx-tokens__issue {
+  /*
+   * Spans the row when it IS a grid item. Inside the confirmation it is a flex
+   * child and this does nothing, which is why that container carries its own
+   * placement rather than relying on this.
+   */
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-destructive);
+}
+
+/* Where a token comes from, when the site's own code supplies it. */
+.nx-tokens__origin {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
   white-space: nowrap;
 }

@@ -33,6 +33,14 @@ export {
   type ComponentInstanceProps,
   DEFAULT_BINDING_SOURCE,
   isBindingSource,
+  // The rule for a valid `BlockNode.type`, beside the types it constrains. This
+  // entry exports `BlockNode`, so a generator or schema publisher reading the
+  // format from here decides what a type may be — and deciding it independently
+  // is how a manifest comes to accept a name registration and compilation
+  // refuse. Exported as the predicate AND the cap: a JSON Schema cannot call a
+  // function, so a publisher emitting `maxLength` needs the number.
+  isBlockType,
+  MAX_BLOCK_TYPE_LENGTH,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   type DocumentFormatVersion,

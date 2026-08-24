@@ -10,7 +10,11 @@ import { describe, expect, it } from "vitest";
 import type { DtcgNode } from "./dtcg";
 import { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./dtcg";
 import type { SiteToken } from "./site-tokens";
-import { renameSiteToken } from "./site-tokens";
+import {
+  MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
+  renameSiteToken,
+} from "./site-tokens";
 
 const tokens = (list: SiteToken[]) => ({ tokens: list });
 
@@ -799,5 +803,129 @@ describe("a token's stable identity across the format", () => {
 
     expect(read).toEqual([]);
     expect(issues.some(i => i.message.includes("id"))).toBe(true);
+  });
+});
+
+describe("a renamed token's long label", () => {
+  // A token's identity is its id, so a renamed token is written under that id
+  // and its display name reaches neither a stylesheet nor an exported file.
+  // Both DTCG gates therefore hold the label to the grammar and the identity to
+  // the emission cap — capping the label would drop a working token from an
+  // export and refuse it on the way back in, silently in both directions.
+  const longLabel = `label.${"a".repeat(MAX_TOKEN_NAME_LENGTH)}`;
+
+  it("straddles the cap, so the cases below mean what they say", () => {
+    expect(longLabel.length).toBeGreaterThan(MAX_TOKEN_NAME_LENGTH);
+    expect("color.primary".length).toBeLessThanOrEqual(MAX_TOKEN_NAME_LENGTH);
+  });
+
+  it("survives an export, because the id is what it is written under", () => {
+    const { document, issues } = tokensToDtcg({
+      tokens: [
+        {
+          id: "color.primary",
+          name: longLabel,
+          kind: "color",
+          values: { light: "#000000" },
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(JSON.stringify(document)).toContain("color.primary");
+  });
+
+  it("imports a token whose stated id is short, however deep its group path", () => {
+    // The import side of the same rule. A file may nest a token so deeply that
+    // its dot path exceeds the cap while stating a short id in the extension —
+    // that id is the identity, so the token is written under it and the path is
+    // only a label.
+    const deep = "g".repeat(MAX_TOKEN_NAME_LENGTH);
+    const { tokens: read, issues } = dtcgToTokens({
+      [deep]: {
+        primary: {
+          $type: "color",
+          $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+          $extensions: { [NEXTLY_EXTENSION]: { id: "color.primary" } },
+        },
+      },
+    });
+    expect(issues).toEqual([]);
+    expect(read[0]?.id).toBe("color.primary");
+  });
+
+  it("skips an imported token whose path is the identity and exceeds the cap", () => {
+    // With no stated id the path IS what the token is written under, so the cap
+    // applies to it. Without this the import gate has no coverage at all: the
+    // case above passes whether or not the cap is applied there.
+    const deep = "g".repeat(MAX_TOKEN_NAME_LENGTH);
+    const { tokens: read, issues } = dtcgToTokens({
+      [deep]: {
+        primary: {
+          $type: "color",
+          $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+        },
+      },
+    });
+    expect(read).toEqual([]);
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("is refused when the LABEL is the identity, which is when it is written", () => {
+    // The control on the other side: with no id the label is the identity, so
+    // the same string is capped. Without this, a gate that accepted everything
+    // would satisfy the case above perfectly.
+    const { issues } = tokensToDtcg({
+      tokens: [
+        { name: longLabel, kind: "color", values: { light: "#000000" } },
+      ],
+    });
+    expect(issues.length).toBeGreaterThan(0);
+  });
+});
+
+describe("a label deep enough to break the reader", () => {
+  // The exporter writes one nested group per dot-separated segment and the
+  // reader walks those groups, so a deep label produces a file this package
+  // cannot read back. An exporter emitting a document that fails its own round
+  // trip is the shape this module exists to prevent, and a renamed token's
+  // label is free of the LENGTH cap — so depth needs its own bound.
+  const deepLabel = Array.from(
+    { length: MAX_TOKEN_NAME_SEGMENTS + 1 },
+    () => "a"
+  ).join(".");
+
+  it("is refused at export rather than written", () => {
+    const { issues } = tokensToDtcg({
+      tokens: [
+        {
+          id: "short.id",
+          name: deepLabel,
+          kind: "color",
+          values: { light: "#000000" },
+        },
+      ],
+    });
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("still exports a label at the depth bound, so the refusal is not blanket", () => {
+    // The control. Without it a gate refusing every renamed token would satisfy
+    // the case above and look correct.
+    const atBound = Array.from(
+      { length: MAX_TOKEN_NAME_SEGMENTS },
+      () => "a"
+    ).join(".");
+    const { document, issues } = tokensToDtcg({
+      tokens: [
+        {
+          id: "short.id",
+          name: atBound,
+          kind: "color",
+          values: { light: "#000000" },
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(dtcgToTokens(document).tokens).toHaveLength(1);
   });
 });
