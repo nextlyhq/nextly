@@ -31,18 +31,27 @@ describe("normalizeSingleDraftGrant", () => {
     expect(normalizeSingleDraftGrant({ readAs })).toEqual({ readAs });
   });
 
-  // `typeof null === "object"`, so the obvious check is the wrong one. A null
-  // reaching the read as an identity is the case this exists to prevent.
-  it("grants without an identity when readAs is null", () => {
-    expect(normalizeSingleDraftGrant({ readAs: null })).toEqual({});
+  // An OBJECT grant is a hook trying to name someone. One that failed to name
+  // anyone must REFUSE, not fall back to the empty grant: an empty grant means
+  // "trusted read, judged by nobody", which hands back the working draft with
+  // every field — the disclosure this path exists to close. The empty grant is
+  // reserved for a literal `true`, where the application has said so.
+  //
+  // `typeof null === "object"`, so the obvious check is the wrong one.
+  it("refuses an object grant whose readAs is null", () => {
+    expect(normalizeSingleDraftGrant({ readAs: null })).toBeNull();
   });
 
-  it("grants without an identity when readAs is not an object", () => {
+  it("refuses an object grant naming nobody", () => {
+    expect(normalizeSingleDraftGrant({})).toBeNull();
+  });
+
+  it("refuses an object grant whose readAs is not an object", () => {
     // A hook returning the sharer's ID rather than their context. Forwarded, a
     // string would be judged as a user object whose every property is absent —
     // and absence can ALLOW, not merely strip.
-    expect(normalizeSingleDraftGrant({ readAs: "user-1" })).toEqual({});
-    expect(normalizeSingleDraftGrant({ readAs: 42 })).toEqual({});
+    expect(normalizeSingleDraftGrant({ readAs: "user-1" })).toBeNull();
+    expect(normalizeSingleDraftGrant({ readAs: 42 })).toBeNull();
   });
 
   it("refuses a non-object, non-boolean answer outright", () => {

@@ -102,12 +102,19 @@ export function normalizeSingleDraftGrant(
   grant: unknown
 ): SingleDraftGrantResult {
   if (grant === false || grant === undefined || grant === null) return null;
+  // The empty grant is reserved for a LITERAL `true`, and that reservation is
+  // the load-bearing part. An empty grant means "trusted read, judged by
+  // nobody" — correct only where the application has said every visitor may see
+  // the draft. An OBJECT grant is a hook trying to name someone, so a `readAs`
+  // that is missing, null, or a primitive is a hook that failed to: normalizing
+  // it to an empty grant would hand back the working draft with every field,
+  // which is the disclosure this whole path exists to close. It refuses.
   if (grant === true) return {};
   if (typeof grant !== "object") return null;
   const readAs = (grant as { readAs?: unknown }).readAs;
   return typeof readAs === "object" && readAs !== null
     ? { readAs: readAs as UserContext }
-    : {};
+    : null;
 }
 
 export interface SingleDraftRequest {

@@ -2780,6 +2780,11 @@ export class SingleQueryService extends BaseService {
           enforceFieldAccess: access.enforceFieldAccess,
           enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
+          // Beside `user`, never folded into it. Dropped here, every top-level
+          // relationship — live and working-draft alike — is judged as the
+          // anonymous bearer while the document above it is judged as the
+          // sharer, which is the disclosure the identity exists to close.
+          fieldAccessUser: access.fieldAccessUser,
           overrideAccess: access.overrideAccess,
           // Narrows that bypass per RELATED collection. Absent means unchanged;
           // dropping it here would silently restore the full bypass.

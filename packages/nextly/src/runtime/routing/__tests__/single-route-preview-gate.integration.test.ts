@@ -12,7 +12,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { signPreviewToken } from "../../../auth/preview/preview-token";
-import { defineSingle, text } from "../../../config";
+import {
+  defineCollection,
+  defineSingle,
+  relationship,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -145,5 +150,81 @@ describe("createSingleRoute driven by previewSingleDraftGate", () => {
     >;
 
     expect(page.apiToken).toBe("secret-token");
+  });
+  // Relationship expansion has its own copy of the question, and the identity
+  // has to survive every rebuild on the way — the builder, the Single's own
+  // literal, and the conversion into the relationship service. A field dropped
+  // at any of them is a VALID access context describing a different caller:
+  // one whose related rows are judged by nobody. The rule below permits the
+  // anonymous bearer and denies the sharer precisely so those two readings
+  // cannot both pass.
+  it("judges a populated relationship as the sharer too", async () => {
+    const authors = defineCollection({
+      slug: "authors",
+      fields: [
+        text({ name: "slug" }),
+        text({
+          name: "name",
+          access: { read: ({ req }) => req.user === undefined },
+        }),
+      ],
+    });
+    const withOwner = defineSingle({
+      slug: "site-settings",
+      status: true,
+      versions: { drafts: true },
+      fields: [
+        text({ name: "siteName" }),
+        relationship({ name: "owner", relationTo: "authors" }),
+      ],
+    });
+    current = await createTestNextly({
+      singles: [withOwner],
+      collections: [authors],
+    });
+    const author = await current.nextly.create({
+      collection: "authors",
+      data: { slug: "ada", name: "Ada" },
+    });
+    await current.nextly.updateSingle({
+      slug: "site-settings",
+      data: {
+        siteName: "Acme",
+        owner: String(author.item.id),
+        status: "published",
+      },
+    });
+    // A PENDING edit on top, so the working-draft overlay is what the preview
+    // renders rather than the published row. The overlay expands its own
+    // relationships through a different builder, so a fixture that never
+    // produced one leaves that path unexercised.
+    await current.nextly.updateSingle({
+      slug: "site-settings",
+      data: { siteName: "Acme (pending)" },
+    });
+    const { token } = await signPreviewToken(
+      { kind: "single", single: "site-settings" },
+      SECRET,
+      {
+        generation: GENERATION,
+        minter: await sharer(current.nextly, PLAIN_EMAIL),
+      }
+    );
+
+    const page = (await route(current.nextly, token).SinglePage()) as Record<
+      string,
+      unknown
+    >;
+    const owner = page.owner as Record<string, unknown> | undefined;
+
+    // The RIGHT related row expanded — otherwise the assertion below is
+    // satisfied by there being no related row at all, which is the absence that
+    // reads as a pass.
+    // The OVERLAY won, so what follows is about the draft's own expansion.
+    expect(page.siteName).toBe("Acme (pending)");
+    expect(owner?.id).toBe(String(author.item.id));
+    // And it was judged as the SHARER, whom the rule denies, rather than as the
+    // anonymous bearer, whom it permits.
+    expect(owner?.name).toBeUndefined();
   });
 });
