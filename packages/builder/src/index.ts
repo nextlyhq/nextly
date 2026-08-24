@@ -478,6 +478,8 @@ export {
  *
  * Headless by construction: it answers what a shared value MEANS and what ops
  * would change it, and knows nothing about how either is drawn.
+ *
+ * @experimental
  */
 export {
   sharedValueAt,

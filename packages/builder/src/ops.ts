@@ -464,7 +464,19 @@ const COMPARISON_BUDGET = MAX_VALUE_PARTS;
  * would otherwise exhaust the call stack and leave a native RangeError where
  * this module promises an `OpError`.
  */
-function equalWithin(a: unknown, b: unknown, budget: number): boolean {
+function equalWithin(
+  a: unknown,
+  b: unknown,
+  budget: number,
+  /**
+   * Whether two records holding the same keys in a different order differ.
+   *
+   * True for a STORED value, false for a STYLE value, and the difference is a
+   * property of who reads them rather than a preference. The reasoning for each
+   * sits at {@link sameStoredValue} and {@link sameStyleValue}.
+   */
+  keyOrderMatters = true
+): boolean {
   const pending: [unknown, unknown][] = [[a, b]];
   // Charged at ENQUEUE, not on the way out. A budget checked per pop still
   // allocates one tuple per element before the next check can run, so a dense
@@ -487,21 +499,30 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
       continue;
     }
     if (isPlainRecord(left) && isPlainRecord(right)) {
-      const leftKeys = Object.keys(left);
-      const rightKeys = Object.keys(right);
+      const leftKeys = keyOrderMatters
+        ? Object.keys(left)
+        : Object.keys(left).sort();
+      const rightKeys = keyOrderMatters
+        ? Object.keys(right)
+        : Object.keys(right).sort();
       if (leftKeys.length !== rightKeys.length) return false;
       if (queued + leftKeys.length > budget) return false;
       queued += leftKeys.length;
       for (let index = 0; index < leftKeys.length; index += 1) {
         const key = leftKeys[index];
         if (key === undefined) return false;
-        // ORDER, not just membership. A document's identity is its serialized
-        // form, and `JSON.stringify` writes keys in insertion order — so
+        // ORDER, not just membership, unless the caller says its domain sorts.
+        // A stored document's identity is its serialized form, and
+        // `JSON.stringify` writes keys in insertion order — so
         // `{ first: 1, second: 2 }` and `{ second: 2, first: 1 }` are different
         // stored documents, and a block rendering `Object.entries(props)`
         // produces different output from them. Comparing membership alone calls
         // that reordering a no-op and refuses an edit that changes what the
         // reader sees.
+        //
+        // Both key lists are sorted when order does not matter, so this same
+        // comparison answers the other domain without a second walk existing to
+        // disagree with this one.
         if (key !== rightKeys[index]) return false;
         pending.push([left[key], right[key]]);
       }
@@ -531,6 +552,34 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
  */
 export function sameStoredValue(a: unknown, b: unknown): boolean {
   return equalWithin(a, b, COMPARISON_BUDGET);
+}
+
+/**
+ * Whether two STYLE values are the same one, by the comparison the style
+ * compiler's own output makes.
+ *
+ * Differs from {@link sameStoredValue} in exactly one way — key order is not a
+ * difference — and the reason is not a preference. `partDeclarations` sorts a
+ * composite's keys before emitting it, and says so beside the sort: "two
+ * documents differing only in the order their keys were written compile to the
+ * same bytes". So for a style value, a reorder changes nothing anybody can see,
+ * and reporting it as a change means an edit that rewrites the document and
+ * costs an undo entry while rendering identically.
+ *
+ * The general predicate stays order sensitive because a general stored value
+ * has no such compiler: a block rendering `Object.entries(props)` really does
+ * produce different output from a reordered record.
+ *
+ * ONE walk with a flag, not a second implementation. Two comparisons of "are
+ * these the same value" drift, and they drift about exactly the composites that
+ * are hard.
+ *
+ * Weaker than {@link sameStoredValue}, which is the safe direction here: every
+ * pair this calls different is one that calls different too, so an op built on
+ * this answer is never one `applyOp` would refuse as a no-op.
+ */
+export function sameStyleValue(a: unknown, b: unknown): boolean {
+  return equalWithin(a, b, COMPARISON_BUDGET, false);
 }
 
 /**

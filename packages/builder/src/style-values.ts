@@ -31,7 +31,7 @@ import {
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
-import { sameStoredValue, type BuilderOp } from "./ops";
+import { sameStyleValue, type BuilderOp } from "./ops";
 import type { StyleControlOptions } from "./style-controls";
 
 /**
@@ -372,7 +372,10 @@ function writeResult(
   // answer here and the answer `applyOp` would give cannot differ. An empty
   // envelope stands in for an absent one: a node with no styles and a node
   // whose styles cleared to nothing are the same document.
-  if (sameStoredValue(before ?? {}, after)) {
+  // The STYLE predicate, not the general stored one: the compiler sorts a
+  // composite's keys, so a reorder renders identically and an op for it would
+  // rewrite the document and cost an undo entry for nothing.
+  if (sameStyleValue(before ?? {}, after)) {
     return {
       ok: true,
       op: null,

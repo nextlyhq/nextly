@@ -97,7 +97,7 @@ describe("what a selection shares at one address", () => {
     });
   });
 
-  it("compares a composite structurally, and by the WRITER's rule on key order", () => {
+  it("compares a composite structurally, and by what the compiler emits", () => {
     /*
      * Two questions in one fixture, and the second one changed deliberately.
      *
@@ -106,16 +106,16 @@ describe("what a selection shares at one address", () => {
      * selection as mixed the moment the values came from different nodes, which
      * is always.
      *
-     * KEY ORDER: reported as a disagreement, because `sameStoredValue` — the
-     * predicate the WRITE path uses to decide an op changes nothing — is order
-     * sensitive, and `ops` names this exact case beside its export as the one
-     * two predicates would disagree about. An order-insensitive read paired
-     * with an order-sensitive write says "these agree", then emits an op per
-     * node and an undo entry for a gesture that changed nothing.
+     * KEY ORDER: not a disagreement, because `partDeclarations` sorts a
+     * composite's keys before emitting it and says so beside the sort — "two
+     * documents differing only in the order their keys were written compile to
+     * the same bytes". Two blocks like these render identically, so a surface
+     * calling them Mixed would describe an overwrite that changes nothing.
      *
-     * So this reads "Mixed" for values that are semantically equal, which is
-     * the conservative direction: "Mixed" makes typing a replacement, and the
-     * replacement is the value they already shared.
+     * The WRITE path reads the same predicate, which is what makes this safe to
+     * answer: committing the shared value onto a differently ordered node
+     * produces no op at all, rather than rewriting the document and costing an
+     * undo entry for bytes that do not change.
      */
     const at = { ...AT, property: "padding" };
     const composite = (id: string, styles: Record<string, string>) =>
@@ -141,7 +141,10 @@ describe("what a selection shares at one address", () => {
       value: { blockStart: "1px", inlineStart: "2px" },
     });
 
-    // Same tree, other order: a disagreement, by the writer's rule.
+    // Same tree, other order: still an agreement, because the style compiler
+    // sorts a composite's keys and both compile to the same bytes. The writer
+    // uses this same predicate, so committing the shared value emits no op
+    // rather than rewriting every differently ordered node.
     expect(
       sharedValueAt(
         [
@@ -150,7 +153,10 @@ describe("what a selection shares at one address", () => {
         ],
         at
       )
-    ).toEqual({ kind: "mixed" });
+    ).toEqual({
+      kind: "same",
+      value: { blockStart: "1px", inlineStart: "2px" },
+    });
   });
 
   it("says nothing is mixed in an EMPTY selection", () => {

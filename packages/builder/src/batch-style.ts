@@ -35,7 +35,7 @@ import type {
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
-import { sameStoredValue, type BuilderOp } from "./ops";
+import { sameStyleValue, type BuilderOp } from "./ops";
 import {
   readStyleValue,
   styleClearOp,
@@ -64,26 +64,23 @@ export type SharedValue =
  * disagrees when there is nothing to disagree, and reporting a conflict for an
  * empty set would put "Mixed" on a panel describing no blocks.
  *
- * Compared with `sameStoredValue`, the op layer's own predicate, and NOT with a
- * comparison of this module's own. That is the whole point rather than a
- * convenience: the write path decides whether an edit changes anything with
- * exactly this function, so a second implementation here would answer "these
- * agree" about values the writer then treats as different — emitting an op per
- * node and an undo entry for a gesture that changed nothing.
+ * Compared with `sameStyleValue`, which is the predicate `styleWriteOp` uses to
+ * decide a write changes nothing. Sharing it is what keeps this reader and that
+ * writer from disagreeing: a comparison of this module's own could call two
+ * values equal that the writer treats as different, and a control committing
+ * the value they "share" would then emit an op per node and an undo entry for a
+ * gesture that changed nothing.
  *
- * `ops` says so beside the export, and names the case that separates them: "a
- * composite whose keys were written in another order". A bespoke comparison
- * here disagreed on precisely that, having already disagreed on a value with an
- * inherited `toJSON` and on two records whose text collided. Three findings,
- * one cause, and the cause was the second implementation rather than any of its
- * bugs.
+ * The STYLE comparison rather than the general stored one, because the compiler
+ * sorts a composite's keys before emitting it — so two blocks holding one value
+ * in different key order render identically and do agree.
  *
- * What it inherits by borrowing: structural rather than serialised, so no
- * `toJSON` is ever consulted; iterative, so a deep value cannot exhaust the
- * stack; bounded, and answering "different" when the budget runs out — the safe
- * direction here too, since MIXED makes the control say so and makes typing a
- * replacement, while a wrong "same" shows one block's value while another holds
- * a different one and the next edit overwrites it silently.
+ * What it brings: structural rather than serialised, so a value carrying its
+ * own `toJSON` cannot decide its comparison; iterative, so a deep value cannot
+ * exhaust the stack; bounded, and answering "different" when the budget runs
+ * out. That direction is the safe one — MIXED makes the control say so and
+ * makes typing a replacement, while a wrong "same" shows one block's value
+ * while another holds a different one and the next edit overwrites it silently.
  */
 export function sharedValueAt(
   nodes: readonly BlockNode[],
@@ -96,7 +93,7 @@ export function sharedValueAt(
       first = { value };
       continue;
     }
-    if (!sameStoredValue(first.value, value)) return { kind: "mixed" };
+    if (!sameStyleValue(first.value, value)) return { kind: "mixed" };
   }
   return { kind: "same", value: first?.value };
 }
