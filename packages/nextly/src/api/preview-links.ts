@@ -45,6 +45,7 @@ import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import { assertEntryPreviewable } from "./preview-access";
 import {
+  loadSingleForPreview,
   previewDeclarationFor,
   singlePreviewDeclarationFor,
 } from "./preview-url";
@@ -303,18 +304,7 @@ async function mintForSingle(
     ? await resolveSinglePreviewRedirect(
         { single, ...(locale === undefined ? {} : { locale }) },
         {
-          loadSingle: async (slug, singleLocale) => {
-            const nextly = await getCachedNextly();
-            const document = await nextly.findSingle({
-              slug,
-              overrideAccess: true,
-              draft: true,
-              status: "all",
-              depth: 0,
-              ...(singleLocale === undefined ? {} : { locale: singleLocale }),
-            });
-            return document ?? null;
-          },
+          loadSingle: loadSingleForPreview,
           ...sharedRedirectDeps(declaration),
         }
       )

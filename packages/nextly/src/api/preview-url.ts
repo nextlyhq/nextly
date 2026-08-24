@@ -126,6 +126,43 @@ export async function singlePreviewDeclarationFor(
 }
 
 /**
+ * A Single's document, read the way a preview redirect needs it.
+ *
+ * Shared by the minting endpoint and the preview route's own default, because
+ * they are asking one question — where does this Single's DRAFT live — and two
+ * implementations of it would drift into minting a link at one address and
+ * landing it at another.
+ *
+ * Trusted, because both callers are already past their own authorization: the
+ * mint has checked `update` on the Single, and whoever follows a link carries a
+ * signed token that recorded that verdict. What this produces is a path, never
+ * content.
+ *
+ * The working draft's values rather than the published row's, and every status,
+ * because an editor sharing a draft is sharing what the draft says — and a
+ * Single that has never been published is exactly the one a preview link is most
+ * often minted for.
+ */
+export async function loadSingleForPreview(
+  slug: string,
+  locale: string | undefined
+): Promise<Record<string, unknown> | null> {
+  const nextly = await getCachedNextly();
+  const document = await nextly.findSingle({
+    slug,
+    overrideAccess: true,
+    draft: true,
+    status: "all",
+    // No relationships: every field a preview URL can be built from is scalar,
+    // so expanding would read further collections to answer a question none of
+    // them contribute to.
+    depth: 0,
+    ...(locale === undefined ? {} : { locale }),
+  });
+  return document ?? null;
+}
+
+/**
  * POST /api/nextly/preview-url
  *
  * Answers with one of the resolver's states, so a caller can tell "this

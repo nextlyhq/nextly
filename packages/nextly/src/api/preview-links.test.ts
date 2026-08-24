@@ -47,6 +47,14 @@ vi.mock("./preview-url", () => ({
   previewDeclarationFor: (...args: unknown[]) => previewDeclaration(...args),
   singlePreviewDeclarationFor: (...args: unknown[]) =>
     singleDeclaration(...args),
+  // Delegates to the same `findSingle` double the mint used to reach directly,
+  // so what these tests drive is unchanged: the read moved behind a shared
+  // loader, and the loader is the one the preview ROUTE reads through too.
+  loadSingleForPreview: async (slug: string, locale: string | undefined) =>
+    (await findSingle({
+      slug,
+      ...(locale === undefined ? {} : { locale }),
+    })) ?? null,
 }));
 
 vi.mock("../di", () => ({

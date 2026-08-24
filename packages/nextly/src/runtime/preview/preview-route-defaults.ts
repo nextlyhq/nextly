@@ -24,6 +24,7 @@ import {
 import { container, getService } from "../../di";
 import {
   resolvePreviewRedirect,
+  resolveSinglePreviewRedirect,
   type PreviewRedirectScope,
 } from "../../domains/collections/services/preview-redirect-resolver";
 import { resolvePreviewSiteUrl } from "../../domains/preview/site-url";
@@ -101,13 +102,39 @@ export async function defaultRedirectTo(
   scope: PreviewTokenScope,
   context?: { requestOrigin: string }
 ): Promise<string | null> {
-  // A Single names no collection and no entry id, so the collection-preview
-  // resolution below cannot answer for one. Refused rather than guessed, which
-  // the route reports as the same 404 every other refusal gets.
-  if (isSingleScope(scope)) return null;
-
   await getCachedNextly();
-  const { previewDeclarationFor } = await import("../../api/preview-url");
+  const {
+    loadSingleForPreview,
+    previewDeclarationFor,
+    singlePreviewDeclarationFor,
+  } = await import("../../api/preview-url");
+
+  // A Single names no collection and no entry id, so the entry resolution below
+  // cannot answer for one. It is a sibling rather than a branch: the two differ
+  // in everything they LOAD — one by id from a collection, one by slug with no
+  // id at all — and share only what they do with the result.
+  //
+  // Answering here rather than leaving it to the application is the whole point
+  // of the default. A route that refused every Single would let the admin mint a
+  // link and then 404 it, which is indistinguishable from an expired one.
+  if (isSingleScope(scope)) {
+    return resolveSinglePreviewRedirect(
+      {
+        single: scope.single,
+        ...(scope.locale === undefined ? {} : { locale: scope.locale }),
+      },
+      {
+        loadSingle: loadSingleForPreview,
+        loadDeclaration: singlePreviewDeclarationFor,
+        loadSiteUrl: async () =>
+          resolvePreviewSiteUrl(
+            await (await settingsService()).getSettings().then(s => s.siteUrl)
+          ),
+      },
+      context?.requestOrigin
+    );
+  }
+
   const collections = getService("collectionsHandler");
 
   return resolvePreviewRedirect(
