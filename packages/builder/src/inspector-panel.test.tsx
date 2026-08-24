@@ -26,6 +26,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
+import { createBlockResolver } from "@nextlyhq/blocks-react";
 import {
   clearBlocks,
   hasBlock,
@@ -1353,5 +1354,76 @@ describe("a refused id while an unrelated attribute saves", () => {
         .queryAllByRole("alert")
         .some(each => each.textContent?.includes("already uses that id"))
     ).toBe(true);
+  });
+});
+
+describe("the block set the collision check answers about", () => {
+  it("uses the resolver the canvas renders with, not the global registry", () => {
+    /*
+     * `Canvas` forwards `render.blocks` to `PageRenderer`, so a host can render
+     * against definitions the global registry has never seen. A panel that
+     * reached for the registry would call such a node a placeholder, free its
+     * id, and let another block take an id the page already renders.
+     *
+     * `acme/host` is deliberately NOT registered: only the resolver passed in
+     * knows it, so the id it holds can only be reserved by way of that
+     * resolver.
+     */
+    register();
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/heading", version: 1, props: {} },
+        { id: "b", type: "acme/host", version: 1, props: {}, cssId: "hero" },
+      ],
+    } as unknown as BlockDocument);
+    render(
+      <InspectorPanel
+        editor={editor}
+        blocks={createBlockResolver([
+          { name: "acme/host", version: 1 } as never,
+        ])}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "already uses that id"
+    );
+  });
+
+  it("falls back to the global registry when the host states none", () => {
+    // The control, and the ordinary case: `PageRenderer` defaults the same way,
+    // so a host that says nothing still has the two sides agreeing.
+    register();
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/heading", version: 1, props: {} },
+        {
+          id: "b",
+          type: "acme/heading",
+          version: 1,
+          props: {},
+          cssId: "hero",
+        },
+      ],
+    } as unknown as BlockDocument);
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    fireEvent.change(screen.getByLabelText("CSS id"), {
+      target: { value: "hero" },
+    });
+    fireEvent.blur(screen.getByLabelText("CSS id"));
+
+    expect(editor.apply).not.toHaveBeenCalled();
   });
 });

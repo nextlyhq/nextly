@@ -26,6 +26,7 @@
  * @module advanced-panel
  */
 import { registeredBlocks } from "@nextlyhq/blocks-react";
+import type { BlockResolver } from "@nextlyhq/blocks-react";
 import { Button, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -59,6 +60,20 @@ export interface AdvancedPanelProps {
    * This is how it is told.
    */
   readonly active: boolean;
+  /**
+   * The definitions the CANVAS is rendering against.
+   *
+   * Which ids are taken depends on which nodes render, and that turns on the
+   * block set. `Canvas` forwards a `render.blocks` resolver to `PageRenderer`,
+   * so a host that supplies one and a panel that reached for the global
+   * registry would be answering about two different pages: a node the canvas
+   * renders would look like a placeholder here and free its id, and a node it
+   * does not would reserve one.
+   *
+   * Optional, and defaulted to the same registry `PageRenderer` defaults to, so
+   * the ordinary host states nothing and the two still agree.
+   */
+  readonly blocks?: BlockResolver;
 }
 
 export function AdvancedPanel({
@@ -67,6 +82,7 @@ export function AdvancedPanel({
   attributes,
   editor,
   active,
+  blocks,
 }: AdvancedPanelProps): React.JSX.Element {
   const [draft, setDraft] = React.useState<Draft>(() => ({
     id: cssId,
@@ -135,8 +151,9 @@ export function AdvancedPanel({
   }, [cssId, attributes]);
 
   const taken = React.useMemo(
-    () => domIdsTaken(editor.document.nodes, nodeId, registeredBlocks()),
-    [editor.document, nodeId]
+    () =>
+      domIdsTaken(editor.document.nodes, nodeId, blocks ?? registeredBlocks()),
+    [editor.document, nodeId, blocks]
   );
 
   /*

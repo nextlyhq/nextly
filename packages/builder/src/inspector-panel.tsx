@@ -29,6 +29,7 @@ import {
   type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
+import type { BlockResolver } from "@nextlyhq/blocks-react";
 import {
   Checkbox,
   Input,
@@ -85,6 +86,15 @@ export interface InspectorPanelProps {
   /** The breakpoint the Style tab edits. The unconditional one by default. */
   breakpoint?: BreakpointId;
   /**
+   * The definitions the CANVAS renders against, forwarded to the Advanced tab.
+   *
+   * A host that gives `Canvas` a `render.blocks` resolver must give the same one
+   * here, or the id-collision check answers about a different page than the one
+   * on screen. Omitted, both sides fall back to the global registry, which is
+   * what `PageRenderer` itself defaults to.
+   */
+  blocks?: BlockResolver;
+  /**
    * The site's design tokens, forwarded to the Style tab's colour controls.
    *
    * Carried rather than defaulted, as `policy` is: omitting it means the
@@ -121,6 +131,7 @@ export function InspectorPanel({
   styleState,
   breakpoint,
   tokens,
+  blocks,
 }: InspectorPanelProps): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
@@ -287,6 +298,7 @@ export function InspectorPanel({
             attributes={inspection.html.attributes}
             editor={editor}
             active={tab === "advanced"}
+            blocks={blocks}
           />
         </TabsContent>
       </Tabs>
