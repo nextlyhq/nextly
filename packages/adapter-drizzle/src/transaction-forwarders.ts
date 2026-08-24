@@ -12,6 +12,7 @@
 import type {
   DeleteOptions,
   SelectOptions,
+  TransactionContext,
   UpdateOptions,
   UpsertOptions,
   WhereClause,
@@ -55,30 +56,10 @@ export interface TransactionCrudDelegator {
 /**
  * Transaction context CRUD methods provided by the forwarder.
  */
-export interface TransactionCrudForwarders {
-  select<T = unknown>(table: string, options?: SelectOptions): Promise<T[]>;
-  selectOne<T = unknown>(
-    table: string,
-    options?: SelectOptions
-  ): Promise<T | null>;
-  update<T = unknown>(
-    table: string,
-    data: Record<string, unknown>,
-    where: WhereClause,
-    options?: UpdateOptions
-  ): Promise<T[]>;
-  delete(
-    table: string,
-    where: WhereClause,
-    options?: DeleteOptions
-  ): Promise<number>;
-  upsert<T = unknown>(
-    table: string,
-    data: Record<string, unknown>,
-    options: UpsertOptions
-  ): Promise<T>;
-  getDrizzle<T = unknown>(): T;
-}
+export type TransactionCrudForwarders = Pick<
+  TransactionContext,
+  "select" | "selectOne" | "update" | "delete" | "upsert" | "getDrizzle"
+>;
 
 /**
  * Create CRUD and Drizzle instance forwarding methods for a TransactionContext.

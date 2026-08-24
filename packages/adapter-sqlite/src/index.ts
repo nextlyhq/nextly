@@ -891,6 +891,7 @@ export class SqliteAdapter extends DrizzleAdapter {
    * @param sql - SQL statement that caused the error (optional)
    * @returns DatabaseError with proper classification
    */
+  // fallow-ignore-next-line complexity
   protected override classifyError(
     error: unknown,
     sql?: string
