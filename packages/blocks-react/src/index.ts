@@ -126,7 +126,7 @@ export type { PageStyles, ResolveStyleOptions } from "./styles";
  * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
-export { prepareDocumentForRead } from "./prepare-document";
+export { prepareDocumentForRead, rendersOwnMarkup } from "./prepare-document";
 export type { PrepareDocumentArgs } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";

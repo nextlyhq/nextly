@@ -18,7 +18,12 @@
  * @module custom-attributes
  */
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import { EDITOR_NAMESPACE, isAllowedAttribute } from "@nextlyhq/blocks-react";
+import {
+  EDITOR_NAMESPACE,
+  isAllowedAttribute,
+  rendersOwnMarkup,
+  type BlockResolver,
+} from "@nextlyhq/blocks-react";
 
 /** One row of the attributes editor, as the author is typing it. */
 export interface AttributeRow {
@@ -264,7 +269,8 @@ export function storedAttributes(
  */
 export function domIdsTaken(
   nodes: readonly BlockNode[],
-  exceptNodeId: string
+  exceptNodeId: string,
+  resolver: BlockResolver
 ): Set<string> {
   const taken = new Set<string>();
   /*
@@ -278,29 +284,48 @@ export function domIdsTaken(
   const visit = (node: unknown): void => {
     if (typeof node !== "object" || node === null) return;
     const held = node as BlockNode;
+    /*
+     * A node the page replaces with a PLACEHOLDER reserves nothing, and neither
+     * does anything inside it: the renderer prunes the whole subtree, so none
+     * of those ids reach the page. Counting them refuses a healthy block an id
+     * the rendered page would contain exactly once — trading a real anchor for
+     * one nothing was going to use.
+     *
+     * Asked of the renderer's own predicate rather than restated. Whether a
+     * node renders its own markup turns on three things — a failed migration,
+     * an unknown type, and a version ahead of the definition — and a second
+     * copy of that list is a copy to keep in step.
+     */
+    if (!rendersOwnMarkup(held, resolver)) return;
     if (held.id !== exceptNodeId) {
-      /*
-       * ONE id per node, because the renderer emits one: the modelled field
-       * wins over the bag. Adding both refused another block the bag's value
-       * even though that id never reaches the page.
-       */
-      /*
-       * PRESENT whenever it is a string, the empty one included, because that
-       * is the renderer's test: it writes `extra.id = cssId` on
-       * `cssId !== undefined`, so an empty modelled field still overwrites
-       * the bag and the element renders `id=""`. Reading it as absent here
-       * recorded the bag's value and refused another block an id that never
-       * renders.
-       */
-      const modelled = typeof held.cssId === "string" ? held.cssId : undefined;
-      const rendered = modelled ?? renderedIdIn(held.attributes);
-      // An empty id is not an id, so it takes nothing — it only stops the bag.
-      if (rendered !== undefined && rendered !== "") taken.add(rendered);
+      const rendered = renderedIdOf(held);
+      if (rendered !== undefined) taken.add(rendered);
     }
     for (const child of childNodesOf(held)) visit(child);
   };
   for (const node of nodes) visit(node);
   return taken;
+}
+
+/**
+ * The one id a node puts on the page, or `undefined` when it puts none.
+ *
+ * ONE per node, because the renderer emits one: the modelled field wins over
+ * the bag. Adding both refused another block the bag's value even though that
+ * id never reaches the page.
+ *
+ * The modelled field counts as PRESENT whenever it is a string, the empty one
+ * included, because that is the renderer's test: it writes `extra.id = cssId`
+ * on `cssId !== undefined`, so an empty modelled field still overwrites the bag
+ * and the element renders `id=""`. Reading it as absent here recorded the bag's
+ * value and refused another block an id that never renders.
+ *
+ * An empty id is not an id, so it takes nothing — it only stops the bag.
+ */
+function renderedIdOf(node: BlockNode): string | undefined {
+  const modelled = typeof node.cssId === "string" ? node.cssId : undefined;
+  const rendered = modelled ?? renderedIdIn(node.attributes);
+  return rendered === "" ? undefined : rendered;
 }
 
 /**
@@ -360,19 +385,31 @@ export interface HtmlFields {
 }
 
 /**
+ * The id the author is ASKING for, normalized the way it would be stored.
+ *
+ * Its own function because two questions need the same answer and must not
+ * answer it twice: what to write, and — once the write lands — whether what the
+ * author asked for is what the node now holds. A collision makes those differ,
+ * and the panel has to tell them apart to know whose text belongs in the field.
+ *
+ * Trimmed only when the author TYPED it. Normalizing a value nobody touched is a
+ * change nobody asked for, and the two normalizations are not alike: the
+ * renderer lowercases an attribute name itself, so storing `DATA-X` as `data-x`
+ * renders the same byte for byte — but it does not trim `cssId`, so tidying a
+ * stored `" hero "` silently moves the anchor every link to this block points
+ * at. What the renderer already does is safe to store; what it does not do is
+ * the author's to decide.
+ */
+export function requestedId(draft: Draft, loaded: Draft): string {
+  return draft.id === loaded.id ? draft.id : draft.id.trim();
+}
+
+/**
  * What a draft wants the node to hold — the whole question of what to STORE.
  *
  * Separate from getting the document there, which is the caller's job and a
  * different kind of problem: this one is about attribute rules and knows
  * nothing about ops, refusals or undo.
- *
- * The id is trimmed only when the author TYPED it. Normalizing a value nobody
- * touched is a change nobody asked for, and the two normalizations here are not
- * alike: the renderer lowercases an attribute name itself, so storing `DATA-X`
- * as `data-x` renders the same byte for byte — but it does not trim `cssId`, so
- * tidying a stored `" hero "` silently moves the anchor every link to this
- * block points at. What the renderer already does is safe to store; what it
- * does not do is the author's to decide.
  *
  * An id another block holds is not written at all: the field keeps showing what
  * the author typed, with the reason beside it, and the document keeps what it
@@ -384,7 +421,7 @@ export function wantedFields(
   stored: HtmlFields,
   taken: ReadonlySet<string>
 ): HtmlFields {
-  const id = draft.id === loaded.id ? draft.id : draft.id.trim();
+  const id = requestedId(draft, loaded);
   const keptId = id !== "" && taken.has(id) ? stored.cssId : id;
   return {
     cssId: keptId,

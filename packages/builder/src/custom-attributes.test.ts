@@ -9,7 +9,10 @@
  *
  * @module custom-attributes.test
  */
-import { isAllowedAttribute } from "@nextlyhq/blocks-react";
+import {
+  createBlockResolver,
+  isAllowedAttribute,
+} from "@nextlyhq/blocks-react";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -202,6 +205,13 @@ describe("names the editor needs for itself", () => {
   });
 });
 
+/*
+ * Every fixture node in this file is `acme/x` at version 1 and renders its own
+ * markup, so the id scan reaches all of them. The placeholder cases below say
+ * so by naming a node this resolver does NOT know.
+ */
+const renders = createBlockResolver([{ name: "acme/x", version: 1 } as never]);
+
 describe("which ids a document already holds", () => {
   const node = (over: Record<string, unknown>): never =>
     ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
@@ -214,7 +224,8 @@ describe("which ids a document already holds", () => {
         node({ id: "b", cssId: "from-field" }),
         node({ id: "c", attributes: { id: "from-bag" } }),
       ],
-      "a"
+      "a",
+      renders
     );
     expect([...taken].sort()).toEqual(["from-bag", "from-field"]);
   });
@@ -228,7 +239,8 @@ describe("which ids a document already holds", () => {
           slots: { main: [node({ id: "d", cssId: "nested" })] },
         }),
       ],
-      "a"
+      "a",
+      renders
     );
     // Its own id is not a collision with itself.
     expect(taken.has("mine")).toBe(false);
@@ -300,7 +312,8 @@ describe("an id spelled with capitals in the bag", () => {
      */
     const taken = domIdsTaken(
       [node({ id: "b", attributes: { ID: "hero" } })],
-      "a"
+      "a",
+      renders
     );
     expect(taken.has("hero")).toBe(true);
   });
@@ -310,7 +323,8 @@ describe("an id spelled with capitals in the bag", () => {
     // earlier one. This editor never writes two spellings; an import can.
     const taken = domIdsTaken(
       [node({ id: "b", attributes: { ID: "first", id: "second" } })],
-      "a"
+      "a",
+      renders
     );
     expect(taken.has("second")).toBe(true);
     expect(taken.has("first")).toBe(false);
@@ -387,7 +401,8 @@ describe("the id a node actually renders", () => {
      */
     const taken = domIdsTaken(
       [node({ id: "b", cssId: "", attributes: { id: "hero" } })],
-      "a"
+      "a",
+      renders
     );
     expect(taken.has("hero")).toBe(false);
     // And the empty one takes nothing: it is not an id, it only stops the bag.
@@ -398,7 +413,8 @@ describe("the id a node actually renders", () => {
     // The control: the rule is about PRESENCE, not about emptiness in general.
     const taken = domIdsTaken(
       [node({ id: "b", attributes: { id: "hero" } })],
-      "a"
+      "a",
+      renders
     );
     expect(taken.has("hero")).toBe(true);
   });
@@ -418,7 +434,8 @@ describe("the id a node actually renders", () => {
           node({ id: "c", slots: { main: [null, "nope"] } }),
           node({ id: "d", cssId: "kept" }),
         ],
-        "a"
+        "a",
+        renders
       )
     ).not.toThrow();
     // And a real nested node beside the rubbish is still read, so the guard
@@ -430,7 +447,8 @@ describe("the id a node actually renders", () => {
           slots: { main: [null, node({ id: "e", cssId: "nested" })] },
         }),
       ],
-      "a"
+      "a",
+      renders
     );
     expect(taken.has("nested")).toBe(true);
   });
@@ -448,7 +466,8 @@ describe("the id a node actually renders", () => {
           node({ id: "c", attributes: ["nope"] }),
           node({ id: "d", cssId: "kept" }),
         ],
-        "a"
+        "a",
+        renders
       )
     ).not.toThrow();
     // And the good node beside them is still read, so the guard skips rather
@@ -456,7 +475,8 @@ describe("the id a node actually renders", () => {
     expect(
       domIdsTaken(
         [node({ id: "b", attributes: null }), node({ id: "d", cssId: "kept" })],
-        "a"
+        "a",
+        renders
       ).has("kept")
     ).toBe(true);
   });
@@ -523,7 +543,8 @@ describe("the id a bag renders when it holds an empty spelling last", () => {
      */
     const taken = domIdsTaken(
       [node({ id: "b", attributes: { id: "hero", ID: "" } })],
-      "a"
+      "a",
+      renders
     );
     expect(taken.has("hero")).toBe(false);
   });
@@ -532,7 +553,8 @@ describe("the id a bag renders when it holds an empty spelling last", () => {
     // The control: last-wins, not empty-wins.
     const taken = domIdsTaken(
       [node({ id: "b", attributes: { ID: "", id: "hero" } })],
-      "a"
+      "a",
+      renders
     );
     expect(taken.has("hero")).toBe(true);
   });
@@ -568,5 +590,80 @@ describe("an empty bag and no bag", () => {
         { cssId: "", attributes: {} }
       )
     ).toEqual({ patch: { attributes: { a: "1" } }, unset: [] });
+  });
+});
+
+describe("ids on a node the page replaces with a placeholder", () => {
+  const node = (over: Record<string, unknown>): never =>
+    ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
+
+  it("reserves nothing for a node whose block is unknown", () => {
+    /*
+     * The renderer emits no modelled id for a placeholder — asserted in
+     * `page-renderer.test.tsx`, "does not reserve a dom id for a node that
+     * renders a placeholder". Counting one here refuses a healthy block an
+     * anchor the rendered page would contain exactly once.
+     */
+    const taken = domIdsTaken(
+      [node({ id: "b", type: "acme/missing", cssId: "hero" })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual([]);
+  });
+
+  it("reserves nothing for a node whose migration failed", () => {
+    const taken = domIdsTaken(
+      [node({ id: "b", cssId: "hero", migrationFailed: true })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual([]);
+  });
+
+  it("reserves nothing for a node ahead of its definition", () => {
+    // The third of the predicate's three conditions, which a hand-written copy
+    // of "unknown or migration-failed" would have missed.
+    const taken = domIdsTaken(
+      [node({ id: "b", version: 2, cssId: "hero" })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual([]);
+  });
+
+  it("reserves nothing INSIDE one either", () => {
+    /*
+     * The second site. `pruneNodes` drops the whole subtree, so a healthy child
+     * of a placeholder never reaches the page and its id is as free as the
+     * parent's. Skipping the node while still descending would have fixed one
+     * of the two.
+     */
+    const taken = domIdsTaken(
+      [
+        node({
+          id: "b",
+          type: "acme/missing",
+          cssId: "outer",
+          slots: { children: [node({ id: "c", cssId: "inner" })] },
+        }),
+      ],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual([]);
+  });
+
+  it("still reserves ids on the healthy nodes beside it", () => {
+    // The control: the skip must not swallow the scan it sits in.
+    const taken = domIdsTaken(
+      [
+        node({ id: "b", type: "acme/missing", cssId: "gone" }),
+        node({ id: "c", cssId: "kept" }),
+      ],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual(["kept"]);
   });
 });

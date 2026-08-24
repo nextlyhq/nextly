@@ -292,6 +292,7 @@ describe("the root entry", () => {
       "preparePageForRead",
       "pruneHiddenNodes",
       "registeredBlocks",
+      "rendersOwnMarkup",
       "resolvePageStyles",
       "styleTextForInjection",
     ]);
