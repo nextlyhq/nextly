@@ -1172,3 +1172,57 @@ describe("a refusal that no longer describes anything", () => {
     );
   });
 });
+
+describe("an id the editor tidied on the way in", () => {
+  it("does not put the whitespace back on the next unrelated edit", () => {
+    /*
+     * Trimming only what the author typed needs the draft to be rebased onto
+     * what LANDED, or the two disagree: the document holds `hero`, the draft
+     * still holds `" hero "`, and the next commit sees an id unchanged from
+     * what was loaded, skips the trim, and patches the spaces back — breaking
+     * every fragment link to the block. The rows were rebased and the id was
+     * not, which is the whole defect.
+     */
+    const editor = mount({ attributes: { "data-x": "1" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: " hero " } });
+    fireEvent.blur(field);
+    // The control: it was stored trimmed, so there is a tidied value to lose.
+    expect(editor.apply).toHaveBeenLastCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "hero" },
+    });
+    // And the field shows what was actually saved, not what was typed.
+    expect((field as HTMLInputElement).value).toBe("hero");
+
+    const value = screen.getByLabelText("Value of attribute 1");
+    fireEvent.change(value, { target: { value: "2" } });
+    fireEvent.blur(value);
+
+    /*
+     * Replayed through the REAL store, both ops in order, because what matters
+     * is the document they leave rather than the shape of either one. The spy
+     * editor never updates what it hands back, so the second op is computed
+     * against the first op's props — which is exactly the situation that let
+     * the untrimmed id return.
+     */
+    let node = {
+      id: "a",
+      type: "acme/heading",
+      version: 1,
+      props: {},
+      attributes: { "data-x": "1" },
+    } as unknown as BlockNode;
+    for (const call of editor.apply.mock.calls) {
+      node = applyOp(
+        { formatVersion: 1, kind: "page", nodes: [node] } as BlockDocument,
+        call[0] as never
+      ).document.nodes[0] as BlockNode;
+    }
+    expect(node.cssId).toBe("hero");
+    expect(node.attributes).toEqual({ "data-x": "2" });
+  });
+});

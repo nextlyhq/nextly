@@ -194,11 +194,23 @@ export function AdvancedPanel({
     }
     setRefusal(undefined);
     lastWritten.current = wanted;
-    // In step with the document again, so the next commit finds nothing to do
-    // rather than writing this same edit a second time.
-    loaded.current = { id: next.id, rows: rebasedRows(next.rows, wanted) };
+    /*
+     * REBASED onto what landed — the id as well as the rows, because the id is
+     * normalized on the way out and the rows are not.
+     *
+     * Recording the raw draft here left the two disagreeing: the document held
+     * `hero` while the draft still held `" hero "`, so the next commit saw an id
+     * unchanged from what was loaded, declined to trim it a second time, and
+     * patched the spaces back — breaking every fragment link to the block. The
+     * rows were already rebased for the same reason; the id was the site this
+     * rule had not reached.
+     */
+    const landed = wanted.cssId;
+    loaded.current = { id: landed, rows: rebasedRows(next.rows, wanted) };
     setDraft(current => ({
-      ...current,
+      // Unless the author has typed since, in which case theirs is newer than
+      // anything this write knows about.
+      id: current.id === next.id ? landed : current.id,
       rows: rebasedRows(current.rows, wanted),
     }));
   };
