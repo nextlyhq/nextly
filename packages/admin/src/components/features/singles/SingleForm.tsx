@@ -30,8 +30,6 @@ import { z } from "zod";
 
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
-import { previewLinkLocale } from "@admin/components/features/entries/EntryForm/entry-address";
-import type { PreviewLinkLocale } from "@admin/components/features/entries/EntryForm/entry-address";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -72,10 +70,6 @@ import {
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
-  usePreviewLink,
-  type UsePreviewLinkOptions,
-} from "@admin/hooks/usePreviewLink";
-import {
   computeMainFields,
   takeoverControllerNames,
   takeoverTypesFromBranding,
@@ -85,6 +79,7 @@ import { getDefaultValues } from "@admin/lib/form/default-values";
 import { cn } from "@admin/lib/utils";
 
 import { relaxIdentityRequired } from "./identity-fields";
+import { useSinglePreviewLink } from "./useSinglePreviewLink";
 
 // ============================================================================
 // Types
@@ -241,31 +236,6 @@ export interface SingleFormProps {
  * }
  * ```
  */
-/**
- * What a Single's preview link is minted against.
- *
- * A Single is addressed by slug and has exactly one document, so there is no id
- * to wait for — unlike an entry, whose link cannot be minted until it has been
- * saved once.
- *
- * The locale comes from `previewLinkLocale`, the same resolver the entry editor
- * uses, rather than from the active locale directly. That distinction is the
- * whole point: on a localized Single opened in its DEFAULT language the active
- * locale reads as `undefined`, and an absent claim is not "the default
- * language" — `previewTokenCovers` treats it as covering EVERY locale, so the
- * recipient could open every other unpublished translation with it. Absent is
- * the correct grant only when the Single is not localized at all, which is the
- * case that resolver answers `unscoped` for.
- */
-function singlePreviewTarget(
-  slug: string,
-  linkLocale: PreviewLinkLocale
-): UsePreviewLinkOptions {
-  return {
-    single: slug,
-    ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
-  };
-}
 
 export function SingleForm({
   schema,
@@ -478,23 +448,17 @@ export function SingleForm({
     enabled: localizationEnabled,
   } = useLocalization();
 
-  // Resolved through the shared rule rather than read off the active locale: on
-  // a localized Single in its default language that value is `undefined`, and a
-  // token minted with no locale claim grants every translation. `unresolved`
-  // withholds the control below rather than minting one of those.
-  const linkLocale = previewLinkLocale({
+  // One decision rather than three: which language the link is for, whether it
+  // can be offered at all, and the mint itself. No site URL is computed here —
+  // a link that travels by email or chat has to name a host, and the server is
+  // the only place that can.
+  const previewLink = useSinglePreviewLink({
+    slug: schema.slug,
     localized: schema.localized === true,
+    hasStatus,
     locale,
     defaultLocale,
   });
-
-  // No site URL is computed here. A link that travels by email or chat has to
-  // name a host, and the server is the only place that can: `settings` is a
-  // system resource the `editor` and `author` presets cannot read, and those
-  // are exactly the roles that share preview links.
-  const previewLink = usePreviewLink(
-    singlePreviewTarget(schema.slug, linkLocale)
-  );
 
   // The per-locale translation-status map, read once and shared by the header
   // adapter and the language panel: two reads of the same document key would
@@ -687,11 +651,9 @@ export function SingleForm({
                    that lifecycle; whether a link can actually be minted is the
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
-                        isLinkAvailable={
-                          hasStatus && linkLocale.kind !== "unresolved"
-                        }
-                        onCopyLink={() => previewLink.mutate()}
-                        isCopyingLink={previewLink.isPending}
+                        isLinkAvailable={previewLink.isAvailable}
+                        onCopyLink={previewLink.copy}
+                        isCopyingLink={previewLink.isCopying}
                         toolbarSlot={
                           <EntryFormToolbarSlots
                             context="single"
