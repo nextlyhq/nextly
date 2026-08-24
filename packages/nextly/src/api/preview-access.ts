@@ -184,7 +184,21 @@ export async function assertEntryPreviewable(
 export async function assertSinglePreviewable(
   single: string,
   locale: string | undefined,
-  user: UserContext
+  user: UserContext,
+  options: {
+    /**
+     * Whether the CALLER has already passed the coarse RBAC / code-defined
+     * access gate for `update` on this Single.
+     *
+     * Required, and per call site rather than defaulted, for the reason
+     * {@link assertEntryPreviewable} states: it is true for the mint, which
+     * runs behind `requireRouteCollectionAccess(req, "update", single)`, and
+     * false for a preview RENDER, which is an anonymous public request with no
+     * route gate at all. Assuming it ran skips the very check that notices a
+     * sharer whose role was withdrawn.
+     */
+    routeAuthorized: boolean;
+  }
 ): Promise<void> {
   const identity = {
     user,
@@ -222,7 +236,7 @@ export async function assertSinglePreviewable(
       ...identity,
       // TRUE here: the mint route ran exactly this gate, so the coarse update
       // check is the redundant one this flag exists to skip.
-      routeAuthorized: true,
+      routeAuthorized: options.routeAuthorized,
     }))
   ) {
     throw NextlyError.forbidden({

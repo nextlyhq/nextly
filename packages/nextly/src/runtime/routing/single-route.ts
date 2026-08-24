@@ -60,6 +60,56 @@ export type NextlySingleReader = Pick<Nextly, "findSingle">;
  * collection path there is no id to resolve and nothing to compare afterwards —
  * the slug IS the identity, and the gate settles the whole question.
  */
+/**
+ * What a Single route's `draft` hook may answer.
+ *
+ * `false` refuses, and an object grants. The object exists so a grant can name
+ * WHOSE field-level read rules the document is judged by: a granted draft read
+ * is trusted, and trust switched field rules off with it, so the document came
+ * back carrying every field — including any the person who shared the link
+ * cannot see. A link was therefore a way to read past your own permissions by
+ * sending yourself one.
+ *
+ * A bare `true` still grants, for a route mounted behind the application's own
+ * auth where every visitor is already entitled to the draft. It names nobody,
+ * so it judges by nobody, which is the pre-existing behaviour it preserves.
+ *
+ * Mirrors `DraftGrant` on the collection route, which carries the same identity
+ * beside the entry id it has to name.
+ */
+export type SingleDraftGrant = boolean | { readAs: UserContext };
+
+/** A normalized draft decision: `null` refuses, an object grants. */
+type SingleDraftGrantResult = { readAs?: UserContext } | null;
+
+/**
+ * Read an app-supplied draft decision as RUNTIME INPUT.
+ *
+ * `SingleDraftGrant` is what the decision is declared to return, and a declared
+ * type is not a runtime guarantee: the hook is application code, so a
+ * JavaScript caller can answer anything. A `readAs` that is not an object would
+ * otherwise be forwarded into the read as an identity and judged as one, and
+ * `typeof null === "object"` makes the obvious check the wrong one.
+ *
+ * Normalized to ONE shape so the reader has a single thing to consult rather
+ * than a three-way union threaded through every call: `null` refuses, an object
+ * grants, and `readAs` is present only when the grant genuinely named someone.
+ *
+ * Extracted rather than inlined because it is the part worth testing on its
+ * own — every branch here exists for a value the type says cannot arrive.
+ */
+export function normalizeSingleDraftGrant(
+  grant: unknown
+): SingleDraftGrantResult {
+  if (grant === false || grant === undefined || grant === null) return null;
+  if (grant === true) return {};
+  if (typeof grant !== "object") return null;
+  const readAs = (grant as { readAs?: unknown }).readAs;
+  return typeof readAs === "object" && readAs !== null
+    ? { readAs: readAs as UserContext }
+    : {};
+}
+
 export interface SingleDraftRequest {
   /** The Single's slug, as configured. */
   slug: string;
@@ -185,7 +235,9 @@ export interface SingleRouteConfig<TNode> {
    */
   draft?:
     | boolean
-    | ((request: SingleDraftRequest) => Promise<boolean> | boolean);
+    | ((
+        request: SingleDraftRequest
+      ) => Promise<SingleDraftGrant> | SingleDraftGrant);
   /**
    * Extra cache tags for a public route, beyond the Single's own.
    *
@@ -241,15 +293,17 @@ function buildSingleRoute<TNode>(
     ...(config.locale === undefined ? {} : { locale: config.locale }),
   };
 
-  /** Whether this request was granted the working draft. */
-  async function draftForThisRequest(): Promise<boolean> {
+  /** Whether this request was granted the working draft, and as whom. */
+  async function draftForThisRequest(): Promise<SingleDraftGrantResult> {
     const decision = config.draft;
-    if (decision === undefined || decision === false) return false;
-    if (decision === true) return true;
-    return decision({
-      slug: config.slug,
-      ...(config.locale === undefined ? {} : { locale: config.locale }),
-    });
+    if (decision === undefined || decision === false) return null;
+    if (decision === true) return {};
+    return normalizeSingleDraftGrant(
+      await decision({
+        slug: config.slug,
+        ...(config.locale === undefined ? {} : { locale: config.locale }),
+      })
+    );
   }
 
   /**
@@ -269,7 +323,8 @@ function buildSingleRoute<TNode>(
   // above: one is the bound, the other is that bound's identity.
   const trustedKey = [...trustedSet].sort().join(",");
 
-  function readArgs(draft: boolean) {
+  function readArgs(grant: SingleDraftGrantResult) {
+    const draft = grant !== null;
     return {
       slug: config.slug,
       // The bound travels WITH the widening. Passed on every read rather than
@@ -290,16 +345,27 @@ function buildSingleRoute<TNode>(
       // published resolves at all. Left alone otherwise: widening it for every
       // read would serve unpublished content to ordinary visitors.
       ...(draft ? { draft: true, status: "all" as const } : {}),
+      // The document stays trusted so the working draft appears at all; the
+      // FIELDS are judged as the person who granted it. Named beside `user`
+      // rather than folded into it, because that identity is a redaction basis
+      // and not the caller: every hook goes on seeing the anonymous visitor who
+      // is actually asking, and a hook-invented value need not be a declared
+      // field, so redaction could not take it back.
+      ...(grant?.readAs === undefined
+        ? {}
+        : { enforceFieldAccess: true, fieldAccessUser: grant.readAs }),
       ...(config.locale === undefined ? {} : { locale: config.locale }),
       ...(config.depth === undefined ? {} : { depth: config.depth }),
       ...(config.user === undefined ? {} : { user: config.user }),
     };
   }
 
-  async function read(draft: boolean): Promise<SingleDocument | null> {
+  async function read(
+    grant: SingleDraftGrantResult
+  ): Promise<SingleDocument | null> {
     const reader = config.nextly ?? getNextly();
     try {
-      const document = await reader.findSingle(readArgs(draft));
+      const document = await reader.findSingle(readArgs(grant));
       return document ?? null;
     } catch (error) {
       if (isMissOrDenied(error)) return null;
@@ -315,9 +381,9 @@ function buildSingleRoute<TNode>(
     // next, which turns a link scoped to one reviewer into a site-wide leak of
     // unpublished content. Bypassing the data cache alone does not opt out of
     // the route cache, which is why this marks the render dynamic as well.
-    if (draft) {
+    if (draft !== null) {
       markDynamic();
-      return read(true);
+      return read(draft);
     }
 
     if (!trusted) {
@@ -325,9 +391,9 @@ function buildSingleRoute<TNode>(
       // into a build-time prerender or held in the route cache. Bypassing the
       // data cache alone does not opt out of the route cache.
       markDynamic();
-      return read(false);
+      return read(null);
     }
-    return cachedFind(() => read(false), {
+    return cachedFind(() => read(null), {
       tags: [...nextlySingleTags(config.slug), ...(config.tags ?? [])],
       // The locale is part of the key: one Single serves a different document
       // per language, and a key that omitted it would serve whichever language
