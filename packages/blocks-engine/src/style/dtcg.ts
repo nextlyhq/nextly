@@ -244,7 +244,22 @@ function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
   return entry;
 }
 
-/** Put a token at its path, creating the groups it passes through. */
+/**
+ * Put a token at its path, creating the groups it passes through.
+ *
+ * Every lookup asks for an OWN key. A document node is an ordinary object, so
+ * reading a segment directly finds whatever `Object.prototype` supplies:
+ * `node["constructor"]` is a function rather than `undefined`, and a token
+ * named `constructor` — which `isTokenName` accepts, because it is a perfectly
+ * ordinary name — was refused as though the site already held it. The document
+ * came back `{}` with "exported more than once" beside it, so the token could
+ * not leave this system at all. `toString`, `valueOf` and the rest of the
+ * prototype behaved the same way, at a leaf or at any segment on the way down.
+ *
+ * `__proto__` is the one name that would also corrupt the ASSIGNMENT rather
+ * than only the lookup, and it cannot arrive here: `exportableValue` refuses a
+ * name `isTokenName` rejects, and that regex requires a letter first.
+ */
 function place(
   root: DtcgNode,
   path: string[],
@@ -254,7 +269,7 @@ function place(
   let node = root;
   for (let index = 0; index < path.length - 1; index++) {
     const segment = path[index] ?? "";
-    const existing = node[segment];
+    const existing = Object.hasOwn(node, segment) ? node[segment] : undefined;
     if (existing === undefined) {
       const group: DtcgNode = {};
       node[segment] = group;
@@ -274,7 +289,7 @@ function place(
     node = existing;
   }
   const leaf = path[path.length - 1] ?? "";
-  if (node[leaf] !== undefined) {
+  if (Object.hasOwn(node, leaf)) {
     issues.push(issue(`"${path.join(".")}" is exported more than once.`));
     return;
   }
@@ -665,6 +680,7 @@ function readToken(
   // Carried, not consumed: everything except this vendor's own key goes back
   // out with the token, which is what the format requires of any tool.
   delete extensions[NEXTLY_EXTENSION];
+  reportUnreadFields(own, name, issues);
 
   const description =
     typeof node.$description === "string" ? node.$description : undefined;
@@ -746,6 +762,10 @@ function readToken(
         typeof dark === "string"
           ? { light: css.light, dark }
           : { light: css.light };
+      // Reported HERE, at the moment the choice between the two is made. This
+      // is the only place that knows both what the file stated and what was
+      // taken instead, so anywhere else would be guessing at that decision.
+      reportOverridden(node.$value, css.light, kind, name, issues);
       return assemble(kind, values);
     }
   }
@@ -770,6 +790,121 @@ function readToken(
   }
 
   return assemble(kind, { light });
+}
+
+/**
+ * The fields this reader takes out of its own extension.
+ *
+ * Named beside the reads below rather than inferred, because a field this list
+ * does not know is REPORTED as dropped: a field added to the reader and not to
+ * this list would name a loss that did not happen. `reportsEveryFieldItWrites`
+ * in the tests is what holds the two together — it round-trips this system's
+ * own export and requires no such report, so adding a field to the emitter
+ * without adding it here fails.
+ */
+const NEXTLY_FIELDS = new Set(["id", "css", "kind"]);
+
+/**
+ * Say which parts of this system's OWN extension were thrown away.
+ *
+ * Unlike another vendor's block, which is carried through untouched, this key is
+ * consumed: it is deleted from the extensions the token keeps, and only the
+ * fields above are read out of it. Anything else a producer wrote there — a
+ * newer version of this system, or a tool imitating it — is gone, and the next
+ * export writes a freshly generated block in its place with no sign that
+ * something was lost.
+ *
+ * Reported rather than preserved. Preserving would be better and is a change to
+ * what a `SiteToken` holds, since there is nowhere on the model today for a
+ * field this system does not understand; saying so is what can be done without
+ * that.
+ */
+function reportUnreadFields(
+  own: unknown,
+  name: string,
+  issues: ValidationIssue[]
+): void {
+  if (!isPlainObject(own)) return;
+  const dropped = Object.keys(own).filter(key => !NEXTLY_FIELDS.has(key));
+  if (dropped.length === 0) return;
+  issues.push(
+    issue(
+      `"${name}" carries ${dropped.map(key => `"${key}"`).join(", ")} in this system's own extension, which this version does not read, so it was not kept.`
+    )
+  );
+}
+
+/**
+ * Say when the file's own `$value` did not agree with the CSS taken instead.
+ *
+ * A token can arrive described twice: the format's `$value`, and the exact CSS
+ * this system wrote into its extension. The extension wins, and that is right —
+ * it preserves what the author typed, where `$value` is a conversion. But when
+ * the two genuinely DISAGREE, the file's value is discarded without a word and
+ * the next export rewrites `$value` to match, so a hand-edited file loses the
+ * edit and reports success.
+ *
+ * Only a real difference is named, never the preference itself. Naming the
+ * preference would put a line against every token of every round trip, because
+ * the two forms differ in SPELLING on files this system wrote: a token stored
+ * as `#111` or `rgb(17 17 17)` comes back from `$value` as `#111111`. A report
+ * that fires on correct files is the report that gets ignored.
+ *
+ * Only the LIGHT value is compared, because the format has one `$value` and a
+ * dark value exists only in this system's extension — there is nothing there
+ * for it to disagree with.
+ */
+function reportOverridden(
+  native: unknown,
+  taken: string,
+  kind: TokenKind,
+  name: string,
+  issues: ValidationIssue[]
+): void {
+  const stated = fromDtcgValue(native, kind);
+  // Unreadable on its own is a different question, and not one this can answer:
+  // there is no value to disagree with.
+  if (stated === undefined) return;
+  if (meansTheSame(stated, taken, kind)) return;
+  issues.push(
+    issue(
+      `"${name}" was imported as "${taken}", the value this system stored, and the "${stated}" its "$value" states was not used.`
+    )
+  );
+}
+
+/**
+ * Whether two spellings of one kind's value mean the same thing.
+ *
+ * Silence is the answer whenever this cannot tell, and the direction is
+ * deliberate: this feeds an advisory report, where a false alarm costs the
+ * whole report and a miss costs one line. So an unequal pair is only called a
+ * disagreement when something here can show the two differ in MEANING.
+ *
+ * Colour is the kind that can be shown, because `parseColor` already reads the
+ * spellings the emitter writes. Every other kind compares only as text, and
+ * text differing is not enough — `1rem` and `1.0rem` are the same dimension —
+ * so those stay silent. That is a real gap and it is stated rather than closed:
+ * closing it needs a normaliser per kind, and each one is a second answer to
+ * what a value of that kind means.
+ */
+function meansTheSame(stated: string, taken: string, kind: TokenKind): boolean {
+  if (stated === taken) return true;
+  if (kind !== "color") return true;
+  const left = parseColor(stated);
+  const right = parseColor(taken);
+  if (left === undefined || right === undefined) return true;
+  return sameRgb(left, right);
+}
+
+/** Whether two parsed colours are the same colour, alpha included. */
+function sameRgb(left: Rgb, right: Rgb): boolean {
+  return (
+    left.r === right.r &&
+    left.g === right.g &&
+    left.b === right.b &&
+    left.a === right.a
+  );
 }
 
 /**
@@ -811,8 +946,17 @@ function isWritableValue(
   return true;
 }
 
-/** Whether a value is one of this system's token kinds. */
-function isKind(value: unknown): value is TokenKind {
+/**
+ * Whether a value is one of this system's token kinds.
+ *
+ * Exported because {@link readToken} decides whether to take a token's stored
+ * CSS on this and two other conditions, and a caller reporting what the reader
+ * dropped has to ask the same question rather than restate it. Restating it
+ * gets the answer wrong: the kinds this predicate accepts are the ones the
+ * FORMAT has a type for, which is not every `TokenKind` — `custom` is a kind
+ * and is not one of them.
+ */
+export function isKind(value: unknown): value is TokenKind {
   return typeof value === "string" && Object.hasOwn(DTCG_TYPE, value);
 }
 
