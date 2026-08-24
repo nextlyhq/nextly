@@ -2093,6 +2093,11 @@ export class CollectionRelationshipService extends BaseService {
       enforceCollectionAccess: options.enforceCollectionAccess,
       fieldAccessStage: options.fieldAccessStage,
       user: options.user,
+      // Carried BESIDE `user`, never folded into it. A preview judges a related
+      // row's fields as the sharer while every hook goes on seeing the
+      // anonymous bearer; dropping it here silently restores the anonymous
+      // reading for the whole expansion, which is the direction that leaks.
+      fieldAccessUser: options.fieldAccessUser,
       overrideAccess: options.overrideAccess,
       trusted: options.trusted,
       authenticatedScope: options.authenticatedScope,
@@ -2689,6 +2694,11 @@ export class CollectionRelationshipService extends BaseService {
       enforceCollectionAccess: options.enforceCollectionAccess,
       fieldAccessStage: options.fieldAccessStage,
       user: options.user,
+      // Carried BESIDE `user`, never folded into it. A preview judges a related
+      // row's fields as the sharer while every hook goes on seeing the
+      // anonymous bearer; dropping it here silently restores the anonymous
+      // reading for the whole expansion, which is the direction that leaks.
+      fieldAccessUser: options.fieldAccessUser,
       overrideAccess: options.overrideAccess,
       trusted: options.trusted,
       authenticatedScope: options.authenticatedScope,

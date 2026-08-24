@@ -12,7 +12,7 @@
  * read enforces field rules at all — is covered in `preview-draft-gate.test.ts`
  * and in the query service's own tests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { findById, listRoleSlugsForUserStrict, getService } = vi.hoisted(() => {
   const findById = vi.fn();
@@ -27,13 +27,16 @@ vi.mock("../../../di/register", () => ({ getService }));
 vi.mock("../../../services/lib/permissions", () => ({
   listRoleSlugsForUserStrict,
 }));
-vi.mock("../../../init", () => ({
-  getCachedNextly: () => Promise.resolve({}),
-}));
+const getCachedNextly = vi.hoisted(() => vi.fn());
+vi.mock("../../../init", () => ({ getCachedNextly }));
 
 const { resolvePreviewIdentity } = await import("../preview-identity");
 
 describe("the identity a previewed draft is rendered as", () => {
+  beforeEach(() => {
+    getCachedNextly.mockResolvedValue({});
+  });
+
   // A role-based rule reads `roles`; an owner-only rule compares the document's
   // owner against `id`; a rule keyed on an email domain reads `email`. All of
   // them have to be present or the rules answer about nobody — which strips
@@ -148,6 +151,23 @@ describe("the identity a previewed draft is rendered as", () => {
   // the same way here rather than being read as "not explicitly disabled".
   it("answers null when the record does not say the sharer is active", async () => {
     findById.mockResolvedValue({ id: "u1", name: "Ada", email: "a@b.c" });
+    listRoleSlugsForUserStrict.mockResolvedValue(["editor"]);
+
+    expect(await resolvePreviewIdentity("u1")).toBeNull();
+  });
+  // Booting is a lookup like any other here, and a preview link can be the
+  // first request a cold process handles — so this is exactly where a
+  // temporarily unavailable database surfaces. Escaping as a rejection turns a
+  // working page into a 500 instead of failing closed, which is what every
+  // other failure in this function does.
+  it("answers null when the instance cannot boot", async () => {
+    getCachedNextly.mockRejectedValue(new Error("database unavailable"));
+    findById.mockResolvedValue({
+      id: "u1",
+      name: "Ada",
+      email: "a@b.c",
+      isActive: true,
+    });
     listRoleSlugsForUserStrict.mockResolvedValue(["editor"]);
 
     expect(await resolvePreviewIdentity("u1")).toBeNull();

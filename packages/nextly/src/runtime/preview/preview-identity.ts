@@ -80,11 +80,15 @@ import { listRoleSlugsForUserStrict } from "../../services/lib/permissions";
 export async function resolvePreviewIdentity(
   minter: string
 ): Promise<UserContext | null> {
-  // Booted first: both lookups below reach the container, and a preview link
-  // can be the first request a cold process handles.
-  await getCachedNextly();
-
   try {
+    // Booted INSIDE the failure boundary, not before it. A preview link can be
+    // the first request a cold process handles, so this is exactly where a
+    // temporarily unavailable database surfaces — and a rejection here would
+    // escape as a 500 on a page that was working, rather than failing closed to
+    // the published page or a 404 the way every other failure in this function
+    // does. Boot is a lookup like the two below it.
+    await getCachedNextly();
+
     const [user, roles] = await Promise.all([
       getService("userService").findById(minter, {}),
       // The STRICT lookup, and the distinction is the whole point. The ordinary
