@@ -37,10 +37,34 @@ vi.mock("../APIPlayground", () => ({
 }));
 
 import { ApiPlaygroundPage } from "../ApiPlaygroundPage";
+// The ROUTE modules, by the path the registry imports them from. Rendering
+// their default exports is the only way the delegation itself is observable:
+// calling the shared component directly proves the component works and says
+// nothing about whether either route reaches it, or reaches it correctly.
+import CollectionRoute from "@admin/pages/dashboard/entries/[slug]/api";
+import SingleRoute from "@admin/pages/dashboard/singles/[slug]/api";
 
 const KINDS = [
   { kind: "collection" as const, slug: "posts", label: "Posts" },
   { kind: "single" as const, slug: "homepage", label: "Homepage" },
+];
+
+/** The routes as the registry holds them, with the label each must resolve. */
+const ROUTES = [
+  {
+    name: "collection",
+    Route: CollectionRoute,
+    slug: "posts",
+    label: "Posts",
+    single: false,
+  },
+  {
+    name: "single",
+    Route: SingleRoute,
+    slug: "homepage",
+    label: "Homepage",
+    single: true,
+  },
 ];
 
 describe("ApiPlaygroundPage", () => {
@@ -79,6 +103,54 @@ describe("ApiPlaygroundPage", () => {
     "asks for a slug the $kind route did not supply",
     ({ kind }) => {
       render(<ApiPlaygroundPage kind={kind} />);
+      expect(screen.getByRole("alert")).toHaveTextContent(/slug is required/i);
+    }
+  );
+});
+
+/**
+ * The wiring, not the component.
+ *
+ * This is the suite that would have caught the original defect. A wrapper that
+ * passes the wrong kind, stops forwarding its slug, or is reverted to local
+ * markup leaves every assertion above green, because none of them renders a
+ * route.
+ */
+describe("the route wrappers", () => {
+  it.each(ROUTES)(
+    "$name route delegates to the shared page",
+    ({ Route, slug }) => {
+      render(<Route params={{ slug }} />);
+      // The shared page is the only thing that renders this container with the
+      // containment classes; local markup would have to reproduce them to pass.
+      const container = screen.getByTestId("page-container");
+      expect(container.className).toContain("h-full");
+      expect(container.className).toContain("min-h-0");
+      expect(container.className).toContain("overflow-hidden");
+    }
+  );
+
+  it.each(ROUTES)(
+    "$name route asks for its own kind",
+    ({ Route, slug, label }) => {
+      render(<Route params={{ slug }} />);
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  );
+
+  it.each(ROUTES)(
+    "$name route tells the playground what it is",
+    ({ Route, slug, single }) => {
+      render(<Route params={{ slug }} />);
+      const playground = screen.getByTestId("playground");
+      expect(playground.getAttribute("data-is-single")).toBe(String(single));
+    }
+  );
+
+  it.each(ROUTES)(
+    "$name route forwards a missing slug rather than inventing one",
+    ({ Route }) => {
+      render(<Route params={{}} />);
       expect(screen.getByRole("alert")).toHaveTextContent(/slug is required/i);
     }
   );
