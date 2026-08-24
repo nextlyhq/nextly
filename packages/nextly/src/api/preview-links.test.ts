@@ -14,11 +14,13 @@ vi.mock("./route-auth", () => ({
   requireRoutePermission: vi.fn(),
 }));
 
-const { getEntry, canUpdateEntry, getSettings } = vi.hoisted(() => ({
-  getEntry: vi.fn(),
-  canUpdateEntry: vi.fn(),
-  getSettings: vi.fn(),
-}));
+const { getEntry, canUpdateEntry, getSettings, previewDeclaration } =
+  vi.hoisted(() => ({
+    getEntry: vi.fn(),
+    canUpdateEntry: vi.fn(),
+    getSettings: vi.fn(),
+    previewDeclaration: vi.fn(),
+  }));
 
 /** The application's `preview` config for the test in hand. */
 let previewConfig: { route?: string } | undefined;
@@ -29,6 +31,10 @@ vi.mock("../init", () => ({
 
 vi.mock("../services/lib/permissions", () => ({
   resolveRoleSlugs: vi.fn().mockResolvedValue(["editor"]),
+}));
+
+vi.mock("./preview-url", () => ({
+  previewDeclarationFor: (...args: unknown[]) => previewDeclaration(...args),
 }));
 
 vi.mock("../di", () => ({
@@ -95,6 +101,7 @@ beforeEach(() => {
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
   getSettings.mockResolvedValue({ siteUrl: "https://site.example" });
+  previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
   previewConfig = undefined;
   // Key-aware, because assembling the link needs BOTH the settings service and
   // the application config, and a mock answering the same object for every key
@@ -115,6 +122,61 @@ beforeEach(() => {
 function item(body: { item?: unknown }): Record<string, unknown> {
   return body.item as Record<string, unknown>;
 }
+
+describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => {
+  // The button that mints this is shown whether or not a collection declares a
+  // preview URL, and that is deliberate — a draft is shareable either way. What
+  // is NOT acceptable is answering success and handing over a link that cannot
+  // land: the reviewer then sees a 404 they cannot tell from an expired link,
+  // and the editor has no idea anything is wrong.
+  it("refuses instead of minting a link that cannot land", async () => {
+    previewDeclaration.mockResolvedValue(undefined);
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  it("names the cause and who can fix it", async () => {
+    previewDeclaration.mockResolvedValue(undefined);
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    // The editor reading this cannot fix it themselves, so the message has to
+    // say what is missing AND that a developer is the one who adds it.
+    const message = String(
+      (body.error as { message?: string } | undefined)?.message ?? ""
+    );
+    expect(message).toMatch(/preview url/i);
+    expect(message).toMatch(/developer/i);
+  });
+
+  it("mints no token at all when it refuses", async () => {
+    previewDeclaration.mockResolvedValue(undefined);
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    // A bearer credential must not be issued for a refused request, even one
+    // refused for a configuration reason rather than an authorization one.
+    expect(body.item).toBeUndefined();
+  });
+
+  it("mints normally once the collection declares one", async () => {
+    previewDeclaration.mockResolvedValue({ url: () => "/somewhere" });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(200);
+  });
+});
 
 describe("mintPreviewLink: the link it hands back", () => {
   it("returns an absolute url built from the site url and the default mount", async () => {

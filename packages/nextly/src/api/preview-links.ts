@@ -24,6 +24,7 @@ import { signPreviewToken } from "../auth/preview/preview-token";
 import { buildUserContext } from "../auth/user-context";
 import { container } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
+import { hasPreviewConfigured } from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -32,6 +33,7 @@ import type { GeneralSettingsService } from "../services/general-settings/genera
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import { assertEntryPreviewable } from "./preview-access";
+import { previewDeclarationFor } from "./preview-url";
 import { respondMutation } from "./response-shapes";
 import {
   requireRouteCollectionAccess,
@@ -139,6 +141,39 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
     }),
     actor
   );
+
+  // Refused BEFORE a token is signed, because a link that cannot land is worse
+  // than no link: the reviewer who opens it sees a 404 indistinguishable from
+  // an expired one, and the editor who sent it was told it worked.
+  //
+  // The button that reaches this endpoint is shown whether or not a collection
+  // declares a preview URL, and that stays true — a draft is worth sharing
+  // either way, and hiding the control would leave an editor with a feature
+  // that vanished and no way to learn why. Refusing here puts the explanation
+  // in front of the person who hit the problem instead.
+  //
+  // `hasPreviewConfigured` is asked rather than the two spellings compared
+  // again here: it is the same predicate the resolver and the stored
+  // `hasPreview` projection use, so a collection cannot be shareable by one
+  // rule and unresolvable by another.
+  const declaration = await previewDeclarationFor(collection);
+  if (!hasPreviewConfigured(declaration)) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message:
+        "This collection has no preview URL configured, so a shared link " +
+        "would have nowhere to open. A developer can add one to the " +
+        "collection before links can be shared.",
+      logContext: {
+        reason: "preview-link-collection-has-no-preview-url",
+        remedy:
+          "Add `admin.preview.url` (code-first) or `admin.preview.urlTemplate` " +
+          "(UI-created) to this collection. It answers where an entry is served " +
+          "on the site, which nothing outside the application can know.",
+        collection,
+      },
+    });
+  }
 
   const generation = await (
     await settingsService()

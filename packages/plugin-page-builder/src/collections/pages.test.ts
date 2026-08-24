@@ -73,3 +73,42 @@ describe("pages is built from blocks", () => {
     expect(fieldsOf().map(f => f.name)).not.toContain("body");
   });
 });
+
+describe("where a page previews", () => {
+  // The plugin ships this collection but cannot see where the host mounted the
+  // route that renders it, so an undeclared preview means a shared link has
+  // nowhere to open — which the minting endpoint now refuses outright.
+  it("declares a preview so a draft can be shared at all", () => {
+    const preview = pagesCollection().admin?.preview;
+
+    expect(preview).toBeDefined();
+    expect(typeof preview?.url).toBe("function");
+  });
+
+  it("defaults to the site root, the common mount", () => {
+    const url = pagesCollection().admin?.preview?.url;
+
+    expect(url?.({ slug: "about" })).toBe("/about");
+  });
+
+  it("serves a host that mounted its pages elsewhere", () => {
+    const url = pagesCollection("/blocks/{slug}").admin?.preview?.url;
+
+    expect(url?.({ slug: "about" })).toBe("/blocks/about");
+  });
+
+  // An entry without a slug yet is not previewable, and becomes so once it has
+  // one. `null` is how the resolver is told to report that rather than building
+  // a URL with a hole in it.
+  it("declines an entry whose slug is not filled in yet", () => {
+    const url = pagesCollection().admin?.preview?.url;
+
+    expect(url?.({})).toBeNull();
+  });
+
+  it("escapes a slug that would otherwise change the path", () => {
+    const url = pagesCollection().admin?.preview?.url;
+
+    expect(url?.({ slug: "a/b" })).toBe("/a%2Fb");
+  });
+});

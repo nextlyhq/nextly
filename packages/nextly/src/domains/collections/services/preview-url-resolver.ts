@@ -179,6 +179,27 @@ function interpolate(
 }
 
 /**
+ * A code-first `preview.url` function built from a `{field}` template.
+ *
+ * The two authoring paths are disjoint by construction — a code-first
+ * collection declares a function, a UI-created one declares a template string —
+ * so a package that ships a collection in code and wants to express its preview
+ * as a PATH has no way to say so. This bridges them, and it is built on the
+ * same `interpolate` the template path uses rather than beside it: two
+ * substitution rules that agree today would drift, and the drift is silent
+ * because a wrong preview URL still looks like a URL.
+ *
+ * Returns `null` for an entry whose placeholders are not all filled, which the
+ * resolver reports as `unavailable` — an entry with no slug yet is not
+ * previewable, and will be once it has one.
+ */
+export function previewUrlFromTemplate(
+  template: string
+): (entry: Record<string, unknown>) => string | null {
+  return entry => interpolate(template, entry);
+}
+
+/**
  * Resolve the preview URL for one entry.
  *
  * `siteUrl` is where the reader's site is served, which is what turns the

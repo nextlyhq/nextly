@@ -118,6 +118,17 @@ export interface PageBuilderOptions {
    * the object once and hand it to both.
    */
   siteStyle?: SiteStyleData;
+
+  /**
+   * Where this application serves its pages, as a path with `{field}`
+   * placeholders. Defaults to `/{slug}`.
+   *
+   * This is what a shared preview link opens. The plugin ships the `pages`
+   * collection but cannot know where the host mounted the route that renders
+   * it, so a site serving pages anywhere other than the root states it here —
+   * `"/blocks/{slug}"`, for example.
+   */
+  pagePreviewPath?: string;
 }
 
 /**
@@ -188,7 +199,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       services: {
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
-      collections: [pagesCollection()],
+      collections: [pagesCollection(opts.pagePreviewPath)],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated
       // defaults, because the storage existing is what the style studios and

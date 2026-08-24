@@ -1,4 +1,4 @@
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, previewUrlFromTemplate, text } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
 /**
@@ -47,7 +47,23 @@ import { blocks } from "../fields/blocksHelper";
  * blocks field and no switcher, so one capability behaved differently depending
  * on who declared the collection.
  */
-export function pagesCollection() {
+/**
+ * Where a page is served on the site.
+ *
+ * Defaulted rather than required, because the overwhelmingly common mount is a
+ * blocks page at the site root — and a plugin cannot discover the mount for
+ * itself: it is a route file in the host application, which may serve pages at
+ * `/`, at `/blocks`, or under a locale segment.
+ *
+ * Getting it wrong on an unusual mount produces a preview link to the wrong
+ * path, which is no worse than the guaranteed 404 an undeclared collection
+ * produces today, and is corrected by one line of options. Requiring it instead
+ * would mean every existing installation loses the share button until someone
+ * reads a changelog.
+ */
+const DEFAULT_PAGE_PREVIEW_PATH = "/{slug}";
+
+export function pagesCollection(previewPath = DEFAULT_PAGE_PREVIEW_PATH) {
   return defineCollection({
     slug: "pages",
     labels: { singular: "Page", plural: "Pages" },
@@ -60,6 +76,14 @@ export function pagesCollection() {
       blocks({ name: "content", label: "Page Builder" }),
     ],
     status: true,
-    admin: { useAsTitle: "title" },
+    admin: {
+      useAsTitle: "title",
+      // A code-first collection declares a FUNCTION — `urlTemplate` is the
+      // spelling a UI-created collection stores, since no column can hold a
+      // function. The path is turned into one through the shared helper rather
+      // than a substitution written here, so a template and a function cannot
+      // resolve the same entry to two different addresses.
+      preview: { url: previewUrlFromTemplate(previewPath) },
+    },
   });
 }
