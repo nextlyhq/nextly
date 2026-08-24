@@ -15,6 +15,8 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { canReadSystemResource } from "../../auth/resource-readable";
 
 import type { RelatedRowReadContext } from "./related-row-read-context";
+import type { TrustBound } from "./trust-grant";
+import { assumedBound, boundReaches } from "./trust-grant";
 
 /** The system resource an upload field's rows are read from. */
 export const MEDIA_TARGET = "media";
@@ -56,8 +58,7 @@ export function boundRefuses(
 ): boolean {
   return (
     access.overrideAccess === true &&
-    access.trusted !== undefined &&
-    !access.trusted(targetCollection)
+    !boundReaches(access.trusted, targetCollection)
   );
 }
 
@@ -128,7 +129,7 @@ export interface CallerOptions {
    */
   enforceFieldAccess?: boolean;
   fieldAccessUser?: Record<string, unknown>;
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
   authenticatedScope?: AuthenticatedScope;
 }
 
@@ -152,7 +153,7 @@ export function expansionAccess(options: CallerOptions): RelatedRowReadContext {
     // nobody. That is silent, and it is the direction that leaks.
     enforceFieldAccess: options.enforceFieldAccess,
     fieldAccessUser: options.fieldAccessUser,
-    trusted: options.trusted,
+    trusted: assumedBound(options.trusted),
     authenticatedScope: options.authenticatedScope,
   };
 }

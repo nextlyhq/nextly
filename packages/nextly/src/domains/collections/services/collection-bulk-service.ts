@@ -23,6 +23,7 @@ import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope"
 import { NextlyError } from "../../../errors/nextly-error";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
+import type { TrustBound } from "../../../services/collections/trust-grant";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
@@ -221,7 +222,7 @@ export class CollectionBulkService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows. See {@link RelatedRowReadContext.trusted}.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /** Route auth already ran the create RBAC gate; skip only that re-check. */
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */

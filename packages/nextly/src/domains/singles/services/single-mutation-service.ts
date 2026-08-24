@@ -45,6 +45,7 @@ import {
   isSuperAdminContext,
 } from "../../../services/access";
 import { expansionAccess } from "../../../services/collections/trust-bound";
+import { assumedBound } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import {
@@ -2355,7 +2356,7 @@ export class SingleMutationService extends BaseService {
           overrideAccess: options.overrideAccess,
           // Narrows that bypass per RELATED collection. Absent means unchanged;
           // dropping it here would silently restore the full bypass.
-          trusted: options.trusted,
+          trusted: assumedBound(options.trusted),
           authenticatedScope: options.authenticatedScope,
           // The language just written: a target collection's read rule may
           // scope reads by one of its own localized fields, and that filter

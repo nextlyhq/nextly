@@ -23,6 +23,7 @@ import {
   siteSettingsMeta,
   textField,
 } from "./single-test-helpers";
+import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 
 type Ctor = ConstructorParameters<typeof SingleQueryService>;
 
@@ -460,7 +461,7 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
         { id: "doc1", author: "a1" } as never,
         RELATION_FIELDS as never,
         1,
-        { trusted: undefined },
+        { trusted: TRUSTS_EVERY_COLLECTION },
         true
       )
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
@@ -590,7 +591,11 @@ describe("SingleQueryService.expandRelationshipFields — enforcement is opt-in"
       { id: "doc1" } as never,
       RELATION_FIELDS as never,
       undefined,
-      { trusted: undefined, enforceFieldAccess: true, user: editor }
+      {
+        trusted: TRUSTS_EVERY_COLLECTION,
+        enforceFieldAccess: true,
+        user: editor,
+      }
     );
 
     const options = expandRelationships.mock.calls[0][3];

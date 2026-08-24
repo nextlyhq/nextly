@@ -20,6 +20,8 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { CollectionAccessRules } from "../access";
 import type { CompanionSchema } from "../collection-file-manager";
 
+import type { TrustBound } from "./trust-grant";
+
 /**
  * A target collection's read policy, as one expansion needs it.
  *
@@ -48,24 +50,30 @@ export interface RelatedRowReadContext {
   overrideAccess?: boolean;
 
   /**
-   * Which collections `overrideAccess` may actually reach, when the caller can
-   * name them.
+   * Which collections `overrideAccess` may actually reach, judged per TARGET.
    *
    * A trusted read that populates a relationship reads the TARGET trusted too,
    * and the target's collection was never named by the caller — it was reached
-   * through a field. For a caller who has already decided who is asking, that
-   * is correct and this stays absent: the Direct API's semantics are unchanged.
+   * through a field. A caller that has already decided who is asking is
+   * entitled to that, and says so with {@link TRUSTS_EVERY_COLLECTION}. A
+   * caller serving one fixed audience is in the opposite position: it can state
+   * its trusted set up front, and anything outside that set must be read as the
+   * audience would read it.
    *
-   * A caller serving one fixed audience is in the opposite position. It can
-   * state its trusted set up front, and anything outside that set must be read
-   * as the audience would read it. Supplying this narrows the bypass to the
-   * collections named, per TARGET, at every fetch the expansion performs.
+   * **Required, and not nullable.** This was previously
+   * `((collection: string) => boolean) | undefined`, where `undefined` meant
+   * unbounded — so a context whose author had weighed the question and one
+   * whose author never saw it were the same value, and only the second was a
+   * bug. The two are now different words. Nothing about the runtime changed:
+   * `TRUSTS_EVERY_COLLECTION` reaches every target, exactly as the absent value
+   * used to.
    *
-   * A predicate rather than a list because the decision is asked once per
-   * target collection at four separate points, and a caller may derive
-   * membership rather than enumerate it.
+   * The requirement is what does the work, not the constant. A route that
+   * forgets its bound no longer compiles, which is the failure mode this
+   * package has actually shipped — twice, on Singles and on collections, caught
+   * by a reviewer both times rather than by the type.
    */
-  trusted: ((collection: string) => boolean) | undefined;
+  trusted: TrustBound;
 
   /**
    * The caller's authenticated scope. A scoped API key is judged on its OWN

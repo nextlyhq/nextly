@@ -6,6 +6,7 @@ import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
+import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
@@ -452,7 +453,7 @@ export class FieldGroupQueryService extends BaseService {
       fallbackLocale,
       executor,
       strict = false,
-      access = { trusted: undefined },
+      access = { trusted: TRUSTS_EVERY_COLLECTION },
     } = params;
     const entryId = entry.id as string;
     if (!entryId) return entry;
@@ -543,7 +544,7 @@ export class FieldGroupQueryService extends BaseService {
       select,
       locale,
       fallbackLocale,
-      access = { trusted: undefined },
+      access = { trusted: TRUSTS_EVERY_COLLECTION },
     } = params;
     if (entries.length === 0) return entries;
 
@@ -647,7 +648,7 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown,
     strict = false,
-    access: ComponentReadAccess = { trusted: undefined }
+    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown> | null> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -697,7 +698,7 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown,
     strict = false,
-    access: ComponentReadAccess = { trusted: undefined }
+    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown>[]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -749,7 +750,7 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown,
     strict = false,
-    access: ComponentReadAccess = { trusted: undefined }
+    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown>[]> {
     const allowedSlugs = field.components ?? [];
     const allRows: {
@@ -826,7 +827,7 @@ export class FieldGroupQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    access: ComponentReadAccess = { trusted: undefined }
+    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, unknown>> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -883,7 +884,7 @@ export class FieldGroupQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    access: ComponentReadAccess = { trusted: undefined }
+    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, unknown>> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -937,7 +938,7 @@ export class FieldGroupQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    access: ComponentReadAccess = { trusted: undefined }
+    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, unknown>> {
     const allowedSlugs = field.components ?? [];
 
@@ -1176,7 +1177,7 @@ export class FieldGroupQueryService extends BaseService {
     componentFields: FieldConfig[],
     depth: number,
     currentDepth: number,
-    access: ComponentReadAccess = { trusted: undefined }
+    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown>> {
     if (!this.relationshipService) {
       return componentData;
@@ -1238,7 +1239,7 @@ export class FieldGroupQueryService extends BaseService {
     componentFields: FieldConfig[],
     depth: number,
     currentDepth: number,
-    access: ComponentReadAccess = { trusted: undefined }
+    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown>[]> {
     if (!this.relationshipService || depth === 0 || currentDepth >= depth) {
       return componentDataArray;
