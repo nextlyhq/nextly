@@ -13,6 +13,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
+import type { TrustBound } from "../../services/collections/trust-grant";
 import type { RequestContext } from "../../shared/types/index";
 import type {
   DirectAPIConfig,
@@ -81,7 +82,7 @@ export interface AccessOptions {
   overrideAccess?: boolean;
   enforceFieldAccess?: boolean;
   fieldAccessUser?: UserContext;
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
   authenticatedScope?: AuthenticatedScope;
 }
 

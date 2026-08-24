@@ -55,6 +55,7 @@ import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";
 import type { WhereFilter } from "./query-operators";
+import type { TrustBound } from "./trust-grant";
 
 export {
   type CollectionServiceResult,
@@ -184,7 +185,7 @@ export class CollectionEntryService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
@@ -209,7 +210,7 @@ export class CollectionEntryService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
@@ -236,7 +237,7 @@ export class CollectionEntryService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). 'all' bypasses the default published-only filter — used by
@@ -465,7 +466,7 @@ export class CollectionEntryService extends BaseService {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
       context?: Record<string, unknown>;
@@ -520,7 +521,7 @@ export class CollectionEntryService extends BaseService {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /** Write locale (i18n M5) — translatable values updated for this language. */
       locale?: string;
       context?: Record<string, unknown>;
@@ -560,7 +561,7 @@ export class CollectionEntryService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Set by the REST dispatcher: the route already authorized this POST as
      * `update`, so the preliminary update gate skips its redundant RBAC re-check.
@@ -592,7 +593,7 @@ export class CollectionEntryService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     routeAuthorized?: boolean;
     context?: Record<string, unknown>;
     /** API-key scope; judges the delete gate on the key's own grant. */
@@ -688,7 +689,7 @@ export class CollectionEntryService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
@@ -720,7 +721,7 @@ export class CollectionEntryService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     routeAuthorized?: boolean;
     context?: Record<string, unknown>;
     /** API-key scope; judges each per-id delete on the key's own grant. */
@@ -748,7 +749,7 @@ export class CollectionEntryService extends BaseService {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     routeAuthorized?: boolean;
     context?: Record<string, unknown>;
     /** Acting identity from the transport, forwarded to the recorded event. */
@@ -779,7 +780,7 @@ export class CollectionEntryService extends BaseService {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /** Route auth already ran; response is still redacted for this user */
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
@@ -817,7 +818,7 @@ export class CollectionEntryService extends BaseService {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       context?: Record<string, unknown>;
     },
     options?: { limit?: number }
@@ -843,7 +844,7 @@ export class CollectionEntryService extends BaseService {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       authenticatedScope?: AuthenticatedScope;
     },
     entries: Record<string, unknown>[],

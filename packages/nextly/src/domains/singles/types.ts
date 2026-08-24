@@ -13,6 +13,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { StatusOption } from "../../lib/status-filter";
 import type { RevalidationIntent } from "../../revalidation/types";
+import type { TrustBound } from "../../services/collections/trust-grant";
 
 /**
  * User context for Single operations.
@@ -48,7 +49,7 @@ export interface GetSingleOptions {
    * the caller's trust, which is unchanged behaviour. Evaluated as
    * `overrideAccess && trusted(target)`, so it can only ever narrow.
    */
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
 
   /**
    * Depth for relationship expansion.
@@ -168,7 +169,7 @@ export interface UpdateSingleOptions {
    * the caller's trust, which is unchanged behaviour. Evaluated as
    * `overrideAccess && trusted(target)`, so it can only ever narrow.
    */
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
 
   /**
    * Set when this write restores an earlier version, recording which one on the

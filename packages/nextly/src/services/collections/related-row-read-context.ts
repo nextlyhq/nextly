@@ -20,6 +20,8 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { CollectionAccessRules } from "../access";
 import type { CompanionSchema } from "../collection-file-manager";
 
+import type { TrustBound } from "./trust-grant";
+
 /**
  * A target collection's read policy, as one expansion needs it.
  *
@@ -48,24 +50,27 @@ export interface RelatedRowReadContext {
   overrideAccess?: boolean;
 
   /**
-   * Which collections `overrideAccess` may actually reach, when the caller can
-   * name them.
+   * Which collections `overrideAccess` may actually reach, judged per TARGET.
    *
    * A trusted read that populates a relationship reads the TARGET trusted too,
    * and the target's collection was never named by the caller — it was reached
-   * through a field. For a caller who has already decided who is asking, that
-   * is correct and this stays absent: the Direct API's semantics are unchanged.
+   * through a field. A caller that has already decided who is asking is
+   * entitled to that, and says so with {@link TRUSTS_EVERY_COLLECTION}. A
+   * caller serving one fixed audience is in the opposite position: it can state
+   * its trusted set up front, and anything outside that set must be read as the
+   * audience would read it.
    *
-   * A caller serving one fixed audience is in the opposite position. It can
-   * state its trusted set up front, and anything outside that set must be read
-   * as the audience would read it. Supplying this narrows the bypass to the
-   * collections named, per TARGET, at every fetch the expansion performs.
+   * **Required, and not nullable.** A nullable bound would give one value to
+   * two different states — a context whose author weighed which collections the
+   * bypass should reach and answered "all of them", and one whose author never
+   * saw the question. Only the second is a defect, and nothing could tell them
+   * apart. `TRUSTS_EVERY_COLLECTION` is the first of those states said out loud;
+   * it reaches every target, so no read behaves differently for saying it.
    *
-   * A predicate rather than a list because the decision is asked once per
-   * target collection at four separate points, and a caller may derive
-   * membership rather than enumerate it.
+   * The requirement is what does the work, not the constant: a context that
+   * does not answer the question does not compile.
    */
-  trusted: ((collection: string) => boolean) | undefined;
+  trusted: TrustBound;
 
   /**
    * The caller's authenticated scope. A scoped API key is judged on its OWN

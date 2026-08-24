@@ -60,6 +60,11 @@ import type {
   WhereFilter,
   ComponentFieldFilter,
 } from "../../../services/collections/query-operators";
+import type { TrustBound } from "../../../services/collections/trust-grant";
+import {
+  assumedBound,
+  narrows,
+} from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -979,7 +984,7 @@ export class CollectionQueryService extends BaseService {
      * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
      * can only ever narrow. See {@link RelatedRowReadContext.trusted}.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * The route middleware already ran the RBAC gate for the authorizing
      * operation, so skip only that redundant re-check while still evaluating
@@ -1627,7 +1632,7 @@ export class CollectionQueryService extends BaseService {
             status: expansionStatusScope({
               status: params.status,
               overrideAccess: params.overrideAccess,
-              bounded: params.trusted !== undefined,
+              bounded: narrows(params.trusted),
             }),
           }
         );
@@ -1661,7 +1666,7 @@ export class CollectionQueryService extends BaseService {
               overrideAccess: params.overrideAccess,
               // Narrows that bypass per RELATED collection. Absent means unchanged;
               // dropping it here would silently restore the full bypass.
-              trusted: params.trusted,
+              trusted: assumedBound(params.trusted),
               authenticatedScope: params.authenticatedScope,
               // Shared across every component row this listing expands, so
               // rows pointing at the same target resolve its policy once.
@@ -1677,7 +1682,7 @@ export class CollectionQueryService extends BaseService {
               status: expansionStatusScope({
                 status: params.status,
                 overrideAccess: params.overrideAccess,
-                bounded: params.trusted !== undefined,
+                bounded: narrows(params.trusted),
               }),
             },
           });
@@ -1779,7 +1784,7 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess,
         // Narrows that bypass per RELATED collection. Absent means unchanged;
         // dropping it here would silently restore the full bypass.
-        trusted: params.trusted,
+        trusted: assumedBound(params.trusted),
         authenticatedScope: params.authenticatedScope,
       };
       for (const entry of expandedEntries) {
@@ -2073,7 +2078,7 @@ export class CollectionQueryService extends BaseService {
      * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
      * can only ever narrow. See {@link RelatedRowReadContext.trusted}.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * The route middleware already ran the RBAC gate for the authorizing
      * operation; skip only that redundant re-check while stored read rules
@@ -2589,7 +2594,7 @@ export class CollectionQueryService extends BaseService {
      * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
      * can only ever narrow. See {@link RelatedRowReadContext.trusted}.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Draft/Published filter override (only effective when collection.status === true).
      * Public callers default to 'published'; trusted callers see all.
@@ -2867,7 +2872,7 @@ export class CollectionQueryService extends BaseService {
           status: expansionStatusScope({
             status: params.status,
             overrideAccess: params.overrideAccess,
-            bounded: params.trusted !== undefined,
+            bounded: narrows(params.trusted),
           }),
         }
       );
@@ -2897,7 +2902,7 @@ export class CollectionQueryService extends BaseService {
             overrideAccess: params.overrideAccess,
             // Narrows that bypass per RELATED collection. Absent means
             // unchanged; dropping it restores the full bypass silently.
-            trusted: params.trusted,
+            trusted: assumedBound(params.trusted),
             authenticatedScope: params.authenticatedScope,
             // As on the list path: a component's relationship reaches a
             // collection that may scope reads by a localized field.
@@ -2909,7 +2914,7 @@ export class CollectionQueryService extends BaseService {
             status: expansionStatusScope({
               status: params.status,
               overrideAccess: params.overrideAccess,
-              bounded: params.trusted !== undefined,
+              bounded: narrows(params.trusted),
             }),
           },
         });
@@ -3107,7 +3112,7 @@ export class CollectionQueryService extends BaseService {
               status: expansionStatusScope({
                 status: params.status,
                 overrideAccess: params.overrideAccess,
-                bounded: params.trusted !== undefined,
+                bounded: narrows(params.trusted),
               }),
             };
             draftEntry = await this.relationshipService.expandRelationships(
@@ -3202,7 +3207,7 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess,
         // Narrows that bypass per RELATED collection. Absent means unchanged;
         // dropping it here would silently restore the full bypass.
-        trusted: params.trusted,
+        trusted: assumedBound(params.trusted),
         authenticatedScope: params.authenticatedScope,
       };
       await this.relationshipService.applyNestedFieldHooks(

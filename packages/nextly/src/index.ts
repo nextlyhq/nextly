@@ -153,6 +153,14 @@ export type {
   DeleteFieldGroupArgs,
 } from "./direct-api/types";
 
+// The vocabulary a caller needs to answer `DirectAPIConfig.trusted`. Exported
+// as a VALUE, not only a type: the escape hatch is a constant a caller has to
+// be able to write, and a bound it cannot name is a bound it will not draw.
+export {
+  TRUSTS_EVERY_COLLECTION,
+  type TrustBound,
+} from "./services/collections/trust-grant";
+
 // Direct API types - core operation argument types
 export type {
   DirectAPIConfig,

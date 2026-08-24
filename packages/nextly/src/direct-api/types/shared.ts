@@ -11,6 +11,7 @@ import type { PaginationMeta } from "../../api/response-shapes";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 import type { RichTextOutputFormat } from "../../lib/rich-text-html";
+import type { TrustBound } from "../../services/collections/trust-grant";
 
 import type { FormsConfig } from "./forms";
 
@@ -435,7 +436,7 @@ export interface DirectAPIConfig {
    *
    * @default undefined — every populated target inherits the caller's trust
    */
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
 
   /**
    * Enforce FIELD-level read rules even though `overrideAccess` is on.
