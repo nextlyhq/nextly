@@ -102,7 +102,9 @@ describe("the notification list", () => {
       toggle.getAttribute("aria-controls") as string
     );
     expect(region).not.toBeNull();
-    expect(region).toContainElement(screen.getByDisplayValue("Admin notification"));
+    expect(region).toContainElement(
+      screen.getByDisplayValue("Admin notification")
+    );
     // And no dialog: an inline editor that still portals is the old panel
     // wearing a different class.
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -190,5 +192,59 @@ describe("the notification list", () => {
     // The part that matters: accumulating open rows would satisfy the line
     // above and turn the list into a wall of fields.
     expect(first).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("does not re-enable a rule that the summary switch turned off", async () => {
+    // The editor reads the rule from the form on every render rather than
+    // holding a copy. A copy goes stale the moment the summary switch writes to
+    // the form, and the next keystroke sends the whole stale rule back —
+    // silently re-enabling a notification the author turned off, which then
+    // sends mail they stopped.
+    notifications = [aNotification()];
+    const user = userEvent.setup();
+    const { rerender } = render(<FormNotificationsTab defaults={null} />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /notification admin notification/i,
+      })
+    );
+
+    // The summary switch writes straight to the form, which re-renders the
+    // list with the rule disabled while this row stays open.
+    notifications = [aNotification({ enabled: false })];
+    rerender(<FormNotificationsTab defaults={null} />);
+    updateNotification.mockClear();
+
+    await user.type(screen.getByDisplayValue("Admin notification"), "!");
+
+    const [, patch] = updateNotification.mock.calls.at(-1) as [
+      string,
+      FormNotification,
+    ];
+    expect(patch.name).toBe("Admin notification!");
+    expect(patch.enabled).toBe(false);
+  });
+
+  it("dims the summary of a disabled rule, not the editor inside it", async () => {
+    // An expanded editor inside a faded card fades every label, input and
+    // validation message the author is reading in order to fix it.
+    notifications = [aNotification({ enabled: false })];
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+
+    const toggle = screen.getByRole("button", {
+      name: /notification admin notification/i,
+    });
+    await user.click(toggle);
+
+    const summary = toggle.parentElement;
+    expect(summary?.className).toContain("opacity-60");
+
+    const editor = document.getElementById(
+      toggle.getAttribute("aria-controls") as string
+    );
+    expect(editor?.className ?? "").not.toContain("opacity");
+    expect(editor?.closest(".opacity-60")).toBeNull();
   });
 });

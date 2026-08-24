@@ -52,6 +52,15 @@ import {
   type FormNotification,
 } from "../../context/FormBuilderContext";
 
+import {
+  addressError,
+  addressErrorsIn,
+  isValidEmail,
+  parseFieldRef,
+  type AddressErrors,
+  type AddressField,
+} from "./notification-addresses";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -123,17 +132,8 @@ async function fetchTemplates(): Promise<TemplateOption[]> {
 // Field-reference helpers
 // ============================================================================
 
-/** The `{{fieldName}}` shape the send path resolves against submissions. */
-const FIELD_REF_PATTERN = /^\{\{(\w+)\}\}$/;
-
 function toFieldRef(fieldName: string): string {
   return `{{${fieldName}}}`;
-}
-
-function parseFieldRef(value: string | undefined): string | null {
-  if (!value) return null;
-  const match = value.match(FIELD_REF_PATTERN);
-  return match ? match[1] : null;
 }
 
 /**
@@ -151,16 +151,6 @@ function buildEmailFieldOptions(
     if (current) return [...emailFields, current];
   }
   return emailFields;
-}
-
-/**
- * Deliberately loose email shape check (something@something.tld): the goal
- * is catching typos before they fail at delivery, not RFC 5322 conformance.
- */
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function isValidEmail(value: string): boolean {
-  return EMAIL_PATTERN.test(value.trim());
 }
 
 // ============================================================================
@@ -266,10 +256,15 @@ function NotificationCard({
   }
 
   return (
-    <div
-      className={`border border-border bg-background ${notification.enabled ? "" : "opacity-60"}`}
-    >
-      <div className="flex items-center gap-2 px-3 py-2.5">
+    <div className="border border-border bg-background">
+      {/* The dimming is the SUMMARY's, not the card's. A disabled rule reads as
+          inactive at a glance, but an expanded editor inside a faded card fades
+          every label, input and validation message the author is reading while
+          they fix it — and takes the already-muted help text below its intended
+          contrast. */}
+      <div
+        className={`flex items-center gap-2 px-3 py-2.5 ${notification.enabled ? "" : "opacity-60"}`}
+      >
         <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-primary/5 text-primary">
           <Mail className="h-3.5 w-3.5" aria-hidden="true" />
         </span>
@@ -497,11 +492,8 @@ interface RecipientFieldsProps {
    * because the editor owns the write-through to the form.
    */
   onRecipientTypeChange: (kind: "static" | "field") => void;
-  addressErrors: Partial<Record<"senderEmail" | "to" | "replyTo", string>>;
-  validateAddress: (
-    key: "senderEmail" | "to" | "replyTo",
-    value: string | undefined
-  ) => void;
+  addressErrors: AddressErrors;
+  validateAddress: (key: AddressField, value: string | undefined) => void;
   replyToMode: ReplyToMode;
   setReplyToMode: (mode: ReplyToMode) => void;
 }
@@ -536,146 +528,45 @@ function RecipientFields({
 
   return (
     <>
-        <div className="space-y-4 pt-4 border-t border-border">
-          <Grid cols={2} responsive>
-            <FieldShell label="Send to" htmlFor="notification-recipient-type">
-              {({ id, describedBy, invalid }) => (
-                <Select
-                  value={form.recipientType}
-                  onValueChange={value => {
-                    // Switching target kinds invalidates the previous `to`
-                    // value shape, so it resets rather than leaking a
-                    // {{ref}} into the static input (or vice versa).
-                    onRecipientTypeChange(value as "static" | "field");
-                  }}
-                >
-                  <SelectTrigger
-                    id={id}
-                    aria-describedby={describedBy}
-                    aria-invalid={invalid}
-                    className="w-full bg-transparent border-input dark:bg-muted/50"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="static">A specific address</SelectItem>
-                    <SelectItem value="field">
-                      The visitor (email field)
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              )}
-            </FieldShell>
-
-            {form.recipientType === "field" ? (
-              <div className="space-y-1.5">
-                <FieldShell
-                  label="Visitor email field"
-                  htmlFor="notification-to"
-                >
-                  {({ id, describedBy, invalid }) => (
-                    <Select
-                      value={toRef ?? "__none"}
-                      onValueChange={value =>
-                        update(
-                          "to",
-                          value === "__none" ? "" : toFieldRef(value)
-                        )
-                      }
-                    >
-                      <SelectTrigger
-                        id={id}
-                        aria-describedby={describedBy}
-                        aria-invalid={invalid}
-                        className="w-full bg-transparent border-input dark:bg-muted/50"
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none">Select a field</SelectItem>
-                        {toFieldOptions.map(f => (
-                          <SelectItem key={f.name} value={f.name}>
-                            {f.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </FieldShell>
-                {toFieldOptions.length === 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    Add an email field to the form first.
-                  </p>
-                )}
-              </div>
-            ) : (
-              <FieldShell
-                label="Recipient address"
-                htmlFor="notification-to"
-                width="half"
-                error={addressErrors.to}
+      <div className="space-y-4 pt-4 border-t border-border">
+        <Grid cols={2} responsive>
+          <FieldShell label="Send to" htmlFor="notification-recipient-type">
+            {({ id, describedBy, invalid }) => (
+              <Select
+                value={form.recipientType}
+                onValueChange={value => {
+                  // Switching target kinds invalidates the previous `to`
+                  // value shape, so it resets rather than leaking a
+                  // {{ref}} into the static input (or vice versa).
+                  onRecipientTypeChange(value as "static" | "field");
+                }}
               >
-                <Input
-                  type="email"
-                  value={form.to}
-                  onChange={e => update("to", e.target.value)}
-                  onBlur={e => validateAddress("to", e.target.value)}
-                  placeholder={
-                    defaults?.defaultToEmail || "admin@example.com"
-                  }
-                />
-              </FieldShell>
+                <SelectTrigger
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  className="w-full bg-transparent border-input dark:bg-muted/50"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="static">A specific address</SelectItem>
+                  <SelectItem value="field">
+                    The visitor (email field)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             )}
-          </Grid>
+          </FieldShell>
 
-          {/* Reply-To */}
-          <Grid cols={2} responsive>
-            <FieldShell label="Reply-To" htmlFor="notification-replyto-mode">
-              {({ id, describedBy, invalid }) => (
-                <Select
-                  value={replyToMode}
-                  onValueChange={value => {
-                    const mode = value as ReplyToMode;
-                    setReplyToMode(mode);
-                    // A mode change always clears the stored value (the old
-                    // shape can't be represented in the new mode); it stays
-                    // absent — not an empty string — until the user picks a
-                    // field or types an address.
-                    update("replyTo", undefined);
-                  }}
-                >
-                  <SelectTrigger
-                    id={id}
-                    aria-describedby={describedBy}
-                    aria-invalid={invalid}
-                    className="w-full bg-transparent border-input dark:bg-muted/50"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="field">
-                      The visitor (email field)
-                    </SelectItem>
-                    <SelectItem value="custom">A custom address</SelectItem>
-                  </SelectContent>
-                </Select>
-              )}
-            </FieldShell>
-
-            {replyToMode === "field" && (
-              <FieldShell
-                label="Visitor email field"
-                htmlFor="notification-replyto"
-              >
+          {form.recipientType === "field" ? (
+            <div className="space-y-1.5">
+              <FieldShell label="Visitor email field" htmlFor="notification-to">
                 {({ id, describedBy, invalid }) => (
                   <Select
-                    value={replyToRef ?? "__none"}
+                    value={toRef ?? "__none"}
                     onValueChange={value =>
-                      update(
-                        "replyTo",
-                        value === "__none" ? undefined : toFieldRef(value)
-                      )
+                      update("to", value === "__none" ? "" : toFieldRef(value))
                     }
                   >
                     <SelectTrigger
@@ -688,7 +579,7 @@ function RecipientFields({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__none">Select a field</SelectItem>
-                      {replyToFieldOptions.map(f => (
+                      {toFieldOptions.map(f => (
                         <SelectItem key={f.name} value={f.name}>
                           {f.label}
                         </SelectItem>
@@ -697,48 +588,138 @@ function RecipientFields({
                   </Select>
                 )}
               </FieldShell>
-            )}
-            {replyToMode === "custom" && (
-              <FieldShell
-                label="Reply-To address"
-                htmlFor="notification-replyto"
-                width="half"
-                error={addressErrors.replyTo}
-              >
-                <Input
-                  type="email"
-                  value={form.replyTo ?? ""}
-                  onBlur={e => validateAddress("replyTo", e.target.value)}
-                  onChange={e =>
-                    update("replyTo", e.target.value || undefined)
-                  }
-                  placeholder="replies@example.com"
-                />
-              </FieldShell>
-            )}
-          </Grid>
-          {replyToMode === "field" && (
-            <p className="text-xs text-muted-foreground -mt-2">
-              Replying to this email answers the person who submitted the
-              form.
-            </p>
+              {toFieldOptions.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Add an email field to the form first.
+                </p>
+              )}
+            </div>
+          ) : (
+            <FieldShell
+              label="Recipient address"
+              htmlFor="notification-to"
+              width="half"
+              error={addressErrors.to}
+            >
+              <Input
+                type="email"
+                value={form.to}
+                onChange={e => update("to", e.target.value)}
+                onBlur={e => validateAddress("to", e.target.value)}
+                placeholder={defaults?.defaultToEmail || "admin@example.com"}
+              />
+            </FieldShell>
           )}
+        </Grid>
 
-          <AddressChipList
-            id="notification-cc"
-            label="CC (optional)"
-            addresses={form.cc}
-            placeholder="cc@example.com"
-            onChange={cc => update("cc", cc)}
-          />
-          <AddressChipList
-            id="notification-bcc"
-            label="BCC (optional)"
-            addresses={form.bcc}
-            placeholder="bcc@example.com"
-            onChange={bcc => update("bcc", bcc)}
-          />
-        </div>
+        {/* Reply-To */}
+        <Grid cols={2} responsive>
+          <FieldShell label="Reply-To" htmlFor="notification-replyto-mode">
+            {({ id, describedBy, invalid }) => (
+              <Select
+                value={replyToMode}
+                onValueChange={value => {
+                  const mode = value as ReplyToMode;
+                  setReplyToMode(mode);
+                  // A mode change always clears the stored value (the old
+                  // shape can't be represented in the new mode); it stays
+                  // absent — not an empty string — until the user picks a
+                  // field or types an address.
+                  update("replyTo", undefined);
+                }}
+              >
+                <SelectTrigger
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  className="w-full bg-transparent border-input dark:bg-muted/50"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  <SelectItem value="field">
+                    The visitor (email field)
+                  </SelectItem>
+                  <SelectItem value="custom">A custom address</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </FieldShell>
+
+          {replyToMode === "field" && (
+            <FieldShell
+              label="Visitor email field"
+              htmlFor="notification-replyto"
+            >
+              {({ id, describedBy, invalid }) => (
+                <Select
+                  value={replyToRef ?? "__none"}
+                  onValueChange={value =>
+                    update(
+                      "replyTo",
+                      value === "__none" ? undefined : toFieldRef(value)
+                    )
+                  }
+                >
+                  <SelectTrigger
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    className="w-full bg-transparent border-input dark:bg-muted/50"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">Select a field</SelectItem>
+                    {replyToFieldOptions.map(f => (
+                      <SelectItem key={f.name} value={f.name}>
+                        {f.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FieldShell>
+          )}
+          {replyToMode === "custom" && (
+            <FieldShell
+              label="Reply-To address"
+              htmlFor="notification-replyto"
+              width="half"
+              error={addressErrors.replyTo}
+            >
+              <Input
+                type="email"
+                value={form.replyTo ?? ""}
+                onBlur={e => validateAddress("replyTo", e.target.value)}
+                onChange={e => update("replyTo", e.target.value || undefined)}
+                placeholder="replies@example.com"
+              />
+            </FieldShell>
+          )}
+        </Grid>
+        {replyToMode === "field" && (
+          <p className="text-xs text-muted-foreground -mt-2">
+            Replying to this email answers the person who submitted the form.
+          </p>
+        )}
+
+        <AddressChipList
+          id="notification-cc"
+          label="CC (optional)"
+          addresses={form.cc}
+          placeholder="cc@example.com"
+          onChange={cc => update("cc", cc)}
+        />
+        <AddressChipList
+          id="notification-bcc"
+          label="BCC (optional)"
+          addresses={form.bcc}
+          placeholder="bcc@example.com"
+          onChange={bcc => update("bcc", bcc)}
+        />
+      </div>
     </>
   );
 }
@@ -766,147 +747,145 @@ function SendConditionField({
 }: SendConditionFieldProps) {
   return (
     <>
-        <div className="space-y-3 pt-4 border-t border-border">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-foreground">
-                Send condition
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Only send this notification when a submitted value matches.
-              </p>
-            </div>
-            {!condition && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  update("condition", {
-                    field: fields[0]?.name ?? "",
-                    comparison: "equals",
-                    value: "",
-                  })
-                }
-                disabled={fields.length === 0}
-              >
-                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                Add condition
-              </Button>
-            )}
+      <div className="space-y-3 pt-4 border-t border-border">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              Send condition
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Only send this notification when a submitted value matches.
+            </p>
           </div>
-
-          {condition && (
-            <div className="flex flex-wrap items-end gap-2 border border-border bg-muted/40 p-3">
-              <FieldShell
-                label="Field"
-                htmlFor="notification-condition-field"
-                className="min-w-36 flex-1"
-              >
-                {({ id, describedBy, invalid }) => (
-                  <Select
-                    value={condition.field || "__none"}
-                    onValueChange={value =>
-                      update("condition", {
-                        ...condition,
-                        field: value === "__none" ? "" : value,
-                      })
-                    }
-                  >
-                    <SelectTrigger
-                      id={id}
-                      aria-describedby={describedBy}
-                      aria-invalid={invalid}
-                      className="w-full bg-transparent border-input dark:bg-muted/50"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">Select a field</SelectItem>
-                      {fields.map(f => (
-                        <SelectItem key={f.name} value={f.name}>
-                          {f.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </FieldShell>
-
-              <FieldShell
-                label="Comparison"
-                htmlFor="notification-condition-comparison"
-                className="min-w-36 flex-1"
-              >
-                {({ id, describedBy, invalid }) => (
-                  <Select
-                    value={condition.comparison}
-                    onValueChange={value =>
-                      update("condition", {
-                        ...condition,
-                        comparison:
-                          value as ConditionalLogicCondition["comparison"],
-                      })
-                    }
-                  >
-                    <SelectTrigger
-                      id={id}
-                      aria-describedby={describedBy}
-                      aria-invalid={invalid}
-                      className="w-full bg-transparent border-input dark:bg-muted/50"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(COMPARISON_LABELS).map(
-                        ([value, label]) => (
-                          <SelectItem key={value} value={value}>
-                            {label}
-                          </SelectItem>
-                        )
-                      )}
-                    </SelectContent>
-                  </Select>
-                )}
-              </FieldShell>
-
-              {!VALUELESS_COMPARISONS.has(condition.comparison) && (
-                <FieldShell
-                  label="Value"
-                  htmlFor="notification-condition-value"
-                  className="min-w-36 flex-1"
-                >
-                  <Input
-                    type="text"
-                    value={
-                      typeof condition.value === "string" ||
-                      typeof condition.value === "number"
-                        ? String(condition.value)
-                        : ""
-                    }
-                    onChange={e =>
-                      update("condition", {
-                        ...condition,
-                        value: e.target.value,
-                      })
-                    }
-                  />
-                </FieldShell>
-              )}
-
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 rounded-none text-muted-foreground hover:text-destructive"
-                onClick={() => update("condition", undefined)}
-                aria-label="Remove send condition"
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            </div>
+          {!condition && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                update("condition", {
+                  field: fields[0]?.name ?? "",
+                  comparison: "equals",
+                  value: "",
+                })
+              }
+              disabled={fields.length === 0}
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              Add condition
+            </Button>
           )}
         </div>
+
+        {condition && (
+          <div className="flex flex-wrap items-end gap-2 border border-border bg-muted/40 p-3">
+            <FieldShell
+              label="Field"
+              htmlFor="notification-condition-field"
+              className="min-w-36 flex-1"
+            >
+              {({ id, describedBy, invalid }) => (
+                <Select
+                  value={condition.field || "__none"}
+                  onValueChange={value =>
+                    update("condition", {
+                      ...condition,
+                      field: value === "__none" ? "" : value,
+                    })
+                  }
+                >
+                  <SelectTrigger
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    className="w-full bg-transparent border-input dark:bg-muted/50"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">Select a field</SelectItem>
+                    {fields.map(f => (
+                      <SelectItem key={f.name} value={f.name}>
+                        {f.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FieldShell>
+
+            <FieldShell
+              label="Comparison"
+              htmlFor="notification-condition-comparison"
+              className="min-w-36 flex-1"
+            >
+              {({ id, describedBy, invalid }) => (
+                <Select
+                  value={condition.comparison}
+                  onValueChange={value =>
+                    update("condition", {
+                      ...condition,
+                      comparison:
+                        value as ConditionalLogicCondition["comparison"],
+                    })
+                  }
+                >
+                  <SelectTrigger
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    className="w-full bg-transparent border-input dark:bg-muted/50"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(COMPARISON_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FieldShell>
+
+            {!VALUELESS_COMPARISONS.has(condition.comparison) && (
+              <FieldShell
+                label="Value"
+                htmlFor="notification-condition-value"
+                className="min-w-36 flex-1"
+              >
+                <Input
+                  type="text"
+                  value={
+                    typeof condition.value === "string" ||
+                    typeof condition.value === "number"
+                      ? String(condition.value)
+                      : ""
+                  }
+                  onChange={e =>
+                    update("condition", {
+                      ...condition,
+                      value: e.target.value,
+                    })
+                  }
+                />
+              </FieldShell>
+            )}
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 rounded-none text-muted-foreground hover:text-destructive"
+              onClick={() => update("condition", undefined)}
+              aria-label="Remove send condition"
+            >
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -920,11 +899,8 @@ interface NotificationIdentityFieldsProps {
     key: K,
     value: FormNotification[K]
   ) => void;
-  addressErrors: Partial<Record<"senderEmail" | "to" | "replyTo", string>>;
-  validateAddress: (
-    key: "senderEmail" | "to" | "replyTo",
-    value: string | undefined
-  ) => void;
+  addressErrors: AddressErrors;
+  validateAddress: (key: AddressField, value: string | undefined) => void;
 }
 
 /**
@@ -957,35 +933,64 @@ function NotificationIdentityFields({
 
   return (
     <>
-        {/* Name */}
-        <FieldShell label="Name" htmlFor="notification-name" width="half">
-          <Input
-            type="text"
-            value={form.name}
-            onChange={e => update("name", e.target.value)}
-            placeholder="e.g. Admin notification"
-          />
-        </FieldShell>
+      {/* Name */}
+      <FieldShell label="Name" htmlFor="notification-name" width="half">
+        <Input
+          type="text"
+          value={form.name}
+          onChange={e => update("name", e.target.value)}
+          placeholder="e.g. Admin notification"
+        />
+      </FieldShell>
 
-        {/* Provider & Template. A container-query grid rather than the
+      {/* Provider & Template. A container-query grid rather than the
             viewport's `sm:` breakpoint: the admin content region is
             narrower than the window whenever both sidebars are open, so a
             viewport breakpoint promises columns this sheet does not have. */}
-        <Grid cols={2} responsive>
-          {/* Both `Select`-driven: FieldShell's render-function `children`
+      <Grid cols={2} responsive>
+        {/* Both `Select`-driven: FieldShell's render-function `children`
               applies the computed id/aria-describedby/aria-invalid to
               SelectTrigger, the actual focusable element, rather than to
               `Select`'s root (which accepts a fixed prop list and forwards
               none of the rest). */}
-          <FieldShell label="Email provider" htmlFor="notification-provider">
+        <FieldShell label="Email provider" htmlFor="notification-provider">
+          {({ id, describedBy, invalid }) => (
+            <Select
+              value={form.providerId ?? "__default"}
+              onValueChange={value =>
+                update("providerId", value === "__default" ? undefined : value)
+              }
+            >
+              <SelectTrigger
+                id={id}
+                aria-describedby={describedBy}
+                aria-invalid={invalid}
+                className="w-full bg-transparent border-input dark:bg-muted/50"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__default">
+                  {defaultProviderLabel}
+                </SelectItem>
+                {providers.map(p => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                    {p.isDefault ? " (Default)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </FieldShell>
+
+        <div className="space-y-1.5">
+          <FieldShell label="Email template" htmlFor="notification-template">
             {({ id, describedBy, invalid }) => (
               <Select
-                value={form.providerId ?? "__default"}
+                value={form.templateSlug ?? "__none"}
                 onValueChange={value =>
-                  update(
-                    "providerId",
-                    value === "__default" ? undefined : value
-                  )
+                  update("templateSlug", value === "__none" ? undefined : value)
                 }
               >
                 <SelectTrigger
@@ -997,81 +1002,43 @@ function NotificationIdentityFields({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__default">
-                    {defaultProviderLabel}
-                  </SelectItem>
-                  {providers.map(p => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
-                      {p.isDefault ? " (Default)" : ""}
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="__none">Select a template</SelectItem>
+                  {templates
+                    .filter(t => t.isActive && t.kind !== "layout")
+                    .map(t => (
+                      <SelectItem key={t.id} value={t.slug}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             )}
           </FieldShell>
+          {!form.templateSlug && (
+            <p className="flex items-center gap-1 text-xs text-destructive">
+              <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+              Required — a notification without a template is never sent.
+            </p>
+          )}
+        </div>
+      </Grid>
 
-          <div className="space-y-1.5">
-            <FieldShell
-              label="Email template"
-              htmlFor="notification-template"
-            >
-              {({ id, describedBy, invalid }) => (
-                <Select
-                  value={form.templateSlug ?? "__none"}
-                  onValueChange={value =>
-                    update(
-                      "templateSlug",
-                      value === "__none" ? undefined : value
-                    )
-                  }
-                >
-                  <SelectTrigger
-                    id={id}
-                    aria-describedby={describedBy}
-                    aria-invalid={invalid}
-                    className="w-full bg-transparent border-input dark:bg-muted/50"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none">Select a template</SelectItem>
-                    {templates
-                      .filter(t => t.isActive && t.kind !== "layout")
-                      .map(t => (
-                        <SelectItem key={t.id} value={t.slug}>
-                          {t.name}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </FieldShell>
-            {!form.templateSlug && (
-              <p className="flex items-center gap-1 text-xs text-destructive">
-                <TriangleAlert className="h-3 w-3" aria-hidden="true" />
-                Required — a notification without a template is never sent.
-              </p>
-            )}
-          </div>
-        </Grid>
-
-        {/* Sender */}
-        <FieldShell
-          label="Sender email"
-          htmlFor="notification-sender"
-          width="half"
-          description={addressErrors.senderEmail ? undefined : senderHelp}
-          error={addressErrors.senderEmail}
-        >
-          <Input
-            type="email"
-            value={form.senderEmail ?? ""}
-            onChange={e => update("senderEmail", e.target.value || undefined)}
-            onBlur={e => validateAddress("senderEmail", e.target.value)}
-            placeholder={senderPlaceholder}
-          />
-        </FieldShell>
+      {/* Sender */}
+      <FieldShell
+        label="Sender email"
+        htmlFor="notification-sender"
+        width="half"
+        description={addressErrors.senderEmail ? undefined : senderHelp}
+        error={addressErrors.senderEmail}
+      >
+        <Input
+          type="email"
+          value={form.senderEmail ?? ""}
+          onChange={e => update("senderEmail", e.target.value || undefined)}
+          onBlur={e => validateAddress("senderEmail", e.target.value)}
+          placeholder={senderPlaceholder}
+        />
+      </FieldShell>
     </>
   );
 }
@@ -1083,7 +1050,14 @@ function NotificationIdentityFields({
 type ReplyToMode = "none" | "field" | "custom";
 
 interface NotificationEditorProps {
-  initial: FormNotification;
+  /**
+   * The rule as the form holds it. Read on every render rather than copied
+   * into local state: the summary row edits the same rule (its Enabled switch
+   * writes straight to the form), and a second copy here would go stale the
+   * moment it did — the next edit would then send the whole stale rule back
+   * and undo it.
+   */
+  notification: FormNotification;
   /** Ties the row's toggle to this region for assistive tech. */
   editorId: string;
   providers: ProviderOption[];
@@ -1104,7 +1078,7 @@ function initialReplyToMode(replyTo: string | undefined): ReplyToMode {
 }
 
 function NotificationEditor({
-  initial,
+  notification,
   editorId,
   providers,
   templates,
@@ -1112,40 +1086,34 @@ function NotificationEditor({
   defaults,
   onChange,
 }: NotificationEditorProps) {
-  const [form, setForm] = useState<FormNotification>(initial);
+  const form = notification;
   const [replyToMode, setReplyToMode] = useState<ReplyToMode>(
-    initialReplyToMode(initial.replyTo)
+    initialReplyToMode(notification.replyTo)
   );
   // Save-time address errors, keyed by field. Nothing here goes through
   // form submission (every control is a type="button" callback), so
   // constraint validation never runs — this is its replacement.
-  const [addressErrors, setAddressErrors] = useState<
-    Partial<Record<"senderEmail" | "to" | "replyTo", string>>
-  >({});
+  // Seeded from the rule as it stands, so a row opened onto an address saved
+  // earlier shows the problem straight away rather than waiting to be touched.
+  const [addressErrors, setAddressErrors] = useState<AddressErrors>(() =>
+    addressErrorsIn(notification)
+  );
 
   const update = useCallback(
     <K extends keyof FormNotification>(key: K, value: FormNotification[K]) => {
-      setForm(prev => {
-        const next = { ...prev, [key]: value };
-        onChange(next);
-        return next;
-      });
+      onChange({ ...notification, [key]: value });
       setAddressErrors(prev =>
         key in prev ? { ...prev, [key]: undefined } : prev
       );
     },
-    [onChange]
+    [notification, onChange]
   );
 
   const changeRecipientType = useCallback(
     (kind: "static" | "field") => {
-      setForm(prev => {
-        const next = { ...prev, recipientType: kind, to: "" };
-        onChange(next);
-        return next;
-      });
+      onChange({ ...notification, recipientType: kind, to: "" });
     },
-    [onChange]
+    [notification, onChange]
   );
 
   /**
@@ -1158,16 +1126,8 @@ function NotificationEditor({
    * for most of the time it is being typed.
    */
   const validateAddress = useCallback(
-    (key: "senderEmail" | "to" | "replyTo", value: string | undefined) => {
-      // A `{{field}}` reference resolves against each submission at send time,
-      // so it is not an address and is not checked as one.
-      const literal = key === "replyTo" && parseFieldRef(value) !== null;
-      const invalid =
-        !literal && Boolean(value?.trim()) && !isValidEmail(value as string);
-      setAddressErrors(prev => ({
-        ...prev,
-        [key]: invalid ? "Enter a valid email address." : undefined,
-      }));
+    (key: AddressField, value: string | undefined) => {
+      setAddressErrors(prev => ({ ...prev, [key]: addressError(key, value) }));
     },
     []
   );
@@ -1175,52 +1135,49 @@ function NotificationEditor({
   const condition = form.condition;
 
   return (
-    <div
-      id={editorId}
-      className="border-t border-border bg-muted/20 px-4 py-5"
-    >
+    <div id={editorId} className="border-t border-border bg-muted/20 px-4 py-5">
       <div className="space-y-6">
-          <NotificationIdentityFields
-            form={form}
-            providers={providers}
-            defaults={defaults}
-            templates={templates}
-            update={update}
-            addressErrors={addressErrors}
-            validateAddress={validateAddress}
-          />
-          {/* Recipients */}
-          <RecipientFields
-            form={form}
-            fields={fields}
-            defaults={defaults}
-            update={update}
-            onRecipientTypeChange={changeRecipientType}
-            addressErrors={addressErrors}
-            validateAddress={validateAddress}
-            replyToMode={replyToMode}
-            setReplyToMode={setReplyToMode}
-          />
-          {/* Send condition */}
-          <SendConditionField
-            condition={condition}
-            fields={fields}
-            update={update}
-          />
-          {/* Enabled */}
-          <div className="flex items-center justify-between pt-4 border-t border-border">
-            <div>
-              <Label htmlFor="notification-enabled">Enabled</Label>
-              <p className="text-xs text-muted-foreground">
-                Turn off to keep the rule without sending.
-              </p>
-            </div>
-            <Switch
-              id="notification-enabled"
-              checked={form.enabled}
-              onCheckedChange={checked => update("enabled", checked)}
-            />
+        <NotificationIdentityFields
+          form={form}
+          providers={providers}
+          defaults={defaults}
+          templates={templates}
+          update={update}
+          addressErrors={addressErrors}
+          validateAddress={validateAddress}
+        />
+        {/* Recipients */}
+        <RecipientFields
+          form={form}
+          fields={fields}
+          defaults={defaults}
+          update={update}
+          onRecipientTypeChange={changeRecipientType}
+          addressErrors={addressErrors}
+          validateAddress={validateAddress}
+          replyToMode={replyToMode}
+          setReplyToMode={setReplyToMode}
+        />
+        {/* Send condition */}
+        <SendConditionField
+          condition={condition}
+          fields={fields}
+          update={update}
+        />
+        {/* Enabled */}
+        <div className="flex items-center justify-between pt-4 border-t border-border">
+          <div>
+            <Label htmlFor="notification-enabled">Enabled</Label>
+            <p className="text-xs text-muted-foreground">
+              Turn off to keep the rule without sending.
+            </p>
           </div>
+          <Switch
+            id="notification-enabled"
+            checked={form.enabled}
+            onCheckedChange={checked => update("enabled", checked)}
+          />
+        </div>
       </div>
     </div>
   );
@@ -1346,7 +1303,7 @@ export function FormNotificationsTab({ defaults }: FormNotificationsTabProps) {
               }
             >
               <NotificationEditor
-                initial={notification}
+                notification={notification}
                 editorId={`notification-editor-${notification.id}`}
                 providers={providers}
                 templates={templates}
@@ -1358,7 +1315,6 @@ export function FormNotificationsTab({ defaults }: FormNotificationsTabProps) {
           ))}
         </div>
       )}
-
     </div>
   );
 }

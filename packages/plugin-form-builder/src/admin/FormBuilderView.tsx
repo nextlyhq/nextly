@@ -45,6 +45,7 @@ import {
   FormSettingsTab,
   type SpamDefaults,
 } from "./components/builder/FormSettingsTab";
+import { badAddressMessage } from "./components/builder/notification-addresses";
 import {
   FormBuilderProvider,
   useFormBuilder,
@@ -237,6 +238,17 @@ function FormBuilderViewInner({
     // Check if there are fields
     if (fields.length === 0) {
       toast.error("Please add at least one field to the form");
+      return;
+    }
+
+    // A notification's address fields are validated as they are left, but the
+    // rule is written to the form as it is typed — so leaving a malformed one
+    // and pressing Save here would persist it, and the delivery path would
+    // hand it to the mail provider. The same function the field uses answers
+    // for every rule, so the two cannot disagree about what is valid.
+    const badAddress = badAddressMessage(notifications);
+    if (badAddress) {
+      toast.error(badAddress);
       return;
     }
 
