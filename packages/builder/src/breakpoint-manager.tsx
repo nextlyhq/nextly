@@ -24,7 +24,11 @@ import { MonitorSmartphone } from "lucide-react";
 import * as React from "react";
 
 import { BreakpointDialog } from "./breakpoint-dialog";
-import { authoredBreakpoints, type BreakpointSet } from "./breakpoints";
+import {
+  authoredBreakpoints,
+  sameBreakpoints,
+  type BreakpointSet,
+} from "./breakpoints";
 
 /**
  * Props for BreakpointManager.
@@ -39,21 +43,23 @@ export interface BreakpointManagerProps {
    */
   onSave: (next: BreakpointSet) => void | Promise<string | undefined>;
   /**
-   * Whether the SAVED set has actually been read yet.
+   * What the SAVED set's read has actually done — not merely whether it is done.
    *
-   * False while the stored site style is loading or could not be read, and the
-   * consequence is why this is a required input rather than an optional nicety.
-   * Until the read answers, `value` is the host's CONFIG DEFAULTS — so a dialog
-   * opened on it would show a set the site never chose, and saving from that
-   * draft would overwrite the site's real breakpoints with defaults the author
-   * never saw. The same gate the canvas and the provenance trace already apply,
-   * one surface over.
+   * Three states, because the two that are not `ready` need different words and
+   * a boolean cannot carry them. Until the read answers, `value` is the host's
+   * CONFIG DEFAULTS, so a dialog opened on it would show a set the site never
+   * chose and saving that draft would overwrite the site's real breakpoints with
+   * defaults the author never saw. That is true of a FAILED read as much as a
+   * pending one — which is why a `pending`-only gate is wrong — but the two are
+   * not the same thing to say. Told "still loading" after a permission denial,
+   * an author waits for a request that already finished.
    *
-   * Disabled rather than hidden: a control that vanishes while a request is in
-   * flight moves the buttons beside it under the pointer, and an author who
-   * knows the manager exists is left wondering whether the feature was removed.
+   * Disabled rather than hidden in both cases: a control that vanishes while a
+   * request is in flight moves the buttons beside it under the pointer, and an
+   * author who knows the manager exists is left wondering whether the feature
+   * was removed.
    */
-  ready: boolean;
+  status: "loading" | "unavailable" | "ready";
 }
 
 /**
@@ -63,8 +69,9 @@ export interface BreakpointManagerProps {
 export function BreakpointManager({
   value,
   onSave,
-  ready,
+  status,
 }: BreakpointManagerProps): React.JSX.Element {
+  const ready = status === "ready";
   const [open, setOpen] = React.useState(false);
   /*
    * The set this surface last wrote, held until the read catches up.
@@ -87,8 +94,27 @@ export function BreakpointManager({
     | { readonly wrote: BreakpointSet; readonly sawAtSave: BreakpointSet }
     | undefined
   >(undefined);
-  const stillStale =
-    pendingWrite !== undefined && pendingWrite.sawAtSave === value;
+  /*
+   * The hold survives exactly while the read has demonstrably not moved.
+   *
+   * Two earlier versions each failed in one direction, which is the tell that a
+   * third heuristic is the wrong answer. Waiting for the incoming set to MATCH
+   * what was written never ends if the server stored something else. Comparing
+   * object IDENTITY releases on any parent render that rebuilds an equal
+   * object, because the prop contract does not promise a stable reference.
+   *
+   * Both are answered by asking about CONTENT and accepting either outcome as
+   * an arrival: the read has caught up when it now equals what was written, and
+   * it has also caught up when it differs from what was there at the save. What
+   * is left — equal to the pre-save set and not to the written one — is the only
+   * state in which nothing has come back yet, so the hold cannot stick and
+   * cannot lift early.
+   */
+  const readArrived =
+    pendingWrite !== undefined &&
+    (sameBreakpoints(value, pendingWrite.wrote) ||
+      !sameBreakpoints(value, pendingWrite.sawAtSave));
+  const stillStale = pendingWrite !== undefined && !readArrived;
   /*
    * CLEARED once the read moves, not merely stopped being consulted.
    *
@@ -101,10 +127,8 @@ export function BreakpointManager({
    * the server and canvas have both moved back to.
    */
   React.useEffect(() => {
-    setPendingWrite(current =>
-      current !== undefined && current.sawAtSave !== value ? undefined : current
-    );
-  }, [value]);
+    if (readArrived) setPendingWrite(undefined);
+  }, [readArrived]);
   const authored = authoredBreakpoints(stillStale ? pendingWrite.wrote : value);
   const count = authored.viewport.length + authored.container.length;
 
@@ -136,12 +160,18 @@ export function BreakpointManager({
          * thing this label is worth showing.
          */
         aria-label={
-          ready ? `Breakpoints: ${count} defined` : "Breakpoints: still loading"
+          ready
+            ? `Breakpoints: ${count} defined`
+            : status === "loading"
+              ? "Breakpoints: still loading"
+              : "Breakpoints: unavailable"
         }
         title={
           ready
             ? undefined
-            : "Available once the site's saved styles have loaded."
+            : status === "loading"
+              ? "Available once the site's saved styles have loaded."
+              : "Your site's saved styles could not be read, so editing them here could overwrite them."
         }
       >
         <MonitorSmartphone className="size-4" />

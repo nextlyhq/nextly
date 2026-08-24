@@ -425,7 +425,7 @@ describe("what the breakpoint manager is told", () => {
     openEditor();
 
     expect(seen.breakpoints).toBeDefined();
-    expect(seen.breakpoints?.ready).toBe(false);
+    expect(seen.breakpoints?.status).toBe("loading");
   });
 
   it("is NOT ready after a FAILED read, which is not a passing state", () => {
@@ -442,7 +442,9 @@ describe("what the breakpoint manager is told", () => {
 
     openEditor();
 
-    expect(seen.breakpoints?.ready).toBe(false);
+    // Named as the FAILURE it is, not as loading: told "still loading" after a
+    // permission denial, an author waits for a request that already finished.
+    expect(seen.breakpoints?.status).toBe("unavailable");
   });
 
   it("IS ready once the read has answered, which is the control", () => {
@@ -454,7 +456,7 @@ describe("what the breakpoint manager is told", () => {
      */
     openEditor();
 
-    expect(seen.breakpoints?.ready).toBe(true);
+    expect(seen.breakpoints?.status).toBe("ready");
   });
 
   it("refuses an empty set while the host config states breakpoints", async () => {

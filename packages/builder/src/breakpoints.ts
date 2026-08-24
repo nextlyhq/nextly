@@ -139,6 +139,34 @@ export function authoredBreakpoints(
 }
 
 /**
+ * Whether two sets describe the same breakpoints.
+ *
+ * By CONTENT, never by object identity. The prop contract does not promise a
+ * stable reference — a host that rebuilds an equal object on any parent render
+ * is within its rights — so identity answers "has the read changed" wrongly in
+ * both directions, and a surface that asks it gets a different wrong answer
+ * depending on which way the host happens to render.
+ *
+ * Compares the AUTHORED sets, so a stored base row on one side and none on the
+ * other is not a difference: the compiler prepends that context either way, and
+ * treating it as a change would report a set that renders identically as new.
+ *
+ * @experimental
+ */
+export function sameBreakpoints(
+  a: BreakpointSet | undefined,
+  b: BreakpointSet | undefined
+): boolean {
+  const shape = (set: BreakpointSet | undefined) => {
+    const authored = authoredBreakpoints(set);
+    const axis = (defs: readonly BreakpointDef[]) =>
+      defs.map(def => `${def.id}\u0000${def.label}\u0000${def.maxWidth ?? ""}`);
+    return [axis(authored.viewport), axis(authored.container)];
+  };
+  return JSON.stringify(shape(a)) === JSON.stringify(shape(b));
+}
+
+/**
  * Whether a bound is one the compiler will keep.
  *
  * @experimental

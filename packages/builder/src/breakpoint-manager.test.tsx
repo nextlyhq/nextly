@@ -50,7 +50,7 @@ describe("the breakpoint trigger", () => {
      * button can be disabled and still have had its dialog mounted beside it.
      */
     render(
-      <BreakpointManager value={empty()} onSave={vi.fn()} ready={false} />
+      <BreakpointManager value={empty()} onSave={vi.fn()} status="loading" />
     );
 
     expect(trigger().disabled).toBe(true);
@@ -58,10 +58,76 @@ describe("the breakpoint trigger", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("says UNAVAILABLE after a failed read, not still loading", () => {
+    /*
+     * Both non-ready states withhold the dialog for the same reason — the value
+     * in hand is the host's config defaults — but they are not the same thing to
+     * say. Told "still loading" after a permission denial or a dropped request,
+     * an author waits for something that already finished, and the only signal
+     * they have says to keep waiting.
+     *
+     * Asserted against the loading wording as well as for its own, so a state
+     * that merely fell through to the same string would fail.
+     */
+    render(
+      <BreakpointManager
+        value={empty()}
+        onSave={vi.fn()}
+        status="unavailable"
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Breakpoints: unavailable" })
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Breakpoints: still loading" })
+    ).toBeNull();
+    // And it is still withheld, which is the property the wording qualifies.
+    expect(trigger().disabled).toBe(true);
+  });
+
+  it("does not release the hold when the host rebuilds an EQUAL value", async () => {
+    /*
+     * The counterpart to the resurrection case, and the reason the release is
+     * asked of content rather than identity: the prop contract does not promise
+     * a stable reference, so a parent render that rebuilds an equal object is
+     * within its rights. Released on that, the hold lifts before the read has
+     * moved at all, and reopening seeds the dialog from the old set.
+     *
+     * The rebuilt value is a fresh object with the SAME contents, which is
+     * exactly what identity comparison cannot tell from a real change.
+     */
+    const onSave = vi.fn((_next: BreakpointSet) => Promise.resolve(undefined));
+    const { rerender } = render(
+      <BreakpointManager value={defined()} onSave={onSave} status="ready" />
+    );
+
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /save breakpoints|saving/i })
+    );
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+    // A fresh object, equal in content — the read has NOT caught up.
+    rerender(
+      <BreakpointManager value={defined()} onSave={onSave} status="ready" />
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Breakpoints: 1 defined" })
+      ).toBeDefined()
+    );
+  });
+
   it("opens once it HAS been read, which is the control", () => {
     // Without this, a manager that never opened would satisfy the case above
     // and the feature would be unreachable rather than merely gated.
-    render(<BreakpointManager value={defined()} onSave={vi.fn()} ready />);
+    render(
+      <BreakpointManager value={defined()} onSave={vi.fn()} status="ready" />
+    );
 
     expect(trigger().disabled).toBe(false);
     fireEvent.click(trigger());
@@ -74,7 +140,9 @@ describe("the breakpoint trigger", () => {
      * otherwise reaches a button called "Breakpoints" that gives no hint whether
      * the site has any, which is the one thing the label is worth showing.
      */
-    render(<BreakpointManager value={defined()} onSave={vi.fn()} ready />);
+    render(
+      <BreakpointManager value={defined()} onSave={vi.fn()} status="ready" />
+    );
 
     expect(
       screen.getByRole("button", { name: "Breakpoints: 2 defined" })
@@ -84,7 +152,9 @@ describe("the breakpoint trigger", () => {
   it("reports ZERO for a site that has defined none", () => {
     // The state the count exists to distinguish, and the one an off-by-one
     // counting the base context would report as "1 breakpoint".
-    render(<BreakpointManager value={empty()} onSave={vi.fn()} ready />);
+    render(
+      <BreakpointManager value={empty()} onSave={vi.fn()} status="ready" />
+    );
 
     expect(
       screen.getByRole("button", { name: "Breakpoints: 0 defined" })
@@ -108,7 +178,9 @@ describe("the breakpoint trigger", () => {
       container: [],
     } as unknown as BreakpointSet;
 
-    render(<BreakpointManager value={withReserved} onSave={vi.fn()} ready />);
+    render(
+      <BreakpointManager value={withReserved} onSave={vi.fn()} status="ready" />
+    );
 
     expect(
       screen.getByRole("button", { name: "Breakpoints: 0 defined" })
@@ -140,7 +212,9 @@ describe("the breakpoint trigger", () => {
       container: [],
     } as unknown as BreakpointSet;
 
-    render(<BreakpointManager value={documented} onSave={vi.fn()} ready />);
+    render(
+      <BreakpointManager value={documented} onSave={vi.fn()} status="ready" />
+    );
 
     // The count follows the same rule, so the two cannot disagree. Asserted
     // BEFORE opening: the dialog takes the page out of the accessibility tree
@@ -181,7 +255,9 @@ describe("the breakpoint trigger", () => {
     // records `[]`, and reading index 0 off it is a type error rather than the
     // assertion this test is making.
     const onSave = vi.fn((_next: BreakpointSet) => Promise.resolve(undefined));
-    render(<BreakpointManager value={defined()} onSave={onSave} ready />);
+    render(
+      <BreakpointManager value={defined()} onSave={onSave} status="ready" />
+    );
 
     expect(
       screen.getByRole("button", { name: "Breakpoints: 2 defined" })
@@ -228,7 +304,7 @@ describe("the breakpoint trigger", () => {
     const onSave = vi.fn((_next: BreakpointSet) => Promise.resolve(undefined));
 
     const { rerender } = render(
-      <BreakpointManager value={configObject} onSave={onSave} ready />
+      <BreakpointManager value={configObject} onSave={onSave} status="ready" />
     );
 
     fireEvent.click(trigger());
@@ -239,9 +315,13 @@ describe("the breakpoint trigger", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
 
     // The read moves — the hold must be released here, permanently.
-    rerender(<BreakpointManager value={other} onSave={onSave} ready />);
+    rerender(
+      <BreakpointManager value={other} onSave={onSave} status="ready" />
+    );
     // And then returns to the very object it was at the save.
-    rerender(<BreakpointManager value={configObject} onSave={onSave} ready />);
+    rerender(
+      <BreakpointManager value={configObject} onSave={onSave} status="ready" />
+    );
 
     await waitFor(() =>
       expect(
@@ -259,10 +339,12 @@ describe("the breakpoint trigger", () => {
      * boot.
      */
     const { rerender } = render(
-      <BreakpointManager value={empty()} onSave={vi.fn()} ready />
+      <BreakpointManager value={empty()} onSave={vi.fn()} status="ready" />
     );
 
-    rerender(<BreakpointManager value={defined()} onSave={vi.fn()} ready />);
+    rerender(
+      <BreakpointManager value={defined()} onSave={vi.fn()} status="ready" />
+    );
     fireEvent.click(trigger());
 
     expect(screen.getByDisplayValue("991")).toBeDefined();

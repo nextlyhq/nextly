@@ -552,6 +552,27 @@ function useBreakpointWriter(
   );
 }
 
+/**
+ * What the stored site style's read has DONE, in the manager's three words.
+ *
+ * Named rather than written inline for the reason the writer moved out of the
+ * editor component: every decision folded into that function is another path
+ * through the whole of it, and `fallow` reports the growth as introduced
+ * complexity.
+ *
+ * `error === null`, not `!== undefined`. `useSiteStyle` types the field as
+ * `Error | null` and normalises a successful read to `null`, so an `undefined`
+ * comparison is true on success as well as on failure — the mistake that once
+ * withheld the provenance trace unconditionally.
+ */
+function siteStyleStatus(
+  pending: boolean,
+  error: Error | null
+): "loading" | "unavailable" | "ready" {
+  if (pending) return "loading";
+  return error === null ? "ready" : "unavailable";
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -893,7 +914,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             <BreakpointManager
               value={canvasRender.styleContext.breakpoints}
               onSave={saveBreakpoints}
-              ready={!siteStylePending && siteStyleError === null}
+              status={siteStyleStatus(siteStylePending, siteStyleError)}
             />
           </>
         }
