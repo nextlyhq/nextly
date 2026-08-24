@@ -231,7 +231,7 @@ jobs:
         if: always() && steps.analyse.conclusion != 'skipped'
         run: |
           {
-            echo "## 📊 Whole-Repository Code Hygiene Summary"
+            echo "## Whole-Repository Code Hygiene Summary"
             echo
             echo "Full dead-code, duplication, and health/complexity report for the"
             echo "PR branch as it stands now. Playground is excluded. Quality gate"
@@ -259,7 +259,7 @@ jobs:
             }
 
             if (!summaryContent.trim()) {
-              summaryContent = `## 📊 Whole-Repository Code Hygiene Summary\n\nFull scan completed for PR #${prNumber}.`;
+              summaryContent = `## Whole-Repository Code Hygiene Summary\n\nFull scan completed for PR #${prNumber}.`;
             }
 
             const commentBody = `${commentMarker}\n${summaryContent}`;
