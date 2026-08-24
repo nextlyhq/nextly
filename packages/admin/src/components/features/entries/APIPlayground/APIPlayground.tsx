@@ -24,6 +24,9 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
   Tabs,
   TabsContent,
   TabsList,
@@ -43,6 +46,9 @@ import {
 
 import { RotateCcw } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
+import { useHydration } from "@admin/hooks/useHydration";
+import { useMediaQuery } from "@admin/hooks/useMediaQuery";
+import { usePersistedState } from "@admin/hooks/usePersistedState";
 import { cn } from "@admin/lib/utils";
 
 import { generateCode } from "./generate-code";
@@ -64,6 +70,21 @@ const CodeMirrorEditor = lazy(() =>
 // ============================================================================
 
 export type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
+
+/**
+ * The request pane's share of the split, as a percentage.
+ *
+ * Two panes have ONE degree of freedom, so a single number describes the layout
+ * and the response pane takes the remainder -- which means there is nothing to
+ * keep consistent. Stored as a string because that is what the persistence hook
+ * holds; the validator is what keeps it a number in range.
+ */
+const SPLIT_KEY = "nextly:admin:api-playground:split";
+const SPLIT_DEFAULT = "40";
+const isSplit = (value: string): value is string => {
+  const share = Number(value);
+  return Number.isFinite(share) && share >= 25 && share <= 75;
+};
 
 /** Available endpoint actions for collection entries */
 export type EndpointAction =
@@ -271,6 +292,23 @@ export function APIPlayground({
 
   // Copy state
   const [copied, setCopied] = useState(false);
+
+  // The group is rendered only after hydration, which is what lets the stored
+  // layout be the one it mounts with. `usePersistedState` reads storage in an
+  // effect, and both effects land in the same flush, so the group mounts once
+  // already holding the restored value rather than mounting on the default and
+  // being corrected afterwards.
+  const hydrated = useHydration();
+  // `lg`, as a query rather than a class, because this CHOOSES a tree instead
+  // of styling one. Rendering both and hiding one with CSS would put the query
+  // builder's labelled fields in the document twice, and a screen reader would
+  // read every one of them twice with no way to tell which is the hidden copy.
+  const isWide = useMediaQuery("(min-width: 64rem)");
+  const [split, setSplit] = usePersistedState(
+    SPLIT_KEY,
+    SPLIT_DEFAULT,
+    isSplit
+  );
 
   /** The in-flight request, so a re-send or Escape can call it off. */
   const abortRef = useRef<AbortController | null>(null);
@@ -620,6 +658,185 @@ export function APIPlayground({
     ]
   );
 
+  // Declared once and rendered by whichever branch is live below. Two
+  // copies of a pane is how the two ROUTE files drifted, and the same trap
+  // applies one level down.
+  const requestPane = (
+    <Card className="flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
+      <CardHeader className="p-6 pb-4" noBorder>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base font-semibold tracking-tight text-foreground">
+            Request configuration
+          </CardTitle>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleReset}
+            className="gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="flex-1 min-h-0 overflow-y-auto space-y-6 px-6 pb-6">
+        {/* The base path and the full URL both used to be restated here; the
+          bar above shows the real thing, so they were saying it a third
+          time and only the bar can be trusted to stay correct. */}
+
+        {/* Entry ID Input (conditional) */}
+        {!isSingle && currentAction.requiresEntryId && (
+          <div className="space-y-2">
+            <Label className="text-sm font-medium text-foreground">
+              Entry ID <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              value={entryId}
+              onChange={e => setEntryId(e.target.value)}
+              placeholder="Enter entry ID (e.g., abc123)"
+              className="font-mono text-xs"
+            />
+            {entryIdMissing && (
+              <p className="text-xs text-destructive">
+                Entry ID is required for this action
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* A body only exists for the actions that carry one, so the tabs
+          only exist then too — a single-tab tab bar is a control that
+          cannot do anything. */}
+        {actionRequiresBody ? (
+          <Tabs
+            defaultValue="body"
+            className="flex-1 flex flex-col min-h-0 pt-2"
+          >
+            <TabsList className="w-full justify-start">
+              {/* Body first: on a write it is what you came to edit. */}
+              <TabsTrigger value="body">Body</TabsTrigger>
+              <TabsTrigger value="params">Parameters</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="body" className="mt-4 flex-1 min-h-0">
+              {/* A JSON editor rather than a textarea: this is the one
+                field you type code into, and it was the only one without
+                highlighting, bracket matching, or a line to point at when
+                the JSON is wrong. */}
+              <div className="flex h-full min-h-0 flex-col gap-2">
+                <Label className="text-sm font-medium text-foreground">
+                  Request body (JSON)
+                </Label>
+                <div className="min-h-0 flex-1 border border-input">
+                  <Suspense
+                    fallback={
+                      <div className="h-full w-full animate-pulse bg-muted/30" />
+                    }
+                  >
+                    <CodeMirrorEditor
+                      value={requestBody}
+                      onChange={setRequestBody}
+                      language="json"
+                      disabled={false}
+                      readOnly={false}
+                      minHeight={320}
+                      editorOptions={{ tabSize: 2, lineNumbers: true }}
+                      placeholder={getBodyPlaceholder()}
+                    />
+                  </Suspense>
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="params" className="mt-4">
+              <QueryBuilder
+                params={queryParams}
+                onChange={setQueryParams}
+                conditions={whereConditions}
+                onConditionsChange={setWhereConditions}
+                fields={fields}
+                hasStatus={hasStatus}
+                isSingle={isSingle}
+              />
+            </TabsContent>
+          </Tabs>
+        ) : (
+          <div className="pt-2">
+            <QueryBuilder
+              params={queryParams}
+              onChange={setQueryParams}
+              conditions={whereConditions}
+              onConditionsChange={setWhereConditions}
+              fields={fields}
+              hasStatus={hasStatus}
+              isSingle={isSingle}
+            />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  const responsePane = (
+    <Card className="flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
+      <CardHeader className="p-6 pb-4" noBorder>
+        <div className="flex items-center justify-between gap-4">
+          <CardTitle className="text-base font-semibold tracking-tight text-foreground">
+            API response
+          </CardTitle>
+          {response && (
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Status</span>
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    statusDotTone(response.status)
+                  )}
+                />
+                <span
+                  className={cn(
+                    "font-mono text-sm font-semibold",
+                    getStatusColor(response.status)
+                  )}
+                >
+                  {response.status}
+                </span>
+              </div>
+              <div className="h-4 w-px bg-border" />
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Latency</span>
+                <span className="font-mono text-sm font-semibold text-foreground">
+                  {response.time}ms
+                </span>
+              </div>
+              <div className="h-4 w-px bg-border" />
+              {/* Size sits beside latency because they are the pair you
+                  trade against each other when tuning depth and limit. */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Size</span>
+                <span className="font-mono text-sm font-semibold text-foreground">
+                  {formatBytes(response.size)}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="flex-1 min-h-0 p-0 overflow-hidden">
+        <ResponseViewer
+          data={response?.data}
+          isLoading={isLoading}
+          error={error}
+          headers={response?.headers}
+          raw={response?.raw}
+          code={codeSnippets}
+          filename={`${collectionSlug}-response`}
+        />
+      </CardContent>
+    </Card>
+  );
+
   return (
     // Fills the height it is given rather than demanding a minimum: the panes
     // below scroll on their own, so the page never grows past the panel and
@@ -697,187 +914,51 @@ export function APIPlayground({
         onOpen={handleOpenInNewTab}
       />
 
-      {/* Stacked on narrow screens, where two scroll panes side by side would
-          leave neither usable, so the page scrolls there instead. */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-8 lg:grid-cols-12">
-        {/* Request Builder Panel - 5 columns */}
-        <Card className="lg:col-span-5 flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
-          <CardHeader className="p-6 pb-4" noBorder>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-semibold tracking-tight text-foreground">
-                Request configuration
-              </CardTitle>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleReset}
-                className="gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Reset
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex-1 min-h-0 overflow-y-auto space-y-6 px-6 pb-6">
-            {/* The base path and the full URL both used to be restated here; the
-              bar above shows the real thing, so they were saying it a third
-              time and only the bar can be trusted to stay correct. */}
-
-            {/* Entry ID Input (conditional) */}
-            {!isSingle && currentAction.requiresEntryId && (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-foreground">
-                  Entry ID <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  value={entryId}
-                  onChange={e => setEntryId(e.target.value)}
-                  placeholder="Enter entry ID (e.g., abc123)"
-                  className="font-mono text-xs"
-                />
-                {entryIdMissing && (
-                  <p className="text-xs text-destructive">
-                    Entry ID is required for this action
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/* A body only exists for the actions that carry one, so the tabs
-              only exist then too — a single-tab tab bar is a control that
-              cannot do anything. */}
-            {actionRequiresBody ? (
-              <Tabs
-                defaultValue="body"
-                className="flex-1 flex flex-col min-h-0 pt-2"
-              >
-                <TabsList className="w-full justify-start">
-                  {/* Body first: on a write it is what you came to edit. */}
-                  <TabsTrigger value="body">Body</TabsTrigger>
-                  <TabsTrigger value="params">Parameters</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="body" className="mt-4 flex-1 min-h-0">
-                  {/* A JSON editor rather than a textarea: this is the one
-                    field you type code into, and it was the only one without
-                    highlighting, bracket matching, or a line to point at when
-                    the JSON is wrong. */}
-                  <div className="flex h-full min-h-0 flex-col gap-2">
-                    <Label className="text-sm font-medium text-foreground">
-                      Request body (JSON)
-                    </Label>
-                    <div className="min-h-0 flex-1 border border-input">
-                      <Suspense
-                        fallback={
-                          <div className="h-full w-full animate-pulse bg-muted/30" />
-                        }
-                      >
-                        <CodeMirrorEditor
-                          value={requestBody}
-                          onChange={setRequestBody}
-                          language="json"
-                          disabled={false}
-                          readOnly={false}
-                          minHeight={320}
-                          editorOptions={{ tabSize: 2, lineNumbers: true }}
-                          placeholder={getBodyPlaceholder()}
-                        />
-                      </Suspense>
-                    </div>
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="params" className="mt-4">
-                  <QueryBuilder
-                    params={queryParams}
-                    onChange={setQueryParams}
-                    conditions={whereConditions}
-                    onConditionsChange={setWhereConditions}
-                    fields={fields}
-                    hasStatus={hasStatus}
-                    isSingle={isSingle}
-                  />
-                </TabsContent>
-              </Tabs>
-            ) : (
-              <div className="pt-2">
-                <QueryBuilder
-                  params={queryParams}
-                  onChange={setQueryParams}
-                  conditions={whereConditions}
-                  onConditionsChange={setWhereConditions}
-                  fields={fields}
-                  hasStatus={hasStatus}
-                  isSingle={isSingle}
-                />
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Response Panel - 7 columns */}
-        <Card className="lg:col-span-7 flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
-          <CardHeader className="p-6 pb-4" noBorder>
-            <div className="flex items-center justify-between gap-4">
-              <CardTitle className="text-base font-semibold tracking-tight text-foreground">
-                API response
-              </CardTitle>
-              {response && (
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      Status
-                    </span>
-                    <span
-                      className={cn(
-                        "h-1.5 w-1.5 rounded-full",
-                        statusDotTone(response.status)
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        "font-mono text-sm font-semibold",
-                        getStatusColor(response.status)
-                      )}
-                    >
-                      {response.status}
-                    </span>
-                  </div>
-                  <div className="h-4 w-px bg-border" />
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      Latency
-                    </span>
-                    <span className="font-mono text-sm font-semibold text-foreground">
-                      {response.time}ms
-                    </span>
-                  </div>
-                  <div className="h-4 w-px bg-border" />
-                  {/* Size sits beside latency because they are the pair you
-                      trade against each other when tuning depth and limit. */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">Size</span>
-                    <span className="font-mono text-sm font-semibold text-foreground">
-                      {formatBytes(response.size)}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className="flex-1 min-h-0 p-0 overflow-hidden">
-            <ResponseViewer
-              data={response?.data}
-              isLoading={isLoading}
-              error={error}
-              headers={response?.headers}
-              raw={response?.raw}
-              code={codeSnippets}
-              filename={`${collectionSlug}-response`}
-            />
-          </CardContent>
-        </Card>
-      </div>
+      {/* Declared once and rendered by whichever branch is live. Two copies of
+          a pane is how the two ROUTE files drifted, and the same trap applies
+          one level down. */}
+      <>
+        {hydrated && isWide ? (
+          <div className="flex min-h-0 flex-1">
+            <ResizablePanelGroup
+              orientation="horizontal"
+              className="min-h-0 flex-1"
+              defaultLayout={{
+                request: Number(split),
+                response: 100 - Number(split),
+              }}
+              onLayoutChanged={(layout, meta) => {
+                // The group reports every layout it settles on, and the mount
+                // pass arrives BEFORE the restored one takes effect -- so an
+                // unconditional write saves the freshly measured default over
+                // the layout being restored, and widths reset on every reload
+                // while appearing to persist within a session.
+                // `isUserInteraction` is true only for a drag or a resize key,
+                // which is the one event that states an intent about widths.
+                if (!meta.isUserInteraction) return;
+                setSplit(String(Math.round(layout.request)));
+              }}
+            >
+              <ResizablePanel id="request" minSize="25%">
+                {requestPane}
+              </ResizablePanel>
+              <ResizableHandle withGrip className="mx-4" />
+              <ResizablePanel id="response" minSize="30%">
+                {responsePane}
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </div>
+        ) : (
+          /* Stacked below `lg`, and until hydration: a splitter needs a
+             pointer and a measured width, and neither exists on a narrow
+             viewport or on the server. The two arms are exclusive so the panes
+             are in the document once, whichever is chosen. */
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-8">
+            {requestPane}
+            {responsePane}
+          </div>
+        )}
+      </>
     </div>
   );
 }

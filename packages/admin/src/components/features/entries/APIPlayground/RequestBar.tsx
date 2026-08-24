@@ -41,6 +41,20 @@ export const METHOD_TONE: Record<HttpMethod, string> = {
   DELETE: "text-destructive",
 };
 
+/**
+ * The same meanings as a filled chip, for the request line.
+ *
+ * The verb is the first thing read on that line and bare coloured text is easy
+ * to skim past, which matters most for the one that destroys a row. Tokens
+ * rather than palette classes, so a retheme carries the meaning with it.
+ */
+export const METHOD_PILL: Record<HttpMethod, string> = {
+  GET: "bg-muted text-foreground",
+  POST: "bg-success/10 text-success",
+  PATCH: "bg-warning/10 text-warning",
+  DELETE: "bg-destructive/10 text-destructive",
+};
+
 export interface RequestBarProps {
   method: HttpMethod;
   /** The absolute URL that will be requested. */
@@ -73,14 +87,14 @@ export function RequestBar({
   onOpen,
 }: RequestBarProps) {
   return (
-    <div className="flex shrink-0 items-stretch gap-px border border-border-strong bg-border-strong">
+    <div className="flex shrink-0 items-stretch gap-px overflow-hidden rounded-lg border border-border-strong bg-border-strong">
       <div className="w-52 shrink-0 bg-background">{action}</div>
 
       <div className="flex flex-1 items-center gap-3 bg-background px-4 py-2.5 min-w-0">
         <span
           className={cn(
-            "shrink-0 font-mono text-xs font-semibold tracking-wide",
-            METHOD_TONE[method]
+            "shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-xs font-semibold tracking-wide",
+            METHOD_PILL[method]
           )}
         >
           {method}
@@ -122,7 +136,11 @@ export function RequestBar({
         // The shortcut is on the label because a control you can only reach
         // with the mouse teaches nobody it has a keyboard.
         title={isLoading ? "Cancel (Esc)" : "Send request (⌘↵)"}
-        className="w-40 shrink-0 gap-2 rounded-md"
+        // Square deliberately: the bar clips to its own corner now, so a
+        // rounded button inside it would draw a second curve just inside the
+        // first. This is the overlapped-strip case theme.css names, not an
+        // element that missed the radius knob.
+        className="w-40 shrink-0 gap-2 rounded-none"
       >
         {isLoading ? (
           <>
