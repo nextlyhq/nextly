@@ -459,3 +459,74 @@ describe("a declaration the PAGE wrote", () => {
     expect(query([own]).kind).toBe("authored");
   });
 });
+
+describe("ranking winners from two live states", () => {
+  const subject = { nodeId: "a", blockType: "acme/box", ancestors: [] };
+  const at = (over: Record<string, unknown>) =>
+    ({
+      origin: { kind: "node", id: "a" },
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint: "base",
+      ...over,
+    }) as never;
+
+  it("prefers descendant SPECIFICITY over emission order", () => {
+    /*
+     * `styleOrigin` ranks by specificity within ONE state, and is asked once per
+     * live state — so across states the comparison lands here, and position
+     * alone gets it wrong.
+     *
+     * A state's rules are wrapped in `:where()`, which contributes NOTHING to
+     * specificity. So an EARLIER `a:hover` rule outranks a LATER plain-`a` one
+     * however far apart they were emitted, and naming the later one reports a
+     * declaration the browser is not showing.
+     */
+    const trace = [
+      at({ descendant: " a:hover", value: "#hover", state: "hover" }),
+      at({ descendant: " a", value: "#plain", state: "base" }),
+    ];
+    const result = styleProvenance({
+      trace: trace as never,
+      subject,
+      cssProperty: "color",
+      descendant: "a:hover",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["hover"],
+    });
+
+    /*
+     * The separating property, stated in the test: the specific rule is EARLIER
+     * in the trace, so anything preferring source order picks the other one.
+     */
+    expect(trace.indexOf(trace[0]!)).toBeLessThan(trace.indexOf(trace[1]!));
+    expect((result as { entry?: { value: string } }).entry?.value).toBe(
+      "#hover"
+    );
+  });
+
+  it("still falls back to emission order at EQUAL specificity", () => {
+    // The control. Preferring specificity must not throw away the cascade's own
+    // tie-break, which is the later rule.
+    const trace = [
+      at({ descendant: " a", value: "#first", state: "base" }),
+      at({ descendant: " a", value: "#second", state: "hover" }),
+    ];
+    const result = styleProvenance({
+      trace: trace as never,
+      subject,
+      cssProperty: "color",
+      descendant: "a",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["hover"],
+    });
+    expect((result as { entry?: { value: string } }).entry?.value).toBe(
+      "#second"
+    );
+  });
+});

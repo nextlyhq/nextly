@@ -249,15 +249,47 @@ function lastWritten(
 ): StyleTraceEntry | undefined {
   let best: StyleTraceEntry | undefined;
   let bestIndex = -1;
+  let bestSpecificity = -1;
   for (const winner of winners) {
     if (winner === undefined) continue;
     const index = trace.indexOf(winner);
-    if (best === undefined || index > bestIndex) {
+    const specificity = pseudoClassesIn(winner.descendant);
+    /*
+     * SPECIFICITY before source order, which is the order the cascade itself
+     * applies them in — and `styleOrigin` already ranks this way WITHIN a state.
+     * Across states it cannot, because it is asked once per state and each
+     * answer is a separate winner, so the comparison lands here.
+     *
+     * Position alone is wrong wherever the states disagree on specificity. A
+     * state's rules are wrapped in `:where()`, which contributes NOTHING, so an
+     * earlier `.card a:hover` outranks a later `:where(:hover) a` however far
+     * apart they were emitted — and picking the later one names a declaration
+     * the browser is not showing.
+     */
+    if (
+      best === undefined ||
+      specificity > bestSpecificity ||
+      (specificity === bestSpecificity && index > bestIndex)
+    ) {
       best = winner;
       bestIndex = index;
+      bestSpecificity = specificity;
     }
   }
   return best;
+}
+
+/**
+ * How many pseudo-classes a descendant selector carries.
+ *
+ * The same count `styleOrigin` uses for its own ranking, which is the point: two
+ * different ideas of what makes one selector beat another would disagree exactly
+ * where the answer is hard, and this comparison exists only to extend that
+ * ranking across the states it is asked about separately.
+ */
+function pseudoClassesIn(descendant: string | undefined): number {
+  if (descendant === undefined) return 0;
+  return descendant.split(":").length - 1;
 }
 
 /** Whether an entry is this node's own value at the position being edited. */

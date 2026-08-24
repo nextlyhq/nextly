@@ -17,7 +17,9 @@ import {
   inCascadeOrder,
   type BreakpointIssueCode,
   type BreakpointSet,
+  breakpointQueries,
   liveBreakpointsFor,
+  matchedBreakpoints,
 } from "./breakpoints";
 
 function set(partial: Partial<BreakpointSet>): BreakpointSet {
@@ -441,5 +443,84 @@ describe("which breakpoints are live while one is being edited", () => {
     // so an unconfigured site gets an honest answer rather than an empty one
     // that would report every control as unset.
     expect(liveBreakpointsFor(undefined, "base")).toEqual(["base"]);
+  });
+});
+
+describe("which breakpoints the BROWSER is applying", () => {
+  const SET2 = {
+    viewport: [
+      { id: "base", label: "Base" },
+      { id: "vp-lg", label: "Large", maxWidth: 1024 },
+      { id: "vp-md", label: "Medium", maxWidth: 768 },
+    ],
+    container: [
+      { id: "c-base", label: "Container base" },
+      { id: "c-narrow", label: "Narrow", maxWidth: 600 },
+    ],
+  };
+
+  it("asks exactly these conditions, in this order", () => {
+    /*
+     * The observable contract, pinned.
+     *
+     * What this does NOT establish, and it is worth saying rather than implying:
+     * that the condition was DERIVED from the compiler's at-rule rather than
+     * rebuilt from `maxWidth`. For the emitted form the two produce identical
+     * strings, so no fixture can separate them today. Taking the at-rule is
+     * still the right construction — it cannot drift when the emitted form
+     * changes, where a rebuild would — but that is an argument about future
+     * change, and this test cannot make it.
+     */
+    const asked: string[] = [];
+    matchedBreakpoints(SET2, query => {
+      asked.push(query);
+      return false;
+    });
+    expect(asked).toEqual(["(max-width: 1024px)", "(max-width: 768px)"]);
+  });
+
+  it("reports the contexts whose query matches, plus the unconditional one", () => {
+    const live = matchedBreakpoints(SET2, query => query.includes("1024"));
+    expect([...live].sort()).toEqual(["base", "vp-lg"].sort());
+  });
+
+  it("reports the unconditional context when nothing matches", () => {
+    // What is certainly live anywhere, and what a runtime with no `matchMedia`
+    // is given.
+    expect(matchedBreakpoints(SET2, () => false)).toEqual(["base"]);
+  });
+
+  it("never asks about a CONTAINER context, whatever the browser answers", () => {
+    /*
+     * A `@container` query resolves against an element's query container rather
+     * than the viewport, so `matchMedia` has nothing to say about it — and an
+     * answer of `true` would be picked up as live for every block on the page.
+     *
+     * The `matches => true` argument is what makes this bite: a filter that
+     * merely happened not to match would pass a permissive probe, and this one
+     * fails unless the context is never asked about at all.
+     */
+    const asked: string[] = [];
+    matchedBreakpoints(SET2, query => {
+      asked.push(query);
+      return true;
+    });
+    expect(asked.some(query => query.includes("600"))).toBe(false);
+    expect(matchedBreakpoints(SET2, () => true)).not.toContain("c-narrow");
+    expect(matchedBreakpoints(SET2, () => true)).not.toContain("c-base");
+  });
+
+  it("subscribes to exactly the queries it evaluates", () => {
+    /*
+     * The two must agree. A subscriber listening to a different set than the
+     * reader evaluates is a panel that stops updating at precisely the widths it
+     * was added for.
+     */
+    const evaluated: string[] = [];
+    matchedBreakpoints(SET2, query => {
+      evaluated.push(query);
+      return false;
+    });
+    expect(breakpointQueries(SET2)).toEqual(evaluated);
   });
 });

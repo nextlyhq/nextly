@@ -684,13 +684,20 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
        * alone would leave the inspector permanently certain about a tier nobody
        * has read. No dots is the honest answer; a fabricated origin is not.
        */
-      siteStylePending || siteStyleError !== undefined
+      /*
+       * `!== null`, NOT `!== undefined`. `useSiteStyle` types `error` as
+       * `Error | null` and normalises a successful read to `null`, so the
+       * `undefined` comparison is true on success as well as on failure — and
+       * withheld the trace unconditionally, which meant no provenance dot ever
+       * appeared. The same test the canvas below uses.
+       */
+      siteStylePending || siteStyleError !== null
         ? undefined
         : pageStyleTrace(
             editor.document,
             canvasRender.styleContext,
             siteSheet(canvasSiteStyle),
-            remotePatterns
+            remotePatterns === undefined ? {} : { remotePatterns }
           ),
     [
       editor.document,

@@ -343,3 +343,78 @@ export function liveBreakpointsFor(
     .map(context => context.id);
   return [...unbounded, ...wider];
 }
+
+/**
+ * The breakpoints whose rules the BROWSER is currently applying.
+ *
+ * Asked of the browser rather than derived from the breakpoint being edited,
+ * because those are different facts and only one of them decides what is on
+ * screen. The edited breakpoint says where a write LANDS; which declarations are
+ * in play is a property of the width the page is being viewed at, and the editor
+ * renders its canvas inline rather than in a frame — so an ordinary window
+ * narrow enough to satisfy `@media (max-width: 1024px)` has those rules active
+ * while the panel is still editing the base breakpoint.
+ *
+ * Evaluated by `matchMedia` against each emitted context's OWN at-rule text, so
+ * there is no second reading of what a breakpoint means: the compiler wrote the
+ * query, and the browser answers it. Width arithmetic here would be a second
+ * implementation of the same condition and would drift the moment the emitted
+ * form changed.
+ *
+ * **Container contexts are excluded and cannot be answered this way.** A
+ * `@container` query resolves against an element's query container, not the
+ * viewport, so `matchMedia` has nothing to say about it — see
+ * {@link liveBreakpointsFor}, which excludes them for the same reason.
+ *
+ * A runtime without `matchMedia` gets the unconditional contexts alone, which is
+ * what is certainly live anywhere.
+ *
+ * @experimental
+ */
+export function matchedBreakpoints(
+  set: BreakpointSet | undefined,
+  matches: (query: string) => boolean
+): BreakpointId[] {
+  const live: BreakpointId[] = [];
+  for (const context of breakpointContexts(set)) {
+    if (context.atRule === undefined) {
+      // The unconditional VIEWPORT context: no query to ask, and always
+      // applying. A container's widest context is not this case — it still
+      // carries `@container (min-width: 0)` and is filtered below.
+      live.push(context.id);
+      continue;
+    }
+    /*
+     * Only a MEDIA query is answerable here, and the at-rule's own prefix is
+     * what decides. An explicit axis check beside this would be a second
+     * decision about one question: a container context's at-rule is
+     * `@container (...)`, so it fails this test already, and the two could only
+     * ever disagree by drifting apart.
+     */
+    const condition = context.atRule.replace(/^@media\s*/, "");
+    if (condition === context.atRule) continue;
+    if (matches(condition)) live.push(context.id);
+  }
+  return live;
+}
+
+/**
+ * Every media condition the site's viewport breakpoints emit, for subscribing to.
+ *
+ * Beside {@link matchedBreakpoints} because they must agree on which contexts
+ * carry a query and how its text is reduced to a condition — a subscriber
+ * listening to a different set than the reader evaluates is a panel that stops
+ * updating at exactly the widths it was added for.
+ *
+ * @experimental
+ */
+export function breakpointQueries(set: BreakpointSet | undefined): string[] {
+  const queries: string[] = [];
+  for (const context of breakpointContexts(set)) {
+    if (context.atRule === undefined) continue;
+    const condition = context.atRule.replace(/^@media\s*/, "");
+    // The same single test {@link matchedBreakpoints} applies, deliberately.
+    if (condition !== context.atRule) queries.push(condition);
+  }
+  return queries;
+}

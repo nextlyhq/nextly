@@ -65,7 +65,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { liveBreakpointsFor } from "./breakpoints";
+import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
 import {
@@ -205,6 +205,7 @@ export function StyleInspectorPanel({
     {}
   );
   const prefersDark = usePrefersDark();
+  const matched = useMatchedBreakpoints(breakpoints);
 
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
@@ -302,7 +303,16 @@ export function StyleInspectorPanel({
       descendant: leaf.descendant,
       state: inspection.state,
       breakpoint: inspection.breakpoint,
-      liveBreakpoints: liveBreakpointsFor(breakpoints, inspection.breakpoint),
+      /*
+       * What the BROWSER is applying, not what the panel is editing. The two are
+       * different facts: the edited breakpoint says where a write lands, while
+       * a narrow enough window has `@media` rules active regardless of it.
+       *
+       * The edited breakpoint is still in the set even when its own query does
+       * not match, because a value authored there is what this control writes
+       * to and `styleOrigin` needs it present to call anything "authored here".
+       */
+      liveBreakpoints: [...new Set([...matched, inspection.breakpoint])],
     });
   };
 
@@ -387,6 +397,55 @@ function usePrefersDark(): boolean {
     return () => query.removeEventListener("change", listen);
   }, []);
   return prefersDark;
+}
+
+/**
+ * The breakpoints whose rules the browser is applying right now.
+ *
+ * Modelled on {@link usePrefersDark} directly below it, and for the same reason:
+ * a media query's state is a fact about the viewer that nothing in React tells
+ * this panel, so it is read and then subscribed to.
+ *
+ * Starts from the unconditional contexts and widens after mount, so a server
+ * render and the first client render agree — React discards a subtree whose two
+ * renders disagree, which would take the whole Style tab with it. The cost is
+ * one frame reporting fewer origins than apply; the alternative is a hydration
+ * mismatch.
+ */
+function useMatchedBreakpoints(
+  breakpoints: BreakpointSet | undefined
+): readonly BreakpointId[] {
+  const never = React.useCallback(() => false, []);
+  const [matches, setMatches] = React.useState<readonly BreakpointId[]>(() =>
+    matchedBreakpoints(breakpoints, never)
+  );
+  React.useEffect(() => {
+    // Detected by CALLABILITY rather than presence, the lesson `usePrefersDark`
+    // records: `"matchMedia" in window` is true under jsdom while the value is
+    // not a function, so the property test passes and the call throws.
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    ) {
+      return;
+    }
+    const ask = (query: string): boolean => window.matchMedia(query).matches;
+    const read = (): void => setMatches(matchedBreakpoints(breakpoints, ask));
+    read();
+    /*
+     * Subscribed to every emitted query, not to a resize. A resize fires
+     * continuously and would re-measure on each frame of a drag, while a media
+     * query change event fires exactly when an answer here would differ.
+     */
+    const lists = breakpointQueries(breakpoints).map(query =>
+      window.matchMedia(query)
+    );
+    for (const list of lists) list.addEventListener("change", read);
+    return () => {
+      for (const list of lists) list.removeEventListener("change", read);
+    };
+  }, [breakpoints]);
+  return matches;
 }
 
 /** One catalog group, as a section that opens onto its properties. */

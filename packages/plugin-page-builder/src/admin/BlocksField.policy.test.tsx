@@ -430,21 +430,25 @@ describe("what the inspector is told about provenance", () => {
     expect(seen.inspector?.trace).toBeUndefined();
   });
 
-  /*
-   * There is deliberately NO positive control here, and that is worth stating
-   * rather than leaving as an absence.
-   *
-   * The obvious one — "and a trace IS passed once the read has answered" —
-   * cannot be built in this harness: the shell is mocked but the block registry
-   * is real and empty, so no node resolves, nothing compiles, and the trace is
-   * `undefined` whatever the gate does. A control asserting otherwise would fail
-   * for a reason unrelated to gating, and one asserting `undefined` would pass
-   * against a gate that was never applied.
-   *
-   * What establishes that the two assertions above are not vacuous is
-   * break-verification: with the pending/error gate removed, BOTH fail, because
-   * the trace becomes defined in exactly those states. That is stronger evidence
-   * than a control here would have been, since it exercises the gate itself
-   * rather than a proxy for it.
-   */
+  it("passes a trace once the read has ANSWERED", () => {
+    /*
+     * The control, and it is the most load-bearing assertion in this file.
+     *
+     * Without it the two withholding tests above are satisfied by a gate that
+     * withholds ALWAYS — which is exactly what shipped: `useSiteStyle` types
+     * `error` as `Error | null` and normalises success to `null`, so a
+     * `!== undefined` test was true on every render and no provenance dot ever
+     * appeared anywhere.
+     *
+     * I wrote this control, watched it fail, and removed it on the reasoning
+     * that the harness could not produce a trace — the registry is real and
+     * empty, so nothing compiles. That reasoning was available, plausible, and
+     * not the cause. A red test explained away is the same error as a green one
+     * taken at face value, and this is the shape it takes.
+     */
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.trace).toBeDefined();
+  });
 });

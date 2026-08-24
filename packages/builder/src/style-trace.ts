@@ -62,6 +62,7 @@ import type {
   StyleCompileContext,
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
+import type { BlockResolver } from "@nextlyhq/blocks-react";
 import { pageStyleTrace as compileTrace } from "@nextlyhq/blocks-react";
 
 /**
@@ -85,15 +86,30 @@ export function pageStyleTrace(
   document: BlockDocument,
   styleContext: StyleCompileContext | undefined,
   site: SiteSheetInput | undefined,
-  remotePatterns?: readonly RemotePatternInput[]
+  options?: {
+    readonly remotePatterns?: readonly RemotePatternInput[];
+    /**
+     * The resolver the CANVAS is rendering with, when the host named one.
+     *
+     * Forwarded rather than left to the default, because a custom resolver
+     * decides two things the trace depends on: a block's base styles, and
+     * whether a node draws at all. A canvas rendered with one and a trace
+     * compiled without it disagree about which declarations exist, so an origin
+     * goes missing or is attributed to the wrong tier.
+     *
+     * Omitted, the compile falls back to the registry `PageRenderer` uses when a
+     * host names none — the same default, not a second one.
+     */
+    readonly blocks?: BlockResolver;
+  }
 ): readonly StyleTraceEntry[] | undefined {
   return compileTrace({
     document,
     styleContext,
     site,
-    // The registry a renderer uses when a host names none is the default there
-    // too, so the two are looking at one registry rather than at two assembled
-    // alike.
-    ...(remotePatterns === undefined ? {} : { remotePatterns }),
+    ...(options?.remotePatterns === undefined
+      ? {}
+      : { remotePatterns: options.remotePatterns }),
+    ...(options?.blocks === undefined ? {} : { blocks: options.blocks }),
   });
 }
