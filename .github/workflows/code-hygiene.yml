@@ -105,7 +105,7 @@ jobs:
 
       - name: Post PR review comments for changed files
         if: always() && steps.audit.conclusion != 'skipped' && github.event.pull_request.number != null
-        uses: actions/github-script@820762786026740c76f36085b0efc47a31fe5020 # v7.0.1
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -245,7 +245,7 @@ jobs:
 
       - name: Post or update whole-repo sticky comment
         if: always() && steps.analyse.conclusion != 'skipped' && github.event.pull_request.number != null
-        uses: actions/github-script@820762786026740c76f36085b0efc47a31fe5020 # v7.0.1
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
