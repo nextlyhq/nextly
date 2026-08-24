@@ -779,3 +779,46 @@ describe("a refused rename beside a rename onto its origin", () => {
     });
   });
 });
+
+describe("a DUPLICATE-refused row holding an origin too", () => {
+  const stored = { "data-a": "1", "data-b": "2", "data-c": "3" };
+
+  it("counts what a duplicate-refused row preserves, not only a malformed one", () => {
+    /*
+     * The first origin-reservation fix counted only rows refused on their own
+     * terms. A row refused as a DUPLICATE preserves its origin just the same:
+     * rename `data-a` onto `data-b` (duplicate, so it keeps `data-a`) and
+     * `data-c` onto `data-a`, and the second was accepted and overwrote the
+     * preserved value — `data-c` gone.
+     */
+    const rows = [
+      { name: "data-b", value: "1", origin: "data-a" },
+      { name: "data-b", value: "2", origin: "data-b" },
+      { name: "data-a", value: "3", origin: "data-c" },
+    ];
+    expect(rowProblem(rows, 2)).toEqual({ kind: "duplicate" });
+    expect(storedAttributes(rows, "", stored)).toEqual(stored);
+  });
+
+  it("settles a CHAIN of refusals rather than one link of it", () => {
+    /*
+     * A row refused because of a held origin holds its OWN origin in turn, so
+     * the set has to be settled rather than swept once.
+     *
+     * Ordered so the chain runs BACKWARD through the rows, which is the only
+     * arrangement that can tell one sweep from a fixed point: a chain running
+     * forward resolves inside a single pass, because the set grows as that pass
+     * walks. Here the last row frees nothing until it is reached, and only then
+     * does the first row become refused — and only then the second.
+     */
+    const rows = [
+      { name: "data-b", value: "1", origin: "data-a" },
+      { name: "data-a", value: "3", origin: "data-c" },
+      { name: "onclick", value: "2", origin: "data-b" },
+    ];
+    expect(rowProblem(rows, 2)).toEqual({ kind: "not-allowed" });
+    expect(rowProblem(rows, 0)).toEqual({ kind: "duplicate" });
+    expect(rowProblem(rows, 1)).toEqual({ kind: "duplicate" });
+    expect(storedAttributes(rows, "", stored)).toEqual(stored);
+  });
+});

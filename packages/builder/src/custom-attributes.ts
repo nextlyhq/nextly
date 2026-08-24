@@ -115,63 +115,84 @@ export function rowProblem(
   rows: readonly AttributeRow[],
   index: number
 ): RowProblem | undefined {
+  return problemGiven(rows, index, heldOrigins(rows));
+}
+
+/**
+ * One row's verdict, given the set of keys refused rows are already holding.
+ *
+ * Takes `held` as DATA rather than computing it, because computing it has to
+ * ask this question of every row — and a version that reached for the answer
+ * itself would be asking itself.
+ */
+function problemGiven(
+  rows: readonly AttributeRow[],
+  index: number,
+  held: ReadonlySet<string>
+): RowProblem | undefined {
   const row = rows[index];
   if (row === undefined || isBlankRow(row)) return undefined;
   const alone = soloProblem(row);
   if (alone !== undefined) return alone;
   const key = attributeKey(row.name);
-  /*
-   * Located by INDEX, never by object identity. A row is a plain value the UI
-   * rebuilds on every keystroke, so two rows holding the same name and value
-   * are indistinguishable by `===`, and a caller passing an equal-but-separate
-   * object had every row reported as a duplicate of itself. Position is what
-   * actually decides this — the FIRST row holding a key is the one that lands,
-   * matching the renderer's own iteration over the stored record — so position
-   * is what the caller passes.
-   */
-  /*
-   * Among rows sharing a key, exactly one is kept and the rest are duplicates.
-   * The one kept is a row that came from the DOCUMENT and still carries its
-   * own name — never a row the author has just renamed onto it.
-   *
-   * First-wins alone got this backwards in one direction: renaming the first
-   * row onto a name a later row already held left the edited row looking fine
-   * and blamed the untouched one, so on rebuild the untouched row's old value
-   * overwrote the edit and the name renamed FROM disappeared. Between two rows
-   * that both came from the document — two spellings of one name in an
-   * imported bag — first-wins is still the answer.
-   */
-  const sharing = rows
-    .map((other, at) => ({ other, at }))
-    .filter(
-      ({ other }) => !isBlankRow(other) && attributeKey(other.name) === key
-    );
-  if (sharing.length > 1) {
-    const settled = sharing.filter(
-      ({ other }) =>
-        other.origin !== undefined && attributeKey(other.origin) === key
-    );
-    const keeps = (settled.length > 0 ? settled : sharing)[0]?.at;
-    if (keeps !== index) return { kind: "duplicate" };
-  }
+  const keeps = keeperOf(rows, key);
+  if (keeps !== undefined && keeps !== index) return { kind: "duplicate" };
+  // Asked BEFORE the held keys, so a row the field above owns is told that
+  // rather than being called a duplicate of whatever is holding the name.
+  if (key === "id") return { kind: "use-css-id-field" };
   /*
    * The keys refused rows are HOLDING count as taken too.
    *
    * A refused row keeps what it replaced, so its origin is still in the stored
    * record even though no row on screen carries that name. Judging collisions
-   * on the live names alone therefore accepted a second row renamed onto it —
-   * and the write, which places the preserved value first, was then overwritten
-   * by that row. `{ "data-a": "1", "data-b": "2" }` with one row refused onto
-   * `onclick` and the other renamed to `data-a` stored `{ "data-a": "2" }`:
-   * `data-b` gone, and the promise the refused row makes quietly broken.
+   * on the live names alone accepted a second row renamed onto it — and the
+   * write, which places the preserved value first, was then overwritten by that
+   * row, deleting an attribute nobody asked to lose.
    *
    * Reported rather than resolved in the write, because the author is the only
    * one who can say which of the two they meant. Both rows keep their origins
    * until they do, so the document is left exactly as it was.
    */
-  if (heldByRefusedRows(rows).has(key)) return { kind: "duplicate" };
-  if (key === "id") return { kind: "use-css-id-field" };
+  if (held.has(key)) return { kind: "duplicate" };
   return undefined;
+}
+
+/**
+ * Among the rows spelling one key, the index of the row that KEEPS it.
+ *
+ * `undefined` when nobody is displaced, which is the ordinary row.
+ *
+ * Located by INDEX, never by object identity. A row is a plain value the UI
+ * rebuilds on every keystroke, so two rows holding the same name and value are
+ * indistinguishable by `===`, and a caller passing an equal-but-separate object
+ * had every row reported as a duplicate of itself. Position is what actually
+ * decides this — the FIRST row holding a key is the one that lands, matching
+ * the renderer's own iteration over the stored record.
+ *
+ * The one kept is a row that came from the DOCUMENT and still carries its own
+ * name — never a row the author has just renamed onto it. First-wins alone got
+ * this backwards in one direction: renaming the first row onto a name a later
+ * row already held left the edited row looking fine and blamed the untouched
+ * one, so on rebuild the untouched row's old value overwrote the edit and the
+ * name renamed FROM disappeared. Between two rows that both came from the
+ * document — two spellings of one name in an imported bag — first-wins is still
+ * the answer.
+ */
+function keeperOf(
+  rows: readonly AttributeRow[],
+  key: string
+): number | undefined {
+  const sharing = rows
+    .map((other, at) => ({ other, at }))
+    .filter(
+      ({ other }) => !isBlankRow(other) && attributeKey(other.name) === key
+    );
+  if (sharing.length <= 1) return undefined;
+  const settled = sharing.filter(
+    ({ other }) =>
+      other.origin !== undefined && attributeKey(other.origin) === key
+  );
+  return (settled.length > 0 ? settled : sharing)[0]?.at;
 }
 
 /**
@@ -195,17 +216,32 @@ function soloProblem(row: AttributeRow): RowProblem | undefined {
 }
 
 /**
- * The stored keys that rows refused on their own terms will hold on to.
+ * Every stored key a refused row will hold on to, settled.
  *
- * Read from `soloProblem` rather than `rowProblem`, which would ask this
- * function while this function was answering it.
+ * EVERY refused row, not only the malformed ones. `storedAttributes` preserves
+ * the origin of any row that cannot land, and counting one kind of refusal but
+ * not the other left the same hole one layer along: a row refused as a
+ * DUPLICATE also keeps its origin, and a third row renamed onto that origin was
+ * accepted and overwrote it.
+ *
+ * Settled to a FIXED POINT, because holding a key refuses another row, and that
+ * row then holds an origin of its own. One pass closes one link of the chain
+ * and leaves the next open. Each pass can only ADD — a larger `held` never
+ * turns a refused row back into an accepted one — so the loop is monotone and
+ * cannot run longer than there are rows to refuse.
  */
-function heldByRefusedRows(rows: readonly AttributeRow[]): Set<string> {
+function heldOrigins(rows: readonly AttributeRow[]): Set<string> {
   const held = new Set<string>();
-  for (const row of rows) {
-    if (isBlankRow(row)) continue;
-    if (soloProblem(row) === undefined) continue;
-    if (row.origin !== undefined) held.add(row.origin);
+  for (let pass = 0; pass < rows.length; pass += 1) {
+    let grew = false;
+    rows.forEach((row, index) => {
+      const origin = row.origin;
+      if (origin === undefined || held.has(origin)) return;
+      if (problemGiven(rows, index, held) === undefined) return;
+      held.add(origin);
+      grew = true;
+    });
+    if (!grew) break;
   }
   return held;
 }
