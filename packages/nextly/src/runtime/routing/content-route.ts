@@ -482,10 +482,15 @@ function buildRoute<TNode>(
     context: ResolvedContext
   ): Promise<void> {
     try {
-      const { readPreviewSession } = await import("../preview/preview-route");
-      const session = await readPreviewSession();
-      if (session === null) return;
-      const { scope } = session;
+      const { readPreviewScope } = await import("../preview/preview-route");
+      const { isSingleScope } = await import(
+        "../../auth/preview/preview-token"
+      );
+      const scope = await readPreviewScope();
+      if (scope === null) return;
+      // A Single's token says nothing about this content route, so a visitor
+      // previewing one while browsing the site is not a misconfiguration here.
+      if (isSingleScope(scope)) return;
       if (scope.collection !== context.collection) return;
 
       // Once per collection per process, and worded as a CONFIGURATION fact

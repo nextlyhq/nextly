@@ -272,6 +272,9 @@ describe("the root entry", () => {
       "BlockBoundary",
       "BlockList",
       "BlockPlaceholder",
+      // The editor marker namespace, public so an editor refuses a name the
+      // renderer would drop rather than keeping a list beside it.
+      "EDITOR_NAMESPACE",
       "NODE_ID_ATTRIBUTE",
       "PROP_ATTRIBUTE",
       "PageRenderer",
@@ -281,11 +284,15 @@ describe("the root entry", () => {
       "defineBlock",
       "emptyDataProvider",
       "fetchPolicyLabel",
+      // The render-safe attribute rule. Public because the editor offering that
+      // field asks it rather than keeping a copy that would drift.
+      "isAllowedAttribute",
       "migrationSourceFor",
       "prepareDocumentForRead",
       "preparePageForRead",
       "pruneHiddenNodes",
       "registeredBlocks",
+      "rendersOwnMarkup",
       "resolvePageStyles",
       "styleTextForInjection",
     ]);

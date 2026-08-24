@@ -12,12 +12,28 @@
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
-export interface PreviewLinkRequest {
-  collection: string;
-  entryId: string;
-  /** Restricts the link to one locale. Absent means every locale. */
-  locale?: string;
-}
+/**
+ * What a mint request names: ONE collection entry, or ONE Single.
+ *
+ * A union rather than three optional fields, mirroring the endpoint's own
+ * schema — so a caller cannot express "both", which names two different
+ * documents, or "neither".
+ */
+export type PreviewLinkRequest =
+  | {
+      collection: string;
+      entryId: string;
+      single?: never;
+      /** Restricts the link to one locale. Absent means every locale. */
+      locale?: string;
+    }
+  | {
+      single: string;
+      collection?: never;
+      entryId?: never;
+      /** Restricts the link to one locale. Absent means every locale. */
+      locale?: string;
+    };
 
 export interface PreviewLink {
   /** The signed token. */

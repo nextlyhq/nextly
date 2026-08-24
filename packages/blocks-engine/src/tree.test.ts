@@ -48,6 +48,205 @@ describe("walkNodes / findNode / locateNode", () => {
     ]);
   });
 
+  it("finishes on a forest nested deeper than the call stack allows", () => {
+    // `MAX_DEPTH` is a validation rule, and this walk runs on documents whether
+    // or not validation ever passed on them. A recursive walk exited a chain of
+    // this size with `RangeError: Maximum call stack size exceeded` — no cycle
+    // involved, just depth — and every caller of the shared walk failed with it.
+    //
+    // Sized well past the measured limit rather than just over it, so the test
+    // does not go quiet if a future engine gives the walk a larger stack.
+    const DEEP = 50_000;
+    let root: BlockNode = { id: "leaf", type: "t", version: 1, props: {} };
+    for (let i = 0; i < DEEP; i++) {
+      root = {
+        id: `n${i}`,
+        type: "t",
+        version: 1,
+        props: {},
+        slots: { main: [root] },
+      };
+    }
+
+    let visited = 0;
+    expect(() => walkNodes([root], () => visited++)).not.toThrow();
+    expect(visited).toBe(DEEP + 1);
+  });
+
+  it("finishes when a slot holds one of its own ancestors", () => {
+    // A cycle reachable through `slots` is the shape the walk actually
+    // descends. Recursion overflowed on it; an iterative walk without a visited
+    // set would spin forever instead, which is why terminating is asserted by a
+    // VISIT COUNT rather than by the absence of a throw.
+    const cyclic: BlockNode = {
+      id: "a",
+      type: "t",
+      version: 1,
+      props: {},
+      slots: { main: [] },
+    };
+    cyclic.slots!.main.push(cyclic);
+
+    const visited: string[] = [];
+    walkNodes([cyclic], n => visited.push(n.id));
+
+    expect(visited).toEqual(["a"]);
+  });
+
+  it("does not hand an ARRAY to the callback as though it were a node", () => {
+    // `typeof [] === "object"`, so a guard written as a type test alone lets an
+    // array through. Nothing then throws, which is the difficulty: every caller
+    // reads its fields as `undefined` and carries on. The id-uniqueness check
+    // behind this compares `undefined` against `undefined` and reports a
+    // collision between two malformed entries, or none at all.
+    const visited: unknown[] = [];
+    walkNodes(
+      [
+        [{ id: "buried" }],
+        { id: "real", type: "t", version: 1, props: {} },
+      ] as unknown as BlockNode[],
+      n => visited.push(n)
+    );
+
+    expect(visited.some(n => Array.isArray(n))).toBe(false);
+    expect(visited.map(n => (n as BlockNode).id)).toEqual(["real"]);
+  });
+
+  it("visits one node object placed in TWO slots twice", () => {
+    // The boundary of the cycle guard, and the reason it tracks the ancestor
+    // path rather than every node seen. Reusing one object in two slots is not
+    // a cycle — nothing recurses — so both placements are real.
+    //
+    // Load-bearing rather than cosmetic: `insertionIsUnsafe` asks
+    // this walk whether an incoming subtree already contains a duplicate id. A
+    // walk that visited the shared object once would report no duplicate, and
+    // `insertNode` would build a forest where one id addresses two positions.
+    const shared: BlockNode = { id: "dup", type: "t", version: 1, props: {} };
+    const host: BlockNode = {
+      id: "host",
+      type: "t",
+      version: 1,
+      props: {},
+      slots: { left: [shared], right: [shared] },
+    };
+
+    const visited: string[] = [];
+    walkNodes([host], n => visited.push(n.id));
+
+    expect(visited).toEqual(["host", "dup", "dup"]);
+  });
+
+  it("stops TRAVERSING once the node budget is spent, not just working", () => {
+    // A budget applied inside the callback bounds the work per node and nothing
+    // else: the walk has still reached every remaining node, so a corrupt
+    // document costs time proportional to the whole stored tree. That is
+    // invisible to an assertion on the result, which looks identical either way.
+    //
+    // The tripwire is on the ROOT ARRAY rather than on descendants, and that
+    // distinction is the whole test. A walk that seeds one stack entry per
+    // top-level node reads the entire array before any bound applies, so a
+    // budget is powerless against the cheapest oversized document there is — a
+    // very wide root array — while a test watching only descendants reports it
+    // as bounded.
+    let readsPastTheBudget = 0;
+    const roots: unknown[] = Array.from({ length: 200 }, (_, i) => ({
+      id: `n${i}`,
+      type: "t",
+      version: 1,
+      props: {},
+    }));
+    const watched = new Proxy(roots, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key) && Number(key) >= 10) {
+          readsPastTheBudget += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    }) as unknown as BlockNode[];
+
+    let visited = 0;
+    walkNodes(watched, () => visited++, { maxNodes: 10 });
+
+    expect(visited).toBe(10);
+    expect(readsPastTheBudget).toBe(0);
+  });
+
+  it("spends the budget on MALFORMED entries too, not only on nodes visited", () => {
+    // A forest can begin with a long run of nulls or primitives that never
+    // reach the callback. A bound counting callbacks cannot see them, so the
+    // whole array is read while the budget sits untouched — and the previous
+    // test cannot distinguish that, because its roots are all valid objects.
+    let readsPastTheBudget = 0;
+    const roots: unknown[] = Array.from({ length: 200 }, () => null);
+    const watched = new Proxy(roots, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key) && Number(key) >= 10) {
+          readsPastTheBudget += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    }) as unknown as BlockNode[];
+
+    let visited = 0;
+    walkNodes(watched, () => visited++, { maxNodes: 10 });
+
+    // Nothing was walkable, so the callback never ran — and the walk still
+    // stopped, which is the property a callback count cannot express.
+    expect(visited).toBe(0);
+    expect(readsPastTheBudget).toBe(0);
+  });
+
+  it("still accepts a bare parent NODE as its third argument", () => {
+    // The shape this function published before it took options. A caller
+    // compiled against it passes a node, and nothing at runtime would reject
+    // one: the option lookup would simply miss and every top-level callback
+    // would receive `undefined` as its parent — a wrong answer rather than an
+    // error, which is the failure worth keeping a compatibility path for.
+    const parent = makeNode("core/section", 1);
+    const seen: (string | undefined)[] = [];
+
+    walkNodes(
+      [makeNode("core/text", 1)],
+      (_node, got) => seen.push(got?.id),
+      parent
+    );
+
+    expect(seen).toEqual([parent.id]);
+  });
+
+  it("reports a cycle it skipped, so a writer can refuse what a reader tolerates", () => {
+    // The reader keeps walking; the report is how the insertion guard learns of
+    // a repeat the walk deliberately hid from it.
+    const cyclic = makeNode("core/section", 1, {}, { children: [] });
+    cyclic.slots!.children.push(cyclic);
+    const reported: string[] = [];
+
+    walkNodes([cyclic], () => undefined, {
+      onCycle: node => reported.push(node.id),
+    });
+
+    expect(reported).toEqual([cyclic.id]);
+  });
+
+  it("still visits a repeated ID that is a DISTINCT object", () => {
+    // The control for the cycle guard, and the boundary of what it costs. It
+    // skips a node OBJECT already visited, not an id already seen — two sibling
+    // nodes that happen to share an id are different nodes and both are walked.
+    // A guard keyed on id would silently drop the second, which is how a
+    // duplicate-id document would stop being measurable at all.
+    const twin = (): BlockNode => ({
+      id: "same",
+      type: "t",
+      version: 1,
+      props: {},
+    });
+
+    const visited: string[] = [];
+    walkNodes([twin(), twin()], n => visited.push(n.id));
+
+    expect(visited).toEqual(["same", "same"]);
+  });
+
   it("finds nested nodes and returns undefined for unknown ids", () => {
     const { nodes, heading } = fixture();
     expect(findNode(nodes, heading.id)?.props).toEqual({ text: "Hello" });
@@ -112,6 +311,47 @@ describe("insertNode", () => {
     expect(insertNode(nodes, extra, { parentId: nodes[0]!.id, index: 0 })).toBe(
       nodes
     );
+  });
+
+  it("refuses a subtree containing a CYCLE, at the top level and in a slot", () => {
+    // The walk this guard uses is cycle-TOLERANT, because a reader counting
+    // classes or measuring a document has to answer rather than fail. That
+    // makes the repeat invisible in what the walk visits, so the guard learns
+    // of it from the walk's report rather than from the ids it saw.
+    //
+    // Both destinations are asserted because they fail differently and only one
+    // of them fails loudly. A top-level insert would simply return a cyclic
+    // forest; an insert into a parent reaches the recursive `mapForest`, which
+    // has no tolerance for one and exits with a RangeError.
+    const { nodes, section } = fixture();
+    const cyclic = makeNode("core/section", 1, {}, { children: [] });
+    cyclic.slots!.children.push(cyclic);
+
+    expect(insertNode(nodes, cyclic, { index: 0 })).toBe(nodes);
+    expect(
+      insertNode(nodes, cyclic, {
+        parentId: section.id,
+        slot: "children",
+        index: 0,
+      })
+    ).toBe(nodes);
+  });
+
+  it("still accepts a subtree that merely REPEATS a node object in two slots", () => {
+    // The control, and the boundary of the refusal. Two slots holding the same
+    // object is not a cycle, so the walk reports none — this must be refused
+    // for carrying a duplicate ID, not for being cyclic. Without it, a guard
+    // that refused everything the cycle path touches would pass the case above
+    // while rejecting valid inserts nobody would trace back to here.
+    const { nodes } = fixture();
+    const shared = makeNode("core/text", 1);
+    const host = makeNode("core/section", 1, {}, { children: [shared] });
+    host.slots!.other = [shared];
+
+    // Refused, and for the duplicate id: re-id the subtree and it is accepted,
+    // which a cycle-based refusal would not allow.
+    expect(insertNode(nodes, host, { index: 0 })).toBe(nodes);
+    expect(insertNode(nodes, reidSubtree(host), { index: 0 })).not.toBe(nodes);
   });
 
   it("rejects re-inserting a node whose id already lives in the forest", () => {

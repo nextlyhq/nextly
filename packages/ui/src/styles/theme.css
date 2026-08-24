@@ -921,6 +921,18 @@
    * the grid is used without that component. */
   --nx-shell-measure: var(--nx-measure-form);
 
+  /* The single vertical-rhythm token for a form section. `FormSection` applies
+   * it to every DIRECT child, so the card's top and bottom breathing room and
+   * the gap between two fields are one decision and cannot drift apart — the
+   * first child's top padding IS the card's top inset.
+   *
+   * The rhythm belongs to the section rather than to the rows it is handed. A
+   * section renders whatever children it is given, and cannot tell one row
+   * idiom from another; leaving each row to supply its own vertical padding
+   * makes the card's inset depend on which idiom the caller happened to reach
+   * for, and a row that supplies none renders flush against the borders. */
+  --nx-field-gap: 1.25rem;
+
   /* Focus ring colors */
   --nx-focus-ring: var(--nx-primary);
   --nx-focus-ring-offset: oklch(1 0 0);
@@ -1158,6 +1170,27 @@
  * where the cap does not bind.
  */
 @layer components {
+  /* A form section's vertical rhythm, applied to every DIRECT child.
+   *
+   * Plain CSS rather than a Tailwind utility on the element, for two reasons.
+   * The parenthesised custom-property shorthand is v4-only, so the same class
+   * compiles to a rule under one Tailwind major and to nothing under the other,
+   * and the section renders flush wherever it compiles to nothing — silently,
+   * because the markup is identical either way. And an arbitrary-value token is
+   * EXTRACTED from any file the scanner reads, a comment or a test string
+   * included, so merely naming one of these utilities in prose emits its rule;
+   * a malformed spelling anywhere in the repository fails the whole stylesheet.
+   *
+   * A rule shipped in the theme has neither property: it is the same CSS under
+   * both majors, and there is no token for a scanner to find.
+   *
+   * Children must not pad themselves. The two paddings are additive, so a row
+   * carrying its own `py-*` doubles the rhythm on the sections that are already
+   * correct. */
+  .nx-form-section-rows > * {
+    padding-block: var(--nx-field-gap);
+  }
+
   .nx-page-shell {
     display: grid;
     /* The outer tracks are `minmax(gutter, 1fr)` rather than a fixed gutter so

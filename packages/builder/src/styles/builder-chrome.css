@@ -1410,3 +1410,87 @@
   flex-direction: column;
   gap: 0.25rem;
 }
+
+/*
+ * The Advanced tab's attribute rows.
+ *
+ * A LIST, because that is what it is: an author adds and removes rows, and a
+ * screen reader announcing "list, 3 items" is the only thing that tells them
+ * how many they have without tabbing through. The markers are removed and the
+ * semantics are not.
+ */
+.nx-attributes {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+.nx-attributes__legend {
+  padding: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--nx-foreground);
+}
+
+.nx-attributes__rows {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/*
+ * Name, value and Remove on one line where there is room, wrapping rather than
+ * shrinking the inputs below what a `data-` attribute needs to be readable in.
+ */
+.nx-attributes__pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nx-attributes__pair > input {
+  flex: 1 1 8rem;
+  min-inline-size: 0;
+}
+
+/*
+ * Column headings for the rows below, shown once. Laid out on the same flex
+ * basis as the inputs so the words sit over the fields they name.
+ */
+.nx-attributes__head {
+  display: flex;
+  gap: 0.25rem;
+  margin-block-end: 0.25rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-attributes__head > span {
+  flex: 1 1 8rem;
+  min-inline-size: 0;
+}
+
+/*
+ * The reason a row will not reach the page. Coloured with the theme's own
+ * destructive token so it reads as a refusal in both light and dark, and given
+ * the row's full width so a sentence is not squeezed beside three controls.
+ */
+.nx-attributes__problem {
+  flex: 1 1 100%;
+  margin: 0.25rem 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-destructive);
+}
+
+.nx-inspector__hint {
+  margin: 0.25rem 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}

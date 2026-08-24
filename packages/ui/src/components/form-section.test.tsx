@@ -67,6 +67,35 @@ describe("FormSection", () => {
     expect(label.id).not.toBe("");
   });
 
+  it("gives every direct child the same vertical rhythm, whatever idiom it is", () => {
+    // The section cannot see WHICH row idiom it was handed, so the rhythm
+    // cannot be the caller's to supply. Two shipped idioms disagreed about it —
+    // one padded itself, the other did not — and a section built from the
+    // second rendered its first field hard against the card's top border.
+    //
+    // One token covers both the card's edge padding and the gap between two
+    // fields, because they are the same measurement seen twice: the first
+    // child's top padding IS the card's top inset.
+    const { container } = render(
+      <FormSection label="Locale">
+        <div data-testid="first">first</div>
+        <div data-testid="second">second</div>
+      </FormSection>
+    );
+
+    const rows = container.querySelector('[data-slot^="card."] > div');
+    // The rhythm is a plain CSS rule in the theme, keyed off this class, not a
+    // Tailwind utility on the element. That is what keeps it identical under the
+    // v3 preset this package also publishes — a v4-only spelling would emit no
+    // rule there and the section would render flush again with nothing to see.
+    expect(rows?.className).toContain("nx-form-section-rows");
+
+    // No arbitrary-value utility for the padding, in either Tailwind spelling.
+    // Both are version-dependent, and one of them is extracted by the scanner
+    // from any file that merely names it.
+    expect(rows?.className).not.toMatch(/py-[[(]/);
+  });
+
   it("uses the shared Card for its container, not a hand-rolled one", () => {
     // Card is the one container implementation and carries the documented
     // container radius tier. Re-rolling the chrome here is what produced the

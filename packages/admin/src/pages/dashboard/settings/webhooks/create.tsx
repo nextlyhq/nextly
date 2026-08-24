@@ -70,7 +70,12 @@ const CreateWebhookPage: React.FC = () => {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout
+          title="New Webhook"
+          description="Send signed events to an external endpoint"
+          crumb="New Webhook"
+          parentCrumb={{ label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS }}
+        >
           <CreateWebhookContent />
         </SettingsLayout>
       </PageContainer>

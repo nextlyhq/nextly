@@ -24,6 +24,10 @@
  */
 
 import { getService } from "../di";
+import {
+  singleDocumentEditable,
+  singleDocumentReadable,
+} from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
@@ -158,6 +162,71 @@ export async function assertEntryPreviewable(
         collection,
         entryId,
       },
+    });
+  }
+}
+
+/**
+ * Confirm the caller may be handed a preview link for this Single.
+ *
+ * The Single counterpart of {@link assertEntryPreviewable}, asking the same two
+ * questions for the same reason. It is NOT redundant with the route's own gate:
+ * that gate is per-slug RBAC, and a Single's stored rules — owner-only, role
+ * based, custom — are evaluated against the loaded document and can deny a
+ * caller who holds the coarse permission. Stopping at the permission would mint
+ * a bearer credential for a draft the real update path refuses to show them.
+ *
+ * One answer for every refusal, deliberately: a caller who is refused a link
+ * learns only that they are refused.
+ *
+ * @throws {NextlyError} `forbidden` when no link may be minted.
+ */
+export async function assertSinglePreviewable(
+  single: string,
+  locale: string | undefined,
+  user: UserContext
+): Promise<void> {
+  const identity = {
+    user,
+    // No `actor`. It carried an API KEY's own stamped grants, and both mints
+    // now refuse a key outright — a preview link records whose permissions the
+    // draft renders through, and a key names no person.
+    // The TRANSLATION the token will name, so the rules are evaluated against
+    // the document the bearer actually receives. A localized Single is a
+    // different document per language, and an owner-only or custom rule can
+    // answer differently for each — authorizing the default translation and
+    // then signing another is authorizing something else.
+    ...(locale === undefined ? {} : { locale }),
+  };
+
+  if (
+    !(await singleDocumentReadable(single, {
+      ...identity,
+      // FALSE, and this is the whole point. The mint route gated `update`, so
+      // nothing has checked this caller's READ permission — and skipping it as
+      // redundant would hand a bearer token for the draft to someone holding
+      // `update` with no read grant at all.
+      routeAuthorized: false,
+    }))
+  ) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "preview-link-single-not-visible", single },
+    });
+  }
+
+  // The token's view is the DRAFT, and the draft overlay surfaces a pending
+  // working draft only to a caller trusted to EDIT the document. Reading the
+  // published one proves nothing about that.
+  if (
+    !(await singleDocumentEditable(single, {
+      ...identity,
+      // TRUE here: the mint route ran exactly this gate, so the coarse update
+      // check is the redundant one this flag exists to skip.
+      routeAuthorized: true,
+    }))
+  ) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "preview-link-single-not-editable", single },
     });
   }
 }

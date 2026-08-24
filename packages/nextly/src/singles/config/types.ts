@@ -68,6 +68,42 @@ export interface SingleLabel {
  * };
  * ```
  */
+/**
+ * Where a Single previews.
+ *
+ * Deliberately the same shape as `CollectionPreviewConfig`: both answer the one
+ * question "given this document, what is its address on the site", and the
+ * resolver that answers it for collections is the resolver that should answer
+ * it here. A second shape would mean a second resolution, and two of those
+ * agree only until one is edited.
+ *
+ * The argument is the Single's own document rather than an entry, which is the
+ * only difference that matters — a Single is addressed by slug and has no id.
+ */
+export interface SinglePreviewConfig {
+  /**
+   * Computes the URL from the Single's document, or declines by returning
+   * `null`.
+   *
+   * `null` says "not previewable right now" — a document whose path field is
+   * still empty, say — which is a different state from a Single that declares no
+   * preview at all: the first becomes previewable, the second never does.
+   */
+  url: (document: Record<string, unknown>) => string | null;
+
+  /**
+   * Whether to open the preview in a new browser tab.
+   * @default true
+   */
+  openInNewTab?: boolean;
+
+  /**
+   * Custom label for the preview button.
+   * @default "Preview"
+   */
+  label?: string;
+}
+
 export interface SingleAdminOptions {
   /**
    * Group name for organizing Singles in the sidebar.
@@ -98,6 +134,20 @@ export interface SingleAdminOptions {
 
   /** Custom sidebar group slug. When set, item moves from its default section to this custom group */
   sidebarGroup?: string;
+
+  /**
+   * Where this Single is served on the site.
+   *
+   * A Single with a Draft / Published lifecycle has drafts worth sharing, and a
+   * shared preview link needs somewhere to open. Nothing outside the
+   * application can work that out — whether the homepage Single is at `/`, at
+   * `/home`, or under a locale segment is decided by a route file — so it is
+   * declared here, exactly as a collection declares its own.
+   *
+   * Absent means this Single is not previewable, and the admin says so rather
+   * than handing out a link with nowhere to land.
+   */
+  preview?: SinglePreviewConfig;
 
   /**
    * Description text displayed below the Single title.

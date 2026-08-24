@@ -122,3 +122,48 @@ describe("usePreviewLink", () => {
     );
   });
 });
+
+describe("usePreviewLink for a Single", () => {
+  // A Single is addressed by slug and has exactly one document, so there is no
+  // id to wait for — unlike an entry, whose link cannot be minted until it has
+  // been saved once.
+  it("mints against the Single's slug", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    mint.mockResolvedValue({
+      token: TOKEN,
+      url: URL_FROM_SERVER,
+      expiresAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    const { result } = renderHook(
+      () => usePreviewLink({ single: "homepage" }),
+      { wrapper: makeWrapper() }
+    );
+    result.current.mutate();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Passed through as the union it arrived as, rather than destructured and
+    // rebuilt — which would be a second place deciding what a request carries.
+    expect(mint).toHaveBeenCalledWith({ single: "homepage" });
+  });
+
+  it("forwards the locale so a link opens the translation being edited", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    mint.mockResolvedValue({
+      token: TOKEN,
+      url: URL_FROM_SERVER,
+      expiresAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    const { result } = renderHook(
+      () => usePreviewLink({ single: "homepage", locale: "fr" }),
+      { wrapper: makeWrapper() }
+    );
+    result.current.mutate();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(mint).toHaveBeenCalledWith({ single: "homepage", locale: "fr" });
+  });
+});

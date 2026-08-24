@@ -17,7 +17,10 @@
  * @module runtime/preview/preview-draft-gate
  */
 import { assertEntryPreviewable } from "../../api/preview-access";
-import type { PreviewTokenScope } from "../../auth/preview/preview-token";
+import {
+  isSingleScope,
+  type PreviewTokenScope,
+} from "../../auth/preview/preview-token";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import type { ResolvedContext } from "../routing/content-route";
 
@@ -92,6 +95,12 @@ export function previewDraftGate(
 
     if (verified === null) return false;
     const { scope, minter } = verified;
+
+    // A Single's token cannot grant a collection draft. Both name one document
+    // and only one, but they are different documents — and this gate answers
+    // for a COLLECTION path, so a single-scoped token reaching it is a token
+    // for somewhere else entirely.
+    if (isSingleScope(scope)) return false;
 
     // `previewGrantsDraft` owns the whole authorization question — an absent
     // session AND whether a present one reaches the document — so it is asked

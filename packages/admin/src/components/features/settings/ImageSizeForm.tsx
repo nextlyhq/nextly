@@ -189,7 +189,7 @@ export function ImageSizeForm({
                 this stays a hand-rolled row rather than FieldShell: there is no
                 single control for one id/error pair to describe. Each Input
                 keeps its own FieldShell for error display. */}
-            <div className="flex flex-col gap-1.5 py-5">
+            <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-foreground">
                 Dimensions
               </span>

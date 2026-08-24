@@ -360,3 +360,37 @@ describe("the shell mock keeps up with the shell", () => {
     }
   });
 });
+
+describe("the shell mock", () => {
+  it("carries exports this file never named, so a new one cannot break it here", () => {
+    // The property the spread exists for, asserted directly rather than left to
+    // be noticed the next time it fails.
+    //
+    // Named exports are checked rather than a count, because a count agrees with
+    // any list of the same size: a spread that dropped `StyleInspectorPanel` and
+    // gained something else would match a total and still break the import this
+    // is protecting. `StyleInspectorPanel` is named first for being the likeliest
+    // next import — it is the surface a per-control provenance badge lives on.
+    return import("@nextlyhq/builder/shell").then(shell => {
+      for (const name of [
+        "StyleInspectorPanel",
+        "useShellIsActive",
+        "MAX_HISTORY",
+        "CANVAS_ROOT_CLASS",
+      ]) {
+        expect(shell, name).toHaveProperty(name);
+      }
+    });
+  });
+
+  it("still overrides the surfaces it records, so the spread did not undo them", () => {
+    // The other half, and the reason a spread cannot simply be trusted: it
+    // brings the REAL components with it, and an override that stopped winning
+    // would leave these tests rendering the live inspector while every
+    // assertion above went on reading a `seen` nothing writes to any more.
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.canvas).toBeDefined();
+  });
+});

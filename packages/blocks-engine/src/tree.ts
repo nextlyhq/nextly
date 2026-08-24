@@ -48,19 +48,213 @@ export interface TreePosition {
   index: number;
 }
 
-/** Depth-first visit over the forest: each node, then its slots' children in order. */
+/**
+ * One step of the walk: a list being read, or the moment a subtree ends.
+ *
+ * A LIST rather than a node, so a forest is never copied onto the stack to be
+ * walked. Seeding one entry per top-level node would read the whole array and
+ * allocate against it before any bound applied, which makes a budget powerless
+ * against the cheapest oversized document there is: a very wide root array.
+ * Holding the array with a cursor spends memory on DEPTH, not on width.
+ *
+ * The `leave` marker is what makes ancestry observable in an iterative walk. A
+ * recursive one knows it has left a subtree because the call returns; a stack
+ * has to be told, so each node queues its own marker BEFORE its children and
+ * the marker is reached again only after every descendant.
+ */
+type Frame =
+  | {
+      kind: "list";
+      nodes: readonly unknown[];
+      index: number;
+      parent: BlockNode | undefined;
+    }
+  | { kind: "leave"; node: unknown };
+
+/** How a caller narrows the walk. */
+export interface WalkOptions {
+  /** Reported as the parent of the top-level nodes. */
+  parent?: BlockNode;
+  /**
+   * Stop after reading this many entries.
+   *
+   * ENTRIES, not nodes visited: a forest can begin with a long run of nulls or
+   * primitives that never reach the callback, and a bound counting callbacks
+   * cannot see them. Reading is the work being bounded, and `selectNodes`
+   * bounds the same quantity so a caller reasons about one budget.
+   *
+   * A bound the caller applies in its own callback is not this either: the
+   * callback can decline to do work, but the walk has already reached every
+   * remaining entry. This ends the traversal.
+   */
+  maxNodes?: number;
+  /**
+   * Called for each node skipped because it is its own ancestor.
+   *
+   * The walk is the only place that knows — detecting a cycle is a property of
+   * having traversed — so it reports rather than leaving each caller to find
+   * out by traversing again. Readers ignore this and keep walking; a WRITER has
+   * to refuse, because a cycle it accepts becomes a forest that later recursive
+   * operations cannot traverse at all.
+   */
+  onCycle?: (node: BlockNode) => void;
+}
+
+/**
+ * The third argument in either of its accepted forms.
+ *
+ * `walkNodes` published a bare `parent` here before it took options, and a
+ * caller compiled against that signature passes a node. Rejecting it is not an
+ * option a type can enforce at runtime: the property lookup would simply miss
+ * and every top-level callback would receive `undefined` as its parent, which
+ * is a wrong answer rather than an error. The two shapes have no property in
+ * common, so `id` separates them exactly.
+ */
+function toWalkOptions(
+  third: BlockNode | WalkOptions | undefined
+): WalkOptions {
+  if (third === undefined) return {};
+  return "id" in third ? { parent: third } : third;
+}
+
+/** Queue a node's slot children so they are read before the next sibling. */
+function pushChildren(stack: Frame[], node: BlockNode): void {
+  if (!node.slots) return;
+  const slots = Object.values(node.slots);
+  // Reversed, so the first slot ends up on top of the stack and is read first.
+  for (let s = slots.length - 1; s >= 0; s -= 1) {
+    const children = slots[s];
+    // A slot whose value is not an array is skipped rather than read. Persisted
+    // documents reach this walk unvalidated, and iterating a non-array throws.
+    if (!Array.isArray(children)) continue;
+    stack.push({ kind: "list", nodes: children, index: 0, parent: node });
+  }
+}
+
+/**
+ * Take the next unread entry, discarding frames that are finished on the way.
+ *
+ * Leaving a subtree is what removes its node from the ancestor path, so that
+ * happens here: it is a property of the stack unwinding rather than of any node
+ * being visited.
+ */
+function takeNext(
+  stack: Frame[],
+  onPath: Set<unknown>
+): { node: unknown; parent: BlockNode | undefined } | undefined {
+  while (stack.length > 0) {
+    const top = stack[stack.length - 1];
+    if (top === undefined) return undefined;
+    if (top.kind === "leave") {
+      stack.pop();
+      onPath.delete(top.node);
+      continue;
+    }
+    if (top.index >= top.nodes.length) {
+      stack.pop();
+      continue;
+    }
+    const node = top.nodes[top.index];
+    top.index += 1;
+    return { node, parent: top.parent };
+  }
+  return undefined;
+}
+
+/** Whether an entry is a value this walk can treat as a node. */
+function isWalkableNode(node: unknown): node is BlockNode {
+  // `Array.isArray` is checked SEPARATELY because `typeof [] === "object"`, so
+  // the type test alone hands an array to `fn` as though it were a node. Every
+  // caller then reads its fields as `undefined` rather than failing: an
+  // id-uniqueness check sees `undefined` and compares it against other
+  // `undefined`s, a class reader finds no classes, a renderer finds no type.
+  // Silence in each case, from a value none of them can act on.
+  return typeof node === "object" && node !== null && !Array.isArray(node);
+}
+
+/**
+ * Depth-first visit over the forest: each node, then its slots' children in
+ * order.
+ *
+ * The forest reaches here from persisted data whether or not anything validated
+ * it — the blocks field admits any value whose `nodes` is an array — so an entry
+ * may be `null` or a primitive, and a slot's children may not be an array at
+ * all. Those are skipped rather than reported, because a walk has nobody to
+ * report to: a caller that needs to know an entry was unreadable is asking a
+ * validation question, and validation is where that answer lives. Skipping also
+ * matches what the renderer does with the same shapes, so a reader counting
+ * references here agrees with what the page actually applies.
+ *
+ * Iterative rather than recursive, because the forest's DEPTH is bounded by
+ * nothing that has run before this. `MAX_DEPTH` is a validation rule, and a
+ * document arrives whether or not validation ever passed on it — measured, a
+ * chain about ten thousand deep exited a recursive walk with
+ * `RangeError: Maximum call stack size exceeded`, no cycle involved.
+ *
+ * A node is skipped when it is already ON THE PATH from the root to itself,
+ * which is what a cycle is. That is deliberately narrower than skipping every
+ * node seen anywhere: the same node OBJECT placed in two different slots is not
+ * a cycle, and a walk that visited it once would report a subtree containing one
+ * duplicated id as containing none — which is exactly the question
+ * `insertionIsUnsafe` asks this walk, and the answer that would let `insertNode`
+ * build a forest addressing two positions by one id.
+ */
 export function walkNodes(
   nodes: BlockNode[],
   fn: (node: BlockNode, parent: BlockNode | undefined) => void,
   parent?: BlockNode
+): void;
+export function walkNodes(
+  nodes: BlockNode[],
+  fn: (node: BlockNode, parent: BlockNode | undefined) => void,
+  options?: WalkOptions
+): void;
+export function walkNodes(
+  nodes: BlockNode[],
+  fn: (node: BlockNode, parent: BlockNode | undefined) => void,
+  third?: BlockNode | WalkOptions
 ): void {
-  for (const node of nodes) {
-    fn(node, parent);
-    if (node.slots) {
-      for (const children of Object.values(node.slots)) {
-        walkNodes(children, fn, node);
-      }
+  if (!Array.isArray(nodes)) return;
+  const options = toWalkOptions(third);
+  const limit = options.maxNodes ?? Number.POSITIVE_INFINITY;
+  if (limit <= 0) return;
+
+  const onPath = new Set<unknown>();
+  // ONE frame for the whole top level. Reading the roots array through a cursor
+  // is what keeps a budget meaningful against a very wide forest: entries are
+  // taken one at a time and the walk returns the moment the budget is spent, so
+  // a million roots with a budget of ten reads ten of them.
+  const stack: Frame[] = [
+    { kind: "list", nodes, index: 0, parent: options.parent },
+  ];
+
+  // Every entry READ spends the budget, not every entry that turned out to be a
+  // node. Reading is the work being bounded, so a forest beginning with a long
+  // run of nulls or primitives would otherwise be traversed in full while the
+  // budget sat untouched — the callback never fires, and a bound counting
+  // callbacks cannot see it. `selectNodes` bounds the same quantity, for the
+  // same reason, and the two agreeing is what lets a caller reason about one
+  // budget rather than two.
+  //
+  // Checked BEFORE taking the next entry rather than after using it, so
+  // "entries read" is exactly what the number means.
+  let read = 0;
+  for (;;) {
+    if (read >= limit) return;
+    const entry = takeNext(stack, onPath);
+    if (entry === undefined) return;
+    read += 1;
+
+    if (!isWalkableNode(entry.node)) continue;
+    if (onPath.has(entry.node)) {
+      options.onCycle?.(entry.node);
+      continue;
     }
+
+    onPath.add(entry.node);
+    fn(entry.node, entry.parent);
+    stack.push({ kind: "leave", node: entry.node });
+    pushChildren(stack, entry.node);
   }
 }
 
@@ -131,23 +325,45 @@ function clampIndex(index: number, length: number): number {
 }
 
 /**
- * True if inserting `node` into `nodes` would break id uniqueness — either the
- * incoming subtree carries a duplicate id WITHIN itself, or one of its ids
- * already lives in the destination forest. Both are rejected: collapsing
- * duplicate incoming ids into the set would let an internally malformed subtree
- * through and corrupt id-addressing after insertion.
+ * True if inserting `node` into `nodes` would produce a forest the primitives
+ * can no longer address or traverse.
+ *
+ * Three ways, and they are rejected together because the consequence is the
+ * same: the incoming subtree carries a duplicate id WITHIN itself, one of its
+ * ids already lives in the destination forest, or it contains a CYCLE.
+ *
+ * Collapsing duplicate incoming ids into the set would let an internally
+ * malformed subtree through and corrupt id-addressing after insertion.
+ *
+ * The cycle is asked of the walk rather than looked for here. `walkNodes` is
+ * cycle-TOLERANT by design — a reader counting classes or measuring a document
+ * must answer rather than fail — so a cycle is invisible in what it visits, and
+ * a guard reading only the visits would call a cyclic subtree clean. What the
+ * walk reports is therefore the only account of it, and a second traversal
+ * written here to look again would be a second definition of the same thing.
+ *
+ * Refusing matters more for the writer than tolerating does for the reader: a
+ * top-level insert would return a forest that is itself cyclic, and an insert
+ * into a parent reaches the recursive `mapForest`, which has no such tolerance
+ * and exits with `RangeError: Maximum call stack size exceeded`.
  */
-function insertionBreaksIdUniqueness(
-  nodes: BlockNode[],
-  node: BlockNode
-): boolean {
+function insertionIsUnsafe(nodes: BlockNode[], node: BlockNode): boolean {
   const incoming = new Set<string>();
   let internalDuplicate = false;
-  walkNodes([node], n => {
-    if (incoming.has(n.id)) internalDuplicate = true;
-    incoming.add(n.id);
-  });
-  if (internalDuplicate) return true;
+  let cyclic = false;
+  walkNodes(
+    [node],
+    n => {
+      if (incoming.has(n.id)) internalDuplicate = true;
+      incoming.add(n.id);
+    },
+    {
+      onCycle: () => {
+        cyclic = true;
+      },
+    }
+  );
+  if (cyclic || internalDuplicate) return true;
   let overlapsForest = false;
   walkNodes(nodes, n => {
     if (incoming.has(n.id)) overlapsForest = true;
@@ -170,7 +386,7 @@ export function insertNode(
   node: BlockNode,
   at: TreePosition
 ): BlockNode[] {
-  if (insertionBreaksIdUniqueness(nodes, node)) return nodes;
+  if (insertionIsUnsafe(nodes, node)) return nodes;
   if (at.parentId === undefined) {
     const next = [...nodes];
     next.splice(clampIndex(at.index, next.length), 0, node);

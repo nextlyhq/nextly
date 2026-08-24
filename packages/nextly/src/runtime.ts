@@ -73,6 +73,13 @@ export {
 // short, which is the combination that gets retyped subtly wrong — and its
 // failure grants every draft rather than erroring.
 export { previewDraftGate } from "./runtime/preview/preview-draft-gate";
+
+// The Single counterpart. A sibling rather than a branch: a collection gate
+// returns an entry id so the route can compare it against the row a PATH
+// resolved to, while a Single has no path and no id — its slug is its identity —
+// so its gate settles the question and answers a boolean.
+export { previewSingleDraftGate } from "./runtime/preview/preview-single-draft-gate";
+export type { PreviewSingleDraftGateConfig } from "./runtime/preview/preview-single-draft-gate";
 export type {
   PreviewDraftGateConfig,
   DraftGateRequest,
@@ -108,6 +115,7 @@ export {
   type SingleRoute,
   type SingleRouteConfig,
   type SingleContext,
+  type SingleDraftRequest,
   type SingleDocument,
   type NextlySingleReader,
   type ResolvedContext,

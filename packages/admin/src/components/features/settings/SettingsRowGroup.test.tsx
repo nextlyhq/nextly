@@ -4,6 +4,22 @@ import { describe, it, expect } from "vitest";
 import { SettingsRowGroup } from "./SettingsRowGroup";
 
 describe("SettingsRowGroup", () => {
+  it("supplies no vertical padding of its own", () => {
+    // `FormSection` applies the rhythm to every direct child and the two are
+    // additive, so a group that also padded itself would render at double the
+    // gap. This is the second row idiom to have carried its own padding; the
+    // section owning it is what makes them agree.
+    const { container } = render(
+      <SettingsRowGroup label="Events" description="Pick some">
+        <input aria-label="one" />
+      </SettingsRowGroup>
+    );
+    const row = container.querySelector('[class*="md:grid-cols-[2fr_3fr]"]');
+
+    expect(row).not.toBeNull();
+    expect(row?.className).not.toMatch(/(^|\s)py-/);
+  });
+
   it("renders the label", () => {
     render(
       <SettingsRowGroup label="My Group">

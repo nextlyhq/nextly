@@ -1,5 +1,14 @@
-import { defineCollection, previewUrlFromTemplate, text } from "nextly/config";
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
+import type { HookContext } from "nextly";
+import {
+  defineCollection,
+  json,
+  previewUrlFromTemplate,
+  text,
+} from "nextly/config";
 
+import { classUsageOf } from "../class-usage";
 import { blocks } from "../fields/blocksHelper";
 /**
  * There is no page-level custom CSS field.
@@ -67,7 +76,51 @@ import { blocks } from "../fields/blocksHelper";
  * wiring. It costs one line and it is the only signal available that the link
  * will land.
  */
-export function pagesCollection(previewPath?: string) {
+/**
+ * Store a derived usage list, or mark the record UNKNOWN when it is not the
+ * whole answer.
+ *
+ * An incomplete derivation must not be stored as a list. The record exists so a
+ * class can be deleted safely, and a delete check reads a missing id as
+ * evidence the class is unused — so a list truncated by a bound would licence
+ * exactly the deletion it is there to prevent.
+ *
+ * `null` rather than removing the key, and the difference is the whole point on
+ * an UPDATE. Removing it only omits the field from the payload; the row keeps
+ * whatever it already held, so the PREVIOUS content's list stays authoritative
+ * for content that has since changed — a stale answer presented as a current
+ * one, which is worse than no answer. Writing `null` clears it and says
+ * "unknown" in the column itself.
+ *
+ * Unknown is a state the design already has a meaning for: a page written
+ * before this field existed holds nothing either, the rebuild treats any
+ * non-array as a record to replace, and a page without a usable record blocks
+ * deletion until one can be derived. So an oversized or unreadable document
+ * stays undeletable rather than silently miscounted, which is the honest
+ * outcome — its usage genuinely cannot be determined.
+ */
+function record(
+  data: Record<string, unknown>,
+  usage: { ids: string[]; complete: boolean }
+): void {
+  data.usedClasses = usage.complete ? usage.ids : null;
+}
+
+export function pagesCollection(
+  previewPath?: string,
+  // The limits the PAGE is rendered under, when the host raised them.
+  //
+  // `PageRenderer` takes `limits`, falling back to `styleContext.limits` and
+  // then to the engine defaults, so a host can render more of a document than
+  // the defaults select. The usage record has to select the SAME nodes or a
+  // class applied to a node the page renders is absent from the record a
+  // safe-delete check reads — the two now share one selection, and this is what
+  // stops them invoking it with different bounds.
+  //
+  // Positional because `previewPath` already is; a third argument here is the
+  // point to convert both into one options object.
+  limits?: DocumentLimits
+) {
   return defineCollection({
     slug: "pages",
     labels: { singular: "Page", plural: "Pages" },
@@ -78,6 +131,40 @@ export function pagesCollection(previewPath?: string) {
       // builder arm: a page already holding a block document keeps rendering
       // rather than reading as empty against a field with a new name.
       blocks({ name: "content", label: "Page Builder" }),
+      // Which named classes this page's document references, derived from the
+      // document rather than authored. It answers "how many places is this
+      // class used" for the class library, where an author needs the number
+      // BEFORE renaming or deleting rather than after.
+      //
+      // Derived and stored rather than computed on demand: a class is
+      // referenced by id from inside each page's document, so counting live
+      // means opening every page of the site on every read. Stored, the count
+      // is an aggregate over this one small field.
+      //
+      // On the PAGE rather than in a per-class tally, because this shape is
+      // idempotent: writing it again produces the same list, so a save that was
+      // missed costs nothing once the page is touched again and one applied
+      // twice costs nothing at all. A per-class counter maintained by increment
+      // and decrement is permanently wrong after a single miss, and the number
+      // gives no sign of it.
+      //
+      // Hidden because it is bookkeeping, not content: an author neither writes
+      // it nor needs to read it, and a field they can edit is one that can
+      // disagree with the document it describes.
+      //
+      // `hidden` governs what the admin UI RENDERS and denies no write, so it
+      // is not what keeps the two in agreement. The hook below is: it derives
+      // the value or removes the key on every path, so a value supplied by any
+      // caller is replaced rather than stored.
+      json({
+        name: "usedClasses",
+        label: "Referenced classes",
+        admin: {
+          hidden: true,
+          description:
+            "Derived from this page's blocks: the ids of every named class it references. Maintained automatically; editing it cannot change what the page renders.",
+        },
+      }),
     ],
     status: true,
     admin: {
@@ -91,6 +178,109 @@ export function pagesCollection(previewPath?: string) {
       ...(previewPath === undefined
         ? {}
         : { preview: { url: previewUrlFromTemplate(previewPath) } }),
+    },
+
+    hooks: {
+      // Kept DERIVED on every write, beside the field it maintains, so the two
+      // cannot drift into different files and different opinions.
+      //
+      // `beforeChange` rather than an `after*` phase, and the reason is that
+      // the record lives on this row: written before, it is part of the SAME
+      // write as the document it describes, so there is no window in which a
+      // page is saved and its record is not. An `after*` phase would need a
+      // second write, which can fail on its own and leave exactly that window
+      // open — and a stale record is the failure mode this whole design is
+      // arranged to avoid, because a confidently wrong count is worse than a
+      // slow one.
+      //
+      // Safe on a `before*` phase only while this cannot fail the write, and
+      // that is arranged here rather than assumed of the derivation.
+      // `classIdsUsedBy` answers rather than throwing for every shape that
+      // reaches STORAGE, and a table of those shapes is asserted beside it. An
+      // in-process caller can still hand over an object that throws on being
+      // read, which storage cannot produce, so the catch below closes the
+      // remaining distance rather than trusting the range.
+      //
+      // It reads `originalData` — the row this write is changing — only when a
+      // write CLAIMS a value for this field without carrying the document that
+      // would justify it. That is a rebuild writing the field alone, or a
+      // caller inventing one, and both are answered the same way: the stored
+      // document decides, so a list computed elsewhere from content that has
+      // since been replaced is recomputed rather than believed, and no caller
+      // can set this field to anything the hook did not derive.
+      //
+      // A write claiming NOTHING is left alone entirely, which is a different
+      // thing from deriving an answer for it.
+      beforeChange: [
+        (context: HookContext) => {
+          const { data } = context;
+          if (!isPlainRecord(data)) return data;
+          try {
+            // Every path either DERIVES the value or REMOVES it, and there is
+            // no path that lets one through. A value this hook did not compute
+            // is unverified whoever sent it, and the field is reachable by
+            // anyone who may update the page: `admin.hidden` governs what the
+            // admin UI renders and denies no write, so hiding it never made it
+            // unwritable.
+            //
+            // Removing the key is what "leave the record as it is" means on a
+            // partial update — an absent field is not written, so the stored
+            // list stands. Assigning an empty list instead would RECORD that
+            // the page references nothing, and under-counting is the direction
+            // that gets a live class deleted.
+            if ("content" in data) {
+              // The document is part of this write, so it is the authority.
+              record(data, classUsageOf(data.content, limits));
+            } else if (context.operation === "create") {
+              // A page created without a document references nothing, and that
+              // is a derived answer rather than an absent one, so it is
+              // recorded. Ahead of the claimless branch below because an
+              // ORDINARY create carries neither the document nor this field —
+              // leaving it there would give every new empty page no record at
+              // all, indistinguishable from a page predating the field, and
+              // block deletion until someone ran a rebuild.
+              data.usedClasses = [];
+            } else if (!("usedClasses" in data)) {
+              // The write carries neither the document nor a claim about it, so
+              // it has nothing to say here and must say nothing. Returning the
+              // field ABSENT is not the same as leaving it alone: on a
+              // drafts-enabled collection, publishing sends `status` by itself
+              // and the mutation service folds the promoted draft UNDER the
+              // post-hook payload, so any value written here replaces the one
+              // the draft accumulated. The draft's record was derived from the
+              // draft's document, which is precisely the content being
+              // published, and this hook cannot see it — `originalData` is the
+              // outgoing LIVE row.
+              //
+              // So deriving from the stored document here would publish the
+              // OLD page's class list against the NEW page's content, on the
+              // most ordinary path there is.
+              return data;
+            } else if (isPlainRecord(context.originalData)) {
+              // A patch that does not carry the document — a title-only save,
+              // or a rebuild writing this field alone. The stored document is
+              // read in the same operation as this write, so a list derived
+              // from a document that has since changed is replaced by one
+              // derived from what is actually stored, rather than accepted.
+              record(data, classUsageOf(context.originalData.content, limits));
+            } else {
+              delete data.usedClasses;
+            }
+          } catch {
+            // Nothing readable could be derived, which is the same state a
+            // truncated selection leaves: UNKNOWN rather than absent. Written
+            // as `null` for the same reason — on an update, omitting the field
+            // would leave the row holding the previous content's list, stale
+            // and presented as current.
+            //
+            // Reachable from a caller that constructs the document in process
+            // and hands over an accessor that throws; a stored document arrives
+            // from `JSON.parse` and cannot do this.
+            data.usedClasses = null;
+          }
+          return data;
+        },
+      ],
     },
   });
 }

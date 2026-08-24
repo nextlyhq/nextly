@@ -34,6 +34,7 @@ import {
   type PreviewDeclaration,
 } from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
+import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import { getCachedNextly } from "../init";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 
@@ -94,6 +95,71 @@ export async function previewDeclarationFor(
   );
   const stored = await registry.getCollectionBySlug(collection);
   return stored?.admin?.preview;
+}
+
+/**
+ * Read the preview declaration for a Single.
+ *
+ * The mirror of {@link previewDeclarationFor}, and separate for the same reason
+ * the resolvers are: a Single is addressed by slug with no id, so the lookup
+ * differs even though what is done with the answer does not.
+ *
+ * The AUTHORED config is consulted first, and the order is load-bearing for the
+ * identical reason: a code-first Single is synced into the registry, but the
+ * `url` function cannot survive that trip, so reading the registry first would
+ * find a declaration for exactly those Singles and find it empty.
+ */
+export async function singlePreviewDeclarationFor(
+  slug: string
+): Promise<PreviewDeclaration | undefined> {
+  await getCachedNextly();
+
+  const config = container.get<NextlyServiceConfig>("config");
+  const authored = config?.singles?.find(s => s.slug === slug);
+  if (authored?.admin?.preview) return authored.admin.preview;
+
+  const registry = container.get<SingleRegistryService>(
+    "singleRegistryService"
+  );
+  const stored = await registry.getSingleBySlug(slug);
+  return stored?.admin?.preview;
+}
+
+/**
+ * A Single's document, read the way a preview redirect needs it.
+ *
+ * Shared by the minting endpoint and the preview route's own default, because
+ * they are asking one question — where does this Single's DRAFT live — and two
+ * implementations of it would drift into minting a link at one address and
+ * landing it at another.
+ *
+ * Trusted, because both callers are already past their own authorization: the
+ * mint has checked `update` on the Single, and whoever follows a link carries a
+ * signed token that recorded that verdict. What this produces is a path, never
+ * content.
+ *
+ * The working draft's values rather than the published row's, and every status,
+ * because an editor sharing a draft is sharing what the draft says — and a
+ * Single that has never been published is exactly the one a preview link is most
+ * often minted for.
+ */
+export async function loadSingleForPreview(
+  slug: string,
+  locale: string | undefined
+): Promise<Record<string, unknown> | null> {
+  const nextly = await getCachedNextly();
+  const document = await nextly.findSingle({
+    slug,
+    overrideAccess: true,
+    draft: true,
+    status: "all",
+    // No relationships: every field a preview URL can be built from is scalar,
+    // so expanding would read further collections to answer a question none of
+    // them contribute to.
+    depth: 0,
+    ...(locale === undefined ? {} : { locale }),
+  });
+  return document ?? null;
 }
 
 /**

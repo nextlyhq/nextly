@@ -26,6 +26,30 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
   slug: TSlug;
 
   /**
+   * Return the pending working draft in place of the live document when one
+   * exists (draft/published split). Mirrors `draft` on `findByID`, and forwards
+   * to the same service option, so a Single and a collection entry are read the
+   * same way rather than through two spellings of one idea.
+   *
+   * Gated by trust in the service: a caller who cannot edit the document still
+   * gets the published values, so this never exposes a draft to a read-only
+   * caller.
+   *
+   * @default false
+   */
+  draft?: boolean;
+
+  /**
+   * Which lifecycle states this read may return, for a Single carrying the
+   * `status` column.
+   *
+   * `"all"` is what reaches a Single that has never been published — the state a
+   * preview link is most often shared from — which the default published-only
+   * filter reports as missing.
+   */
+  status?: "published" | "draft" | "all";
+
+  /**
    * Specific fields to include/exclude.
    */
   select?: Record<string, boolean>;

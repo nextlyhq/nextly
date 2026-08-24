@@ -43,6 +43,28 @@ describe("page shell stylesheet", () => {
     expect(flat).toContain("--nx-measure-wide: 72rem");
   });
 
+  it("ships the section rhythm as a rule, not only as a token", () => {
+    // The token alone is inert. The rule that spends it has to live in the
+    // theme too: the class the component writes is discoverable by scanning,
+    // the rule behind it is not, so a consumer who resolves the token and never
+    // loads this stylesheet gets no padding and no error either.
+    expect(flat).toContain(
+      ".nx-form-section-rows > * { padding-block: var(--nx-field-gap); }"
+    );
+  });
+
+  it("declares the section rhythm token FormSection reads", () => {
+    // A missing custom property does not error: the declaration that reads it
+    // resolves to nothing and the section loses its rhythm silently.
+    //
+    // The utility spelling is deliberately NOT written out here. Tailwind scans
+    // this file, and a complete arbitrary-value token in a comment is extracted
+    // exactly as one in JSX would be, so naming the square-bracket form in
+    // prose emits a rule whose value is whatever the prose said — and one
+    // malformed value fails the entire compiled stylesheet.
+    expect(flat).toContain("--nx-field-gap: 1.25rem");
+  });
+
   it("names the four grid lines the shell and Bleed both depend on", () => {
     // `content` is what every ordinary child resolves to and `full` is what
     // `Bleed` resolves to. Renaming either line silently makes the other half

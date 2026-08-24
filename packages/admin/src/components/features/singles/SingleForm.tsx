@@ -79,6 +79,7 @@ import { getDefaultValues } from "@admin/lib/form/default-values";
 import { cn } from "@admin/lib/utils";
 
 import { relaxIdentityRequired } from "./identity-fields";
+import { useSinglePreviewLink } from "./useSinglePreviewLink";
 
 // ============================================================================
 // Types
@@ -235,6 +236,7 @@ export interface SingleFormProps {
  * }
  * ```
  */
+
 export function SingleForm({
   schema,
   document,
@@ -446,6 +448,18 @@ export function SingleForm({
     enabled: localizationEnabled,
   } = useLocalization();
 
+  // One decision rather than three: which language the link is for, whether it
+  // can be offered at all, and the mint itself. No site URL is computed here —
+  // a link that travels by email or chat has to name a host, and the server is
+  // the only place that can.
+  const previewLink = useSinglePreviewLink({
+    slug: schema.slug,
+    localized: schema.localized === true,
+    hasStatus,
+    locale,
+    defaultLocale,
+  });
+
   // The per-locale translation-status map, read once and shared by the header
   // adapter and the language panel: two reads of the same document key would
   // agree today and drift the moment one of them learns a new shape.
@@ -632,6 +646,14 @@ export function SingleForm({
                         locale={locale}
                         onLocaleChange={onLocaleChange}
                         localized={schema.localized === true}
+                        /* A Single has a draft lifecycle, so it has drafts worth
+                   sharing. The control is offered whenever the Single carries
+                   that lifecycle; whether a link can actually be minted is the
+                   server's call, and it refuses with a message naming what is
+                   missing rather than handing out one that 404s. */
+                        isLinkAvailable={previewLink.isAvailable}
+                        onCopyLink={previewLink.copy}
+                        isCopyingLink={previewLink.isCopying}
                         toolbarSlot={
                           <EntryFormToolbarSlots
                             context="single"

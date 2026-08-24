@@ -46,13 +46,55 @@ const PREVIEW_KEY_BYTES = 32;
 export const DEFAULT_PREVIEW_TTL_SECONDS = 60 * 60;
 
 /** The single document a preview token authorizes, and nothing else. */
-export interface PreviewTokenScope {
+/** One entry of a collection. */
+export interface PreviewEntryScope {
+  /**
+   * Optional, and that is what keeps every already-minted link working.
+   *
+   * Tokens signed before this type gained a discriminant carry no `kind` claim
+   * at all, so requiring one would kill every outstanding link the moment this
+   * shipped — an editor who shared a draft last week would find it dead with no
+   * explanation. An absent kind reads as an entry, which is what those tokens
+   * are.
+   */
+  kind?: "entry";
   /** Collection slug the entry belongs to. */
   collection: string;
   /** The entry's id. Ids, not slugs: a slug can be edited on the draft itself. */
   entryId: string;
   /** Locale to preview, when the entry is localized. */
   locale?: string;
+}
+
+/**
+ * One Single.
+ *
+ * Addressed by slug and not by id, because there is exactly one of it and its
+ * identity IS the slug. Reusing the entry shape would mean inventing an id that
+ * names nothing and having `previewTokenCovers` compare two made-up values.
+ */
+export interface PreviewSingleScope {
+  kind: "single";
+  /** The Single's slug. */
+  single: string;
+  /** Locale to preview, when the Single is localized. */
+  locale?: string;
+}
+
+/**
+ * The ONE document a preview token authorizes.
+ *
+ * A union rather than a widened entry shape, so a comparison cannot accidentally
+ * satisfy one kind with the other: a Single named `pages` and a collection named
+ * `pages` are different documents.
+ */
+export type PreviewTokenScope = PreviewEntryScope | PreviewSingleScope;
+
+/** Whether a scope names a Single rather than a collection entry. */
+export function isSingleScope(
+  scope: PreviewTokenScope
+): scope is PreviewSingleScope {
+  return scope.kind === "single";
 }
 
 export interface SignPreviewTokenOptions {
@@ -143,6 +185,21 @@ export async function signPreviewToken(
   // covers every locale — so an empty string would quietly widen a
   // locale-specific link into an all-locales grant. Refusing at the mint is
   // where the caller can still be told.
+  // Refused for the same reason an empty locale is: verification reads an
+  // unusable claim as ABSENT, and an absent single slug would leave a token
+  // that names no document at all.
+  if (isSingleScope(scope) && scope.single.length === 0) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "single",
+          code: "INVALID_FORMAT",
+          message: "A preview token's single slug must be a non-empty string.",
+        },
+      ],
+    });
+  }
+
   if (scope.locale !== undefined && scope.locale.length === 0) {
     throw NextlyError.validation({
       errors: [
@@ -187,9 +244,15 @@ export async function signPreviewToken(
   const issuedAt = Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + ttlSeconds;
 
+  // An entry scope is signed WITHOUT a `kind` claim, byte-identical to what
+  // this signer produced before Singles existed. That keeps the common token
+  // unchanged rather than migrating every outstanding link.
+  const claims = isSingleScope(scope)
+    ? { kind: "single" as const, sng: scope.single }
+    : { col: scope.collection, eid: scope.entryId };
+
   const token = await new SignJWT({
-    col: scope.collection,
-    eid: scope.entryId,
+    ...claims,
     ...(scope.locale === undefined ? {} : { loc: scope.locale }),
     // `mnt`, not `sub`: the subject below names the DOCUMENT, and a reader that
     // mistook this for an authenticated principal would be reading a bearer
@@ -201,7 +264,11 @@ export async function signPreviewToken(
     .setAudience(PREVIEW_AUDIENCE)
     // `sub` names the document rather than a user: nobody is authenticated by
     // this token, and reading it as a user id is the mistake worth preventing.
-    .setSubject(`${scope.collection}:${scope.entryId}`)
+    .setSubject(
+      isSingleScope(scope)
+        ? `single:${scope.single}`
+        : `${scope.collection}:${scope.entryId}`
+    )
     .setJti(randomBytes(16).toString("hex"))
     .setIssuedAt(issuedAt)
     .setExpirationTime(expiresAt)
@@ -213,6 +280,39 @@ export async function signPreviewToken(
 /** Whether a decoded claim value is a usable, non-empty string. */
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The document a verified payload names, or `null` when it names none.
+ *
+ * Split out of the verifier so the two questions stay separate: that function
+ * answers "is this token real", and this one answers "what does it point at".
+ * The locale is deliberately NOT read here — it qualifies whichever document
+ * this returns, and folding it in would make one function answer both.
+ *
+ * An absent `kind` is an ENTRY, which is what every token minted before Singles
+ * existed carries. A kind that is present but unrecognised is refused rather
+ * than defaulted: one this version cannot judge is not one to guess at, and
+ * treating it as an entry would read `col`/`eid` claims never meant to be an
+ * entry's. A token missing what its kind requires names no document at all, so
+ * it is malformed rather than a grant over everything.
+ */
+function decodeScope(
+  payload: Record<string, unknown>
+): PreviewTokenScope | null {
+  const kind = payload.kind;
+
+  if (kind === "single") {
+    const single = readString(payload.sng);
+    return single === null ? null : { kind: "single", single };
+  }
+
+  if (kind !== undefined) return null;
+
+  const collection = readString(payload.col);
+  const entryId = readString(payload.eid);
+  if (collection === null || entryId === null) return null;
+  return { collection, entryId };
 }
 
 /**
@@ -239,13 +339,8 @@ export async function verifyPreviewToken(
     return { valid: false, reason: "invalid" };
   }
 
-  const collection = readString(payload.col);
-  const entryId = readString(payload.eid);
-  // A token missing either half names no document, so there is nothing it could
-  // authorize. Treated as malformed rather than as a grant over everything.
-  if (collection === null || entryId === null) {
-    return { valid: false, reason: "invalid" };
-  }
+  const scope = decodeScope(payload);
+  if (scope === null) return { valid: false, reason: "invalid" };
 
   // Checked AFTER the shape, so a malformed token is never reported as merely
   // revoked — the two need different answers from a caller.
@@ -282,11 +377,7 @@ export async function verifyPreviewToken(
 
   return {
     valid: true,
-    scope: {
-      collection,
-      entryId,
-      ...(locale === null ? {} : { locale }),
-    },
+    scope: locale === null ? scope : { ...scope, locale },
     ...(minter === null ? {} : { minter }),
     expiresAt,
   };
@@ -308,8 +399,20 @@ export function previewTokenCovers(
   scope: PreviewTokenScope,
   requested: PreviewTokenScope
 ): boolean {
-  if (scope.collection !== requested.collection) return false;
-  if (scope.entryId !== requested.entryId) return false;
+  // The KIND first, so one kind can never satisfy the other: a Single named
+  // `pages` and a collection named `pages` are different documents, and a
+  // comparison that only looked at names would let one link open the other.
+  if (isSingleScope(scope) !== isSingleScope(requested)) return false;
+
+  if (isSingleScope(scope) && isSingleScope(requested)) {
+    if (scope.single !== requested.single) return false;
+  } else if (!isSingleScope(scope) && !isSingleScope(requested)) {
+    if (scope.collection !== requested.collection) return false;
+    if (scope.entryId !== requested.entryId) return false;
+  }
+
+  // An absent locale covers every locale, deliberately: a link minted without
+  // one is a link to the document rather than to one translation of it.
   if (scope.locale === undefined) return true;
   return scope.locale === requested.locale;
 }

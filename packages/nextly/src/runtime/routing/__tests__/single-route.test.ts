@@ -209,3 +209,64 @@ describe("createPublicSingleRoute construction", () => {
     ).not.toThrow();
   });
 });
+
+/**
+ * A draft grant authorizes ONE document and says nothing about what that
+ * document points at.
+ *
+ * The read it triggers is trusted, so without a bound the bypass spreads to
+ * every collection the Single populates — and a caller who may preview this
+ * document receives related records they have no permission to read at all.
+ * The bound is the same option, with the same meaning, that a content route
+ * carries.
+ */
+describe("how far a Single route's trust reaches", () => {
+  /** The `trusted` predicate the route handed the reader, if any. */
+  async function boundFrom(
+    config: Record<string, unknown>
+  ): Promise<((collection: string) => boolean) | undefined> {
+    const { reader, calls } = stubReader(HOME);
+    const { generateMetadata } = createSingleRoute({
+      slug: "homepage",
+      nextly: reader,
+      render: () => "rendered",
+      buildMetadata: document => ({ title: String(document.title) }),
+      ...config,
+    });
+
+    await generateMetadata();
+
+    expect(calls).toHaveLength(1);
+    return (calls[0] as { trusted?: (collection: string) => boolean }).trusted;
+  }
+
+  // The positive control. Without it the assertions below cannot tell "bounded
+  // to nothing" from "no bound was passed at all", which are opposite outcomes
+  // reported by the same `false`.
+  it("passes a bound the reader can actually consult", async () => {
+    expect(await boundFrom({ draft: true })).toBeTypeOf("function");
+  });
+
+  it("trusts nothing by default, which is what a draft grant authorizes", async () => {
+    const trusted = await boundFrom({ draft: true });
+
+    expect(trusted?.("posts")).toBe(false);
+  });
+
+  it("trusts exactly what the route named, and nothing beside it", async () => {
+    const trusted = await boundFrom({
+      draft: true,
+      trustedCollections: ["posts"],
+    });
+
+    expect(trusted?.("posts")).toBe(true);
+    expect(trusted?.("authors")).toBe(false);
+  });
+
+  // Passed on an enforced read too. It decides nothing there — the reader
+  // evaluates `overrideAccess && trusted(target)` — and travelling with every
+  // read is what makes it impossible to omit on the one path that matters.
+  it("travels with an ordinary read as well", async () => {
+    expect(await boundFrom({})).toBeTypeOf("function");
+  });
+});

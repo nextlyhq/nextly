@@ -581,5 +581,13 @@ export type {
  * measure in order to escape it. No first-party plugin has exercised it yet.
  */
 export { Bleed, PageShell } from "./components/page-shell";
+/**
+ * @experimental A page's own identity — trail, name, summary and actions — fed
+ * entirely by props, so a page declares what it is instead of a foreign file
+ * deriving it from the URL. No first-party plugin has exercised it yet.
+ */
+export { PageHeader } from "./components/page-header";
+/** @experimental */
+export type { PageHeaderProps } from "./components/page-header";
 /** @experimental */
 export type { BleedProps, PageShellProps } from "./components/page-shell";

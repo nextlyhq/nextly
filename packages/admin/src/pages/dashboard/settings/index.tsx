@@ -217,7 +217,10 @@ const SettingsGeneralPage: React.FC = () => {
             void form.handleSubmit(onSubmit)(e);
           }}
         >
-          <SettingsLayout>
+          <SettingsLayout
+            title="General Settings"
+            description="Manage your application and configuration"
+          >
             <FormLayout>
               {isLoading ? (
                 <GeneralSettingsSkeleton />
