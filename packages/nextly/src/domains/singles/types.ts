@@ -108,6 +108,15 @@ export interface GetSingleOptions {
   enforceFieldAccess?: boolean;
 
   /**
+   * Whose field-level read rules to judge by, when that is NOT the caller.
+   *
+   * See the collection read path: a preview's bearer is anonymous and must stay
+   * anonymous to every hook, while the FIELDS are judged as the person who
+   * shared the link. A redaction basis, never a principal.
+   */
+  fieldAccessUser?: UserContext;
+
+  /**
    * Set by a route whose middleware already authenticated AND authorized the
    * caller. Skips only the redundant RBAC re-check, which resolves permissions
    * from the caller's stored roles and would otherwise reject an API key whose

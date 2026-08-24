@@ -284,7 +284,18 @@ export async function resolveContent(
    * no sharer is named.
    */
   const sharerFieldAccess = {
-    user: draftFieldAccessAs ?? user,
+    // `user` is left as the CALLER — anonymous, on a preview — and the sharer
+    // travels beside it as a redaction basis. Putting the sharer into `user`
+    // made every collection, stored and field-level hook see them as the
+    // requester: a hook branching on `req.user` would add an editor-only value
+    // and hand it to whoever holds the link, and a value a hook invents need
+    // not correspond to any declared field, so the access pass cannot take it
+    // back. The token's own documentation limits `mnt` to a redaction basis;
+    // this is that limit made structural.
+    user,
+    ...(draftFieldAccessAs === undefined
+      ? {}
+      : { fieldAccessUser: draftFieldAccessAs }),
     enforceFieldAccess: draftFieldAccessAs !== undefined,
   };
 

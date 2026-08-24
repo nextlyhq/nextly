@@ -1955,7 +1955,10 @@ export class SingleQueryService extends BaseService {
         kind: "single",
         slug,
         entry: doc,
-        user: options.user,
+        // The field-access identity, never the hook one. A preview judges these
+        // fields as the sharer while the hooks above go on seeing the anonymous
+        // bearer who is actually asking.
+        user: options.fieldAccessUser ?? options.user,
         overrideAccess:
           options.enforceFieldAccess === true ? false : options.overrideAccess,
       });

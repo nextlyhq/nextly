@@ -308,4 +308,54 @@ describe("createContentRoute driven by previewDraftGate", () => {
     expect(page.title).toBe("Unreleased");
     expect(page.slug).toBeUndefined();
   });
+  // The sharer is a REDACTION BASIS, never the requester — the token's own
+  // documentation says so, and this is that limit made observable.
+  //
+  // A hook branching on `req.user` that saw the sharer would add an
+  // editor-only value and hand it to whoever holds the link. Worse than a
+  // denied field surviving: a value a hook invents need not correspond to any
+  // declared field, so the access pass cannot take it back afterwards.
+  it("does not let a hook see the sharer as the visitor", async () => {
+    const hooked = () =>
+      defineCollection({
+        slug: "pages",
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "slug" }),
+          text({
+            name: "title",
+            hooks: {
+              // Reads the caller the way an ordinary hook would — `user` is
+              // top-level on the field-hook context. On a preview the caller is
+              // the anonymous bearer, whatever the FIELDS are judged as.
+              afterRead: [
+                ({ value, user }: { value: unknown; user?: unknown }) =>
+                  user === undefined ? value : `${String(value)} [staff]`,
+              ],
+            },
+          }),
+        ],
+      });
+    current = await createTestNextly({ collections: [hooked()] });
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: { slug: "unreleased", title: "Unreleased", status: "draft" },
+    });
+
+    const { token } = await signPreviewToken(
+      { collection: "pages", entryId: String(created.item.id) },
+      SECRET,
+      { generation: GENERATION, minter: await sharer(current.nextly) }
+    );
+
+    const page = (await route(current.nextly, token).ContentPage({
+      params: { slug: ["unreleased"] },
+    })) as ContentEntry;
+
+    // The draft resolved — otherwise this asserts nothing about the hook.
+    expect(page.slug).toBe("unreleased");
+    // And the hook saw nobody, so it produced the anonymous value.
+    expect(page.title).toBe("Unreleased");
+  });
 });

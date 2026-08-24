@@ -387,6 +387,12 @@ export interface RelationshipExpansionOptions {
    * read paths that forward a real caller; see {@link RelatedRowAccess}.
    */
   enforceFieldAccess?: boolean;
+  /**
+   * Whose field rules related rows are judged by, when that is not the caller.
+   * See {@link RelatedRowReadContext.fieldAccessUser}. Applied to the access
+   * pass alone — hooks keep seeing `user`, who is who is actually asking.
+   */
+  fieldAccessUser?: Record<string, unknown>;
 
   /**
    * Evaluate the target collection's own read rules even when field redaction
@@ -3999,7 +4005,10 @@ export class CollectionRelationshipService extends BaseService {
           kind: "collection",
           slug: targetCollection,
           entry: row,
-          user: access.user,
+          // The field-access identity, never the hook one: a preview judges a
+          // related row's fields as the sharer while every hook goes on seeing
+          // the anonymous bearer who is actually asking.
+          user: access.fieldAccessUser ?? access.user,
           overrideAccess: false,
         },
         redactions
