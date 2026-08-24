@@ -391,6 +391,56 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
 }
 
 /**
+ * How far each of the box's four extremes is drawn from where it was laid out.
+ *
+ * A transform about an origin maps a local coordinate `v` to
+ * `o + factor * (v - o) + shift`, so an extreme at `v` is displaced by
+ * `(o - v) * (1 - factor) + shift`. The near extreme sits at `v = 0` and the far
+ * one at `v = size`, which is the whole of the arithmetic.
+ *
+ * Compared in RENDERED pixels rather than local ones, because the tolerance is
+ * about what an author can see: a tenth of a local pixel under a tenfold
+ * ancestor scale is a visible pixel on screen, and the same displacement inside
+ * a shrunken ancestor is not.
+ *
+ * Converted by the ANCESTOR scale, never the composed one. The displacement is
+ * already expressed in the parent's coordinates — the element's own transform is
+ * what produced it — so multiplying by that transform again counts it twice and
+ * understates the movement by exactly the factor doing the moving. Measured, a
+ * 100px block under `scaleY(0.01)` displaces each vertical extreme by 49.5
+ * rendered pixels while the composed conversion answers 0.495, which is under
+ * the threshold and would call a plainly moved extreme stationary.
+ *
+ * These are EXTREMES of the box rather than named sides, and the distinction is
+ * load-bearing under a reflection: the image of `v = 0` is then the rendered
+ * box's far side, so `leftX` names the displacement of the near extreme and not
+ * of whatever ends up on the left. Callers that could meet a reflection refuse
+ * it before reading these.
+ */
+function endpointsMovedBy(
+  own: DOMMatrix,
+  origin: { x: number; y: number },
+  box: { width: number; height: number },
+  ancestor: { x: number; y: number }
+): { topY: boolean; bottomY: boolean; leftX: boolean; rightX: boolean } {
+  const moved = (
+    o: number,
+    v: number,
+    factor: number,
+    shift: number,
+    axisScale: number
+  ): boolean =>
+    Math.abs(((o - v) * (1 - factor) + shift) * axisScale) > EDGE_STILL_PX;
+
+  return {
+    topY: moved(origin.y, 0, own.d, own.f, ancestor.y),
+    bottomY: moved(origin.y, box.height, own.d, own.f, ancestor.y),
+    leftX: moved(origin.x, 0, own.a, own.e, ancestor.x),
+    rightX: moved(origin.x, box.width, own.a, own.e, ancestor.x),
+  };
+}
+
+/**
  * Which physical edges a single element's own transform draws away from layout.
  *
  * Asked of the MATRIX rather than of the declaration, because a declaration that
@@ -427,14 +477,34 @@ function edgesMovedBy(
   own: DOMMatrix | null,
   origin: { x: number; y: number },
   box: { width: number; height: number },
-  scale: { x: number; y: number }
+  ancestor: { x: number; y: number }
 ): MovedEdges {
+  const EVERY_EDGE: MovedEdges = {
+    top: true,
+    right: true,
+    bottom: true,
+    left: true,
+  };
   if (own === null) return { ...NO_EDGE_MOVED };
+  /*
+   * A non-positive ancestor scale carries no margin that can be drawn, and it
+   * reaches here past the caller's own guard: that guard reads the COMPOSED
+   * matrix, and an ancestor reflection CANCELLED by the element's own reflection
+   * composes to a positive matrix. Measured, a parent at `scaleX(-1)` holding a
+   * child at `translateX(-200px) scaleX(-1)` composes to `a = 1` and passes
+   * describability while the ancestor's own `a` is still −1.
+   *
+   * Left unchecked that negative factor becomes the margin's scale, turning a
+   * positive margin into a negative extent — which the band code draws INWARD
+   * over the content while still labelling it as ordinary positive spacing. The
+   * mirrored space is real; a rectangle claiming to be it is not.
+   */
+  if (!(ancestor.x > 0) || !(ancestor.y > 0)) return EVERY_EDGE;
   const skewed =
     !own.is2D ||
     Math.abs(own.b) > AXIS_ALIGNED_TOLERANCE ||
     Math.abs(own.c) > AXIS_ALIGNED_TOLERANCE;
-  if (skewed) return { top: true, right: true, bottom: true, left: true };
+  if (skewed) return EVERY_EDGE;
 
   /*
    * How far one edge is drawn from where it was laid out.
@@ -458,20 +528,43 @@ function edgesMovedBy(
    * 0.495, which is under the threshold and would call a plainly moved edge
    * stationary.
    */
-  const moved = (
-    o: number,
-    v: number,
-    factor: number,
-    shift: number,
-    axisScale: number
-  ): boolean =>
-    Math.abs(((o - v) * (1 - factor) + shift) * axisScale) > EDGE_STILL_PX;
+  const { topY, bottomY, leftX, rightX } = endpointsMovedBy(
+    own,
+    origin,
+    box,
+    ancestor
+  );
 
+  return edgesFromEndpoints({ topY, bottomY, leftX, rightX });
+}
+
+/**
+ * Which edges are undrawable, given which of the box's extremes moved.
+ *
+ * An edge is a SEGMENT, so BOTH of its endpoints have to land where layout put
+ * them. Its own coordinate is only half the question: measured,
+ * `translate(30px, -25px) scaleY(0.5)` leaves the top edge's Y exactly where
+ * layout had it and slides the whole edge thirty pixels sideways, so a band
+ * anchored to it names pixels the margin never occupied, at exactly the right
+ * height.
+ *
+ * The top and bottom edges therefore need the horizontal extent still, and the
+ * left and right edges need the vertical extent still — which is why the four
+ * answers are not independent even though the four displacements are.
+ */
+function edgesFromEndpoints(moved: {
+  topY: boolean;
+  bottomY: boolean;
+  leftX: boolean;
+  rightX: boolean;
+}): MovedEdges {
+  const acrossStill = !moved.leftX && !moved.rightX;
+  const downStill = !moved.topY && !moved.bottomY;
   return {
-    top: moved(origin.y, 0, own.d, own.f, scale.y),
-    bottom: moved(origin.y, box.height, own.d, own.f, scale.y),
-    left: moved(origin.x, 0, own.a, own.e, scale.x),
-    right: moved(origin.x, box.width, own.a, own.e, scale.x),
+    top: moved.topY || !acrossStill,
+    bottom: moved.bottomY || !acrossStill,
+    left: moved.leftX || !downStill,
+    right: moved.rightX || !downStill,
   };
 }
 
