@@ -206,6 +206,7 @@ export default function EditEmailProviderPage() {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SettingsLayout
+          {...EMAIL_PROVIDER_PAGE}
           actions={
             <>
               {/* Test Connection — preserves the previous form behaviour
