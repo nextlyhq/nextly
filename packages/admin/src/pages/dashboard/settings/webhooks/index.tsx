@@ -178,6 +178,9 @@ const WebhooksPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SettingsLayout
+          title="Webhooks"
+          description="Send signed events to your services when content changes"
+          crumb="Webhooks"
           actions={
             canCreate ? (
               <Button

@@ -60,6 +60,8 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
+import type { PreviewConfig } from "../domains/preview/route-config";
+import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearFieldTypes,
@@ -237,6 +239,15 @@ export interface NextlyServiceConfig {
 
   /** Optional base path for collection file operations. */
   basePath?: string;
+
+  /**
+   * Draft-preview wiring.
+   *
+   * Carried here so the minting endpoint can read where this application
+   * mounted its preview route, which is the half of a shareable link the admin
+   * cannot see from the browser.
+   */
+  preview?: PreviewConfig;
 
   /** Optional directory for dynamic collection schemas. */
   schemasDir?: string;
@@ -499,7 +510,7 @@ export async function registerServices(
   // alongside an `email` block is superseded by that block. The nested form is
   // the one a transformer can speak for, and a caller supplying both has stated
   // the same setting twice.
-  const transformedConfig: typeof contributedConfig =
+  const withEmailRetention: typeof contributedConfig =
     contributedConfig.email !== undefined
       ? {
           ...contributedConfig,
@@ -509,6 +520,28 @@ export async function registerServices(
           ),
         }
       : contributedConfig;
+
+  // Resolved HERE, on the transformed config, for the reason above and for one
+  // more: this is the object the container serves, so it is the only value a
+  // link is ever built from. A `setup` transformer may add or replace `preview`,
+  // and a check that ran before them would vouch for a mount the plugin then
+  // changed — the same shape as the `emailRetention` divergence beside it.
+  //
+  // It normalises as well as validates, so the mount the container carries is
+  // the mount the link uses, rather than two readings of one string that a
+  // trailing slash can separate. An invalid one stops the boot, where whoever
+  // can fix the configuration is still the person reading the message — rather
+  // than at an editor's click, where they are not.
+  const transformedConfig: typeof contributedConfig =
+    withEmailRetention.preview !== undefined
+      ? {
+          ...withEmailRetention,
+          preview: {
+            ...withEmailRetention.preview,
+            route: resolvePreviewRoute(withEmailRetention.preview),
+          },
+        }
+      : withEmailRetention;
 
   // Collect every relationTo (code + plugin) that doesn't resolve to a merged
   // collection (or core target); require dependsOn for cross-plugin relations

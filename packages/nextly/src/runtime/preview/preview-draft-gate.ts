@@ -59,6 +59,14 @@ export type PreviewDraftGateConfig = PreviewScopeReaderConfig;
  * });
  * ```
  *
+ * **Callable with no argument, which is how it should normally be written.**
+ * The three values it needs — the signing secret, the revocation generation and
+ * the request's cookies — are facts about the booted instance and the request
+ * in hand rather than decisions a site makes. Requiring them turned a one-line
+ * gate into a paragraph of wiring, and a gate nobody writes is worse than an
+ * absent one: the preview link mints, redirects, and then answers 404 from a
+ * page that looks entirely correct.
+ *
  * **The route's own `status` is deliberately left alone.** It widens internally
  * for the request a grant applies to, so configuring `status: "all"` adds
  * nothing and takes something away: the widened scope then also covers the
@@ -69,7 +77,7 @@ export type PreviewDraftGateConfig = PreviewScopeReaderConfig;
  * enforces it.
  */
 export function previewDraftGate(
-  config: PreviewDraftGateConfig
+  config: PreviewDraftGateConfig = {}
 ): (request: DraftGateRequest) => Promise<{ entryId: string } | false> {
   return async ({ collection, locale }) => {
     // Re-read per request. The config is captured once at module scope while

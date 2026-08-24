@@ -35,7 +35,12 @@ async function cookiesFor(
 /** A request with no preview cookie at all. */
 const noCookies = () => ({ get: () => undefined });
 
-function gate(cookies: Parameters<typeof previewDraftGate>[0]["cookies"]) {
+// `NonNullable`, because the config parameter is optional: the ordinary mount
+// passes nothing and lets every value default. These tests pin all three, which
+// is what keeps them independent of the container.
+function gate(
+  cookies: NonNullable<Parameters<typeof previewDraftGate>[0]>["cookies"]
+) {
   return previewDraftGate({ secret: SECRET, generation: GENERATION, cookies });
 }
 

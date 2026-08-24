@@ -93,6 +93,7 @@ import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { useSaveSiteStyle, useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
+import { useShown } from "./use-shown";
 
 export interface BlocksFieldProps<
   TFieldValues extends FieldValues = FieldValues,
@@ -422,7 +423,7 @@ function TokensStudio({
    * first. Nothing would report it: the mutation serialises the payloads and
    * neither fails. Composing against this means every edit builds on the last.
    */
-  const [edits, setEdits] = useState<SiteTokenSet | null>(null);
+  const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
   const [issue, setIssue] = useState<string | undefined>(undefined);
   /*
    * The last set a save is KNOWN to have stored, and what a refused edit falls
@@ -435,7 +436,7 @@ function TokensStudio({
   const latest = useRef<SiteTokenSet | null>(null);
 
   const commit = (next: SiteTokenSet): void => {
-    setEdits(next);
+    show(next);
     setIssue(undefined);
     latest.current = next;
     void save(
@@ -455,7 +456,7 @@ function TokensStudio({
         persisted.current
       );
       if (result.saved) persisted.current = next;
-      if (outcome.tokens !== undefined) setEdits(outcome.tokens);
+      if (outcome.tokens !== undefined) show(outcome.tokens);
       if (outcome.issue !== undefined) setIssue(outcome.issue ?? undefined);
     });
   };
@@ -467,6 +468,13 @@ function TokensStudio({
       issue={issue}
       absence={pending ? "pending" : "failed"}
       onChange={commit}
+      /*
+       * The set as it is at the moment an import needs it, rather than the one
+       * the panel last rendered with. `shown` is written before React is told
+       * anything, so it answers for an edit the panel has not been re-rendered
+       * with yet.
+       */
+      currentTokens={() => shownNow() ?? editable}
     />
   );
 }

@@ -22,7 +22,12 @@ import { z } from "zod";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { signPreviewToken } from "../auth/preview/preview-token";
 import { buildUserContext } from "../auth/user-context";
-import { container } from "../di";
+import { container, getService } from "../di";
+import type { NextlyServiceConfig } from "../di/register";
+import { resolvePreviewRedirect } from "../domains/collections/services/preview-redirect-resolver";
+import { hasPreviewConfigured } from "../domains/collections/services/preview-url-resolver";
+import { resolvePreviewRoute } from "../domains/preview/route-config";
+import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
@@ -30,6 +35,7 @@ import type { GeneralSettingsService } from "../services/general-settings/genera
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import { assertEntryPreviewable } from "./preview-access";
+import { previewDeclarationFor } from "./preview-url";
 import { respondMutation } from "./response-shapes";
 import {
   requireRouteCollectionAccess,
@@ -81,6 +87,47 @@ function previewSigningSecret(): string {
     });
   }
   return secret;
+}
+
+/**
+ * The link a reviewer opens, built with URL semantics rather than by
+ * concatenating strings.
+ *
+ * A configured site URL may legitimately carry a path, a query or a fragment —
+ * the settings schema accepts all three. Gluing the route onto the end of one
+ * puts the path INSIDE whichever component came last: a site URL of
+ * `https://site.example/base?tenant=a` becomes
+ * `https://site.example/base?tenant=a/api/preview?token=…`, which never reaches
+ * the preview route and arrives carrying no token at all. Asking the URL parser
+ * to place the pathname and the parameter cannot make that mistake, and it
+ * keeps a site URL's own query intact rather than silently discarding it.
+ *
+ * `null` only when the site's address is available NOWHERE — neither the stored
+ * setting nor the application's own URL. A relative URL would be resolved
+ * against whatever origin the admin is served from, which is not the site's on
+ * any deployment that separates them.
+ */
+function previewLinkUrl({
+  siteUrl,
+  route,
+  token,
+}: {
+  siteUrl: string | null;
+  route: string;
+  token: string;
+}): string | null {
+  if (siteUrl === null) return null;
+  try {
+    const base = new URL(siteUrl);
+    // Joined as PATHS, so a site URL mounted under a sub-path keeps it.
+    base.pathname = `${base.pathname.replace(/\/+$/, "")}${route}`;
+    base.searchParams.set("token", token);
+    return base.toString();
+  } catch {
+    // An unparseable site URL is a configuration fault the editor cannot act
+    // on, and answering with a broken link would be worse than answering none.
+    return null;
+  }
 }
 
 /**
@@ -138,6 +185,89 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
     actor
   );
 
+  // Refused BEFORE a token is signed, because a link that cannot land is worse
+  // than no link: the reviewer who opens it sees a 404 indistinguishable from
+  // an expired one, and the editor who sent it was told it worked.
+  //
+  // The button that reaches this endpoint is shown whether or not a collection
+  // declares a preview URL, and that stays true — a draft is worth sharing
+  // either way, and hiding the control would leave an editor with a feature
+  // that vanished and no way to learn why. Refusing here puts the explanation
+  // in front of the person who hit the problem instead.
+  //
+  // `hasPreviewConfigured` is asked rather than the two spellings compared
+  // again here: it is the same predicate the resolver and the stored
+  // `hasPreview` projection use, so a collection cannot be shareable by one
+  // rule and unresolvable by another.
+  const declaration = await previewDeclarationFor(collection);
+
+  // Asked of THIS ENTRY, not only of the collection.
+  //
+  // A declaration is necessary and not sufficient: `preview.url` may return
+  // `null` for a document it cannot address yet, and a `urlTemplate` placeholder
+  // may name a field that is still empty. Checking only that a declaration
+  // exists lets both mint successfully and 404 at the redirect — which is the
+  // failure this refusal exists to remove, reappearing one level down.
+  //
+  // Resolved through the SAME function the preview route will call, so the
+  // answer here and the answer the reviewer gets cannot disagree. The entry is
+  // already authorized at this point, which is why a trusted read is correct.
+  const target = hasPreviewConfigured(declaration)
+    ? await resolvePreviewRedirect(
+        { collection, entryId, ...(locale === undefined ? {} : { locale }) },
+        {
+          loadEntry: async (name, id, entryLocale) => {
+            const read = await getService("collectionsHandler").getEntry({
+              collectionName: name,
+              entryId: id,
+              depth: 0,
+              overrideAccess: true,
+              status: "all",
+              ...(entryLocale === undefined ? {} : { locale: entryLocale }),
+              includeWorkingDraft: true,
+            });
+            return read.success && read.data !== null
+              ? (read.data as Record<string, unknown>)
+              : null;
+          },
+          // Already resolved above, so this hands back the value rather than
+          // fetching it again — the resolver takes a loader and this call site
+          // happens to have the answer.
+          loadDeclaration: () => Promise.resolve(declaration),
+          loadSiteUrl: async () =>
+            resolvePreviewSiteUrl(
+              await (await settingsService()).getSettings().then(s => s.siteUrl)
+            ),
+        }
+      )
+    : null;
+
+  if (target === null) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: hasPreviewConfigured(declaration)
+        ? "This entry has no preview address yet, so a shared link would have " +
+          "nowhere to open. Filling in the fields its preview URL is built " +
+          "from — usually the slug — makes it shareable."
+        : "This collection has no preview URL configured, so a shared link " +
+          "would have nowhere to open. A developer can add one to the " +
+          "collection before links can be shared.",
+      logContext: {
+        reason: hasPreviewConfigured(declaration)
+          ? "preview-link-entry-has-no-preview-target"
+          : "preview-link-collection-has-no-preview-url",
+        remedy: hasPreviewConfigured(declaration)
+          ? "The collection's preview declaration returned no address for this " +
+            "entry. A `url` function answering null, or a `urlTemplate` whose " +
+            "placeholder field is empty, both mean 'not previewable yet'."
+          : "Add `admin.preview.url` (code-first) or `admin.preview.urlTemplate` " +
+            "(UI-created) to this collection. It answers where an entry is served " +
+            "on the site, which nothing outside the application can know.",
+        collection,
+      },
+    });
+  }
+
   const generation = await (
     await settingsService()
   ).getPreviewTokenGeneration();
@@ -148,11 +278,33 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
     { generation, ...(ttlSeconds === undefined ? {} : { ttlSeconds }) }
   );
 
-  // The token, not a full URL. Where a preview route is mounted is the app's
-  // decision, and guessing it here would produce a link that 404s on any app
-  // that mounted it elsewhere.
+  // The finished URL as well as the token.
+  //
+  // Both halves are visible from here and from nowhere else. The site URL lives
+  // in settings, which the `editor` and `author` presets cannot read; the mount
+  // lives in the application's config, which the browser cannot see at all. So
+  // the admin had no way to build this correctly and assumed a default, which
+  // is why an application that mounted the route elsewhere handed its reviewers
+  // a link that answered 404.
+  //
+  // `null` when no site URL is set, never a relative URL: a relative one would
+  // be resolved against whatever origin the admin is served from, which is not
+  // the site. The token is still returned, because it is what the link is —
+  // withholding it would break preview outright on a site that never set a
+  // URL, rather than degrading the one thing that needs the host.
+  const settings = await (await settingsService()).getSettings();
+  const siteUrl = resolvePreviewSiteUrl(settings.siteUrl);
+  const url = previewLinkUrl({
+    siteUrl,
+    route: resolvePreviewRoute(
+      container.get<NextlyServiceConfig>("config")?.preview
+    ),
+    token,
+  });
+
   return respondMutation("Preview link created", {
     token,
+    url,
     expiresAt: expiresAt.toISOString(),
   });
 });

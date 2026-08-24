@@ -1,198 +1,79 @@
 "use client";
 
+import { PageHeader } from "@nextlyhq/ui";
 import type React from "react";
-import { useMemo } from "react";
 
 import { Breadcrumbs } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
 
 interface SettingsLayoutProps {
-  children: React.ReactNode;
+  /** The page's name, rendered as its `h1`. */
+  title: string;
+  /** A sentence under the title. */
+  description?: React.ReactNode;
+  /**
+   * This page's own crumb, last in the trail. Omitted for the settings root,
+   * whose crumb would repeat the "Settings" link immediately before it.
+   */
+  crumb?: string;
+  /**
+   * The listing a create/edit page belongs under, placed between "Settings"
+   * and this page's own crumb.
+   */
+  parentCrumb?: { label: string; href: string };
   actions?: React.ReactNode;
+  children: React.ReactNode;
 }
 
 /**
- * SettingsLayout Component
+ * The shared chrome for a settings page: its breadcrumb trail and its header.
  *
- * Shared layout wrapper for all Settings pages. Renders the page header
- * and breadcrumbs. Tabs are removed as they are redundant with the inner sidebar.
+ * Each page DECLARES its own identity through props. It previously derived
+ * every title, description and crumb here by matching `window.location.pathname`
+ * against a chain of sixteen branches — so a page's name lived in a file the
+ * page did not import, adding a route meant editing a foreign `if`, and a
+ * plugin could not contribute a settings page at all because it cannot add a
+ * branch to a chain it does not ship. Reading the URL also made the header
+ * wrong for any page reachable at more than one path.
+ *
+ * The registry already made this call for the sidebar: a private route must
+ * declare the rail section it belongs to, so a missing declaration is a compile
+ * error rather than a page that silently highlights the wrong entry. This is
+ * the same decision applied to the page's own name.
+ *
+ * What stays shared is the TRAIL, not the identity. Every settings page hangs
+ * off Dashboard › Settings, so composing that here keeps one implementation of
+ * it; a page supplying its whole breadcrumb array would put sixteen copies of
+ * the same two links in the tree.
  */
-export function SettingsLayout({ children, actions }: SettingsLayoutProps) {
-  const pathname =
-    typeof window !== "undefined" ? window.location.pathname : "";
-
-  // Map of routes to their display labels for breadcrumbs and titles
-  const pageInfo = useMemo(() => {
-    if (pathname === ROUTES.SETTINGS) {
-      return {
-        title: "General Settings",
-        description: "Manage your application and configuration",
-        crumb: "General",
-      };
-    }
-    if (pathname.includes("user-fields")) {
-      return {
-        title: "User Fields",
-        description: "Manage custom fields and attributes for users",
-        crumb: "User Fields",
-      };
-    }
-    if (pathname.includes("email-providers")) {
-      if (pathname.includes("/create")) {
-        return {
-          title: "New Email Provider",
-          description: "Configure a new email delivery provider",
-          crumb: "New Email Provider",
-          parentCrumb: {
-            label: "Email Providers",
-            href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
-          },
-        };
-      }
-      if (pathname.includes("/edit/")) {
-        return {
-          title: "Edit Email Provider",
-          description: "Update the email provider configuration",
-          crumb: "Edit Email Provider",
-          parentCrumb: {
-            label: "Email Providers",
-            href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
-          },
-        };
-      }
-      return {
-        title: "Email Providers",
-        description: "Configure your SMTP and email delivery services",
-        crumb: "Email Providers",
-      };
-    }
-    if (pathname.includes("email-templates")) {
-      if (pathname.includes("/create")) {
-        return {
-          title: "New Email Template",
-          description: "Create a new email template for your application",
-          crumb: "New Email Template",
-          parentCrumb: {
-            label: "Email Templates",
-            href: ROUTES.SETTINGS_EMAIL_TEMPLATES,
-          },
-        };
-      }
-      if (pathname.includes("/edit/")) {
-        return {
-          title: "Edit Email Template",
-          description: "Update the email template content and settings",
-          crumb: "Edit Email Template",
-          parentCrumb: {
-            label: "Email Templates",
-            href: ROUTES.SETTINGS_EMAIL_TEMPLATES,
-          },
-        };
-      }
-      return {
-        title: "Email Templates",
-        description: "Manage and customize system email content",
-        crumb: "Email Templates",
-      };
-    }
-    if (pathname.includes("api-keys")) {
-      return {
-        title: "API Keys",
-        description: "Manage secure access keys for API integrations",
-        crumb: "API Keys",
-      };
-    }
-    if (pathname.includes("webhooks")) {
-      if (pathname.includes("/deliveries")) {
-        return {
-          title: "Deliveries",
-          description:
-            "Delivery attempts for this endpoint, with response status and retries",
-          crumb: "Deliveries",
-          parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
-        };
-      }
-      if (pathname.includes("/create")) {
-        return {
-          title: "New Webhook",
-          description: "Send signed events to an external endpoint",
-          crumb: "New Webhook",
-          parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
-        };
-      }
-      if (pathname.includes("/edit/")) {
-        return {
-          title: "Edit Webhook",
-          description: "Update the endpoint, events, and headers",
-          crumb: "Edit Webhook",
-          parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
-        };
-      }
-      return {
-        title: "Webhooks",
-        description: "Send signed events to your services when content changes",
-        crumb: "Webhooks",
-      };
-    }
-    if (pathname.includes("permissions")) {
-      return {
-        title: "Permissions",
-        description: "Define user roles and access control levels",
-        crumb: "Permissions",
-      };
-    }
-    if (pathname.includes("image-sizes")) {
-      return {
-        title: "Image Sizes",
-        description: "Configure image sizes generated for uploaded images",
-        crumb: "Image Sizes",
-      };
-    }
-    return {
-      title: "General Settings",
-      description: "Manage your application and configuration",
-      crumb: null,
-    };
-  }, [pathname]);
-
+export function SettingsLayout({
+  title,
+  description,
+  crumb,
+  parentCrumb,
+  actions,
+  children,
+}: SettingsLayoutProps) {
   return (
     <div>
-      {/* Breadcrumbs */}
-      <div className="mb-6">
-        <Breadcrumbs
-          items={[
-            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-            { label: "Settings", href: ROUTES.SETTINGS },
-            ...("parentCrumb" in pageInfo && pageInfo.parentCrumb
-              ? [
-                  {
-                    label: pageInfo.parentCrumb.label,
-                    href: pageInfo.parentCrumb.href,
-                  },
-                ]
-              : []),
-            ...(pageInfo.crumb && pageInfo.crumb !== "General"
-              ? [{ label: pageInfo.crumb }]
-              : []),
-          ]}
-        />
-      </div>
+      <PageHeader
+        title={title}
+        description={description}
+        actions={actions}
+        breadcrumbs={
+          <Breadcrumbs
+            items={[
+              { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+              { label: "Settings", href: ROUTES.SETTINGS },
+              ...(parentCrumb
+                ? [{ label: parentCrumb.label, href: parentCrumb.href }]
+                : []),
+              ...(crumb ? [{ label: crumb }] : []),
+            ]}
+          />
+        }
+      />
 
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-        <div className="space-y-1">
-          <h1 className="text-xl font-semibold tracking-tight">
-            {pageInfo.title}
-          </h1>
-          {/* Muted foreground so this secondary text meets contrast; a faint primary alpha did not. */}
-          <p className="text-sm font-normal text-muted-foreground mt-1">
-            {pageInfo.description}
-          </p>
-        </div>
-        {actions && <div className="flex items-center gap-3">{actions}</div>}
-      </div>
-
-      {/* Content Area */}
       <div className="pt-2">{children}</div>
     </div>
   );

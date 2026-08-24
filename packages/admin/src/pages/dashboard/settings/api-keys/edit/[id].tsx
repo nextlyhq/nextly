@@ -22,6 +22,16 @@ import { validateUUID } from "@admin/lib/validation";
 // Inner content (inside QueryErrorBoundary)
 // ============================================================
 
+/**
+ * This page renders the settings chrome in several branches — loading,
+ * error and the resolved document — and its identity is the same in all of
+ * them. Stated once here so the branches cannot drift apart.
+ */
+const API_KEYS_PAGE = {
+  title: "API Keys",
+  description: "Manage secure access keys for API integrations",
+  crumb: "API Keys",
+} as const;
 const EditApiKeyContent: React.FC<{ id: string }> = ({ id }) => {
   // The API exposes only a list endpoint, so find the key in the cached list.
   const { data, isLoading, isError, error } = useApiKeys();
@@ -108,7 +118,7 @@ export default function EditApiKeyPage() {
   if (!id) {
     return (
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...API_KEYS_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
               Invalid API key ID. Please go back and try again.
@@ -127,7 +137,7 @@ export default function EditApiKeyPage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...API_KEYS_PAGE}>
           <EditApiKeyContent id={id} />
         </SettingsLayout>
       </PageContainer>

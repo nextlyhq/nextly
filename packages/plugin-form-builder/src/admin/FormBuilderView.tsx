@@ -445,9 +445,13 @@ function FormBuilderViewInner({
           {/* Layout only. The underline, the active and hover colours, the
               focus ring and the disabled state all come from the shared
               primitive; restating them here is how two copies of one
-              appearance start drifting. `gap-0` and the scroll behaviour
-              are genuinely local: this strip can overflow its container. */}
-          <TabsList className="bg-transparent justify-start gap-0 max-w-full overflow-x-auto">
+              appearance start drifting.
+
+              The strip can overflow its container, so it asks for scrolling
+              through `scrollable` rather than by putting `overflow-x-auto` on
+              the list: that spelling makes the LIST the scroll container, which
+              costs the rail its indicator. */}
+          <TabsList scrollable className="bg-transparent justify-start gap-0">
             {mainTabs.map(tab => (
               <TabsTrigger
                 key={tab.value}

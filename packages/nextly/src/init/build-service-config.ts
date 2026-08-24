@@ -79,6 +79,15 @@ export function buildServiceConfig(
     serviceConfig.runMigrationsOnBoot =
       nextlyConfig?.db?.runMigrationsOnBoot === true;
 
+    // Forwarded from the nested config for the same reason as the fields below:
+    // the nested object is destructured away here, so anything not named again
+    // never reaches the container. The minting endpoint reads this to learn
+    // where the preview route is mounted, and an absent value means every
+    // non-default mount silently hands out links to `/api/preview`.
+    if (serviceConfig.preview === undefined && nextlyConfig?.preview) {
+      serviceConfig.preview = nextlyConfig.preview;
+    }
+
     // If storagePlugins not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.storagePlugins && nextlyConfig?.storage) {
       serviceConfig.storagePlugins = nextlyConfig.storage;

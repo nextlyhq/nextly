@@ -1075,11 +1075,32 @@
   justify-content: center;
 }
 
-.nx-spacing-overlay__band[data-box="margin"] {
+/*
+ * The fill is a pseudo-element rather than the band's own background, because on
+ * a rounded block it has to be CLIPPED and the value chip must not be.
+ *
+ * A block with `border-radius` curves away from the rectangle its bands are cut
+ * from, so a full-width strip paints colour into the transparent corner OUTSIDE
+ * the rendered border — a band is read as a measurement, and one covering ground
+ * the block does not occupy states a measurement that is false. The component
+ * supplies the curve as `--nx-spacing-clip`; a square block sets nothing and the
+ * fallback leaves the fill uncut.
+ *
+ * Clipping the band itself would take the chip with it, and the chip
+ * deliberately overflows the band it names.
+ */
+.nx-spacing-overlay__band::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  clip-path: var(--nx-spacing-clip, none);
+}
+
+.nx-spacing-overlay__band[data-box="margin"]::before {
   background-color: color-mix(in srgb, var(--nx-chart-4) 22%, transparent);
 }
 
-.nx-spacing-overlay__band[data-box="padding"] {
+.nx-spacing-overlay__band[data-box="padding"]::before {
   background-color: color-mix(in srgb, var(--nx-chart-3) 22%, transparent);
 }
 
@@ -1091,7 +1112,7 @@
  * ordinary space and says the opposite of what is happening; a hatch reads as
  * the element being pulled over its neighbour, which it is.
  */
-.nx-spacing-overlay__band[data-box="margin"][data-negative] {
+.nx-spacing-overlay__band[data-box="margin"][data-negative]::before {
   background-color: transparent;
   background-image: repeating-linear-gradient(
     45deg,
@@ -1113,6 +1134,12 @@
  * centred on the band it names.
  */
 .nx-spacing-overlay__value {
+  /*
+   * Positioned so it paints ABOVE the fill. The fill is an absolutely positioned
+   * pseudo-element, which takes the positioned-descendants layer and would
+   * otherwise be painted over this in-flow text whatever the source order says.
+   */
+  position: relative;
   padding: 0 3px;
   border-radius: 2px;
   background-color: var(--nx-background);
@@ -1297,4 +1324,89 @@
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
   white-space: nowrap;
+}
+
+/*
+ * Import and export, under the studio's heading.
+ *
+ * The file input is styled away and its LABEL is the control: a button that
+ * forwards a click to a hidden input is a second mechanism for one affordance,
+ * and the one that breaks first is the keyboard. Styling the label keeps the
+ * input as the thing that is focused, activated and announced.
+ */
+.nx-tokens__transfer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nx-tokens__import {
+  display: inline-flex;
+  align-items: center;
+  height: var(--nx-control-height-md);
+  padding-inline: 1rem;
+  font-size: var(--text-sm);
+  color: var(--nx-foreground);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.nx-tokens__import:hover {
+  background: var(--nx-muted);
+}
+
+/*
+ * Off-screen rather than `display: none`, which removes it from the
+ * accessibility tree and from the tab order along with it.
+ */
+.nx-tokens__import input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.nx-tokens__import:focus-within {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+/*
+ * What a transfer carried and what it left behind. Persistent rather than a
+ * toast: the list names tokens the author has to go and look at, and a message
+ * that disappears while they are reading it is a message they cannot act on.
+ */
+.nx-tokens__report {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+}
+
+.nx-tokens__report[data-tone="refused"] {
+  color: var(--nx-destructive);
+  border-color: var(--nx-destructive);
+}
+
+.nx-tokens__report p {
+  margin: 0;
+  font-weight: 600;
+}
+
+.nx-tokens__report ul {
+  margin: 0;
+  padding-inline-start: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }

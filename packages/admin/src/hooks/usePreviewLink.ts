@@ -11,54 +11,11 @@ import { useMutation } from "@tanstack/react-query";
 import { toast } from "@admin/components/ui";
 import { previewLinkApi } from "@admin/services/previewLinkApi";
 
-/**
- * Where `createPreviewRoute` is mounted, by convention.
- *
- * The route handler is written to be dropped into `app/api/preview/route.ts`,
- * which is where a Next application puts a route handler, and the admin has no
- * other way to learn the path: the mount point is a file in the user's own app,
- * invisible from here.
- *
- * A convention with an override is the honest arrangement. Guessing silently
- * would produce a copied link that 404s with nothing to explain it; demanding
- * configuration before the feature works at all would make the common case pay
- * for the uncommon one.
- */
-export const DEFAULT_PREVIEW_ROUTE = "/api/preview";
-
 export interface UsePreviewLinkOptions {
   collection: string;
   entryId: string;
   /** Restricts the link to one locale. Absent means every locale. */
   locale?: string;
-  /**
-   * The site the link points at. Without one the link is relative, which is
-   * correct when the admin and the site share an origin and useless when they
-   * do not.
-   */
-  siteUrl?: string;
-  /** Overrides {@link DEFAULT_PREVIEW_ROUTE} for an app that mounted it elsewhere. */
-  previewRoute?: string;
-}
-
-/** Assemble the URL a reviewer will open. */
-export function buildPreviewUrl({
-  token,
-  siteUrl,
-  previewRoute = DEFAULT_PREVIEW_ROUTE,
-}: {
-  token: string;
-  siteUrl?: string;
-  previewRoute?: string;
-}): string {
-  // `encodeURIComponent` rather than raw interpolation: a token is base64url
-  // and safe today, but a query value assembled by hand is exactly where an
-  // encoding assumption stops being true later.
-  const query = `?token=${encodeURIComponent(token)}`;
-  if (!siteUrl) return `${previewRoute}${query}`;
-  // Trailing slashes on a configured site URL are common and would otherwise
-  // produce `https://site.com//api/preview`.
-  return `${siteUrl.replace(/\/+$/, "")}${previewRoute}${query}`;
 }
 
 /**
@@ -89,8 +46,6 @@ export function usePreviewLink({
   collection,
   entryId,
   locale,
-  siteUrl,
-  previewRoute,
 }: UsePreviewLinkOptions) {
   return useMutation({
     mutationFn: async (): Promise<{ url: string; copied: boolean }> => {
@@ -99,12 +54,30 @@ export function usePreviewLink({
         entryId,
         ...(locale === undefined ? {} : { locale }),
       });
-      const url = buildPreviewUrl({
-        token: link.token,
-        ...(siteUrl === undefined ? {} : { siteUrl }),
-        ...(previewRoute === undefined ? {} : { previewRoute }),
-      });
-      return { url, copied: await copyToClipboard(url) };
+
+      // The server answers `null` only when it can find the site's address
+      // NOWHERE — neither the Site URL setting nor the application's own
+      // `NEXT_PUBLIC_APP_URL` — and that is not something to paper over. A
+      // relative URL here would be resolved against the ADMIN's origin, which is
+      // not the site's on any deployment that separates them, and a link to the
+      // wrong host is worse than no link because it looks like it worked.
+      //
+      // Both remedies are named because either one settles it, and they belong
+      // to different people: an administrator can fill in the setting without a
+      // deploy, while the environment variable is a developer's to set.
+      // `== null` catches an absent field as well as an explicit null. The
+      // contract says `string | null`, but a response that simply omits it —
+      // an older server, a proxy that reshapes JSON — must not reach the
+      // clipboard as the string "undefined".
+      if (link.url == null) {
+        throw new Error(
+          "This site has no address configured, so a preview link has nowhere " +
+            "to point. An administrator can set the Site URL in Settings, or a " +
+            "developer can set NEXT_PUBLIC_APP_URL."
+        );
+      }
+
+      return { url: link.url, copied: await copyToClipboard(link.url) };
     },
     onSuccess: ({ url, copied }) => {
       if (copied) {
@@ -153,8 +126,15 @@ export function usePreviewLink({
         }
       );
     },
-    onError: () => {
-      toast.error("Couldn't create a preview link.");
+    onError: (error: unknown) => {
+      // The thrown message rather than a fixed one: it names what is missing and
+      // who can supply it, and collapsing it into "couldn't create a preview
+      // link" hides the only remedies there are.
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Couldn't create a preview link."
+      );
     },
   });
 }

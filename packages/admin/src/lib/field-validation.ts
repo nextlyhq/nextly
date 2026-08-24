@@ -345,7 +345,7 @@ function fieldToZodSchema(
   } else if (isUploadField(field)) {
     schema = convertUploadFieldToZod(field);
   } else if (isRepeaterField(field)) {
-    schema = convertArrayFieldToZod(field, options);
+    schema = convertRepeaterFieldToZod(field, options);
   } else if (isGroupField(field)) {
     schema = convertGroupFieldToZod(field, options);
   } else if (isJSONField(field)) {
@@ -355,15 +355,10 @@ function fieldToZodSchema(
     schema = z.unknown();
   }
 
-  // Handle required vs optional
-  // Check both flat format (field.required) and nested format (field.validation.required)
-  // for compatibility with both static configs and dynamic collections
-  const fieldRecord = field as unknown as Record<string, unknown>;
-  const validation = fieldRecord.validation as
-    | Record<string, unknown>
-    | undefined;
-  let isRequired =
-    Boolean(fieldRecord.required) || Boolean(validation?.required);
+  // Handle required vs optional. Requiredness is read through
+  // `isFieldRequired` so the flat and nested shapes are interpreted in
+  // exactly one place.
+  let isRequired = isFieldRequired(field);
 
   // Password values never round-trip from the server, so edit forms seed
   // them blank and blank means "keep the current password". Demanding a
@@ -410,115 +405,17 @@ function fieldToZodSchema(
 // ============================================================
 
 function convertTextFieldToZod(field: TextFieldConfig): z.ZodTypeAny {
-  // Get validation values from both flat and nested formats
-  const minLength = getValidation(field, "minLength") as number | undefined;
-  const maxLength = getValidation(field, "maxLength") as number | undefined;
-  const minRows = getValidation(field, "minRows") as number | undefined;
-  const maxRows = getValidation(field, "maxRows") as number | undefined;
-  const pattern = getValidation(field, "pattern") as string | undefined;
-  const patternMsg = getPatternMessage(field);
-
   if (field.hasMany) {
-    // Multiple text values
-    let itemSchema = z.string();
-    if (minLength) {
-      itemSchema = itemSchema.min(
-        minLength,
-        `Each item must be at least ${minLength} characters`
-      );
-    }
-    if (maxLength) {
-      itemSchema = itemSchema.max(
-        maxLength,
-        `Each item must be at most ${maxLength} characters`
-      );
-    }
-    if (pattern) {
-      // hasMany items: when the parent field is optional, items can be empty
-      // strings without tripping the regex. Required items must match.
-      const required = isFieldRequired(field);
-      itemSchema = applyPattern(
-        itemSchema,
-        pattern,
-        patternMsg,
-        required
-      ) as z.ZodString;
-    }
-
-    let arraySchema = z.array(itemSchema);
-    if (minRows) {
-      arraySchema = arraySchema.min(
-        minRows,
-        `Minimum ${minRows} items required`
-      );
-    }
-    if (maxRows) {
-      arraySchema = arraySchema.max(
-        maxRows,
-        `Maximum ${maxRows} items allowed`
-      );
-    }
-
-    return arraySchema;
+    // Each item carries the same length and pattern rules a single value
+    // would, worded per item; the row bounds then guard the list length.
+    return applyRowBounds(constrainedStringSchema(field, "Each item"), field);
   }
-
-  // Single text value
-  let schema: z.ZodTypeAny = z.string();
-  if (minLength) {
-    schema = (schema as z.ZodString).min(
-      minLength,
-      `Must be at least ${minLength} characters`
-    );
-  }
-  if (maxLength) {
-    schema = (schema as z.ZodString).max(
-      maxLength,
-      `Must be at most ${maxLength} characters`
-    );
-  }
-  if (pattern) {
-    schema = applyPattern(
-      schema as z.ZodString,
-      pattern,
-      patternMsg,
-      isFieldRequired(field)
-    );
-  }
-
-  return schema;
+  return constrainedStringSchema(field, "");
 }
 
 function convertTextareaFieldToZod(field: TextareaFieldConfig): z.ZodTypeAny {
-  // Get validation values from both flat and nested formats
-  const minLength = getValidation(field, "minLength") as number | undefined;
-  const maxLength = getValidation(field, "maxLength") as number | undefined;
-  const pattern = getValidation(field, "pattern") as string | undefined;
-  const patternMsg = getPatternMessage(field);
-
-  let schema: z.ZodTypeAny = z.string();
-
-  if (minLength) {
-    schema = (schema as z.ZodString).min(
-      minLength,
-      `Must be at least ${minLength} characters`
-    );
-  }
-  if (maxLength) {
-    schema = (schema as z.ZodString).max(
-      maxLength,
-      `Must be at most ${maxLength} characters`
-    );
-  }
-  if (pattern) {
-    schema = applyPattern(
-      schema as z.ZodString,
-      pattern,
-      patternMsg,
-      isFieldRequired(field)
-    );
-  }
-
-  return schema;
+  // Textarea enforces exactly the text single-value rule set.
+  return constrainedStringSchema(field, "");
 }
 
 /**
@@ -592,101 +489,161 @@ function compileRegexOrUndefined(pattern: string): RegExp | undefined {
   }
 }
 
-function convertEmailFieldToZod(field: EmailFieldConfig): z.ZodTypeAny {
-  // Email field has built-in email format validation. The `validation`
-  // block on the public config (mirrored from `FieldValidation`) also
-  // exposes minLength / maxLength which the previous converter ignored —
-  // so a developer who set `validation: { maxLength: 80 }` on an email
-  // field saw the rule honoured nowhere. Length rules now compose with
-  // the email-format check.
+// ============================================================
+// Shared Constraint Builders
+// ============================================================
+
+/**
+ * Word a bound message. `subject` names the constrained thing ("Password",
+ * "Email", "Each item", "Each value"); an empty subject renders the generic
+ * form. `unit` ("characters", or "" for numbers) names what is counted, so
+ * every bound in this module shares one sentence shape.
+ */
+function boundMessage(
+  subject: string,
+  bound: "least" | "most",
+  value: number,
+  unit: string
+): string {
+  const unitSuffix = unit ? ` ${unit}` : "";
+  if (subject) {
+    return `${subject} must be at ${bound} ${value}${unitSuffix}`;
+  }
+  return `Must be at ${bound} ${value}${unitSuffix}`;
+}
+
+/**
+ * Wrap an item schema in a list and apply the row-count bounds
+ * (`minRows` / `maxRows`). The single implementation of the repeater
+ * row-count rule, shared by every list-bearing field type (text and number
+ * hasMany, relationship, upload, repeater); the noun only names what the
+ * field collects in the message. A bound of 0 means "unset".
+ */
+function applyRowBounds(
+  itemSchema: z.ZodTypeAny,
+  field: DataFieldConfig | ExtractedField,
+  noun: "items" | "relationships" | "files" = "items"
+): z.ZodTypeAny {
+  const minRows = getValidation(field, "minRows") as number | undefined;
+  const maxRows = getValidation(field, "maxRows") as number | undefined;
+
+  let listSchema = z.array(itemSchema);
+  if (minRows) {
+    listSchema = listSchema.min(minRows, `Minimum ${minRows} ${noun} required`);
+  }
+  if (maxRows) {
+    listSchema = listSchema.max(maxRows, `Maximum ${maxRows} ${noun} allowed`);
+  }
+  return listSchema;
+}
+
+/**
+ * Apply `minLength` / `maxLength` to a string schema. A length of 0 means
+ * "unset" (truthiness check), matching how the Schema Builder serialises an
+ * empty bound.
+ */
+function applyStringLengthBounds(
+  schema: z.ZodString,
+  field: DataFieldConfig | ExtractedField,
+  subject: string
+): z.ZodString {
   const minLength = getValidation(field, "minLength") as number | undefined;
   const maxLength = getValidation(field, "maxLength") as number | undefined;
 
-  let schema: z.ZodString = z.string().email("Invalid email address");
   if (minLength) {
     schema = schema.min(
       minLength,
-      `Email must be at least ${minLength} characters`
+      boundMessage(subject, "least", minLength, "characters")
     );
   }
   if (maxLength) {
     schema = schema.max(
       maxLength,
-      `Email must be at most ${maxLength} characters`
+      boundMessage(subject, "most", maxLength, "characters")
     );
   }
   return schema;
 }
 
-function convertPasswordFieldToZod(field: PasswordFieldConfig): z.ZodTypeAny {
-  // Get validation values from both flat and nested formats
-  const minLength = getValidation(field, "minLength") as number | undefined;
-  const maxLength = getValidation(field, "maxLength") as number | undefined;
+/**
+ * Build the string schema for fields whose whole rule set is length plus
+ * pattern: text (single value), textarea, password, code, and each item of
+ * a text hasMany (via the "Each item" subject). Email is deliberately not a
+ * caller — it composes length bounds with the built-in format check but
+ * does not enforce `validation.pattern`, and routing it here would newly
+ * reject addresses it accepts today.
+ */
+function constrainedStringSchema(
+  field: DataFieldConfig | ExtractedField,
+  subject: string
+): z.ZodTypeAny {
+  const schema = applyStringLengthBounds(z.string(), field, subject);
   const pattern = getValidation(field, "pattern") as string | undefined;
-  const patternMsg = getPatternMessage(field);
-
-  let schema: z.ZodTypeAny = z.string();
-
-  if (minLength) {
-    schema = (schema as z.ZodString).min(
-      minLength,
-      `Password must be at least ${minLength} characters`
-    );
-  }
-  if (maxLength) {
-    schema = (schema as z.ZodString).max(
-      maxLength,
-      `Password must be at most ${maxLength} characters`
-    );
-  }
   if (pattern) {
-    schema = applyPattern(
-      schema as z.ZodString,
+    return applyPattern(
+      schema,
       pattern,
-      patternMsg,
+      getPatternMessage(field),
       isFieldRequired(field)
     );
   }
+  return schema;
+}
 
+/**
+ * Apply `min` / `max` to a number schema. Unlike string lengths, a bound of
+ * 0 is a real constraint (`min: 0` rejects negatives), so presence is
+ * `!== undefined`. A developer-set `validation.message` replaces the
+ * generated wording on both bounds.
+ */
+function applyNumberBounds(
+  schema: z.ZodNumber,
+  field: DataFieldConfig | ExtractedField,
+  subject: string
+): z.ZodNumber {
+  const min = getValidation(field, "min") as number | undefined;
+  const max = getValidation(field, "max") as number | undefined;
+  const customMsg = getPatternMessage(field);
+
+  if (min !== undefined) {
+    schema = schema.min(
+      min,
+      customMsg ?? boundMessage(subject, "least", min, "")
+    );
+  }
+  if (max !== undefined) {
+    schema = schema.max(
+      max,
+      customMsg ?? boundMessage(subject, "most", max, "")
+    );
+  }
+  return schema;
+}
+
+function convertEmailFieldToZod(field: EmailFieldConfig): z.ZodTypeAny {
+  // Email composes the built-in format check with the shared length bounds
+  // ("Email must be at least N characters"). `validation.pattern` stays
+  // unenforced here: applying it would newly reject addresses the product
+  // accepts today, so email deliberately does not use
+  // `constrainedStringSchema`.
+  return applyStringLengthBounds(
+    z.string().email("Invalid email address"),
+    field,
+    "Email"
+  );
+}
+
+function convertPasswordFieldToZod(field: PasswordFieldConfig): z.ZodTypeAny {
   // Blank means "keep the current password" on edit, and "no password" when
   // the field is optional. That empty-string tolerance is applied centrally in
   // `fieldToZodSchema` (the optional branch), together with the edit-mode rule
   // that treats a required password field as optional, so no per-type handling
-  // is needed here.
-  return schema;
+  // is needed here beyond the Password-worded bounds.
+  return constrainedStringSchema(field, "Password");
 }
 
 function convertCodeFieldToZod(field: CodeFieldConfig): z.ZodTypeAny {
-  // Get validation values from both flat and nested formats
-  const minLength = getValidation(field, "minLength") as number | undefined;
-  const maxLength = getValidation(field, "maxLength") as number | undefined;
-  const pattern = getValidation(field, "pattern") as string | undefined;
-  const patternMsg = getPatternMessage(field);
-
-  let schema: z.ZodTypeAny = z.string();
-
-  if (minLength) {
-    schema = (schema as z.ZodString).min(
-      minLength,
-      `Must be at least ${minLength} characters`
-    );
-  }
-  if (maxLength) {
-    schema = (schema as z.ZodString).max(
-      maxLength,
-      `Must be at most ${maxLength} characters`
-    );
-  }
-  if (pattern) {
-    schema = applyPattern(
-      schema as z.ZodString,
-      pattern,
-      patternMsg,
-      isFieldRequired(field)
-    );
-  }
-
-  return schema;
+  return constrainedStringSchema(field, "");
 }
 
 function convertRichTextFieldToZod(): z.ZodTypeAny {
@@ -747,62 +704,12 @@ export function isRichTextEmpty(value: unknown): boolean {
 // ============================================================
 
 function convertNumberFieldToZod(field: NumberFieldConfig): z.ZodTypeAny {
-  // Get validation values from both flat and nested formats
-  const min = getValidation(field, "min") as number | undefined;
-  const max = getValidation(field, "max") as number | undefined;
-  const minRows = getValidation(field, "minRows") as number | undefined;
-  const maxRows = getValidation(field, "maxRows") as number | undefined;
-  // Why: previously the min/max bounds always emitted generic "Must be
-  // at least N" / "Must be at most N" messages, ignoring any
-  // `validation.message` set by the developer. The matrix flagged this
-  // as "Custom error message not working for Singles". Reusing the
-  // `getPatternMessage` helper keeps the lookup consistent with the
-  // pattern-message path (validation.message → flat message → fallback).
-  const customMsg = getPatternMessage(field);
-
   if (field.hasMany) {
-    // Multiple number values
-    let itemSchema = z.number();
-    if (min !== undefined) {
-      itemSchema = itemSchema.min(
-        min,
-        customMsg ?? `Each value must be at least ${min}`
-      );
-    }
-    if (max !== undefined) {
-      itemSchema = itemSchema.max(
-        max,
-        customMsg ?? `Each value must be at most ${max}`
-      );
-    }
-
-    let arraySchema = z.array(itemSchema);
-    if (minRows) {
-      arraySchema = arraySchema.min(
-        minRows,
-        `Minimum ${minRows} values required`
-      );
-    }
-    if (maxRows) {
-      arraySchema = arraySchema.max(
-        maxRows,
-        `Maximum ${maxRows} values allowed`
-      );
-    }
-
-    return arraySchema;
+    // Per-item bounds are worded per value; the row bounds guard the list.
+    const itemSchema = applyNumberBounds(z.number(), field, "Each value");
+    return applyRowBounds(itemSchema, field);
   }
-
-  // Single number value
-  let schema = z.number();
-  if (min !== undefined) {
-    schema = schema.min(min, customMsg ?? `Must be at least ${min}`);
-  }
-  if (max !== undefined) {
-    schema = schema.max(max, customMsg ?? `Must be at most ${max}`);
-  }
-
-  return schema;
+  return applyNumberBounds(z.number(), field, "");
 }
 
 // ============================================================
@@ -889,26 +796,7 @@ function convertRelationshipFieldToZod(
   }
 
   if (field.hasMany) {
-    // Get validation values from both flat and nested formats
-    const minRows = getValidation(field, "minRows") as number | undefined;
-    const maxRows = getValidation(field, "maxRows") as number | undefined;
-
-    let arraySchema = z.array(singleSchema);
-
-    if (minRows) {
-      arraySchema = arraySchema.min(
-        minRows,
-        `Minimum ${minRows} relationships required`
-      );
-    }
-    if (maxRows) {
-      arraySchema = arraySchema.max(
-        maxRows,
-        `Maximum ${maxRows} relationships allowed`
-      );
-    }
-
-    return arraySchema;
+    return applyRowBounds(singleSchema, field, "relationships");
   }
 
   return singleSchema;
@@ -928,26 +816,7 @@ function convertUploadFieldToZod(field: UploadFieldConfig): z.ZodTypeAny {
     .or(z.string()); // Accept ID string or full object
 
   if (field.hasMany) {
-    // Get validation values from both flat and nested formats
-    const minRows = getValidation(field, "minRows") as number | undefined;
-    const maxRows = getValidation(field, "maxRows") as number | undefined;
-
-    let arraySchema = z.array(singleSchema);
-
-    if (minRows) {
-      arraySchema = arraySchema.min(
-        minRows,
-        `Minimum ${minRows} files required`
-      );
-    }
-    if (maxRows) {
-      arraySchema = arraySchema.max(
-        maxRows,
-        `Maximum ${maxRows} files allowed`
-      );
-    }
-
-    return arraySchema;
+    return applyRowBounds(singleSchema, field, "files");
   }
 
   return singleSchema;
@@ -957,30 +826,18 @@ function convertUploadFieldToZod(field: UploadFieldConfig): z.ZodTypeAny {
 // Structured Field Converters
 // ============================================================
 
-function convertArrayFieldToZod(
+function convertRepeaterFieldToZod(
   field: RepeaterFieldConfig,
   options: GenerateSchemaOptions
 ): z.ZodTypeAny {
-  // Get validation values from both flat and nested formats
-  const minRows = getValidation(field, "minRows") as number | undefined;
-  const maxRows = getValidation(field, "maxRows") as number | undefined;
-
-  // Generate schema for array items (nested fields)
+  // Items are nested field groups; a repeater with no nested fields
+  // validates each item as an empty group object.
   const itemSchema =
     field.fields && field.fields.length > 0
       ? generateClientSchema(field.fields as FieldConfig[], options)
       : z.object({});
 
-  let arraySchema = z.array(itemSchema);
-
-  if (minRows) {
-    arraySchema = arraySchema.min(minRows, `Minimum ${minRows} items required`);
-  }
-  if (maxRows) {
-    arraySchema = arraySchema.max(maxRows, `Maximum ${maxRows} items allowed`);
-  }
-
-  return arraySchema;
+  return applyRowBounds(itemSchema, field);
 }
 
 function convertGroupFieldToZod(

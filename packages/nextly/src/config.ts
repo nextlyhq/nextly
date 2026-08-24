@@ -164,3 +164,10 @@ export {
   type PluginCategory,
 } from "./plugins/plugin-categories";
 export { pluginAdminSlug } from "./plugins/plugin-slug";
+
+// A code-first `preview.url` built from a `{field}` path. Exported because a
+// package that ships a collection in code — the page builder's `pages`, say —
+// can only express its preview as a function, while the path is what its host
+// naturally configures. Sharing the one substitution rule keeps a template and
+// a function from drifting into two different addresses for the same entry.
+export { previewUrlFromTemplate } from "./domains/collections/services/preview-url-resolver";

@@ -1,0 +1,248 @@
+---
+title: Draft Preview Links
+description: Share an unpublished draft with someone who has no account. A preview link is a signed, expiring, per-entry credential — mount one route, add one draft gate, and declare where each collection is served.
+---
+
+A preview link lets an editor show an unpublished draft to someone with **no
+Nextly account at all** — a client, a reviewer, a colleague in another
+department. The link carries its own signed authorization, so the recipient
+never signs in and never sees anything beyond the one entry it names.
+
+This is the part worth knowing before anything else: the link is scoped to a
+**single entry**, it **expires**, and it can be **revoked**. It is not a
+password to your drafts.
+
+## The three pieces
+
+Draft preview needs three things wired, and it is not obvious when one is
+missing, because the symptom is always the same: a link that answers `404`.
+
+| Piece | Where it goes | What happens without it |
+| --- | --- | --- |
+| The preview **route** | `app/api/preview/route.ts` | The link 404s immediately |
+| The **draft gate** | On the route that renders your content | The link redirects, then 404s on a page that looks correct |
+| The collection's **preview URL** | `admin.preview` in the collection | The admin refuses to mint a link, and says why |
+
+### 1. Mount the route
+
+One file, three lines:
+
+```ts
+// src/app/api/preview/route.ts
+import { createPreviewRoute } from "nextly/runtime";
+
+export const { GET } = createPreviewRoute();
+```
+
+It needs no configuration. The signing key, the revocation counter, Next's
+draft mode and the request's cookies are all read from the running instance.
+
+**Why this lives in your app and not in the package:** the draft cookie is set
+by whichever *origin* serves the route. If your admin is deployed on a
+different host from your site, a route inside the package would set the cookie
+on the admin's host and then send the reviewer to a site that never receives
+it — and they would silently see the **published** page instead of the draft.
+Mounting it in your app puts it on the site's own origin, where it belongs.
+
+If you mount it somewhere else, say so, or the admin will build links pointing
+at the default:
+
+```ts
+// nextly.config.ts
+export default defineConfig({
+  preview: { route: "/next/preview" },
+});
+```
+
+It is a mount path and nothing else — site-relative, with no host, no query and
+no fragment. A value carrying any of those is refused when the configuration is
+read, rather than at the moment an editor clicks copy: the link's own `token`
+parameter is appended to this path, so a path already carrying a `?` has nowhere
+to put it.
+
+### 2. Add the draft gate to your content route
+
+This is the step most easily missed, and its failure is the most confusing.
+
+```ts
+import { previewDraftGate } from "nextly/runtime";
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  // State the locale on a localized site, even for the default language.
+  locale: "en",
+  draft: previewDraftGate(),
+});
+```
+
+<Callout type="warn">
+**On a localized site, `locale` is required for preview to work** — and omitting
+it fails in the confusing direction. The admin mints a token naming a resolved
+locale even for the default language, and the gate compares that against the
+route's own. A route that states none compares against `undefined`, so every
+localized token is refused *after* the redirect — the visitor lands on the page
+and gets the 404 this guide exists to prevent.
+
+Nothing infers the default for you, deliberately: inferring it means reading
+configuration per request, and a route's reader may defer booting until its
+first query — so the inferred value would differ between the first request of a
+cold process and every one after, authorizing previews intermittently.
+</Callout>
+
+Without it your route serves **published entries only**. A preview link then
+verifies correctly, redirects correctly, and answers `404` from a page that
+looks entirely right — indistinguishable, to the person who opened it, from a
+link that had expired.
+
+`previewDraftGate()` grants exactly the one entry the visitor's token names.
+That distinction matters more than it looks: Next's own draft mode is a single
+boolean for the whole host, so enabling it alone would turn a link meant for
+one unpublished page into a key to **every** unpublished page on the site.
+
+<Callout type="warn">
+`createPublicContentRoute` and `createPublicBlocksPage` refuse a `draft` hook,
+deliberately. A draft read cannot be cached, so accepting one would quietly
+turn a statically-rendered route dynamic. Mount previewable paths on
+`createContentRoute` / `createBlocksPage` instead.
+</Callout>
+
+### 3. Tell Nextly where the collection is served
+
+Nextly cannot work out a URL on its own. If a post has the slug
+`hello-world`, only your app knows whether that is `/hello-world`,
+`/blog/hello-world`, or `/en/blog/hello-world` — you wrote the routing.
+
+**Code-first**, a function of the entry:
+
+```ts
+export const Posts = defineCollection({
+  slug: "posts",
+  status: true,
+  admin: {
+    preview: {
+      // `null` means "not previewable yet" — a post with no slug becomes
+      // previewable once it has one.
+      url: entry =>
+        typeof entry.slug === "string" && entry.slug !== ""
+          ? `/blog/${encodeURIComponent(entry.slug)}`
+          : null,
+    },
+  },
+  fields: [/* ... */],
+});
+```
+
+**In the Visual Schema Builder**, a path with `{field}` placeholders, because
+no database column can hold a function:
+
+```
+/blog/{slug}
+```
+
+Both answer the same question and are resolved by the same code.
+
+If a collection declares neither, **the admin refuses to mint a link** and
+tells the editor that a developer needs to add a preview URL. That refusal is
+deliberate: the alternative was reporting success and handing over a link with
+nowhere to open.
+
+#### Pages built in the page builder
+
+The `pages` collection comes from the page-builder plugin, so you do not declare
+it — you tell the plugin where you serve it:
+
+```ts
+// nextly.config.ts
+plugins: [pageBuilder({ pagePreviewPath: "/{slug}" })];
+```
+
+Use `"/blocks/{slug}"`, or whatever prefix your blocks route is mounted under.
+There is no default, for the reason above: the plugin cannot see your routing,
+and a guessed path would trade the refusal that names the remedy for a 404 that
+names nothing.
+
+## Using it
+
+An editor opens an entry, clicks **Copy shareable link**, and pastes it to
+whoever needs to see the draft. Opening it starts a preview session scoped to
+that entry and forwards to the page.
+
+The link is a **bearer credential** — anyone holding it can read that one
+draft. It is minted fresh on every click rather than cached, because it carries
+an expiry and a stale one would be handed out after it stopped working.
+
+### Expiry and revocation
+
+Links last **one hour** by default and at most **seven days**. Asking for
+longer is refused rather than quietly shortened, because an editor who believes
+a link lasts a week and finds it dead is worse off than one who was told no.
+
+To invalidate **every** outstanding link at once — including sessions already
+open — raise the site's preview generation by revoking. That requires
+`manage settings`, because the effect is site-wide: one editor revoking would
+otherwise break every other editor's links.
+
+### What a reviewer can and cannot see
+
+They can read the one entry the link names, in the locale it names, as it
+stands right now — including unpublished edits to an already-published page.
+
+They cannot browse to other drafts. Every refusal — an expired token, a revoked
+one, a forged one, an entry since deleted — answers with the same bare `404`,
+with no cookie and no draft mode. That uniformity is intentional: a different
+answer for "no such entry" would let a stranger discover which entries have
+drafts.
+
+## Requirements
+
+- **`NEXTLY_SECRET` must be set.** Preview tokens are signed with a key derived
+  from it; without one, a link would be forgeable by anyone who could guess an
+  entry id.
+- The collection needs a Draft / Published lifecycle to have a draft worth
+  previewing — see [Draft / Published Status](/docs/guides/draft-published-status).
+
+## Troubleshooting
+
+**The link 404s straight away.** The route is not mounted, or is mounted
+somewhere other than where the admin thinks. Check `app/api/preview/route.ts`
+exists, and that `preview.route` in `nextly.config.ts` matches it.
+
+**The link redirects, then 404s.** The destination route has no
+`draft: previewDraftGate()`. This is the common one — in development the server
+logs a warning naming the route when a valid preview cookie reaches a route
+that cannot honour it.
+
+**The admin says a preview URL is not configured.** The collection declares no
+`admin.preview`. Add one, as in step 3.
+
+**The admin says this site has no address configured.** The link has to name a
+host, because it travels by email and chat to someone with no session. Nextly
+takes that host from the **Site URL** setting, and falls back to
+`NEXT_PUBLIC_APP_URL` when it is empty — so this means neither is set, or one of
+them holds something that is not an `http(s)` address. Set either; the setting
+is what you want when the admin and the site are on different origins, since it
+is the only one that can name the site rather than the app the admin runs in.
+
+**The reviewer sees the published page, not the draft.** The draft cookie was
+set on a different origin from the one serving the page — usually an admin and
+site on separate hosts with the preview route mounted on the admin. It belongs
+on the site.
+
+**Everything is wired and a localized entry still 404s.** The content route
+states no `locale`. See the callout in step 2: the token names a locale and the
+gate compares it against the route's, so a route that states none refuses every
+localized token.
+
+**The admin says this entry has no preview address yet.** The collection's
+declaration returned nothing for this document — a `url` function answering
+`null`, or a `urlTemplate` whose placeholder field is still empty. Filling in
+the field the address is built from, usually the slug, makes it shareable. This
+is distinct from a collection that declares no preview at all, which is a
+developer's job rather than an editor's.
+
+## See also
+
+- [Draft / Published Status](/docs/guides/draft-published-status) — the lifecycle a preview shows
+- [Routing and SEO](/docs/guides/routing-and-seo) — the content routes a preview lands on
+- [ISR and Caching](/docs/guides/isr-caching) — why a draft read is never cached

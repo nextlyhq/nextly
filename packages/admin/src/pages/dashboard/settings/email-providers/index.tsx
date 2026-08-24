@@ -810,6 +810,9 @@ const EmailProvidersPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <SettingsLayout
+          title="Email Providers"
+          description="Configure your SMTP and email delivery services"
+          crumb="Email Providers"
           actions={
             <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE}>
               <Button size="md" className="flex items-center gap-1">

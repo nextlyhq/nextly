@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
 import type { DtcgNode } from "./dtcg";
 import { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./dtcg";
 import type { SiteToken } from "./site-tokens";
+
+import { isTokenName } from "./declarations";
 import {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
@@ -927,5 +929,237 @@ describe("a label deep enough to break the reader", () => {
     });
     expect(issues).toEqual([]);
     expect(dtcgToTokens(document).tokens).toHaveLength(1);
+  });
+});
+
+describe("a name the object prototype already answers for", () => {
+  /*
+   * A document node is an ordinary object, so reading a segment directly finds
+   * whatever `Object.prototype` supplies. `node["constructor"]` is a function
+   * rather than `undefined`, so the emitter concluded the path was already
+   * taken and refused a token nothing had written — the document came back
+   * `{}` with "exported more than once" beside it, and the token could not
+   * leave this system at all.
+   *
+   * DERIVED rather than listed, so this widens with the grammar instead of
+   * pinning today's answer. The name rule is lowercase-only, which is why
+   * `constructor` is currently the only prototype key a token name can spell:
+   * `toString` and the rest carry capitals and are refused as names long
+   * before they reach the emitter.
+   */
+  const REACHABLE = Object.getOwnPropertyNames(Object.prototype).filter(
+    isTokenName
+  );
+
+  it("has something to test", () => {
+    // The positive control on the fixture itself. Filtered to nothing, every
+    // `it.each` below would silently run zero times and read as a pass.
+    expect(REACHABLE).toContain("constructor");
+  });
+
+  it.each(REACHABLE)("writes a token named %s", name => {
+    const { document, issues } = tokensToDtcg({
+      tokens: [{ name, kind: "number", values: { light: "1" } }],
+    });
+    expect(issues).toEqual([]);
+    // Asserted as an OWN key, because `document[name]` is truthy for every one
+    // of these whether or not anything was written.
+    expect(Object.hasOwn(document, name)).toBe(true);
+    expect(JSON.parse(JSON.stringify(document))).toHaveProperty([name]);
+  });
+
+  it("writes a token whose PATH passes through such a name", () => {
+    // The same lookup runs at every segment on the way down, not only the leaf.
+    const { document, issues } = tokensToDtcg({
+      tokens: [
+        { name: "a.constructor.b", kind: "number", values: { light: "1" } },
+      ],
+    });
+    expect(issues).toEqual([]);
+    const written = JSON.parse(JSON.stringify(document)) as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+    expect(written["a"]?.["constructor"]?.["b"]).toBeDefined();
+  });
+
+  it("round-trips such a token back to the same name", () => {
+    const { document } = tokensToDtcg({
+      tokens: [{ name: "constructor", kind: "number", values: { light: "1" } }],
+    });
+    const read = dtcgToTokens(JSON.parse(JSON.stringify(document)));
+    expect(read.issues).toEqual([]);
+    expect(read.tokens.map(token => token.name)).toEqual(["constructor"]);
+  });
+
+  it("still refuses a genuine duplicate at such a name", () => {
+    // The control. Own-key lookups must not stop the emitter noticing a path
+    // it really has written already.
+    const { issues } = tokensToDtcg({
+      tokens: [
+        { name: "constructor", kind: "number", values: { light: "1" } },
+        {
+          id: "other",
+          name: "constructor",
+          kind: "number",
+          values: { light: "2" },
+        },
+      ],
+    });
+    expect(issues.map(issue => issue.message).join(" ")).toContain(
+      "exported more than once"
+    );
+  });
+});
+
+describe("a file describing one token twice", () => {
+  const withBoth = (value: unknown, stored: string, type: string): unknown => ({
+    one: {
+      $type: type,
+      $value: value,
+      $extensions: {
+        [NEXTLY_EXTENSION]: { css: { light: stored }, kind: type },
+      },
+    },
+  });
+
+  it("names a value the file states and this system did not use", () => {
+    /*
+     * The extension wins, which is right — it holds what the author typed. But
+     * when the two genuinely disagree the file's value is discarded, the next
+     * export rewrites `$value` to match, and a hand-edited file loses the edit
+     * while reporting success.
+     */
+    const read = dtcgToTokens(
+      withBoth(
+        { colorSpace: "srgb", components: [0, 0, 0] },
+        "#111111",
+        "color"
+      )
+    );
+    // The behaviour is unchanged: the stored value is still the one taken.
+    expect(read.tokens[0]?.values.light).toBe("#111111");
+    expect(read.issues.map(issue => issue.message).join(" ")).toContain(
+      "was not used"
+    );
+  });
+
+  it.each(["#111", "rgb(17 17 17)"])(
+    "stays silent when the two only SPELL it differently (%s)",
+    stored => {
+      /*
+       * The control this whole check turns on. A token stored in either of
+       * these spellings comes back from `$value` as `#111111`, so comparing the
+       * two as text reports a disagreement on files this system wrote itself —
+       * and a report that fires on correct files is the one that gets ignored.
+       */
+      const read = dtcgToTokens(
+        withBoth(
+          {
+            colorSpace: "srgb",
+            components: [0.0667, 0.0667, 0.0667],
+            hex: "#111111",
+          },
+          stored,
+          "color"
+        )
+      );
+      expect(read.tokens[0]?.values.light).toBe(stored);
+      expect(read.issues).toEqual([]);
+    }
+  );
+
+  it("stays silent for a kind it cannot compare by meaning", () => {
+    /*
+     * The documented gap, asserted so it is visible here and not only in a
+     * comment. Only colour has a normaliser to hand, and text differing is not
+     * enough on its own — `1rem` and `1.0rem` are the same dimension — so every
+     * other kind errs toward saying nothing. This fixture DOES disagree, and is
+     * still not reported.
+     */
+    const read = dtcgToTokens(
+      withBoth({ value: 1, unit: "rem" }, "2rem", "dimension")
+    );
+    expect(read.tokens[0]?.values.light).toBe("2rem");
+    expect(read.issues).toEqual([]);
+  });
+
+  it("says nothing about a token this system exported itself", () => {
+    // The round trip, end to end: our own file must never carry this line.
+    const { document } = tokensToDtcg({
+      tokens: [
+        {
+          name: "brand",
+          kind: "color",
+          values: { light: "#111", dark: "#eee" },
+        },
+      ],
+    });
+    const read = dtcgToTokens(JSON.parse(JSON.stringify(document)));
+    expect(read.issues).toEqual([]);
+    expect(read.tokens[0]?.values).toEqual({ light: "#111", dark: "#eee" });
+  });
+});
+
+describe("this system's own extension, on the way in", () => {
+  it("names a field this version does not read", () => {
+    /*
+     * Another vendor's block is carried through untouched; THIS one is consumed
+     * — deleted from what the token keeps, with only the fields the reader
+     * knows taken out of it. Anything else a producer wrote there is gone, and
+     * the next export writes a freshly generated block with no sign of it.
+     */
+    const read = dtcgToTokens({
+      one: {
+        $type: "number",
+        $value: 1,
+        $extensions: {
+          [NEXTLY_EXTENSION]: { id: "stable", future: "keep-me" },
+        },
+      },
+    });
+    expect(read.tokens[0]?.id).toBe("stable");
+    expect(read.issues.map(issue => issue.message).join(" ")).toContain(
+      "future"
+    );
+  });
+
+  it("reportsEveryFieldItWrites: a round trip carries no such report", () => {
+    /*
+     * What holds the list of read fields to the emitter. The report above is
+     * driven by a NAMED set, so a field added to the emitter and not to that
+     * set would be announced as dropped on every file this system writes —
+     * naming a loss that did not happen. This fails the moment the two drift.
+     */
+    const { document } = tokensToDtcg({
+      tokens: [
+        {
+          id: "color.primary",
+          name: "brand.main",
+          kind: "color",
+          values: { light: "#111111", dark: "#eeeeee" },
+        },
+        { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      ],
+    });
+    const read = dtcgToTokens(JSON.parse(JSON.stringify(document)));
+    expect(read.issues).toEqual([]);
+    expect(read.tokens).toHaveLength(2);
+  });
+
+  it("says nothing about ANOTHER vendor's fields", () => {
+    // The control: those are carried, not consumed, so nothing is lost and a
+    // report would fire on every file from every other tool.
+    const read = dtcgToTokens({
+      one: {
+        $type: "number",
+        $value: 1,
+        $extensions: { "com.figma": { anything: "at all" } },
+      },
+    });
+    expect(read.issues).toEqual([]);
+    expect(read.tokens[0]?.extensions).toEqual({
+      "com.figma": { anything: "at all" },
+    });
   });
 });

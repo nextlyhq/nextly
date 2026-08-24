@@ -33,6 +33,7 @@ import {
   resolvePreviewUrl,
   type PreviewDeclaration,
 } from "../domains/collections/services/preview-url-resolver";
+import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
 import { getCachedNextly } from "../init";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 
@@ -79,7 +80,7 @@ async function settingsService(): Promise<GeneralSettingsService> {
  * find it empty, and the resolver would correctly report `notConfigured` for a
  * collection whose preview works.
  */
-async function previewDeclarationFor(
+export async function previewDeclarationFor(
   collection: string
 ): Promise<PreviewDeclaration | undefined> {
   await getCachedNextly();
@@ -121,6 +122,10 @@ export const resolveEntryPreviewUrl = withErrorHandler(async (req: Request) => {
   ]);
 
   return respondData(
-    resolvePreviewUrl({ preview, entry, siteUrl: settings.siteUrl })
+    resolvePreviewUrl({
+      preview,
+      entry,
+      siteUrl: resolvePreviewSiteUrl(settings.siteUrl),
+    })
   );
 });

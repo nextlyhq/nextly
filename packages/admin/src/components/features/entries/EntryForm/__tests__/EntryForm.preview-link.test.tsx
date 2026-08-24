@@ -116,8 +116,22 @@ describe("EntryForm wires the shareable link into its header", () => {
         collection: "posts",
         entryId: "e1",
         locale: "en",
-        siteUrl: "https://site.example",
       })
+    );
+  });
+
+  it("passes no site url, because the browser is not where one is known", () => {
+    // Asserted as an ABSENCE rather than left implicit. `settings` is a system
+    // resource the sharing roles cannot read, so a site URL reaching the hook
+    // from here would either be missing for exactly those roles or be the
+    // admin's own origin standing in for the site's.
+    renderForm();
+
+    expect(mintArgs).toHaveBeenCalledWith(
+      expect.not.objectContaining({ siteUrl: expect.anything() })
+    );
+    expect(mintArgs).toHaveBeenCalledWith(
+      expect.not.objectContaining({ previewRoute: expect.anything() })
     );
   });
 

@@ -29,3 +29,22 @@ describe("sanitizeConfig — webhook audit seam", () => {
     ).toBe(true);
   });
 });
+
+describe("preview config survives the boot pipeline", () => {
+  // The unit test for the minting endpoint mocks the container directly, so it
+  // proves the endpoint READS `config.preview` and says nothing about whether
+  // anything ever puts it there. `sanitizeConfig` enumerates its result rather
+  // than spreading, so an unnamed field is dropped silently — the option
+  // typechecks, the application sets it, and the value never arrives.
+  it("is carried through sanitizeConfig rather than dropped", () => {
+    const sanitized = sanitizeConfig({
+      preview: { route: "/next/preview" },
+    });
+
+    expect(sanitized.preview).toEqual({ route: "/next/preview" });
+  });
+
+  it("leaves preview undefined when the application sets none", () => {
+    expect(sanitizeConfig({}).preview).toBeUndefined();
+  });
+});

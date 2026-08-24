@@ -277,3 +277,349 @@ describe("generateClientSchema — optional fields tolerate empty string", () =>
     );
   });
 });
+
+describe("generateClientSchema — repeater row bounds (minRows / maxRows)", () => {
+  it("rejects a text hasMany list below minRows with the items wording", () => {
+    const schema = generateClientSchema([
+      {
+        type: "text",
+        name: "tags",
+        required: true,
+        hasMany: true,
+        validation: { minRows: 3 },
+      } as unknown as FieldConfig,
+    ]);
+    expect(schema.safeParse({ tags: ["a", "b"] }).success).toBe(false);
+    const bad = schema.safeParse({ tags: ["a", "b"] });
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Minimum 3 items required");
+    }
+  });
+
+  it("accepts a text hasMany list once minRows is met", () => {
+    const schema = generateClientSchema([
+      {
+        type: "text",
+        name: "tags",
+        required: true,
+        hasMany: true,
+        validation: { minRows: 2 },
+      } as unknown as FieldConfig,
+    ]);
+    expect(schema.safeParse({ tags: ["a", "b"] }).success).toBe(true);
+  });
+
+  it("rejects a text hasMany list above maxRows", () => {
+    const schema = generateClientSchema([
+      {
+        type: "text",
+        name: "tags",
+        required: true,
+        hasMany: true,
+        validation: { maxRows: 2 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ tags: ["a", "b", "c"] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Maximum 2 items allowed");
+    }
+  });
+
+  it("rejects a number hasMany list below minRows with the items wording", () => {
+    // Every list-bearing field type words its row bounds the same way;
+    // number hasMany is not special.
+    const schema = generateClientSchema([
+      {
+        type: "number",
+        name: "scores",
+        required: true,
+        hasMany: true,
+        validation: { minRows: 3 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ scores: [1, 2] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Minimum 3 items required");
+    }
+  });
+
+  it("rejects a number hasMany list above maxRows with the items wording", () => {
+    const schema = generateClientSchema([
+      {
+        type: "number",
+        name: "scores",
+        required: true,
+        hasMany: true,
+        validation: { maxRows: 3 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ scores: [1, 2, 3, 4] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Maximum 3 items allowed");
+    }
+  });
+
+  it("rejects a repeater below minRows with the items wording", () => {
+    const schema = generateClientSchema([
+      {
+        type: "repeater",
+        name: "rows",
+        required: true,
+        validation: { minRows: 2 },
+        fields: [{ type: "text", name: "label", required: true }],
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ rows: [{ label: "a" }] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Minimum 2 items required");
+    }
+  });
+
+  it("accepts a repeater at minRows and still validates nested fields", () => {
+    const schema = generateClientSchema([
+      {
+        type: "repeater",
+        name: "rows",
+        required: true,
+        validation: { minRows: 1 },
+        fields: [{ type: "text", name: "label", required: true }],
+      } as unknown as FieldConfig,
+    ]);
+    expect(
+      schema.safeParse({ rows: [{ label: "a" }, { label: "b" }] }).success
+    ).toBe(true);
+    // The row bound passing must not mute the item's own required rule.
+    const bad = schema.safeParse({ rows: [{ label: "" }] });
+    expect(bad.success).toBe(false);
+  });
+
+  it("rejects a relationship hasMany list below minRows with the relationships wording", () => {
+    const schema = generateClientSchema([
+      {
+        type: "relationship",
+        name: "authors",
+        required: true,
+        hasMany: true,
+        relationTo: "users",
+        validation: { minRows: 2 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ authors: ["u-1"] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe(
+        "Minimum 2 relationships required"
+      );
+    }
+  });
+
+  it("rejects an upload hasMany list below minRows with the files wording", () => {
+    const schema = generateClientSchema([
+      {
+        type: "upload",
+        name: "gallery",
+        required: true,
+        hasMany: true,
+        validation: { minRows: 2 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ gallery: ["file-1"] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Minimum 2 files required");
+    }
+  });
+});
+
+describe("generateClientSchema — string length bound messages", () => {
+  it("words text bounds without a subject prefix", () => {
+    const schema = generateClientSchema([
+      {
+        type: "text",
+        name: "title",
+        required: true,
+        validation: { minLength: 3, maxLength: 5 },
+      } as unknown as FieldConfig,
+    ]);
+    const short = schema.safeParse({ title: "ab" });
+    expect(short.success).toBe(false);
+    if (!short.success) {
+      expect(short.error.issues[0]?.message).toBe(
+        "Must be at least 3 characters"
+      );
+    }
+    const long = schema.safeParse({ title: "toolong" });
+    expect(long.success).toBe(false);
+    if (!long.success) {
+      expect(long.error.issues[0]?.message).toBe(
+        "Must be at most 5 characters"
+      );
+    }
+  });
+
+  it("words textarea bounds identically to text", () => {
+    const schema = generateClientSchema([
+      {
+        type: "textarea",
+        name: "summary",
+        required: true,
+        validation: { minLength: 3 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ summary: "ab" });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe(
+        "Must be at least 3 characters"
+      );
+    }
+  });
+
+  it("words code bounds identically to text", () => {
+    const schema = generateClientSchema([
+      {
+        type: "code",
+        name: "snippet",
+        required: true,
+        validation: { maxLength: 4 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ snippet: "toolong" });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Must be at most 4 characters");
+    }
+  });
+
+  it("words password bounds with the Password subject", () => {
+    const schema = generateClientSchema([
+      {
+        type: "password",
+        name: "secret",
+        required: true,
+        validation: { minLength: 8 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ secret: "short" });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe(
+        "Password must be at least 8 characters"
+      );
+    }
+  });
+
+  it("words email bounds with the Email subject", () => {
+    const schema = generateClientSchema([
+      {
+        type: "email",
+        name: "supportEmail",
+        required: true,
+        validation: { minLength: 12 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ supportEmail: "a@b.co" });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe(
+        "Email must be at least 12 characters"
+      );
+    }
+  });
+
+  it("words per-item bounds in a text hasMany with the Each item subject", () => {
+    const schema = generateClientSchema([
+      {
+        type: "text",
+        name: "tags",
+        required: true,
+        hasMany: true,
+        validation: { minLength: 2 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ tags: ["a"] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe(
+        "Each item must be at least 2 characters"
+      );
+    }
+  });
+});
+
+describe("generateClientSchema — numeric bound edges", () => {
+  it("enforces min: 0, so zero is a bound and not a skipped setting", () => {
+    const schema = generateClientSchema([
+      {
+        type: "number",
+        name: "qty",
+        required: true,
+        validation: { min: 0 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ qty: -1 });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Must be at least 0");
+    }
+    expect(schema.safeParse({ qty: 0 }).success).toBe(true);
+  });
+
+  it("enforces per-item min in a number hasMany with the Each value subject", () => {
+    const schema = generateClientSchema([
+      {
+        type: "number",
+        name: "scores",
+        required: true,
+        hasMany: true,
+        validation: { min: 2 },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ scores: [1, 5] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe(
+        "Each value must be at least 2"
+      );
+    }
+  });
+
+  it("lets validation.message override per-item number bounds too", () => {
+    const schema = generateClientSchema([
+      {
+        type: "number",
+        name: "scores",
+        required: true,
+        hasMany: true,
+        validation: { min: 2, message: "Scores are 2..10" },
+      } as unknown as FieldConfig,
+    ]);
+    const bad = schema.safeParse({ scores: [1, 5] });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues[0]?.message).toBe("Scores are 2..10");
+    }
+  });
+});
+
+describe("generateClientSchema — email applies length bounds but not pattern", () => {
+  it("accepts a valid email that violates validation.pattern", () => {
+    // Email composes the built-in format check with length bounds only.
+    // Applying the string pattern rule here would newly reject values the
+    // product accepts today, so the email converter stays off that rule.
+    const schema = generateClientSchema([
+      {
+        type: "email",
+        name: "supportEmail",
+        required: true,
+        validation: { pattern: "^x+@x\\.com$" },
+      } as unknown as FieldConfig,
+    ]);
+    const result = schema.safeParse({ supportEmail: "a@b.co" });
+    expect(result.success).toBe(true);
+  });
+});

@@ -14,10 +14,16 @@ vi.mock("./route-auth", () => ({
   requireRoutePermission: vi.fn(),
 }));
 
-const { getEntry, canUpdateEntry } = vi.hoisted(() => ({
-  getEntry: vi.fn(),
-  canUpdateEntry: vi.fn(),
-}));
+const { getEntry, canUpdateEntry, getSettings, previewDeclaration } =
+  vi.hoisted(() => ({
+    getEntry: vi.fn(),
+    canUpdateEntry: vi.fn(),
+    getSettings: vi.fn(),
+    previewDeclaration: vi.fn(),
+  }));
+
+/** The application's `preview` config for the test in hand. */
+let previewConfig: { route?: string } | undefined;
 
 vi.mock("../init", () => ({
   getCachedNextly: vi.fn().mockResolvedValue({}),
@@ -25,6 +31,10 @@ vi.mock("../init", () => ({
 
 vi.mock("../services/lib/permissions", () => ({
   resolveRoleSlugs: vi.fn().mockResolvedValue(["editor"]),
+}));
+
+vi.mock("./preview-url", () => ({
+  previewDeclarationFor: (...args: unknown[]) => previewDeclaration(...args),
 }));
 
 vi.mock("../di", () => ({
@@ -75,7 +85,11 @@ beforeEach(() => {
   getEntry.mockResolvedValue({
     success: true,
     statusCode: 200,
-    data: { id: "7" },
+    // A slug, because the default declaration below is `/{slug}` and minting
+    // now resolves the ENTRY rather than trusting that a declaration exists. An
+    // entry with no slug is genuinely not previewable, which is what the
+    // refusal tests assert by removing it again.
+    data: { id: "7", slug: "seven" },
   });
   canUpdateEntry.mockResolvedValue(true);
   (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -90,9 +104,242 @@ beforeEach(() => {
   });
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
-  (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
-    getPreviewTokenGeneration: getGeneration,
-    revokeAllPreviewTokens: revokeAll,
+  getSettings.mockResolvedValue({ siteUrl: "https://site.example" });
+  previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
+  previewConfig = undefined;
+  // Key-aware, because assembling the link needs BOTH the settings service and
+  // the application config, and a mock answering the same object for every key
+  // cannot tell them apart.
+  (container.get as ReturnType<typeof vi.fn>).mockImplementation(
+    (key: string) => {
+      if (key === "config") return { preview: previewConfig };
+      return {
+        getPreviewTokenGeneration: getGeneration,
+        revokeAllPreviewTokens: revokeAll,
+        getSettings,
+      };
+    }
+  );
+});
+
+/** The mutation envelope's payload, narrowed once rather than at every use. */
+function item(body: { item?: unknown }): Record<string, unknown> {
+  return body.item as Record<string, unknown>;
+}
+
+/** Mint once for the default entry and hand back the envelope's payload. */
+async function mintedData(): Promise<Record<string, unknown>> {
+  return item(
+    await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    )
+  );
+}
+
+describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => {
+  // The button that mints this is shown whether or not a collection declares a
+  // preview URL, and that is deliberate — a draft is shareable either way. What
+  // is NOT acceptable is answering success and handing over a link that cannot
+  // land: the reviewer then sees a 404 they cannot tell from an expired link,
+  // and the editor has no idea anything is wrong.
+  it("refuses instead of minting a link that cannot land", async () => {
+    previewDeclaration.mockResolvedValue(undefined);
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  it("names the cause and who can fix it", async () => {
+    previewDeclaration.mockResolvedValue(undefined);
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    // The editor reading this cannot fix it themselves, so the message has to
+    // say what is missing AND that a developer is the one who adds it.
+    const message = String(
+      (body.error as { message?: string } | undefined)?.message ?? ""
+    );
+    expect(message).toMatch(/preview url/i);
+    expect(message).toMatch(/developer/i);
+  });
+
+  it("mints no token at all when it refuses", async () => {
+    previewDeclaration.mockResolvedValue(undefined);
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    // A bearer credential must not be issued for a refused request, even one
+    // refused for a configuration reason rather than an authorization one.
+    expect(body.item).toBeUndefined();
+  });
+
+  // A declaration is necessary and NOT sufficient. `preview.url` returning null
+  // for a document it cannot address yet, or a `urlTemplate` placeholder naming
+  // an empty field, both mean "not previewable yet" — and both used to mint
+  // successfully and 404 at the redirect, which is the failure this refusal
+  // exists to remove, reappearing one level down.
+  it("refuses an entry the declaration cannot address yet", async () => {
+    previewDeclaration.mockResolvedValue({ url: () => null });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  it("refuses when a template placeholder has no value on this entry", async () => {
+    previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
+    getEntry.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { id: "7" },
+    });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  // The two refusals must not read alike: one is a developer's job and the other
+  // is the editor's own, and an editor told to "ask a developer" about their
+  // empty slug field is being sent to the wrong person.
+  it("distinguishes an unaddressable entry from an unconfigured collection", async () => {
+    previewDeclaration.mockResolvedValue({ url: () => null });
+    const entryBody = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    previewDeclaration.mockResolvedValue(undefined);
+    const collectionBody = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    const message = (b: { error?: unknown }): string =>
+      String((b.error as { message?: string } | undefined)?.message ?? "");
+
+    expect(message(entryBody)).not.toBe(message(collectionBody));
+    expect(message(entryBody)).toMatch(/this entry/i);
+    expect(message(collectionBody)).toMatch(/developer/i);
+  });
+
+  it("mints normally once the collection declares one", async () => {
+    previewDeclaration.mockResolvedValue({ url: () => "/somewhere" });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(200);
+  });
+});
+
+describe("mintPreviewLink: the link it hands back", () => {
+  it("returns an absolute url built from the site url and the default mount", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).toMatch(
+      /^https:\/\/site\.example\/api\/preview\?token=/
+    );
+  });
+
+  it("honours a configured preview.route", async () => {
+    previewConfig = { route: "/next/preview" };
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).toMatch(
+      /^https:\/\/site\.example\/next\/preview\?token=/
+    );
+  });
+
+  // A site URL may legitimately carry a path, a query or a fragment — the
+  // settings schema accepts all three — and concatenating the route onto the end
+  // puts it inside whichever component came last, producing a link that never
+  // reaches the route and carries no token.
+  it("keeps a site url's own query instead of appending the route inside it", async () => {
+    getSettings.mockResolvedValue({
+      siteUrl: "https://site.example/base?tenant=a",
+    });
+
+    const url = new URL(String((await mintedData()).url));
+
+    expect(url.pathname).toBe("/base/api/preview");
+    expect(url.searchParams.get("tenant")).toBe("a");
+    expect(url.searchParams.get("token")).toBeTruthy();
+  });
+
+  it("mounts the route under a site url served from a sub-path", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "https://site.example/site" });
+
+    expect(new URL(String((await mintedData()).url)).pathname).toBe(
+      "/site/api/preview"
+    );
+  });
+
+  it("returns a null url for a site url that cannot be parsed", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "not a url" });
+
+    expect(await mintedData()).toMatchObject({ url: null });
+  });
+
+  it("does not double the separator when the site url carries a trailing slash", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "https://site.example/" });
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).not.toContain("//api/preview");
+  });
+
+  it("carries the token in the url it returns", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).toContain(
+      `token=${encodeURIComponent(item(body).token as string)}`
+    );
+  });
+
+  it("still returns the token and expiry", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(typeof item(body).token).toBe("string");
+    expect(typeof item(body).expiresAt).toBe("string");
+  });
+
+  // The admin cannot recover from this: the `editor` and `author` presets
+  // cannot read settings at all, so a RELATIVE url would be resolved against
+  // the admin's own origin — confidently wrong, and the exact guess the
+  // four-state preview resolver exists elsewhere to prevent.
+  it("returns a null url when no site url is configured", async () => {
+    getSettings.mockResolvedValue({ siteUrl: null });
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect(item(body).url).toBeNull();
+    // The token is still minted: the link is usable by anyone who can build the
+    // URL, and refusing here would break preview on a site that never set one.
+    expect(typeof item(body).token).toBe("string");
   });
 });
 
@@ -343,16 +590,17 @@ describe("mintPreviewLink", () => {
     });
   });
 
-  it("returns a token rather than a url", async () => {
-    // Where the preview route is mounted is the app's decision; a url guessed
-    // here would 404 on any app that mounted it elsewhere.
+  it("answers with the canonical envelope and nothing else", async () => {
     const body = await json(
       await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
     );
+
     // The canonical mutation envelope, so a direct-API caller reads `.item`.
     expect(Object.keys(body).sort()).toEqual(["item", "message"]);
     const item = body.item as Record<string, unknown>;
-    expect(Object.keys(item).sort()).toEqual(["expiresAt", "token"]);
+    expect(Object.keys(item).sort()).toEqual(["expiresAt", "token", "url"]);
+    // The token is a credential, not an address: it carries no host of its own,
+    // and the `url` beside it is what puts one in front.
     expect(String(item.token)).not.toContain("http");
   });
 

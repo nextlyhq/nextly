@@ -20,6 +20,14 @@
  * @module geometry-dom
  */
 
+import type { CornerRadii, EdgeBounds } from "./border-radii";
+import {
+  insetCornerRadii,
+  isSquare,
+  roundedInsideRounded,
+  scaleCornerRadii,
+  usedCornerRadii,
+} from "./border-radii";
 import type { FrameInset, Point, Rect } from "./geometry";
 
 /**
@@ -688,13 +696,59 @@ export function hasScrollbarGutter(
  * that clipping applies to the bands and the page alike, so it produces no
  * mismatch; only a clip between the block and the root does.
  */
+/**
+ * Computed `display` values whose generated box `overflow` does not clip.
+ *
+ * MEASURED across the catalog's display set in Chromium rather than read off a
+ * spec table, by giving each value `overflow: hidden` and a child pulled outside
+ * it, then reading the pixels. The list is wider than the inline box people
+ * reach for first, and two of the entries are not guessable:
+ *
+ * - The internal TABLE boxes take no clip — a row, a row group, a header group
+ *   and a footer group all paint a child straight through the edge — while
+ *   `table`, `inline-table` and `table-cell` all clip normally.
+ * - `contents` generates no box at all, so nothing clips AND
+ *   `getBoundingClientRect` answers 0x0 on it. A caller that skipped this entry
+ *   would compare a descendant against a zero-sized rectangle and conclude every
+ *   block is outside it.
+ *
+ * `ruby-base`, `ruby-base-container` and `ruby-text-container` are deliberately
+ * ABSENT: all three compute to plain `block` in Chromium, so they clip and an
+ * entry for them would describe a value that never arrives.
+ *
+ * The measurement had to force overflow with a NEGATIVE MARGIN rather than an
+ * oversized child, because table boxes size to their content: a wide child makes
+ * them grow to fit, and "not clipped" then means "never overflowed" — which read
+ * as six false entries on the first pass.
+ */
+const OVERFLOW_NEVER_CLIPS: ReadonlySet<string> = new Set([
+  "inline",
+  "inline list-item",
+  "table-row",
+  "table-row-group",
+  "table-header-group",
+  "table-footer-group",
+  "ruby",
+  "ruby-text",
+  "contents",
+]);
+
+/** Whether `overflow` establishes a clip on a box with this computed display. */
+export function overflowApplies(display: string): boolean {
+  return !OVERFLOW_NEVER_CLIPS.has(display);
+}
+
 /** A computed border width in pixels, or zero when the browser reports no number. */
 function edgeWidth(value: string): number {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export function clippedByAncestor(element: Element, root: Element): boolean {
+export function clippedByAncestor(
+  element: Element,
+  root: Element,
+  radii: CornerRadii
+): boolean {
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
   const box = element.getBoundingClientRect();
@@ -704,83 +758,229 @@ export function clippedByAncestor(element: Element, root: Element): boolean {
     node !== null && node !== root;
     node = node.parentElement
   ) {
-    const style = view.getComputedStyle(node);
-    /*
-     * PER AXIS, because the two can differ and the catalog ships the shorthand
-     * that makes them differ: `overflow` takes two values, so `clip visible` is
-     * a declaration an author can store. Measured in Chromium it is also the
-     * ONLY mixed pair that survives computation — pairing `visible` with
-     * `hidden`, `auto` or `scroll` resolves the `visible` side to `auto`, while
-     * `clip visible` stays exactly as written.
-     *
-     * Asking whether EITHER axis clips and then comparing all four edges
-     * refuses a block that overflows only the axis still rendering it, and a
-     * refusal costs every band on the block.
-     */
-    const clipsX = style.overflowX !== "visible";
-    const clipsY = style.overflowY !== "visible";
-    if (!clipsX && !clipsY) continue;
-    /*
-     * Overflow clips at the PADDING edge, and `getBoundingClientRect` reports the
-     * BORDER box. On a container with a border the two differ by its width, so a
-     * child pulled into the border by a negative margin or a transform is
-     * visibly cut while a border-box comparison reports it contained — measured,
-     * a 20px border puts the border box at 217 and the clip edge at 237.
-     */
-    const outer = node.getBoundingClientRect();
-    /*
-     * Scaled, because the two readings are in different units: `outer` is
-     * post-transform and a computed border width is unscaled CSS pixels. Under
-     * `scale(2)` a 20px border renders 40px thick, so insetting by 20 puts the
-     * clip edge half way through the border and accepts a child the container
-     * visibly cuts — measured, the real padding edge sat at 40 while this
-     * arithmetic answered 20 and a child at exactly 20 was let through.
-     */
-    const scale = renderedScale(node, root);
-    /*
-     * A clipping ancestor that is not axis-aligned is DECLINED rather than
-     * measured, because neither reading survives its transform: `a` and `d` are
-     * not scale factors once a rotation is present, and `getBoundingClientRect`
-     * answers with an axis-aligned BOUNDING box whose edges are not the clip
-     * edges at all. The real clip is a slanted rectangle sitting inside that
-     * box, so a child cut by it still reads as contained.
-     *
-     * It cannot be left to the caller's own describability check, which is what
-     * an earlier version of this assumed: a descendant carrying the INVERSE
-     * transform composes back to an axis-aligned matrix, so the block passes
-     * that check while this ancestor fails it. Measured — a block under
-     * `rotate(-30deg)` inside an ancestor under `rotate(30deg)` composes to
-     * `a=0.999999, b=0, c=0, d=0.999999` and is called describable, while its
-     * ancestor's own matrix carries `b=0.5, c=-0.5`; the block sat inside the
-     * ancestor's bounding box with a quarter of it beyond the clip.
-     *
-     * Refusing is deliberately broader than the defect: a block WHOLLY INSIDE a
-     * rotated clipping ancestor is not cut and loses its bands anyway. Deciding
-     * that needs the clip as an oriented rectangle, and drawing nothing is the
-     * same answer this module already gives for every other shape it cannot
-     * describe.
-     */
-    if (!scale.describable) return true;
-    const clip = {
-      top: outer.top + edgeWidth(style.borderTopWidth) * scale.y,
-      left: outer.left + edgeWidth(style.borderLeftWidth) * scale.x,
-      bottom: outer.bottom - edgeWidth(style.borderBottomWidth) * scale.y,
-      right: outer.right - edgeWidth(style.borderRightWidth) * scale.x,
-    };
-    // Half a pixel, because both rectangles are fractional and a block laid out
-    // flush against its container's edge is not clipped by rounding.
-    const slack = 0.5;
-    const cutVertically =
-      clipsY &&
-      (box.top < clip.top - slack || box.bottom > clip.bottom + slack);
-    const cutHorizontally =
-      clipsX &&
-      (box.left < clip.left - slack || box.right > clip.right + slack);
-    if (cutVertically || cutHorizontally) {
-      return true;
-    }
+    if (cutByAncestor(node, box, radii, view, root)) return true;
   }
   return false;
+}
+
+/**
+ * Whether ONE ancestor cuts the block.
+ *
+ * Separated from the walk above so that each answers a single question: which
+ * elements to ask, and what the answer is for one of them. The decision needs
+ * four readings of that element and three independent reasons to refuse, and
+ * inlining it into the loop puts all of that inside a `for` whose own job is
+ * one line long.
+ */
+function cutByAncestor(
+  node: Element,
+  box: DOMRect,
+  radii: CornerRadii,
+  view: Window,
+  root: Element
+): boolean {
+  const style = view.getComputedStyle(node);
+  /*
+   * PER AXIS, because the two can differ and the catalog ships the shorthand
+   * that makes them differ: `overflow` takes two values, so `clip visible` is
+   * a declaration an author can store. Measured in Chromium it is also the
+   * ONLY mixed pair that survives computation — pairing `visible` with
+   * `hidden`, `auto` or `scroll` resolves the `visible` side to `auto`, while
+   * `clip visible` stays exactly as written.
+   *
+   * Asking whether EITHER axis clips and then comparing all four edges
+   * refuses a block that overflows only the axis still rendering it, and a
+   * refusal costs every band on the block.
+   */
+  const clipsX = style.overflowX !== "visible";
+  const clipsY = style.overflowY !== "visible";
+  if (!clipsX && !clipsY) return false;
+  /*
+   * A computed `overflow` is not the same as an overflow that CLIPS. The
+   * property does not apply to every generated box, and the computed value says
+   * nothing about that — so an author who writes `overflow: hidden` on an inline
+   * span gets the declaration in the computed style and no clip on the page.
+   * Reading the first as the second cuts a descendant nothing removes.
+   */
+  if (!overflowApplies(style.display)) return false;
+  /*
+   * Overflow clips at the PADDING edge, and `getBoundingClientRect` reports the
+   * BORDER box. On a container with a border the two differ by its width, so a
+   * child pulled into the border by a negative margin or a transform is
+   * visibly cut while a border-box comparison reports it contained — measured,
+   * a 20px border puts the border box at 217 and the clip edge at 237.
+   */
+  const outer = node.getBoundingClientRect();
+  /*
+   * Scaled, because the two readings are in different units: `outer` is
+   * post-transform and a computed border width is unscaled CSS pixels. Under
+   * `scale(2)` a 20px border renders 40px thick, so insetting by 20 puts the
+   * clip edge half way through the border and accepts a child the container
+   * visibly cuts — measured, the real padding edge sat at 40 while this
+   * arithmetic answered 20 and a child at exactly 20 was let through.
+   */
+  const scale = renderedScale(node, root);
+  /*
+   * A clipping ancestor that is not axis-aligned is DECLINED rather than
+   * measured, because neither reading survives its transform: `a` and `d` are
+   * not scale factors once a rotation is present, and `getBoundingClientRect`
+   * answers with an axis-aligned BOUNDING box whose edges are not the clip
+   * edges at all. The real clip is a slanted rectangle sitting inside that
+   * box, so a child cut by it still reads as contained.
+   *
+   * It cannot be left to the caller's own describability check, which is what
+   * an earlier version of this assumed: a descendant carrying the INVERSE
+   * transform composes back to an axis-aligned matrix, so the block passes
+   * that check while this ancestor fails it. Measured — a block under
+   * `rotate(-30deg)` inside an ancestor under `rotate(30deg)` composes to
+   * `a=0.999999, b=0, c=0, d=0.999999` and is called describable, while its
+   * ancestor's own matrix carries `b=0.5, c=-0.5`; the block sat inside the
+   * ancestor's bounding box with a quarter of it beyond the clip.
+   *
+   * Refusing is deliberately broader than the defect: a block WHOLLY INSIDE a
+   * rotated clipping ancestor is not cut and loses its bands anyway. Deciding
+   * that needs the clip as an oriented rectangle, and drawing nothing is the
+   * same answer this module already gives for every other shape it cannot
+   * describe.
+   */
+  if (!scale.describable) return true;
+  const clip = clipEdges(outer, style, scale);
+  if (cutByEdges(box, clip, clipsX, clipsY)) return true;
+  return cutByCorner(
+    box,
+    radii,
+    clip,
+    style,
+    scale,
+    clipsX && clipsY,
+    CLIP_SLACK_PX
+  );
+}
+
+/**
+ * How far a block may sit outside a clip edge before the overhang is real.
+ *
+ * Half a pixel, because both rectangles are fractional and a block laid out
+ * flush against its container's edge is not clipped by rounding.
+ */
+const CLIP_SLACK_PX = 0.5;
+
+/** The ancestor's PADDING edge, which is where overflow actually clips. */
+function clipEdges(
+  outer: DOMRect,
+  style: CSSStyleDeclaration,
+  scale: RenderedScale
+): EdgeBounds {
+  return {
+    top: outer.top + edgeWidth(style.borderTopWidth) * scale.y,
+    left: outer.left + edgeWidth(style.borderLeftWidth) * scale.x,
+    bottom: outer.bottom - edgeWidth(style.borderBottomWidth) * scale.y,
+    right: outer.right - edgeWidth(style.borderRightWidth) * scale.x,
+  };
+}
+
+/**
+ * Whether the block falls outside the clip RECTANGLE, on an axis that clips.
+ *
+ * Each axis is asked only where it clips: a block overflowing the axis that is
+ * still `visible` has its overflow rendered, and refusing it costs every band.
+ */
+function cutByEdges(
+  box: DOMRect,
+  clip: EdgeBounds,
+  clipsX: boolean,
+  clipsY: boolean
+): boolean {
+  const cutVertically =
+    clipsY &&
+    (box.top < clip.top - CLIP_SLACK_PX ||
+      box.bottom > clip.bottom + CLIP_SLACK_PX);
+  const cutHorizontally =
+    clipsX &&
+    (box.left < clip.left - CLIP_SLACK_PX ||
+      box.right > clip.right + CLIP_SLACK_PX);
+  return cutVertically || cutHorizontally;
+}
+
+/**
+ * Whether a rounded clipping ancestor cuts the block at one of its CORNERS.
+ *
+ * A container with `border-radius` and `overflow: hidden` clips on the curve,
+ * not on the rectangle: a child inside all four padding edges can still have a
+ * corner visibly removed, and the comparison above accepts it. That container is
+ * the ordinary card, so declining every rounded ancestor outright would blank
+ * the overlay for most blocks on a real page — the exact test is what keeps the
+ * refusal to the blocks that are genuinely cut.
+ *
+ * Asked only when BOTH axes clip, which is measured rather than assumed. With
+ * `overflow: clip visible` the clip region is unbounded on the visible axis, and
+ * a corner needs two bounds to exist — probed in Chromium, a child at the corner
+ * of a 60px-radius box under `overflow: clip visible` is painted in full, while
+ * the same child under `overflow: hidden` is cut away. Applying the arc there
+ * would refuse a block nothing removes.
+ *
+ * The radii come off the PADDING box, because that is where overflow clips and
+ * `border-radius` states the border box's curve.
+ */
+function cutByCorner(
+  box: DOMRect,
+  radii: CornerRadii,
+  clip: EdgeBounds,
+  style: CSSStyleDeclaration,
+  scale: RenderedScale,
+  bothAxesClip: boolean,
+  slack: number
+): boolean {
+  if (!bothAxesClip) return false;
+  const outer = usedCornerRadii(
+    {
+      topLeft: style.borderTopLeftRadius,
+      topRight: style.borderTopRightRadius,
+      bottomRight: style.borderBottomRightRadius,
+      bottomLeft: style.borderBottomLeftRadius,
+    },
+    /*
+     * The ancestor's LAYOUT size, so a percentage resolves against what the
+     * author declared it against. `clip` is post-transform and inset to the
+     * padding edge, so it is divided back out by the scale and re-widened by the
+     * borders that were taken off it.
+     */
+    {
+      width: (clip.right - clip.left) / scale.x + borderSpan(style, "x"),
+      height: (clip.bottom - clip.top) / scale.y + borderSpan(style, "y"),
+    }
+  );
+  /*
+   * A radius this cannot resolve is a clip of UNKNOWN shape, and the block is
+   * refused rather than treated as sitting inside a square one — the same answer
+   * this module gives for every other geometry it cannot describe.
+   */
+  if (outer === undefined) return true;
+  const inner = scaleCornerRadii(
+    insetCornerRadii(outer, {
+      top: edgeWidth(style.borderTopWidth),
+      right: edgeWidth(style.borderRightWidth),
+      bottom: edgeWidth(style.borderBottomWidth),
+      left: edgeWidth(style.borderLeftWidth),
+    }),
+    scale
+  );
+  if (isSquare(inner)) return false;
+  /*
+   * The block's OWN curve is part of the comparison. A rounded block flush
+   * inside an equally rounded container is not cut at all, while its bounding
+   * rectangle's corners lie outside every one of that container's arcs — so
+   * reading only the rectangle refuses the ordinary nested rounded card and
+   * takes the whole overlay with it.
+   */
+  return !roundedInsideRounded(box, radii, clip, inner, slack);
+}
+
+/** The two border widths an axis loses, in unscaled CSS pixels. */
+function borderSpan(style: CSSStyleDeclaration, axis: "x" | "y"): number {
+  return axis === "x"
+    ? edgeWidth(style.borderLeftWidth) + edgeWidth(style.borderRightWidth)
+    : edgeWidth(style.borderTopWidth) + edgeWidth(style.borderBottomWidth);
 }
 
 /**

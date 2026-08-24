@@ -80,7 +80,7 @@ export default function EditImageSizePage() {
   if (!imageSizeId) {
     return (
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...IMAGE_SIZES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
               Invalid image size ID. Please go back and try again.
@@ -100,7 +100,7 @@ export default function EditImageSizePage() {
   if (isLoading) {
     return (
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...IMAGE_SIZES_PAGE}>
           <div className="space-y-6">
             <div className="flex items-center gap-4">
               <Skeleton className="w-9 rounded-md" />
@@ -120,7 +120,7 @@ export default function EditImageSizePage() {
   if (fetchError) {
     return (
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...IMAGE_SIZES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription className="flex items-center justify-between">
               <span>
@@ -155,7 +155,7 @@ export default function EditImageSizePage() {
   if (!imageSize) {
     return (
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...IMAGE_SIZES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
               Image size not found. It may have been deleted.
@@ -174,7 +174,7 @@ export default function EditImageSizePage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <SettingsLayout>
+        <SettingsLayout {...IMAGE_SIZES_PAGE}>
           <ImageSizeForm
             mode="edit"
             imageSize={imageSize}
@@ -188,3 +188,14 @@ export default function EditImageSizePage() {
     </QueryErrorBoundary>
   );
 }
+
+/**
+ * This page renders the settings chrome in several branches — loading,
+ * error and the resolved document — and its identity is the same in all of
+ * them. Stated once here so the branches cannot drift apart.
+ */
+const IMAGE_SIZES_PAGE = {
+  title: "Image Sizes",
+  description: "Configure image sizes generated for uploaded images",
+  crumb: "Image Sizes",
+} as const;

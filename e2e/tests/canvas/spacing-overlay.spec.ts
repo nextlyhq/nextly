@@ -1425,3 +1425,439 @@ test.describe("spacing values on the canvas", () => {
     await expect(page.locator(band("padding", "bottom"))).toHaveCount(0);
   });
 });
+
+/**
+ * A rounded block is not the rectangle its bands are cut from.
+ *
+ * `borderRadius` is a catalog property, so an author reaches every case here
+ * from the inspector. Two separate things go wrong on a curve, and only a
+ * browser can settle either: whether the paint lands where the block is, and
+ * whether a rounded container's clip removes a corner the rectangle comparison
+ * calls contained.
+ */
+test.describe("rounded geometry", () => {
+  /**
+   * One pixel out of a screenshot, in CSS pixels.
+   *
+   * Hit-testing cannot stand in for this. `elementFromPoint` reports a child
+   * sitting in the cut-away corner of an `overflow: hidden` ancestor as hit —
+   * measured in Chromium — so it answers about the box tree while the question
+   * here is about what was painted.
+   */
+  async function pixels(
+    page: import("@playwright/test").Page,
+    points: readonly (readonly [number, number])[]
+  ): Promise<string[]> {
+    const shot = (await page.screenshot()).toString("base64");
+    const ratio = await page.evaluate(() => window.devicePixelRatio);
+    return page.evaluate(
+      async ({ b64, at, r }) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${b64}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        if (ctx === null) throw new Error("no 2d context");
+        ctx.drawImage(img, 0, 0);
+        return at.map(([x, y]) => {
+          const d = ctx.getImageData(
+            Math.round(x * r),
+            Math.round(y * r),
+            1,
+            1
+          ).data;
+          return `${String(d[0])},${String(d[1])},${String(d[2])}`;
+        });
+      },
+      { b64: shot, at: points, r: ratio }
+    );
+  }
+
+  test("paints nothing in the corner a rounded block curves away from", async ({
+    page,
+  }) => {
+    /*
+     * The padding box of a rounded block has curved corners while its bands are
+     * full-width strips, so the strip covers ground the block does not occupy —
+     * and a band is read as a MEASUREMENT, so one painted over the page beside
+     * the block states a measurement that is false.
+     *
+     * Asserted as pixels rather than as a `clip-path` attribute because the
+     * attribute is the mechanism and this is the property: a clip applied to the
+     * wrong element, in the wrong coordinate space, or to a band that then paints
+     * its chip over the gap would all satisfy an attribute check.
+     */
+    await page.goto(ROUTE);
+    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    await expect(block).toBeVisible();
+    await block.scrollIntoViewIfNeeded();
+
+    const where = await block.evaluate(node => {
+      const el = node as HTMLElement;
+      const box = el.getBoundingClientRect();
+      /*
+       * Small enough that CSS's overlap reduction leaves it alone, so the corner
+       * measured below is the one declared rather than a shrunk one.
+       */
+      const radius = Math.min(80, box.width / 2, box.height / 2);
+      el.style.borderRadius = `${String(radius)}px`;
+      /*
+       * Six pixels into the bottom-left corner: inside the band's rectangle on
+       * both axes, and outside the arc, since (74/80)² + (74/80)² is 1.71.
+       *
+       * It is also some twenty-four pixels clear of the rendered edge along the
+       * diagonal, so a selection outline drawn on that edge cannot reach it and
+       * be mistaken for a band.
+       */
+      const inset = 6;
+      return {
+        radius,
+        corner: [box.left + inset, box.bottom - inset] as [number, number],
+        middle: [box.left + box.width / 2, box.bottom - inset] as [
+          number,
+          number,
+        ],
+      };
+    });
+
+    // The corner really is outside the curve, stated here so the assertion below
+    // cannot be satisfied by a fixture that drifted into a gentler radius.
+    const depth = where.radius - 6;
+    expect((depth / where.radius) ** 2 * 2).toBeGreaterThan(1);
+
+    const before = await pixels(page, [where.corner, where.middle]);
+
+    await block.click();
+    await expect(page.locator(band("padding", "bottom"))).toHaveCount(1);
+
+    const after = await pixels(page, [where.corner, where.middle]);
+
+    /*
+     * The separating half FIRST: the band really did paint, at the same distance
+     * from the bottom edge, in the middle of the same strip. Without this the
+     * corner assertion is satisfied by an overlay that drew nothing at all.
+     */
+    expect(after[1]).not.toBe(before[1]);
+
+    // And the corner is untouched. Selecting a block must not colour the page
+    // beside it.
+    expect(after[0]).toBe(before[0]);
+  });
+
+  test("draws nothing for a block cut by a rounded ancestor's CORNER", async ({
+    page,
+  }) => {
+    /*
+     * A container with `border-radius` and `overflow: hidden` clips on the
+     * curve. A child inside all four padding edges can still lose a corner, and
+     * a rectangular comparison accepts it.
+     *
+     * The control is the point of the test as much as the refusal is: the
+     * rounded card is the ordinary layout, so an implementation that declined
+     * every rounded clipping ancestor would blank the overlay for most blocks on
+     * a real page and would pass a test that only checked the refusal.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.borderRadius = "100px";
+      // Holds the child clear of all four arcs without moving it out of the
+      // container, which is what makes the first phase a control and not a
+      // second copy of the refusal.
+      section.style.padding = "40px";
+    });
+    await target.click();
+
+    /** How far the child reaches past a corner's arc centre, per axis. */
+    const reach = () =>
+      page.evaluate(() => {
+        const section = document.querySelector(
+          '[data-nx-node="hx-section"]'
+        ) as HTMLElement;
+        const child = document.querySelector(
+          '[data-nx-node="hx-nested-text"]'
+        ) as HTMLElement;
+        const outer = section.getBoundingClientRect();
+        const box = child.getBoundingClientRect();
+        const radius = Number.parseFloat(
+          getComputedStyle(section).borderTopLeftRadius
+        );
+        const dx = outer.left + radius - box.left;
+        const dy = outer.top + radius - box.top;
+        return (dx / radius) ** 2 + (dy / radius) ** 2;
+      });
+
+    // CONTROL: inside the arc, and the bands are drawn.
+    expect(await reach()).toBeLessThan(1);
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).style.padding = "0px";
+    });
+
+    // The same block, now genuinely through the curve — and still inside all
+    // four straight edges, which is the case the rectangle comparison misses.
+    expect(await reach()).toBeGreaterThan(1);
+    await expect(page.locator(BAND)).toHaveCount(0);
+  });
+
+  test("keeps drawing at the corner of an ancestor that clips ONE axis", async ({
+    page,
+  }) => {
+    /*
+     * `overflow: clip visible` is the one mixed pair that survives computation,
+     * and it leaves the clip region unbounded on the visible axis — a corner
+     * needs two bounds to exist at all.
+     *
+     * Measured in Chromium: a child at the corner of a 60px-radius box under
+     * `overflow: clip visible` is painted in full, while the same child under
+     * `overflow: hidden` is cut away. Applying the arc on one axis would refuse
+     * a block nothing removes.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "clip visible";
+      section.style.borderRadius = "100px";
+      section.style.padding = "0px";
+    });
+    await target.click();
+
+    const axes = await page.evaluate(() => {
+      const style = getComputedStyle(
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      );
+      return [style.overflowX, style.overflowY];
+    });
+    // The separating property: only ONE axis clips. Were both clipping, the
+    // refusal would be correct and this test would pin the opposite of its name.
+    expect(axes).toEqual(["clip", "visible"]);
+
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
+  test("keeps drawing for a rounded block FLUSH inside a rounded container", async ({
+    page,
+  }) => {
+    /*
+     * The nested rounded card, and the case a rectangular comparison gets wrong
+     * in the opposite direction from the corner test above.
+     *
+     * A block whose curve matches the container it fills is not cut anywhere —
+     * but its BOUNDING RECTANGLE's corners lie outside every one of that
+     * container's arcs, so a check that reads only the rectangle refuses it and
+     * takes the whole overlay with it.
+     *
+     * The two boxes are given the same SIZE as well as the same radius, and that
+     * is not tidiness. CSS reduces the radii to fit the box, so the same
+     * declaration on two differently-sized boxes produces two different curves:
+     * on the seeded 1280x48 section a declared 60px is drawn at 24, while the
+     * 1280x24 child inside it is drawn at 12 — and that child really is cut.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.borderRadius = "60px";
+      section.style.padding = "0px";
+      section.style.height = "200px";
+      const child = document.querySelector(
+        '[data-nx-node="hx-nested-text"]'
+      ) as HTMLElement;
+      child.style.marginBottom = "24px";
+      // Matched to the container it fills, which is how the pattern is authored.
+      child.style.borderRadius = "60px";
+      child.style.height = "200px";
+    });
+    await target.click();
+
+    const geometry = await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      const child = document.querySelector(
+        '[data-nx-node="hx-nested-text"]'
+      ) as HTMLElement;
+      const outer = section.getBoundingClientRect();
+      const box = child.getBoundingClientRect();
+      const radius = Number.parseFloat(
+        getComputedStyle(section).borderTopLeftRadius
+      );
+      const dx = outer.left + radius - box.left;
+      const dy = outer.top + radius - box.top;
+      return {
+        cornerReach: (dx / radius) ** 2 + (dy / radius) ** 2,
+        sameBox:
+          Math.abs(box.left - outer.left) < 1.5 &&
+          Math.abs(box.top - outer.top) < 1.5 &&
+          Math.abs(box.right - outer.right) < 1.5 &&
+          Math.abs(box.bottom - outer.bottom) < 1.5,
+        sameRadius:
+          getComputedStyle(section).borderTopLeftRadius ===
+          getComputedStyle(child).borderTopLeftRadius,
+      };
+    });
+
+    /*
+     * The separating properties, asserted so this cannot pass for a reason other
+     * than the one it names. The two boxes coincide and carry the same
+     * declaration — so CSS reduces both by the same factor and the two curves
+     * are the same curve — while the block's RECTANGULAR corner is outside the
+     * container's arc, which is precisely what the earlier implementation
+     * refused on.
+     */
+    expect(geometry.sameBox).toBe(true);
+    expect(geometry.sameRadius).toBe(true);
+    expect(geometry.cornerReach).toBeGreaterThan(1);
+
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
+  test("draws nothing under an ancestor whose curve cannot be read", async ({
+    page,
+  }) => {
+    /*
+     * A radius the computed value does not resolve is a clip of UNKNOWN shape,
+     * and the block is refused rather than treated as sitting inside a square
+     * one — the same answer this package gives for every other geometry it
+     * cannot describe.
+     *
+     * Reachable, and measured: a percentage inside a math function still depends
+     * on the box, so `border-radius: calc(10% + 5px)` stays exactly that in the
+     * computed value where `calc(10px + 5px)` resolves to `15px`. The catalog
+     * accepts a `calc()` length, so an author reaches this from the inspector.
+     *
+     * The control comes first, with the resolvable form of the same declaration:
+     * a block clear of the corners keeps its bands, so the emptiness afterwards
+     * is the value being unreadable and not the shape being wrong.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.padding = "40px";
+      section.style.borderRadius = "calc(10px + 5px)";
+    });
+    await target.click();
+
+    const resolved = await page.evaluate(
+      () =>
+        getComputedStyle(
+          document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+        ).borderTopLeftRadius
+    );
+    // The control's radius really did resolve, so the bands below are drawn
+    // under a curve this can read.
+    expect(resolved).toBe("15px");
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+      ).style.borderRadius = "calc(10% + 5px)";
+    });
+
+    const unresolved = await page.evaluate(
+      () =>
+        getComputedStyle(
+          document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
+        ).borderTopLeftRadius
+    );
+    /*
+     * The separating property: the browser really did leave this unresolved. A
+     * version of Chromium that resolved it would make the refusal below wrong
+     * rather than merely untested, and this says so loudly instead.
+     */
+    expect(unresolved).toBe("calc(10% + 5px)");
+
+    await expect(page.locator(BAND)).toHaveCount(0);
+  });
+  test("keeps drawing under an ancestor whose overflow CANNOT clip", async ({
+    page,
+  }) => {
+    /*
+     * A computed `overflow` is not an overflow that clips. The property does not
+     * apply to every generated box, and the computed value says nothing about
+     * that — so an author who writes `overflow: hidden` where it has no effect
+     * would otherwise lose the whole overlay to a clip that does not exist.
+     *
+     * `display: contents` is the sharpest of the nine measured cases, because it
+     * fails twice over: the element generates NO BOX, so nothing clips AND
+     * `getBoundingClientRect` answers 0x0 — and a descendant compared against a
+     * zero-sized rectangle is outside it on every edge.
+     */
+    await page.goto(ROUTE);
+    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
+      ).style.marginBottom = "24px";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      section.style.borderRadius = "60px";
+      section.style.display = "contents";
+    });
+    await target.click();
+
+    const ancestor = await page.evaluate(() => {
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      const style = getComputedStyle(section);
+      const box = section.getBoundingClientRect();
+      return {
+        display: style.display,
+        overflow: style.overflowX,
+        area: box.width * box.height,
+      };
+    });
+
+    /*
+     * The separating properties. The computed overflow really does say `hidden`,
+     * so a reader that trusted it would act — and the box really is empty, so
+     * acting would refuse every descendant on the rectangle alone, before the
+     * curve was ever consulted.
+     */
+    expect(ancestor.display).toBe("contents");
+    expect(ancestor.overflow).toBe("hidden");
+    expect(ancestor.area).toBe(0);
+
+    await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
+});
