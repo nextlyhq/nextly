@@ -237,7 +237,14 @@ export function ResponseViewer({
         data-testid="response-toolbar"
         className="flex shrink-0 flex-col gap-1 border-b border-border bg-muted/30 px-6 py-1.5 @sm/response:flex-row @sm/response:items-center @sm/response:justify-between @sm/response:gap-2"
       >
-        <TabsList variant="ghost">
+        {/* The pane is draggable to a third of the group, which against a wide
+            sidebar leaves under 200px -- less than three nowrap triggers need
+            once the header count appears -- and the card clips rather than
+            scrolls, so Headers and Code simply vanish. `scrollable` is the
+            primitive's own answer; putting `overflow-x-auto` here instead would
+            make the rail its own scroll container and break the contract the
+            component depends on. */}
+        <TabsList variant="ghost" scrollable>
           <TabsTrigger value="body" size="sm">
             Body
           </TabsTrigger>
