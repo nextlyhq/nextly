@@ -59,6 +59,7 @@ import {
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
+  MAX_VALUE_LENGTH,
   breakpointContexts,
   hashId,
   isPlainRecord,
@@ -95,21 +96,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The encoding this module produces, carried inside every stamp.
+ * The generation of the input-to-CSS mapping this stamp identifies.
  *
- * A later change to what is serialized, or to how, makes old stamps describe a
- * different question — and comparing them would silently reuse artifacts nobody
- * re-judged. Bumping this invalidates them instead, which costs one recompile
- * each and is the safe direction.
+ * A stamp answers "would this compile to the same stylesheet". Two things decide
+ * that answer, and BOTH belong here:
+ *
+ * - what this module serializes, and how. A change makes old stamps describe a
+ *   different question, so comparing them reuses artifacts nobody re-judged.
+ * - what the COMPILER emits from that serialization. A stamp keys on inputs, so
+ *   it cannot see the compiler treating the same inputs differently — a value
+ *   the compiler starts refusing, a rule it stops writing, a selector it spells
+ *   another way. The inputs are unchanged, the stamp matches, and the stored
+ *   sheet is served for a compile that would no longer produce it.
+ *
+ * The second is the one with no other guard: nothing else in an artifact records
+ * which compiler wrote it. So bump this whenever a release changes what the
+ * compiler emits for inputs it already accepted, not only when this file
+ * changes. It costs one recompile per artifact, which is the safe direction —
+ * the unbumped alternative is a stale stylesheet served indefinitely, silently.
  */
-const ENCODING = "v1";
+const ENCODING = "v2";
 
 /**
  * The identity of shared inputs that decline to identify themselves.
  *
  * Deliberately not valid digest output: every stamp this module produces is
- * `v1:` followed by hex, and this contains neither, so no stored stamp can
- * equal it. That makes "compiled when the inputs were unknowable" mean
+ * the encoding above followed by `:` and a base-36 digest, and this contains
+ * neither separator nor digest, so no stored stamp can equal it. That makes "compiled when the inputs were unknowable" mean
  * recompile every time.
  *
  * The asymmetry that forces a sentinel rather than absence is the one
@@ -241,7 +254,37 @@ function leafText(value: unknown): string {
   if (value === null) return "null";
   switch (typeof value) {
     case "string":
-      return JSON.stringify(value);
+      // Bounded where the compiler bounds it. A style value past
+      // `MAX_VALUE_LENGTH` is refused before parsing and emits no declaration,
+      // so two of them produce identical CSS — carrying both in full invalidated
+      // a byte-identical sheet over a suffix nothing reads, and put an
+      // arbitrarily large allocation into every cache check.
+      //
+      // One character past the limit, which is what separates a value AT it —
+      // emitted, and preserved here in full — from one over it. Written as a
+      // slice rather than a branch because `slice` returns the string unchanged
+      // when it is shorter, so the ordinary case pays nothing.
+      //
+      // Applied to every string rather than to declaration values alone: the
+      // walk carries no notion of where it is, which is what keeps it from
+      // becoming a second reading of the envelope.
+      //
+      // That is sound only because no string the compiler emits can exceed the
+      // longest one this keeps. It is a claim about the COMPILER rather than
+      // about the positions a string is reachable from, and the engine states it
+      // as data: `EMITTABLE_STRING_BOUNDS` lists every bound on a string it can
+      // write, and `shared-style-inputs.test.ts` asserts each is at or under
+      // `MAX_VALUE_LENGTH`.
+      //
+      // Read from that list rather than named here, so a bound added to the
+      // compiler is covered without this file or its test being edited. A list
+      // restated at the consumer is a copy of the producer's set with nothing
+      // keeping the two in step.
+      //
+      // The label's other fields are carried whole and are subject to none of
+      // this: an unbounded string there costs allocation, not correctness,
+      // because it is never truncated and so can never make two inputs agree.
+      return JSON.stringify(value.slice(0, MAX_VALUE_LENGTH + 1));
     case "number":
     case "boolean":
       // `String`, not `JSON.stringify`, which writes `null` for NaN and for both

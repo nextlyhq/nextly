@@ -19,7 +19,6 @@ import {
   type Path,
 } from "react-hook-form";
 
-import { useTheme } from "@admin/context/providers/ThemeProvider";
 import { cn } from "@admin/lib/utils";
 
 // Lazy load CodeMirror and its dependencies to avoid SSR issues with Prism
@@ -158,10 +157,6 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
   readOnly = false,
   className,
 }: CodeInputProps<TFieldValues>) {
-  // resolvedTheme, not theme: the default is "system", which never equals
-  // "dark" and would leave the editor on its light palette inside a dark admin.
-  const { resolvedTheme } = useTheme();
-
   // SSR guard - only render CodeMirror on the client
   const [isMounted, setIsMounted] = useState(false);
 
@@ -221,7 +216,6 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
             value={value ?? ""}
             onChange={handleChange}
             language={language}
-            theme={resolvedTheme === "dark" ? "dark" : "light"}
             disabled={disabled}
             readOnly={readOnly}
             minHeight={minHeight}

@@ -26,6 +26,8 @@ import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { TableCellNode, TableNode, TableRowNode } from "@lexical/table";
 import type { Klass, LexicalNode } from "lexical";
 
+import { codeClass } from "@admin/lib/code-palette";
+
 import { ButtonGroupNode } from "./ButtonGroupNode";
 import { ButtonLinkNode } from "./ButtonLinkNode";
 import {
@@ -89,41 +91,41 @@ const editorTheme = {
   // Links
   link: "text-primary underline hover-unified cursor-pointer",
 
-  // Code blocks. The tokenizer names what each token is; these classes decide
-  // how it looks, so the palette lives in the design tokens and both modes are
-  // settled by CSS rather than stored with the content.
+  // Code blocks. The tokenizer names what each token is; the construct table
+  // decides what that is worth, so a colour is never chosen here and cannot
+  // disagree with the CodeMirror surfaces that read the same table.
   code: "block bg-code-bg text-code-fg p-4 rounded-md font-mono text-sm mb-2 overflow-x-auto",
   codeHighlight: {
-    atrule: "text-code-keyword",
-    attr: "text-code-function",
-    boolean: "text-code-number",
-    builtin: "text-code-function",
-    cdata: "text-code-comment",
-    char: "text-code-string",
-    class: "text-code-variable",
-    "class-name": "text-code-variable",
-    comment: "text-code-comment italic",
-    constant: "text-code-number",
-    deleted: "text-code-deleted",
-    doctype: "text-code-comment",
-    entity: "text-code-tag",
-    function: "text-code-function",
-    important: "text-code-tag font-bold",
-    inserted: "text-code-inserted",
-    keyword: "text-code-keyword",
-    namespace: "text-code-comment",
-    number: "text-code-number",
-    operator: "text-code-operator",
-    prolog: "text-code-comment",
-    property: "text-code-function",
-    punctuation: "text-code-punctuation",
-    regex: "text-code-string",
-    selector: "text-code-tag",
-    string: "text-code-string",
-    symbol: "text-code-number",
-    tag: "text-code-tag",
-    url: "text-code-function underline",
-    variable: "text-code-variable",
+    atrule: codeClass("keyword"),
+    attr: codeClass("function"),
+    boolean: codeClass("number"),
+    builtin: codeClass("function"),
+    cdata: codeClass("comment"),
+    char: codeClass("string"),
+    class: codeClass("variable"),
+    "class-name": codeClass("variable"),
+    comment: `${codeClass("comment")} italic`,
+    constant: codeClass("number"),
+    deleted: codeClass("deleted"),
+    doctype: codeClass("comment"),
+    entity: codeClass("tag"),
+    function: codeClass("function"),
+    important: `${codeClass("tag")} font-bold`,
+    inserted: codeClass("inserted"),
+    keyword: codeClass("keyword"),
+    namespace: codeClass("comment"),
+    number: codeClass("number"),
+    operator: codeClass("operator"),
+    prolog: codeClass("comment"),
+    property: codeClass("function"),
+    punctuation: codeClass("punctuation"),
+    regex: codeClass("string"),
+    selector: codeClass("tag"),
+    string: codeClass("string"),
+    symbol: codeClass("number"),
+    tag: codeClass("tag"),
+    url: `${codeClass("function")} underline`,
+    variable: codeClass("variable"),
   },
 
   // Tables

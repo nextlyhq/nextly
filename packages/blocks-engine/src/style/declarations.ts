@@ -71,14 +71,60 @@ export interface CompiledDeclarations {
 const TOKEN_NAME_RE = /^[a-z0-9]+(?:[-.][a-z0-9]+)*$/;
 
 /**
+ * The longest name this engine will write as a token.
+ *
+ * The grammar above bounds the ALPHABET and not the length, so a name of
+ * megabytes of otherwise-valid characters satisfies it, is scanned in full by
+ * the regex on every compile, and is copied into a `var()` on every rule that
+ * references it. `MAX_NAMED_CLASS_NAME_LENGTH` exists for exactly this reason
+ * one file over; a token name reaches CSS the same way and had no equivalent.
+ *
+ * Deliberately NOT the 128 that bounds a class name, because the two are
+ * produced by different mechanisms. A class slug is typed by a person. A token
+ * name is composed — `readToken` joins a design-token file's nested group path
+ * with dots, so its length is set by how deeply an imported file nests rather
+ * than by anything anyone types. Real token paths run 30-65 characters
+ * (`md.sys.color.on-surface-variant`); 256 sits an order of magnitude above
+ * that, so no realistic import meets it, while still bounding both the scan and
+ * the copy. Inheriting the class-name number would have applied a limit
+ * calibrated for hand-typed input to a value nesting depth produces.
+ */
+export const MAX_TOKEN_NAME_LENGTH = 256;
+
+/**
  * Whether a name may be written as a token, on either side of the reference.
  *
  * One grammar for the table and for the `$token` that reads it. Two would
  * disagree the moment either moved, and the disagreement has no symptom to
  * follow: a table accepting `Color.Primary` while a reference refuses it leaves
  * a token that exists, resolves to nothing, and reports no reason.
+ *
+ * Length BEFORE the pattern, so the cheap test is what rejects an oversized
+ * name: run the other way round, the regex scans the whole string first and the
+ * cap bounds nothing it was added to bound.
  */
 export function isTokenName(name: string): boolean {
+  return name.length <= MAX_TOKEN_NAME_LENGTH && isAuthorableTokenName(name);
+}
+
+/**
+ * Whether a name may be WRITTEN as a token name, without asking whether it can
+ * be emitted.
+ *
+ * The grammar half of {@link isTokenName}, separated because the two answer
+ * different questions and one value can need only the first. A token's identity
+ * is `id ?? name`, so a renamed token emits under its id and its display name
+ * reaches no stylesheet at all — holding that name to the emission cap would
+ * refuse a token whose every emitted string is well within it, and the token
+ * would vanish from the site sheet on being renamed.
+ *
+ * So: this for a value that is only ever read by a person, {@link isTokenName}
+ * for one that reaches CSS. Bounded is the default and the wider name; a caller
+ * has to reach for this one deliberately, which is the safe direction — using
+ * the bounded predicate where the grammar alone was needed refuses a little too
+ * much, while the reverse writes an unbounded string into a stylesheet.
+ */
+export function isAuthorableTokenName(name: string): boolean {
   return TOKEN_NAME_RE.test(name);
 }
 
@@ -105,16 +151,54 @@ const RESERVED_TOKEN_PREFIXES = ["--nx-", "--tw-"] as const;
 const TOKEN_PREFIX_RE = /^--[a-z0-9-]*$/;
 
 /**
+ * The longest custom-property prefix this engine will write.
+ *
+ * The pattern above constrains the alphabet and not the length, and the prefix
+ * is copied into every token definition and every `var()` that reads one — so
+ * one oversized stored value is written once per token and once per reference,
+ * on every compile.
+ *
+ * Small because a prefix is small: `--site-` is seven characters and a vendor
+ * prefix is not much more. Set well clear of that and still far below anything
+ * a person would type by accident, so the cap is only met by data already wrong.
+ */
+export const MAX_TOKEN_PREFIX_LENGTH = 64;
+
+/**
+ * The most dot-separated parts a token name may hold.
+ *
+ * A name's segments are structure rather than characters: the DTCG exporter
+ * writes one nested group per segment, and the reader walks those groups
+ * recursively, so a deep enough name produces a file this package cannot read
+ * back. Bounded separately from the length cap because depth is what breaks
+ * there, and because a renamed token's label is deliberately free of the length
+ * cap — it is not emitted.
+ *
+ * Well above any real token path: `md.sys.color.on-surface-variant` is five.
+ */
+export const MAX_TOKEN_NAME_SEGMENTS = 32;
+
+/**
  * The prefix to write tokens under, or the default when the supplied one cannot
  * be used. Reports rather than throwing, in keeping with everything else here:
  * one bad setting should cost the tokens, not the page.
  */
-export function safeTokenPrefix(prefix: string | undefined): {
+export function safeTokenPrefix(prefix: unknown): {
   prefix: string;
   warning?: string;
 } {
   if (prefix === undefined) return { prefix: DEFAULT_TOKEN_PREFIX };
-  if (!TOKEN_PREFIX_RE.test(prefix)) {
+  // TYPE before length before pattern, and the parameter is `unknown` because
+  // that is what actually arrives: this reads a persisted site setting, so a
+  // stored `null` is not the absent value handled above, and reading `.length`
+  // off it aborts the compile this function exists to keep going. Length then
+  // precedes the pattern so the cheap test rejects an oversized value rather
+  // than the regex scanning it in full first.
+  if (
+    typeof prefix !== "string" ||
+    prefix.length > MAX_TOKEN_PREFIX_LENGTH ||
+    !TOKEN_PREFIX_RE.test(prefix)
+  ) {
     return {
       prefix: DEFAULT_TOKEN_PREFIX,
       warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. A prefix starts with "--" and holds only lowercase letters, digits and dashes.`,

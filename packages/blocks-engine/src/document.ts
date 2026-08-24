@@ -451,6 +451,48 @@ export const MAX_BREAKPOINTS_PER_AXIS = 7;
 export const MAX_BREAKPOINT_ID_LENGTH = 128;
 
 /**
+ * The grammar a block type follows: two lowercase slug segments around one `/`.
+ *
+ * Held here, in the document model, because a block type is a document-model
+ * fact rather than a property of any one consumer. Registration, validation and
+ * compilation all decide whether a value is a type, and each asking its own
+ * question is how they come to disagree about the same string.
+ */
+const BLOCK_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The longest block type this engine accepts.
+ *
+ * The grammar constrains the alphabet and not the length, so a type of megabytes
+ * of otherwise-valid characters satisfies it, is scanned in full wherever it is
+ * checked, and is copied into a selector for every rule its defaults produce.
+ * The same reason `MAX_BREAKPOINT_ID_LENGTH` and `MAX_NAMED_CLASS_NAME_LENGTH`
+ * exist, and the same value: far above a namespaced slug anyone types, so it is
+ * only ever met by data that is already wrong.
+ */
+export const MAX_BLOCK_TYPE_LENGTH = 128;
+
+/**
+ * Whether a value is a usable block type.
+ *
+ * Length before the pattern, so the cheap test is what rejects an oversized
+ * value: the other way round, the regex scans the whole string first and the cap
+ * bounds nothing it exists to bound.
+ *
+ * This is the ONE answer. A consumer that bounds the type where another does not
+ * accepts a value its neighbour rejects — a block registers and validates while
+ * the compiler silently omits its defaults, so it renders without the look it
+ * declared and nothing reports why.
+ */
+export function isBlockType(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_BLOCK_TYPE_LENGTH &&
+    BLOCK_TYPE_RE.test(value)
+  );
+}
+
+/**
  * Maximum named classes read from the site library on one compile.
  *
  * The library is site settings, not part of a document, so the document's own byte cap does not
