@@ -55,7 +55,7 @@ export type { PageRendererProps } from "./page-renderer";
  * reaches the trace, so every value from a named class reports as set by nobody.
  */
 export { pageStyleTrace } from "./page-style-trace";
-export type { PageStyleTraceInput } from "./page-style-trace";
+export type { PageStyleCascade, PageStyleTraceInput } from "./page-style-trace";
 
 export type {
   DarkModeStrategy,

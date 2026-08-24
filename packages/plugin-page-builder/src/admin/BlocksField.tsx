@@ -669,7 +669,26 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * declaration in the trace, so every value from a named class reads as set by
    * nobody, and a `url(...)` this host refuses reads as active.
    */
-  const styleTrace = useMemo(
+  /*
+   * ONE breakpoint set object for the inspector, held across renders.
+   *
+   * `siteBreakpoints` returns a fresh `{ viewport: [], container: [] }` when no
+   * site style is stored, so passing the call inline handed the panel a new
+   * object on every render of this component — and the panel subscribes to a
+   * media query per breakpoint in an effect keyed on it. Every keystroke in the
+   * editor therefore tore down and rebuilt those listeners. Not a loop, and
+   * nothing visibly broke; it is churn on a path that runs on every edit.
+   *
+   * Memoised on the stored style rather than on the derived set, because the
+   * derived set is the thing that cannot be compared — a fresh empty object is
+   * never equal to the last one.
+   */
+  const inspectorBreakpoints = useMemo(
+    () => siteBreakpoints(canvasSiteStyle),
+    [canvasSiteStyle]
+  );
+
+  const styleCascade = useMemo(
     () =>
       /*
        * Withheld on exactly the states the CANVAS is withheld on, and for the
@@ -792,8 +811,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           <InspectorPanel
             editor={editor}
             policy={stylePolicy}
-            trace={styleTrace}
-            breakpoints={siteBreakpoints(canvasSiteStyle)}
+            cascade={styleCascade}
+            breakpoints={inspectorBreakpoints}
             tokens={offerableTokens(
               canvasSiteStyle,
               siteStylePending,

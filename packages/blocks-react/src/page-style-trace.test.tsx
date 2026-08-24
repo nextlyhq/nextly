@@ -121,14 +121,14 @@ describe("the tree an editor's cascade read is compiled from", () => {
     );
     expect(html).toContain("magenta");
 
-    const trace = pageStyleTrace({
+    const cascade = pageStyleTrace({
       document,
       styleContext: { breakpoints: BREAKPOINTS },
       site: undefined,
       blocks: resolver,
     });
 
-    expect(trace?.map(entry => entry.property)).toContain("color");
+    expect(cascade?.entries.map(entry => entry.property)).toContain("color");
   });
 
   it("drops a child whose parent renders as a placeholder", async () => {
@@ -152,7 +152,7 @@ describe("the tree an editor's cascade read is compiled from", () => {
     );
     expect(html).not.toContain("magenta");
 
-    const trace = pageStyleTrace({
+    const cascade = pageStyleTrace({
       document,
       styleContext: { breakpoints: BREAKPOINTS },
       site: undefined,
@@ -161,7 +161,9 @@ describe("the tree an editor's cascade read is compiled from", () => {
 
     // Not `toBeUndefined`: the read succeeded and answered. What it must not
     // carry is the pruned child's declaration.
-    expect(trace).toBeDefined();
-    expect(trace?.map(entry => entry.property)).not.toContain("color");
+    expect(cascade).toBeDefined();
+    expect(cascade?.entries.map(entry => entry.property)).not.toContain(
+      "color"
+    );
   });
 });
