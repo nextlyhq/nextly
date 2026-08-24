@@ -393,16 +393,81 @@ function nodeRootReason(
   // that legitimately draws nothing from a wrapper root says so through
   // `rendersNothing`, which is computed from props and cannot vary.
   if (declaresNothing || rendersNothing(output)) return null;
+  const shape = noHostRootReason(output);
+  if (shape === null) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
   // A primitive or a list, on the other hand, is real output with no single
   // element to carry the fields, so it loses them anyway — silently, and with
   // the same broken anchors as a wrapper root. The format says a block renders
   // a single element for these to target.
-  if (!isValidElement(output)) {
-    return `a node carrying ${named} whose block returned no element, so there is no DOM root to put them on`;
-  }
+  return `a node carrying ${named} whose block ${shape}, so there is no DOM root to put them on`;
+}
+
+/**
+ * Why this output gives the node no single host element, or `null` when it does.
+ *
+ * The SHAPE question alone, separated from what the document asked for, because
+ * two readers need it and they must not answer it apart: the placeholder above
+ * decides whether root fields can land, and the warning below tells a block
+ * author their block does not conform at all. A second copy would let the two
+ * disagree about the same output.
+ *
+ * Asked of what the boundary RECEIVED, never of what a definition predicts.
+ * A prediction is a second model of a thing this function already knows
+ * first-hand, and the two drift; the artifact is the only witness.
+ */
+function noHostRootReason(output: ReactNode): string | null {
+  if (!isValidElement(output)) return "returned no element";
   if (typeof output.type === "string") return null;
-  return `a node carrying ${named} whose block returned a wrapper rather than an element, so there is no DOM root to put them on`;
+  return "returned a wrapper rather than an element";
+}
+
+/**
+ * Tells a BLOCK AUTHOR, in development, that their block does not conform.
+ *
+ * `BlockRenderArgs.className` states the contract every block is handed: "The
+ * generated class the block MUST place on its own root element. Blocks render a
+ * single element and never wrap it, so styles target that element." A block
+ * returning a Fragment, a list or a primitive has nowhere to put that class, so
+ * its compiled styles never apply — it is already broken, and nothing said so.
+ *
+ * The only signal today arrives through the placeholder above, which fires when
+ * a DOCUMENT asks for `cssId` or an attribute. That blames the wrong party at
+ * the wrong time: a page author sets an anchor and watches the block vanish,
+ * having done nothing wrong, while the block author never hears about it. This
+ * fires on the first render instead, whether or not anyone asked for anything.
+ *
+ * NOT deduplicated by type. A module-scoped set would either couple one test's
+ * warning to another's or need a reset API exported for tests to call, and this
+ * fires only for a block that is already broken — which in development is one
+ * or two instances on screen, not a page full. If that stops being true,
+ * deduplicating is a change with its own reset rather than hidden state added
+ * to this one.
+ *
+ * A warning is not an EXEMPTION, which is why reading the output here is safe
+ * where granting one from it would not be: nothing about the render changes,
+ * so a reading React need not repeat can at worst produce a wrong message.
+ */
+function warnNoHostRoot(
+  output: ReactNode,
+  node: BlockNode,
+  declaresNothing: boolean
+): void {
+  // Read at render rather than module scope, so a consumer's bundler can inline
+  // it per build and a test can exercise both modes in one process. Read
+  // defensively: this renderer runs anywhere React does, and an Edge or Worker
+  // runtime need not define `process` at all.
+  const isProduction =
+    typeof process !== "undefined" && process.env?.NODE_ENV === "production";
+  if (isProduction) return;
+  // Rendering nothing is a DECISION, not a violation — the same exemption the
+  // placeholder grants, asked the same way.
+  if (declaresNothing || rendersNothing(output)) return;
+  const shape = noHostRootReason(output);
+  if (shape === null) return;
+  console.warn(
+    `[nextly] Block "${node.type}" ${shape}. Blocks render a single element and never wrap it, so the generated class has nowhere to go and this block's styles do not apply. Setting an id or an attribute on it will replace it with a placeholder.`
+  );
 }
 
 /**
@@ -458,6 +523,10 @@ function checkedOutput(
     );
   }
 
+  // Warned INDEPENDENTLY of whether the document asked for root fields: the
+  // block is non-conforming either way, and waiting for someone to set an
+  // anchor is what made a page author look responsible for it.
+  if (isBlockRoot) warnNoHostRoot(result.node, node, declaresNothing);
   const rootReason = isBlockRoot
     ? nodeRootReason(result.node, node, declaresNothing)
     : null;

@@ -5349,3 +5349,86 @@ describe("PageRenderer", () => {
     });
   });
 });
+
+describe("a block that does not render a single element", () => {
+  /*
+   * `BlockRenderArgs.className` is the contract every block author is handed:
+   * "The generated class the block MUST place on its own root element. Blocks
+   * render a single element and never wrap it, so styles target that element."
+   *
+   * A block returning a Fragment has nowhere to put that class, so its compiled
+   * styles never apply — it is already broken. Until now the only signal came
+   * from the placeholder, which fires when a DOCUMENT asks for `cssId` or an
+   * attribute: the page author who set an anchor watched the block vanish,
+   * while the block author never heard about it.
+   */
+  const wrapped = defineBlock<{ value: string }>({
+    name: "test/wrapped",
+    version: 1,
+    description: "Wraps its output in a fragment, against the contract.",
+    example: { props: { value: "hi" } },
+    defaultProps: { value: "" },
+    render: ({ props }) => (
+      <>
+        <p>{props.value}</p>
+      </>
+    ),
+  });
+
+  const renderWith = async (
+    definition: AnyBlockDefinition,
+    extra: Partial<BlockNode> = {}
+  ): Promise<string> =>
+    renderToHtml(
+      <PageRenderer
+        document={doc(node("a", definition.name, extra))}
+        blocks={createBlockResolver([definition])}
+      />
+    );
+
+  it("warns the BLOCK author on the first render, asked for nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(wrapped as AnyBlockDefinition);
+      // The control on the assertions below: the block RENDERED. Its output is
+      // on the page, so this is not a placeholder case and nobody asked for a
+      // root field — the warning is the only thing that fired.
+      expect(html).not.toMatch(PLACEHOLDER);
+      expect(html).toContain("<p>");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/wrapped");
+      expect(said).toContain("returned a wrapper rather than an element");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a block that renders one element", async () => {
+    // The control that stops this warning firing on every conforming block.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await renderWith(text as AnyBlockDefinition);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a block that draws nothing on purpose", async () => {
+    /*
+     * Rendering nothing is a DECISION, not a violation — `core/image` with no
+     * source returns null deliberately. The same exemption the placeholder
+     * grants, asked the same way, or every conditional block would be scolded
+     * for working correctly.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await renderWith(drawless as AnyBlockDefinition, {
+        props: { draw: false },
+      });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
