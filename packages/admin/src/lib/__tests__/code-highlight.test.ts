@@ -64,12 +64,15 @@ function codeTokensIn(selector: string): Set<string> {
 }
 
 /**
- * The chrome's own tokens.
+ * Tokens outside the construct table, named here because nothing derives them.
  *
- * Consumed by `nextlyEditorChrome` rather than by the construct table, which is
- * why they are named here rather than derived. They still have to be declared
- * in BOTH blocks: losing `--nx-code-fg` from `.dark` leaves code inheriting a
- * foreground picked for a white page.
+ * They have different consumers, which matters to anyone updating this list:
+ * `--nx-code-fg` is the editor's own foreground, set by `nextlyEditorChrome`,
+ * while `--nx-code-bg` is the rich-text code BLOCK's surface, reached through
+ * the `bg-code-bg` utility in `rich-text-kit.ts` and by no editor at all.
+ *
+ * Both still have to be declared in BOTH blocks: losing `--nx-code-fg` from
+ * `.dark` leaves code inheriting a foreground picked for a white page.
  */
 const CHROME_TOKENS = ["--nx-code-bg", "--nx-code-fg"];
 
