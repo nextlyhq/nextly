@@ -3,7 +3,12 @@ import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
-import { describeThrown, isThenable, normalizeRenderable } from "./renderable";
+import {
+  createsNoHostElement,
+  describeThrown,
+  isThenable,
+  normalizeRenderable,
+} from "./renderable";
 import type { BlockResolver } from "./resolver";
 import { isUnconditional } from "./visibility";
 
@@ -344,7 +349,17 @@ function nodeRootReason(
    * React afterwards, and every accessor, proxy trap and custom iterator in it
    * can answer differently the second time.
    */
-  declaresNothing: boolean
+  declaresNothing: boolean,
+  /**
+   * How the output was classified, read ONCE by the caller.
+   *
+   * Passed in rather than read again here. The warning above asks the same
+   * question of the same value, and a second reading is a second chance for an
+   * author-controlled accessor to answer differently — which for this policy
+   * means throwing on a path with no guard over it, taking the page instead of
+   * producing the placeholder this function exists to produce.
+   */
+  shape: RootShape
 ): string | null {
   const hasCssId = typeof node.cssId === "string";
   const attributes = node.attributes;
@@ -393,16 +408,262 @@ function nodeRootReason(
   // that legitimately draws nothing from a wrapper root says so through
   // `rendersNothing`, which is computed from props and cannot vary.
   if (declaresNothing || rendersNothing(output)) return null;
+  const noRoot = noHostRootReason(shape);
+  if (noRoot === null) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
   // A primitive or a list, on the other hand, is real output with no single
   // element to carry the fields, so it loses them anyway — silently, and with
   // the same broken anchors as a wrapper root. The format says a block renders
   // a single element for these to target.
-  if (!isValidElement(output)) {
-    return `a node carrying ${named} whose block returned no element, so there is no DOM root to put them on`;
+  return `a node carrying ${named} whose block ${noRoot}, so there is no DOM root to put them on`;
+}
+
+/**
+ * Why this output gives the node no single host element, or `null` when it does.
+ *
+ * The SHAPE question alone, separated from what the document asked for, because
+ * two readers need it and they must not answer it apart: the placeholder above
+ * decides whether root fields can land, and the warning below tells a block
+ * author their block does not conform at all. A second copy would let the two
+ * disagree about the same output.
+ *
+ * Asked of what the boundary RECEIVED, never of what a definition predicts.
+ * A prediction is a second model of a thing this function already knows
+ * first-hand, and the two drift; the artifact is the only witness.
+ */
+function noHostRootReason(shape: RootShape): string | null {
+  switch (shape) {
+    case "host":
+      return null;
+    case "none":
+      return "returned no element";
+    case "builtin":
+    case "component":
+      return "returned a wrapper rather than an element";
   }
-  if (typeof output.type === "string") return null;
-  return `a node carrying ${named} whose block returned a wrapper rather than an element, so there is no DOM root to put them on`;
+}
+
+/**
+ * What KIND of root a block's output gives the node.
+ *
+ * The classification itself, held ONCE, because two policies read it and must
+ * not classify apart. The placeholder above decides whether root fields can
+ * land; the warning below decides whether to tell an author their block is
+ * broken. Those are different questions with opposite safe directions — each
+ * says which, beside itself — but they are the same READING, and a second copy
+ * of the reading is where recognising another wrapper kind updates one answer
+ * and leaves the other behind.
+ *
+ * Asked of what the boundary RECEIVED, never of what a definition predicts. A
+ * prediction is a second model of something this already knows first-hand, and
+ * the two drift; the artifact is the only witness.
+ */
+type RootShape = "host" | "component" | "builtin" | "none";
+
+function rootShapeOf(output: ReactNode): RootShape {
+  if (!isValidElement(output)) return "none";
+  // A string type is a host element, and the only shape that HAS a root.
+  if (typeof output.type === "string") return "host";
+  /*
+   * React's own wrappers — a fragment, a suspense boundary, a context provider
+   * or consumer — create no element of their own, so none of them is a root the
+   * generated class can be attached to. Whether the block forwarded that class
+   * to a child is a separate question, and not one this classification answers.
+   *
+   * ASKED rather than restated. `renderable.ts` already separates those from
+   * `memo`, `forwardRef` and `lazy`, which wrap a component that may well
+   * render a host element and forward the class to it; a second reading of the
+   * same tags here is where the two would come to disagree.
+   */
+  if (createsNoHostElement(output.type)) return "builtin";
+  /*
+   * Everything else is a COMPONENT, which cannot be called broken: it may
+   * render a host element and forward `className`, and only calling it would
+   * say. That is deliberate under-reporting, and the cheaper error for a
+   * diagnostic — a warning that is sometimes false is one people learn to
+   * scroll past.
+   */
+  return "component";
+}
+
+/**
+ * {@link rootShapeOf} with a floor under it, called ONCE per block root.
+ *
+ * The classification touches `output.type` and the tag on the type object, both
+ * author-controlled, and both readable more than once with different answers: a
+ * getter that counts, a proxy that flips. Reproduced against React 19 with a
+ * context-tagged type whose `$$typeof` accessor throws on its seventh read —
+ * the read the placeholder path made, which had no guard, so the throw left
+ * this package entirely and the stream never settled. Not "the page shows an
+ * error": nothing resolved at all.
+ *
+ * So the reading happens here, once, and both policies are handed the result.
+ * `unreadable` is a real answer rather than an exception, and the caller turns
+ * it into the placeholder every other unusable output already gets — the same
+ * direction `isRenderableElementType` takes for a type React would refuse:
+ * refusing something valid shows up as a placeholder, accepting something
+ * invalid takes the page.
+ */
+function readRootShape(output: ReactNode): RootShape | "unreadable" {
+  try {
+    return rootShapeOf(output);
+  } catch {
+    return "unreadable";
+  }
+}
+
+/**
+ * Why this output is DEFINITELY not the single element the contract asks for,
+ * or `null` when it might be.
+ *
+ * Deliberately NARROWER than {@link noHostRootReason}, and the difference is
+ * the point rather than a duplication of it. That one asks whether the renderer
+ * may attach root fields, and answers no for a component root because it cannot
+ * know the component forwards them — conservative in the direction of refusing,
+ * which is right when an anchor is at stake.
+ *
+ * This one asks whether to tell an author their block is broken, where the safe
+ * direction is the opposite. A component that renders one host element and
+ * forwards `className` is a legitimate shape whose compiled styles DO apply, so
+ * warning about it would be false, and a diagnostic that is sometimes false is
+ * one people learn to scroll past. Only shapes with no root element of their
+ * own are named: no element, or a wrapper.
+ *
+ * Naming a shape is not a claim that its styles are lost. A wrapper root can
+ * still forward the class to a child, and the warning above says so — what it
+ * reports is the shape, which is outside the contract whatever the block did
+ * with the class.
+ */
+function brokenRootReason(shape: RootShape): string | null {
+  switch (shape) {
+    // A COMPONENT is not broken: one that renders a host element and forwards
+    // `className` gets its compiled styles applied. The placeholder still
+    // refuses to attach root fields to it, not being able to know that — which
+    // is the one place these two policies part company.
+    case "host":
+    case "component":
+      return null;
+    case "none":
+      return "returned no element";
+    case "builtin":
+      return "returned a wrapper rather than an element";
+  }
+}
+
+/**
+ * Tells a BLOCK AUTHOR, in development, that their block does not conform.
+ *
+ * `BlockRenderArgs.className` states the contract every block is handed: "The
+ * generated class the block MUST place on its own root element. Blocks render a
+ * single element and never wrap it, so styles target that element." A block
+ * returning a Fragment, a list or a primitive gives that class no root element
+ * to sit on — it is already outside the contract, and nothing said so.
+ *
+ * NOT "its styles never apply", which is the stronger claim and is false for
+ * one real shape: a wrapper whose child takes the class renders it into the
+ * DOM, and the compiled CSS then matches normally. What that block loses is the
+ * node's ROOT FIELDS, which are attached here and have nowhere to go — so the
+ * warning is right and the diagnosis has to be the narrower one.
+ *
+ * The only signal today arrives through the placeholder above, which fires when
+ * a DOCUMENT asks for `cssId` or an attribute. That blames the wrong party at
+ * the wrong time: a page author sets an anchor and watches the block vanish,
+ * having done nothing wrong, while the block author never hears about it. This
+ * fires on the first render instead, whether or not anyone asked for anything.
+ *
+ * NOT deduplicated by type. A module-scoped set would either couple one test's
+ * warning to another's or need a reset API exported for tests to call, and this
+ * fires only for a block that is already broken — which in development is one
+ * or two instances on screen, not a page full. If that stops being true,
+ * deduplicating is a change with its own reset rather than hidden state added
+ * to this one.
+ *
+ * A warning is not an EXEMPTION, which is why reading the output here is safe
+ * where granting one from it would not be: nothing about the render changes,
+ * so a reading React need not repeat can at worst produce a wrong message.
+ */
+function warnNoHostRoot(
+  output: ReactNode,
+  node: BlockNode,
+  declaresNothing: boolean,
+  /** How the output was classified, read once by the caller. */
+  shape: RootShape
+): void {
+  /*
+   * Speaks only where the environment is POSITIVELY identified as one a
+   * developer is watching. Read at render rather than module scope, so a
+   * consumer's bundler can inline it per build and a test can exercise several
+   * environments in one process.
+   *
+   * Everything else stays silent, which is the opposite of how the placeholder
+   * reads the same signal and deliberately so: a placeholder is a visible box
+   * on a block that is already broken, while this is an undeduplicated line on
+   * every render of every affected block. Unable to tell, a diagnostic says
+   * nothing.
+   *
+   * Being unable to tell has more than one shape, which is what a check for
+   * `process === undefined` missed. This renderer runs anywhere React does: an
+   * Edge or Worker runtime need not define `process`, a standalone SSR host can
+   * expose a partial shim with no `NODE_ENV`, and a deployment may name its
+   * environment something this does not recognise. Asking which environments
+   * may speak covers all of them at once; asking which must stay quiet is a
+   * list, and a list falls behind toward noise in production.
+   *
+   * The cost is a bare harness that sets no `NODE_ENV` hearing nothing. For an
+   * advisory diagnostic that is the cheaper error: a miss costs the report,
+   * while a false one in production teaches everyone to filter the message.
+   */
+  try {
+    /*
+     * Read INSIDE the guard, because reading it is itself author-exposed. A
+     * standalone SSR host supplies its own `process`, and `env` can be a
+     * throwing getter or a proxy — so `process.env?.NODE_ENV` raises before a
+     * `try` placed after it ever begins. The synchronous call to
+     * `checkedOutput` sits PAST the try that contains `render`, as the comment
+     * at that call site says, so a raise here does not become a placeholder: it
+     * takes the page. An advisory diagnostic aborting the render is the exact
+     * thing this function promises not to do.
+     *
+     * Failing to read it lands in the catch below and says nothing, which is
+     * the same answer the checks below give any environment that cannot be
+     * positively identified. Unable to tell, a diagnostic stays quiet.
+     */
+    const environment =
+      typeof process === "undefined" ? undefined : process.env?.NODE_ENV;
+    if (environment !== "development" && environment !== "test") return;
+    // Rendering nothing is a DECISION, not a violation — the same exemption the
+    // placeholder grants, asked the same way.
+    if (declaresNothing || rendersNothing(output)) return;
+    const broken = brokenRootReason(shape);
+    if (broken === null) return;
+    /*
+     * Says what is CERTAIN and nothing more. The class is handed to the block
+     * rather than attached here, so a wrapper root that forwards it to a child
+     * — `({ className }) => <><div className={className} /></>` — does get its
+     * compiled styles, on a page whose DOM carries the class. Telling that
+     * author their styles do not apply sends them hunting a failure that is not
+     * there, and a diagnostic people find wrong once is one they stop reading.
+     *
+     * What IS certain either way: the shape is outside the contract, the node
+     * has no root element of its own, and its root fields therefore have
+     * nowhere to go. The style consequence is stated as the condition it
+     * actually is.
+     */
+    console.warn(
+      `[nextly] Block "${node.type}" ${broken}. Blocks render a single element and never wrap it: with no root element of its own, this block's styles apply only where the block itself placed the class, and setting an id or an attribute on the node will replace it with a placeholder.`
+    );
+  } catch {
+    /*
+     * A DIAGNOSTIC must never be the thing that fails the page, and this call
+     * sits past the try block that contains `render`.
+     *
+     * It no longer covers the CLASSIFICATION, which was the exposure it was
+     * written for: that is read once by {@link readRootShape}, under its own
+     * floor, and arrives here as a value. What it covers now is the environment
+     * read above, `rendersNothing` over an array this renderer materialised,
+     * and the `console` call itself.
+     */
+  }
 }
 
 /**
@@ -458,9 +719,38 @@ function checkedOutput(
     );
   }
 
-  const rootReason = isBlockRoot
-    ? nodeRootReason(result.node, node, declaresNothing)
-    : null;
+  // Warned INDEPENDENTLY of whether the document asked for root fields: the
+  // block is non-conforming either way, and waiting for someone to set an
+  // anchor is what made a page author look responsible for it.
+  /*
+   * Classified ONCE, and both policies below read that value rather than the
+   * output. They ask the same question of the same author-controlled object,
+   * and asking twice is asking something that can answer differently — which
+   * for the placeholder path meant an accessor throwing where nothing guarded
+   * it. One reading, two policies.
+   */
+  const shape = isBlockRoot ? readRootShape(result.node) : null;
+  if (shape === "unreadable") {
+    /*
+     * Refused rather than passed on. React reads the same accessors after this
+     * returns, so output that cannot be classified here is output whose next
+     * read is React's, past this boundary and past any containment — which is
+     * exactly the failure `normalizeRenderable` exists to prevent.
+     */
+    return (
+      <BlockPlaceholder
+        reason="invalid-output"
+        type={node.type}
+        id={node.id}
+        detail="Expected a React node, received output whose own element type could not be read"
+      />
+    );
+  }
+  if (shape !== null) warnNoHostRoot(result.node, node, declaresNothing, shape);
+  const rootReason =
+    shape !== null
+      ? nodeRootReason(result.node, node, declaresNothing, shape)
+      : null;
   if (rootReason !== null) {
     return (
       <BlockPlaceholder
