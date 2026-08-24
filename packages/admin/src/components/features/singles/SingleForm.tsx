@@ -619,10 +619,10 @@ export function SingleForm({
                     className="mx-6 mt-3"
                   />
 
-                  <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+                  <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
                     {/* Main column */}
                     <div className="flex-1 min-w-0 flex flex-col">
-                      {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
+                      {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-my-8
                 already cancels PageContainer's px-8, so wrapping the header / meta
                 strip in another -mx-8 was double-negative and pushed them
                 past the page edges. */}

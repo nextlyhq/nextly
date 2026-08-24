@@ -13,10 +13,14 @@
  * no rule at all. The single source is therefore this check rather than a
  * value, which is why it reads the files instead of importing from them.
  *
- * WHAT THIS COVERS: the three files below and nothing else. `SingleForm` and
- * the singles skeleton still carry the two-axis version and are correct to —
- * that page is not measured yet, so it still has the `px-8` to cancel. They
- * join this list when it takes a measure.
+ * WHAT THIS COVERS: the five files below and nothing else — the two editors
+ * and the three skeletons that stand in for them.
+ *
+ * Singles is in the list because it had to be. `TranslationPanes` is shared by
+ * both editors, and it stops padding where they go edge-to-edge; a Single
+ * rendering into an unmeasured page would have been the one consumer still
+ * expecting that padding, 64px wider than the pane holding it. Two editors
+ * sharing a container cannot answer this differently.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -30,8 +34,10 @@ const ADMIN_SRC = resolve(HERE, "../../../..");
 /** The editor and both skeletons — the same layout at two moments. */
 const MEASURED = [
   "components/features/entries/EntryForm/EntryForm.tsx",
+  "components/features/singles/SingleForm.tsx",
   "pages/dashboard/entries/[slug]/create.tsx",
   "pages/dashboard/entries/[slug]/[id]/index.tsx",
+  "pages/dashboard/singles/[slug]/index.tsx",
 ];
 
 /**
