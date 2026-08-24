@@ -900,6 +900,19 @@
   --nx-field-half: 380px;
   --nx-field-full: 760px;
 
+  /* Page shell — the inset from the content panel's edge to the page's content,
+   * and the measure that content is bounded to. `PageShell` spends these as
+   * GRID COLUMNS rather than as padding, because padding cannot be cancelled by
+   * a descendant: that is why full-bleed content previously had to be rendered
+   * OUTSIDE the wrapper to escape the measure, and why two wrappers each
+   * applying their own inset silently doubled it.
+   *
+   * A length rather than a colour, so it is declared once here rather than per
+   * light/dark block — a page's inset does not change with the theme. */
+  --nx-gutter: 2rem;
+  --nx-measure-form: 56rem;
+  --nx-measure-wide: 72rem;
+
   /* Focus ring colors */
   --nx-focus-ring: var(--nx-primary);
   --nx-focus-ring-offset: oklch(1 0 0);
@@ -1114,4 +1127,82 @@
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
+}
+
+/* ============================================================
+ * Page shell
+ * ============================================================
+ *
+ * The gutter and the measure are ONE grid definition, spent as columns rather
+ * than as padding. That is load-bearing rather than stylistic:
+ *
+ *  - Padding cannot be cancelled by a descendant, so a block that must run
+ *    edge-to-edge previously had to be rendered OUTSIDE the wrapper imposing
+ *    the measure. `.nx-bleed` turns that from an accident into a declaration.
+ *  - Two wrappers that each apply an inset silently add. As columns there is
+ *    one declaration, so double-padding is unrepresentable rather than merely
+ *    discouraged.
+ *  - Every direct child defaults to the `content` column, so a page header and
+ *    the card beneath it cannot disagree about their left edge.
+ *
+ * Centring comes from the two outer tracks being equal rather than from
+ * `margin-inline: auto` on a max-width box, which does nothing at panel widths
+ * where the cap does not bind.
+ */
+@layer components {
+  .nx-page-shell {
+    display: grid;
+    /* The outer tracks are `minmax(gutter, 1fr)` rather than a fixed gutter so
+     * the grid always spans its container: a fixed pair would total only
+     * `measure + 2 * gutter`, leaving `full-start`/`full-end` short of the
+     * panel's edges in anything wider, and a `Bleed` child short with them. The
+     * `1fr` maximum absorbs the surplus while `gutter` holds as the minimum.
+     *
+     * Their being equal is also what centres the content column, so no
+     * `justify-content` is declared: with flexible tracks the grid fills its
+     * container and there is no free space for it to distribute. */
+    grid-template-columns:
+      [full-start] minmax(var(--nx-gutter), 1fr)
+      [content-start] minmax(0, var(--nx-shell-measure, var(--nx-measure-form)))
+      [content-end] minmax(var(--nx-gutter), 1fr)
+      [full-end];
+    align-content: start;
+  }
+
+  /* `min-width: 0` because a grid item's default `min-width: auto` refuses to
+   * shrink below its content, which lets one wide descendant — a long code
+   * string, a table — push the column past the measure it was given. */
+  .nx-page-shell > * {
+    grid-column: content;
+    min-width: 0;
+  }
+
+  /* Scoped to a DIRECT child: the named lines exist on this grid alone, so a
+   * `.nx-bleed` nested deeper resolves against a grid that never declared them.
+   * Writing the rule this way means such a case is inert rather than
+   * mysteriously half-working. */
+  .nx-page-shell > .nx-bleed {
+    grid-column: full;
+  }
+}
+
+/* The gutter steps with the content PANEL rather than the viewport: the panel's
+ * width changes when a sidebar opens, and the panel is what the page sits in.
+ * `content` is the container the admin's <main> already names. The step values
+ * match Payload's --gutter-h ladder (32 / 24 / 16).
+ *
+ * The override lands on `.nx-page-shell`, a DESCENDANT of that container. A
+ * container query styles only elements inside its container, so a rule naming
+ * `:root` or `.nextly-admin` — both ancestors of the `<main>` that declares it —
+ * never matches, and the gutter keeps its widest value at every panel size. */
+@container content (max-width: 1024px) {
+  .nx-page-shell {
+    --nx-gutter: 1.5rem;
+  }
+}
+
+@container content (max-width: 768px) {
+  .nx-page-shell {
+    --nx-gutter: 1rem;
+  }
 }
