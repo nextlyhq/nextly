@@ -10,6 +10,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { resolveContent } from "../resolve-content";
+import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 
 const pages = () =>
   defineCollection({
@@ -170,6 +171,7 @@ describe("resolveContent (integration)", () => {
       nextly: current.nextly,
       draft: true,
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
       draftFieldAccessAs: { id: "u1", email: "nobody@x.test", roles: [] },
     })) as { title?: string; secret?: string } | null;
 
@@ -218,6 +220,7 @@ describe("resolveContent (integration)", () => {
       nextly: current.nextly,
       draft: true,
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
       draftFieldAccessAs: { id: "u1", email: "boss@x.test", roles: [] },
     })) as { title?: string; secret?: string } | null;
 

@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ListResult } from "../../../direct-api/types/shared";
 import { resolveContent, type NextlyContentReader } from "../resolve-content";
+import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 
 const { cachedFindSpy } = vi.hoisted(() => ({ cachedFindSpy: vi.fn() }));
 
@@ -54,6 +55,7 @@ describe("caching a draft read", () => {
     await resolveContent("posts", "a", {
       nextly: reader(),
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
     });
 
     expect(cachedFindSpy).toHaveBeenCalledOnce();
@@ -65,6 +67,7 @@ describe("caching a draft read", () => {
     const result = await resolveContent("posts", "a", {
       nextly: reader(),
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
       draft: true,
     });
 
