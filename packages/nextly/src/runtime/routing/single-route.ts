@@ -263,6 +263,12 @@ function buildSingleRoute<TNode>(
   // read this route issues.
   const trustedSet = new Set(config.trustedCollections ?? []);
 
+  // SORTED, so two routes stating the same trust in a different order share a
+  // cache entry rather than warming two — the key names the policy, not the
+  // spelling of it. Derived from the Set so it cannot drift from the predicate
+  // above: one is the bound, the other is that bound's identity.
+  const trustedKey = [...trustedSet].sort().join(",");
+
   function readArgs(draft: boolean) {
     return {
       slug: config.slug,
@@ -326,7 +332,15 @@ function buildSingleRoute<TNode>(
       // The locale is part of the key: one Single serves a different document
       // per language, and a key that omitted it would serve whichever language
       // warmed the cache first to everyone.
-      keyParts: ["nextly-single", config.slug, config.locale ?? ""],
+      //
+      // The trust bound is part of it for the same reason, and it became one the
+      // moment that bound started deciding what a read RETURNS. Two routes may
+      // mount the same Single in the same language with different
+      // `trustedCollections` — and without this the more-trusted one warms the
+      // cache and the other is served its populated restricted rows, having
+      // never run its own bound at all. A cache key has to name every input the
+      // cached value depends on, and this is now one of them.
+      keyParts: ["nextly-single", config.slug, config.locale ?? "", trustedKey],
       ...(config.revalidate === undefined
         ? {}
         : { revalidate: config.revalidate }),
