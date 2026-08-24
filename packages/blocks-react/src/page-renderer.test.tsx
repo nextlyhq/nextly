@@ -5700,6 +5700,115 @@ describe("a block that does not render a single element", () => {
   });
 });
 
+describe("an element type that answers differently on a later read", () => {
+  /*
+   * The root shape is a reading of author-controlled data: `output.type`, and
+   * the tag on the type object. Nothing makes that reading stable — a getter
+   * can count, a proxy can flip — so every place that reads it is a place the
+   * author can raise from.
+   *
+   * It used to be read twice per block root: once by the contract warning,
+   * which had a floor under it, and again by the placeholder policy, which had
+   * none. A type whose accessor threw on that second read left this package
+   * entirely: the stream never settled, so not even an error page.
+   *
+   * Now it is read ONCE, under one floor, and both policies are handed the
+   * result. This asserts the property that follows and not the arithmetic
+   * behind it: WHICHEVER read the accessor picks to throw on, containment
+   * holds. Pinning the index instead would pass forever after any change to how
+   * many times the value happens to be read.
+   */
+  const trickyBlock = (onRead: () => void): AnyBlockDefinition =>
+    defineBlock({
+      name: "test/stateful-type-tag",
+      version: 1,
+      description: "Roots at a type whose tag accessor is stateful.",
+      example: { props: {} },
+      defaultProps: {},
+      render: () =>
+        createElement(
+          {
+            get $$typeof() {
+              onRead();
+              // A context object, which React 19 renders as a provider — a
+              // wrapper root, so the shape question is genuinely asked of it.
+              return Symbol.for("react.context");
+            },
+            _currentValue: "held",
+          } as never,
+          null,
+          "shown"
+        ),
+    }) as AnyBlockDefinition;
+
+  const renderTricky = async (
+    onRead: () => void,
+    extra: Partial<BlockNode> = {}
+  ): Promise<string> => {
+    const definition = trickyBlock(onRead);
+    return renderToHtml(
+      <PageRenderer
+        document={doc(node("a", definition.name, extra))}
+        blocks={createBlockResolver([definition])}
+      />
+    );
+  };
+
+  it("renders the fixture when its tag accessor behaves", async () => {
+    /*
+     * The control, and the thing that stops every assertion below passing
+     * because the fixture is broken in some other way: with the accessor
+     * answering consistently, React renders it and its children reach the page.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderTricky(() => {});
+      expect(html).toContain("shown");
+      expect(html).not.toMatch(PLACEHOLDER);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("placeholders instead of escaping, whichever read throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      /*
+       * `cssId` is set so BOTH policies run: the warning classifies, and the
+       * placeholder policy — the one that had no floor — classifies too. Ten
+       * covers every read this path makes today with room over it.
+       */
+      for (let throwOn = 1; throwOn <= 10; throwOn += 1) {
+        let reads = 0;
+        const html = await renderTricky(
+          () => {
+            reads += 1;
+            if (reads === throwOn) throw new Error("tag read");
+          },
+          { cssId: "anchor" }
+        );
+        /*
+         * Contained: the render RESOLVED, and what came back is this block's
+         * placeholder rather than its output.
+         *
+         * Which placeholder depends on where the throw lands, and both are
+         * containment: React validates a type inside `createElement`, so the
+         * earliest read happens while the block's own `render` is running and
+         * the render guard answers it. The later reads are this renderer's, and
+         * they answer `invalid-output`. What matters is that neither escapes,
+         * so the assertion names both rather than pinning an index.
+         */
+        expect(placeholderReasons(html)).toEqual([
+          expect.stringMatching(/^(render-error|invalid-output)$/),
+        ]);
+        expect(html).not.toContain("shown");
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("which runtimes the contract warning is willing to speak in", () => {
   const wrapped2 = defineBlock({
     name: "test/wrapped-env",
