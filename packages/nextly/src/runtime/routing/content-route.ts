@@ -29,6 +29,7 @@
 import type { Metadata } from "next";
 
 import { getNextly } from "../../direct-api/nextly";
+import type { UserContext } from "../../domains/collections/services/collection-types";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { triggerNotFound } from "./not-found";
@@ -279,21 +280,28 @@ export type DraftGrant =
   | {
       entryId: string;
       /**
-       * Applied to the resolved document before it is rendered, when the grant
-       * carries one.
+       * Whose field-level read rules the draft is judged by, when the grant
+       * names someone.
        *
        * A draft read is TRUSTED — that is what lets the working-draft overlay
-       * appear at all — and trust switches off field-level read rules along
-       * with row ones, because a single flag decides both. So the document that
-       * comes back carries every field, including any the person who granted
-       * this could not read themselves.
+       * appear at all — and trust switched off field-level read rules along
+       * with row ones, because a single flag decided both. So the document came
+       * back carrying every field, including any the person who granted this
+       * could not read themselves.
        *
-       * The grant supplies the remedy rather than the route implementing one,
+       * The grant supplies the identity rather than the route inventing one,
        * because only the grant knows whose permissions the document should be
-       * seen through. This route just applies what it was handed, which keeps
-       * it free of any notion of who is previewing.
+       * seen through. The route forwards it into the READ, so the rules run
+       * inside the query pipeline's own before-and-after-hooks sandwich — not
+       * over the finished document, where an `afterRead` hook has already had
+       * the chance to copy a denied field onto an allowed one.
+       *
+       * Carried only into the read the grant is answering. Once the grant stops
+       * answering this path the request is an ordinary anonymous one, and
+       * judging public content by a stranger's rules would strip fields every
+       * visitor is entitled to.
        */
-      redact?: (document: Record<string, unknown>) => Promise<void>;
+      readAs?: UserContext;
     };
 
 /** The optional-catch-all route arg: `{ params: Promise<{ slug?: string[] }> }`. */
@@ -572,6 +580,17 @@ function buildRoute<TNode>(
           ? grant.entryId
           : undefined;
       const draft = grant === true || grantedEntryId !== undefined;
+      // Read as runtime input for the same reason `entryId` is above: the
+      // `draft` decision is app-supplied code and its declared type is not a
+      // guarantee. A non-object here would otherwise be forwarded into the read
+      // as an identity and judged as one.
+      const readAs =
+        typeof grant === "object" &&
+        grant !== null &&
+        typeof grant.readAs === "object" &&
+        grant.readAs !== null
+          ? grant.readAs
+          : undefined;
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
@@ -602,24 +621,13 @@ function buildRoute<TNode>(
         // which is a separate entry point into the same expansion. Passed as
         // the LIST, because that layer caches and a predicate has no identity.
         trustedCollections,
+        // Named separately from the trust above, because it takes back exactly
+        // one half of it: the row stays reachable, the FIELDS are judged as the
+        // person who granted the draft. `resolveContent` applies it to the
+        // draft read alone — the published fall-through stays anonymous.
+        ...(readAs === undefined ? {} : { draftFieldAccessAs: readAs }),
       });
       if (!entry) continue;
-      // Before the document is handed to `render`, and before anything derived
-      // from it is computed, so nothing downstream can have read a field the
-      // grant means to withhold.
-      // `grant !== null` explicitly: `typeof null === "object"`, so a hook
-      // written in JavaScript returning null to mean "no grant" would pass a
-      // bare object check and then throw reading `.redact` — turning an
-      // ordinary published page into a 500. The resolver above already treats
-      // an app-supplied grant as runtime input rather than trusting the
-      // declaration, and this property access needs the same care.
-      if (
-        grant !== null &&
-        typeof grant === "object" &&
-        typeof grant.redact === "function"
-      ) {
-        await grant.redact(entry);
-      }
       // No identity check here, deliberately. Both halves a grant has to
       // satisfy — that it names THIS entry, and that the entry lives at THIS
       // path — are settled inside `resolveContent`, which reads by the granted

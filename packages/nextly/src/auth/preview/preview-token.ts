@@ -70,13 +70,12 @@ export interface SignPreviewTokenOptions {
    * cannot see — a way to read past your own permissions by sending yourself a
    * link.
    *
-   * **Required when signing, and tolerated when verifying — the asymmetry is
-   * the point.** Compatibility is owed to tokens ALREADY ISSUED, which cannot
-   * gain a claim they were minted without and which expire within days.
-   * Nothing is owed to a token minted after this shipped: leaving it optional
-   * here would let any caller of this public signer keep producing links that
-   * render with every field rule bypassed, which is the hole being closed
-   * rather than a compatibility concern.
+   * **Required when signing, and merely REPORTED when verifying — the
+   * asymmetry is deliberate and it is not a compatibility allowance.**
+   * Verification answers what a token holds; whether an absent record is
+   * acceptable is a policy question, and it belongs where the policy is. The
+   * draft gate refuses such a token outright, because a draft rendered as
+   * nobody is a draft rendered with no field rules at all.
    */
   minter: string;
   /**
@@ -106,9 +105,11 @@ export type PreviewVerifyResult =
        * equality — folding an identity in would make two links to one document
        * compare unequal because different people sent them.
        *
-       * Absent on every token minted before this claim existed, and on any link
-       * minted outside a request. A reader must handle that rather than assume
-       * it: see {@link SignPreviewTokenOptions.minter}.
+       * Absent on every token minted before this claim existed; the signer
+       * refuses to produce one without it now. A reader must handle the absence
+       * rather than assume it away — and must fail CLOSED on it, since a draft
+       * with no recorded sender cannot be judged by anyone's field rules. See
+       * {@link SignPreviewTokenOptions.minter}.
        */
       minter?: string;
       expiresAt: Date;

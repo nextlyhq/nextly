@@ -20,6 +20,12 @@ let cookieValue: string | undefined;
 // mid-suite, which is the whole point of reading it per request.
 let generation = 1;
 
+// The identity lookup reaches the container and the database; these cases are
+// about the unwired gate's defaults. Who a draft renders as is covered in
+// `preview-identity.test.ts`.
+const resolvePreviewIdentity = vi.hoisted(() => vi.fn());
+vi.mock("../preview-identity", () => ({ resolvePreviewIdentity }));
+
 vi.mock("../preview-route-defaults", () => ({
   defaultSecret: () => TEST_SECRET,
   defaultGeneration: () => Promise.resolve(generation),
@@ -50,6 +56,12 @@ describe("previewDraftGate with no arguments", () => {
   beforeEach(() => {
     cookieValue = undefined;
     generation = 1;
+    resolvePreviewIdentity.mockClear();
+    resolvePreviewIdentity.mockResolvedValue({
+      id: "minter-1",
+      roles: ["editor"],
+      role: "editor",
+    });
   });
 
   it("grants the entry its token names", async () => {
@@ -62,10 +74,10 @@ describe("previewDraftGate with no arguments", () => {
     );
   });
 
-  // The grant carries the redaction, because the row is read TRUSTED and trust
-  // switches field-level read rules off with it. Without one the page renders
-  // every field, including any the sharer cannot see.
-  it("carries a redactor when the token records who shared it", async () => {
+  // The grant carries the identity the draft is READ as, because the row is
+  // read TRUSTED and trust switched field-level read rules off with it. Without
+  // one the page renders every field, including any the sharer cannot see.
+  it("carries the sharer's identity when the token records who shared it", async () => {
     await cookieFor({ collection: "pages", entryId: "entry-1" });
 
     const grant = await previewDraftGate()({
@@ -73,8 +85,11 @@ describe("previewDraftGate with no arguments", () => {
       slug: "about",
     });
 
-    expect(grant).not.toBe(false);
-    expect(typeof (grant as { redact?: unknown }).redact).toBe("function");
+    expect(resolvePreviewIdentity).toHaveBeenCalledWith("minter-1");
+    expect(grant).toMatchObject({
+      entryId: "entry-1",
+      readAs: { id: "minter-1" },
+    });
   });
 
   it("refuses a request with no preview cookie", async () => {

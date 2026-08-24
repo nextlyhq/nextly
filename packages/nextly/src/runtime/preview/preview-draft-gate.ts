@@ -17,9 +17,10 @@
  * @module runtime/preview/preview-draft-gate
  */
 import type { PreviewTokenScope } from "../../auth/preview/preview-token";
+import type { UserContext } from "../../domains/collections/services/collection-types";
 import type { ResolvedContext } from "../routing/content-route";
 
-import { redactAsMinter } from "./preview-redaction";
+import { resolvePreviewIdentity } from "./preview-identity";
 import { previewGrantsDraft, readPreviewSession } from "./preview-route";
 import type { PreviewScopeReaderConfig } from "./preview-route";
 
@@ -77,15 +78,11 @@ export type PreviewDraftGateConfig = PreviewScopeReaderConfig;
  * a configuration that defeats it must not be taught alongside the thing that
  * enforces it.
  */
-export function previewDraftGate(config: PreviewDraftGateConfig = {}): (
+export function previewDraftGate(
+  config: PreviewDraftGateConfig = {}
+): (
   request: DraftGateRequest
-) => Promise<
-  | {
-      entryId: string;
-      redact?: (document: Record<string, unknown>) => Promise<void>;
-    }
-  | false
-> {
+) => Promise<{ entryId: string; readAs: UserContext } | false> {
   return async ({ collection, locale }) => {
     // Re-read per request. The config is captured once at module scope while
     // whether this visitor is previewing — and whether their token has since
@@ -119,28 +116,23 @@ export function previewDraftGate(config: PreviewDraftGateConfig = {}): (
     if (!previewGrantsDraft(scope, requested)) return false;
 
     // The row is read trusted so the working draft appears at all, and trust
-    // switches field-level read rules off with it. So the fields are judged
+    // switched field-level read rules off with it. So the fields are judged
     // separately, as the person who shared the link — otherwise the recipient
     // sees fields the sharer cannot, which turns the link into a way to read
-    // past your own permissions.
+    // past your own permissions by sending yourself one.
     //
-    // A token minted before the claim existed carries no minter. Those links
-    // keep working and render unredacted, exactly as they did when they were
-    // issued; they expire within hours, and killing every outstanding link to
-    // close a gap that expires on its own is the worse trade. Nothing NEW is
-    // minted without one.
-    return {
-      entryId: scope.entryId,
-      ...(minter === undefined
-        ? {}
-        : {
-            redact: (document: Record<string, unknown>) =>
-              redactAsMinter(document, {
-                kind: "collection",
-                slug: collection,
-                minter,
-              }),
-          }),
-    };
+    // **No identity, no draft.** Two cases reach this line without one: a token
+    // minted before the claim existed, and a sharer whose account has since
+    // been deleted. Granting the draft anyway would read it with no field rules
+    // at all, which IS the defect — so the grant is refused and the request
+    // resolves published-only, indistinguishable from an expired link. That
+    // does invalidate preview links minted in the hour before this ships;
+    // keeping a known field leak open for the lifetime of a token is the worse
+    // trade, and nothing new is mintable without a minter.
+    if (minter === undefined) return false;
+    const readAs = await resolvePreviewIdentity(minter);
+    if (readAs === null) return false;
+
+    return { entryId: scope.entryId, readAs };
   };
 }
