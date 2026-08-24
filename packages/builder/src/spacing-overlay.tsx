@@ -214,11 +214,12 @@ export function isReplaced(element: Element): boolean {
  * leaves a gap of MINUS eighty pixels, drawn over the neighbour that margin is
  * holding away, so no rectangle beside the rendered border edge describes it.
  *
- * That second reason is applied PER AXIS, because the sides are independent:
- * `translateY(-4px)` — an ordinary hover lift — moves the top and bottom
- * margins and leaves the left and right ones exactly where they were. See
- * `selfMoved`, which reads the matrix rather than the declaration, so an
- * identity-valued transform keeps every band.
+ * That second reason is applied PER EDGE, because the sides are independent and
+ * so are the two ends of one axis: `translateY(-4px)` — an ordinary hover lift —
+ * moves the top and bottom margins and leaves left and right where they were,
+ * while `translateY(-25px) scaleY(0.5)` pins the TOP edge and moves only the
+ * bottom. See `selfMoved`, which asks whether each edge renders where it lays
+ * out rather than inspecting the declaration.
  *
  * Padding is subject only to the first reason. It lies INSIDE the transform and
  * renders scaled with the box, so those bands stay correct on both axes.
@@ -234,10 +235,10 @@ function drawableBoxes(
     isReplaced(block)
   );
   const margin: EdgeApplicability = {
-    top: applies.margin.top && !scale.selfMoved.y,
-    bottom: applies.margin.bottom && !scale.selfMoved.y,
-    left: applies.margin.left && !scale.selfMoved.x,
-    right: applies.margin.right && !scale.selfMoved.x,
+    top: applies.margin.top && !scale.selfMoved.top,
+    bottom: applies.margin.bottom && !scale.selfMoved.bottom,
+    left: applies.margin.left && !scale.selfMoved.left,
+    right: applies.margin.right && !scale.selfMoved.right,
   };
   const measured = boxesOf(style);
   return {
@@ -412,6 +413,9 @@ export function SpacingOverlay({
         // Composed from the real transform between the block and the root, so
         // a scaled ancestor counts and no rounded layout value is involved.
         scale: { x: scale.x, y: scale.y },
+        // Margins take the ancestors' scale ALONE — a transform does not scale
+        // the space a margin reserves, only the box it is drawn beside.
+        marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
       }),
       layerBox
     );

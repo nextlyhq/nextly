@@ -30,6 +30,9 @@ function bandsFor(over: Partial<SpacingGeometry>): readonly SpacingBand[] {
     margin: NONE,
     padding: NONE,
     scale: { x: 1, y: 1 },
+    // Equal to `scale` unless a case says otherwise, which is what an element
+    // carrying no transform of its own reports.
+    marginScale: over.scale ?? { x: 1, y: 1 },
     ...over,
   });
 }
@@ -293,6 +296,54 @@ describe("where a margin band lands", () => {
       width: 20,
       height: 150,
     });
+  });
+});
+
+describe("which scale each box is drawn at", () => {
+  it("scales a MARGIN by the ancestors alone, not by the element's own transform", () => {
+    /*
+     * The separating case, and it needs the two scales to DIFFER — with one
+     * scale for both boxes every assertion here passes on either implementation.
+     *
+     * A transform does not scale the space a margin reserves. Measured, a 100px
+     * block with `margin-top: 28px` under a transform pinning its top edge
+     * leaves a real gap of 28 rendered pixels while the composed scale would
+     * draw the band 14 high, naming the space beside it wrongly by half.
+     */
+    const bands = bandsFor({
+      margin: { ...NONE, top: 28 },
+      scale: { x: 1, y: 0.5 },
+      marginScale: { x: 1, y: 1 },
+    });
+
+    expect(band(bands, "margin", "top")?.rect.height).toBe(28);
+  });
+
+  it("scales PADDING by the composed scale, which includes the element's own", () => {
+    // The mirror, and the reason this is not simply "stop scaling". Padding
+    // lies INSIDE the transform and renders scaled with the box, so the same
+    // fixture must halve the padding while leaving the margin whole.
+    const bands = bandsFor({
+      padding: { ...NONE, top: 28 },
+      scale: { x: 1, y: 0.5 },
+      marginScale: { x: 1, y: 1 },
+    });
+
+    expect(band(bands, "padding", "top")?.rect.height).toBe(14);
+  });
+
+  it("labels both with the AUTHORED value, whichever scale drew them", () => {
+    // The number is what the author typed, and neither scale is allowed to
+    // reach it — a band reading `14` names a value in no document.
+    const bands = bandsFor({
+      margin: { ...NONE, top: 28 },
+      padding: { ...NONE, top: 28 },
+      scale: { x: 1, y: 0.5 },
+      marginScale: { x: 1, y: 1 },
+    });
+
+    expect(band(bands, "margin", "top")?.label).toBe("28");
+    expect(band(bands, "padding", "top")?.label).toBe("28");
   });
 });
 
