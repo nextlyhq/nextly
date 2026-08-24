@@ -14,6 +14,7 @@ import { getNextly } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
+import { TRUSTS_EVERY_COLLECTION } from "../../services/collections/trust-grant";
 import { cachedFind } from "../cache/cached-find";
 import { nextlyTags } from "../cache/nextly-tags";
 
@@ -32,7 +33,7 @@ export type ContentEntry = Record<string, unknown>;
 export type NextlyContentReader = Pick<Nextly, "find" | "findByID">;
 
 /** Options for {@link resolveContent}. */
-export interface ResolveContentOptions {
+interface ResolveContentOptionsBase {
   /**
    * A booted Nextly instance. Defaults to the runtime singleton (`getNextly()`),
    * which requires services to be registered — pass one explicitly (e.g. the
@@ -162,7 +163,7 @@ export interface ResolveContentOptions {
    * predicate plus a separate key would be two options a caller can get out of
    * step.
    */
-  trustedCollections?: readonly string[];
+  trustedCollections?: readonly string[] | typeof TRUSTS_EVERY_COLLECTION;
   /**
    * What the CALLER authorized, before a draft decision widened it.
    *
@@ -201,6 +202,36 @@ export interface ResolveContentOptions {
    */
   draftFieldAccessAs?: UserContext;
 }
+
+/**
+ * A content read, with its trust answered rather than assumed.
+ *
+ * A route names ONE collection. The page it renders reaches others through
+ * relationships, and those were never named here. Saying nothing meant every
+ * populated target inherited the route's bypass — which is how a public route
+ * ends up writing another collection's restricted rows into a static artifact,
+ * where they outlive the row being unpublished.
+ *
+ * Expressed as a union so the question is put only to the reads that can answer
+ * it wrongly. An enforced read trusts nothing and is not asked; a read holding
+ * the bypass does not compile until it says how far that bypass travels. A
+ * route that genuinely serves everything says {@link TRUSTS_EVERY_COLLECTION}
+ * and performs exactly the read it performed before — the value records that
+ * someone decided, which absence could not.
+ *
+ * The union narrows on a COMPUTED flag too, which is the case that matters:
+ * a route writing `overrideAccess: granted || draft` is the shape that shipped
+ * unbounded, and TypeScript checks each constituent of `boolean` separately, so
+ * that spelling is caught as surely as a literal `true`.
+ */
+export type ResolveContentOptions = ResolveContentOptionsBase &
+  (
+    | { overrideAccess?: false }
+    | {
+        overrideAccess: true;
+        trustedCollections: readonly string[] | typeof TRUSTS_EVERY_COLLECTION;
+      }
+  );
 
 /**
  * Resolve a published entry by slug in `collection`, F1-cached and tagged so a
@@ -532,10 +563,18 @@ export async function resolveContent(
   // handed to a request that never asked for one.
   // Sorted and de-duplicated so the same set written two ways is one cache
   // identity, and so the predicate and the key are built from one value.
-  const trustedNames =
-    options.trustedCollections === undefined
+  // Both spellings of "reaches everything" collapse here, and must: an absent
+  // bound and `TRUSTS_EVERY_COLLECTION` describe the same read, so they have to
+  // produce the same predicate AND the same cache identity. Giving the constant
+  // a key of its own would split one read across two entries that can then
+  // diverge under revalidation while claiming to be the same page.
+  const named =
+    options.trustedCollections === undefined ||
+    options.trustedCollections === TRUSTS_EVERY_COLLECTION
       ? undefined
-      : [...new Set(options.trustedCollections)].sort();
+      : options.trustedCollections;
+  const trustedNames =
+    named === undefined ? undefined : [...new Set(named)].sort();
   const trusted =
     trustedNames === undefined
       ? undefined

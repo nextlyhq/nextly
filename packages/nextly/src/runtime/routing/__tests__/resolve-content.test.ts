@@ -12,6 +12,7 @@ import type {
 import type { ListResult } from "../../../direct-api/types/shared";
 import { NextlyError } from "../../../errors/nextly-error";
 import { resolveContent, type NextlyContentReader } from "../resolve-content";
+import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 
 function stubReader(behavior: {
   items?: Record<string, unknown>[];
@@ -76,6 +77,7 @@ describe("resolveContent (unit)", () => {
     await resolveContent("posts", "a", {
       nextly: reader,
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
       user: { id: "u1", role: "editor" },
       status: "all",
     });
@@ -125,6 +127,7 @@ describe("resolveContent (working-draft layer)", () => {
       nextly: reader,
       draft: true,
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
     });
 
     expect(result).toEqual({
@@ -150,6 +153,7 @@ describe("resolveContent (working-draft layer)", () => {
       nextly: reader,
       draft: true,
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
     });
     expect(calls[0].status).toBe("all");
   });
@@ -205,6 +209,7 @@ describe("resolveContent (working-draft layer)", () => {
       nextly: reader,
       draft: true,
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
     });
 
     expect(byIdCalls).toHaveLength(1);
@@ -235,6 +240,7 @@ describe("resolveContent (working-draft layer)", () => {
         nextly: gone.reader,
         draft: true,
         overrideAccess: true,
+        trustedCollections: TRUSTS_EVERY_COLLECTION,
       })
     ).toEqual({ id: "1", title: "live", status: "published" });
 
@@ -248,6 +254,7 @@ describe("resolveContent (working-draft layer)", () => {
         nextly: blip.reader,
         draft: true,
         overrideAccess: true,
+        trustedCollections: TRUSTS_EVERY_COLLECTION,
       })
     ).rejects.toBe(broken);
   });
@@ -264,6 +271,7 @@ describe("resolveContent (working-draft layer)", () => {
         nextly: reader,
         draft: true,
         overrideAccess: true,
+        trustedCollections: TRUSTS_EVERY_COLLECTION,
       })
     ).rejects.toBe(notFound);
   });
@@ -278,6 +286,7 @@ describe("resolveContent (working-draft layer)", () => {
       draft: true,
       status: "published",
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
     });
     expect(calls[0].status).toBe("published");
   });
@@ -295,6 +304,7 @@ describe("resolveContent (working-draft layer)", () => {
       locale: "fr",
       richTextFormat: "html",
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
       user: { id: "u1", role: "editor" },
     });
 
@@ -317,6 +327,7 @@ describe("resolveContent (working-draft layer)", () => {
         nextly: reader,
         draft: true,
         overrideAccess: true,
+        trustedCollections: TRUSTS_EVERY_COLLECTION,
       })
     ).toEqual({ id: "1", title: "live", status: "published" });
   });
@@ -332,6 +343,7 @@ describe("resolveContent (working-draft layer)", () => {
       nextly: reader,
       draft: true,
       overrideAccess: true,
+      trustedCollections: TRUSTS_EVERY_COLLECTION,
     });
 
     expect(result).toEqual({
