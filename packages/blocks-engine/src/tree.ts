@@ -48,6 +48,34 @@ export interface TreePosition {
   index: number;
 }
 
+/** One node waiting to be visited, with the parent to report it under. */
+interface PendingNode {
+  node: unknown;
+  parent: BlockNode | undefined;
+}
+
+/**
+ * Queue a node's slot children so that popping them restores written order.
+ *
+ * Both loops run backwards for that reason: a stack returns what went on last,
+ * so pushing in order would hand a caller the document mirrored — slot by slot
+ * and sibling by sibling.
+ *
+ * A slot whose value is not an array is skipped rather than read. Persisted
+ * documents reach this walk unvalidated, and iterating a non-array throws.
+ */
+function pushChildren(stack: PendingNode[], node: BlockNode): void {
+  if (!node.slots) return;
+  const slots = Object.values(node.slots);
+  for (let s = slots.length - 1; s >= 0; s--) {
+    const children = slots[s];
+    if (!Array.isArray(children)) continue;
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push({ node: children[i], parent: node });
+    }
+  }
+}
+
 /** Depth-first visit over the forest: each node, then its slots' children in order. */
 export function walkNodes(
   nodes: BlockNode[],
@@ -66,14 +94,41 @@ export function walkNodes(
   // caller that needs to know an entry was unreadable is asking a validation
   // question, and validation is where that answer lives.
   if (!Array.isArray(nodes)) return;
-  for (const node of nodes) {
+
+  // Iterative rather than recursive, because the forest's DEPTH is not bounded
+  // by anything that has run before this. `MAX_DEPTH` is a validation rule, and
+  // a document reaches this walk whether or not validation ever passed on it —
+  // measured, a chain about ten thousand deep exits with
+  // `RangeError: Maximum call stack size exceeded`, with no cycle involved. An
+  // explicit stack removes the limit rather than raising it.
+  //
+  // `seen` closes the other way a walk fails to terminate: a slot list holding
+  // an ancestor. Recursion turned that into the same RangeError; an iterative
+  // walk without it would loop forever instead, which is worse. Neither shape
+  // can arrive from storage — `JSON.parse` mints a fresh object per node, so it
+  // cannot alias one — but both are constructible in process, which is the same
+  // range every other guard in this function covers.
+  //
+  // What that costs: a node object appearing twice in one forest is visited
+  // once. Only an in-process producer can build that, and for one the choice is
+  // between a single visit and a walk that does not finish.
+  const seen = new Set<unknown>();
+  const stack: PendingNode[] = [];
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    stack.push({ node: nodes[i], parent });
+  }
+
+  while (stack.length > 0) {
+    const entry = stack.pop();
+    if (entry === undefined) break;
+    const node = entry.node;
     if (typeof node !== "object" || node === null) continue;
-    fn(node, parent);
-    if (node.slots) {
-      for (const children of Object.values(node.slots)) {
-        walkNodes(children, fn, node);
-      }
-    }
+    if (seen.has(node)) continue;
+    seen.add(node);
+
+    const block = node as BlockNode;
+    fn(block, entry.parent);
+    pushChildren(stack, block);
   }
 }
 

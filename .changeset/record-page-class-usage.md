@@ -39,3 +39,10 @@ the direction that gets a class deleted.
 are not an array, rather than throwing. It is shared by everything that reads a
 document, so one malformed entry previously broke counting, measuring and
 rendering alike — each looking like a fault of its own.
+
+It also walks iteratively and skips a node object it has already visited, so
+neither a forest nested deeper than the call stack allows nor a slot holding one
+of its own ancestors ends the walk with a `RangeError`. Depth is a validation
+rule and this walk runs on documents whether or not validation passed on them.
+Traversal order, the parent each callback receives, and repeated IDs on distinct
+node objects are all unchanged.

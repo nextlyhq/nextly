@@ -241,8 +241,27 @@ describe("what it must never do", () => {
   // Asserted over a table rather than one shape, because the risk is a shape
   // nobody thought of: every entry is a document the blocks field admits, since
   // it accepts any value whose `nodes` is an array and validates nothing below.
-  const cyclic: Record<string, unknown> = { nodes: [] };
-  (cyclic.nodes as unknown[]).push({ id: "a", classes: [], self: cyclic });
+  // A cycle through a property the walk does not follow. Kept because it is a
+  // shape that reaches storage, and named for what it actually exercises: the
+  // walk descends `slots` alone, so this one never recurses at all and cannot
+  // stand in for the case below.
+  const cyclicByAnyProperty: Record<string, unknown> = { nodes: [] };
+  (cyclicByAnyProperty.nodes as unknown[]).push({
+    id: "a",
+    classes: [],
+    self: cyclicByAnyProperty,
+  });
+
+  // A cycle through SLOTS, which is the path the walk recurses on. Before the
+  // walk became iterative this exited with a RangeError rather than an answer.
+  const cyclicNode: Record<string, unknown> = {
+    id: "a",
+    classes: ["hero"],
+    slots: { main: [] as unknown[] },
+  };
+  ((cyclicNode.slots as Record<string, unknown[]>).main as unknown[]).push(
+    cyclicNode
+  );
 
   const hostile: [string, unknown][] = [
     ["null", null],
@@ -276,7 +295,8 @@ describe("what it must never do", () => {
       "a node whose slots are not arrays",
       { nodes: [{ id: "a", slots: { main: 5 } }] },
     ],
-    ["a document that references itself", cyclic],
+    ["a document with a cycle the walk does not follow", cyclicByAnyProperty],
+    ["a node whose slot holds the node itself", { nodes: [cyclicNode] }],
     [
       "a null prototype",
       Object.assign(Object.create(null), {

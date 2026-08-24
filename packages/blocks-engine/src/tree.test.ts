@@ -48,6 +48,70 @@ describe("walkNodes / findNode / locateNode", () => {
     ]);
   });
 
+  it("finishes on a forest nested deeper than the call stack allows", () => {
+    // `MAX_DEPTH` is a validation rule, and this walk runs on documents whether
+    // or not validation ever passed on them. A recursive walk exited a chain of
+    // this size with `RangeError: Maximum call stack size exceeded` — no cycle
+    // involved, just depth — and every caller of the shared walk failed with it.
+    //
+    // Sized well past the measured limit rather than just over it, so the test
+    // does not go quiet if a future engine gives the walk a larger stack.
+    const DEEP = 50_000;
+    let root: BlockNode = { id: "leaf", type: "t", version: 1, props: {} };
+    for (let i = 0; i < DEEP; i++) {
+      root = {
+        id: `n${i}`,
+        type: "t",
+        version: 1,
+        props: {},
+        slots: { main: [root] },
+      };
+    }
+
+    let visited = 0;
+    expect(() => walkNodes([root], () => visited++)).not.toThrow();
+    expect(visited).toBe(DEEP + 1);
+  });
+
+  it("finishes when a slot holds one of its own ancestors", () => {
+    // A cycle reachable through `slots` is the shape the walk actually
+    // descends. Recursion overflowed on it; an iterative walk without a visited
+    // set would spin forever instead, which is why terminating is asserted by a
+    // VISIT COUNT rather than by the absence of a throw.
+    const cyclic: BlockNode = {
+      id: "a",
+      type: "t",
+      version: 1,
+      props: {},
+      slots: { main: [] },
+    };
+    cyclic.slots!.main.push(cyclic);
+
+    const visited: string[] = [];
+    walkNodes([cyclic], n => visited.push(n.id));
+
+    expect(visited).toEqual(["a"]);
+  });
+
+  it("still visits a repeated ID that is a DISTINCT object", () => {
+    // The control for the cycle guard, and the boundary of what it costs. It
+    // skips a node OBJECT already visited, not an id already seen — two sibling
+    // nodes that happen to share an id are different nodes and both are walked.
+    // A guard keyed on id would silently drop the second, which is how a
+    // duplicate-id document would stop being measurable at all.
+    const twin = (): BlockNode => ({
+      id: "same",
+      type: "t",
+      version: 1,
+      props: {},
+    });
+
+    const visited: string[] = [];
+    walkNodes([twin(), twin()], n => visited.push(n.id));
+
+    expect(visited).toEqual(["same", "same"]);
+  });
+
   it("finds nested nodes and returns undefined for unknown ids", () => {
     const { nodes, heading } = fixture();
     expect(findNode(nodes, heading.id)?.props).toEqual({ text: "Hello" });
