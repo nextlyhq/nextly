@@ -14,18 +14,25 @@
  * no rule at all. The single source is therefore this check rather than a
  * value, which is why it reads the files instead of importing from them.
  *
- * WHAT THIS COVERS: every `.ts` and `.tsx` under the admin's source, minus
- * this file, whose fixtures are examples of the thing being forbidden.
+ * WHAT THIS COVERS, and what it does not.
  *
- * A list of files would not do: a class list extracted to a constant in a file
- * nobody thought to list still compiles, because Tailwind scans literals across
- * the whole source set. A list is something someone has to remember to extend;
- * a tree walk is not.
+ * It reads every `.ts`/`.tsx` under the four trees Tailwind compiles for the
+ * admin — the admin's own source plus `@nextlyhq/ui` and both plugin admin
+ * trees — minus this file, whose fixtures are examples of the thing being
+ * forbidden.
  *
- * This is only affordable because the utility is used NOWHERE else in the
- * admin: measured, every other occurrence is prose explaining its removal. If a
- * legitimate use ever appears, it belongs in a named exclusion beside
- * `THIS_FILE` with the reason, not in a widened pattern.
+ * It does NOT cover stylesheet inputs. A `@source inline(...)` safelist emits
+ * utilities whose names it never spells out — `{m,mx}-{8}` contains no class
+ * at all — so no text scan of it can answer this question.
+ *
+ * The complete answer is in `scripts/build-css.mjs`, which refuses to ship a
+ * stylesheet containing either utility, from any input. This scan earns its
+ * place by being fast and by naming the FILE, which the compiled output cannot:
+ * it turns "the stylesheet has this rule" into "this file put it there".
+ *
+ * That division is why the tree walk is affordable at all: the utility is used
+ * nowhere in these trees, so every hit is a finding. A legitimate use would
+ * belong in a named exclusion beside `THIS_FILE`, with its reason.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

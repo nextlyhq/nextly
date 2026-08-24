@@ -190,6 +190,39 @@ try {
     process.exit(1);
   }
 
+  // A measured page spends its horizontal inset as GRID COLUMNS, not padding,
+  // so a negative margin that cancels the horizontal axis has nothing to pull
+  // back from: it pulls content PAST its own column. Measured, that was 64px on
+  // the entry editor.
+  //
+  // Checked HERE rather than in a unit test because the property is about this
+  // file. A test that reads sources has to know every input Tailwind reads —
+  // four package trees, plus `@source inline(...)` safelists whose brace
+  // expansions contain no literal class at all — and each one it misses is a
+  // way for the rule to reach the stylesheet unseen. The output has one answer.
+  //
+  // The utilities are assembled rather than written: this file is not scanned,
+  // but the same habit is what keeps the rule out of the sources that are.
+  const forbidden = [`-m${"-8"}`, `-mx${"-8"}`];
+  const shipped = fs.readFileSync(outputFile, "utf-8");
+  const emitted = forbidden.filter(name =>
+    new RegExp(`\\.[^{\\s,]*${name.replace(/-/g, "\\\\?-")}(?![\\w-])`).test(shipped)
+  );
+  if (emitted.length) {
+    console.error(
+      `\n❌ The stylesheet emits ${emitted.length} inset(s) that cancel a page's\n` +
+        "horizontal padding:\n"
+    );
+    for (const name of emitted) console.error("  ." + name);
+    console.error(
+      "\nA measured page has no horizontal padding to cancel — it spends the\n" +
+        "inset as grid columns — so content carrying one of these lands outside\n" +
+        "its own column. Remove the class, or the sentence naming it: Tailwind\n" +
+        "emits the rule from a comment exactly as it does from code.\n"
+    );
+    process.exit(1);
+  }
+
   // Get file size
   const stats = fs.statSync(outputFile);
   const sizeKB = (stats.size / 1024).toFixed(2);
