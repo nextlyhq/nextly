@@ -29,16 +29,18 @@ import { Button, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
-  attributeKey,
   domIdsTaken,
   htmlUpdate,
   type HtmlFields,
   isBlankRow,
   problemMessage,
+  rebasedRows,
   rowProblem,
   rowsOf,
-  storedAttributes,
+  sameDraft,
+  wantedFields,
   type AttributeRow,
+  type Draft,
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
 
@@ -47,12 +49,14 @@ export interface AdvancedPanelProps {
   readonly cssId: string;
   readonly attributes: Readonly<Record<string, string>> | undefined;
   readonly editor: EditorState;
-}
-
-/** The draft an author is editing, before any of it is written down. */
-interface Draft {
-  readonly id: string;
-  readonly rows: readonly AttributeRow[];
+  /**
+   * Whether this is the tab currently on screen.
+   *
+   * The panel stays MOUNTED behind the other tabs — see the commit effect below
+   * — so it no longer learns that the author looked away by being destroyed.
+   * This is how it is told.
+   */
+  readonly active: boolean;
 }
 
 export function AdvancedPanel({
@@ -60,6 +64,7 @@ export function AdvancedPanel({
   cssId,
   attributes,
   editor,
+  active,
 }: AdvancedPanelProps): React.JSX.Element {
   const [draft, setDraft] = React.useState<Draft>(() => ({
     id: cssId,
@@ -90,6 +95,18 @@ export function AdvancedPanel({
    * beside it, in the same moment the valid attribute it replaced was deleted.
    */
   const lastWritten = React.useRef<HtmlFields | null>(null);
+  /*
+   * The draft as last SYNCHRONIZED with the document — what the fields held
+   * when they were filled from it, or when a write of ours landed.
+   *
+   * A commit asks this before it asks anything else, because "the normalized
+   * draft differs from what is stored" is not the same question as "the author
+   * changed something", and answering the first one for the second wrote an
+   * edit nobody made: a stored `" hero "` trims and a stored `DATA-X`
+   * lowercases, so opening Advanced and switching tabs rewrote the document,
+   * added an undo entry, and moved the anchor a link pointed at.
+   */
+  const loaded = React.useRef<Draft>(draft);
   const [refusal, setRefusal] = React.useState<string | undefined>(undefined);
   React.useEffect(() => {
     const written = lastWritten.current;
@@ -112,6 +129,7 @@ export function AdvancedPanel({
     const stored = { id: cssId, rows: rowsOf(attributes) };
     setDraft(stored);
     setSettled(stored);
+    loaded.current = stored;
   }, [cssId, attributes]);
 
   const taken = React.useMemo(
@@ -130,29 +148,30 @@ export function AdvancedPanel({
   const write = React.useRef<(next: Draft) => void>(() => {});
 
   write.current = (next: Draft): void => {
-    const id = next.id.trim();
-    // An id another block holds is not written at all: the field keeps showing
-    // what the author typed, with the reason beside it, and the document keeps
-    // what it had.
-    const keptId = id !== "" && taken.has(id) ? cssId : id;
-    const wanted = {
-      cssId: keptId,
-      /*
-       * The shadowed `id` is dropped only when the author has just SET the
-       * field, never merely because it holds something. A node imported with
-       * both a `cssId` and a legacy `id` would otherwise lose the second the
-       * moment anyone opened this tab — and lose it again on a change that was
-       * REFUSED, since a refusal keeps the id the node already had and that is
-       * still non-empty. Nothing the author did not ask for gets deleted.
-       */
-      attributes: storedAttributes(
-        next.rows,
-        keptId === cssId ? "" : keptId,
-        attributes ?? {}
-      ),
-    };
-    const update = htmlUpdate(wanted, { cssId, attributes });
-    if (update === undefined) return;
+    /*
+     * NOTHING is written unless the author edited something. Every other test
+     * this could have used compares a NORMALIZED draft against the document,
+     * and normalization is exactly what an untouched panel does to a value it
+     * did not choose — so a panel that had only been looked at wrote a change,
+     * added an undo entry, and moved the anchor a link pointed at.
+     *
+     * The refusal goes with it: a message about a save that failed is about a
+     * pending change, and there is no longer one to fail.
+     */
+    if (sameDraft(next, loaded.current)) {
+      setRefusal(undefined);
+      return;
+    }
+    const stored = { cssId, attributes };
+    const wanted = wantedFields(next, loaded.current, stored, taken);
+    const update = htmlUpdate(wanted, stored);
+    // Edited, but to something the document already holds — a value typed back
+    // to what it was, or a row whose refusal leaves the stored bag as it was.
+    // Nothing to save, so nothing left to report about saving.
+    if (update === undefined) {
+      setRefusal(undefined);
+      return;
+    }
     const applied = editor.apply({
       kind: "update",
       id: nodeId,
@@ -163,7 +182,7 @@ export function AdvancedPanel({
      * REFUSED ops leave the document alone — a value that pushes it past its
      * byte limit is the reachable one — and `apply` says so by answering
      * `null`. Marking the attempt as written before knowing would tell the
-     * effect below that the props it sees are this panel's own echo, so it
+     * effect above that the props it sees are this panel's own echo, so it
      * would stop re-reading the document and the field would go on showing a
      * value nothing stored.
      */
@@ -175,34 +194,56 @@ export function AdvancedPanel({
     }
     setRefusal(undefined);
     lastWritten.current = wanted;
-    /*
-     * REBASED onto what was stored. A row keeps the name it was loaded with so
-     * a later mistake can fall back to it — but once the rename has landed,
-     * that old name is no longer in the document, and falling back to it finds
-     * nothing and unsets the value the rename had just saved.
-     *
-     * Only the origins move; the names and values the author is looking at stay
-     * exactly as they are, so nothing shifts under a cursor.
-     */
+    // In step with the document again, so the next commit finds nothing to do
+    // rather than writing this same edit a second time.
+    loaded.current = { id: next.id, rows: rebasedRows(next.rows, wanted) };
     setDraft(current => ({
       ...current,
-      rows: current.rows.map(row =>
-        wanted.attributes !== undefined &&
-        wanted.attributes[attributeKey(row.name)] === row.value
-          ? { ...row, origin: attributeKey(row.name) }
-          : row
-      ),
+      rows: rebasedRows(current.rows, wanted),
     }));
   };
 
+  const settle = (next: Draft): void => {
+    setSettled(next);
+    write.current(next);
+  };
+
   /*
-   * Committed when the panel GOES AWAY, not only on blur.
+   * Read at commit time rather than closed over, for the same reason `latest`
+   * is: both effects below run after a render the author has already moved on
+   * from.
+   */
+  const settleLatest = React.useRef<() => void>(() => {});
+  settleLatest.current = (): void => {
+    settle(latest.current);
+  };
+
+  /*
+   * Committed when the author LOOKS AWAY, and again if the panel goes away.
    *
-   * The inspector's tabs activate on `mousedown` and unmount the inactive tab's
-   * content, so an author who types an attribute and clicks Style has this
-   * panel removed before the browser delivers the blur — and the draft was
-   * lost with it, silently. Selecting another block does the same through the
-   * key on this element.
+   * The inspector's tabs activate on `mousedown`, so an author who types an
+   * attribute and clicks Style leaves before the browser delivers the blur.
+   * This tab's content is force-mounted for that reason — destroying it took
+   * the draft with it, and took the explanation beside a refused row with it
+   * too: renaming `data-x` to `onclick` and clicking Style correctly declined
+   * to store the name, then discarded the row that said so, so returning to
+   * Advanced showed `data-x` again and the author never learned why.
+   *
+   * Settled rather than merely written, because the verdicts an author needs to
+   * come back to are read from the settled draft.
+   */
+  const shown = React.useRef(active);
+  React.useEffect(() => {
+    if (shown.current === active) return;
+    shown.current = active;
+    if (active) return;
+    settleLatest.current();
+  }, [active]);
+
+  /*
+   * Selecting another block still DESTROYS this panel, through the key on it,
+   * and so does closing the inspector. Neither passes through the effect above,
+   * so the draft is committed here as well.
    */
   React.useEffect(
     () => () => {
@@ -210,11 +251,6 @@ export function AdvancedPanel({
     },
     []
   );
-
-  const settle = (next: Draft): void => {
-    setSettled(next);
-    write.current(next);
-  };
 
   const change = (index: number, part: Partial<AttributeRow>): void => {
     setDraft(current => ({

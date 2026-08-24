@@ -127,6 +127,10 @@ export function InspectorPanel({
   // the document and the values shown.
   const inspection = inspectSelection(editor.document, editor.selectedId);
 
+  // Declared before the early returns below, because a hook has to run on every
+  // render of this component and "no selection" is one of them.
+  const [tab, setTab] = React.useState<string>("content");
+
   const commit = React.useCallback(
     (name: string, value: unknown) => {
       const id = editor.selectedId;
@@ -207,12 +211,16 @@ export function InspectorPanel({
       />
 
       {/*
-        Uncontrolled, so the chosen tab survives a change of selection — an
-        author styling one block after another means to stay on Style. React
-        keeps that state because this element's position does not change; a
-        `key` on the node id here would reset it on every click.
+        Held HERE, so the chosen tab survives a change of selection — an author
+        styling one block after another means to stay on Style. This element's
+        position does not change, so the state lives across every selection; a
+        `key` on the node id would reset it on every click.
+
+        Controlled rather than left to Radix because the Advanced tab has to be
+        told when it stops being the one on screen: it is force-mounted, so its
+        own removal no longer tells it.
       */}
-      <Tabs defaultValue="content" className="nx-inspector__tabs">
+      <Tabs value={tab} onValueChange={setTab} className="nx-inspector__tabs">
         <TabsList>
           {INSPECTOR_TABS.map(tab => (
             <TabsTrigger key={tab.value} value={tab.value}>
@@ -253,7 +261,14 @@ export function InspectorPanel({
           />
         </TabsContent>
 
-        <TabsContent value="advanced">
+        {/*
+          FORCE-MOUNTED, alone among the three. The other two hold controls that
+          write on the spot; this one holds a draft, and unmounting it threw
+          away both what the author had typed and the reason a refused row was
+          not saved. Radix keeps it hidden while another tab is chosen, so it is
+          out of the accessibility tree exactly as before.
+        */}
+        <TabsContent value="advanced" forceMount>
           <AdvancedPanel
             // Keyed by node, so a half-typed attribute does not travel to the
             // next block the way an uncommitted name would. The panel holds
@@ -264,6 +279,7 @@ export function InspectorPanel({
             cssId={inspection.html.cssId}
             attributes={inspection.html.attributes}
             editor={editor}
+            active={tab === "advanced"}
           />
         </TabsContent>
       </Tabs>

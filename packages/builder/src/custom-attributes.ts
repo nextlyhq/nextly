@@ -38,6 +38,40 @@ export interface AttributeRow {
   readonly origin?: string;
 }
 
+/** The id and rows an author is editing, before any of it is written down. */
+export interface Draft {
+  readonly id: string;
+  readonly rows: readonly AttributeRow[];
+}
+
+/**
+ * Whether two drafts hold the same TEXT — what the author typed, character for
+ * character.
+ *
+ * Deliberately not `htmlUpdate`, which compares a NORMALIZED draft against the
+ * document and therefore reports a difference nobody made: a stored `" hero "`
+ * trims and a stored `DATA-X` lowercases, so a panel that had only been looked
+ * at wrote a change, added an undo entry, and moved the rendered anchor. The
+ * question a commit has to ask first is whether the author edited anything, and
+ * that is this one.
+ *
+ * `origin` is not compared: it records where a row came from so a mistake can
+ * fall back to it, and it moves when a write lands rather than when an author
+ * types.
+ */
+export function sameDraft(left: Draft, right: Draft): boolean {
+  if (left.id !== right.id) return false;
+  if (left.rows.length !== right.rows.length) return false;
+  return left.rows.every((row, at) => {
+    const other = right.rows[at];
+    return (
+      other !== undefined &&
+      row.name === other.name &&
+      row.value === other.value
+    );
+  });
+}
+
 /** Why a row will not reach the page, or `undefined` when it will. */
 export type RowProblem =
   | { readonly kind: "not-allowed" }
@@ -323,6 +357,74 @@ function childNodesOf(node: BlockNode): unknown[] {
 export interface HtmlFields {
   readonly cssId: string;
   readonly attributes: Readonly<Record<string, string>> | undefined;
+}
+
+/**
+ * What a draft wants the node to hold — the whole question of what to STORE.
+ *
+ * Separate from getting the document there, which is the caller's job and a
+ * different kind of problem: this one is about attribute rules and knows
+ * nothing about ops, refusals or undo.
+ *
+ * The id is trimmed only when the author TYPED it. Normalizing a value nobody
+ * touched is a change nobody asked for, and the two normalizations here are not
+ * alike: the renderer lowercases an attribute name itself, so storing `DATA-X`
+ * as `data-x` renders the same byte for byte — but it does not trim `cssId`, so
+ * tidying a stored `" hero "` silently moves the anchor every link to this
+ * block points at. What the renderer already does is safe to store; what it
+ * does not do is the author's to decide.
+ *
+ * An id another block holds is not written at all: the field keeps showing what
+ * the author typed, with the reason beside it, and the document keeps what it
+ * had.
+ */
+export function wantedFields(
+  draft: Draft,
+  loaded: Draft,
+  stored: HtmlFields,
+  taken: ReadonlySet<string>
+): HtmlFields {
+  const id = draft.id === loaded.id ? draft.id : draft.id.trim();
+  const keptId = id !== "" && taken.has(id) ? stored.cssId : id;
+  return {
+    cssId: keptId,
+    /*
+     * The shadowed `id` is dropped only when the author has just SET the field,
+     * never merely because it holds something. A node imported with both a
+     * `cssId` and a legacy `id` would otherwise lose the second the moment
+     * anyone opened this tab — and lose it again on a change that was REFUSED,
+     * since a refusal keeps the id the node already had and that is still
+     * non-empty. Nothing the author did not ask for gets deleted.
+     */
+    attributes: storedAttributes(
+      draft.rows,
+      keptId === stored.cssId ? "" : keptId,
+      stored.attributes ?? {}
+    ),
+  };
+}
+
+/**
+ * The rows again, each pointed at the name it is now STORED under.
+ *
+ * A row keeps the name it was loaded with so a later mistake can fall back to
+ * it — but once a rename has landed, that old name is no longer in the document,
+ * and falling back to it finds nothing and unsets the value the rename had just
+ * saved.
+ *
+ * Only the origins move. The names and values the author is looking at stay
+ * exactly as they are, so nothing shifts under a cursor.
+ */
+export function rebasedRows(
+  rows: readonly AttributeRow[],
+  wanted: HtmlFields
+): AttributeRow[] {
+  const written = wanted.attributes;
+  return rows.map(row =>
+    written !== undefined && written[attributeKey(row.name)] === row.value
+      ? { ...row, origin: attributeKey(row.name) }
+      : row
+  );
 }
 
 /**

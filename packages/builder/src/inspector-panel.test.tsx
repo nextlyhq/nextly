@@ -933,3 +933,242 @@ describe("a node carrying both a css id and a legacy id attribute", () => {
     });
   });
 });
+
+describe("an attribute bag the document should not have held", () => {
+  /*
+   * A stored bag can hold anything an import or a script put there. The
+   * renderer skips a non-string value and emits every attribute beside it, so
+   * a panel that refused the WHOLE bag on one bad entry showed no rows for a
+   * block that was visibly carrying attributes.
+   */
+  // Cast at the definition, because the whole point of this fixture is a node
+  // holding what its own type forbids — which is what a stored document does
+  // when an import or a script wrote it.
+  const mixed = {
+    attributes: { "data-keep": "yes", "data-bad": 5 },
+  } as unknown as Partial<BlockNode>;
+
+  it("offers the entries it CAN edit rather than none of them", () => {
+    mount(mixed);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(
+      (screen.getByLabelText("Name of attribute 1") as HTMLInputElement).value
+    ).toBe("data-keep");
+    // And only that one: the unreadable entry is not offered as a row, because
+    // there is no value for the author to see or type over.
+    expect(screen.queryByLabelText("Name of attribute 2")).toBeNull();
+  });
+
+  it("does not delete the valid attribute when another is added", () => {
+    /*
+     * The data loss this closes: with no rows shown, the first attribute the
+     * author added was written from an empty view, and `data-keep` went with
+     * it. Driven through the real store, because what matters is the document
+     * the op leaves behind rather than the op's shape.
+     */
+    const before = {
+      id: "a",
+      type: "acme/heading",
+      version: 1,
+      props: {},
+      ...mixed,
+    } as unknown as BlockNode;
+    const editor = mount(mixed);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add attribute" }));
+    fireEvent.change(screen.getByLabelText("Name of attribute 2"), {
+      target: { value: "data-new" },
+    });
+    fireEvent.blur(screen.getByLabelText("Name of attribute 2"));
+
+    expect(editor.apply).toHaveBeenCalled();
+    const op = editor.apply.mock.calls.at(-1)?.[0] as never;
+    const after = applyOp(
+      { formatVersion: 1, kind: "page", nodes: [before] } as BlockDocument,
+      op
+    ).document.nodes[0] as BlockNode;
+    expect(after.attributes).toEqual({ "data-keep": "yes", "data-new": "" });
+  });
+
+  it("leaves the bag alone entirely while only the id is edited", () => {
+    /*
+     * The unreadable entry cannot survive an edit to the attributes — `update`
+     * refuses a bag holding a non-string, so no op could carry it — but an edit
+     * to a different field must not take it. `htmlUpdate` names only what
+     * changed, and this is the assertion that keeps it that way.
+     */
+    const editor = mount({ ...mixed, cssId: "old" });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "new" } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "new" },
+    });
+  });
+});
+
+describe("a panel that was only LOOKED at", () => {
+  /*
+   * Stored values the editor would spell differently: `cssId` is trimmed on the
+   * way out and an attribute name is lowercased. Committing whenever the
+   * normalized draft differed from the document therefore wrote a change the
+   * author never made — an undo entry for opening a tab, and a moved anchor.
+   */
+  const noncanonical = {
+    cssId: " hero ",
+    attributes: { "DATA-X": "1" },
+  };
+
+  it("writes nothing when the tab is switched away", () => {
+    const editor = mount(noncanonical);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when a field is merely focused and left", () => {
+    // The same cause through the other door: blur commits too, so a click into
+    // the id field and out of it was enough to rewrite the value.
+    const editor = mount(noncanonical);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    fireEvent.blur(screen.getByLabelText("CSS id"));
+    fireEvent.blur(screen.getByLabelText("Name of attribute 1"));
+
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("still normalizes once the author DOES edit", () => {
+    /*
+     * The control. Holding the write back until an edit must not mean the
+     * editor stops normalizing what it writes — an author who changes the value
+     * beside `DATA-X` gets the lowercased name stored, which is what the page
+     * renders.
+     */
+    const editor = mount(noncanonical);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    const value = screen.getByLabelText("Value of attribute 1");
+    fireEvent.change(value, { target: { value: "2" } });
+    fireEvent.blur(value);
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { attributes: { "data-x": "2" } },
+    });
+  });
+});
+
+describe("a refused row when the author leaves the tab", () => {
+  it("keeps the draft and its reason to come back to", () => {
+    /*
+     * The tabs activate on `mousedown`, before blur. The commit correctly
+     * declined to store `onclick` — but the panel was destroyed with it, so
+     * returning to Advanced showed `data-x` again and nothing had said why the
+     * rename did not take. The tab's content is force-mounted for this.
+     */
+    const editor = mount({ attributes: { "data-x": "1" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    const name = screen.getByLabelText("Name of attribute 1");
+    fireEvent.change(name, { target: { value: "onclick" } });
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    // The document kept what it had: the rename was refused, not applied.
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(
+      (screen.getByLabelText("Name of attribute 1") as HTMLInputElement).value
+    ).toBe("onclick");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "does not put that attribute"
+    );
+  });
+
+  it("keeps a VALID draft too, and commits it", () => {
+    // The other half: leaving the tab still saves work that can be saved.
+    const editor = mount({});
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    fireEvent.change(screen.getByLabelText("CSS id"), {
+      target: { value: "hero" },
+    });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { cssId: "hero" },
+    });
+  });
+});
+
+describe("a refusal that no longer describes anything", () => {
+  /*
+   * `apply` answers `null` for a value past the document's byte limit, and the
+   * panel says so. The message is about a PENDING change, so it has to go when
+   * there is no longer one to fail — and a commit reaches that conclusion by
+   * two different routes, which is why both are driven here.
+   */
+  const refusedFirst = (node: Partial<BlockNode>) => {
+    register();
+    const editor = editorFor(documentOf(node));
+    editor.apply.mockReturnValue(null);
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const field = screen.getByLabelText("CSS id");
+    fireEvent.change(field, { target: { value: "enormous" } });
+    fireEvent.blur(field);
+    // The control on both tests below: the alert was there to be cleared.
+    expect(screen.getByRole("alert").textContent).toContain("size limit");
+    return field;
+  };
+
+  const sizeAlert = () =>
+    screen
+      .queryAllByRole("alert")
+      .find(each => each.textContent?.includes("size limit"));
+
+  it("clears when the field is put back to what it was", () => {
+    // The first route: the draft matches what was loaded, so the commit stops
+    // before it has anything to compare against the document.
+    const field = refusedFirst({ cssId: "hero" });
+
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+
+    expect(sizeAlert()).toBeUndefined();
+  });
+
+  it("clears when the draft still differs but stores the same thing", () => {
+    /*
+     * The second route, and the one the first cannot reach: the author reverts
+     * the oversized id AND renames a row to a name that will not be stored. The
+     * draft is not what was loaded, so the commit runs — and finds the document
+     * already holds what the draft would store, which is the early return that
+     * used to leave this alert standing.
+     */
+    const field = refusedFirst({
+      cssId: "hero",
+      attributes: { "data-x": "1" },
+    });
+
+    fireEvent.change(field, { target: { value: "hero" } });
+    const name = screen.getByLabelText("Name of attribute 1");
+    fireEvent.change(name, { target: { value: "onclick" } });
+    fireEvent.blur(name);
+
+    expect(sizeAlert()).toBeUndefined();
+    // And the row's OWN reason is what the author is left looking at.
+    expect(screen.getByRole("alert").textContent).toContain(
+      "does not put that attribute"
+    );
+  });
+});
