@@ -92,10 +92,11 @@ describe("usePreviewLink", () => {
     expect(mint).toHaveBeenCalledWith({ collection: "posts", entryId: "7" });
   });
 
-  // The server answers `null` when no site URL is configured, because it cannot
-  // name a host. The admin must NOT put its own origin in front of the path:
-  // the admin may be served from somewhere the site is not, and a link to the
-  // wrong host looks like a working one.
+  // The server answers `null` only when the site's address is available nowhere
+  // — neither the stored setting nor the application's own URL — because it
+  // then cannot name a host. The admin must NOT put its own origin in front of
+  // the path: the admin may be served from somewhere the site is not, and a
+  // link to the wrong host looks like a working one.
   it("reports the missing site url instead of substituting its own origin", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
@@ -109,8 +110,15 @@ describe("usePreviewLink", () => {
 
     expect(isError).toBe(true);
     expect(writeText).not.toHaveBeenCalled();
+    // Both remedies, because either one settles it and they belong to different
+    // people: the setting is an administrator's and the variable is a
+    // developer's. Naming only one sends half the readers looking in a place
+    // they cannot act.
     expect(toast.error).toHaveBeenCalledWith(
-      expect.stringContaining("site URL")
+      expect.stringContaining("Site URL")
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("NEXT_PUBLIC_APP_URL")
     );
   });
 });

@@ -32,7 +32,21 @@
  * @module spacing-bands
  */
 
-import type { Rect } from "./geometry";
+import type { CornerRadii, RoundedShape } from "./border-radii";
+import {
+  insetCornerRadii,
+  isSquare,
+  roundedShapeIn,
+  scaleCornerRadii,
+} from "./border-radii";
+import type { EdgeLengths, Rect, Scale } from "./geometry";
+
+/*
+ * Re-exported rather than moved outright because both are the vocabulary this
+ * module's callers already speak, while `border-radii.ts` needs them too and a
+ * type imported FROM here would make the two modules import each other.
+ */
+export type { EdgeLengths, Scale } from "./geometry";
 
 /** The four physical sides, in the order a CSS shorthand writes them. */
 export type SpacingSide = "top" | "right" | "bottom" | "left";
@@ -44,14 +58,6 @@ export type SpacingSide = "top" | "right" | "bottom" | "left";
  * padding box cannot be located without it.
  */
 export type SpacingBox = "margin" | "padding";
-
-/** Four physical edge lengths, in unscaled CSS pixels. */
-export interface EdgeLengths {
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-  readonly left: number;
-}
 
 /** One band to draw, with the text that goes on it. */
 export interface SpacingBand {
@@ -70,17 +76,19 @@ export interface SpacingBand {
    * it differently so it cannot be mistaken for padding.
    */
   readonly negative: boolean;
-}
-
-/**
- * How much bigger the measured rectangle is than the layout it came from.
- *
- * Per-axis because a transform scales the two independently. `{ x: 1, y: 1 }`
- * for an untransformed element, which is the ordinary case.
- */
-export interface Scale {
-  readonly x: number;
-  readonly y: number;
+  /**
+   * The rounded box this band's FILL has to be cut to, when one is smaller than
+   * the band.
+   *
+   * Absent on the ordinary square block, and absent on every band that lies
+   * wholly outside the block: a positive margin sits beyond the border edge,
+   * where the margin box is a plain rectangle whatever the corners do, so
+   * nothing there is drawn over ground the block does not occupy.
+   *
+   * Stated in the BAND's own coordinates, because that is what a `clip-path` on
+   * the band is resolved against.
+   */
+  readonly clip?: RoundedShape;
 }
 
 /** Everything the placement needs, and nothing that has to be read from a DOM. */
@@ -108,6 +116,15 @@ export interface SpacingGeometry {
    * its own, which is why this is easy to miss.
    */
   readonly marginScale: Scale;
+  /**
+   * The border box's USED corner radii, unscaled, already resolved and reduced.
+   *
+   * Resolved by the caller because a percentage resolves against the border
+   * box's own size in LAYOUT pixels, and `border` has already been through the
+   * transform by the time it arrives here. See `border-radii.ts` for why the
+   * computed value is not the used one.
+   */
+  readonly radii: CornerRadii;
 }
 
 const SIDES: readonly SpacingSide[] = ["top", "right", "bottom", "left"];
@@ -173,17 +190,37 @@ export function spacingBands(
   const bands: SpacingBand[] = [];
 
   const inward = inwardExtents(margin, border);
+  /*
+   * Two rounded shapes, because the two kinds of band sit in different boxes. A
+   * negative margin is drawn INSIDE the border edge, so it is the border box's
+   * own curve that decides where it may paint; padding is drawn inside the
+   * border, where the curve is that much tighter.
+   *
+   * Both are scaled AFTER the border widths come off, which is the order the
+   * lengths are in: a radius and a border width are both unscaled CSS pixels
+   * until the transform is applied to their difference.
+   */
+  const outerRadii = scaleCornerRadii(geometry.radii, scale);
+  const innerRadii = scaleCornerRadii(
+    insetCornerRadii(geometry.radii, geometry.borderWidths),
+    scale
+  );
 
   for (const side of SIDES) {
     const value = geometry.margin[side];
     const label = labelFor(value);
     if (!reports(label)) continue;
+    const rect = marginRect(border, side, margin, inward);
+    const negative = value < 0;
     bands.push({
       box: "margin",
       side,
-      rect: marginRect(border, side, margin, inward),
+      rect,
       label,
-      negative: value < 0,
+      negative,
+      // Only the negative one, which is the only margin band laid inside the
+      // border edge and so the only one a corner can cut.
+      clip: negative ? clipWithin(rect, border, outerRadii) : undefined,
     });
   }
 
@@ -199,16 +236,35 @@ export function spacingBands(
     const value = geometry.padding[side];
     const label = labelFor(value);
     if (!reports(label)) continue;
+    const rect = paddingRect(inner, side, padding);
     bands.push({
       box: "padding",
       side,
-      rect: paddingRect(inner, side, padding),
+      rect,
       label,
       negative: false,
+      clip: clipWithin(rect, inner, innerRadii),
     });
   }
 
   return bands;
+}
+
+/**
+ * The clip a band's fill needs, or nothing when the box it sits in has square
+ * corners.
+ *
+ * Nothing is the answer for nearly every block, and it is worth distinguishing:
+ * a `clip-path` that happens to cut nothing still puts the fill on its own
+ * compositing path, and an absent clip lets the ordinary case stay ordinary.
+ */
+function clipWithin(
+  band: Rect,
+  shape: Rect,
+  radii: CornerRadii
+): RoundedShape | undefined {
+  if (isSquare(radii)) return undefined;
+  return roundedShapeIn(band, shape, radii);
 }
 
 /** A rectangle reduced on each side, never past zero in either dimension. */
@@ -447,19 +503,73 @@ export function sameBands(
   if (left.length !== right.length) return false;
   return left.every((one, index) => {
     const other = right[index];
-    return (
-      other !== undefined &&
-      one.box === other.box &&
-      one.side === other.side &&
-      one.label === other.label &&
-      one.negative === other.negative &&
-      one.rect.x === other.rect.x &&
-      one.rect.y === other.rect.y &&
-      one.rect.width === other.rect.width &&
-      one.rect.height === other.rect.height
-    );
+    return other !== undefined && sameBand(one, other);
   });
 }
+
+/**
+ * Whether two bands describe the same thing.
+ *
+ * Every field, not a subset. A band that MOVED without resizing, a label that
+ * changed while the geometry held, and a curve that changed while both held are
+ * all real changes an author has to see, and a comparison skipping any of them
+ * freezes the overlay in exactly the case it exists to report.
+ */
+function sameBand(one: SpacingBand, other: SpacingBand): boolean {
+  return (
+    one.box === other.box &&
+    one.side === other.side &&
+    one.label === other.label &&
+    one.negative === other.negative &&
+    sameRect(one.rect, other.rect) &&
+    sameClip(one.clip, other.clip)
+  );
+}
+
+/** Whether two rectangles are the same rectangle. */
+function sameRect(one: Rect, other: Rect): boolean {
+  return (
+    one.x === other.x &&
+    one.y === other.y &&
+    one.width === other.width &&
+    one.height === other.height
+  );
+}
+
+/**
+ * Whether two bands are cut to the same shape.
+ *
+ * Compared because NOTHING else here changes when only the radius does. An
+ * author dragging `border-radius` moves no band rectangle, no label and no
+ * sign, so a comparison over those fields alone reports the bands equal, the
+ * caller keeps the array it already had, and the fill stays cut to the curve the
+ * block used to have — which is the case this clip exists for.
+ */
+function sameClip(
+  left: RoundedShape | undefined,
+  right: RoundedShape | undefined
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height &&
+    CLIP_CORNERS.every(
+      corner =>
+        left.radii[corner].x === right.radii[corner].x &&
+        left.radii[corner].y === right.radii[corner].y
+    )
+  );
+}
+
+/** The four corners, named so the comparison above cannot silently skip one. */
+const CLIP_CORNERS = [
+  "topLeft",
+  "topRight",
+  "bottomRight",
+  "bottomLeft",
+] as const satisfies readonly (keyof CornerRadii)[];
 
 /**
  * Boxes that CSS gives no margin, whatever the computed style reports.

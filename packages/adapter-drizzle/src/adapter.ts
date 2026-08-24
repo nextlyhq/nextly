@@ -15,6 +15,10 @@ import { asc, desc, getColumns } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
 import { buildDrizzleWhere } from "./drizzle-where";
+import {
+  createTransactionForwarders,
+  type TransactionCrudForwarders,
+} from "./transaction-forwarders";
 import type {
   SupportedDialect,
   SqlParam,
@@ -2086,11 +2090,52 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * Helper to create transaction context CRUD forwarding methods.
+   *
+   * @param txDb - Thunk returning the transaction-bound Drizzle executor
+   * @returns Object providing forwarded CRUD and getDrizzle methods
+   *
+   * @protected
+   */
+  protected createTransactionForwarders(
+    txDb: () => unknown
+  ): TransactionCrudForwarders {
+    return createTransactionForwarders(this, txDb);
+  }
+
+  /**
+   * Classify an error into a DatabaseError.
+   *
+   * @remarks
+   * Subclasses can override this method to add dialect-specific error code classification.
+   *
+   * @param error - Original error
+   * @param sql - SQL statement that caused the error (optional)
+   * @returns DatabaseError instance
+   *
+   * @protected
+   */
+  protected classifyError(error: unknown, sql?: string): DatabaseError {
+    if (isDatabaseError(error)) {
+      return error;
+    }
+
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    return this.createDatabaseError(
+      "query",
+      sql ? `Query failed: ${errorMessage}` : errorMessage,
+      error instanceof Error ? error : undefined
+    );
+  }
+
+  /**
    * Handle query errors and convert to DatabaseError.
    *
    * @remarks
    * Protected helper for consistent error handling across CRUD operations.
-   * Subclasses can override to add dialect-specific error classification.
+   * Delegates to `classifyError` and attaches operation and table context if not present.
+   * Subclasses override `classifyError` to provide dialect-specific error code classification.
    *
    * @param error - Original error
    * @param operation - Operation that failed
@@ -2104,17 +2149,18 @@ export abstract class DrizzleAdapter {
     operation: string,
     table: string
   ): DatabaseError {
-    if (isDatabaseError(error)) {
-      return error;
+    const dbError = this.classifyError(error);
+
+    // Add operation context if not already present
+    if (!dbError.message.includes(operation)) {
+      dbError.message = `${operation} operation failed on table '${table}': ${dbError.message}`;
     }
 
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (!dbError.table) {
+      dbError.table = table;
+    }
 
-    return this.createDatabaseError(
-      "query",
-      `${operation} operation failed on table '${table}': ${errorMessage}`,
-      error instanceof Error ? error : undefined
-    );
+    return dbError;
   }
 }
 

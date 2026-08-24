@@ -104,6 +104,13 @@ function styleOf(values: Record<string, string>): CSSStyleDeclaration {
     borderRightWidth: "0px",
     borderBottomWidth: "0px",
     borderLeftWidth: "0px",
+    // Square unless a case says otherwise. A real `CSSStyleDeclaration` always
+    // carries these, so leaving them out here is a property of the fake and not
+    // of anything the overlay could meet.
+    borderTopLeftRadius: "0px",
+    borderTopRightRadius: "0px",
+    borderBottomRightRadius: "0px",
+    borderBottomLeftRadius: "0px",
   };
   return { ...zeroed, ...values } as unknown as CSSStyleDeclaration;
 }
