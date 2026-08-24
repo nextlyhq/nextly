@@ -183,11 +183,22 @@ describe("names the editor needs for itself", () => {
     }
   });
 
+  it("reserves the whole namespace, not just the markers that exist", () => {
+    /*
+     * A prefix rather than a list. The list version fell behind once already
+     * — three markers existed and two were reserved — and a marker a future
+     * overlay needs is covered here without anyone remembering to add it.
+     */
+    expect(rowProblem([row("data-nx-anything")], 0)).toEqual({
+      kind: "reserved",
+    });
+  });
+
   it("still allows an ordinary data attribute", () => {
     // The control that stops the reservation swallowing the namespace it sits
-    // in: `data-` is the feature, and only these two names are taken.
-    expect(rowProblem([row("data-nx-something-else")], 0)).toBeUndefined();
+    // in: `data-` is the feature and only `data-nx-` is spoken for.
     expect(rowProblem([row("data-analytics")], 0)).toBeUndefined();
+    expect(rowProblem([row("data-nxt")], 0)).toBeUndefined();
   });
 });
 
@@ -360,5 +371,81 @@ describe("a row that cannot land keeps what it replaced", () => {
     expect(
       storedAttributes([{ name: "onclick", value: "1" }], "", stored)
     ).toBeUndefined();
+  });
+});
+
+describe("the id a node actually renders", () => {
+  const node = (over: Record<string, unknown>): never =>
+    ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
+
+  it("treats an EMPTY modelled id as present, as the renderer does", () => {
+    /*
+     * The renderer writes `extra.id = cssId` whenever `cssId !== undefined`, so
+     * an empty one still overwrites the bag and the element renders `id=""`.
+     * Reading it as absent recorded the bag's value and refused another block an
+     * id that never appears on the page.
+     */
+    const taken = domIdsTaken(
+      [node({ id: "b", cssId: "", attributes: { id: "hero" } })],
+      "a"
+    );
+    expect(taken.has("hero")).toBe(false);
+    // And the empty one takes nothing: it is not an id, it only stops the bag.
+    expect(taken.has("")).toBe(false);
+  });
+
+  it("still takes the bag id when there is no modelled field at all", () => {
+    // The control: the rule is about PRESENCE, not about emptiness in general.
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { id: "hero" } })],
+      "a"
+    );
+    expect(taken.has("hero")).toBe(true);
+  });
+
+  it("survives a malformed bag on another node", () => {
+    /*
+     * This walks every OTHER node, and a stored document holds whatever the
+     * database returned. `Object.entries(null)` throws, and one bad node
+     * elsewhere took the whole tab down before it rendered.
+     */
+    expect(() =>
+      domIdsTaken(
+        [
+          node({ id: "b", attributes: null }),
+          node({ id: "c", attributes: ["nope"] }),
+          node({ id: "d", cssId: "kept" }),
+        ],
+        "a"
+      )
+    ).not.toThrow();
+    // And the good node beside them is still read, so the guard skips rather
+    // than abandoning the walk.
+    expect(
+      domIdsTaken(
+        [node({ id: "b", attributes: null }), node({ id: "d", cssId: "kept" })],
+        "a"
+      ).has("kept")
+    ).toBe(true);
+  });
+});
+
+describe("a bag holding two spellings of id", () => {
+  it("drops EVERY variant once the field above is set", () => {
+    /*
+     * The duplicate check runs before the id rule, so the first variant draws
+     * `use-css-id-field` and every later one draws `duplicate`. Keying the drop
+     * on one kind preserved the second — and clearing the CSS id later made a
+     * supposedly removed value render again.
+     */
+    const bag = { ID: "first", id: "second" };
+    expect(storedAttributes(rowsOf(bag), "new", bag)).toBeUndefined();
+  });
+
+  it("keeps both when no CSS id is set, rather than deleting silently", () => {
+    // The control: with nothing in the field above, the author has not asked
+    // for anything to go, so nothing does.
+    const bag = { ID: "first", id: "second" };
+    expect(storedAttributes(rowsOf(bag), "", bag)).toEqual(bag);
   });
 });

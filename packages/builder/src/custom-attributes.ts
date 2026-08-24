@@ -18,13 +18,7 @@
  * @module custom-attributes
  */
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import {
-  NODE_ID_ATTRIBUTE,
-  PROP_ATTRIBUTE,
-  isAllowedAttribute,
-} from "@nextlyhq/blocks-react";
-
-import { CHROME_ATTRIBUTE } from "./canvas";
+import { EDITOR_NAMESPACE, isAllowedAttribute } from "@nextlyhq/blocks-react";
 
 /** One row of the attributes editor, as the author is typing it. */
 export interface AttributeRow {
@@ -43,32 +37,6 @@ export interface AttributeRow {
    */
   readonly origin?: string;
 }
-
-/**
- * Names the EDITOR needs, which the renderer has no reason to refuse.
- *
- * Both are `data-` attributes, so the render-safe rule admits them — correctly,
- * because on a published page they are ordinary author data. They are not
- * ordinary HERE: the canvas reads one to decide which block was clicked and
- * treats the other as its own chrome, so a block carrying either can send a
- * click to the wrong block or swallow it. That is an editing surface the
- * renderer cannot see, which is why this narrowing lives here and not there.
- *
- * ALL THREE, which is the point: the first version of this reserved two and
- * missed `data-nx-prop`, the marker inline editing reads to decide which
- * property a click makes editable. On a block with more than one inline
- * property, an author's value matching another property makes the whole root
- * editable and commits its text into the wrong property; a value matching none
- * disables inline editing on that root entirely.
- *
- * Taken from the modules that define them rather than written out, so renaming
- * any of them moves this with it.
- */
-const RESERVED_FOR_THE_EDITOR = new Set([
-  NODE_ID_ATTRIBUTE,
-  PROP_ATTRIBUTE,
-  CHROME_ATTRIBUTE,
-]);
 
 /** Why a row will not reach the page, or `undefined` when it will. */
 export type RowProblem =
@@ -112,7 +80,14 @@ export function rowProblem(
   if (row === undefined || isBlankRow(row)) return undefined;
   const key = attributeKey(row.name);
   if (!isAllowedAttribute(key)) return { kind: "not-allowed" };
-  if (RESERVED_FOR_THE_EDITOR.has(key)) return { kind: "reserved" };
+  /*
+   * The editor's own NAMESPACE, asked as a prefix rather than as a list of
+   * the markers that exist today. The renderer drops these while it is
+   * rendering for the editor, so accepting one here would store a name that
+   * never appears — and a list is a thing to keep in sync, which this one
+   * already fell behind on once.
+   */
+  if (key.startsWith(EDITOR_NAMESPACE)) return { kind: "reserved" };
   /*
    * Located by INDEX, never by object identity. A row is a plain value the UI
    * rebuilds on every keystroke, so two rows holding the same name and value
@@ -206,7 +181,14 @@ export function storedAttributes(
      * the renderer fall back to it the moment that field is cleared, which is
      * the value coming back from the dead.
      */
-    if (problem.kind === "use-css-id-field" && cssId.trim() !== "") return;
+    /*
+     * ANY row that would render as `id`, whichever problem it happened to
+     * draw. A bag holding two spellings gives the first `use-css-id-field`
+     * and every later one `duplicate` — the duplicate check runs earlier —
+     * so keying this on one kind preserved the second, and clearing the CSS
+     * id later made a supposedly removed value render again.
+     */
+    if (cssId.trim() !== "" && attributeKey(row.name) === "id") return;
     const origin = row.origin;
     if (origin === undefined) return;
     const had = stored[origin];
@@ -244,12 +226,18 @@ export function domIdsTaken(
        * wins over the bag. Adding both refused another block the bag's value
        * even though that id never reaches the page.
        */
-      const modelled =
-        typeof node.cssId === "string" && node.cssId !== ""
-          ? node.cssId
-          : undefined;
+      /*
+       * PRESENT whenever it is a string, the empty one included, because that
+       * is the renderer's test: it writes `extra.id = cssId` on
+       * `cssId !== undefined`, so an empty modelled field still overwrites
+       * the bag and the element renders `id=""`. Reading it as absent here
+       * recorded the bag's value and refused another block an id that never
+       * renders.
+       */
+      const modelled = typeof node.cssId === "string" ? node.cssId : undefined;
       const rendered = modelled ?? renderedIdIn(node.attributes);
-      if (rendered !== undefined) taken.add(rendered);
+      // An empty id is not an id, so it takes nothing — it only stops the bag.
+      if (rendered !== undefined && rendered !== "") taken.add(rendered);
     }
     for (const child of childNodesOf(node)) visit(child);
   };
@@ -273,7 +261,15 @@ export function domIdsTaken(
 function renderedIdIn(
   attributes: Readonly<Record<string, string>> | undefined
 ): string | undefined {
-  if (attributes === undefined) return undefined;
+  /*
+   * Shape-checked, because this walks OTHER nodes and a stored document can
+   * hold whatever the database returned. `Object.entries(null)` throws, and
+   * one malformed node elsewhere would take down the whole tab before it
+   * rendered. The reader and the renderer both treat a malformed bag as
+   * absent; this agrees with them.
+   */
+  if (typeof attributes !== "object" || attributes === null) return undefined;
+  if (Array.isArray(attributes)) return undefined;
   let found: string | undefined;
   for (const [name, value] of Object.entries(attributes)) {
     if (name.toLowerCase() !== "id") continue;

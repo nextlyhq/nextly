@@ -272,6 +272,9 @@ describe("the root entry", () => {
       "BlockBoundary",
       "BlockList",
       "BlockPlaceholder",
+      // The editor marker namespace, public so an editor refuses a name the
+      // renderer would drop rather than keeping a list beside it.
+      "EDITOR_NAMESPACE",
       "NODE_ID_ATTRIBUTE",
       "PROP_ATTRIBUTE",
       "PageRenderer",

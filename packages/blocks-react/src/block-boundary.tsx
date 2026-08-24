@@ -164,6 +164,16 @@ export const NODE_ID_ATTRIBUTE = "data-nx-node";
 export const PROP_ATTRIBUTE = "data-nx-prop";
 
 /**
+ * The prefix every marker the editor puts on a rendered element shares.
+ *
+ * A NAMESPACE rather than a list, because a list is a thing to keep in sync
+ * and this one already fell behind once: three markers exist and only the
+ * node id was protected here. Anything a future overlay needs is covered by
+ * construction.
+ */
+export const EDITOR_NAMESPACE = "data-nx-";
+
+/**
  * Builds the `markProp` a block spreads onto the element carrying a value.
  *
  * Returns nothing at all outside an editor, and nothing for a prop the block
@@ -225,6 +235,17 @@ function withNodeAttributes(
       // document can hold anything; a non-string would be handed to React as a
       // prop value it never expected.
       if (typeof value !== "string") continue;
+      /*
+       * The editor's own namespace is not the document's to write, and only
+       * while this render is FOR the editor: on a published page these are
+       * ordinary author data and none of this system's business.
+       *
+       * Filtered HERE rather than trusted to the panel that offers the field.
+       * A document can arrive from an import or a script, and the marker it
+       * would overwrite decides which block a click selects and which
+       * property inline editing commits into.
+       */
+      if (nodeAttribute && key.startsWith(EDITOR_NAMESPACE)) continue;
       extra[key] = value;
     }
   }
