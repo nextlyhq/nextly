@@ -264,6 +264,79 @@ describe("walkNodes / findNode / locateNode", () => {
   });
 });
 
+describe("a forest whose slots form a cycle", () => {
+  // A cycle reaches these primitives the same way every other malformed shape
+  // does: persisted documents are not required to have been validated, and an
+  // in-process producer can build one directly. None of these crashed on a
+  // document an author could make — they crashed on one the system admits.
+  //
+  // Measured before the fix, on the built package: `treeDepth` did not throw,
+  // it SPUN, which is the failure nobody attributes correctly. The rest exited
+  // with `RangeError: Maximum call stack size exceeded`.
+  function cyclic(): BlockNode[] {
+    const parent = makeNode("core/box", 1);
+    const child = makeNode("core/box", 1, {}, { main: [parent] });
+    parent.slots = { main: [child] };
+    return [parent];
+  }
+
+  it("counts a cyclic forest instead of exhausting its own queue", () => {
+    expect(countNodes(cyclic())).toBe(3);
+  });
+
+  it("measures depth instead of spinning forever", () => {
+    expect(treeDepth(cyclic())).toBe(3);
+  });
+
+  it("returns undefined for an ABSENT id rather than overflowing", () => {
+    // The half that hid this: a lookup for an id that is PRESENT returns before
+    // it can loop, so only a miss fails — and a miss is the ordinary case for
+    // any lookup that can have one.
+    // One forest, not two: `cyclic()` mints fresh ids per call, so an id taken
+    // from a second build is absent from the first by construction and would
+    // pass this whatever `findNode` did.
+    const nodes = cyclic();
+    expect(findNode(nodes, "nope")).toBeUndefined();
+    expect(findNode(nodes, nodes[0]!.id)).toBeDefined();
+  });
+
+  it("rebuilds through updateNode by breaking the back edge", () => {
+    // An immutable rebuild of a cyclic forest is not a thing that exists: the
+    // result would have to contain itself. Dropping the edge that closes the
+    // cycle is the only outcome that terminates, and it is the repair a caller
+    // wants — the operation succeeds on a finite forest.
+    // `updateNode` takes a PATCH, not a mapper — it merges the given fields
+    // onto the node whose id matches.
+    const nodes = cyclic();
+    const next = updateNode(nodes, nodes[0]!.id, { props: { touched: true } });
+
+    expect(next[0]?.props).toEqual({ touched: true });
+    // Terminated, and returned a forest that is itself finite to walk.
+    expect(countNodes(next)).toBe(3);
+  });
+
+  it("duplicates and re-ids a cyclic subtree without recursing forever", () => {
+    const nodes = cyclic();
+    expect(() => duplicateNode(nodes, nodes[0]!.id)).not.toThrow();
+    expect(() => reidSubtree(nodes[0]!)).not.toThrow();
+  });
+
+  it("still counts a REPEATED node that is not a cycle twice", () => {
+    // The boundary. One node object placed in two slots is two elements of this
+    // document and is not a cycle — a guard keyed on everything seen would
+    // report half the real size and pass a cap the document exceeds.
+    const shared = makeNode("core/text", 1);
+    const host = makeNode(
+      "core/box",
+      1,
+      {},
+      { left: [shared], right: [shared] }
+    );
+
+    expect(countNodes([host])).toBe(3);
+  });
+});
+
 describe("insertNode", () => {
   it("inserts at the top level with a clamped index", () => {
     const { nodes } = fixture();

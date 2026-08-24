@@ -263,14 +263,51 @@ export function findNode(
   nodes: BlockNode[],
   id: string
 ): BlockNode | undefined {
+  return findWithin(nodes, id, new Set());
+}
+
+/**
+ * `findNode`, carrying the ancestors the current forest was reached through.
+ *
+ * The path is what makes a MISS terminate. A hit returns before descending
+ * further, so a lookup for an id that is present has always worked even on a
+ * cyclic document — which is exactly why this went unnoticed: the failure needs
+ * an id that is ABSENT, and asking for one that is not there is the ordinary
+ * case for any lookup that can miss.
+ *
+ * A node reached through itself is not descended into again; the back edge is
+ * simply not followed, so the search still covers everything reachable without
+ * a cycle.
+ */
+function findWithin(
+  nodes: BlockNode[],
+  id: string,
+  path: ReadonlySet<unknown>
+): BlockNode | undefined {
+  if (!Array.isArray(nodes)) return undefined;
   for (const node of nodes) {
+    // Persisted forests reach these primitives unvalidated, so an entry may be
+    // `null` or a primitive and reading `id` off one throws.
+    if (typeof node !== "object" || node === null) continue;
     if (node.id === id) return node;
-    if (node.slots) {
-      for (const children of Object.values(node.slots)) {
-        const hit = findNode(children, id);
-        if (hit) return hit;
-      }
-    }
+    if (path.has(node) || !node.slots) continue;
+    const hit = findBelow(node, id, path);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** Search a node's slots, with that node added to the ancestor path. */
+function findBelow(
+  node: BlockNode,
+  id: string,
+  path: ReadonlySet<unknown>
+): BlockNode | undefined {
+  const below: ReadonlySet<unknown> = new Set(path).add(node);
+  for (const children of Object.values(node.slots ?? {})) {
+    if (!Array.isArray(children)) continue;
+    const hit = findWithin(children, id, below);
+    if (hit) return hit;
   }
   return undefined;
 }
@@ -306,14 +343,31 @@ export function locateNode(
 /** Immutably rebuild the forest, applying `fn` to every node (parents before children). */
 function mapForest(
   nodes: BlockNode[],
-  fn: (node: BlockNode) => BlockNode
+  fn: (node: BlockNode) => BlockNode,
+  path: ReadonlySet<unknown> = new Set()
 ): BlockNode[] {
+  if (!Array.isArray(nodes)) return [];
   return nodes.map(node => {
+    // Unvalidated entries reach here, and `fn` is written for nodes.
+    if (typeof node !== "object" || node === null) return node;
     const mapped = fn(node);
     if (!mapped.slots) return mapped;
+    // A node reached through itself CANNOT be rebuilt: the result would have to
+    // contain itself, and the attempt recurses until the stack runs out. The
+    // back edge is dropped instead, so the rebuild returns a finite forest with
+    // the cycle broken rather than failing the caller's operation outright.
+    //
+    // Dropping rather than keeping is the only option that terminates, and it
+    // is the repair a caller would want anyway: an immutable rebuild of a
+    // cyclic forest is not a thing that exists.
+    if (path.has(node)) {
+      const { slots: _cyclic, ...withoutSlots } = mapped;
+      return withoutSlots;
+    }
+    const below: ReadonlySet<unknown> = new Set(path).add(node);
     const slots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(mapped.slots)) {
-      slots[name] = mapForest(children, fn);
+      slots[name] = mapForest(children, fn, below);
     }
     return { ...mapped, slots };
   });
@@ -455,6 +509,18 @@ export function moveNode(
 
 /** Deep-clone a subtree, assigning fresh ids to every node (copy/paste, patterns). */
 export function reidSubtree(node: BlockNode): BlockNode {
+  return reidWithin(node, new Set());
+}
+
+/**
+ * `reidSubtree`, carrying the ancestors this node was reached through.
+ *
+ * A node reached through itself has its slots dropped rather than rebuilt. The
+ * re-id'd copy would otherwise have to contain a copy of itself, which is not a
+ * finite structure — the recursion simply runs the stack out. Breaking the back
+ * edge yields a duplicable subtree instead of failing the duplicate.
+ */
+function reidWithin(node: BlockNode, path: ReadonlySet<unknown>): BlockNode {
   // Clone only this node's own fields; descendants are cloned by the recursive
   // calls below, so cloning `slots` here too would deep-copy them twice.
   const { slots, ...own } = node;
@@ -473,10 +539,16 @@ export function reidSubtree(node: BlockNode): BlockNode {
     if (Object.keys(attributes).length > 0) copy.attributes = attributes;
     else delete copy.attributes;
   }
-  if (slots) {
+  if (slots && !path.has(node)) {
+    const below: ReadonlySet<unknown> = new Set(path).add(node);
     const newSlots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(slots)) {
-      newSlots[name] = children.map(reidSubtree);
+      if (!Array.isArray(children)) continue;
+      newSlots[name] = children.map(child =>
+        typeof child === "object" && child !== null
+          ? reidWithin(child, below)
+          : child
+      );
     }
     copy.slots = newSlots;
   }

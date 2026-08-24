@@ -37,6 +37,31 @@ export const DEFAULT_LIMITS: DocumentLimits = {
   maxBytes: DEFAULT_MAX_DOCUMENT_BYTES,
 };
 
+/**
+ * Queue a node's slot children for the counter, carrying the ancestors below it.
+ *
+ * Enqueued one at a time. `push(...children)` passes each child as a call
+ * ARGUMENT, and V8 caps those near 100k — so a slot wider than that throws a
+ * native RangeError from inside the counter, before any caller can refuse the
+ * document for being too large. The count exists to reject exactly that
+ * document.
+ *
+ * A malformed slot value (a non-array) is skipped: these helpers run over
+ * untrusted documents during validation and must not throw.
+ */
+function enqueueChildren(
+  node: BlockNode,
+  path: ReadonlySet<unknown>,
+  queue: { node: BlockNode; path: ReadonlySet<unknown> }[]
+): void {
+  if (typeof node !== "object" || node === null || !node.slots) return;
+  const below: ReadonlySet<unknown> = new Set(path).add(node);
+  for (const children of Object.values(node.slots)) {
+    if (!Array.isArray(children)) continue;
+    for (const child of children) queue.push({ node: child, path: below });
+  }
+}
+
 /** Total node count across the forest, slots included. */
 export function countNodes(nodes: BlockNode[]): number {
   let count = 0;
@@ -44,23 +69,25 @@ export function countNodes(nodes: BlockNode[]): number {
   // ones (null, a primitive): the node cap must reflect the real element count
   // so an array padded with junk cannot slip past it. Only well-formed objects
   // are descended into.
-  const queue: BlockNode[] = [...nodes];
+  // Each entry carries the ancestors it was reached through, so a slot holding
+  // one of its own ancestors is not descended into again. Without it the queue
+  // gains entries forever on a cyclic document and this exits with a native
+  // RangeError — from inside the counter whose job is to let a caller REFUSE
+  // such a document.
+  //
+  // Ancestors rather than everything seen, because the two differ where it
+  // matters: one node object placed in two slots is two elements of this
+  // document and is counted twice, exactly as it is today. Only a true cycle is
+  // cut, and only where it closes.
+  const queue: { node: BlockNode; path: ReadonlySet<unknown> }[] = nodes.map(
+    node => ({ node, path: new Set() })
+  );
   for (let i = 0; i < queue.length; i++) {
-    const node = queue[i];
+    const node = queue[i]?.node;
+    const path = queue[i]?.path ?? new Set();
     count++;
-    if (typeof node === "object" && node !== null && node.slots) {
-      // Guard against malformed slots (a non-array value): these helpers run
-      // over untrusted documents during validation and must not throw.
-      for (const children of Object.values(node.slots)) {
-        if (!Array.isArray(children)) continue;
-        // Enqueued one at a time. `push(...children)` passes each child as a
-        // call ARGUMENT, and V8 caps those near 100k — so a slot wider than
-        // that throws a native RangeError from inside the counter, before any
-        // caller can refuse the document for being too large. The count exists
-        // to reject exactly that document.
-        for (const child of children) queue.push(child);
-      }
-    }
+    if (path.has(node)) continue;
+    enqueueChildren(node, path, queue);
   }
   return count;
 }
@@ -68,14 +95,24 @@ export function countNodes(nodes: BlockNode[]): number {
 /** Deepest nesting level in the forest; an empty forest is depth 0. */
 export function treeDepth(nodes: BlockNode[]): number {
   let deepest = 0;
-  const stack: Array<{ node: BlockNode; depth: number }> = nodes.map(node => ({
-    node,
-    depth: 1,
-  }));
+  // Carries the ancestors each entry was reached through, for the reason the
+  // node counter does: a slot holding one of its own ancestors otherwise makes
+  // this walk gain entries forever while `depth` climbs without bound, and it
+  // does not crash — it SPINS. A hang holds a request open and presents as
+  // slowness somewhere unrelated, which is the failure nobody attributes here.
+  //
+  // Ancestors rather than everything seen: the deepest path to a node shared
+  // between two branches is still the answer, and only a cycle is cut.
+  const stack: Array<{
+    node: BlockNode;
+    depth: number;
+    path: ReadonlySet<unknown>;
+  }> = nodes.map(node => ({ node, depth: 1, path: new Set() }));
   while (stack.length > 0) {
     const entry = stack.pop();
     if (!entry) continue;
     if (entry.depth > deepest) deepest = entry.depth;
+    if (entry.path.has(entry.node)) continue;
     // A malformed array element (null, or a non-object) has no slots and must
     // not be dereferenced: validation runs this over untrusted documents.
     if (
@@ -87,8 +124,9 @@ export function treeDepth(nodes: BlockNode[]): number {
       // during validation cannot make this throw.
       for (const children of Object.values(entry.node.slots)) {
         if (!Array.isArray(children)) continue;
+        const below: ReadonlySet<unknown> = new Set(entry.path).add(entry.node);
         for (const child of children) {
-          stack.push({ node: child, depth: entry.depth + 1 });
+          stack.push({ node: child, depth: entry.depth + 1, path: below });
         }
       }
     }
