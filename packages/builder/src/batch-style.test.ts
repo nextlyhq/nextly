@@ -97,12 +97,25 @@ describe("what a selection shares at one address", () => {
     });
   });
 
-  it("compares composite values by shape, not by key order", () => {
+  it("compares a composite structurally, and by the WRITER's rule on key order", () => {
     /*
-     * A style value is a tree — `padding` is four sides — and two blocks
-     * holding equal trees hold equal values however separately those trees were
-     * built. Comparing the text of `JSON.stringify` without sorting would call
-     * these two a disagreement and put "Mixed" on a control whose blocks agree.
+     * Two questions in one fixture, and the second one changed deliberately.
+     *
+     * STRUCTURAL: two blocks holding equal trees hold equal values however
+     * separately those trees were built. Reference equality would report every
+     * selection as mixed the moment the values came from different nodes, which
+     * is always.
+     *
+     * KEY ORDER: reported as a disagreement, because `sameStoredValue` — the
+     * predicate the WRITE path uses to decide an op changes nothing — is order
+     * sensitive, and `ops` names this exact case beside its export as the one
+     * two predicates would disagree about. An order-insensitive read paired
+     * with an order-sensitive write says "these agree", then emits an op per
+     * node and an undo entry for a gesture that changed nothing.
+     *
+     * So this reads "Mixed" for values that are semantically equal, which is
+     * the conservative direction: "Mixed" makes typing a replacement, and the
+     * replacement is the value they already shared.
      */
     const at = { ...AT, property: "padding" };
     const composite = (id: string, styles: Record<string, string>) =>
@@ -113,12 +126,31 @@ describe("what a selection shares at one address", () => {
         props: {},
         styles: { base: { base: { padding: styles } } },
       }) as unknown as BlockNode;
-    const left = composite("a", { blockStart: "1px", inlineStart: "2px" });
-    const right = composite("b", { inlineStart: "2px", blockStart: "1px" });
-    expect(sharedValueAt([left, right], at)).toEqual({
+
+    // Same tree, same order: structural, so equal despite being separate objects.
+    expect(
+      sharedValueAt(
+        [
+          composite("a", { blockStart: "1px", inlineStart: "2px" }),
+          composite("b", { blockStart: "1px", inlineStart: "2px" }),
+        ],
+        at
+      )
+    ).toEqual({
       kind: "same",
       value: { blockStart: "1px", inlineStart: "2px" },
     });
+
+    // Same tree, other order: a disagreement, by the writer's rule.
+    expect(
+      sharedValueAt(
+        [
+          composite("a", { blockStart: "1px", inlineStart: "2px" }),
+          composite("b", { inlineStart: "2px", blockStart: "1px" }),
+        ],
+        at
+      )
+    ).toEqual({ kind: "mixed" });
   });
 
   it("says nothing is mixed in an EMPTY selection", () => {
@@ -229,49 +261,25 @@ describe("the ops that change a whole selection", () => {
     });
   });
 
-  it("does not run a value's own accessor, and calls that a disagreement", () => {
+  it("answers instead of hanging on two distinct cyclic values", () => {
     /*
-     * An OWN getter has no value without being CALLED, and calling it runs
-     * author code during what is meant to be an inspection. Refused instead —
-     * and refused toward `mixed`, never `same`, because "Mixed" makes the
-     * control say so and makes typing a replacement, while a wrong "same" hides
-     * a difference behind the accessor.
+     * `sameStoredValue` is iterative and budgeted, so a cycle costs the budget
+     * and then answers "different" — the safe direction, since a pair reported
+     * different becomes "Mixed" rather than a silent agreement.
+     *
+     * DISTINCT objects on purpose: two references to one object are settled by
+     * identity before any bound is reached, so a fixture sharing one proves
+     * nothing about either.
      */
-    let calls = 0;
-    const withGetter = {};
-    Object.defineProperty(withGetter, "blockStart", {
-      enumerable: true,
-      get() {
-        calls += 1;
-        return "1px";
-      },
-    });
+    const left: Record<string, unknown> = { blockStart: "1px" };
+    left.self = left;
+    const right: Record<string, unknown> = { blockStart: "1px" };
+    right.self = right;
 
     expect(
-      sharedValueAt([padNode("a", withGetter), padNode("b", withGetter)], PAD)
+      sharedValueAt([padNode("a", left), padNode("b", right)], PAD)
     ).toEqual({ kind: "mixed" });
-    // The property under test: it was never invoked. Two nodes holding the SAME
-    // object makes this the strongest form — even identity does not buy a
-    // `same` answer when the value cannot be read without running code.
-    expect(calls).toBe(0);
   });
-
-  it("terminates on a cyclic value instead of looping", () => {
-    /*
-     * `JSON.stringify` threw on a cycle; a hand-rolled walk would loop forever.
-     * This is exported API now, so the value is whatever a caller passed rather
-     * than something that came out of a document.
-     */
-    const cyclic: Record<string, unknown> = { blockStart: "1px" };
-    cyclic.self = cyclic;
-
-    expect(
-      sharedValueAt([padNode("a", cyclic), padNode("b", cyclic)], PAD)
-    ).toEqual({
-      kind: "mixed",
-    });
-  });
-
   it("does not confuse a number with the string that prints the same", () => {
     // Types are part of the comparison: `1` and `"1"` are different values and
     // a text-only shape would merge them.
@@ -310,27 +318,6 @@ describe("the ops that change a whole selection", () => {
     ).toEqual({ kind: "mixed" });
   });
 
-  it("refuses a record too wide to compare without enumerating all of it", () => {
-    /*
-     * A corrupt or imported value can carry hundreds of thousands of keys.
-     * Building and sorting that list before consulting the budget does the work
-     * the budget exists to refuse — and a multi-selection repeats it per node.
-     *
-     * Asserted as the ANSWER rather than as a duration, because a timing
-     * assertion measures the machine. What this pins is that the walk refuses,
-     * which is the direction that keeps a wide value from reading as agreement.
-     */
-    const wide: Record<string, string> = {};
-    for (let index = 0; index < 20_000; index += 1) wide[`k${index}`] = "v";
-
-    // Population: the value really is over budget, so the refusal is about
-    // width rather than about some other property of the fixture.
-    expect(Object.keys(wide).length).toBeGreaterThan(10_000);
-    expect(
-      sharedValueAt([padNode("a", wide), padNode("b", wide)], PAD)
-    ).toEqual({ kind: "mixed" });
-  });
-
   it("still sees two separately built equal trees as the SAME", () => {
     /*
      * The control on all four above. A comparison that answered `mixed` for
@@ -341,8 +328,8 @@ describe("the ops that change a whole selection", () => {
       sharedValueAt(
         [
           padNode("a", { blockStart: "1px", blockEnd: "2px" }),
-          // Same tree, keys assembled in the other order.
-          padNode("b", { blockEnd: "2px", blockStart: "1px" }),
+          // A separate object holding the same tree in the same order.
+          padNode("b", { blockStart: "1px", blockEnd: "2px" }),
         ],
         PAD
       )

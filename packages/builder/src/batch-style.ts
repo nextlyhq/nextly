@@ -35,7 +35,7 @@ import type {
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
-import type { BuilderOp } from "./ops";
+import { sameStoredValue, type BuilderOp } from "./ops";
 import {
   readStyleValue,
   styleClearOp,
@@ -64,207 +64,41 @@ export type SharedValue =
  * disagrees when there is nothing to disagree, and reporting a conflict for an
  * empty set would put "Mixed" on a panel describing no blocks.
  *
- * Compared by STRUCTURE, because a style value is a tree — a padding is four
- * sides, a shadow is a record — and two blocks holding equal trees hold equal
- * values however separately those trees were built. Reference equality would
- * report every selection as mixed the moment the values came from different
- * nodes, which is always.
+ * Compared with `sameStoredValue`, the op layer's own predicate, and NOT with a
+ * comparison of this module's own. That is the whole point rather than a
+ * convenience: the write path decides whether an edit changes anything with
+ * exactly this function, so a second implementation here would answer "these
+ * agree" about values the writer then treats as different — emitting an op per
+ * node and an undo entry for a gesture that changed nothing.
  *
- * A value this cannot compare answers MIXED, and that direction is the whole
- * safety of the surface. "Mixed" makes the control say so and makes typing a
- * replacement, which is safe; a wrong "same" shows one block's value while
- * another holds a different one, and the next edit overwrites it silently.
+ * `ops` says so beside the export, and names the case that separates them: "a
+ * composite whose keys were written in another order". A bespoke comparison
+ * here disagreed on precisely that, having already disagreed on a value with an
+ * inherited `toJSON` and on two records whose text collided. Three findings,
+ * one cause, and the cause was the second implementation rather than any of its
+ * bugs.
+ *
+ * What it inherits by borrowing: structural rather than serialised, so no
+ * `toJSON` is ever consulted; iterative, so a deep value cannot exhaust the
+ * stack; bounded, and answering "different" when the budget runs out — the safe
+ * direction here too, since MIXED makes the control say so and makes typing a
+ * replacement, while a wrong "same" shows one block's value while another holds
+ * a different one and the next edit overwrites it silently.
  */
 export function sharedValueAt(
   nodes: readonly BlockNode[],
   address: StyleAddress
 ): SharedValue {
   let first: { value: StyleValue | undefined } | undefined;
-  let firstShape: string | undefined;
   for (const node of nodes) {
     const value = readStyleValue(node.styles, address);
-    const shape = shapeOf(value);
-    // Not comparable without running code this module does not own. Reported as
-    // a disagreement rather than skipped, so an unreadable value can never be
-    // the reason a selection looks unanimous.
-    if (shape === null) return { kind: "mixed" };
     if (first === undefined) {
       first = { value };
-      firstShape = shape;
       continue;
     }
-    if (shape !== firstShape) return { kind: "mixed" };
+    if (!sameStoredValue(first.value, value)) return { kind: "mixed" };
   }
   return { kind: "same", value: first?.value };
-}
-
-/**
- * How deep {@link shapeOf} will walk before refusing to compare.
- *
- * The stack is the real limit and a cycle is the real reason: without this, a
- * value referring to itself recursed until the budget ran out — ten thousand
- * frames — and threw `RangeError` out of a comparison rather than answering.
- */
-const MAX_VALUE_DEPTH = 32;
-
-/**
- * A stable string for a style value, or `null` when it cannot be compared.
- *
- * Walks the value's OWN data properties rather than serialising it, and the
- * difference is not stylistic. `JSON.stringify` calls `toJSON` before a
- * replacer ever sees the object, so a value carrying an inherited `toJSON`
- * decides its own comparison text: two paddings differing at `blockStart`
- * measured as EQUAL through a prototype whose `toJSON` returned a constant,
- * and `sharedValueAt` answered `same` for a selection that disagreed — the
- * exact failure this module exists to prevent. A throwing `toJSON` escaped the
- * read entirely, which in a panel is the panel.
- *
- * So nothing here runs code the value brought with it:
- *
- * - **Own properties only.** `Object.keys` never reaches the prototype, so an
- *   inherited `toJSON`, `toString` or accessor is not consulted at all.
- * - **Data properties only.** An OWN accessor is refused rather than invoked —
- *   answering `null`, which the caller reads as a disagreement. Invoking it
- *   would run author code during an inspection; treating two accessors as
- *   equal would hide a real difference behind them.
- * - **Keys sorted at every level**, so `{ top, left }` and `{ left, top }` —
- *   the same value assembled by two code paths — read the same.
- * - **Bounded in BOTH directions**, which is what terminates a cycle.
- *   `JSON.stringify` threw on one; a hand-rolled walk loops, and this is
- *   exported API now, so the value is whatever a caller passed. The budget
- *   bounds how many values are read; the DEPTH bounds how deep the walk goes,
- *   and only the second one stops a cycle — measured, because a budget of
- *   10,000 alone recursed ten thousand frames deep on a two-node cycle and
- *   exhausted the stack instead of answering.
- *
- * Types are part of the text: `1` and `"1"` are different values and must not
- * compare equal because they print alike.
- *
- * `undefined` gets a marker leading with NUL, which no ordinary text produces,
- * so it cannot collide with a real value's shape. Written as the ESCAPE `\0`,
- * never as the byte itself — a literal NUL makes the whole file binary to the
- * tools that read it: `file` reports `data` instead of TypeScript, and
- * `rg`/`grep` answer "binary file matches" and stop, so every symbol here goes
- * missing from routine searches unless the caller remembers `--text`. Shipped
- * that way once and it hid the module from its own callers.
- */
-function shapeOf(
-  value: unknown,
-  budget = { left: 10_000 },
-  depth = 0
-): string | null {
-  // A style value is shallow — a property holding sides, or corners, or a
-  // record of them — so this bound is far above anything a document produces
-  // and well below what the stack can take.
-  if (depth > MAX_VALUE_DEPTH) return null;
-  if (budget.left-- <= 0) return null;
-  const leaf = scalarShapeOf(value);
-  if (leaf !== undefined) return leaf;
-  return Array.isArray(value)
-    ? listShapeOf(value, budget, depth)
-    : recordShapeOf(value as object, budget, depth);
-}
-
-/**
- * The text for a value with no PARTS, or `undefined` when it has parts.
- *
- * Three answers, and the third is why this is separate from the walk above: a
- * string is the comparison, `null` refuses the comparison, and `undefined` says
- * "this is a container, keep walking". Folding that into the walk made one
- * function answer both what a leaf reads as and how a tree is assembled.
- *
- * The type letter is part of the text. `1` and `"1"` are different values and
- * must not compare equal for printing alike; so must `1` and `1n`.
- *
- * A string leaf is LENGTH-PREFIXED, which is what makes the encoding injective.
- * Inserted verbatim, a string can forge the punctuation that separates parts:
- * measured, `{ a: 'x,"b":sy' }` and `{ a: "x", b: "y" }` — one key against two
- * — produced the identical text and `sharedValueAt` answered `same` for values
- * that disagree. The length pins where the leaf ends, so no content can end it
- * early.
- */
-function scalarShapeOf(value: unknown): string | null | undefined {
-  if (value === undefined) return "\0unset";
-  if (value === null) return "\0null";
-  if (typeof value === "string") return `s${value.length}:${value}`;
-  if (typeof value === "number") return `n${String(value)}`;
-  if (typeof value === "bigint") return `i${String(value)}`;
-  if (typeof value === "boolean") return `b${String(value)}`;
-  // A function or a symbol is not a style value and has no comparable text.
-  // Refused rather than given one, so it cannot read as equal to anything.
-  if (typeof value !== "object") return null;
-  return undefined;
-}
-
-/** How a list's parts compare, by INDEX, which is the only order it has. */
-function listShapeOf(
-  value: readonly unknown[],
-  budget: { left: number },
-  depth: number
-): string | null {
-  const parts: string[] = [];
-  for (const entry of value) {
-    const shape = shapeOf(entry, budget, depth + 1);
-    if (shape === null) return null;
-    parts.push(shape);
-  }
-  return `[${parts.join(",")}]`;
-}
-
-/**
- * The record's OWN enumerable keys, sorted, or `null` when there are more of
- * them than the budget allows.
- *
- * Counted DURING enumeration rather than after it. `Object.keys(value).sort()`
- * builds and sorts the whole list before anything can refuse it, so a value
- * carrying hundreds of thousands of keys — which an import or a corrupt
- * document can produce — costs all of that per node before the budget is
- * consulted even once. Measured at 300,000 keys: the walk refused, having first
- * enumerated and sorted every one of them.
- *
- * `for...in` reaches the prototype, so `Object.hasOwn` filters; the pair reads
- * exactly what `Object.keys` would, one key at a time and interruptibly.
- */
-function ownKeysWithin(
-  value: object,
-  budget: { left: number }
-): string[] | null {
-  const keys: string[] = [];
-  for (const key in value) {
-    if (!Object.hasOwn(value, key)) continue;
-    if (keys.length >= budget.left) return null;
-    keys.push(key);
-  }
-  return keys.sort();
-}
-
-/**
- * How a record's parts compare: its OWN data properties, keys sorted.
- *
- * The prototype is never reached, so an inherited `toJSON`, `toString` or
- * accessor is not consulted. An OWN accessor is refused rather than invoked —
- * reading it would run author code during an inspection, and treating two
- * accessors as equal would hide a real difference behind them.
- *
- * Keys are length-prefixed for the same reason string leaves are: a key
- * containing the punctuation between parts could otherwise forge a boundary.
- */
-function recordShapeOf(
-  value: object,
-  budget: { left: number },
-  depth: number
-): string | null {
-  const keys = ownKeysWithin(value, budget);
-  if (keys === null) return null;
-  const parts: string[] = [];
-  for (const key of keys) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined || !("value" in descriptor)) return null;
-    const shape = shapeOf(descriptor.value, budget, depth + 1);
-    if (shape === null) return null;
-    parts.push(`${key.length}:${key}=${shape}`);
-  }
-  return `{${parts.join(",")}}`;
 }
 
 /** What a batch edit would do, before anything is applied. */
