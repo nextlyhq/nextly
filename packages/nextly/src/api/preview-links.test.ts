@@ -85,7 +85,11 @@ beforeEach(() => {
   getEntry.mockResolvedValue({
     success: true,
     statusCode: 200,
-    data: { id: "7" },
+    // A slug, because the default declaration below is `/{slug}` and minting
+    // now resolves the ENTRY rather than trusting that a declaration exists. An
+    // entry with no slug is genuinely not previewable, which is what the
+    // refusal tests assert by removing it again.
+    data: { id: "7", slug: "seven" },
   });
   canUpdateEntry.mockResolvedValue(true);
   (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -174,6 +178,58 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
     // A bearer credential must not be issued for a refused request, even one
     // refused for a configuration reason rather than an authorization one.
     expect(body.item).toBeUndefined();
+  });
+
+  // A declaration is necessary and NOT sufficient. `preview.url` returning null
+  // for a document it cannot address yet, or a `urlTemplate` placeholder naming
+  // an empty field, both mean "not previewable yet" — and both used to mint
+  // successfully and 404 at the redirect, which is the failure this refusal
+  // exists to remove, reappearing one level down.
+  it("refuses an entry the declaration cannot address yet", async () => {
+    previewDeclaration.mockResolvedValue({ url: () => null });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  it("refuses when a template placeholder has no value on this entry", async () => {
+    previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
+    getEntry.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { id: "7" },
+    });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  // The two refusals must not read alike: one is a developer's job and the other
+  // is the editor's own, and an editor told to "ask a developer" about their
+  // empty slug field is being sent to the wrong person.
+  it("distinguishes an unaddressable entry from an unconfigured collection", async () => {
+    previewDeclaration.mockResolvedValue({ url: () => null });
+    const entryBody = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    previewDeclaration.mockResolvedValue(undefined);
+    const collectionBody = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    const message = (b: { error?: unknown }): string =>
+      String((b.error as { message?: string } | undefined)?.message ?? "");
+
+    expect(message(entryBody)).not.toBe(message(collectionBody));
+    expect(message(entryBody)).toMatch(/this entry/i);
+    expect(message(collectionBody)).toMatch(/developer/i);
   });
 
   it("mints normally once the collection declares one", async () => {

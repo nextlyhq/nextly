@@ -121,12 +121,14 @@ export interface PageBuilderOptions {
 
   /**
    * Where this application serves its pages, as a path with `{field}`
-   * placeholders. Defaults to `/{slug}`.
+   * placeholders — `"/{slug}"` for a blocks page at the site root,
+   * `"/blocks/{slug}"` for one mounted under a prefix.
    *
-   * This is what a shared preview link opens. The plugin ships the `pages`
-   * collection but cannot know where the host mounted the route that renders
-   * it, so a site serving pages anywhere other than the root states it here —
-   * `"/blocks/{slug}"`, for example.
+   * **Setting this is what enables shareable preview links for pages**, and
+   * there is deliberately no default. The plugin cannot install the host's
+   * preview route or its draft gate, and cannot discover where pages are
+   * mounted — so a defaulted path would let an editor mint a link that resolves
+   * to nothing, while declaring nothing gets them an explanation instead.
    */
   pagePreviewPath?: string;
 }

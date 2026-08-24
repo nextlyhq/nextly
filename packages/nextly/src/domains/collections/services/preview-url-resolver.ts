@@ -252,7 +252,39 @@ export function resolvePreviewUrl({
   // Join without doubling or dropping the separator: the configured site may or
   // may not carry a trailing slash, and an authored path may or may not lead
   // with one.
-  const origin = `${base.origin}${base.pathname}`.replace(/\/+$/, "");
+  const basePath = `${base.origin}${base.pathname}`.replace(/\/+$/, "");
   const suffix = path.startsWith("/") ? path : `/${path}`;
-  return { status: "resolved", url: `${origin}${suffix}` };
+
+  const joined = joinUnderSite(`${basePath}${suffix}`, base);
+  // The pieces parsed separately and not together, which is a declaration this
+  // resolver cannot turn into an address.
+  if (joined === null) return { status: "unavailable" };
+  return { status: "resolved", url: joined };
+}
+
+/**
+ * An authored path placed under the configured site, keeping what the site URL
+ * itself declared.
+ *
+ * The site's own query and fragment are CARRIED rather than discarded. A site
+ * URL may legitimately hold one — a tenant selector is the usual reason — and
+ * the settings schema accepts it, so dropping it would send a visitor to the
+ * same path on a different tenant. It would also disagree with the minted link,
+ * which keeps it: the reviewer's first request would arrive scoped correctly and
+ * the redirect would then strip the scope.
+ *
+ * The authored path wins a conflict. It describes one document while the site
+ * URL describes the deployment, so the narrower statement is the one to honour.
+ */
+function joinUnderSite(candidate: string, base: URL): string | null {
+  try {
+    const joined = new URL(candidate);
+    for (const [key, value] of base.searchParams) {
+      if (!joined.searchParams.has(key)) joined.searchParams.append(key, value);
+    }
+    if (joined.hash === "" && base.hash !== "") joined.hash = base.hash;
+    return joined.toString();
+  } catch {
+    return null;
+  }
 }

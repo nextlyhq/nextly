@@ -440,6 +440,16 @@ function buildRoute<TNode>(
    * about to answer normally, so a failure to produce a DIAGNOSTIC must never
    * become a failure to serve the page.
    */
+  /**
+   * Collections this route has already warned about.
+   *
+   * Per route instance, which is per module in practice: a route is built once
+   * at import and the diagnostic is about its CONFIGURATION, so one mention is
+   * the whole message. A counter here also keeps the warning off the hot path
+   * after the first request that triggers it.
+   */
+  const warnedCollections = new Set<string>();
+
   async function warnOnUnhonouredPreviewCookie(
     context: ResolvedContext
   ): Promise<void> {
@@ -449,11 +459,23 @@ function buildRoute<TNode>(
       if (scope === null) return;
       if (scope.collection !== context.collection) return;
 
+      // Once per collection per process, and worded as a CONFIGURATION fact
+      // rather than a prediction about this request.
+      //
+      // The hook runs before the path is resolved, so nothing here knows whether
+      // this particular request would have wanted the draft: a visitor holding a
+      // preview cookie goes on browsing, and every published page they open in
+      // the same collection reaches this branch. Claiming each of those ends in a
+      // 404 is false, and repeating it turns the one useful signal into noise a
+      // developer learns to scroll past.
+      if (warnedCollections.has(context.collection)) return;
+      warnedCollections.add(context.collection);
+
       console.warn(
-        `[nextly] A valid preview link for "${scope.collection}" reached a ` +
-          "content route that declares no `draft` hook, so the draft cannot " +
-          "be served and the visitor gets a 404 that looks like an expired " +
-          "link.\n" +
+        `[nextly] This route serves "${context.collection}" and declares no ` +
+          "`draft` hook, so a preview link for that collection cannot be " +
+          "served here — a reviewer following one gets a 404 that looks like " +
+          "an expired link.\n" +
           "  Add `draft: previewDraftGate()` to this route's config.\n" +
           "  https://nextlyhq.com/docs/guides/draft-preview"
       );

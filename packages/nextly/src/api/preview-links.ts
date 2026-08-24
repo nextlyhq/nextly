@@ -22,8 +22,9 @@ import { z } from "zod";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { signPreviewToken } from "../auth/preview/preview-token";
 import { buildUserContext } from "../auth/user-context";
-import { container } from "../di";
+import { container, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
+import { resolvePreviewRedirect } from "../domains/collections/services/preview-redirect-resolver";
 import { hasPreviewConfigured } from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { NextlyError } from "../errors/nextly-error";
@@ -197,19 +198,67 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // `hasPreview` projection use, so a collection cannot be shareable by one
   // rule and unresolvable by another.
   const declaration = await previewDeclarationFor(collection);
-  if (!hasPreviewConfigured(declaration)) {
+
+  // Asked of THIS ENTRY, not only of the collection.
+  //
+  // A declaration is necessary and not sufficient: `preview.url` may return
+  // `null` for a document it cannot address yet, and a `urlTemplate` placeholder
+  // may name a field that is still empty. Checking only that a declaration
+  // exists lets both mint successfully and 404 at the redirect — which is the
+  // failure this refusal exists to remove, reappearing one level down.
+  //
+  // Resolved through the SAME function the preview route will call, so the
+  // answer here and the answer the reviewer gets cannot disagree. The entry is
+  // already authorized at this point, which is why a trusted read is correct.
+  const target = hasPreviewConfigured(declaration)
+    ? await resolvePreviewRedirect(
+        { collection, entryId, ...(locale === undefined ? {} : { locale }) },
+        {
+          loadEntry: async (name, id, entryLocale) => {
+            const read = await getService("collectionsHandler").getEntry({
+              collectionName: name,
+              entryId: id,
+              depth: 0,
+              overrideAccess: true,
+              status: "all",
+              ...(entryLocale === undefined ? {} : { locale: entryLocale }),
+              includeWorkingDraft: true,
+            });
+            return read.success && read.data !== null
+              ? (read.data as Record<string, unknown>)
+              : null;
+          },
+          // Already resolved above, so this hands back the value rather than
+          // fetching it again — the resolver takes a loader and this call site
+          // happens to have the answer.
+          loadDeclaration: () => Promise.resolve(declaration),
+          loadSiteUrl: async () =>
+            (await settingsService()).getSettings().then(s => s.siteUrl),
+        }
+      )
+    : null;
+
+  if (target === null) {
     throw NextlyError.conflict({
       reason: "state",
-      message:
-        "This collection has no preview URL configured, so a shared link " +
-        "would have nowhere to open. A developer can add one to the " +
-        "collection before links can be shared.",
+      message: hasPreviewConfigured(declaration)
+        ? "This entry has no preview address yet, so a shared link would have " +
+          "nowhere to open. Filling in the fields its preview URL is built " +
+          "from — usually the slug — makes it shareable."
+        : "This collection has no preview URL configured, so a shared link " +
+          "would have nowhere to open. A developer can add one to the " +
+          "collection before links can be shared.",
       logContext: {
-        reason: "preview-link-collection-has-no-preview-url",
-        remedy:
-          "Add `admin.preview.url` (code-first) or `admin.preview.urlTemplate` " +
-          "(UI-created) to this collection. It answers where an entry is served " +
-          "on the site, which nothing outside the application can know.",
+        reason: hasPreviewConfigured(declaration)
+          ? "preview-link-entry-has-no-preview-target"
+          : "preview-link-collection-has-no-preview-url",
+        remedy: hasPreviewConfigured(declaration)
+          ? "The collection's preview declaration returned no address for this " +
+            "entry. A `url` function answering null, or a `urlTemplate` whose " +
+            "placeholder field is empty, both mean 'not previewable yet'."
+          : "Add `admin.preview.url` (code-first) or `admin.preview.urlTemplate` " +
+            "(UI-created) to this collection. It answers where an entry is served " +
+            "on the site, which nothing outside the application can know.",
         collection,
       },
     });

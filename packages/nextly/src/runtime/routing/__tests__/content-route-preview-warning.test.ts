@@ -68,6 +68,25 @@ afterEach(() => {
 });
 
 describe("a preview credential meeting a route with no draft hook", () => {
+  // The hook runs before a path is resolved, so it cannot know whether THIS
+  // request wanted the draft. A visitor holding a preview cookie goes on
+  // browsing, and every published page they open in the same collection reaches
+  // the same branch — so the diagnostic is stated once and worded as a fact
+  // about the route rather than a prediction about the request.
+  it("warns once, however many pages the visitor then opens", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    await cookieFor("pages");
+
+    const route = routeWithoutGate();
+    for (const slug of ["about", "contact", "pricing"]) {
+      await route
+        .ContentPage({ params: { slug: [slug] } })
+        .catch(() => undefined);
+    }
+
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it("warns in development, naming the hook that is missing", async () => {
     vi.stubEnv("NODE_ENV", "development");
     await cookieFor("pages");

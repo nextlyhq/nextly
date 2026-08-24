@@ -86,20 +86,6 @@ export const Posts = defineCollection({
   admin: {
     useAsTitle: "title",
     defaultColumns: ["title", "status", "author", "publishedAt"],
-    // Where a post is served, which is what a shared preview link opens.
-    // Nothing outside this application can work it out: the path is decided by
-    // the route file at `app/(frontend)/blog/[slug]/page.tsx`, and a collection
-    // that declares no preview URL has nowhere to send a reviewer — so the
-    // admin refuses to mint a link rather than handing over one that 404s.
-    //
-    // `null` for a post with no slug yet: it becomes previewable once it has
-    // one, which is a different state from never being previewable at all.
-    preview: {
-      url: entry =>
-        typeof entry.slug === "string" && entry.slug !== ""
-          ? `/blog/${encodeURIComponent(entry.slug)}`
-          : null,
-    },
   },
   // Access control: reads are public (frontend queries filter by
   // status=published for visitors); any logged-in user can draft a

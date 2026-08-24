@@ -48,22 +48,26 @@ import { blocks } from "../fields/blocksHelper";
  * on who declared the collection.
  */
 /**
- * Where a page is served on the site.
+ * Where a page is served on the site — declared only when the host says so.
  *
- * Defaulted rather than required, because the overwhelmingly common mount is a
- * blocks page at the site root — and a plugin cannot discover the mount for
- * itself: it is a route file in the host application, which may serve pages at
- * `/`, at `/blocks`, or under a locale segment.
+ * A default was the obvious choice and it is the wrong one, because minting a
+ * preview link now REFUSES when a collection declares no preview URL. Those two
+ * behaviours interact: without a declaration an editor is told, in words, that a
+ * developer needs to configure one; with a defaulted declaration the mint
+ * succeeds and the reviewer gets a 404 that looks like an expired link.
  *
- * Getting it wrong on an unusual mount produces a preview link to the wrong
- * path, which is no worse than the guaranteed 404 an undeclared collection
- * produces today, and is corrected by one line of options. Requiring it instead
- * would mean every existing installation loses the share button until someone
- * reads a changelog.
+ * So a default would make an existing installation — one that upgrades while
+ * still calling `pageBuilder()` and has mounted no preview route — strictly
+ * worse off than declaring nothing, by replacing an explanation with a silent
+ * failure. The plugin cannot install the host's route or its draft gate, and it
+ * cannot discover where pages are mounted: a host may serve them at `/`, at
+ * `/blocks`, or under a locale segment.
+ *
+ * Passing `pagePreviewPath` is therefore how a host states that it has done the
+ * wiring. It costs one line and it is the only signal available that the link
+ * will land.
  */
-const DEFAULT_PAGE_PREVIEW_PATH = "/{slug}";
-
-export function pagesCollection(previewPath = DEFAULT_PAGE_PREVIEW_PATH) {
+export function pagesCollection(previewPath?: string) {
   return defineCollection({
     slug: "pages",
     labels: { singular: "Page", plural: "Pages" },
@@ -78,12 +82,15 @@ export function pagesCollection(previewPath = DEFAULT_PAGE_PREVIEW_PATH) {
     status: true,
     admin: {
       useAsTitle: "title",
-      // A code-first collection declares a FUNCTION — `urlTemplate` is the
-      // spelling a UI-created collection stores, since no column can hold a
-      // function. The path is turned into one through the shared helper rather
-      // than a substitution written here, so a template and a function cannot
-      // resolve the same entry to two different addresses.
-      preview: { url: previewUrlFromTemplate(previewPath) },
+      // Present only when the host supplied a path. A code-first collection
+      // declares a FUNCTION — `urlTemplate` is the spelling a UI-created
+      // collection stores, since no column can hold a function — and the path is
+      // turned into one through the shared helper rather than a substitution
+      // written here, so a template and a function cannot resolve the same entry
+      // to two different addresses.
+      ...(previewPath === undefined
+        ? {}
+        : { preview: { url: previewUrlFromTemplate(previewPath) } }),
     },
   });
 }

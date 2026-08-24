@@ -64,9 +64,25 @@ import { previewDraftGate } from "nextly/runtime";
 const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
+  // State the locale on a localized site, even for the default language.
+  locale: "en",
   draft: previewDraftGate(),
 });
 ```
+
+<Callout type="warn">
+**On a localized site, `locale` is required for preview to work** — and omitting
+it fails in the confusing direction. The admin mints a token naming a resolved
+locale even for the default language, and the gate compares that against the
+route's own. A route that states none compares against `undefined`, so every
+localized token is refused *after* the redirect — the visitor lands on the page
+and gets the 404 this guide exists to prevent.
+
+Nothing infers the default for you, deliberately: inferring it means reading
+configuration per request, and a route's reader may defer booting until its
+first query — so the inferred value would differ between the first request of a
+cold process and every one after, authorizing previews intermittently.
+</Callout>
 
 Without it your route serves **published entries only**. A preview link then
 verifies correctly, redirects correctly, and answers `404` from a page that
@@ -183,6 +199,18 @@ that cannot honour it.
 set on a different origin from the one serving the page — usually an admin and
 site on separate hosts with the preview route mounted on the admin. It belongs
 on the site.
+
+**Everything is wired and a localized entry still 404s.** The content route
+states no `locale`. See the callout in step 2: the token names a locale and the
+gate compares it against the route's, so a route that states none refuses every
+localized token.
+
+**The admin says this entry has no preview address yet.** The collection's
+declaration returned nothing for this document — a `url` function answering
+`null`, or a `urlTemplate` whose placeholder field is still empty. Filling in
+the field the address is built from, usually the slug, makes it shareable. This
+is distinct from a collection that declares no preview at all, which is a
+developer's job rather than an editor's.
 
 ## See also
 

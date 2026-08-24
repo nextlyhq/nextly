@@ -1,4 +1,9 @@
-import { defineCollection, json, text } from "nextly/config";
+import {
+  defineCollection,
+  json,
+  previewUrlFromTemplate,
+  text,
+} from "nextly/config";
 
 // Pages rendered by the code-first blocks renderer (`@nextlyhq/blocks-react`),
 // served at /blocks/<slug> by apps/playground/src/app/blocks/[[...slug]]/page.tsx.
@@ -29,12 +34,14 @@ export const BlockPages = defineCollection({
   // `src/app/blocks/[[...slug]]/page.tsx`. The mount is the application's
   // choice, so the path is stated here rather than guessed anywhere else.
   admin: {
-    preview: {
-      url: entry =>
-        typeof entry.slug === "string" && entry.slug !== ""
-          ? `/blocks/${entry.slug}`
-          : null,
-    },
+    // Built through the shared helper rather than interpolated here. A slug
+    // holding a URL-significant character — `?`, `#`, `%`, a space — changes the
+    // meaning of a hand-built path instead of addressing the stored slug, so
+    // `draft?mode=x` would redirect to the route for `draft` and the token's
+    // entry comparison would then refuse it. The helper applies the same
+    // encoding a stored `urlTemplate` gets, so both spellings resolve one entry
+    // to one address.
+    preview: { url: previewUrlFromTemplate("/blocks/{slug}") },
   },
   fields: [
     text({ name: "title", required: true }),
