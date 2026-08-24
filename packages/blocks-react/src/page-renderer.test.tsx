@@ -5544,6 +5544,67 @@ describe("a block that does not render a single element", () => {
     }
   });
 
+  it("warns about a context PROVIDER root", async () => {
+    /*
+     * React 19 tags both `Ctx` and `Ctx.Provider` as `react.context`, and
+     * renders their children itself — so there is no element of its own for the
+     * generated class, exactly as with a fragment. Classifying by "is the type
+     * a symbol" missed it, because a provider's type is a tagged OBJECT.
+     */
+    const Ctx = createContext("none");
+    const provided = defineBlock({
+      name: "test/provider-root",
+      version: 1,
+      description: "Roots at a context provider, against the contract.",
+      example: { props: {} },
+      defaultProps: {},
+      render: () => <Ctx value="held">shown</Ctx>,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(provided as AnyBlockDefinition);
+      // Population first: it rendered, so this is a warning about working
+      // output rather than about a block that failed some other way.
+      expect(html).toContain("shown");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/provider-root");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a `memo` root, which may forward the class", async () => {
+    /*
+     * The boundary that stops the provider fix from becoming "every tagged
+     * object is broken". `memo` wraps a component that may render a host
+     * element and forward `className` to it, and only calling it would say —
+     * so warning about it would be false.
+     */
+    const Inner = ({ className }: { className: string }) => (
+      <div className={className}>memoised</div>
+    );
+    const Memo = memo(Inner);
+    const memoised = defineBlock({
+      name: "test/memo-root",
+      version: 1,
+      description: "Roots at a memoised component.",
+      example: { props: {} },
+      defaultProps: {},
+      render: ({ className }) => <Memo className={className} />,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(memoised as AnyBlockDefinition);
+      expect(html).toContain("memoised");
+      expect(html).toMatch(bothClasses("test/memo-root"));
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("says nothing about a block that DECLARES it draws nothing", async () => {
     /*
      * The declaration exemption on its own. A block that also RETURNS nothing

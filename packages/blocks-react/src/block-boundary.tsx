@@ -3,7 +3,12 @@ import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
-import { describeThrown, isThenable, normalizeRenderable } from "./renderable";
+import {
+  createsNoHostElement,
+  describeThrown,
+  isThenable,
+  normalizeRenderable,
+} from "./renderable";
 import type { BlockResolver } from "./resolver";
 import { isUnconditional } from "./visibility";
 
@@ -450,26 +455,21 @@ function rootShapeOf(output: ReactNode): RootShape {
   // A string type is a host element, and the only shape that HAS a root.
   if (typeof output.type === "string") return "host";
   /*
-   * A SYMBOL type is one of React's own wrappers — `Fragment`, `Suspense`,
-   * `StrictMode`, `Profiler` — and none of them renders an element of its own,
-   * so the generated class has nowhere to go in any of them.
+   * React's own wrappers — a fragment, a suspense boundary, a context provider
+   * or consumer — create no element of their own, so the generated class has
+   * nowhere to go in any of them.
    *
-   * Asked as "is it a symbol" rather than as a list of the wrappers that exist
-   * today, for the reason a list is the wrong instrument: React adds these, and
-   * a list falls behind silently in the direction of saying nothing. Nothing
-   * with a symbol type can be a host element, so widening this way adds no
-   * false positive.
+   * ASKED rather than restated. `renderable.ts` already separates those from
+   * `memo`, `forwardRef` and `lazy`, which wrap a component that may well
+   * render a host element and forward the class to it; a second reading of the
+   * same tags here is where the two would come to disagree.
    */
-  if (typeof output.type === "symbol") return "builtin";
+  if (createsNoHostElement(output.type)) return "builtin";
   /*
-   * Everything else is a COMPONENT, and that is deliberately under-reporting.
-   * A function component may render a host element and forward `className`, so
-   * it cannot be called broken. React also spells several non-function
-   * constructs as objects — a context provider has no root, while `memo` and
-   * `forwardRef` wrap something that may well have one — and telling those
-   * apart means reading `$$typeof` against React's internal symbols. This check
-   * errs toward silence there rather than risking a warning on a working
-   * `memo`, because a diagnostic that is sometimes false is one people learn to
+   * Everything else is a COMPONENT, which cannot be called broken: it may
+   * render a host element and forward `className`, and only calling it would
+   * say. That is deliberate under-reporting, and the cheaper error for a
+   * diagnostic — a warning that is sometimes false is one people learn to
    * scroll past.
    */
   return "component";
