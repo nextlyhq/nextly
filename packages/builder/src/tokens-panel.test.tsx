@@ -933,12 +933,78 @@ describe("an export that produces no file", () => {
   });
 
   it("stays silent when a file DID arrive with nothing to report", () => {
-    // The other control, and the reason the silence exists: exporting is the
-    // common next step after an import, and a clean export must not wipe the
-    // import's report of what the source file could not carry.
-    render(<Panel tokens={TOKENS} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Export CSS" }));
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
+    /*
+     * The other control, and the reason the silence exists: exporting is the
+     * common next step after an import, and a clean export must not wipe the
+     * import's report of what the source file could not carry.
+     *
+     * The absence of a report is not enough on its own. An export that stopped
+     * handing over a file while still taking the wrote branch would satisfy
+     * both queries below and be exactly the silent no-op the sibling test
+     * exists to catch — so the download boundary is asserted to have been
+     * REACHED, with the bytes that were built.
+     */
+    const made = vi.spyOn(URL, "createObjectURL");
+    try {
+      render(<Panel tokens={TOKENS} onChange={vi.fn()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Export CSS" }));
+      expect(made).toHaveBeenCalledTimes(1);
+      expect(made.mock.calls[0]?.[0]).toBeInstanceOf(Blob);
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      made.mockRestore();
+    }
+  });
+});
+
+describe("an import where nothing landed", () => {
+  it("reports a refusal and does NOT save", async () => {
+    /*
+     * `importDtcg` succeeds when the file was readable, and every token in it
+     * can still be refused afterwards — by a name the site holds, by a path, by
+     * a custom property two tokens compose. Announcing "Imported 0 tokens." as
+     * a status claims an arrival that did not happen, and handing the host a
+     * table identical to the one it had spends a save on nothing.
+     */
+    const onChange = vi.fn();
+    const held: SiteTokenSet = {
+      tokens: [
+        { id: "other", name: "thing", kind: "number", values: { light: "9" } },
+      ],
+    };
+    render(
+      <Panel tokens={held} onChange={onChange} currentTokens={() => held} />
+    );
+    /*
+     * Names a token the site already holds under a DIFFERENT identity, so the
+     * file reads fine and its one token is refused on the way in. A NUMBER,
+     * because a bare string is not a readable DTCG colour value and the token
+     * would then be unusable rather than refused — a different path, and one
+     * that reports its own refusal.
+     */
+    const document = JSON.stringify({
+      thing: { $type: "number", $value: 1 },
+    });
+    /*
+     * `text` supplied explicitly, as every other import test here does: jsdom
+     * File does not implement it, and without this the panel reports the file
+     * as unreadable — a refusal that would satisfy the assertion below for
+     * entirely the wrong reason.
+     */
+    const chosen = new File([document], "tokens.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(chosen, "text", {
+      value: () => Promise.resolve(document),
+    });
+    fireEvent.change(screen.getByLabelText("Import"), {
+      target: { files: [chosen] },
+    });
+
+    const said = await screen.findByRole("alert");
+    expect(said.textContent).toContain("could be imported");
+    // The half that matters beyond the wording: no no-op save.
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

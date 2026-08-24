@@ -417,6 +417,23 @@ function TokenTransfer({
       });
       return;
     }
+    /*
+     * NOTHING landed is a refusal, even though the file was readable. Every
+     * token in it can be refused after the fact — by a name the site already
+     * holds, by a path, by a custom property two tokens compose — and the
+     * import then reports "Imported 0 tokens." as a success while handing the
+     * host a table identical to the one it already had. That announces an
+     * arrival that did not happen AND spends a save on it.
+     */
+    if (result.imported === 0) {
+      setReport({
+        tone: "refused",
+        headline:
+          "No tokens from that file could be imported, so nothing was changed.",
+        detail: result.skipped,
+      });
+      return;
+    }
     setReport({
       tone: "done",
       headline: `Imported ${String(result.imported)} ${

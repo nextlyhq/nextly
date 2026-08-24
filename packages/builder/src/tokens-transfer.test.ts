@@ -1114,21 +1114,28 @@ describe("this system's own extension, read field by field", () => {
   });
 
   it("says nothing about an extension the reader takes whole", () => {
-    // The control. Reporting a well-formed payload would name a loss that did
-    // not happen, on every file this system exported itself.
-    const document = {
-      brand: {
-        $type: "color",
-        $value: { colorSpace: "srgb", components: [0, 0, 0] },
-        $extensions: {
-          "com.nextlyhq.nextly": {
-            css: { light: "#111111", dark: "#eeeeee" },
+    /*
+     * The control. Reporting a well-formed payload would name a loss that did
+     * not happen, on every file this system exported itself.
+     *
+     * Built by EXPORTING rather than written out, because the fixture has to
+     * hold a property to be a control at all: `$value` and the stored CSS must
+     * agree, and hand-writing both is how they stop agreeing. The first version
+     * of this test paired an srgb black `$value` with a `#111111` light value
+     * and was a disagreement wearing a control's name.
+     */
+    const result = importDtcg(
+      exportDtcg({
+        tokens: [
+          {
+            name: "brand",
             kind: "color",
+            values: { light: "#111111", dark: "#eeeeee" },
           },
-        },
-      },
-    };
-    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+        ],
+      }).text,
+      { tokens: [] }
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.tokens.tokens[0]?.values.dark).toBe("#eeeeee");
@@ -1241,5 +1248,45 @@ describe("vendor data whose written form is not the value", () => {
 
     const result = exportDtcg(tokens);
     expect(result.skipped.join(" ")).toContain("foo");
+  });
+});
+
+describe("a vendor payload the reader throws away", () => {
+  it("names this system's own key when it is not an object", () => {
+    /*
+     * The reader DELETES this key before carrying the rest of the block
+     * through, so whatever it held is gone and the next export writes a
+     * generated object in its place. Absent and discarded look identical from
+     * the outside, which is why it has to be said.
+     */
+    const document = {
+      thing: {
+        $type: "number",
+        $value: 1,
+        $extensions: { "com.nextlyhq.nextly": "future" },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The control: the token itself DID import, so this is the reader dropping
+    // one field rather than a document it could not read.
+    expect(result.tokens.tokens.map(token => token.name)).toEqual(["thing"]);
+    expect(result.skipped.join(" ")).toContain("com.nextlyhq.nextly");
+  });
+
+  it("says nothing when the key is simply absent", () => {
+    // The control that stops the check firing on every file from another tool.
+    const document = {
+      thing: {
+        $type: "number",
+        $value: 1,
+        $extensions: { "com.figma": { id: 7 } },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skipped).toEqual([]);
   });
 });

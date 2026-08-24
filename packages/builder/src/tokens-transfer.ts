@@ -253,7 +253,22 @@ function reservedFate(
   path: string,
   isToken: boolean
 ): Fate {
-  // What makes the node a token at all, and the two fields carried with it.
+  /*
+   * What makes the node a token at all — and reported as KEPT even though the
+   * reader may not have used it. When a token carries this system's own stored
+   * CSS the reader prefers that and never looks at `$value`, so a file whose
+   * two disagree has its `$value` silently overridden.
+   *
+   * Not named, deliberately, and the reason is a measurement rather than a
+   * judgement. Telling "means something different" from "spells the same colour
+   * differently" needs colour semantics, which is a THIRD answer to what a
+   * value means. Comparing the strings instead reports a disagreement on files
+   * this system wrote itself: a token stored as `#111` or `rgb(17 17 17)`
+   * comes back from `$value` as `#111111`, so every such round trip would
+   * carry a line saying its own value was not imported. A report that fires on
+   * correct files is worse than one that misses, because it is the report that
+   * gets ignored.
+   */
   if (key === "$value") return { kind: "kept" };
   if (key === "$description" || key === "$extensions") {
     const said = metadataLostAt(key, value, path, isToken);
@@ -364,7 +379,17 @@ function metadataLostAt(
 function vendorLostIn(value: unknown, path: string): string | undefined {
   if (!isPlainRecord(value)) return undefined;
   const own = value[NEXTLY_EXTENSION];
-  if (!isPlainRecord(own)) return undefined;
+  if (!isPlainRecord(own)) {
+    /*
+     * Present and not an object. The reader DELETES this key before carrying
+     * the rest of the block through, so whatever it held is gone and the next
+     * export writes a generated object in its place — the one shape where
+     * absent and discarded look identical from the outside.
+     */
+    return own === undefined
+      ? undefined
+      : `"${path}.${NEXTLY_EXTENSION}" is not an object, so this site could not read it and did not keep it.`;
+  }
   const at = `${path}.${NEXTLY_EXTENSION}`;
   if (readsStoredCss(own)) return darkLostAt(own.css, at);
   /*
