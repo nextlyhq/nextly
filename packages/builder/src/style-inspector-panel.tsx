@@ -30,6 +30,7 @@
  */
 
 import {
+  breakpointContexts,
   findNode,
   isTokenRef,
   trimCssWhitespace,
@@ -1408,18 +1409,42 @@ function ProvenanceDot({
   const described = describeProvenance(provenance, editing, descendant);
   if (described === null) return null;
   return (
-    <span
-      className="nx-style-inspector__provenance"
-      data-provenance={described.kind}
-      title={described.text}
-      /*
-       * A role, because the element is empty: the dot is drawn by the
-       * stylesheet, so without one the label is the only content and assistive
-       * technology has nothing to attach the description to.
-       */
-      role="img"
-      aria-label={described.text}
-    />
+    <>
+      <span
+        className="nx-style-inspector__provenance"
+        data-provenance={described.kind}
+        title={described.text}
+        /*
+         * A role, because the element is empty: the dot is drawn by the
+         * stylesheet, so without one the label is the only content and assistive
+         * technology has nothing to attach the description to.
+         */
+        role="img"
+        aria-label={described.text}
+      />
+      {/*
+       * The same sentence, for a sighted keyboard user.
+       *
+       * `title` reaches a POINTER and nothing else, and `aria-label` reaches
+       * assistive technology and nothing else. Between them sits the person who
+       * tabs to a control and can see the screen: they got a coloured dot with
+       * no way to learn what it means, which is the one group the first two
+       * accommodations do not cover.
+       *
+       * Revealed on `:focus-within` of the field rather than made focusable
+       * itself. A focusable dot would put a second tab stop in front of every
+       * control in a panel that already has eight or more per section, so
+       * reaching the last field would cost twice the presses — fixing the
+       * explanation by damaging the navigation it explains.
+       *
+       * `aria-hidden` because the dot beside it already carries this text: two
+       * copies in the accessibility tree is the same sentence announced twice,
+       * which reads as a stutter rather than as emphasis.
+       */}
+      <span className="nx-style-inspector__provenance-text" aria-hidden="true">
+        {described.text}
+      </span>
+    </>
   );
 }
 
@@ -1447,47 +1472,43 @@ export function describeProvenance(
 }
 
 /**
- * What a `node` origin means, composed from EVERY axis that differs.
+ * Which block, class or tier a value came from — the SUBJECT of the phrase.
  *
- * Split from {@link originName} because the other three tiers answer in one line
- * each while this one is the whole question: an ancestor's rule, another control
- * on this block, another breakpoint, another state, and only then this control's
- * own value.
+ * Split from {@link originName} because the address that qualifies it is the
+ * same for every tier while the subject is different for each, and composing
+ * both in one function made the tier answers hard to read past the qualifiers.
  *
- * Composed rather than narrowed. An earlier version returned on the FIRST
- * differing axis, which is a complete answer only when exactly one differs — and
- * two differ in an ordinary case: editing hover at Tablet, a value arriving from
- * base at Mobile was labelled "this block at Mobile", which is a real address
- * that does not hold the value. The author goes to hover at Mobile, finds
- * nothing, and the indicator has actively misdirected them. Naming a wrong
- * address is worse than naming a vague one.
- *
- * The CONTROL leads rather than trails, because it is the subject of the phrase
- * the other two qualify: "the Link color control at Medium in its hover state"
- * is an address read in one direction, where a trailing control name would read
- * as a second, competing subject.
+ * A same-node origin resolves to the CONTROL where one differs, because there
+ * the control is what the author must open: a rule reaches a control whose
+ * descendant selector is more specific than its own — `linkColorHover` displays
+ * the plain `a` declaration when no hover value exists — and told "this block",
+ * the author cannot find the field that holds it.
  */
-function nodeOriginName(
-  originNodeId: string,
-  entry: StyleTraceEntry,
+function originSubject(
+  origin: StyleOrigin,
   editing: EditedAddress,
-  controlDescendant: string | undefined
+  control: string | undefined
 ): string {
-  if (originNodeId !== editing.nodeId) return "an enclosing block";
-  /*
-   * A rule reaches a control whose descendant selector is more specific than its
-   * own: `linkColorHover` displays the plain `a` declaration when no hover value
-   * exists. Told "this block", the author cannot find the field that actually
-   * holds it, which is the one thing this indicator is for.
-   */
-  const parts = [sourceControl(entry, controlDescendant) ?? "this block"];
-  if (entry.breakpoint !== editing.breakpoint) {
-    parts.push(`at ${editing.labelOf(entry.breakpoint)}`);
+  switch (origin.kind) {
+    case "class":
+      return `.${origin.slug}`;
+    case "blockType":
+      /*
+       * The same problem the `node` case has, and it arrives by the same route:
+       * `reachesThroughAncestor` asks `reachesNode` about each ancestor, and
+       * that matches a `blockType` origin against the ANCESTOR's type. So a
+       * descendant rule from an enclosing block's defaults reaches this control
+       * carrying that block's type, not this one's.
+       */
+      return origin.type === editing.blockType
+        ? "this block's defaults"
+        : "an enclosing block's defaults";
+    case "page":
+      return "the page";
+    case "node":
+      if (origin.id !== editing.nodeId) return "an enclosing block";
+      return control ?? "this block";
   }
-  if (entry.state !== editing.state) {
-    parts.push(`in its ${entry.state} state`);
-  }
-  return parts.join(" ");
 }
 
 /**
@@ -1527,19 +1548,40 @@ function sourceControl(
  * A breakpoint's author-facing name, or its id when the site defines no such
  * breakpoint.
  *
+ * Resolved through `breakpointContexts` — the engine's own normalisation — and
+ * not by searching the stored axes. The two disagree, and the disagreement is
+ * exactly the case a label matters in. `breakpointContexts` sorts each axis
+ * WIDEST-FIRST and then claims each id once, so of two rows storing the same id
+ * the wider one survives and emits the rule; a raw search returns whichever was
+ * stored first. With a narrow `dup` above a wider `dup`, the value on screen
+ * comes from the wide row while the tooltip names the narrow one — an author
+ * sent to a definition that did not produce the value.
+ *
+ * The surviving DEFINITION is then matched by axis and bound rather than by id
+ * alone, because id alone is what is ambiguous here. Two rows sharing an id and
+ * a bound differ only in their label, and the compiler's sort is stable, so the
+ * first of those is the one it kept.
+ *
  * Falling back to the id rather than to a placeholder: a value keyed to a
  * breakpoint the settings no longer define is exactly the case an author needs
  * to recognise, and "unknown" tells them nothing they can act on.
  */
-function breakpointLabel(
+export function breakpointLabel(
   breakpoints: BreakpointSet | undefined,
   id: BreakpointId
 ): string {
-  for (const axis of [breakpoints?.viewport, breakpoints?.container]) {
-    const found = (axis ?? []).find(def => def.id === id);
-    if (found !== undefined) return found.label;
-  }
-  return id;
+  const context = breakpointContexts(breakpoints).find(
+    found => found.id === id
+  );
+  if (context === undefined) return id;
+  const axis =
+    context.axis === "container"
+      ? breakpoints?.container
+      : breakpoints?.viewport;
+  const survivor = (axis ?? []).find(
+    def => def.id === id && def.maxWidth === context.maxWidth
+  );
+  return survivor?.label ?? id;
 }
 
 /** Which node, state and breakpoint the panel is editing, to say what DIFFERS. */
@@ -1554,23 +1596,23 @@ export interface EditedAddress {
 }
 
 /**
- * What to call the place a value came from.
+ * What to call the place a value came from, as ONE address.
  *
- * A class is named by its SLUG rather than its id: the slug is what an author
- * typed and what the canvas shows, while the id is storage. The id is never
- * interpolated anywhere — see `canvas.tsx`'s `nodeElement` for why a class id
- * must not reach a selector or a queried attribute.
+ * Every axis that differs from what the panel is editing is named, not just the
+ * first. Naming a subset is not a vaguer answer, it is a WRONG one: editing
+ * hover at Tablet, a value arriving from base at Mobile labelled "this block at
+ * Mobile" sends the author to a real address that does not hold the value, and
+ * finding nothing there they conclude the indicator is broken.
  *
- * A `node` origin is FOUR different answers and reading it as one misnames three
- * of them. The winning declaration can belong to an ancestor, whose rule reached
- * this block through a descendant selector; or to this block at another
- * breakpoint; or in another interaction state; and only what is left is "this
- * block". An author told "this block" about an ancestor's rule goes looking for
- * a value that is not on the block they have selected.
+ * The qualifiers apply to EVERY tier, not only to a node. A class carries
+ * responsive and interaction-state values of its own, so `.card` alone leaves an
+ * author who opens the class editor at base looking at the wrong row — the same
+ * misdirection, one tier over.
  *
- * The breakpoint is named by its LABEL rather than its id, for the same reason
- * the class is named by its slug: the id is storage and the label is what the
- * author reads everywhere else.
+ * The control is the SUBJECT for a same-node origin and a `via` clause for every
+ * other tier, because that is what it means in each: on this block it is the
+ * field to open, while on a class or an enclosing block it says which field's
+ * rule reached here, and the place to go is still the class or the block.
  */
 function originName(
   origin: StyleOrigin,
@@ -1578,25 +1620,17 @@ function originName(
   editing: EditedAddress,
   controlDescendant: string | undefined
 ): string {
-  switch (origin.kind) {
-    case "class":
-      return `.${origin.slug}`;
-    case "blockType":
-      /*
-       * The same four-way problem the `node` case has, and it arrives by the
-       * same route: `reachesThroughAncestor` asks `reachesNode` about each
-       * ancestor, and that matches a `blockType` origin against the ANCESTOR's
-       * type. So a descendant rule from an enclosing block's defaults reaches
-       * this control carrying that block's type, not this one's.
-       */
-      return origin.type === editing.blockType
-        ? "this block's defaults"
-        : "an enclosing block's defaults";
-    case "page":
-      return "the page";
-    case "node":
-      return nodeOriginName(origin.id, entry, editing, controlDescendant);
+  const control = sourceControl(entry, controlDescendant);
+  const ownControl = origin.kind === "node" && origin.id === editing.nodeId;
+  const parts = [originSubject(origin, editing, control)];
+  if (!ownControl && control !== undefined) parts.push(`via ${control}`);
+  if (entry.breakpoint !== editing.breakpoint) {
+    parts.push(`at ${editing.labelOf(entry.breakpoint)}`);
   }
+  if (entry.state !== editing.state) {
+    parts.push(`in its ${entry.state} state`);
+  }
+  return parts.join(" ");
 }
 
 /**

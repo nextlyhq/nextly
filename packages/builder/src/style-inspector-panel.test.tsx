@@ -14,10 +14,12 @@
  */
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   clearBlocks,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type BreakpointSet,
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -33,6 +35,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 import {
+  breakpointLabel,
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
@@ -1347,6 +1350,63 @@ describe("where a control's value came from", () => {
     expect(dot?.getAttribute("aria-label")).toBe("Inherited from .card");
   });
 
+  it("puts the same sentence in TEXT, for someone who tabs rather than points", () => {
+    /*
+     * The gap the dot alone leaves. `title` reaches a pointer and `aria-label`
+     * reaches assistive technology; a sighted keyboard user sits between them
+     * and had a coloured dot with nothing to explain it.
+     *
+     * Asserted as ONE string shared with the dot rather than as a literal,
+     * because two copies of a sentence are two places for it to drift — and a
+     * literal here would keep passing after the dot's wording changed.
+     *
+     * `aria-hidden` is asserted as the other half: without it the same sentence
+     * is announced twice, and the fix for one group becomes a regression for
+     * another. The VISIBLE reveal is `:focus-within` in the stylesheet, which
+     * jsdom does not apply — what is certified here is the DOM contract the
+     * reveal depends on.
+     */
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        trace={
+          [
+            entry({
+              origin: { kind: "class", id: "cls-1", slug: "card" },
+            }),
+          ] as never
+        }
+      />
+    );
+
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
+
+    // The POPULATION first. Both sides of the comparison below read through
+    // `?.`, so a query that found nothing would compare `undefined` with
+    // `undefined` and pass while nothing was rendered at all.
+    expect(dotIn("color")).not.toBeNull();
+    expect(text).not.toBeNull();
+    expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
+    expect(text?.textContent).not.toBe("");
+    expect(text?.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("draws NOTHING for a property no tier set", () => {
     // Eight empty dots per section is the shape that trains an author to stop
     // reading the panel.
@@ -1540,6 +1600,80 @@ describe("naming the place a value came from", () => {
     expect(nameFor({ kind: "node", id: "a" }, at({ state: "hover" }))).toBe(
       "Inherited from this block in its hover state"
     );
+  });
+
+  it("names the DEFINITION the compiler kept, not the first one stored", () => {
+    /*
+     * The label and the rule have to come from the same row or the tooltip sends
+     * an author to a definition that did not produce the value.
+     *
+     * `breakpointContexts` sorts each axis WIDEST-FIRST and then claims each id
+     * once, so of two rows storing `dup` the wider survives and emits the rule.
+     * A raw search over the stored axes returns whichever was written first.
+     * Stored narrow-then-wide, those two disagree — which is why the fixture is
+     * in that order and not the other.
+     *
+     * The engine is asked for the expectation rather than a literal, so this
+     * tracks the compiler if its normalisation ever changes rather than pinning
+     * today's answer as a second opinion.
+     */
+    const set = {
+      viewport: [
+        { id: "dup", label: "Narrow row", maxWidth: 400 },
+        { id: "dup", label: "Wide row", maxWidth: 900 },
+      ],
+      container: [],
+    } as unknown as BreakpointSet;
+
+    const kept = breakpointContexts(set).find(context => context.id === "dup");
+
+    expect(kept?.maxWidth).toBe(900);
+    expect(breakpointLabel(set, "dup")).toBe("Wide row");
+  });
+
+  it("falls back to the id for a breakpoint the settings no longer define", () => {
+    // A value keyed to a removed breakpoint is exactly what an author needs to
+    // recognise; a placeholder would tell them nothing they can act on.
+    expect(breakpointLabel({ viewport: [], container: [] }, "gone")).toBe(
+      "gone"
+    );
+  });
+
+  it("carries the address on a CLASS origin too, not only on a node", () => {
+    /*
+     * The same misdirection one tier over, and the reason the qualifiers were
+     * moved out of the node branch. A class holds responsive and
+     * interaction-state values of its own, so a Mobile declaration on `.card`
+     * winning while the panel edits base is answered by ".card" alone — and the
+     * author opens the class editor at base, sees a different value, and has no
+     * way to learn the one on screen came from another row.
+     *
+     * Asserted on the qualifier specifically, not just the whole string, so a
+     * regression that drops it cannot pass by matching the slug.
+     */
+    const label = nameFor(
+      { kind: "class", id: "cls-1", slug: "card" },
+      at({ breakpoint: "md" })
+    );
+
+    expect(label).toContain("at Medium");
+    expect(label).toBe("Inherited from .card at Medium");
+  });
+
+  it("says which control a non-node rule came THROUGH, without moving the place", () => {
+    /*
+     * The control is the subject only for a value on this block, where it is the
+     * field to open. On a class it is a qualifier: the rule came through that
+     * field, and the place to go is still the class. Told only "the Link color
+     * control", an author would look on the block and find nothing.
+     */
+    const label = nameFor(
+      { kind: "class", id: "cls-1", slug: "card" },
+      at({ property: "color", descendant: " a" })
+    );
+
+    expect(label).toContain(".card");
+    expect(label).toContain("via");
   });
 
   it("names BOTH axes when both differ, not just the first", () => {

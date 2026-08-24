@@ -1548,3 +1548,27 @@
 .nx-style-inspector__provenance[data-provenance="inherited"] {
   background-color: var(--nx-chart-4);
 }
+
+/*
+ * The provenance sentence in text, for someone who tabs rather than points.
+ *
+ * Hidden with `display: none` rather than clipped off-screen, because the dot
+ * beside it already carries this string for assistive technology — a
+ * screen-reader-visible copy here would announce the same sentence twice on
+ * every control that has one.
+ *
+ * Revealed from `:focus-within` on the FIELD, not on the label: the thing that
+ * takes focus is the input, and the label is its sibling. Scoping the reveal to
+ * the label would never fire.
+ */
+.nx-style-inspector__provenance-text {
+  display: none;
+}
+
+.nx-inspector__field:focus-within .nx-style-inspector__provenance-text {
+  display: inline;
+  margin-inline-start: 0.375rem;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--nx-muted-foreground);
+}
