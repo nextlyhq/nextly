@@ -30,11 +30,8 @@
 
 import { useCallback, useMemo } from "react";
 
+import type { ApiError } from "@admin/lib/api/parseApiError";
 import { previewLinkApi } from "@admin/services/previewLinkApi";
-import {
-  previewUrlApi,
-  type PreviewUrlResolution,
-} from "@admin/services/previewUrlApi";
 
 /**
  * How long a token minted for the editor's own preview stays valid.
@@ -102,6 +99,18 @@ export interface UseEntryPreviewOptions {
    * from the saved row means the address and the content agree.
    */
   entry?: Record<string, unknown> | null;
+  /**
+   * The language to open, on a localized collection.
+   *
+   * Absent means UNSCOPED, which is right for a collection that has no
+   * translations and wrong for one that does: the preview route derives its
+   * redirect from the token's scope, so an unscoped token on a localized
+   * collection sends the reader to the default language whichever one they were
+   * editing. The caller resolves which case it is — `previewLinkLocale` answers
+   * exactly this — and withholds the action entirely while the answer is
+   * unknown.
+   */
+  locale?: string;
   /** Told why a click could not open anything. */
   onUnavailable?: (reason: PreviewUnavailableReason) => void;
 }
@@ -155,15 +164,11 @@ export const PREVIEW_MESSAGES: Record<PreviewUnavailableReason, string> = {
  * Separated from the sequence around it because it is the only part that is a
  * DECISION rather than choreography: opening the tab early, severing its
  * opener and closing it again are all forced by how browsers treat a click,
- * while this is a four-case mapping that can be read on its own. Keeping it
- * pure also means the mapping is exercised without a window, a user gesture or
- * a round trip.
+ * while this is a mapping that can be read on its own.
  */
 type PreviewOutcome =
   | { kind: "open"; url: string }
-  | { kind: "report"; reason: PreviewUnavailableReason }
-  /** Nothing to open and nothing to say — close the claimed tab quietly. */
-  | { kind: "close" };
+  | { kind: "report"; reason: PreviewUnavailableReason };
 
 /**
  * The document a preview could be authorized for, or `null` when there is none.
@@ -212,54 +217,57 @@ function claimTab(
   return { target };
 }
 
-function outcomeOf(resolution: PreviewUrlResolution): PreviewOutcome {
-  if (resolution.status === "resolved") {
-    return { kind: "open", url: resolution.url };
-  }
-  // `notConfigured` is deliberately silent: the button should not have been
-  // offered at all, so telling the editor a preview is unavailable describes a
-  // state they cannot act on. The other two ARE theirs to act on — fill in the
-  // slug, or ask an administrator to set the site URL.
-  if (resolution.status === "notConfigured") return { kind: "close" };
-  return { kind: "report", reason: resolution.status };
+/**
+ * Why a refused mint refused, as something the editor can act on.
+ *
+ * Read from the HTTP status rather than the message: 409 is the server saying
+ * this document has no preview address yet — usually an empty slug — which is
+ * the one refusal the editor can fix themselves, and the one the generic
+ * failure message would bury. Anything else is reported as a failure rather
+ * than guessed at, because a wrong diagnosis sends someone editing fields that
+ * were never the problem.
+ */
+function reasonForRefusal(error: unknown): PreviewUnavailableReason {
+  const status = (error as ApiError | undefined)?.status;
+  return status === 409 ? "unavailable" : "failed";
 }
 
 /**
- * Turns "there is a page" into "there is a page this tab may see as a draft".
+ * Mints the credential this preview opens with.
  *
- * The resolver answers only WHERE, and a bare address is not enough: the draft
- * gate on the site refuses an unauthenticated request, so navigating to it
- * shows the published page or a 404. A token is what carries draft mode across
- * the origin boundary.
+ * The mint is the ONLY question asked, and that is deliberate. It already
+ * resolves the destination through the same function the preview route will
+ * call, and refuses before signing when a document has no address yet — so
+ * asking `/preview-url` first was a second implementation of a question the
+ * server already answers, one that ran an author's `preview.url` function twice
+ * and could disagree with itself between the two calls.
  *
- * Minted only once the address is known, so an entry with no page yet is never
- * the reason a credential exists. That ordering is the reason the cheap
- * read-only resolve still runs first rather than being folded into the mint.
- *
- * The minted URL replaces the resolved one rather than being added to it: the
- * preview route derives the destination from the token's own scope, so the two
- * cannot disagree about which document is being opened.
+ * The token's own scope is what the route redirects from, which is why the
+ * locale travels with it: on a localized collection an unscoped token opens the
+ * default language whichever one was being edited.
  */
 async function authorizedOutcome(
-  resolution: PreviewUrlResolution,
   collection: string,
-  entryId: string
+  entryId: string,
+  locale: string | undefined
 ): Promise<PreviewOutcome> {
-  const outcome = outcomeOf(resolution);
-  if (outcome.kind !== "open") return outcome;
+  try {
+    const link = await previewLinkApi.mint({
+      collection,
+      entryId,
+      ...(locale === undefined ? {} : { locale }),
+      ttlSeconds: SELF_PREVIEW_TTL_SECONDS,
+    });
 
-  const link = await previewLinkApi.mint({
-    collection,
-    entryId,
-    ttlSeconds: SELF_PREVIEW_TTL_SECONDS,
-  });
-
-  // Assembled on the server or not at all: the site's address lives in settings
-  // the sharing roles cannot read. A null URL is the same missing setting the
-  // resolver reports as `noSiteUrl`, so it is reported as that rather than as a
-  // failure the editor cannot place.
-  if (link.url === null) return { kind: "report", reason: "noSiteUrl" };
-  return { kind: "open", url: link.url };
+    // Assembled on the server or not at all: the site's address lives in
+    // settings the previewing roles cannot read. A null URL is that setting
+    // missing, which is a thing an administrator can fix, so it is reported as
+    // itself rather than as an opaque failure.
+    if (link.url === null) return { kind: "report", reason: "noSiteUrl" };
+    return { kind: "open", url: link.url };
+  } catch (error) {
+    return { kind: "report", reason: reasonForRefusal(error) };
+  }
 }
 
 /**
@@ -320,6 +328,7 @@ export interface UseEntryPreviewResult {
 export function useEntryPreview({
   collection,
   entry,
+  locale,
   onUnavailable,
 }: UseEntryPreviewOptions): UseEntryPreviewResult {
   const previewConfig = collection.admin?.preview;
@@ -357,26 +366,12 @@ export function useEntryPreview({
       return;
     }
 
-    try {
-      const resolution = await previewUrlApi.resolve({
-        collection: collection.name,
-        entry: target.entry,
-      });
-      settle(
-        claimed.target,
-        await authorizedOutcome(resolution, collection.name, target.entryId),
-        onUnavailable
-      );
-    } catch {
-      // A failed request is reported like any other refusal, so the claimed tab
-      // is closed on this path too rather than left blank.
-      settle(
-        claimed.target,
-        { kind: "report", reason: "failed" },
-        onUnavailable
-      );
-    }
-  }, [collection.name, entry, onUnavailable, previewConfig]);
+    settle(
+      claimed.target,
+      await authorizedOutcome(collection.name, target.entryId, locale),
+      onUnavailable
+    );
+  }, [collection.name, entry, locale, onUnavailable, previewConfig]);
 
   return {
     isPreviewAvailable,

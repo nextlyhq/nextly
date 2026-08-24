@@ -214,6 +214,19 @@ describe("EntryForm wires the preview action into its header", () => {
     expect(lastHeaderProps().onPreview).toBeUndefined();
   });
 
+  it("withholds the preview while the language is still unknown", () => {
+    // The token's scope is what the preview route redirects from, so opening
+    // without a resolved language sends the editor to the default translation
+    // rather than the one on screen. The link half withholds here too, for a
+    // different reason — an unscoped token grants every translation — and both
+    // reasons bite.
+    localization.current = { defaultLocale: "" };
+    renderPreviewable();
+
+    expect(lastHeaderProps().isPreviewAvailable).toBe(false);
+    expect(lastHeaderProps().onPreview).toBeUndefined();
+  });
+
   it("withholds the preview while the entry is unsaved", () => {
     // What opens renders the SAVED row, so on a create form the address names
     // nothing yet. Offering it would open a 404 the author cannot act on.

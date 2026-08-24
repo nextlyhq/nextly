@@ -591,6 +591,12 @@ export function EntryForm({
   const entryPreview = useEntryPreview({
     collection,
     entry,
+    // The SAME resolution the shareable link uses, for the same reason: the
+    // token's scope is what the preview route redirects from, so an unscoped
+    // token on a localized collection opens the default language whichever one
+    // is being edited. `unscoped` is right only where there are no
+    // translations, which is what this answers.
+    ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
     onUnavailable: reason => {
       toast.error(PREVIEW_MESSAGES[reason]);
     },
@@ -607,8 +613,16 @@ export function EntryForm({
    *
    * The saved-id half is not about permission. What opens renders the saved
    * row, so on a create form there is nothing at the address yet.
+   *
+   * An unresolved language withholds it too, on the same grounds as the link
+   * beside it. The reasons differ and both bite: a link minted without one is a
+   * grant over every translation, while a preview opened without one silently
+   * shows the wrong one.
    */
-  const canPreview = entryPreview.isPreviewAvailable && savedEntryId !== "";
+  const canPreview =
+    entryPreview.isPreviewAvailable &&
+    savedEntryId !== "" &&
+    linkLocale.kind !== "unresolved";
 
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
@@ -756,10 +770,6 @@ export function EntryForm({
                           locale={locale}
                           onLocaleChange={onLocaleChange}
                           localized={collection.localized === true}
-                          // Unlike the link beside it, the locale does not gate
-                          // this: the preview carries no grant, so an unresolved
-                          // language costs the reader a redirect rather than
-                          // handing them every translation.
                           isPreviewAvailable={canPreview}
                           previewLabel={entryPreview.label}
                           {...(canPreview
