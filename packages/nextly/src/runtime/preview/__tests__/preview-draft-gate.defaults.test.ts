@@ -38,6 +38,7 @@ async function cookieFor(
 ): Promise<void> {
   const { token } = await signPreviewToken(scope, TEST_SECRET, {
     generation: options.generation ?? 1,
+    minter: "minter-1",
     ...(options.ttlSeconds === undefined
       ? {}
       : { ttlSeconds: options.ttlSeconds }),
@@ -57,10 +58,23 @@ describe("previewDraftGate with no arguments", () => {
     const gate = previewDraftGate();
 
     await expect(gate({ collection: "pages", slug: "about" })).resolves.toEqual(
-      {
-        entryId: "entry-1",
-      }
+      expect.objectContaining({ entryId: "entry-1" })
     );
+  });
+
+  // The grant carries the redaction, because the row is read TRUSTED and trust
+  // switches field-level read rules off with it. Without one the page renders
+  // every field, including any the sharer cannot see.
+  it("carries a redactor when the token records who shared it", async () => {
+    await cookieFor({ collection: "pages", entryId: "entry-1" });
+
+    const grant = await previewDraftGate()({
+      collection: "pages",
+      slug: "about",
+    });
+
+    expect(grant).not.toBe(false);
+    expect(typeof (grant as { redact?: unknown }).redact).toBe("function");
   });
 
   it("refuses a request with no preview cookie", async () => {
@@ -93,7 +107,7 @@ describe("previewDraftGate with no arguments", () => {
 
     await expect(
       gate({ collection: "pages", slug: "some-other-page" })
-    ).resolves.toEqual({ entryId: "entry-A" });
+    ).resolves.toEqual(expect.objectContaining({ entryId: "entry-A" }));
   });
 
   it("refuses an expired token", async () => {

@@ -77,7 +77,7 @@ describe("createContentRoute driven by previewDraftGate", () => {
     const { token } = await signPreviewToken(
       { collection: "pages", entryId: String(created.item.id) },
       SECRET,
-      { generation: GENERATION }
+      { generation: GENERATION, minter: "minter-1" }
     );
 
     const page = (await route(current.nextly, token).ContentPage({
@@ -119,7 +119,7 @@ describe("createContentRoute driven by previewDraftGate", () => {
     const { token } = await signPreviewToken(
       { collection: "pages", entryId: String(a.item.id) },
       SECRET,
-      { generation: GENERATION }
+      { generation: GENERATION, minter: "minter-1" }
     );
 
     await expect(

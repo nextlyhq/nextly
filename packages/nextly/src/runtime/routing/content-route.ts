@@ -474,8 +474,8 @@ function buildRoute<TNode>(
     context: ResolvedContext
   ): Promise<void> {
     try {
-      const { readPreviewScope } = await import("../preview/preview-route");
-      const session = await readPreviewScope();
+      const { readPreviewSession } = await import("../preview/preview-route");
+      const session = await readPreviewSession();
       if (session === null) return;
       const { scope } = session;
       if (scope.collection !== context.collection) return;
@@ -607,7 +607,17 @@ function buildRoute<TNode>(
       // Before the document is handed to `render`, and before anything derived
       // from it is computed, so nothing downstream can have read a field the
       // grant means to withhold.
-      if (typeof grant === "object" && typeof grant.redact === "function") {
+      // `grant !== null` explicitly: `typeof null === "object"`, so a hook
+      // written in JavaScript returning null to mean "no grant" would pass a
+      // bare object check and then throw reading `.redact` — turning an
+      // ordinary published page into a 500. The resolver above already treats
+      // an app-supplied grant as runtime input rather than trusting the
+      // declaration, and this property access needs the same care.
+      if (
+        grant !== null &&
+        typeof grant === "object" &&
+        typeof grant.redact === "function"
+      ) {
         await grant.redact(entry);
       }
       // No identity check here, deliberately. Both halves a grant has to

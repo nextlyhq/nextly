@@ -62,6 +62,7 @@ export {
   PREVIEW_SCOPE_COOKIE,
   createPreviewRoute,
   readPreviewScope,
+  readPreviewSession,
   previewGrantsDraft,
   type PreviewRouteConfig,
   type PreviewScopeReaderConfig,

@@ -70,12 +70,15 @@ export interface SignPreviewTokenOptions {
    * cannot see — a way to read past your own permissions by sending yourself a
    * link.
    *
-   * Optional, for the reason `kind` is: a token minted before this existed
-   * carries no claim, and requiring one would kill every outstanding link. A
-   * reader that finds none has to decide what to do about it rather than
-   * treating absence as permission.
+   * **Required when signing, and tolerated when verifying — the asymmetry is
+   * the point.** Compatibility is owed to tokens ALREADY ISSUED, which cannot
+   * gain a claim they were minted without and which expire within days.
+   * Nothing is owed to a token minted after this shipped: leaving it optional
+   * here would let any caller of this public signer keep producing links that
+   * render with every field rule bypassed, which is the hole being closed
+   * rather than a compatibility concern.
    */
-  minter?: string;
+  minter: string;
   /**
    * The site's current revocation generation.
    *

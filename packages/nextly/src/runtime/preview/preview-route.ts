@@ -305,7 +305,7 @@ export interface PreviewSession {
  * the generation moves, which is what makes "revoke all preview links" mean
  * something for sessions already in flight.
  */
-export async function readPreviewScope(
+export async function readPreviewSession(
   config: PreviewScopeReaderConfig = {}
 ): Promise<PreviewSession | null> {
   const loadDefaults = () => import("./preview-route-defaults");
@@ -338,6 +338,25 @@ export async function readPreviewScope(
     scope: verified.scope,
     ...(verified.minter === undefined ? {} : { minter: verified.minter }),
   };
+}
+
+/**
+ * What the current request is allowed to preview, if anything.
+ *
+ * DERIVED from {@link readPreviewSession} rather than reading the cookie a
+ * second time, so the two cannot come to disagree about what a token says.
+ *
+ * Kept at its original shape because it is exported from `nextly/runtime` and
+ * applications call it: widening the return to carry the minter would break
+ * every typed consumer at compile time, and — worse — leave an untyped one
+ * reading `scope.collection` as `undefined`, so its gate silently refuses every
+ * valid preview. A richer answer belongs in a new function, which is what the
+ * session reader is.
+ */
+export async function readPreviewScope(
+  config: PreviewScopeReaderConfig = {}
+): Promise<PreviewTokenScope | null> {
+  return (await readPreviewSession(config))?.scope ?? null;
 }
 
 /**

@@ -20,7 +20,7 @@ import type { PreviewTokenScope } from "../../auth/preview/preview-token";
 import type { ResolvedContext } from "../routing/content-route";
 
 import { redactAsMinter } from "./preview-redaction";
-import { previewGrantsDraft, readPreviewScope } from "./preview-route";
+import { previewGrantsDraft, readPreviewSession } from "./preview-route";
 import type { PreviewScopeReaderConfig } from "./preview-route";
 
 /**
@@ -90,7 +90,7 @@ export function previewDraftGate(config: PreviewDraftGateConfig = {}): (
     // Re-read per request. The config is captured once at module scope while
     // whether this visitor is previewing — and whether their token has since
     // expired or been revoked — is a fact about the request in hand.
-    const verified = await readPreviewScope(config);
+    const verified = await readPreviewSession(config);
 
     if (verified === null) return false;
     const { scope, minter } = verified;

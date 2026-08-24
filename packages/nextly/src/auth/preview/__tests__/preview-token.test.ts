@@ -21,6 +21,7 @@ describe("preview tokens", () => {
   it("authorizes the document it was minted for", async () => {
     const { token, expiresAt } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
 
     const result = await verifyPreviewToken(token, TEST_SECRET, {
@@ -39,6 +40,7 @@ describe("preview tokens", () => {
     const before = Date.now();
     const { expiresAt } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
 
     const lifetimeSeconds = (expiresAt.getTime() - before) / 1000;
@@ -55,6 +57,7 @@ describe("preview tokens", () => {
       // session cookie would turn "see this page" into an account.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       const asSession = await verifyAccessToken(token, TEST_SECRET);
@@ -80,6 +83,7 @@ describe("preview tokens", () => {
     it("refuses a token signed with a different secret", async () => {
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       const result = await verifyPreviewToken(token, `${TEST_SECRET}-other`, {
@@ -92,6 +96,7 @@ describe("preview tokens", () => {
     it("refuses a tampered payload", async () => {
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
       const [header, payload, signature] = token.split(".");
       const decoded = JSON.parse(
@@ -117,6 +122,7 @@ describe("preview tokens", () => {
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         ttlSeconds: 1,
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       vi.useFakeTimers();
@@ -136,6 +142,7 @@ describe("preview tokens", () => {
     it("refuses every outstanding token once the generation moves", async () => {
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       const result = await verifyPreviewToken(token, TEST_SECRET, {
@@ -151,7 +158,7 @@ describe("preview tokens", () => {
       const { token } = await signPreviewToken(
         { collection: "", entryId: "" },
         TEST_SECRET,
-        { generation: GENERATION + 1 }
+        { generation: GENERATION + 1, minter: "minter-1" }
       );
 
       const result = await verifyPreviewToken(token, TEST_SECRET, {
@@ -173,6 +180,7 @@ describe("preview tokens", () => {
       await expect(
         signPreviewToken({ ...SCOPE, locale: "" }, TEST_SECRET, {
           generation: GENERATION,
+          minter: "minter-1",
         })
       ).rejects.toMatchObject({
         code: "VALIDATION_ERROR",

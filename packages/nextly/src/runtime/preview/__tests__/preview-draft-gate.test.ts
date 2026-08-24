@@ -25,6 +25,7 @@ async function cookiesFor(
   const { token } = await signPreviewToken(scope, SECRET, {
     generation: options.generation ?? GENERATION,
     ttlSeconds: 600,
+    minter: "minter-1",
   });
   return () => ({
     get: (name: string) =>
@@ -70,7 +71,7 @@ describe("previewDraftGate", () => {
     // `{ entryId }`, never `true`. A slug is not unique, so a bare `true`
     // grants whichever row the route resolves — which need not be the entry the
     // token was minted for.
-    expect(grant).toEqual({ entryId: "entry-1" });
+    expect(grant).toEqual(expect.objectContaining({ entryId: "entry-1" }));
   });
 
   it("refuses a collection the token does not name", async () => {
@@ -118,7 +119,7 @@ describe("previewDraftGate", () => {
     );
     expect(
       await g({ collection: "pages", slug: "about", locale: "en" })
-    ).toEqual({ entryId: "entry-1" });
+    ).toEqual(expect.objectContaining({ entryId: "entry-1" }));
   });
 
   it("grants the default language, whose request names the resolved locale", async () => {
@@ -134,7 +135,7 @@ describe("previewDraftGate", () => {
 
     expect(
       await gate(cookies)({ collection: "pages", slug: "about", locale: "en" })
-    ).toEqual({ entryId: "entry-1" });
+    ).toEqual(expect.objectContaining({ entryId: "entry-1" }));
   });
 
   it("grants an unscoped token where the site has no locale at all", async () => {
@@ -148,7 +149,7 @@ describe("previewDraftGate", () => {
     });
 
     expect(await gate(cookies)({ collection: "pages", slug: "about" })).toEqual(
-      { entryId: "entry-1" }
+      expect.objectContaining({ entryId: "entry-1" })
     );
   });
 
@@ -162,7 +163,7 @@ describe("previewDraftGate", () => {
 
     expect(
       await gate(cookies)({ collection: "pages", slug: "about", locale: "fr" })
-    ).toEqual({ entryId: "entry-1" });
+    ).toEqual(expect.objectContaining({ entryId: "entry-1" }));
   });
 
   it("re-reads the token per request rather than capturing a verdict", async () => {
@@ -177,9 +178,9 @@ describe("previewDraftGate", () => {
     const switching = () => (present ? cookies() : noCookies());
 
     const g = gate(switching);
-    expect(await g({ collection: "pages", slug: "about" })).toEqual({
-      entryId: "entry-1",
-    });
+    expect(await g({ collection: "pages", slug: "about" })).toEqual(
+      expect.objectContaining({ entryId: "entry-1" })
+    );
 
     present = false;
     expect(await g({ collection: "pages", slug: "about" })).toBe(false);

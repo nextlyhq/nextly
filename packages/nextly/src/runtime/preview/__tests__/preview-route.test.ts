@@ -56,6 +56,7 @@ describe("the preview route", () => {
   it("starts a draft session and sends the visitor to the document", async () => {
     const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
     const { route, enable } = routeFor();
 
@@ -71,6 +72,7 @@ describe("the preview route", () => {
     // what keeps a link meant for ONE page from unlocking every draft.
     const { token, expiresAt } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
     const { route } = routeFor();
 
@@ -94,6 +96,7 @@ describe("the preview route", () => {
             (
               await signPreviewToken(SCOPE, `${TEST_SECRET}-other`, {
                 generation: GENERATION,
+                minter: "minter-1",
               })
             ).token
           ),
@@ -105,6 +108,7 @@ describe("the preview route", () => {
             (
               await signPreviewToken(SCOPE, TEST_SECRET, {
                 generation: GENERATION - 1,
+                minter: "minter-1",
               })
             ).token
           ),
@@ -132,6 +136,7 @@ describe("the preview route", () => {
       // unreachable.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       for (const target of [
@@ -169,6 +174,7 @@ describe("the preview route", () => {
       // never did.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       for (const redirectTo of [
@@ -197,6 +203,7 @@ describe("the preview route", () => {
       // NUL, so the header cannot carry a second one.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
       const CR = String.fromCharCode(13);
       const LF = String.fromCharCode(10);
@@ -225,6 +232,7 @@ describe("the preview route", () => {
       // needs — a locale query or an anchor into the page being reviewed.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
       const { route } = routeFor({
         redirectTo: () => "/pages/entry-1?locale=fr#section-2",
@@ -290,6 +298,7 @@ describe("the reader shapes both supported Next majors supply", () => {
   it("enables draft mode from either major", async () => {
     const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
 
     for (const draftMode of [next14Draft, next15Draft]) {
@@ -310,29 +319,30 @@ describe("request input the reader must survive", () => {
     // A cookie is request input whoever wrote it, and "%" alone makes
     // decodeURIComponent throw — which would answer a page request with a 500
     // rather than simply no preview.
-    const session = await readPreviewScope({
+    const scope = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => Promise.resolve({ get: () => ({ value: "%" }) }),
     });
 
-    expect(session).toBeNull();
+    expect(scope).toBeNull();
   });
 
   it("accepts synchronous cookies(), as Next 14 supplies", async () => {
     // The peer range covers Next 14, where these helpers are synchronous.
-    const session = await readPreviewScope({
+    const scope = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => ({ get: () => undefined }),
     });
 
-    expect(session).toBeNull();
+    expect(scope).toBeNull();
   });
 
   it("accepts a synchronous draftMode(), as Next 14 supplies", async () => {
     const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
     const enable = vi.fn();
     const route = createPreviewRoute({
@@ -353,6 +363,7 @@ describe("what a preview session may read", () => {
   async function sessionFor(scope = SCOPE, generation = GENERATION) {
     const { token } = await signPreviewToken(scope, TEST_SECRET, {
       generation,
+      minter: "minter-1",
     });
     const { route } = routeFor();
     return cookiesFrom(await route.GET(request(token)));
@@ -361,32 +372,32 @@ describe("what a preview session may read", () => {
   it("reports the document the link named", async () => {
     const store = await sessionFor();
 
-    const session = await readPreviewScope({
+    const scope = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => Promise.resolve(store),
     });
 
-    expect(session?.scope).toEqual(SCOPE);
+    expect(scope).toEqual(SCOPE);
   });
 
   it("grants that document and refuses every other", async () => {
     const store = await sessionFor();
-    const session = await readPreviewScope({
+    const scope = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => Promise.resolve(store),
     });
 
-    expect(previewGrantsDraft(session?.scope ?? null, SCOPE)).toBe(true);
+    expect(previewGrantsDraft(scope, SCOPE)).toBe(true);
     expect(
-      previewGrantsDraft(session?.scope ?? null, {
+      previewGrantsDraft(scope, {
         collection: "pages",
         entryId: "entry-2",
       })
     ).toBe(false);
     expect(
-      previewGrantsDraft(session?.scope ?? null, {
+      previewGrantsDraft(scope, {
         collection: "posts",
         entryId: "entry-1",
       })
@@ -400,23 +411,23 @@ describe("what a preview session may read", () => {
     // route once said yes, so revoking reaches sessions already in flight.
     const store = await sessionFor();
 
-    const session = await readPreviewScope({
+    const scope = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION + 1,
       cookies: () => Promise.resolve(store),
     });
 
-    expect(session).toBeNull();
-    expect(previewGrantsDraft(session?.scope ?? null, SCOPE)).toBe(false);
+    expect(scope).toBeNull();
+    expect(previewGrantsDraft(scope, SCOPE)).toBe(false);
   });
 
   it("reports nothing when there is no cookie", async () => {
-    const session = await readPreviewScope({
+    const scope = await readPreviewScope({
       secret: TEST_SECRET,
       generation: GENERATION,
       cookies: () => Promise.resolve({ get: () => undefined }),
     });
 
-    expect(session).toBeNull();
+    expect(scope).toBeNull();
   });
 });
