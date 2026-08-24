@@ -761,6 +761,10 @@ function readToken(
         typeof dark === "string"
           ? { light: css.light, dark }
           : { light: css.light };
+      // Reported HERE, at the moment the choice between the two is made. This
+      // is the only place that knows both what the file stated and what was
+      // taken instead, so anywhere else would be guessing at that decision.
+      reportOverridden(node.$value, css.light, kind, name, issues);
       return assemble(kind, values);
     }
   }
@@ -785,6 +789,79 @@ function readToken(
   }
 
   return assemble(kind, { light });
+}
+
+/**
+ * Say when the file's own `$value` did not agree with the CSS taken instead.
+ *
+ * A token can arrive described twice: the format's `$value`, and the exact CSS
+ * this system wrote into its extension. The extension wins, and that is right —
+ * it preserves what the author typed, where `$value` is a conversion. But when
+ * the two genuinely DISAGREE, the file's value is discarded without a word and
+ * the next export rewrites `$value` to match, so a hand-edited file loses the
+ * edit and reports success.
+ *
+ * Only a real difference is named, never the preference itself. Naming the
+ * preference would put a line against every token of every round trip, because
+ * the two forms differ in SPELLING on files this system wrote: a token stored
+ * as `#111` or `rgb(17 17 17)` comes back from `$value` as `#111111`. A report
+ * that fires on correct files is the report that gets ignored.
+ *
+ * Only the LIGHT value is compared, because the format has one `$value` and a
+ * dark value exists only in this system's extension — there is nothing there
+ * for it to disagree with.
+ */
+function reportOverridden(
+  native: unknown,
+  taken: string,
+  kind: TokenKind,
+  name: string,
+  issues: ValidationIssue[]
+): void {
+  const stated = fromDtcgValue(native, kind);
+  // Unreadable on its own is a different question, and not one this can answer:
+  // there is no value to disagree with.
+  if (stated === undefined) return;
+  if (meansTheSame(stated, taken, kind)) return;
+  issues.push(
+    issue(
+      `"${name}" was imported as "${taken}", the value this system stored, and the "${stated}" its "$value" states was not used.`
+    )
+  );
+}
+
+/**
+ * Whether two spellings of one kind's value mean the same thing.
+ *
+ * Silence is the answer whenever this cannot tell, and the direction is
+ * deliberate: this feeds an advisory report, where a false alarm costs the
+ * whole report and a miss costs one line. So an unequal pair is only called a
+ * disagreement when something here can show the two differ in MEANING.
+ *
+ * Colour is the kind that can be shown, because `parseColor` already reads the
+ * spellings the emitter writes. Every other kind compares only as text, and
+ * text differing is not enough — `1rem` and `1.0rem` are the same dimension —
+ * so those stay silent. That is a real gap and it is stated rather than closed:
+ * closing it needs a normaliser per kind, and each one is a second answer to
+ * what a value of that kind means.
+ */
+function meansTheSame(stated: string, taken: string, kind: TokenKind): boolean {
+  if (stated === taken) return true;
+  if (kind !== "color") return true;
+  const left = parseColor(stated);
+  const right = parseColor(taken);
+  if (left === undefined || right === undefined) return true;
+  return sameRgb(left, right);
+}
+
+/** Whether two parsed colours are the same colour, alpha included. */
+function sameRgb(left: Rgb, right: Rgb): boolean {
+  return (
+    left.r === right.r &&
+    left.g === right.g &&
+    left.b === right.b &&
+    left.a === right.a
+  );
 }
 
 /**

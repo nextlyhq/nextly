@@ -1290,3 +1290,31 @@ describe("a vendor payload the reader throws away", () => {
     expect(result.skipped).toEqual([]);
   });
 });
+
+describe("a value the file states and this site did not use", () => {
+  it("carries the reader's own report through to the import", () => {
+    /*
+     * The engine decides this, at the point it chooses between the two forms —
+     * it is the only code that knows both. What is asserted here is that the
+     * verdict REACHES the author: an issue the reader raises and this layer
+     * drops would be a loss reported to nobody.
+     */
+    const document = {
+      brand: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0] },
+        $extensions: {
+          "com.nextlyhq.nextly": {
+            css: { light: "#111111" },
+            kind: "color",
+          },
+        },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), { tokens: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tokens.tokens[0]?.values.light).toBe("#111111");
+    expect(result.skipped.join(" ")).toContain("was not used");
+  });
+});

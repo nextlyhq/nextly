@@ -40,3 +40,10 @@ Fixes a token named `constructor`, or any path passing through that segment,
 being refused on export as though the site already held it: the emitter read
 the name off the document object directly, where `Object.prototype` answers for
 it. Such a token now leaves and returns unchanged.
+
+A file can describe one token twice — the format's own `$value`, and the exact
+CSS this system wrote beside it. The stored CSS is still what gets imported,
+since it holds what the author typed, but when the two genuinely disagree the
+import now says so instead of discarding the file's value in silence. Only a
+real difference in the colour is reported, never a difference in how it is
+spelled, so a file exported from here never carries the warning.

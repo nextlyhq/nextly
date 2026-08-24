@@ -1011,3 +1011,92 @@ describe("a name the object prototype already answers for", () => {
     );
   });
 });
+
+describe("a file describing one token twice", () => {
+  const withBoth = (value: unknown, stored: string, type: string): unknown => ({
+    one: {
+      $type: type,
+      $value: value,
+      $extensions: {
+        [NEXTLY_EXTENSION]: { css: { light: stored }, kind: type },
+      },
+    },
+  });
+
+  it("names a value the file states and this system did not use", () => {
+    /*
+     * The extension wins, which is right — it holds what the author typed. But
+     * when the two genuinely disagree the file's value is discarded, the next
+     * export rewrites `$value` to match, and a hand-edited file loses the edit
+     * while reporting success.
+     */
+    const read = dtcgToTokens(
+      withBoth(
+        { colorSpace: "srgb", components: [0, 0, 0] },
+        "#111111",
+        "color"
+      )
+    );
+    // The behaviour is unchanged: the stored value is still the one taken.
+    expect(read.tokens[0]?.values.light).toBe("#111111");
+    expect(read.issues.map(issue => issue.message).join(" ")).toContain(
+      "was not used"
+    );
+  });
+
+  it.each(["#111", "rgb(17 17 17)"])(
+    "stays silent when the two only SPELL it differently (%s)",
+    stored => {
+      /*
+       * The control this whole check turns on. A token stored in either of
+       * these spellings comes back from `$value` as `#111111`, so comparing the
+       * two as text reports a disagreement on files this system wrote itself —
+       * and a report that fires on correct files is the one that gets ignored.
+       */
+      const read = dtcgToTokens(
+        withBoth(
+          {
+            colorSpace: "srgb",
+            components: [0.0667, 0.0667, 0.0667],
+            hex: "#111111",
+          },
+          stored,
+          "color"
+        )
+      );
+      expect(read.tokens[0]?.values.light).toBe(stored);
+      expect(read.issues).toEqual([]);
+    }
+  );
+
+  it("stays silent for a kind it cannot compare by meaning", () => {
+    /*
+     * The documented gap, asserted so it is visible here and not only in a
+     * comment. Only colour has a normaliser to hand, and text differing is not
+     * enough on its own — `1rem` and `1.0rem` are the same dimension — so every
+     * other kind errs toward saying nothing. This fixture DOES disagree, and is
+     * still not reported.
+     */
+    const read = dtcgToTokens(
+      withBoth({ value: 1, unit: "rem" }, "2rem", "dimension")
+    );
+    expect(read.tokens[0]?.values.light).toBe("2rem");
+    expect(read.issues).toEqual([]);
+  });
+
+  it("says nothing about a token this system exported itself", () => {
+    // The round trip, end to end: our own file must never carry this line.
+    const { document } = tokensToDtcg({
+      tokens: [
+        {
+          name: "brand",
+          kind: "color",
+          values: { light: "#111", dark: "#eee" },
+        },
+      ],
+    });
+    const read = dtcgToTokens(JSON.parse(JSON.stringify(document)));
+    expect(read.issues).toEqual([]);
+    expect(read.tokens[0]?.values).toEqual({ light: "#111", dark: "#eee" });
+  });
+});

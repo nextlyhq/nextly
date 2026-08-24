@@ -254,20 +254,15 @@ function reservedFate(
   isToken: boolean
 ): Fate {
   /*
-   * What makes the node a token at all — and reported as KEPT even though the
-   * reader may not have used it. When a token carries this system's own stored
-   * CSS the reader prefers that and never looks at `$value`, so a file whose
-   * two disagree has its `$value` silently overridden.
+   * What makes the node a token at all. Reported as KEPT here even though the
+   * reader may have preferred this system's own stored CSS over it — because
+   * whether it did, and whether the two even disagreed, is the READER's to say
+   * and it says so: `dtcgToTokens` names an overridden value among its own
+   * issues, which the caller reports beside these.
    *
-   * Not named, deliberately, and the reason is a measurement rather than a
-   * judgement. Telling "means something different" from "spells the same colour
-   * differently" needs colour semantics, which is a THIRD answer to what a
-   * value means. Comparing the strings instead reports a disagreement on files
-   * this system wrote itself: a token stored as `#111` or `rgb(17 17 17)`
-   * comes back from `$value` as `#111111`, so every such round trip would
-   * carry a line saying its own value was not imported. A report that fires on
-   * correct files is worse than one that misses, because it is the report that
-   * gets ignored.
+   * Deliberately not answered here. This walk sees spellings and the question
+   * is about MEANING — `#111` and `#111111` are one colour — so a verdict from
+   * here would fire on files this system wrote itself.
    */
   if (key === "$value") return { kind: "kept" };
   if (key === "$description" || key === "$extensions") {
