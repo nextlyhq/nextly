@@ -50,6 +50,27 @@ test("the metrics row does not resize when the first response arrives", async ({
   const toolbar = page.getByTestId("response-toolbar");
   await expect(meta).toBeVisible();
 
+  // Serve the reply from here, registered after the page has loaded so only
+  // Send is answered by it.
+  //
+  // The row reserves 6ch for latency, which holds `9999ms`, and the component
+  // says plainly that a slower reply outgrows the reservation and may reflow
+  // again. Measured against a LIVE request this test would therefore fail on
+  // correct code whenever a cold route compile or a loaded worker pushes the
+  // first call past ten seconds. An immediate reply of a fixed size puts every
+  // value inside the width reserved for it, so what is left varying between
+  // the two measurements is the thing under test.
+  await page.route("**/admin/api/collections/posts/entries*", route =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [],
+        meta: { total: 0, page: 1, limit: 10 },
+      }),
+    })
+  );
+
   // The empty row, before anything has been sent. Read after the row is
   // visible so the measurement is of a laid-out box rather than of a node the
   // engine has not reached yet.
@@ -66,6 +87,18 @@ test("the metrics row does not resize when the first response arrives", async ({
   // in front of it rather than matched on a word boundary that is not there.
   await expect(meta).toContainText(/Status\s*\d{3}/, { timeout: 30_000 });
   await expect(meta).toContainText(/Latency\s*\d+ms/);
+
+  // The reservation only claims to cover latencies it has room for, so the
+  // comparison below is only meaningful inside that range. Asserting it here
+  // means a reply that somehow outran the reservation reports THAT, rather
+  // than presenting itself as a layout regression.
+  const latencyMs = Number(
+    /Latency\s*(\d+)ms/.exec((await meta.textContent()) ?? "")?.[1]
+  );
+  expect(
+    latencyMs,
+    "latency outgrew the 6ch reservation, so the width comparison cannot bind"
+  ).toBeLessThan(10_000);
 
   const edgeAfter = await contentLeftEdge(meta);
   const toolbarAfter = (await toolbar.boundingBox())?.y;
