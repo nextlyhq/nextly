@@ -147,7 +147,9 @@ export function ResponseViewer({
   time,
   size,
 }: ResponseViewerProps) {
-  const [copied, setCopied] = useState(false);
+  // The text last copied, so the feedback belongs to it rather than to the
+  // button. Null means nothing was copied recently.
+  const [copied, setCopied] = useState<string | null>(null);
   const [tab, setTab] = useState<ResponseTab>("body");
   const [flavour, setFlavour] = usePersistedState(
     FLAVOUR_KEY,
@@ -166,24 +168,64 @@ export function ResponseViewer({
     }
   }, [data]);
 
-  // What the toolbar acts on is what the reader is looking at, which is the
-  // whole point of holding the tab here.
-  const onCode = tab === "code";
-  const copyTarget = onCode ? code[flavour] : jsonString;
+  const headerEntries = Object.entries(headers ?? {});
+
+  /**
+   * The headers as text, in the form they arrived in.
+   *
+   * `name: value` per line is what a header block IS, and it is what pasting
+   * one into a request or an issue expects. Rebuilding it from the map is the
+   * only option -- `fetch` gives no access to the raw block.
+   */
+  const headerText = useMemo(
+    () => headerEntries.map(([name, value]) => `${name}: ${value}`).join("\n"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- entries are rebuilt each render from `headers`
+    [headers]
+  );
+
+  /**
+   * What the toolbar acts on is what the reader is looking at.
+   *
+   * All THREE tabs, not two. Copy took the body whenever the Code tab was
+   * closed, so reading the headers and pressing Copy put the body on the
+   * clipboard -- the same defect this control was rewritten to remove, one tab
+   * further along.
+   */
+  const target: { text: string; label: string; filename: string } =
+    tab === "code"
+      ? {
+          text: code[flavour],
+          label: "Code",
+          filename: `${filename}-${flavour}`,
+        }
+      : tab === "headers"
+        ? {
+            text: headerText,
+            label: "Headers",
+            filename: `${filename}-headers`,
+          }
+        : { text: jsonString, label: "Response", filename };
+  const copyTarget = target.text;
 
   const handleCopy = useCallback(async () => {
     if (!copyTarget) return;
     try {
       await navigator.clipboard.writeText(copyTarget);
-      setCopied(true);
-      toast.success(
-        onCode ? "Code copied to clipboard" : "Response copied to clipboard"
+      // Keyed to WHAT was copied rather than a bare flag: switching tab or
+      // flavour inside the feedback window otherwise leaves "Copied" standing
+      // over a control that would now copy something else.
+      setCopied(copyTarget);
+      toast.success(`${target.label} copied to clipboard`);
+      setTimeout(
+        () => setCopied(current => (current === copyTarget ? null : current)),
+        UI.COPY_FEEDBACK_TIMEOUT_MS
       );
-      setTimeout(() => setCopied(false), UI.COPY_FEEDBACK_TIMEOUT_MS);
     } catch {
       toast.error("Failed to copy");
     }
-  }, [copyTarget, onCode]);
+  }, [copyTarget, target.label]);
+
+  const showCopied = copied !== null && copied === copyTarget;
 
   /**
    * Save the body to a file.
@@ -193,35 +235,42 @@ export function ResponseViewer({
    * differ from what the API actually sent.
    */
   const handleDownload = useCallback(() => {
-    const body = raw ?? jsonString;
+    // The body is saved as it ARRIVED rather than as it is displayed: a saved
+    // response is usually about to be diffed or replayed, and pretty-printing
+    // would make it differ from what the API sent. Headers have no raw form to
+    // preserve, so the rendered block is the honest one.
+    const body = tab === "headers" ? headerText : (raw ?? jsonString);
     if (!body) return;
 
+    const isJson = tab === "body";
     const url = URL.createObjectURL(
-      new Blob([body], { type: "application/json" })
+      new Blob([body], { type: isJson ? "application/json" : "text/plain" })
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${filename}.json`;
+    link.download = `${target.filename}.${isJson ? "json" : "txt"}`;
     link.click();
     // The object URL pins the blob in memory until it is let go.
     URL.revokeObjectURL(url);
-  }, [raw, jsonString, filename]);
+  }, [raw, jsonString, headerText, tab, target.filename]);
 
-  const headerEntries = Object.entries(headers ?? {});
   const hasResponse = Boolean(jsonString) || isLoading || Boolean(error);
 
   return (
     <Tabs
       value={tab}
       onValueChange={value => setTab(value as ResponseTab)}
-      className="flex h-full min-h-0 flex-col"
+      className="@container/response flex h-full min-h-0 flex-col"
     >
       {/* Always rendered, with placeholders holding the width. The metrics used
           to appear with the first reply, so the header reflowed at the moment
           somebody was reading it. */}
       <div
         data-testid="response-meta"
-        className="flex shrink-0 items-center justify-end gap-4 border-b border-border px-6 py-2"
+        // Wraps rather than clipping. The pane is resizable, and its minimum
+        // against a wide admin sidebar leaves a few hundred pixels -- at which
+        // a non-wrapping row puts the metrics past the card's clipped edge.
+        className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-1 border-b border-border px-6 py-2"
       >
         <Metric label="Status">
           {status === undefined ? (
@@ -261,7 +310,9 @@ export function ResponseViewer({
         </Metric>
       </div>
 
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/30 px-6 py-1.5">
+      {/* Stacks below a narrow pane so the tabs and the copy control stay
+          reachable instead of overflowing the card's clipped edge. */}
+      <div className="flex shrink-0 flex-col gap-1 border-b border-border bg-muted/30 px-6 py-1.5 @sm/response:flex-row @sm/response:items-center @sm/response:justify-between @sm/response:gap-2">
         <TabsList variant="ghost">
           <TabsTrigger value="body" size="sm">
             Body
@@ -282,12 +333,14 @@ export function ResponseViewer({
         <div className="flex items-center gap-1">
           {/* Absent on the Code tab: a snippet saved as `<collection>.json` is
               not a thing anybody wants, and offering it invites the mistake. */}
-          {!onCode && (
+          {/* A snippet is copied, not saved: it belongs in an editor rather
+              than in a file named after the collection. */}
+          {tab !== "code" && (
             <Button
               variant="ghost"
               size="sm"
               onClick={handleDownload}
-              disabled={!jsonString}
+              disabled={!copyTarget}
               className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
             >
               <Download className="h-3.5 w-3.5" />
@@ -303,12 +356,12 @@ export function ResponseViewer({
             disabled={!copyTarget}
             className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
           >
-            {copied ? (
+            {showCopied ? (
               <Check className="h-3.5 w-3.5 text-success" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}
-            {copied ? "Copied" : "Copy"}
+            {showCopied ? "Copied" : "Copy"}
           </Button>
         </div>
       </div>

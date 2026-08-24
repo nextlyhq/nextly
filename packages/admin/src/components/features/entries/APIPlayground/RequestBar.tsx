@@ -42,17 +42,28 @@ export const METHOD_TONE: Record<HttpMethod, string> = {
 };
 
 /**
- * The same meanings as a filled chip, for the request line.
+ * The same meanings as a chip, for the request line.
  *
  * The verb is the first thing read on that line and bare coloured text is easy
- * to skim past, which matters most for the one that destroys a row. Tokens
- * rather than palette classes, so a retheme carries the meaning with it.
+ * to skim past, which matters most for the one that destroys a row.
+ *
+ * The COLOUR is carried by the fill and the ink stays neutral, which is forced
+ * rather than chosen. This chip is `text-xs`, so it owes 4.5:1, and at that
+ * size nothing coloured in this palette clears it: `text-success` reaches
+ * 4.35:1 on a light page, and even the theme's own declared pairs are built for
+ * large text -- measured, `success-foreground` on `bg-success` is 3.43:1 in
+ * dark and `warning-foreground` on `bg-warning` is 3.27:1 in light.
+ *
+ * A translucent role fill flips with the mode because the role token does, and
+ * `foreground` flips with it, so one pair serves both. GET stays neutral
+ * because a read is not an event; the other three are things that happen to
+ * your data.
  */
 export const METHOD_PILL: Record<HttpMethod, string> = {
   GET: "bg-muted text-foreground",
-  POST: "bg-success/10 text-success",
-  PATCH: "bg-warning/10 text-warning",
-  DELETE: "bg-destructive/10 text-destructive",
+  POST: "bg-success/15 text-foreground",
+  PATCH: "bg-warning/15 text-foreground",
+  DELETE: "bg-destructive/15 text-foreground",
 };
 
 export interface RequestBarProps {

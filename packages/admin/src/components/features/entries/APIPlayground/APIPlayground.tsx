@@ -625,7 +625,7 @@ export function APIPlayground({
   // copies of a pane is how the two ROUTE files drifted, and the same trap
   // applies one level down.
   const requestPane = (
-    <Card className="flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
+    <Card className="flex h-full flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
       <CardHeader className="p-6 pb-4" noBorder>
         <div className="flex items-center justify-between">
           <CardTitle className="text-base font-semibold tracking-tight text-foreground">
@@ -741,7 +741,7 @@ export function APIPlayground({
   );
 
   const responsePane = (
-    <Card className="flex flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
+    <Card className="flex h-full flex-col min-h-0 rounded-lg border-border shadow-none bg-card overflow-hidden">
       <CardHeader className="p-6 pb-4" noBorder>
         <CardTitle className="text-base font-semibold tracking-tight text-foreground">
           API response
@@ -845,7 +845,17 @@ export function APIPlayground({
           a pane is how the two ROUTE files drifted, and the same trap applies
           one level down. */}
       <>
-        {hydrated && isWide ? (
+        {!hydrated ? (
+          /* Neither hook can answer before mount, and answering "stacked" is a
+             guess that is wrong on most desktops: the stacked tree would paint,
+             then be replaced by the splitter, shifting the layout and mounting
+             both panes' editors twice. A skeleton commits to nothing and mounts
+             nothing heavy. */
+          <div
+            data-testid="playground-pending"
+            className="min-h-0 flex-1 animate-pulse rounded-lg border border-border bg-muted/30"
+          />
+        ) : isWide ? (
           <div className="flex min-h-0 flex-1">
             <ResizablePanelGroup
               orientation="horizontal"

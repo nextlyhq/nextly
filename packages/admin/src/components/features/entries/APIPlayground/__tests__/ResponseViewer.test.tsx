@@ -94,6 +94,40 @@ describe("ResponseViewer", () => {
     expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
   });
 
+  it("copies the headers, not the body, while the Headers tab is open", async () => {
+    // The third tab. Copy took the body whenever Code was closed, so reading
+    // the headers and pressing Copy put JSON on the clipboard.
+    render(
+      <ResponseViewer
+        data={{ items: [] }}
+        code={code}
+        headers={{
+          "x-request-id": "abc123",
+          "content-type": "application/json",
+        }}
+      />
+    );
+    await userEvent.click(screen.getByRole("tab", { name: /headers/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+    expect(writeText).toHaveBeenCalledWith(
+      "x-request-id: abc123\ncontent-type: application/json"
+    );
+  });
+
+  it("stops saying Copied once the button would copy something else", async () => {
+    // The flag used to be a bare boolean, so switching flavour inside the
+    // feedback window left "Copied" standing over a control that would now put
+    // a different snippet on the clipboard.
+    render(<ResponseViewer data={undefined} code={code} />);
+    await userEvent.click(screen.getByRole("tab", { name: /code/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+    expect(screen.getByRole("button", { name: /copied/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: /curl/i }));
+    expect(screen.queryByRole("button", { name: /copied/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /^copy$/i })).toBeInTheDocument();
+  });
+
   it("remembers which flavour was last read", async () => {
     const { unmount } = render(<ResponseViewer data={undefined} code={code} />);
     await userEvent.click(screen.getByRole("tab", { name: /code/i }));
