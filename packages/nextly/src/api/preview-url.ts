@@ -34,6 +34,7 @@ import {
   type PreviewDeclaration,
 } from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
+import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import { getCachedNextly } from "../init";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 
@@ -93,6 +94,34 @@ export async function previewDeclarationFor(
     "collectionRegistryService"
   );
   const stored = await registry.getCollectionBySlug(collection);
+  return stored?.admin?.preview;
+}
+
+/**
+ * Read the preview declaration for a Single.
+ *
+ * The mirror of {@link previewDeclarationFor}, and separate for the same reason
+ * the resolvers are: a Single is addressed by slug with no id, so the lookup
+ * differs even though what is done with the answer does not.
+ *
+ * The AUTHORED config is consulted first, and the order is load-bearing for the
+ * identical reason: a code-first Single is synced into the registry, but the
+ * `url` function cannot survive that trip, so reading the registry first would
+ * find a declaration for exactly those Singles and find it empty.
+ */
+export async function singlePreviewDeclarationFor(
+  slug: string
+): Promise<PreviewDeclaration | undefined> {
+  await getCachedNextly();
+
+  const config = container.get<NextlyServiceConfig>("config");
+  const authored = config?.singles?.find(s => s.slug === slug);
+  if (authored?.admin?.preview) return authored.admin.preview;
+
+  const registry = container.get<SingleRegistryService>(
+    "singleRegistryService"
+  );
+  const stored = await registry.getSingleBySlug(slug);
   return stored?.admin?.preview;
 }
 

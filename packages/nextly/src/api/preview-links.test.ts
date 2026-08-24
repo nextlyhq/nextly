@@ -14,19 +14,29 @@ vi.mock("./route-auth", () => ({
   requireRoutePermission: vi.fn(),
 }));
 
-const { getEntry, canUpdateEntry, getSettings, previewDeclaration } =
-  vi.hoisted(() => ({
-    getEntry: vi.fn(),
-    canUpdateEntry: vi.fn(),
-    getSettings: vi.fn(),
-    previewDeclaration: vi.fn(),
-  }));
+const {
+  getEntry,
+  canUpdateEntry,
+  getSettings,
+  previewDeclaration,
+  singleDeclaration,
+  findSingle,
+} = vi.hoisted(() => ({
+  getEntry: vi.fn(),
+  canUpdateEntry: vi.fn(),
+  getSettings: vi.fn(),
+  previewDeclaration: vi.fn(),
+  singleDeclaration: vi.fn(),
+  findSingle: vi.fn(),
+}));
 
 /** The application's `preview` config for the test in hand. */
 let previewConfig: { route?: string } | undefined;
 
 vi.mock("../init", () => ({
-  getCachedNextly: vi.fn().mockResolvedValue({}),
+  // Carries findSingle, because the Single mint path reads the document through
+  // the Direct API rather than the collections handler.
+  getCachedNextly: () => Promise.resolve({ findSingle }),
 }));
 
 vi.mock("../services/lib/permissions", () => ({
@@ -35,6 +45,8 @@ vi.mock("../services/lib/permissions", () => ({
 
 vi.mock("./preview-url", () => ({
   previewDeclarationFor: (...args: unknown[]) => previewDeclaration(...args),
+  singlePreviewDeclarationFor: (...args: unknown[]) =>
+    singleDeclaration(...args),
 }));
 
 vi.mock("../di", () => ({
@@ -135,6 +147,81 @@ async function mintedData(): Promise<Record<string, unknown>> {
     )
   );
 }
+
+describe("mintPreviewLink for a Single", () => {
+  beforeEach(() => {
+    singleDeclaration.mockResolvedValue({ url: () => "/" });
+    findSingle.mockResolvedValue({ id: "homepage" });
+  });
+
+  it("mints a link scoped to the Single", async () => {
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(response.status).toBe(200);
+  });
+
+  it("signs a token that names the Single rather than a collection entry", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ single: "homepage" }))
+    );
+    const verified = await verifyPreviewToken(
+      String(item(body).token),
+      SECRET,
+      { generation: 0 }
+    );
+
+    expect(verified.valid && verified.scope).toEqual({
+      kind: "single",
+      single: "homepage",
+    });
+  });
+
+  // The same gate a Single's document update asks for, keyed on its slug — so a
+  // caller who cannot edit the Single cannot mint a credential to read its
+  // draft.
+  it("authorizes update on the Single, not on some collection", async () => {
+    await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(requireRouteCollectionAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      "update",
+      "homepage"
+    );
+  });
+
+  it("refuses a Single that declares no preview url", async () => {
+    singleDeclaration.mockResolvedValue(undefined);
+
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(response.status).toBe(409);
+  });
+
+  it("refuses a Single whose declaration cannot address it yet", async () => {
+    singleDeclaration.mockResolvedValue({ url: () => null });
+
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(response.status).toBe(409);
+  });
+
+  // Naming both is not a narrower request, it is two different documents — and
+  // silently honouring one would mint a credential for a document the caller
+  // may not have meant.
+  it("refuses a request that names both a Single and a collection entry", async () => {
+    const response = await mintPreviewLink(
+      post({ single: "homepage", collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it("refuses a request that names neither", async () => {
+    const response = await mintPreviewLink(post({}));
+
+    expect(response.status).toBe(400);
+  });
+});
 
 describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => {
   // The button that mints this is shown whether or not a collection declares a
