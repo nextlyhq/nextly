@@ -31,8 +31,8 @@ import { Button, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
-  attributeKey,
   domIdsTaken,
+  renderedIdIn,
   htmlUpdate,
   type HtmlFields,
   isBlankRow,
@@ -188,6 +188,46 @@ export function AdvancedPanel({
   latest.current = draft;
   const write = React.useRef<(next: Draft) => void>(() => {});
 
+  /*
+   * The ONE place an op leaves this panel.
+   *
+   * Both things that write — the field commit below and the empty-id removal
+   * beside the CSS id — have to record the same three facts afterwards, and a
+   * second `editor.apply` that recorded none of them is what let a removal
+   * arrive at the effect above looking like an edit from somewhere else. The
+   * effect then replaced the draft with the stored rows, discarding a refused
+   * name and the explanation beside it. The module's own header names this
+   * shape: two commit paths for one pair of fields, disagreeing about what they
+   * had just written.
+   *
+   * Answers whether the op landed, so a caller can stop.
+   */
+  const store = React.useRef<
+    (wanted: HtmlFields, update: { patch: object; unset: string[] }) => boolean
+  >(() => false);
+  store.current = (wanted, update): boolean => {
+    const applied = editor.apply({
+      kind: "update",
+      id: nodeId,
+      patch: update.patch,
+      ...(update.unset.length > 0 ? { unset: update.unset } : {}),
+    } as Parameters<EditorState["apply"]>[0]);
+    /*
+     * REFUSED ops leave the document alone, and `apply` says so by answering
+     * `null`. Marking the attempt as written before knowing would tell the
+     * effect above that the props it sees are this panel's own echo, so it
+     * would stop re-reading the document and the field would go on showing a
+     * value nothing stored.
+     */
+    if (applied === null) {
+      setRefusal(REFUSED);
+      return false;
+    }
+    setRefusal(undefined);
+    lastWritten.current = wanted;
+    return true;
+  };
+
   write.current = (next: Draft): void => {
     /*
      * NOTHING is written unless the author edited something. Every other test
@@ -216,31 +256,7 @@ export function AdvancedPanel({
       setRefusal(undefined);
       return;
     }
-    const applied = editor.apply({
-      kind: "update",
-      id: nodeId,
-      patch: update.patch,
-      ...(update.unset.length > 0 ? { unset: update.unset } : {}),
-    } as Parameters<EditorState["apply"]>[0]);
-    /*
-     * REFUSED ops leave the document alone, and `apply` says so by answering
-     * `null`. Marking the attempt as written before knowing would tell the
-     * effect above that the props it sees are this panel's own echo, so it
-     * would stop re-reading the document and the field would go on showing a
-     * value nothing stored.
-     *
-     * The message names no single cause, because `apply` reports none: it
-     * answers `null` for ANY refused op — a value past the document's byte
-     * limit, but equally an update to a node a concurrent edit or an undo has
-     * removed. Both are reachable from this panel, and telling an author their
-     * page is full when their block has gone sends them to fix the wrong thing.
-     */
-    if (applied === null) {
-      setRefusal(REFUSED);
-      return;
-    }
-    setRefusal(undefined);
-    lastWritten.current = wanted;
+    if (!store.current(wanted, update)) return;
     /*
      * REBASED onto what landed — the id as well as the rows, because the id is
      * normalized on the way out and the rows are not.
@@ -354,10 +370,14 @@ export function AdvancedPanel({
    * Whether removing the empty id would reveal one. The bag's `id` is dead
    * while the modelled field is present, so saying so is the difference
    * between "this does nothing visible" and "this changes the anchor".
+   *
+   * Asked of the RENDERER's reading rather than of this editor's. The two are
+   * not the same rule: `attributeKey` trims a name on its way to being stored,
+   * so an imported `" id "` normalizes to `id` under it while the renderer,
+   * which matches the stored name, emits no id at all — and the note would then
+   * promise to reveal something that was never there.
    */
-  const emptyIdShadows =
-    attributes !== undefined &&
-    Object.keys(attributes).some(name => attributeKey(name) === "id");
+  const emptyIdShadows = renderedIdIn(attributes) !== undefined;
 
   /*
    * Written directly rather than through the draft, because the draft cannot
@@ -369,20 +389,19 @@ export function AdvancedPanel({
       { cssId, attributes }
     );
     if (update === undefined) return;
-    const applied = editor.apply({
-      kind: "update",
-      id: nodeId,
-      patch: update.patch,
-      ...(update.unset.length > 0 ? { unset: update.unset } : {}),
-    } as Parameters<EditorState["apply"]>[0]);
+    const wanted = { cssId: undefined, attributes };
     /*
-     * REFUSED ops answer `null`, and this button targets exactly the documents
-     * where that is reachable — an import can carry duplicate node ids, which
-     * pass this panel's own reading and are refused by the store. Discarding
-     * the answer presented a failure as a success, while the writer beside it
-     * reports the same refusal. One panel, one way of saying it.
+     * Through the SAME writer as every other op this panel sends, so the echo
+     * is recorded and the effect above does not mistake this panel's own write
+     * for an edit from elsewhere. Written separately once, it discarded a
+     * refused row and its reason every time an empty id was removed.
+     *
+     * `loaded` moves with it: the field is gone, so the draft is in step with
+     * the document at an empty box, and the next commit has nothing to do
+     * rather than proposing this removal a second time.
      */
-    setRefusal(applied === null ? REFUSED : undefined);
+    if (!store.current(wanted, update)) return;
+    loaded.current = { id: "", rows: rebasedRows(latest.current.rows, wanted) };
   };
 
   return (

@@ -1549,3 +1549,92 @@ describe("an empty id while an unrelated attribute is edited", () => {
     );
   });
 });
+
+describe("what the empty-id note promises", () => {
+  it("does not claim to reveal an id the renderer would not emit", () => {
+    /*
+     * `isAllowedAttribute(" id ")` is false — the renderer checks the STORED
+     * name, spaces and all — so no bag id reaches the page and removing the
+     * empty modelled field reveals nothing. Reading the name through the
+     * editor's own normalization, which trims, promised otherwise.
+     */
+    mount({
+      cssId: "",
+      attributes: { " id ": "never-rendered" },
+    } as unknown as Partial<BlockNode>);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const note = screen.getByRole("status").textContent ?? "";
+    // The control: the note IS shown, so this is not passing on its absence.
+    expect(note).toContain("empty id");
+    expect(note).not.toContain("hides the id");
+  });
+
+  it("DOES claim it when the renderer would emit one", () => {
+    // The other half: the promise is right when the bag really is shadowed.
+    mount({
+      cssId: "",
+      attributes: { ID: "revealed" },
+    } as unknown as Partial<BlockNode>);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.getByRole("status").textContent).toContain("hides the id");
+  });
+});
+
+describe("removing an empty id while a row is refused", () => {
+  it("keeps the refused row and its reason on screen", () => {
+    /*
+     * The removal wrote through its own `editor.apply` rather than the panel's
+     * one writer, so it recorded no echo: the resulting prop change arrived at
+     * the synchronisation effect looking like an edit from somewhere else, and
+     * the effect replaced the draft with the stored rows — discarding the
+     * refused name the author was fixing, and the explanation beside it.
+     *
+     * The module's own docblock names this shape: two commit paths for the same
+     * pair of fields, disagreeing about what they had just written.
+     */
+    register();
+    const document = documentOf({
+      cssId: "",
+      attributes: { "data-x": "1" },
+    } as unknown as Partial<BlockNode>);
+    const editor = editorFor(document);
+    const { rerender } = render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const name = screen.getByLabelText("Name of attribute 1");
+    fireEvent.change(name, { target: { value: "onclick" } });
+    fireEvent.blur(name);
+    // The control: the refused draft and its reason are on screen to be lost.
+    expect((name as HTMLInputElement).value).toBe("onclick");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove the empty id" })
+    );
+    /*
+     * Re-rendered with the field GONE, which is what a real store does after
+     * this op. A spy editor never re-renders, and the defect only appears when
+     * the panel sees its own write arrive back through props.
+     */
+    rerender(
+      <InspectorPanel
+        editor={
+          {
+            ...editor,
+            document: documentOf({
+              attributes: { "data-x": "1" },
+            } as unknown as Partial<BlockNode>),
+          } as never
+        }
+      />
+    );
+
+    expect(
+      (screen.getByLabelText("Name of attribute 1") as HTMLInputElement).value
+    ).toBe("onclick");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "does not put that attribute"
+    );
+  });
+});

@@ -931,3 +931,34 @@ describe("which of two rows keeps a key spelled with capitals", () => {
     });
   });
 });
+
+describe("a bag whose id NAME the renderer will not accept", () => {
+  const node = (over: Record<string, unknown>): never =>
+    ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
+
+  it("reserves nothing for it", () => {
+    /*
+     * `isAllowedAttribute(" id ")` is false — the renderer checks the STORED
+     * name, syntax and all, before lowercasing it — so no id reaches the page
+     * and another block may use that value. Reading the name through
+     * `attributeKey`, which trims, is the EDITOR's normalization and describes
+     * what this panel would write rather than what the document holds.
+     */
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { " id ": "hero" } })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual([]);
+  });
+
+  it("still reserves one the renderer WILL accept", () => {
+    // The control: the rejection is about the spelling, not about the bag.
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { ID: "hero" } })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual(["hero"]);
+  });
+});

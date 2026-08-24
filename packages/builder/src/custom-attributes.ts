@@ -472,6 +472,13 @@ function renderedIdOf(node: BlockNode): string | undefined {
 /**
  * The `id` the renderer would emit from an attribute bag, if any.
  *
+ * EXPORTED so nothing asks this question a second way. The editor normalizes a
+ * name it is about to write — trimming and lowercasing through `attributeKey` —
+ * and that describes what this panel WOULD store, not what a stored bag holds:
+ * an imported `" id "` normalizes to `id` under that rule while the renderer,
+ * matching the stored name, emits nothing for it. A caller wanting to know what
+ * the page shows has to ask the reading that models the page.
+ *
  * Read case-INSENSITIVELY, because that is how the renderer reads it: HTML
  * attribute names are ASCII case-insensitive and it lowercases every key before
  * writing, so a stored `{ ID: "hero" }` renders as `id="hero"`. A scan looking
@@ -482,7 +489,7 @@ function renderedIdOf(node: BlockNode): string | undefined {
  * lowercased key in turn, so a later one replaces an earlier one. This editor
  * never writes two spellings, but an import or a script can.
  */
-function renderedIdIn(
+export function renderedIdIn(
   attributes: Readonly<Record<string, string>> | undefined
 ): string | undefined {
   /*
