@@ -521,7 +521,16 @@ function childNodesOf(node: BlockNode): unknown[] {
 
 /** What a node should hold, and what it holds now. */
 export interface HtmlFields {
-  readonly cssId: string;
+  /**
+   * The element's `id`, or `undefined` for a node carrying no such field.
+   *
+   * `""` is a THIRD state and a reachable one: the renderer writes
+   * `extra.id = cssId` on `cssId !== undefined`, so a stored empty string
+   * renders `id=""` and shadows any `id` in the bag. This editor never writes
+   * it — clearing the field is `unset` — but an import can, and telling it
+   * apart from an absent field is what makes it removable.
+   */
+  readonly cssId: string | undefined;
   readonly attributes: Readonly<Record<string, string>> | undefined;
 }
 
@@ -563,7 +572,12 @@ export function wantedFields(
   taken: ReadonlySet<string>
 ): HtmlFields {
   const id = requestedId(draft, loaded);
-  const keptId = id !== "" && taken.has(id) ? stored.cssId : id;
+  /*
+   * An empty box means the field should be GONE, not present and empty. The
+   * panel has no gesture that asks for `id=""` and the renderer would emit one,
+   * so `undefined` is the only thing an empty draft can honestly mean.
+   */
+  const keptId = id === "" ? undefined : taken.has(id) ? stored.cssId : id;
   return {
     cssId: keptId,
     /*
@@ -576,7 +590,7 @@ export function wantedFields(
      */
     attributes: storedAttributes(
       draft.rows,
-      keptId === stored.cssId ? "" : keptId,
+      keptId === stored.cssId ? "" : (keptId ?? ""),
       stored.attributes ?? {}
     ),
   };
@@ -633,7 +647,10 @@ export function htmlUpdate(
   const patch: Record<string, unknown> = {};
   const unset: string[] = [];
   if (!sameId) {
-    if (wanted.cssId === "") unset.push("cssId");
+    // REMOVED rather than written empty. `applyOp` refuses `undefined` as a
+    // patch value and says why, and an empty string is a different request —
+    // it would leave the field present and rendering `id=""`.
+    if (wanted.cssId === undefined) unset.push("cssId");
     else patch["cssId"] = wanted.cssId;
   }
   if (!sameAttributes) {

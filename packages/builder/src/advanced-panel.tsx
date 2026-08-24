@@ -31,6 +31,7 @@ import { Button, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
+  attributeKey,
   domIdsTaken,
   htmlUpdate,
   type HtmlFields,
@@ -50,7 +51,15 @@ import type { EditorState } from "./editor-state";
 
 export interface AdvancedPanelProps {
   readonly nodeId: string;
-  readonly cssId: string;
+  /**
+   * The element's `id`, or `undefined` when the node carries no such field.
+   *
+   * The two are different states and the renderer reads them differently: a
+   * stored `""` is PRESENT, renders `id=""`, and shadows any `id` in the bag
+   * below. The panel has to be able to say which one it is looking at, or the
+   * empty-but-present one can never be removed.
+   */
+  readonly cssId: string | undefined;
   readonly attributes: Readonly<Record<string, string>> | undefined;
   readonly editor: EditorState;
   /**
@@ -86,7 +95,7 @@ export function AdvancedPanel({
   blocks,
 }: AdvancedPanelProps): React.JSX.Element {
   const [draft, setDraft] = React.useState<Draft>(() => ({
-    id: cssId,
+    id: cssId ?? "",
     rows: rowsOf(attributes),
   }));
   /*
@@ -99,7 +108,7 @@ export function AdvancedPanel({
    * actually wanted, and it says what it does.
    */
   const [settled, setSettled] = React.useState<Draft>({
-    id: cssId,
+    id: cssId ?? "",
     rows: rowsOf(attributes),
   });
 
@@ -145,7 +154,7 @@ export function AdvancedPanel({
       lastWritten.current = null;
       return;
     }
-    const stored = { id: cssId, rows: rowsOf(attributes) };
+    const stored = { id: cssId ?? "", rows: rowsOf(attributes) };
     setDraft(stored);
     setSettled(stored);
     loaded.current = stored;
@@ -233,7 +242,9 @@ export function AdvancedPanel({
      * rows were already rebased for the same reason; the id was the site this
      * rule had not reached.
      */
-    const landed = wanted.cssId;
+    // The DRAFT is text, so an absent field and an empty one are both the empty
+    // box; the difference lives in `wanted` and is settled before this.
+    const landed = wanted.cssId ?? "";
     loaded.current = { id: landed, rows: rebasedRows(next.rows, wanted) };
     /*
      * The FIELD only follows when the author's own id is the one that landed.
@@ -321,7 +332,7 @@ export function AdvancedPanel({
     settle(next);
   };
 
-  const idProblem = idProblemOf(settled.id, cssId, taken);
+  const idProblem = idProblemOf(settled.id, cssId ?? "", taken);
   /*
    * Analysed ONCE for the settled set, not once per row. Every verdict depends
    * on the whole set — who keeps a contested key, which keys refused rows are
@@ -329,6 +340,32 @@ export function AdvancedPanel({
    * imported bag of a few hundred attributes stopped rendering.
    */
   const problems = React.useMemo(() => rowProblems(settled.rows), [settled]);
+  /*
+   * Whether removing the empty id would reveal one. The bag's `id` is dead
+   * while the modelled field is present, so saying so is the difference
+   * between "this does nothing visible" and "this changes the anchor".
+   */
+  const emptyIdShadows =
+    attributes !== undefined &&
+    Object.keys(attributes).some(name => attributeKey(name) === "id");
+
+  /*
+   * Written directly rather than through the draft, because the draft cannot
+   * hold the distinction: its id is text, and the box is already empty.
+   */
+  const removeEmptyId = (): void => {
+    const update = htmlUpdate(
+      { cssId: undefined, attributes },
+      { cssId, attributes }
+    );
+    if (update === undefined) return;
+    editor.apply({
+      kind: "update",
+      id: nodeId,
+      patch: update.patch,
+      ...(update.unset.length > 0 ? { unset: update.unset } : {}),
+    } as Parameters<EditorState["apply"]>[0]);
+  };
 
   return (
     <div className="nx-inspector__fields">
@@ -369,6 +406,38 @@ export function AdvancedPanel({
             role="alert"
           >
             {idProblem}
+          </p>
+        )}
+        {/*
+          The EMPTY-BUT-PRESENT id, which the box above cannot express.
+
+          A field holding `""` renders `id=""` and shadows any `id` in the bag
+          below, and no amount of typing in an already-empty box says "remove
+          it" — the draft matches what was loaded, so a commit correctly finds
+          nothing to do. This is the gesture that was missing.
+
+          Shown only in that state. Cleaning it up on open would be a write
+          nobody asked for, and folding it into an unrelated save would change
+          the id the page renders as a side effect of editing an attribute:
+          removing the modelled field UNSHADOWS the bag's `id`, so it has to be
+          the author's decision and has to say what it does.
+        */}
+        {cssId !== "" ? null : (
+          <p className="nx-inspector__note" role="status">
+            This block has an empty id set, which renders as{" "}
+            <code>id=&quot;&quot;</code>
+            {emptyIdShadows
+              ? " and hides the id set in the attributes below"
+              : ""}
+            .{" "}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => removeEmptyId()}
+            >
+              Remove the empty id
+            </Button>
           </p>
         )}
       </div>

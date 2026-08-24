@@ -1427,3 +1427,63 @@ describe("the block set the collision check answers about", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 });
+
+describe("a node whose CSS id is present but empty", () => {
+  /*
+   * The renderer treats the modelled field as PRESENT whenever it is a string:
+   * it writes `extra.id = cssId` on `cssId !== undefined`, so `cssId: ""`
+   * renders `id=""` AND shadows any `id` in the attribute bag. The inspection
+   * collapsed it with an absent field, so the panel showed an empty box, every
+   * clear attempt read as untouched, and no `unset` could ever be emitted.
+   *
+   * Unreachable through the editor, which writes `unset` rather than `""`, so
+   * it arrives by import or by a script — and then cannot be undone.
+   */
+  const shadowed = {
+    cssId: "",
+    attributes: { id: "from-bag" },
+  } as unknown as Partial<BlockNode>;
+
+  it("says the empty id is there and what it is doing", () => {
+    mount(shadowed);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.getByRole("status").textContent).toContain("empty id");
+  });
+
+  it("offers a way to remove it, and removes it", () => {
+    const editor = mount(shadowed);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove the empty id" })
+    );
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["cssId"],
+    });
+  });
+
+  it("says nothing when the field is simply ABSENT", () => {
+    // The control: the ordinary block has no id and no note, or every block
+    // would carry a warning about a state it is not in.
+    mount({ attributes: { id: "from-bag" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Remove the empty id" })
+    ).toBeNull();
+  });
+
+  it("says nothing when the id holds a value", () => {
+    // The other control: a real id is not the empty-but-present state either.
+    mount({ cssId: "hero" });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
