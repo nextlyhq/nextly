@@ -41,25 +41,37 @@ const MEASURED = [
 ];
 
 /**
- * A negative inset that cancels the page's HORIZONTAL padding, in any variant
- * and any position.
+ * A negative inset that cancels the page's HORIZONTAL padding, in any variant,
+ * any position, and any JSX spelling.
  *
- * Both spellings, because both do it: `-m-8` cancels the horizontal axis as a
+ * Both utilities, because both do it: `-m-8` cancels the horizontal axis as a
  * side effect, and `-mx-8` beside a `-my-8` recreates it deliberately. An
- * earlier version of this file matched only the first and carried a control
- * asserting `-mx-8` was fine — which would have let exactly that pairing
- * restore the 64px bleed with this test green.
+ * earlier version matched only the first and carried a control asserting
+ * `-mx-8` was fine — which would have let exactly that pairing restore the
+ * 64px bleed with this test green.
  *
- * `-m-8` and `lg:-m-8` are the same mistake at different breakpoints; so is
- * `-m-8` written FIRST, where a `^` anchor is useless because the pattern has
- * already consumed `className="`. The opening quote is therefore a boundary
- * alongside whitespace and the variant colon.
- *
- * Prose about it is not a mistake — the comment explaining why the horizontal
- * half is gone necessarily names it, which is why this reads a `className`
- * rather than the file.
+ * Not anchored on `className="`, which an earlier version was. That anchor
+ * makes the check a check on ONE SPELLING rather than on the class: moving the
+ * list into `cn("flex", "@4xl/content:-m-8")` is an ordinary refactor and it
+ * walked straight past. Comments are removed first instead, so the scan reads
+ * code however it is written while the prose explaining why the horizontal half
+ * is gone — which necessarily names the utility — is not mistaken for it.
  */
-const HORIZONTAL_CANCEL = /className="(?:[^"]*[\s:])?-mx?-8\b/;
+const HORIZONTAL_CANCEL = /(?:^|[\s:"'`{(,])-mx?-8\b/;
+
+/**
+ * `source` with its comments removed.
+ *
+ * Line and block comments both, and JSX comments are block comments inside an
+ * expression, so removing block comments covers them. String literals are not
+ * tracked: a `//` inside one would truncate the line, which costs coverage
+ * rather than creating a false positive, and no scanned file contains one.
+ */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+}
 
 describe("a measured entry page", () => {
   it("reads the files it names", () => {
@@ -80,9 +92,7 @@ describe("a measured entry page", () => {
     expect(HORIZONTAL_CANCEL.test('<div className="@4xl/content:-m-8">')).toBe(
       true
     );
-    // First token, where a `^` anchor cannot help: the pattern has already
-    // consumed `className="`, so the opening quote has to be a boundary too.
-    // A class reorder would otherwise restore the bleed unseen.
+    // First token, where a class reorder would otherwise hide it.
     expect(HORIZONTAL_CANCEL.test('<div className="-m-8 flex">')).toBe(true);
     // And what it must not catch.
     // The pairing that recreates the bleed one utility at a time.
@@ -97,14 +107,28 @@ describe("a measured entry page", () => {
     );
     expect(HORIZONTAL_CANCEL.test('<div className="-my-8 flex">')).toBe(false);
     expect(HORIZONTAL_CANCEL.test('<div className="-mx-4">')).toBe(false);
+
+    // And the prose, which every one of these files carries because the
+    // comment explaining the removal has to name what was removed.
+    expect(
+      HORIZONTAL_CANCEL.test(withoutComments("{/* `-my-8`, not `-m-8` */}"))
+    ).toBe(false);
+    expect(
+      HORIZONTAL_CANCEL.test(withoutComments("// cancels -m-8 horizontally"))
+    ).toBe(false);
+    // Prose is excluded by removing comments, NOT by the pattern — so the raw
+    // sentence does match, and must, or the pattern would be blind to a class
+    // that happened to sit after a backtick.
     expect(
       HORIZONTAL_CANCEL.test("{/* `-my-8`, not `-m-8`, because … */}")
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("cancels the vertical inset only", () => {
     const offenders = MEASURED.filter(path =>
-      HORIZONTAL_CANCEL.test(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
+      HORIZONTAL_CANCEL.test(
+        withoutComments(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
+      )
     );
 
     expect(
