@@ -573,6 +573,12 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * This `where` was built by the framework from a route, not received from
+     * a request. Forwarded to the filterable-fields guard; per-operation only,
+     * so a nested call cannot inherit it.
+     */
+    frameworkFilter?: boolean;
+    /**
      * Which collections a trusted read may reach as relationships are expanded.
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
@@ -766,6 +772,12 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * This `where` was built by the framework from a route, not received from
+     * a request. Forwarded to the filterable-fields guard; per-operation only,
+     * so a nested call cannot inherit it.
+     */
+    frameworkFilter?: boolean;
     /**
      * Which collections a trusted read may reach as relationships are expanded.
      * Absent means every populated target inherits the caller's trust. Only ever
