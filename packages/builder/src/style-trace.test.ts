@@ -289,3 +289,114 @@ describe("the SHARED inputs the page is compiled from", () => {
     expect(pageStyleTrace(classed(), undefined, undefined)).toBeUndefined();
   });
 });
+
+describe("a stored document that still needs reader repair", () => {
+  const context = { breakpoints: BREAKPOINTS };
+
+  it("does not throw on a malformed node the renderer survives", () => {
+    /*
+     * A stored document is untrusted. `{ nodes: [null] }` passes the envelope
+     * guard, and compiling the RAW tree throws while the cascade is read — so an
+     * editor that asked for the trace on open crashed there, before the renderer
+     * could show the placeholder it keeps for exactly this.
+     *
+     * The renderer sanitises and migrates first; this now runs the same stages.
+     */
+    register();
+    const malformed = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [null],
+    } as unknown as BlockDocument;
+
+    expect(() => pageStyleTrace(malformed, context, undefined)).not.toThrow();
+  });
+
+  it("still reports the cascade of the nodes that survive repair", () => {
+    /*
+     * The separating half. Not throwing is satisfied by returning nothing for
+     * every document, which would be the feature switched off — so a malformed
+     * node beside a good one must leave the good one's declarations intact.
+     */
+    register();
+    const mixed = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        null,
+        {
+          id: "a",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          styles: { base: { base: { color: "teal" } } },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const trace = pageStyleTrace(mixed, context, undefined);
+    expect(trace).toBeDefined();
+    expect((trace ?? []).map(entry => entry.property)).toContain("color");
+  });
+
+  it("answers undefined for an envelope the format does not recognise", () => {
+    // A real answer rather than a throw: nothing can be compiled from a document
+    // this format cannot read, and the caller is documented not to treat that as
+    // "nothing is authored".
+    register();
+    const alien = {
+      formatVersion: 999,
+      kind: "page",
+      nodes: [],
+    } as unknown as BlockDocument;
+    expect(pageStyleTrace(alien, context, undefined)).toBeUndefined();
+  });
+});
+
+describe("a node the reader would withhold", () => {
+  it("keeps a node HIDDEN AT A BREAKPOINT in the trace", () => {
+    /*
+     * The deliberate difference from the renderer, and until now the only part
+     * of it nothing asserted.
+     *
+     * A node an author has hidden at a breakpoint still has values they are owed
+     * an account of — it remains selectable from the Layers panel — so its
+     * declarations must reach the trace.
+     *
+     * What this does NOT establish, said plainly: that compiling the MIGRATED
+     * tree rather than the pruned one is what achieves it. Measured, the two are
+     * observationally equal here — a condition-gated node's declarations are
+     * dropped by the compiler before any pruning, and a breakpoint-hidden node
+     * survives both trees, being kept and given visibility rules rather than
+     * removed. No input currently separates them. The property below is worth
+     * pinning regardless of which tree delivers it.
+     */
+    register();
+    const gated = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "hidden",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          visibility: { devices: { base: false } },
+          styles: { base: { base: { color: "rebeccapurple" } } },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const trace = pageStyleTrace(
+      gated,
+      { breakpoints: BREAKPOINTS },
+      undefined
+    );
+
+    // The population first, then the property: an empty trace satisfies the
+    // search below by vacuity.
+    expect(trace).toBeDefined();
+    expect(trace ?? []).not.toHaveLength(0);
+    expect((trace ?? []).map(entry => entry.value)).toContain("rebeccapurple");
+  });
+});

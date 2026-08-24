@@ -20,6 +20,7 @@
 
 import type {
   BlockDocument,
+  DocumentLimits,
   RemotePatternInput,
   SiteSheetInput,
   StyleCompileContext,
@@ -27,6 +28,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import { sharedStyleInputs } from "./page-renderer";
+import { prepareDocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import { registeredBlocks } from "./resolver";
 import { effectiveCompile, resolvePageStylesWithTrace } from "./styles";
@@ -46,6 +48,16 @@ export interface PageStyleTraceInput {
   readonly blocks?: BlockResolver;
   /** The host's fetch policy, so a refused `url(...)` is refused here too. */
   readonly remotePatterns?: readonly RemotePatternInput[];
+  /**
+   * The caps the renderer prepares and compiles under.
+   *
+   * Forwarded because they change what EXISTS: preparation drops nodes past a
+   * cap, and the compile drops declarations past another. A page rendered under
+   * one cap and a trace compiled under a different one disagree about which
+   * declarations were written, so a control is attributed a value the page never
+   * emitted, or none at all.
+   */
+  readonly limits?: DocumentLimits;
 }
 
 /**
@@ -102,17 +114,51 @@ export function pageStyleTrace(
     // No stored artifact and no caller cap: this compiles to READ the cascade,
     // and a sheet is never kept from it.
     styles: undefined,
-    limits: undefined,
+    limits: input.limits,
     remotePatterns: input.remotePatterns,
   });
+  const resolver = input.blocks ?? registeredBlocks();
+  /*
+   * The SAME preparation the renderer runs, and for the reason it runs it: a
+   * stored document is untrusted. A malformed node — a `null` in `nodes`, or one
+   * written against an old block version — passes the envelope guard and then
+   * throws while the cascade is read, so an editor compiling the raw tree
+   * crashes on open, before the renderer can show the placeholder it has for
+   * exactly this.
+   *
+   * `migrated` rather than `prepared`: sanitised and migrated, and NOT gated.
+   * Withholding a node is right for what renders and wrong for what a panel
+   * explains, since a node the reader drops is still selectable from a layers
+   * panel with authored values an author is owed an account of.
+   *
+   * Measured, the two are OBSERVATIONALLY EQUAL here today, and saying so is
+   * more useful than implying the choice is load-bearing. A condition-gated
+   * node's declarations are dropped by the COMPILER before any pruning, and a
+   * node hidden at a breakpoint survives BOTH trees — it is kept and given
+   * visibility rules rather than removed. So no input currently distinguishes
+   * them, and no test claims to.
+   *
+   * The wider tree is still the right one to hand over: it is the choice that
+   * stays correct if the compiler ever stops dropping gated declarations, and
+   * the narrower one would then silently start reporting those controls as set
+   * by nobody.
+   */
+  const stages = prepareDocumentReadStages(input.document, {
+    resolver,
+    ...(input.limits === undefined ? {} : { limits: input.limits }),
+    styleContext: context,
+  });
+  // An unreadable ENVELOPE, which is a real answer: nothing can be compiled from
+  // a document this format does not recognise.
+  if (stages === null) return undefined;
   return resolvePageStylesWithTrace(
-    input.document,
+    stages.migrated,
     // No stored artifact. One would be REUSED rather than recompiled, and a
     // reused sheet has no cascade to report — the caller would get `undefined`
     // for a document it can perfectly well compile.
     undefined,
     context,
-    input.blocks ?? registeredBlocks(),
+    resolver,
     false,
     { trace: true }
   ).trace;

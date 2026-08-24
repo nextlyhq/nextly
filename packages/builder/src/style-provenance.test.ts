@@ -530,3 +530,65 @@ describe("ranking winners from two live states", () => {
     );
   });
 });
+
+describe("a caller that states which states are live", () => {
+  const subject = { nodeId: "a", blockType: "acme/box", ancestors: [] };
+  const at = (over: Record<string, unknown>) =>
+    ({
+      origin: { kind: "node", id: "a" },
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint: "base",
+      ...over,
+    }) as never;
+
+  it("does NOT add the edited state back when a set was supplied", () => {
+    /*
+     * The field's contract: omitting it means the edited state plus base, so
+     * stating one is the host ruling states OUT. A canvas simulating only `base`
+     * while the panel edits `hover` would otherwise have the hover declaration
+     * reported as the visible winner — a value the browser is not showing, which
+     * is the exact case the field exists to prevent.
+     */
+    const result = styleProvenance({
+      trace: [at({ state: "hover", value: "#hover" })] as never,
+      subject,
+      cssProperty: "color",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["base"],
+    });
+    expect(result.kind).toBe("unset");
+  });
+
+  it("DOES default to the edited state when none was supplied", () => {
+    // The other half of the same contract, and the control: respecting a
+    // supplied set must not turn into ignoring the default.
+    const result = styleProvenance({
+      trace: [at({ state: "hover", value: "#hover" })] as never,
+      subject,
+      cssProperty: "color",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+    expect(result.kind).toBe("authored");
+  });
+
+  it("keeps base live whatever the caller stated", () => {
+    // Base rules are not state-gated and match alongside anything else, so they
+    // are in play even for a caller that named only an interaction state.
+    const result = styleProvenance({
+      trace: [at({ state: "base", value: "#base" })] as never,
+      subject,
+      cssProperty: "color",
+      state: "hover",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+      liveStates: ["hover"],
+    });
+    expect(result.kind).toBe("inherited");
+  });
+});

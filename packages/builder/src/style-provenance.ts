@@ -349,9 +349,19 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   // the cascade is settling — rather than by a second idea of tier order.
   // Every state matching right now, base included: base always matches, and the
   // state being edited is the one the canvas is simulating.
+  /*
+   * A SUPPLIED set is authoritative. The field's own contract says omitting it
+   * means the edited state plus base — so adding the edited state back when a
+   * caller did state one contradicts the answer they gave: a canvas simulating
+   * only `base` while the panel edits `hover` would have a hover declaration
+   * reported as the visible winner, which is exactly the case the field exists
+   * to let a host rule out.
+   *
+   * `base` is added either way because base rules are not state-gated and match
+   * whatever else is.
+   */
   const live = new Set<StyleState>([
-    ...(query.liveStates ?? []),
-    query.state,
+    ...(query.liveStates ?? [query.state]),
     "base",
   ]);
   const winner = lastWritten(
