@@ -9,13 +9,20 @@
  * carries the very class being looked for.
  *
  * WHAT THIS COVERS, stated here because a green run is read where it is
- * printed and a reader has no other way to learn the scope: the fixed list
- * of files in `CONVERTED` below, and nothing else. A file that was converted
- * onto the page's measure but is absent from that list is UNCHECKED, not clean —
- * this scan has no way to discover a form page on its own, so its silence
- * about a file it never opened is not evidence about that file. Extend the
- * list when a new page is converted; a passing suite does not do that for
- * you.
+ * printed and a reader has no other way to learn the scope: every `.tsx` under
+ * the admin and the two plugin packages that renders a part of the form-layout
+ * kit, plus the short `UNMARKED` list of form bodies that render none of it.
+ *
+ * The population is DERIVED rather than listed, and that is the point. A fixed
+ * list has to be edited in the same commit that converts a form, which is
+ * exactly the edit that gets forgotten — leaving a green run that means "never
+ * looked at" while reading as "clean". Two files converted by this change were
+ * missing from the list that preceded this, and a competing wrapper in either
+ * would have gone unseen.
+ *
+ * The remaining blind spot is `UNMARKED`: a form body that renders no part of
+ * the kit cannot be discovered, so it is named. That list is checked against
+ * the derivation, so it cannot quietly hold files that no longer need naming.
  *
  * The negative-control block below exists because the check's own pattern
  * has a shape that could over-report: the shared field-half width utility in
@@ -47,7 +54,7 @@
  * this is not expected to occur). Nothing in the nine files does this today;
  * if one starts, narrow the exemption rather than trusting it forever.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -57,22 +64,68 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../../../../../");
 
 /**
- * The form components whose page now owns the measure.
- *
- * This is the scan's entire population. See the file header: absence from
- * this list means unchecked, never means clean.
+ * Where a form body can live. Both trees are walked in full.
  */
-const CONVERTED = [
-  "packages/plugin-form-builder/src/admin/FormBuilderView.tsx",
-  "packages/plugin-form-builder/src/admin/components/builder/FormSettingsTab.tsx",
-  "packages/plugin-form-builder/src/admin/components/builder/FormNotificationsTab.tsx",
-  "packages/admin/src/components/features/api-keys/CreateApiKeyForm.tsx",
-  "packages/admin/src/components/features/api-keys/EditApiKeyForm.tsx",
-  "packages/admin/src/components/features/role-management/RoleForm.tsx",
-  "packages/admin/src/components/features/settings/ImageSizeForm.tsx",
-  "packages/admin/src/components/features/settings/EmailProviderForm/EmailProviderForm.tsx",
-  "packages/admin/src/components/features/webhooks/WebhookForm.tsx",
+const ROOTS = [
+  "packages/admin/src",
+  "packages/plugin-form-builder/src",
+  "packages/plugin-page-builder/src",
 ];
+
+/**
+ * What marks a file as a form body: it renders one of the form-layout kit's
+ * parts. A file that renders any of these is content inside a page whose
+ * container declares the measure, so it must not declare one itself.
+ */
+const FORM_BODY = /<(FormSection|FormActions|FieldShell)\b/;
+
+/**
+ * Form bodies that carry NO marker, listed because nothing can discover them.
+ *
+ * A tab body of plain elements renders no part of the kit, so the scan cannot
+ * find it the way it finds the rest. Each entry is here because it is a form
+ * body, not because it once was: check that before adding one.
+ */
+const UNMARKED = [
+  "packages/plugin-form-builder/src/admin/components/builder/FormSettingsTab.tsx",
+];
+
+/** Every `.tsx` under `dir`, recursively, as repo-relative paths. */
+function tsxFilesIn(dir: string): string[] {
+  const found: string[] = [];
+
+  for (const entry of readdirSync(resolve(ROOT, dir), {
+    withFileTypes: true,
+  })) {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) found.push(...tsxFilesIn(path));
+    else if (entry.name.endsWith(".tsx") && !entry.name.includes(".test."))
+      found.push(path);
+  }
+
+  return found;
+}
+
+/**
+ * The scan's population, DERIVED rather than listed.
+ *
+ * A fixed list is a list that drifts: this change converted nine components
+ * off `FormLayout` and a hand-maintained population would have to be edited in
+ * the same commit, which is exactly the edit that gets forgotten — leaving a
+ * green run that means "not looked at" while reading as "clean". Deriving it
+ * means a form added tomorrow is covered the day it is written.
+ *
+ * `UNMARKED` is the residue the derivation cannot reach, and the test below
+ * fails if an entry there becomes discoverable, so the list cannot quietly
+ * accumulate files that no longer need naming.
+ */
+function formBodies(): string[] {
+  const derived = ROOTS.flatMap(tsxFilesIn).filter(path =>
+    FORM_BODY.test(readFileSync(resolve(ROOT, path), "utf8"))
+  );
+
+  return [...new Set([...derived, ...UNMARKED])].sort();
+}
 
 /**
  * Every JSX opening tag in `source`, attributes included, spanning any number
@@ -240,21 +293,60 @@ describe("converted form pages do not set their own measure", () => {
     expect(offendersIn(inBraces)).toHaveLength(1);
   });
 
-  it("reads every listed file", () => {
-    // Asserts the POPULATION before the verdict: a scan that read nothing
-    // satisfies "no violations" perfectly, and this is what keeps that from
-    // passing silently. Every path resolving to non-empty content also
-    // confirms the list above still matches the tree.
-    for (const path of CONVERTED) {
-      expect(readFileSync(resolve(ROOT, path), "utf8").length).toBeGreaterThan(
-        0
-      );
+  it("finds the form bodies, including the ones this change converted", () => {
+    // Two named explicitly because they were the derivation's own evidence:
+    // both lost their `FormLayout` here and neither appeared in the fixed list
+    // this replaced, so a competing wrapper in either would have gone unseen.
+    const population = formBodies();
+
+    expect(population.length).toBeGreaterThan(8);
+    for (const path of [
+      "packages/admin/src/components/features/settings/UserFieldForm/UserFieldForm.tsx",
+      "packages/admin/src/pages/dashboard/settings/index.tsx",
+      "packages/admin/src/components/features/webhooks/WebhookForm.tsx",
+      "packages/plugin-form-builder/src/admin/FormBuilderView.tsx",
+    ]) {
+      expect(population, `${path} is not in the population`).toContain(path);
     }
   });
 
-  it.each(CONVERTED)("%s sets no max-width of its own", path => {
-    const source = readFileSync(resolve(ROOT, path), "utf8");
-    expect(offendersIn(source)).toEqual([]);
+  it("reads every file it names", () => {
+    // Every assertion below is about file CONTENT, and an unreadable path
+    // yields no content and therefore no offenders. A moved file has to fail
+    // here rather than pass by silence.
+    for (const path of formBodies()) {
+      expect(
+        readFileSync(resolve(ROOT, path), "utf8").length,
+        `${path} is empty or unreadable`
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps the unmarked list to what cannot be discovered", () => {
+    // An entry here that the derivation already finds is dead weight, and dead
+    // weight in a hand-maintained list is how the list stops being read.
+    const derived = new Set(
+      ROOTS.flatMap(tsxFilesIn).filter(path =>
+        FORM_BODY.test(readFileSync(resolve(ROOT, path), "utf8"))
+      )
+    );
+
+    expect(UNMARKED.filter(path => derived.has(path))).toEqual([]);
+  });
+
+  it("sets no max-width of its own, in any form body", () => {
+    const offenders = formBodies().flatMap(path =>
+      offendersIn(readFileSync(resolve(ROOT, path), "utf8")).map(
+        element => `${path}: ${element.replace(/\s+/g, " ").slice(0, 120)}`
+      )
+    );
+
+    expect(
+      offenders,
+      `A form body caps its own width. The page owns the measure — ` +
+        `PageContainer declares it — and a second cap inside sits within the ` +
+        `page's inset and adds to it:\n${offenders.join("\n")}`
+    ).toEqual([]);
   });
 });
 
