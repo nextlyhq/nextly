@@ -102,8 +102,20 @@ function skipString(source: string, at: number): number {
   const quote = source[at];
   if (quote !== '"' && quote !== "'" && quote !== "`") return at;
 
-  const close = source.indexOf(quote, at + 1);
-  return close === -1 ? source.length : close + 1;
+  // Walked rather than found with `indexOf`, because an ESCAPED quote is not
+  // the string's end. `alert('Don\'t')` inside a callback would otherwise
+  // close the string early, leaving the rest of the tag read as code — and a
+  // `>` in the remaining text ends the element mid-attribute. An apostrophe is
+  // common enough in a message that this is not an edge case.
+  for (let i = at + 1; i < source.length; i++) {
+    if (source[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (source[i] === quote) return i + 1;
+  }
+
+  return source.length;
 }
 
 /**
@@ -201,6 +213,18 @@ describe("converted form pages do not set their own measure", () => {
       </form>
     `;
 
+    expect(offendersIn(fixture)).toHaveLength(1);
+  });
+
+  it("reads through an escaped quote inside a callback", () => {
+    // An apostrophe in a message closes the string early for any scan that
+    // finds the next quote rather than walking past escapes. The rest of the
+    // tag is then read as code, the `>` in it ends the element, and the class
+    // after it is never examined — the contract silently stops applying to
+    // that element.
+    const fixture = `<button onClick={() => alert('Don\\'t > go')} className="max-w-sm">x</button>`;
+
+    expect(openingTags(fixture)).toHaveLength(1);
     expect(offendersIn(fixture)).toHaveLength(1);
   });
 

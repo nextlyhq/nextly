@@ -42,13 +42,26 @@ export function CustomEntryView({
   breadcrumbs,
   children,
 }: CustomEntryViewProps) {
-  const suppressed = useSuppressedChrome();
+  const framed = !useSuppressedChrome().has("pageFrame");
 
-  if (suppressed.has("pageFrame")) return <>{children}</>;
-
+  // One tree in both states, differing only in props.
+  //
+  // The request arrives from an effect, so the frame necessarily changes AFTER
+  // the view has mounted. Returning a different tree for the immersive case
+  // replaces the subtree at that position, and React unmounts and remounts the
+  // view: its state initialisers rerun, its mount-time fetches fire twice, and
+  // the very request that changed the frame is made again. Keeping the
+  // container and the trail slot in place — hidden rather than absent — leaves
+  // the view at a stable reconciliation position, so the frame changes around
+  // it and it never moves.
+  //
+  // `display: contents` is what removes the frame without removing the box:
+  // the container's own grid, padding and background stop applying while its
+  // children lay out exactly as if it were not there. An immersive view
+  // therefore reaches every edge, which is the whole point of asking.
   return (
-    <PageContainer width="form">
-      <div className="mb-6">{breadcrumbs}</div>
+    <PageContainer width="form" className={framed ? undefined : "contents"}>
+      <div className={framed ? "mb-6" : "hidden"}>{breadcrumbs}</div>
       {children}
     </PageContainer>
   );

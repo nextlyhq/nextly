@@ -9,6 +9,7 @@
  * creating one.
  */
 import { render, screen } from "@testing-library/react";
+import { useEffect, useState } from "react";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -43,22 +44,57 @@ describe("CustomEntryView", () => {
 
     const container = screen.getByTestId("page-container");
     expect(container).toBeDefined();
-    expect(screen.getByText("trail")).toBeDefined();
+    expect(screen.getByText("trail").parentElement?.className).toContain(
+      "mb-6"
+    );
     // The measure is the page's. A view that set its own would sit inside this
     // container's inset and add a second one to it.
     expect(container.className).toContain("nx-page-shell");
+    expect(container.className).not.toContain("contents");
     expect(container.style.getPropertyValue("--nx-shell-measure")).toBe(
       "var(--nx-measure-form)"
     );
   });
 
-  it("drops the frame and the trail for a view that took the window", () => {
+  it("neutralises the frame and the trail for a view that took the window", () => {
     renderIn(<ImmersiveView />);
 
     expect(screen.getByText("immersive body")).toBeDefined();
-    // Both, not just the container: suppressing the frame while leaving a
-    // breadcrumb above the view is the half-done state that reads as a bug.
-    expect(screen.queryByTestId("page-container")).toBeNull();
-    expect(screen.queryByText("trail")).toBeNull();
+
+    // The container is still THERE — removing it would remount the view, which
+    // the case below covers — but it stops laying anything out. `contents`
+    // takes its box out of the flow, so its grid, padding and background no
+    // longer apply and the view reaches every edge.
+    const container = screen.getByTestId("page-container");
+    expect(container.className).toContain("contents");
+
+    // The trail goes with it. Suppressing the frame while leaving a breadcrumb
+    // above the view is the half-done state that reads as a bug, and `hidden`
+    // keeps it out of the accessibility tree as well as off the screen.
+    const trail = screen.getByText("trail").parentElement;
+    expect(trail?.className).toContain("hidden");
+    expect(trail?.className).not.toContain("mb-6");
+  });
+
+  it("keeps the view mounted when it asks for the window", () => {
+    // The request arrives from an effect, so the frame necessarily changes
+    // AFTER the view has mounted. If that change replaces the subtree, the
+    // plugin view unmounts and mounts again: its state initialisers rerun, its
+    // data fetches fire twice, and anything it did on mount happens twice —
+    // including asking for the window.
+    let mounts = 0;
+
+    function CountingImmersiveView() {
+      useSuppressAdminChrome({ layers: ["pageFrame"], canExit: false });
+      const [id] = useState(() => ++mounts);
+      return <p>view {id}</p>;
+    }
+
+    renderIn(<CountingImmersiveView />);
+
+    // Named rather than asserted through the DOM alone: the rendered text
+    // would also read "view 1" if a second mount replaced the first.
+    expect(mounts).toBe(1);
+    expect(screen.getByText("view 1")).toBeDefined();
   });
 });
