@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import * as publicEntry from "../index";
 import { compileStyleValues, safeTokenPrefix } from "./declarations";
-import type { SiteToken } from "./site-tokens";
+import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import {
   checkTokenKind,
   DARK_MODE_ATTRIBUTE,
@@ -20,6 +20,7 @@ import {
   isTokenName,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
+  MAX_TOKEN_SELECTOR_LENGTH,
   renameSiteToken,
   tokenIdentity,
   tokenValueFetches,
@@ -1103,5 +1104,35 @@ describe("a stored prefix that is not a string", () => {
     // case above.
     expect(safeTokenPrefix(undefined).prefix).toBe("--site-");
     expect(safeTokenPrefix(undefined).warning).toBeUndefined();
+  });
+});
+
+describe("the selector token blocks are written under", () => {
+  const oneToken: SiteTokenSet = {
+    tokens: [
+      { name: "color.primary", kind: "color", values: { light: "#000" } },
+    ],
+  };
+
+  it("refuses an oversized selector rather than writing under a cut one", () => {
+    // The selector is the caller's and goes into the sheet verbatim, once per
+    // block. Truncating it would be worse than refusing: a selector cut in half
+    // is a different selector, so the site's values would land on whatever it
+    // happens to match.
+    const { css, issues } = emitTokenBlocks(
+      oneToken,
+      `.${"s".repeat(MAX_TOKEN_SELECTOR_LENGTH)}`
+    );
+    expect(css).toBe("");
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("still writes under a selector at the bound", () => {
+    // The control. A guard refusing every selector would satisfy the case above
+    // and emit no tokens at all, anywhere.
+    const atBound = "s".repeat(MAX_TOKEN_SELECTOR_LENGTH);
+    const { css, issues } = emitTokenBlocks(oneToken, atBound);
+    expect(issues).toEqual([]);
+    expect(css).toContain(atBound);
   });
 });

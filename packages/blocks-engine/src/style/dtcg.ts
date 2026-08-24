@@ -189,11 +189,13 @@ function exportableValue(
     // the file while Nextly went on rendering it.
     issues.push(
       issue(
-        naming.reason === "length"
-          ? `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was not exported. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
-          : naming.field === "name"
-            ? `"${token.name}" is not a token name, so it was not exported.`
-            : `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
+        naming.reason === "depth"
+          ? `"${String(token.name)}" is nested too deeply, so it was not exported. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`
+          : naming.reason === "length"
+            ? `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was not exported. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
+            : naming.field === "name"
+              ? `"${token.name}" is not a token name, so it was not exported.`
+              : `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
       )
     );
     return undefined;
@@ -698,9 +700,11 @@ function readToken(
   if (naming !== undefined) {
     issues.push(
       issue(
-        naming.reason === "length"
-          ? `"${name}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was skipped. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
-          : `"${name}" has a ${naming.field} that is not a usable token name, so it was skipped.`
+        naming.reason === "depth"
+          ? `"${name}" is nested too deeply, so it was skipped. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`
+          : naming.reason === "length"
+            ? `"${name}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was skipped. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
+            : `"${name}" has a ${naming.field} that is not a usable token name, so it was skipped.`
       )
     );
     return undefined;

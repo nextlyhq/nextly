@@ -148,3 +148,10 @@ A font format is bounded, and the token studio refuses a name that lands on a
 custom property another token already occupies. The name-to-property mapping is
 deliberately not injective, so two visibly different, individually legal names
 can collide and the compiler drops whichever it reaches second.
+
+The selector `emitTokenBlocks` writes under is bounded, and the token studio no
+longer lets a new row claim an identity another row has frozen under a different
+display name — the compiler writes the older token and drops the new one.
+
+Both design-token gates name the depth limit when they refuse for it, instead of
+reporting a grammar problem the name does not have.

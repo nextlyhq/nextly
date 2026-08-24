@@ -167,8 +167,15 @@ export function renameSiteToken(token: SiteToken, name: string): SiteToken {
   //
   // Re-pinning is safe in exactly that case and only there. A WORKING identity
   // must never move, because every stored `$token` reads it — which is what
-  // this function exists to protect. One that cannot be emitted has no such
-  // references to lose, so the new name becomes the identity instead.
+  // this function exists to protect. One that cannot be emitted resolves for
+  // nothing, so no reference that WORKS is lost by replacing it.
+  //
+  // What that does not mean is that no references exist. A name refused today
+  // may have been valid when a document was saved, so stored `$token` values
+  // can still name it — already resolving to nothing, and still doing so after
+  // the token is repaired under a new identity. This makes the TOKEN usable
+  // again; the documents pointing at the old name are a separate repair, and
+  // one this helper cannot make: it is handed a token and never sees them.
   if (
     identityProblem(current, token.id === undefined ? "name" : "id") !==
     undefined
@@ -218,6 +225,17 @@ export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
  * and is only met by data already wrong.
  */
 export const MAX_FONT_FORMAT_LENGTH = 32;
+
+/**
+ * The longest selector `emitTokenBlocks` will write a token block under.
+ *
+ * The selector is supplied by the caller and inserted into the emitted CSS
+ * verbatim — once for the light block and once more for a dark one — so an
+ * oversized one is copied into the sheet rather than merely held.
+ *
+ * Generous against what a caller passes: a page-scope class or `:root`.
+ */
+export const MAX_TOKEN_SELECTOR_LENGTH = 256;
 
 const FONT_FORMAT = /^[a-z0-9-]+$/i;
 
@@ -1022,6 +1040,20 @@ export function emitTokenBlocks(
     }
   }
 
+  // Refused rather than truncated: a selector cut in half is a different
+  // selector, and writing tokens under it would put the site's values on
+  // whatever it happens to match.
+  if (
+    typeof selector !== "string" ||
+    selector.length > MAX_TOKEN_SELECTOR_LENGTH
+  ) {
+    issues.push(
+      tokenIssue(
+        `The selector these tokens would be written under is longer than ${MAX_TOKEN_SELECTOR_LENGTH} characters, so none were written.`
+      )
+    );
+    return { css: "", issues };
+  }
   if (light.length === 0) return { css: "", issues };
 
   let css = `${selector}{${light.join(";")}}`;

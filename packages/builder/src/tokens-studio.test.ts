@@ -459,6 +459,24 @@ describe("two names that land on one custom property", () => {
     expect(tokenNameIssue(pair, 1, "color-primary.dark")).toBeDefined();
   });
 
+  it("refuses a NEW row claiming an identity another row has frozen", () => {
+    // A renamed token keeps its old name as its identity under a new label, so
+    // that name is taken even though no row READS under it any more. Suppressing
+    // the clash whenever identities match would let the new row claim it, and
+    // the compiler writes the older token and drops this one.
+    const frozen = {
+      tokens: [
+        {
+          id: "color.primary",
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#111111" },
+        },
+      ],
+    } as SiteTokenSet;
+    expect(tokenNameIssue(frozen, 1, "color.primary")).toBeDefined();
+  });
+
   it("accepts a spelling that lands somewhere else", () => {
     // The control. A gate refusing every name would satisfy the case above and
     // make the studio unusable.

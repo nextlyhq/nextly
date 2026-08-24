@@ -297,11 +297,19 @@ export function tokenNameIssue(
     token.id ?? token.name;
   const claimedIdentity = identityOf(proposed);
   const claimed = tokenCustomProperty(claimedIdentity, "");
+  // Whether this row ALREADY shared its identity with another before the edit.
+  // That is a repair in progress — reporting it leaves the row unfixable
+  // whatever the author types — and it is a property of the row, not of the
+  // name being proposed. Deciding it from the PROPOSED identity instead
+  // suppresses the error whenever an edit newly claims another row's identity,
+  // which is the collision this check exists for.
+  const wasAlreadyTwinned =
+    existing !== undefined &&
+    others.some(token => identityOf(token) === identityOf(existing));
+
   const clash = others.find(token => {
-    // A row sharing this row's identity is the same token twice — a repair the
-    // author is in the middle of rather than a name they may not take. Report
-    // it and that row is unfixable whatever they type.
-    if (identityOf(token) === claimedIdentity) return false;
+    if (wasAlreadyTwinned && identityOf(token) === claimedIdentity)
+      return false;
     return tokenCustomProperty(identityOf(token), "") === claimed;
   });
   return clash === undefined
