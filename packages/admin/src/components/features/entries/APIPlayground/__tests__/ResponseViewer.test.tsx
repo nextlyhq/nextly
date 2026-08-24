@@ -142,6 +142,39 @@ describe("ResponseViewer", () => {
     expect("1023.99 GB".length).toBeLessThanOrEqual(10);
   });
 
+  it("draws the status dot and the status number in the same role", () => {
+    // The dot and the number are two renderings of one judgement about one
+    // response. Asserted through the DOM rather than against the classifier,
+    // because what must agree is what a reader SEES -- a test on the function
+    // would keep passing if a call site read the wrong half of it.
+    const ROLE: ReadonlyArray<readonly [number, string]> = [
+      [200, "success"],
+      [301, "muted-foreground"],
+      [404, "warning"],
+      [500, "destructive"],
+    ];
+
+    for (const [status, role] of ROLE) {
+      const { unmount } = render(
+        <ResponseViewer data={{ items: [] }} code={code} status={status} />
+      );
+      const meta = screen.getByTestId("response-meta");
+
+      const number = screen.getByText(String(status));
+      const dot = meta.querySelector(".rounded-full");
+
+      expect(dot, `a dot is drawn for ${status}`).not.toBeNull();
+      expect(number.className, `${status} text names ${role}`).toContain(
+        `text-${role}`
+      );
+      expect(dot?.className, `${status} dot names ${role}`).toContain(
+        `bg-${role}`
+      );
+
+      unmount();
+    }
+  });
+
   it("shows the metrics once a response exists", () => {
     render(
       <ResponseViewer

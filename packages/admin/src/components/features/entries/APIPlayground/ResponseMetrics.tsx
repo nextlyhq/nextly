@@ -16,28 +16,27 @@
 import { cn } from "@admin/lib/utils";
 
 /**
- * The status dot, keyed to the same meaning as the status text beside it.
- */
-function statusDotTone(status: number): string {
-  if (status >= 200 && status < 300) return "bg-success";
-  if (status >= 300 && status < 400) return "bg-muted-foreground";
-  if (status >= 400 && status < 500) return "bg-warning";
-  if (status >= 500) return "bg-destructive";
-  return "bg-muted-foreground";
-}
-
-/**
- * Colour a response by what its status class means.
+ * What a status class means, and the two ways that meaning is drawn.
+ *
+ * ONE classifier. The dot and the number are two renderings of a single
+ * judgement about a single response, and two functions branching on the same
+ * ranges agree only until somebody reclassifies one of them -- at which point
+ * the dot says one thing and the number beside it says another, on the control
+ * a reader trusts to tell them whether the request worked.
  *
  * A 4xx is the caller's mistake and a 5xx is the server's, so they read as
- * warning and error respectively.
+ * warning and error respectively. A 3xx is not an outcome yet, so it stays
+ * neutral, as does anything outside the ranges HTTP defines.
  */
-function statusTone(status: number): string {
-  if (status >= 200 && status < 300) return "text-success";
-  if (status >= 300 && status < 400) return "text-muted-foreground";
-  if (status >= 400 && status < 500) return "text-warning";
-  if (status >= 500) return "text-destructive";
-  return "text-muted-foreground";
+function statusPresentation(status: number): { text: string; dot: string } {
+  if (status >= 200 && status < 300)
+    return { text: "text-success", dot: "bg-success" };
+  if (status >= 300 && status < 400)
+    return { text: "text-muted-foreground", dot: "bg-muted-foreground" };
+  if (status >= 400 && status < 500)
+    return { text: "text-warning", dot: "bg-warning" };
+  if (status >= 500) return { text: "text-destructive", dot: "bg-destructive" };
+  return { text: "text-muted-foreground", dot: "bg-muted-foreground" };
 }
 
 /**
@@ -106,7 +105,9 @@ export function ResponseMetrics({ status, time, size }: ResponseMetricsProps) {
         <span
           className={cn(
             "h-1.5 w-1.5 shrink-0 rounded-full",
-            status === undefined ? "bg-transparent" : statusDotTone(status)
+            status === undefined
+              ? "bg-transparent"
+              : statusPresentation(status).dot
           )}
         />
         <span
@@ -114,7 +115,9 @@ export function ResponseMetrics({ status, time, size }: ResponseMetricsProps) {
             // 3ch: an HTTP status code is always three digits, so this
             // reserves the exact width rather than an estimate of it.
             "min-w-[3ch] font-mono text-sm font-semibold",
-            status === undefined ? "text-muted-foreground" : statusTone(status)
+            status === undefined
+              ? "text-muted-foreground"
+              : statusPresentation(status).text
           )}
         >
           {status ?? "—"}
