@@ -540,20 +540,32 @@ function warnNoHostRoot(
   declaresNothing: boolean
 ): void {
   /*
-   * Read at render rather than module scope, so a consumer's bundler can inline
-   * it per build and a test can exercise both modes in one process.
+   * Speaks only where the environment is POSITIVELY identified as one a
+   * developer is watching. Read at render rather than module scope, so a
+   * consumer's bundler can inline it per build and a test can exercise several
+   * environments in one process.
    *
-   * An ABSENT `process` counts as production here, which is the opposite of how
-   * the placeholder reads the same signal — and deliberately so. This renderer
-   * runs anywhere React does, and an Edge or Worker runtime need not define
-   * `process` at all; a placeholder that appears there is a visible box on a
-   * block that is already broken, while this is an undeduplicated line written
-   * on every render of every such block. Unable to tell, a diagnostic says
+   * Everything else stays silent, which is the opposite of how the placeholder
+   * reads the same signal and deliberately so: a placeholder is a visible box
+   * on a block that is already broken, while this is an undeduplicated line on
+   * every render of every affected block. Unable to tell, a diagnostic says
    * nothing.
+   *
+   * Being unable to tell has more than one shape, which is what a check for
+   * `process === undefined` missed. This renderer runs anywhere React does: an
+   * Edge or Worker runtime need not define `process`, a standalone SSR host can
+   * expose a partial shim with no `NODE_ENV`, and a deployment may name its
+   * environment something this does not recognise. Asking which environments
+   * may speak covers all of them at once; asking which must stay quiet is a
+   * list, and a list falls behind toward noise in production.
+   *
+   * The cost is a bare harness that sets no `NODE_ENV` hearing nothing. For an
+   * advisory diagnostic that is the cheaper error: a miss costs the report,
+   * while a false one in production teaches everyone to filter the message.
    */
-  const isProduction =
-    typeof process === "undefined" || process.env?.NODE_ENV === "production";
-  if (isProduction) return;
+  const environment =
+    typeof process === "undefined" ? undefined : process.env?.NODE_ENV;
+  if (environment !== "development" && environment !== "test") return;
   try {
     // Rendering nothing is a DECISION, not a violation — the same exemption the
     // placeholder grants, asked the same way.

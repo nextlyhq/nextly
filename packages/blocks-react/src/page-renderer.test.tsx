@@ -5589,3 +5589,68 @@ describe("a block that does not render a single element", () => {
     }
   });
 });
+
+describe("which runtimes the contract warning is willing to speak in", () => {
+  const wrapped2 = defineBlock({
+    name: "test/wrapped-env",
+    version: 1,
+    description: "Wraps its output in a fragment, against the contract.",
+    example: { props: {} },
+    defaultProps: {},
+    render: () => <>{"held"}</>,
+  });
+
+  const renderIt = async (): Promise<string> =>
+    renderToHtml(
+      <PageRenderer
+        document={doc(node("a", "test/wrapped-env"))}
+        blocks={createBlockResolver([wrapped2 as AnyBlockDefinition])}
+      />
+    );
+
+  const saysNothingWhen = async (env: unknown): Promise<void> => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubGlobal("process", { env });
+      await renderIt();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  };
+
+  it("says nothing when NODE_ENV is absent from a real `process`", async () => {
+    /*
+     * A standalone SSR runtime can expose a partial Node shim and never set
+     * `NODE_ENV`. Reading only "is `process` absent" covered ONE way of being
+     * unable to tell, so this one warned — undeduplicated, on every render of
+     * every affected block, in something that may well be production.
+     */
+    await saysNothingWhen({});
+  });
+
+  it("says nothing for an environment name it does not recognise", async () => {
+    // `staging` is neither development nor production, and guessing which it
+    // resembles is exactly the judgement a diagnostic should decline to make.
+    await saysNothingWhen({ NODE_ENV: "staging" });
+  });
+
+  it("DOES speak in development", async () => {
+    /*
+     * The control on all three silences above, and the one that stops this
+     * being satisfied by a warning that never fires at all.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubGlobal("process", { env: { NODE_ENV: "development" } });
+      const html = await renderIt();
+      expect(html).toContain("held");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/wrapped-env");
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  });
+});
