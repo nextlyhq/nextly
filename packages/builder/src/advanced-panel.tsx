@@ -37,13 +37,14 @@ import {
   isBlankRow,
   problemMessage,
   rebasedRows,
-  rowProblem,
   requestedId,
   rowsOf,
+  rowProblems,
   sameDraft,
   wantedFields,
   type AttributeRow,
   type Draft,
+  type RowProblem,
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
 
@@ -321,6 +322,13 @@ export function AdvancedPanel({
   };
 
   const idProblem = idProblemOf(settled.id, cssId, taken);
+  /*
+   * Analysed ONCE for the settled set, not once per row. Every verdict depends
+   * on the whole set — who keeps a contested key, which keys refused rows are
+   * holding — so asking row by row recomputed all of it for each row, and an
+   * imported bag of a few hundred attributes stopped rendering.
+   */
+  const problems = React.useMemo(() => rowProblems(settled.rows), [settled]);
 
   return (
     <div className="nx-inspector__fields">
@@ -394,7 +402,7 @@ export function AdvancedPanel({
                   key={`${nodeId}:${String(index)}`}
                   row={row}
                   index={index}
-                  problem={problemOf(settled, index, draft)}
+                  problem={problemOf(settled, problems, index, draft)}
                   onChange={change}
                   onCommit={() => settle(latest.current)}
                   onRemove={() => remove(index)}
@@ -442,6 +450,7 @@ function idProblemOf(
  */
 function problemOf(
   settled: Draft,
+  problems: readonly (RowProblem | undefined)[],
   index: number,
   live: Draft
 ): string | undefined {
@@ -456,7 +465,7 @@ function problemOf(
    * an id belongs in the field above, and that field carries its own collision
    * message on the one input whose value it is about.
    */
-  const problem = rowProblem(settled.rows, index);
+  const problem = problems[index];
   return problem === undefined ? undefined : problemMessage(problem);
 }
 

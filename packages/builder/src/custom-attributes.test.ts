@@ -22,6 +22,7 @@ import {
   problemMessage,
   rowProblem,
   rowsOf,
+  rowProblems,
   storedAttributes,
   type AttributeRow,
 } from "./custom-attributes";
@@ -820,5 +821,87 @@ describe("a DUPLICATE-refused row holding an origin too", () => {
     expect(rowProblem(rows, 0)).toEqual({ kind: "duplicate" });
     expect(rowProblem(rows, 1)).toEqual({ kind: "duplicate" });
     expect(storedAttributes(rows, "", stored)).toEqual(stored);
+  });
+});
+
+describe("a held origin spelled with capitals", () => {
+  it("is matched case-insensitively, as every other key here is", () => {
+    /*
+     * `{ "DATA-A": "1", "data-b": "2" }` loaded, the first row renamed to the
+     * refused `onclick` and the second onto `data-a`. The held set carried the
+     * raw `DATA-A` while the check asked for the normalized `data-a`, so the
+     * second rename was accepted and both spellings were stored — and the
+     * renderer, which lowercases and lets the last one win, would have changed
+     * the rendered value while `data-b` disappeared.
+     */
+    const stored = { "DATA-A": "1", "data-b": "2" };
+    const rows = [
+      { name: "onclick", value: "1", origin: "DATA-A" },
+      { name: "data-a", value: "2", origin: "data-b" },
+    ];
+    expect(rowProblem(rows, 1)).toEqual({ kind: "duplicate" });
+    expect(storedAttributes(rows, "", stored)).toEqual(stored);
+  });
+});
+
+describe("a bag with a great many rows in it", () => {
+  it("is judged without the work growing faster than the bag", () => {
+    /*
+     * A COMPLEXITY guard rather than a timing assertion: every row's verdict
+     * rebuilt the held set, which walked every row, each of which rescanned
+     * every row for its key. An imported bag of a few hundred permitted
+     * `data-*` entries froze the panel outright, so this fails by not finishing
+     * rather than by being slow.
+     */
+    const size = 600;
+    /*
+     * A backward chain of refusals, which is what actually costs: the last row
+     * is refused on its own terms and holds its origin, refusing the row before
+     * it, and so on. Every link needs another pass over the set, so this is the
+     * shape where recomputing the analysis per row multiplies.
+     *
+     * A field of ordinary VALID rows would not have caught it — the fixed point
+     * exits after one pass when nothing is refused, and the first version of
+     * this test passed against the unfixed code for exactly that reason.
+     */
+    const rows = [
+      ...Array.from({ length: size - 1 }, (_each, at) => ({
+        name: `data-${String(at + 1)}`,
+        value: String(at),
+        origin: `data-${String(at)}`,
+      })),
+      { name: "onclick", value: "x", origin: `data-${String(size - 1)}` },
+    ];
+    const stored = Object.fromEntries(rows.map(row => [row.origin, row.value]));
+
+    // Every row refused, so the document is left exactly as it was.
+    expect(storedAttributes(rows, "", stored)).toEqual(stored);
+    expect(rowProblems(rows).filter(each => each === undefined)).toHaveLength(
+      0
+    );
+  });
+});
+
+describe("which of two rows keeps a key spelled with capitals", () => {
+  it("keeps the DOCUMENT's row even when it is not the first one", () => {
+    /*
+     * The rule is that a row which came from the document and still carries its
+     * own name keeps the key, and only first-wins between two document rows.
+     * That comparison has to normalize: a bag spelled `DATA-A` supplies a row
+     * whose origin is `DATA-A` while the key everything else speaks is
+     * `data-a`, so an unnormalized check does not recognise it as the
+     * document's row at all — and first-wins then blames it for the new row
+     * the author typed above it.
+     */
+    const rows = [
+      { name: "data-a", value: "new" },
+      { name: "DATA-A", value: "stored", origin: "DATA-A" },
+    ];
+    expect(rowProblem(rows, 1)).toBeUndefined();
+    expect(rowProblem(rows, 0)).toEqual({ kind: "duplicate" });
+    // And the stored value is what survives, not the row typed over it.
+    expect(storedAttributes(rows, "", { "DATA-A": "stored" })).toEqual({
+      "data-a": "stored",
+    });
   });
 });

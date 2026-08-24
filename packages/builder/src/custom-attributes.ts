@@ -115,7 +115,28 @@ export function rowProblem(
   rows: readonly AttributeRow[],
   index: number
 ): RowProblem | undefined {
-  return problemGiven(rows, index, heldOrigins(rows));
+  return rowProblems(rows)[index];
+}
+
+/**
+ * Every row's verdict, worked out ONCE for the whole set.
+ *
+ * The verdicts are not independent — who keeps a contested key, and which keys
+ * refused rows are holding, are both facts about the set — so asking row by row
+ * recomputed both for every row. With the held set settled to a fixed point on
+ * top of that, a large imported bag froze the panel: a few hundred permitted
+ * `data-*` entries is an ordinary import and was enough.
+ *
+ * So the set is analysed once and each row reads its answer out. `rowProblem`
+ * stays for the single-row callers, and says by its own shape that asking it in
+ * a loop is asking for the analysis again each time.
+ */
+export function rowProblems(
+  rows: readonly AttributeRow[]
+): (RowProblem | undefined)[] {
+  const keepers = keepersOf(rows);
+  const held = heldOrigins(rows, keepers);
+  return rows.map((_row, index) => problemGiven(rows, index, keepers, held));
 }
 
 /**
@@ -128,6 +149,7 @@ export function rowProblem(
 function problemGiven(
   rows: readonly AttributeRow[],
   index: number,
+  keepers: ReadonlyMap<string, number>,
   held: ReadonlySet<string>
 ): RowProblem | undefined {
   const row = rows[index];
@@ -135,7 +157,7 @@ function problemGiven(
   const alone = soloProblem(row);
   if (alone !== undefined) return alone;
   const key = attributeKey(row.name);
-  const keeps = keeperOf(rows, key);
+  const keeps = keepers.get(key);
   if (keeps !== undefined && keeps !== index) return { kind: "duplicate" };
   // Asked BEFORE the held keys, so a row the field above owns is told that
   // rather than being called a duplicate of whatever is holding the name.
@@ -178,21 +200,27 @@ function problemGiven(
  * document — two spellings of one name in an imported bag — first-wins is still
  * the answer.
  */
-function keeperOf(
-  rows: readonly AttributeRow[],
-  key: string
-): number | undefined {
-  const sharing = rows
-    .map((other, at) => ({ other, at }))
-    .filter(
-      ({ other }) => !isBlankRow(other) && attributeKey(other.name) === key
-    );
-  if (sharing.length <= 1) return undefined;
-  const settled = sharing.filter(
-    ({ other }) =>
-      other.origin !== undefined && attributeKey(other.origin) === key
-  );
-  return (settled.length > 0 ? settled : sharing)[0]?.at;
+function keepersOf(rows: readonly AttributeRow[]): Map<string, number> {
+  const sharing = new Map<string, number[]>();
+  rows.forEach((row, at) => {
+    if (isBlankRow(row)) return;
+    const key = attributeKey(row.name);
+    const holders = sharing.get(key);
+    if (holders === undefined) sharing.set(key, [at]);
+    else holders.push(at);
+  });
+  const keepers = new Map<string, number>();
+  for (const [key, holders] of sharing) {
+    // One holder is nobody displaced, which is the ordinary row.
+    if (holders.length <= 1) continue;
+    const settled = holders.filter(at => {
+      const origin = rows[at]?.origin;
+      return origin !== undefined && attributeKey(origin) === key;
+    });
+    const keeps = (settled.length > 0 ? settled : holders)[0];
+    if (keeps !== undefined) keepers.set(key, keeps);
+  }
+  return keepers;
 }
 
 /**
@@ -230,15 +258,27 @@ function soloProblem(row: AttributeRow): RowProblem | undefined {
  * turns a refused row back into an accepted one — so the loop is monotone and
  * cannot run longer than there are rows to refuse.
  */
-function heldOrigins(rows: readonly AttributeRow[]): Set<string> {
+function heldOrigins(
+  rows: readonly AttributeRow[],
+  keepers: ReadonlyMap<string, number>
+): Set<string> {
   const held = new Set<string>();
   for (let pass = 0; pass < rows.length; pass += 1) {
     let grew = false;
     rows.forEach((row, index) => {
       const origin = row.origin;
-      if (origin === undefined || held.has(origin)) return;
-      if (problemGiven(rows, index, held) === undefined) return;
-      held.add(origin);
+      if (origin === undefined) return;
+      /*
+       * NORMALIZED, because the membership test asks with a normalized key.
+       * A stored `DATA-A` went in raw and was never matched, so a row renamed
+       * onto `data-a` was accepted and both spellings were stored — and the
+       * renderer lowercases and lets the last one win, so the rendered value
+       * changed while another attribute disappeared.
+       */
+      const key = attributeKey(origin);
+      if (held.has(key)) return;
+      if (problemGiven(rows, index, keepers, held) === undefined) return;
+      held.add(key);
       grew = true;
     });
     if (!grew) break;
@@ -290,6 +330,7 @@ export function storedAttributes(
   stored: Readonly<Record<string, string>> = {}
 ): Record<string, string> | undefined {
   const kept: Record<string, string> = {};
+  const problems = rowProblems(rows);
   rows.forEach((row, index) => {
     /*
      * Blankness is asked SEPARATELY from correctness, because they are
@@ -299,7 +340,7 @@ export function storedAttributes(
      * answer for both stored an attribute under the empty name.
      */
     if (isBlankRow(row)) return;
-    const problem = rowProblem(rows, index);
+    const problem = problems[index];
     if (problem === undefined) {
       kept[attributeKey(row.name)] = row.value;
       return;
