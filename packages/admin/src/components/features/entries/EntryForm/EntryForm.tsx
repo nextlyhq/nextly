@@ -684,7 +684,7 @@ export function EntryForm({
                       className="mx-6 mt-3"
                     />
 
-                    {/* `-my-8`, not `-m-8`. The vertical half still cancels
+                    {/* Vertical only, not both axes. The vertical half still cancels
                         `PageContainer`'s `py-8` so the editor's two columns
                         reach the top and bottom of the panel. The horizontal
                         half cancelled its `px-8`, and there is none left to
@@ -697,7 +697,7 @@ export function EntryForm({
                     <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
                       {/* Main column */}
                       <div className="flex-1 min-w-0 flex flex-col">
-                        {/* No `-mx-8` here. These bands fill the Main column,
+                        {/* No horizontal negative inset here. These bands fill the Main column,
                   which is already as wide as the content column allows;
                   pulling them wider pushed both ~32px past the page edges
                   and clipped the title's first character on the left and

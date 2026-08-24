@@ -145,7 +145,8 @@ export const PageContainer = React.forwardRef<
         surface,
         // Horizontal padding scales with the content-panel width (not the
         // viewport): 16px -> 24px -> 32px. The 32px step aligns with the
-        // edge-to-edge forms' -m-8, which fires at a wider panel (@4xl).
+        // edge-to-edge forms' negative inset, which fires at a wider panel
+        // (@4xl).
         "px-4 @sm/content:px-6 @2xl/content:px-8",
         rhythm,
         className

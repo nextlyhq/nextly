@@ -2,7 +2,8 @@
  * A measured page may cancel the page's VERTICAL inset and nothing else.
  *
  * `PageContainer` pads vertically and spends its horizontal inset as GRID
- * COLUMNS, so a `-m-8` inside a measured page has nothing to pull back from
+ * COLUMNS, so a two-axis negative inset in a measured page has nothing to pull
+ * back from
  * horizontally: it pulls the content PAST its own column instead. Measured at a
  * 1600px viewport before this was fixed, the entry editor rendered 960px wide
  * inside an 896px column, and its loading skeleton did the same — so the editor
@@ -63,34 +64,47 @@ function sourceFiles(dir = ""): string[] {
  * A negative inset that cancels the page's HORIZONTAL padding, in any variant,
  * any position, and any JSX spelling.
  *
- * Both utilities, because both do it: `-m-8` cancels the horizontal axis as a
- * side effect, and `-mx-8` beside a `-my-8` recreates it deliberately. An
+ * Both utilities, because both do it: the two-axis inset cancels the horizontal
+ * axis as a side effect, and the horizontal-only one beside a `-my-8`
+ * recreates it deliberately. An
  * earlier version matched only the first and carried a control asserting
- * `-mx-8` was fine — which would have let exactly that pairing restore the
+ * the horizontal-only spelling was fine — which would have let exactly that pairing restore the
  * 64px bleed with this test green.
  *
  * Not anchored on `className="`, which an earlier version was. That anchor
  * makes the check a check on ONE SPELLING rather than on the class: moving the
- * list into `cn("flex", "@4xl/content:-m-8")` is an ordinary refactor and it
- * walked straight past. Comments are removed first instead, so the scan reads
- * code however it is written while the prose explaining why the horizontal half
- * is gone — which necessarily names the utility — is not mistaken for it.
- */
-const HORIZONTAL_CANCEL = /(?:^|[\s:"'`{(,])-mx?-8\b/;
-
-/**
- * `source` with its comments removed.
+ * list into a `cn(...)` call is an ordinary refactor and it walked straight
+ * past.
  *
- * Line and block comments both, and JSX comments are block comments inside an
- * expression, so removing block comments covers them. String literals are not
- * tracked: a `//` inside one would truncate the line, which costs coverage
- * rather than creating a false positive, and no scanned file contains one.
+ * Comments are NOT excluded, which an earlier version also got wrong. Tailwind
+ * scans them like any other text and emits the rule from a sentence that spells
+ * the class out. Measured: prose in three files put both selectors into the
+ * shipped stylesheet, where a class built at runtime would have found them
+ * waiting. So the scan agrees with the scanner — any complete token anywhere is
+ * a finding — and the prose in those files, and in this one, describes the
+ * utility instead of naming it.
+ *
+ * This sentence is the demonstration. An earlier draft of it spelled both
+ * classes out to explain the hazard, and put them straight back into the
+ * stylesheet.
  */
-function withoutComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-}
+/**
+ * The two forbidden utilities, ASSEMBLED rather than written.
+ *
+ * Tailwind scans this file like any other source, so a complete token here —
+ * in a fixture or in a sentence — makes it emit the very rule the file exists
+ * to forbid. Measured: an earlier version put both selectors into the shipped
+ * stylesheet, which meant a class built at runtime would have found a rule
+ * waiting for it and bled 64px while this test passed.
+ *
+ * Split so no scanner sees a whole class. Nothing below writes one either; the
+ * prose says "the two-axis inset" and "the horizontal-only inset" for the same
+ * reason.
+ */
+const TWO_AXIS = `-m${"-8"}`;
+const HORIZONTAL_ONLY = `-mx${"-8"}`;
+
+const HORIZONTAL_CANCEL = /(?:^|[\s:"'`{(,])-mx?-8\b/;
 
 describe("a measured entry page", () => {
   it("reads the whole admin, not a list someone maintains", () => {
@@ -115,18 +129,26 @@ describe("a measured entry page", () => {
   it("sees a two-axis inset when there is one", () => {
     // The control for the check itself: a pattern that matched nothing would
     // report every file clean, including one that had regressed.
-    expect(HORIZONTAL_CANCEL.test('<div className="flex lg:-m-8">')).toBe(true);
-    expect(HORIZONTAL_CANCEL.test('<div className="@4xl/content:-m-8">')).toBe(
+    expect(
+      HORIZONTAL_CANCEL.test(`<div className="flex lg:${TWO_AXIS}">`)
+    ).toBe(true);
+    expect(
+      HORIZONTAL_CANCEL.test(`<div className="@4xl/content:${TWO_AXIS}">`)
+    ).toBe(true);
+    // First token, where a class reorder would otherwise hide it.
+    expect(HORIZONTAL_CANCEL.test(`<div className="${TWO_AXIS} flex">`)).toBe(
       true
     );
-    // First token, where a class reorder would otherwise hide it.
-    expect(HORIZONTAL_CANCEL.test('<div className="-m-8 flex">')).toBe(true);
     // And what it must not catch.
     // The pairing that recreates the bleed one utility at a time.
-    expect(HORIZONTAL_CANCEL.test('<div className="-my-8 -mx-8">')).toBe(true);
-    expect(HORIZONTAL_CANCEL.test('<div className="@4xl/content:-mx-8">')).toBe(
-      true
-    );
+    expect(
+      HORIZONTAL_CANCEL.test(`<div className="-my-8 ${HORIZONTAL_ONLY}">`)
+    ).toBe(true);
+    expect(
+      HORIZONTAL_CANCEL.test(
+        `<div className="@4xl/content:${HORIZONTAL_ONLY}">`
+      )
+    ).toBe(true);
 
     // And what stays allowed: the vertical half alone, and any other size.
     expect(HORIZONTAL_CANCEL.test('<div className="flex lg:-my-8">')).toBe(
@@ -135,19 +157,14 @@ describe("a measured entry page", () => {
     expect(HORIZONTAL_CANCEL.test('<div className="-my-8 flex">')).toBe(false);
     expect(HORIZONTAL_CANCEL.test('<div className="-mx-4">')).toBe(false);
 
-    // And the prose, which every one of these files carries because the
-    // comment explaining the removal has to name what was removed.
+    expect(HORIZONTAL_CANCEL.test(`// cancels ${TWO_AXIS} horizontally`)).toBe(
+      true
+    );
+    // A comment naming the class is NOT an exception. Tailwind scans comments
+    // like any other text and emits the rule from one, so prose that spells it
+    // out is the same finding as code that does.
     expect(
-      HORIZONTAL_CANCEL.test(withoutComments("{/* `-my-8`, not `-m-8` */}"))
-    ).toBe(false);
-    expect(
-      HORIZONTAL_CANCEL.test(withoutComments("// cancels -m-8 horizontally"))
-    ).toBe(false);
-    // Prose is excluded by removing comments, NOT by the pattern — so the raw
-    // sentence does match, and must, or the pattern would be blind to a class
-    // that happened to sit after a backtick.
-    expect(
-      HORIZONTAL_CANCEL.test("{/* `-my-8`, not `-m-8`, because … */}")
+      HORIZONTAL_CANCEL.test(`{/* \`-my-8\`, not \`${TWO_AXIS}\` */}`)
     ).toBe(true);
   });
 
@@ -155,9 +172,7 @@ describe("a measured entry page", () => {
     const offenders = sourceFiles()
       .filter(path => path !== THIS_FILE)
       .filter(path =>
-        HORIZONTAL_CANCEL.test(
-          withoutComments(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
-        )
+        HORIZONTAL_CANCEL.test(readFileSync(resolve(ADMIN_SRC, path), "utf8"))
       );
 
     expect(

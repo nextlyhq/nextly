@@ -625,10 +625,10 @@ export function SingleForm({
                       {/* No horizontal compensation here, and none needed. The
                 parent's `-my-8` cancels the page's VERTICAL inset only; the
                 horizontal inset is spent as grid columns on a measured page and
-                is not a padding any margin can pull back from. An `-mx-8` here
+                is not a padding any margin can pull back from. A horizontal one here
                 would not cancel anything — it would push the header and meta
                 strip past the content column, which is what it did when the
-                parent still carried `-m-8`. */}
+                parent still cancelled both axes. */}
                       <EntrySystemHeader
                         autosaveEnabled={autosaveScope !== null}
                         autosaveStatus={autosave.status}
