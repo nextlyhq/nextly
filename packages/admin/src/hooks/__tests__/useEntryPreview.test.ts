@@ -9,13 +9,6 @@ vi.mock("@admin/services/previewUrlApi", () => ({
   previewUrlApi: { resolve },
 }));
 
-vi.mock("@admin/lib/preview/preview-data", () => ({
-  storePreviewData: vi.fn(() => "preview-key"),
-  generatePreviewUrlWithData: vi.fn(
-    (url: string, key: string) => `${url}?__preview=${key}`
-  ),
-}));
-
 /** A stand-in for the tab `window.open` hands back. */
 function fakeTab() {
   return { location: { href: "" }, close: vi.fn(), opener: {} as unknown };
@@ -224,70 +217,49 @@ describe("openPreview", () => {
     expect(onUnavailable).toHaveBeenCalledWith("failed");
   });
 
-  it("sends unsaved form values, not the saved row", async () => {
+  /*
+   * Four tests stood here and are gone with the behaviour they described: the
+   * hook sent unsaved form values to the resolver, wrote them to session
+   * storage before opening the tab, appended `?_preview=<key>` same-origin and
+   * dropped it cross-origin.
+   *
+   * That handoff never worked. Nothing ever read the key back — `_preview`
+   * appeared nowhere outside the admin — so the preview always rendered saved
+   * content while the tests asserted the machinery around a payload with no
+   * reader. They are obsolete rather than redundant: there is no other file
+   * covering this, because the behaviour itself was removed.
+   */
+  it("resolves against the SAVED row and appends nothing to the URL", async () => {
     const tab = fakeTab();
     openSpy.mockReturnValue(tab as unknown as Window);
-    // Same-origin on purpose: this test is about WHICH VALUES reach the
-    // resolver, and a cross-origin URL would additionally drop the session-key
-    // handoff, mixing a second behaviour into the assertion.
+    // Same-origin on purpose. The removed handoff was gated on origin, so a
+    // cross-origin URL could pass this assertion for the wrong reason — it
+    // would be bare because the gate refused it, not because nothing appends.
     resolve.mockResolvedValue({
       status: "resolved",
-      url: `${window.location.origin}/p/new`,
+      url: `${window.location.origin}/p/saved`,
     });
 
     const { result } = renderHook(() =>
       useEntryPreview({
         collection,
         entry: { id: "1", slug: "saved" },
-        getFormValues: () => ({ slug: "edited" }),
       })
     );
     await act(async () => {
       await result.current.openPreview();
     });
 
-    // Resolving against the saved row would open the previous URL and show the
-    // wrong page, which is worse than not offering the button.
+    // The address and the content have to agree. What opens is the site's draft
+    // route, which renders the saved row, so resolving from anything else names
+    // a page that does not exist yet.
     expect(resolve).toHaveBeenCalledWith({
       collection: "posts",
-      entry: { id: "1", slug: "edited" },
+      entry: { id: "1", slug: "saved" },
     });
-    expect(tab.location.href).toBe(
-      `${window.location.origin}/p/new?__preview=preview-key`
-    );
-  });
-
-  it("stores unsaved data BEFORE opening the tab, not after", async () => {
-    const tab = fakeTab();
-    const order: string[] = [];
-    const { storePreviewData } = await import(
-      "@admin/lib/preview/preview-data"
-    );
-    vi.mocked(storePreviewData).mockImplementation(() => {
-      order.push("store");
-      return "preview-key";
-    });
-    openSpy.mockImplementation(() => {
-      order.push("open");
-      return tab as unknown as Window;
-    });
-    resolve.mockResolvedValue({ status: "resolved", url: "https://s.dev/p/1" });
-
-    const { result } = renderHook(() =>
-      useEntryPreview({
-        collection,
-        entry: { id: "1" },
-        getFormValues: () => ({ slug: "edited" }),
-      })
-    );
-    await act(async () => {
-      await result.current.openPreview();
-    });
-
-    // A new browsing context gets a COPY of session storage taken at creation.
-    // Written afterwards, the key stays in this window and the preview silently
-    // shows the last saved values instead of the edits on screen.
-    expect(order).toEqual(["store", "open"]);
+    // Navigated to unchanged: no key, no query, nothing claiming to carry
+    // edits the server will never see.
+    expect(tab.location.href).toBe(`${window.location.origin}/p/saved`);
   });
 
   it("reports a blocked popup instead of navigating the admin away", async () => {
@@ -312,64 +284,25 @@ describe("openPreview", () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it("drops the unsaved-data key cross-origin and says so, rather than sending a dead one", async () => {
+  it("navigates a CROSS-ORIGIN site URL unchanged", async () => {
+    // The counterpart to the same-origin case above. A configured site URL
+    // routinely names another origin, and the URL must survive that untouched —
+    // this is where the removed handoff used to branch.
     const tab = fakeTab();
     openSpy.mockReturnValue(tab as unknown as Window);
-    // jsdom serves the admin from localhost; the site is elsewhere, which is
-    // what a configured site URL now routinely means.
     resolve.mockResolvedValue({
       status: "resolved",
       url: "https://site.example.com/p/1",
     });
-    const onUnsavedChangesNotSent = vi.fn();
 
     const { result } = renderHook(() =>
-      useEntryPreview({
-        collection,
-        entry: { id: "1" },
-        getFormValues: () => ({ slug: "edited" }),
-        onUnsavedChangesNotSent,
-      })
+      useEntryPreview({ collection, entry: { id: "1" } })
     );
     await act(async () => {
       await result.current.openPreview();
     });
 
-    // Session storage is partitioned per origin, so the key would name a
-    // payload the preview page cannot reach. Appending it would look like it
-    // worked while quietly rendering stale content.
     expect(tab.location.href).toBe("https://site.example.com/p/1");
-    expect(tab.location.href).not.toContain("__preview");
-    // Reported, because silently previewing saved data is the failure mode this
-    // whole path exists to prevent.
-    expect(onUnsavedChangesNotSent).toHaveBeenCalled();
-  });
-
-  it("still sends the key when the site is same-origin", async () => {
-    // The positive control for the drop above: without it, a hook that never
-    // appended the key would satisfy that test perfectly.
-    const tab = fakeTab();
-    openSpy.mockReturnValue(tab as unknown as Window);
-    resolve.mockResolvedValue({
-      status: "resolved",
-      url: `${window.location.origin}/p/1`,
-    });
-    const onUnsavedChangesNotSent = vi.fn();
-
-    const { result } = renderHook(() =>
-      useEntryPreview({
-        collection,
-        entry: { id: "1" },
-        getFormValues: () => ({ slug: "edited" }),
-        onUnsavedChangesNotSent,
-      })
-    );
-    await act(async () => {
-      await result.current.openPreview();
-    });
-
-    expect(tab.location.href).toContain("__preview=preview-key");
-    expect(onUnsavedChangesNotSent).not.toHaveBeenCalled();
   });
 
   it("navigates the current window when the collection opts out of a new tab", async () => {

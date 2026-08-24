@@ -26,7 +26,7 @@ import { HistoricalDocumentBanner } from "@admin/components/features/versions/Hi
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { snapshotToFormValues } from "@admin/components/features/versions/snapshot-to-form-values";
 import { VersionSnapshotForm } from "@admin/components/features/versions/VersionSnapshotForm";
-import { Alert, AlertDescription, Skeleton } from "@admin/components/ui";
+import { Alert, AlertDescription, Skeleton, toast } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -35,6 +35,10 @@ import {
   autosaveScopeFor,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
+import {
+  PREVIEW_MESSAGES,
+  useEntryPreview,
+} from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
@@ -573,6 +577,39 @@ export function EntryForm({
     ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
   });
 
+  /*
+   * Opening the preview, which is a different action from minting the link
+   * beside it: this one uses the editor's OWN session and hands out no
+   * credential, so it is offered wherever the collection declares a preview
+   * rather than only where a link may be shared.
+   *
+   * Given the SAVED entry rather than the form's current values. The site's
+   * draft route renders the saved row, so resolving the address from an unsaved
+   * slug would open a page that does not exist yet — the address and the
+   * content have to agree.
+   */
+  const entryPreview = useEntryPreview({
+    collection,
+    entry,
+    onUnavailable: reason => {
+      toast.error(PREVIEW_MESSAGES[reason]);
+    },
+  });
+
+  /*
+   * Decided ONCE and used for both the flag and the handler.
+   *
+   * `PreviewActions` needs the pair and draws nothing without either, so
+   * answering this question twice — once for each prop — is a divergence the
+   * control's own shape would hide: a handler passed where the flag says no
+   * looks identical to no preview at all, and the disagreement only surfaces
+   * when someone later reads one of them alone.
+   *
+   * The saved-id half is not about permission. What opens renders the saved
+   * row, so on a create form there is nothing at the address yet.
+   */
+  const canPreview = entryPreview.isPreviewAvailable && savedEntryId !== "";
+
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
     onSave: () => {
@@ -719,6 +756,15 @@ export function EntryForm({
                           locale={locale}
                           onLocaleChange={onLocaleChange}
                           localized={collection.localized === true}
+                          // Unlike the link beside it, the locale does not gate
+                          // this: the preview carries no grant, so an unresolved
+                          // language costs the reader a redirect rather than
+                          // handing them every translation.
+                          isPreviewAvailable={canPreview}
+                          previewLabel={entryPreview.label}
+                          {...(canPreview
+                            ? { onPreview: entryPreview.openPreview }
+                            : {})}
                           // Withheld while the language is unknown as well as while
                           // the entry is unsaved: a link minted without a resolvable
                           // locale is either refused by the mint route or, if the claim
