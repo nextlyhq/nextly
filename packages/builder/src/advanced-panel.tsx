@@ -32,6 +32,7 @@ import * as React from "react";
 
 import {
   domIdsTaken,
+  renderedIdIn,
   htmlUpdate,
   type HtmlFields,
   isBlankRow,
@@ -48,9 +49,29 @@ import {
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
 
+/**
+ * What a refused write says, wherever it is refused.
+ *
+ * Names no single cause, because `apply` reports none: it answers `null` for
+ * ANY refused op — a value past the document's byte limit, but equally an
+ * update to a node a concurrent edit or an undo has removed, or a document
+ * carrying duplicate node ids. Telling an author their page is full when their
+ * block has gone sends them to fix the wrong thing.
+ */
+const REFUSED =
+  "That change could not be saved. A very long value can push the page past its size limit; otherwise the block may have changed since you opened this tab.";
+
 export interface AdvancedPanelProps {
   readonly nodeId: string;
-  readonly cssId: string;
+  /**
+   * The element's `id`, or `undefined` when the node carries no such field.
+   *
+   * The two are different states and the renderer reads them differently: a
+   * stored `""` is PRESENT, renders `id=""`, and shadows any `id` in the bag
+   * below. The panel has to be able to say which one it is looking at, or the
+   * empty-but-present one can never be removed.
+   */
+  readonly cssId: string | undefined;
   readonly attributes: Readonly<Record<string, string>> | undefined;
   readonly editor: EditorState;
   /**
@@ -86,7 +107,7 @@ export function AdvancedPanel({
   blocks,
 }: AdvancedPanelProps): React.JSX.Element {
   const [draft, setDraft] = React.useState<Draft>(() => ({
-    id: cssId,
+    id: cssId ?? "",
     rows: rowsOf(attributes),
   }));
   /*
@@ -99,7 +120,7 @@ export function AdvancedPanel({
    * actually wanted, and it says what it does.
    */
   const [settled, setSettled] = React.useState<Draft>({
-    id: cssId,
+    id: cssId ?? "",
     rows: rowsOf(attributes),
   });
 
@@ -145,7 +166,7 @@ export function AdvancedPanel({
       lastWritten.current = null;
       return;
     }
-    const stored = { id: cssId, rows: rowsOf(attributes) };
+    const stored = { id: cssId ?? "", rows: rowsOf(attributes) };
     setDraft(stored);
     setSettled(stored);
     loaded.current = stored;
@@ -166,6 +187,46 @@ export function AdvancedPanel({
   const latest = React.useRef<Draft>(draft);
   latest.current = draft;
   const write = React.useRef<(next: Draft) => void>(() => {});
+
+  /*
+   * The ONE place an op leaves this panel.
+   *
+   * Both things that write — the field commit below and the empty-id removal
+   * beside the CSS id — have to record the same three facts afterwards, and a
+   * second `editor.apply` that recorded none of them is what let a removal
+   * arrive at the effect above looking like an edit from somewhere else. The
+   * effect then replaced the draft with the stored rows, discarding a refused
+   * name and the explanation beside it. The module's own header names this
+   * shape: two commit paths for one pair of fields, disagreeing about what they
+   * had just written.
+   *
+   * Answers whether the op landed, so a caller can stop.
+   */
+  const store = React.useRef<
+    (wanted: HtmlFields, update: { patch: object; unset: string[] }) => boolean
+  >(() => false);
+  store.current = (wanted, update): boolean => {
+    const applied = editor.apply({
+      kind: "update",
+      id: nodeId,
+      patch: update.patch,
+      ...(update.unset.length > 0 ? { unset: update.unset } : {}),
+    } as Parameters<EditorState["apply"]>[0]);
+    /*
+     * REFUSED ops leave the document alone, and `apply` says so by answering
+     * `null`. Marking the attempt as written before knowing would tell the
+     * effect above that the props it sees are this panel's own echo, so it
+     * would stop re-reading the document and the field would go on showing a
+     * value nothing stored.
+     */
+    if (applied === null) {
+      setRefusal(REFUSED);
+      return false;
+    }
+    setRefusal(undefined);
+    lastWritten.current = wanted;
+    return true;
+  };
 
   write.current = (next: Draft): void => {
     /*
@@ -195,33 +256,7 @@ export function AdvancedPanel({
       setRefusal(undefined);
       return;
     }
-    const applied = editor.apply({
-      kind: "update",
-      id: nodeId,
-      patch: update.patch,
-      ...(update.unset.length > 0 ? { unset: update.unset } : {}),
-    } as Parameters<EditorState["apply"]>[0]);
-    /*
-     * REFUSED ops leave the document alone, and `apply` says so by answering
-     * `null`. Marking the attempt as written before knowing would tell the
-     * effect above that the props it sees are this panel's own echo, so it
-     * would stop re-reading the document and the field would go on showing a
-     * value nothing stored.
-     *
-     * The message names no single cause, because `apply` reports none: it
-     * answers `null` for ANY refused op — a value past the document's byte
-     * limit, but equally an update to a node a concurrent edit or an undo has
-     * removed. Both are reachable from this panel, and telling an author their
-     * page is full when their block has gone sends them to fix the wrong thing.
-     */
-    if (applied === null) {
-      setRefusal(
-        "That change could not be saved. A very long value can push the page past its size limit; otherwise the block may have changed since you opened this tab."
-      );
-      return;
-    }
-    setRefusal(undefined);
-    lastWritten.current = wanted;
+    if (!store.current(wanted, update)) return;
     /*
      * REBASED onto what landed — the id as well as the rows, because the id is
      * normalized on the way out and the rows are not.
@@ -233,7 +268,9 @@ export function AdvancedPanel({
      * rows were already rebased for the same reason; the id was the site this
      * rule had not reached.
      */
-    const landed = wanted.cssId;
+    // The DRAFT is text, so an absent field and an empty one are both the empty
+    // box; the difference lives in `wanted` and is settled before this.
+    const landed = wanted.cssId ?? "";
     loaded.current = { id: landed, rows: rebasedRows(next.rows, wanted) };
     /*
      * The FIELD only follows when the author's own id is the one that landed.
@@ -321,7 +358,7 @@ export function AdvancedPanel({
     settle(next);
   };
 
-  const idProblem = idProblemOf(settled.id, cssId, taken);
+  const idProblem = idProblemOf(settled.id, cssId ?? "", taken);
   /*
    * Analysed ONCE for the settled set, not once per row. Every verdict depends
    * on the whole set — who keeps a contested key, which keys refused rows are
@@ -329,6 +366,43 @@ export function AdvancedPanel({
    * imported bag of a few hundred attributes stopped rendering.
    */
   const problems = React.useMemo(() => rowProblems(settled.rows), [settled]);
+  /*
+   * Whether removing the empty id would reveal one. The bag's `id` is dead
+   * while the modelled field is present, so saying so is the difference
+   * between "this does nothing visible" and "this changes the anchor".
+   *
+   * Asked of the RENDERER's reading rather than of this editor's. The two are
+   * not the same rule: `attributeKey` trims a name on its way to being stored,
+   * so an imported `" id "` normalizes to `id` under it while the renderer,
+   * which matches the stored name, emits no id at all — and the note would then
+   * promise to reveal something that was never there.
+   */
+  const emptyIdShadows = renderedIdIn(attributes) !== undefined;
+
+  /*
+   * Written directly rather than through the draft, because the draft cannot
+   * hold the distinction: its id is text, and the box is already empty.
+   */
+  const removeEmptyId = (): void => {
+    const update = htmlUpdate(
+      { cssId: undefined, attributes },
+      { cssId, attributes }
+    );
+    if (update === undefined) return;
+    const wanted = { cssId: undefined, attributes };
+    /*
+     * Through the SAME writer as every other op this panel sends, so the echo
+     * is recorded and the effect above does not mistake this panel's own write
+     * for an edit from elsewhere. Written separately once, it discarded a
+     * refused row and its reason every time an empty id was removed.
+     *
+     * `loaded` moves with it: the field is gone, so the draft is in step with
+     * the document at an empty box, and the next commit has nothing to do
+     * rather than proposing this removal a second time.
+     */
+    if (!store.current(wanted, update)) return;
+    loaded.current = { id: "", rows: rebasedRows(latest.current.rows, wanted) };
+  };
 
   return (
     <div className="nx-inspector__fields">
@@ -369,6 +443,38 @@ export function AdvancedPanel({
             role="alert"
           >
             {idProblem}
+          </p>
+        )}
+        {/*
+          The EMPTY-BUT-PRESENT id, which the box above cannot express.
+
+          A field holding `""` renders `id=""` and shadows any `id` in the bag
+          below, and no amount of typing in an already-empty box says "remove
+          it" — the draft matches what was loaded, so a commit correctly finds
+          nothing to do. This is the gesture that was missing.
+
+          Shown only in that state. Cleaning it up on open would be a write
+          nobody asked for, and folding it into an unrelated save would change
+          the id the page renders as a side effect of editing an attribute:
+          removing the modelled field UNSHADOWS the bag's `id`, so it has to be
+          the author's decision and has to say what it does.
+        */}
+        {cssId !== "" ? null : (
+          <p className="nx-inspector__note" role="status">
+            This block has an empty id set, which renders as{" "}
+            <code>id=&quot;&quot;</code>
+            {emptyIdShadows
+              ? " and hides the id set in the attributes below"
+              : ""}
+            .{" "}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => removeEmptyId()}
+            >
+              Remove the empty id
+            </Button>
           </p>
         )}
       </div>

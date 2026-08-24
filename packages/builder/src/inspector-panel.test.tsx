@@ -1427,3 +1427,214 @@ describe("the block set the collision check answers about", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 });
+
+describe("a node whose CSS id is present but empty", () => {
+  /*
+   * The renderer treats the modelled field as PRESENT whenever it is a string:
+   * it writes `extra.id = cssId` on `cssId !== undefined`, so `cssId: ""`
+   * renders `id=""` AND shadows any `id` in the attribute bag. The inspection
+   * collapsed it with an absent field, so the panel showed an empty box, every
+   * clear attempt read as untouched, and no `unset` could ever be emitted.
+   *
+   * Unreachable through the editor, which writes `unset` rather than `""`, so
+   * it arrives by import or by a script — and then cannot be undone.
+   */
+  const shadowed = {
+    cssId: "",
+    attributes: { id: "from-bag" },
+  } as unknown as Partial<BlockNode>;
+
+  it("says the empty id is there and what it is doing", () => {
+    mount(shadowed);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.getByRole("status").textContent).toContain("empty id");
+  });
+
+  it("offers a way to remove it, and removes it", () => {
+    const editor = mount(shadowed);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove the empty id" })
+    );
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["cssId"],
+    });
+  });
+
+  it("says nothing when the field is simply ABSENT", () => {
+    // The control: the ordinary block has no id and no note, or every block
+    // would carry a warning about a state it is not in.
+    mount({ attributes: { id: "from-bag" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Remove the empty id" })
+    ).toBeNull();
+  });
+
+  it("says nothing when the id holds a value", () => {
+    // The other control: a real id is not the empty-but-present state either.
+    mount({ cssId: "hero" });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("an empty id while an unrelated attribute is edited", () => {
+  it("is NOT removed as a side effect of that edit", () => {
+    /*
+     * The removal has to stay the author's explicit decision. Treating an
+     * untouched empty box as a request to drop the field meant any other save
+     * carried `unset: ["cssId"]` with it — bypassing the button, and silently
+     * unshadowing the bag's `id` so the rendered anchor changed because an
+     * attribute was edited.
+     */
+    const editor = mount({
+      cssId: "",
+      attributes: { id: "from-bag", "data-x": "1" },
+    } as unknown as Partial<BlockNode>);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    /*
+     * Row ONE, not two: `rowsOf` sorts by name, so `data-x` sits above `id`.
+     * Editing by position without checking which row it is has passed for the
+     * wrong reason here before.
+     */
+    const name = screen.getByLabelText("Name of attribute 1");
+    expect((name as HTMLInputElement).value).toBe("data-x");
+    const value = screen.getByLabelText("Value of attribute 1");
+    fireEvent.change(value, { target: { value: "2" } });
+    fireEvent.blur(value);
+
+    expect(editor.apply).toHaveBeenCalled();
+    const op = editor.apply.mock.calls.at(-1)?.[0] as {
+      patch: Record<string, unknown>;
+      unset?: string[];
+    };
+    expect(op.unset ?? []).not.toContain("cssId");
+    // The control: the edit itself DID land, so this is not passing on a write
+    // that never happened.
+    expect(op.patch["attributes"]).toMatchObject({ "data-x": "2" });
+  });
+
+  it("still reports a refused removal instead of doing nothing", () => {
+    /*
+     * `apply` answers `null` for any refused op — a document with duplicate
+     * node ids passes inspection and is refused by the store. The panel's other
+     * writer says so through the refusal line; the button silently did nothing.
+     */
+    register();
+    const editor = editorFor(
+      documentOf({ cssId: "" } as unknown as Partial<BlockNode>)
+    );
+    editor.apply.mockReturnValue(null);
+    render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove the empty id" })
+    );
+
+    expect(editor.apply).toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be saved"
+    );
+  });
+});
+
+describe("what the empty-id note promises", () => {
+  it("does not claim to reveal an id the renderer would not emit", () => {
+    /*
+     * `isAllowedAttribute(" id ")` is false — the renderer checks the STORED
+     * name, spaces and all — so no bag id reaches the page and removing the
+     * empty modelled field reveals nothing. Reading the name through the
+     * editor's own normalization, which trims, promised otherwise.
+     */
+    mount({
+      cssId: "",
+      attributes: { " id ": "never-rendered" },
+    } as unknown as Partial<BlockNode>);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const note = screen.getByRole("status").textContent ?? "";
+    // The control: the note IS shown, so this is not passing on its absence.
+    expect(note).toContain("empty id");
+    expect(note).not.toContain("hides the id");
+  });
+
+  it("DOES claim it when the renderer would emit one", () => {
+    // The other half: the promise is right when the bag really is shadowed.
+    mount({
+      cssId: "",
+      attributes: { ID: "revealed" },
+    } as unknown as Partial<BlockNode>);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(screen.getByRole("status").textContent).toContain("hides the id");
+  });
+});
+
+describe("removing an empty id while a row is refused", () => {
+  it("keeps the refused row and its reason on screen", () => {
+    /*
+     * The removal wrote through its own `editor.apply` rather than the panel's
+     * one writer, so it recorded no echo: the resulting prop change arrived at
+     * the synchronisation effect looking like an edit from somewhere else, and
+     * the effect replaced the draft with the stored rows — discarding the
+     * refused name the author was fixing, and the explanation beside it.
+     *
+     * The module's own docblock names this shape: two commit paths for the same
+     * pair of fields, disagreeing about what they had just written.
+     */
+    register();
+    const document = documentOf({
+      cssId: "",
+      attributes: { "data-x": "1" },
+    } as unknown as Partial<BlockNode>);
+    const editor = editorFor(document);
+    const { rerender } = render(<InspectorPanel editor={editor} />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+
+    const name = screen.getByLabelText("Name of attribute 1");
+    fireEvent.change(name, { target: { value: "onclick" } });
+    fireEvent.blur(name);
+    // The control: the refused draft and its reason are on screen to be lost.
+    expect((name as HTMLInputElement).value).toBe("onclick");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove the empty id" })
+    );
+    /*
+     * Re-rendered with the field GONE, which is what a real store does after
+     * this op. A spy editor never re-renders, and the defect only appears when
+     * the panel sees its own write arrive back through props.
+     */
+    rerender(
+      <InspectorPanel
+        editor={
+          {
+            ...editor,
+            document: documentOf({
+              attributes: { "data-x": "1" },
+            } as unknown as Partial<BlockNode>),
+          } as never
+        }
+      />
+    );
+
+    expect(
+      (screen.getByLabelText("Name of attribute 1") as HTMLInputElement).value
+    ).toBe("onclick");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "does not put that attribute"
+    );
+  });
+});

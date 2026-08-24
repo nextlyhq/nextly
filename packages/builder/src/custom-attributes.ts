@@ -472,6 +472,13 @@ function renderedIdOf(node: BlockNode): string | undefined {
 /**
  * The `id` the renderer would emit from an attribute bag, if any.
  *
+ * EXPORTED so nothing asks this question a second way. The editor normalizes a
+ * name it is about to write — trimming and lowercasing through `attributeKey` —
+ * and that describes what this panel WOULD store, not what a stored bag holds:
+ * an imported `" id "` normalizes to `id` under that rule while the renderer,
+ * matching the stored name, emits nothing for it. A caller wanting to know what
+ * the page shows has to ask the reading that models the page.
+ *
  * Read case-INSENSITIVELY, because that is how the renderer reads it: HTML
  * attribute names are ASCII case-insensitive and it lowercases every key before
  * writing, so a stored `{ ID: "hero" }` renders as `id="hero"`. A scan looking
@@ -482,7 +489,7 @@ function renderedIdOf(node: BlockNode): string | undefined {
  * lowercased key in turn, so a later one replaces an earlier one. This editor
  * never writes two spellings, but an import or a script can.
  */
-function renderedIdIn(
+export function renderedIdIn(
   attributes: Readonly<Record<string, string>> | undefined
 ): string | undefined {
   /*
@@ -521,7 +528,16 @@ function childNodesOf(node: BlockNode): unknown[] {
 
 /** What a node should hold, and what it holds now. */
 export interface HtmlFields {
-  readonly cssId: string;
+  /**
+   * The element's `id`, or `undefined` for a node carrying no such field.
+   *
+   * `""` is a THIRD state and a reachable one: the renderer writes
+   * `extra.id = cssId` on `cssId !== undefined`, so a stored empty string
+   * renders `id=""` and shadows any `id` in the bag. This editor never writes
+   * it — clearing the field is `unset` — but an import can, and telling it
+   * apart from an absent field is what makes it removable.
+   */
+  readonly cssId: string | undefined;
   readonly attributes: Readonly<Record<string, string>> | undefined;
 }
 
@@ -545,6 +561,11 @@ export function requestedId(draft: Draft, loaded: Draft): string {
   return draft.id === loaded.id ? draft.id : draft.id.trim();
 }
 
+/** Whether the author has left the id field exactly as it was loaded. */
+function untouchedId(draft: Draft, loaded: Draft): boolean {
+  return draft.id === loaded.id;
+}
+
 /**
  * What a draft wants the node to hold — the whole question of what to STORE.
  *
@@ -563,7 +584,25 @@ export function wantedFields(
   taken: ReadonlySet<string>
 ): HtmlFields {
   const id = requestedId(draft, loaded);
-  const keptId = id !== "" && taken.has(id) ? stored.cssId : id;
+  /*
+   * An UNTOUCHED field wants whatever the node already holds, including an
+   * empty-but-present one. Reading an empty box as "remove it" made every other
+   * save carry `unset: ["cssId"]` along with it — bypassing the explicit
+   * removal the panel offers, and silently unshadowing the bag's `id` so the
+   * rendered anchor changed because an attribute was edited.
+   *
+   * Once the author HAS typed, an empty box means the field should be gone
+   * rather than present and empty: the panel has no gesture that asks for
+   * `id=""` while the renderer would emit one, so `undefined` is the only thing
+   * a cleared box can honestly mean.
+   */
+  const keptId = untouchedId(draft, loaded)
+    ? stored.cssId
+    : id === ""
+      ? undefined
+      : taken.has(id)
+        ? stored.cssId
+        : id;
   return {
     cssId: keptId,
     /*
@@ -576,7 +615,7 @@ export function wantedFields(
      */
     attributes: storedAttributes(
       draft.rows,
-      keptId === stored.cssId ? "" : keptId,
+      keptId === stored.cssId ? "" : (keptId ?? ""),
       stored.attributes ?? {}
     ),
   };
@@ -633,7 +672,10 @@ export function htmlUpdate(
   const patch: Record<string, unknown> = {};
   const unset: string[] = [];
   if (!sameId) {
-    if (wanted.cssId === "") unset.push("cssId");
+    // REMOVED rather than written empty. `applyOp` refuses `undefined` as a
+    // patch value and says why, and an empty string is a different request —
+    // it would leave the field present and rendering `id=""`.
+    if (wanted.cssId === undefined) unset.push("cssId");
     else patch["cssId"] = wanted.cssId;
   }
   if (!sameAttributes) {

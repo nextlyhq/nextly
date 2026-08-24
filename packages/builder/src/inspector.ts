@@ -89,8 +89,19 @@ export interface BlockIdentity {
  * this one about which node is selected.
  */
 export interface BlockHtml {
-  /** The element's `id`, empty when the author has not set one. */
-  readonly cssId: string;
+  /**
+   * The element's `id`. `undefined` when the node does not carry the field at
+   * all, which is NOT the same as carrying an empty one.
+   *
+   * The renderer treats the field as present whenever it is a string — it
+   * writes `extra.id = cssId` on `cssId !== undefined` — so a stored `""`
+   * renders `id=""` and shadows any `id` in the attribute bag. Collapsing the
+   * two into `""` here left the panel unable to tell them apart, so every
+   * attempt to clear an empty-but-present field read as no change and the
+   * field could never be removed. The distinction the document draws has to
+   * survive the reading of it.
+   */
+  readonly cssId: string | undefined;
   /**
    * The author's own attributes, absent when there are none.
    *
@@ -274,7 +285,7 @@ export function inspectSelection(
      * that is an array or null, must not reach a control typed for neither.
      */
     html: {
-      cssId: typeof node.cssId === "string" ? node.cssId : "",
+      cssId: typeof node.cssId === "string" ? node.cssId : undefined,
       attributes: editableAttributes(node.attributes),
     },
     // The same name the palette offered and the layers panel shows. Reading

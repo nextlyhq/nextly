@@ -252,9 +252,12 @@ describe("which ids a document already holds", () => {
 
 describe("the op that stores the two fields", () => {
   const fields = (
-    cssId: string,
+    cssId: string | undefined,
     attributes?: Record<string, string>
-  ): { cssId: string; attributes: Record<string, string> | undefined } => ({
+  ): {
+    cssId: string | undefined;
+    attributes: Record<string, string> | undefined;
+  } => ({
     cssId,
     attributes,
   });
@@ -272,8 +275,11 @@ describe("the op that stores the two fields", () => {
     /*
      * `applyOp` refuses `undefined` as a patch value and says why: the key
      * disappears when the op is stored, so a replayed edit would do nothing.
+     *
+     * Removal is `undefined`, not `""`. The two are different requests — see
+     * the test below — and this one asks for the field to be GONE.
      */
-    expect(htmlUpdate(fields(""), fields("hero"))).toEqual({
+    expect(htmlUpdate(fields(undefined), fields("hero"))).toEqual({
       patch: {},
       unset: ["cssId"],
     });
@@ -281,6 +287,26 @@ describe("the op that stores the two fields", () => {
       patch: {},
       unset: ["attributes"],
     });
+  });
+
+  it("keeps an EMPTY id distinct from an absent one", () => {
+    /*
+     * A third state, and the renderer reads it: it writes `extra.id = cssId`
+     * on `cssId !== undefined`, so a stored `""` renders `id=""` and shadows
+     * any `id` in the bag. Asking for one is therefore a patch, not an unset,
+     * and asking to remove one is an unset even though the box looks the same.
+     */
+    expect(htmlUpdate(fields(""), fields("hero"))).toEqual({
+      patch: { cssId: "" },
+      unset: [],
+    });
+    expect(htmlUpdate(fields(undefined), fields(""))).toEqual({
+      patch: {},
+      unset: ["cssId"],
+    });
+    // And neither is a change from itself.
+    expect(htmlUpdate(fields(""), fields(""))).toBeUndefined();
+    expect(htmlUpdate(fields(undefined), fields(undefined))).toBeUndefined();
   });
 
   it("does not unset a field the node never had", () => {
@@ -903,5 +929,36 @@ describe("which of two rows keeps a key spelled with capitals", () => {
     expect(storedAttributes(rows, "", { "DATA-A": "stored" })).toEqual({
       "data-a": "stored",
     });
+  });
+});
+
+describe("a bag whose id NAME the renderer will not accept", () => {
+  const node = (over: Record<string, unknown>): never =>
+    ({ id: "n", type: "acme/x", version: 1, props: {}, ...over }) as never;
+
+  it("reserves nothing for it", () => {
+    /*
+     * `isAllowedAttribute(" id ")` is false — the renderer checks the STORED
+     * name, syntax and all, before lowercasing it — so no id reaches the page
+     * and another block may use that value. Reading the name through
+     * `attributeKey`, which trims, is the EDITOR's normalization and describes
+     * what this panel would write rather than what the document holds.
+     */
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { " id ": "hero" } })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual([]);
+  });
+
+  it("still reserves one the renderer WILL accept", () => {
+    // The control: the rejection is about the spelling, not about the bag.
+    const taken = domIdsTaken(
+      [node({ id: "b", attributes: { ID: "hero" } })],
+      "a",
+      renders
+    );
+    expect([...taken]).toEqual(["hero"]);
   });
 });
