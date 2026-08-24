@@ -463,7 +463,56 @@ const COMPARISON_BUDGET = MAX_VALUE_PARTS;
  * Iterative, for the reason every other walk in this module is: a deep value
  * would otherwise exhaust the call stack and leave a native RangeError where
  * this module promises an `OpError`.
+ *
+ * Bounded in DEPTH as well as in parts, and the depth is what stops a cycle.
+ * The parts budget alone is a machine-size number, so two distinct
+ * self-referential values compare by descending forever until four million
+ * entries are spent — measured at roughly half a second for one pair, on a
+ * read a panel performs per address. {@link isJsonValue} already bounds its own
+ * walk this way and refuses such a value in a few steps; this now matches it,
+ * so a cycle costs {@link MAX_VALUE_DEPTH} rather than the whole budget.
+ *
+ * Answering "different" past the bound is the same safe direction the budget
+ * takes, and no value from a document reaches it: anything nested deeper is
+ * refused before it can be stored.
  */
+/**
+ * The keys two records must agree on value by value, or `null` when their key
+ * sets already settle it.
+ *
+ * Asked BEFORE any value is compared, because it is a different question: two
+ * records can disagree on their keys alone, and answering that first means the
+ * walk never queues a pair for a record that was never going to match.
+ *
+ * ORDER, not just membership, unless the caller's domain sorts. A stored
+ * document's identity is its serialized form, and `JSON.stringify` writes keys
+ * in insertion order — so `{ first: 1, second: 2 }` and `{ second: 2, first: 1 }`
+ * are different stored documents, and a block rendering `Object.entries(props)`
+ * produces different output from them. Comparing membership alone calls that
+ * reordering a no-op and refuses an edit that changes what the reader sees.
+ *
+ * Sorting both lists is what lets ONE comparison answer the other domain, where
+ * a compiler sorts the keys before emitting them and a reorder changes nothing.
+ * A second walk for that would be a second answer to drift from this one.
+ */
+function comparableKeys(
+  left: Readonly<Record<string, unknown>>,
+  right: Readonly<Record<string, unknown>>,
+  keyOrderMatters: boolean
+): readonly string[] | null {
+  const leftKeys = keyOrderMatters
+    ? Object.keys(left)
+    : Object.keys(left).sort();
+  const rightKeys = keyOrderMatters
+    ? Object.keys(right)
+    : Object.keys(right).sort();
+  if (leftKeys.length !== rightKeys.length) return null;
+  for (let index = 0; index < leftKeys.length; index += 1) {
+    if (leftKeys[index] !== rightKeys[index]) return null;
+  }
+  return leftKeys;
+}
+
 function equalWithin(
   a: unknown,
   b: unknown,
@@ -477,7 +526,7 @@ function equalWithin(
    */
   keyOrderMatters = true
 ): boolean {
-  const pending: [unknown, unknown][] = [[a, b]];
+  const pending: [unknown, unknown, number][] = [[a, b, 1]];
   // Charged at ENQUEUE, not on the way out. A budget checked per pop still
   // allocates one tuple per element before the next check can run, so a dense
   // array near the parts ceiling builds millions of temporary pairs to answer a
@@ -487,44 +536,25 @@ function equalWithin(
   while (pending.length > 0) {
     const pair = pending.pop();
     if (pair === undefined) break;
-    const [left, right] = pair;
+    const [left, right, depth] = pair;
     if (left === right) continue;
+    if (depth > MAX_VALUE_DEPTH) return false;
     if (Array.isArray(left) || Array.isArray(right)) {
       if (!Array.isArray(left) || !Array.isArray(right)) return false;
       if (left.length !== right.length) return false;
       if (queued + left.length > budget) return false;
       queued += left.length;
       for (let i = 0; i < left.length; i += 1)
-        pending.push([left[i], right[i]]);
+        pending.push([left[i], right[i], depth + 1]);
       continue;
     }
     if (isPlainRecord(left) && isPlainRecord(right)) {
-      const leftKeys = keyOrderMatters
-        ? Object.keys(left)
-        : Object.keys(left).sort();
-      const rightKeys = keyOrderMatters
-        ? Object.keys(right)
-        : Object.keys(right).sort();
-      if (leftKeys.length !== rightKeys.length) return false;
-      if (queued + leftKeys.length > budget) return false;
-      queued += leftKeys.length;
-      for (let index = 0; index < leftKeys.length; index += 1) {
-        const key = leftKeys[index];
-        if (key === undefined) return false;
-        // ORDER, not just membership, unless the caller says its domain sorts.
-        // A stored document's identity is its serialized form, and
-        // `JSON.stringify` writes keys in insertion order — so
-        // `{ first: 1, second: 2 }` and `{ second: 2, first: 1 }` are different
-        // stored documents, and a block rendering `Object.entries(props)`
-        // produces different output from them. Comparing membership alone calls
-        // that reordering a no-op and refuses an edit that changes what the
-        // reader sees.
-        //
-        // Both key lists are sorted when order does not matter, so this same
-        // comparison answers the other domain without a second walk existing to
-        // disagree with this one.
-        if (key !== rightKeys[index]) return false;
-        pending.push([left[key], right[key]]);
+      const keys = comparableKeys(left, right, keyOrderMatters);
+      if (keys === null) return false;
+      if (queued + keys.length > budget) return false;
+      queued += keys.length;
+      for (const key of keys) {
+        pending.push([left[key], right[key], depth + 1]);
       }
       continue;
     }

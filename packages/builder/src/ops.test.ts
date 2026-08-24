@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
+import {
+  applyOp,
+  OpError,
+  sameStoredValue,
+  sameStyleValue,
+  type BuilderOp,
+  type NodePatch,
+} from "./ops";
 
 import {
   countNodes,
@@ -2820,5 +2827,75 @@ describe("an inherited field is refused only when it would change the edit", () 
     } finally {
       delete (Object.prototype as Record<string, unknown>).slot;
     }
+  });
+});
+
+describe("what the two value comparisons each treat as the same value", () => {
+  /** A chain `{ next: { next: ... } }` ending in a leaf, `depth` links long. */
+  function chain(depth: number, leaf: unknown): unknown {
+    let value = leaf;
+    for (let level = 0; level < depth; level += 1) value = { next: value };
+    return value;
+  }
+
+  it("separates key ORDER by which domain is asking", () => {
+    /*
+     * The one difference between them, and it is a property of the readers
+     * rather than a preference. A stored value's identity is its serialized
+     * form — a block rendering `Object.entries(props)` really does produce
+     * different output from a reordered record — while a STYLE value is emitted
+     * by a compiler that sorts a composite's keys first, so a reorder compiles
+     * to the same bytes and changes nothing anyone can see.
+     */
+    const left = { first: 1, second: 2 };
+    const right = { second: 2, first: 1 };
+
+    expect(sameStoredValue(left, right)).toBe(false);
+    expect(sameStyleValue(left, right)).toBe(true);
+  });
+
+  it("agrees everywhere else, so only order separates them", () => {
+    /*
+     * The control on the assertion above. Two predicates that disagreed about
+     * more than order would be two implementations rather than one walk asked
+     * two ways, and the test above would pass just as well while hiding it.
+     */
+    const same = { a: [1, "2", { b: null }], c: true };
+    const copy = { a: [1, "2", { b: null }], c: true };
+    const other = { a: [1, "2", { b: null }], c: false };
+
+    expect(sameStoredValue(same, copy)).toBe(true);
+    expect(sameStyleValue(same, copy)).toBe(true);
+    expect(sameStoredValue(same, other)).toBe(false);
+    expect(sameStyleValue(same, other)).toBe(false);
+  });
+
+  it("answers `different` past the depth bound instead of walking on", () => {
+    /*
+     * The bound that stops a CYCLE costing the whole parts budget: a
+     * self-referential pair descends forever, and the budget is a machine-size
+     * number, so the walk spent millions of entries before answering.
+     *
+     * Asserted through legal nesting rather than through a cycle, because this
+     * pins WHERE the bound is. Equal values either side of it: below, they
+     * compare equal; above, the walk stops and says different — the same safe
+     * direction the budget takes, and unreachable from a document, which
+     * refuses anything nested that deep before it can be stored.
+     */
+    expect(sameStoredValue(chain(400, "leaf"), chain(400, "leaf"))).toBe(true);
+    expect(sameStoredValue(chain(700, "leaf"), chain(700, "leaf"))).toBe(false);
+  });
+
+  it("answers on two distinct cyclic values without spending the budget", () => {
+    /*
+     * Distinct objects on purpose: two references to one value are settled by
+     * identity before any bound is reached, so a shared fixture proves nothing.
+     */
+    const left: Record<string, unknown> = { a: 1 };
+    left.self = left;
+    const right: Record<string, unknown> = { a: 1 };
+    right.self = right;
+
+    expect(sameStoredValue(left, right)).toBe(false);
   });
 });
