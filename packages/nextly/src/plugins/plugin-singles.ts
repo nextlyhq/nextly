@@ -43,7 +43,10 @@ import type {
   ListSinglesOptions,
   SingleRegistryService,
 } from "../domains/singles/services/single-registry-service";
-import type { DynamicSingleRecord } from "../schemas/dynamic-singles/types";
+import type {
+  DynamicSingleRecord,
+  SingleSource,
+} from "../schemas/dynamic-singles/types";
 
 /**
  * @public Read-only registry access to the app's Singles.
@@ -95,14 +98,50 @@ export interface SerializedFieldConfig {
 }
 
 /**
- * A Single as the registry can describe it.
+ * A Single as this listing can describe it.
  *
- * Everything `DynamicSingleRecord` carries, with `fields` narrowed to what
- * survived the round trip through storage.
+ * Declared member by member rather than derived from `DynamicSingleRecord`
+ * with the awkward parts subtracted. That distinction is the whole point: an
+ * `Omit<..., "fields">` inherits every OTHER member exactly as the registry
+ * declares it, including the ones the registry cannot actually return —
+ *
+ * - `admin.preview.url` is `(document) => string | null`. The registry reads
+ *   `admin` back through `JSON.parse`, and JSON has no functions, so a plugin
+ *   calling it gets a `TypeError` from a type that promised a callable.
+ * - `createdAt` and `updatedAt` are declared `Date` and produced by
+ *   `normalizeDbTimestamp`, whose signature is `(value: unknown) => string |
+ *   null`. The registry bridges that with `as unknown as Date`, so
+ *   `record.createdAt.getTime()` compiles and throws.
+ *
+ * Subtracting those two as well would fix today's members and leave the same
+ * trap armed for tomorrow's: anything added to the registry record arrives
+ * here unexamined, with its declared type republished as plugin API. Listing
+ * what this surface can honour means a new registry member is absent until
+ * somebody decides it belongs, which is the safe direction for a published
+ * type.
+ *
+ * Narrow on purpose. A member omitted can be added when somebody needs it; a
+ * member published cannot be withdrawn without breaking an installed plugin.
  */
-export type PluginSingleRecord = Omit<DynamicSingleRecord, "fields"> & {
+export interface PluginSingleRecord {
+  id: string;
+  /** The stable name. A Single's row may not exist; its slug always does. */
+  slug: string;
+  label: string;
+  description?: string;
+  /** The declaration, whether or not anybody has written to this Single. */
   fields: SerializedFieldConfig[];
-};
+  /** Where it came from: declared in code, built in the UI, or built in. */
+  source: SingleSource;
+  /**
+   * ISO strings, or null — NOT `Date`.
+   *
+   * `normalizeDbTimestamp` returns `string | null` and the registry casts the
+   * result to `Date`. This reports what the value is.
+   */
+  createdAt: string | null;
+  updatedAt: string | null;
+}
 
 /** What a plugin gets back from listing Singles. */
 export interface PluginSinglesResult {
@@ -134,13 +173,71 @@ export interface PluginSinglesService {
  * invisible — nothing about `services.singles = singleRegistry` looks like it
  * grants a plugin the ability to unregister a Single.
  */
+/**
+ * Project a registry record onto what this surface publishes.
+ *
+ * A real projection rather than an assertion, because the two shapes genuinely
+ * differ: the registry declares `createdAt` as `Date` and holds a string. A
+ * cast would have compiled and republished the same untruth one layer out,
+ * which is what makes copying members across deliberate work rather than
+ * plumbing.
+ *
+ * Timestamps go through {@link toIsoString}, which is a conversion rather than
+ * an assertion: the registry's own deserializer types the raw column as
+ * `Date | string | number`, so what arrives is genuinely one of three shapes.
+ */
+/**
+ * One timestamp, as an ISO string or null.
+ *
+ * `String(value)` was the first attempt and is wrong in two directions. On a
+ * `Date` it produces `"Fri Jan 02 2026 03:04:05 GMT+0000"` — a valid string,
+ * and NOT the ISO format the same column yields when the driver hands back
+ * text, so the published format would depend on which dialect answered. On
+ * anything else object-shaped it produces `"[object Object]"`, which is a
+ * string that looks like data and is not.
+ *
+ * Each accepted shape is converted on its own terms, and anything else answers
+ * null. A value this cannot read is ABSENT rather than mangled: a caller can
+ * see a null, and cannot see that `"[object Object]"` was never a timestamp.
+ */
+function toIsoString(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    // An invalid Date stringifies to "Invalid Date" and `toISOString` throws,
+    // so it is reported as absent rather than as either.
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value === "string") return value;
+  if (typeof value === "number") {
+    const asDate = new Date(value);
+    return Number.isNaN(asDate.getTime()) ? null : asDate.toISOString();
+  }
+  return null;
+}
+
+function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
+  return {
+    id: record.id,
+    slug: record.slug,
+    label: record.label,
+    description: record.description,
+    // Assignable without an assertion: `SerializedFieldConfig` declares only
+    // members every `FieldConfig` arm already satisfies, which is what made
+    // narrowing it honest in the first place.
+    fields: record.fields,
+    source: record.source,
+    createdAt: toIsoString(record.createdAt),
+    updatedAt: toIsoString(record.updatedAt),
+  };
+}
+
 export function wrapSinglesForPlugin(
   registry: SingleRegistryService
 ): PluginSinglesService {
   return {
-    // The registry types `fields` as `FieldConfig[]`; what it actually holds
-    // came back through JSON. Narrowed here rather than left overstated, so the
-    // published type says what the data can support.
-    list: options => registry.listSingles(options),
+    list: async options => {
+      const result = await registry.listSingles(options);
+      return { data: result.data.map(toPluginRecord), total: result.total };
+    },
   };
 }

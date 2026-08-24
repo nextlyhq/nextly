@@ -197,3 +197,135 @@ describe("the context's service names and the resolver that answers them", () =>
     expect(asked).toContain("singleRegistryService");
   });
 });
+
+describe("the published record says what the registry can actually return", () => {
+  /**
+   * A registry row as it really comes back: timestamps normalised to strings
+   * and cast to `Date` by the deserializer, `admin` round-tripped through JSON
+   * so its `preview.url` function is gone. Built to mirror the runtime value,
+   * not the declared type — the gap between those two is the whole subject.
+   */
+  function rowAsStored() {
+    return {
+      id: "s1",
+      slug: "homepage",
+      label: "Homepage",
+      tableName: "single_homepage",
+      fields: [{ name: "content", type: "blocks" }],
+      source: "code",
+      // `normalizeDbTimestamp` returns `string | null`; the registry casts the
+      // result to `Date` with `as unknown as Date`.
+      createdAt: "2026-08-24T20:00:00.000Z",
+      updatedAt: "2026-08-24T21:00:00.000Z",
+      // Survived JSON, so `preview.url` — declared `(doc) => string | null` —
+      // is not here any more.
+      admin: { preview: {} },
+      schemaVersion: 1,
+      migrationStatus: "applied",
+    };
+  }
+
+  async function listOne() {
+    const registry = {
+      listSingles: async () => ({ data: [rowAsStored()], total: 1 }),
+    } as unknown as SingleRegistryService;
+    const result = await wrapSinglesForPlugin(registry).list();
+    return result.data[0]!;
+  }
+
+  it("reports timestamps as the strings they are", async () => {
+    // `DynamicSingleRecord` declares these `Date`, and the value is a string,
+    // so `record.createdAt.getTime()` compiled and threw. Asserting the TYPE
+    // of the value rather than its content: the content was never wrong.
+    const record = await listOne();
+
+    expect(typeof record.createdAt).toBe("string");
+    expect(record.createdAt).toBe("2026-08-24T20:00:00.000Z");
+  });
+
+  it("converts a timestamp that arrives as a Date, rather than passing it on", async () => {
+    // The assertion above does NOT separate a projection from a pass-through:
+    // its fixture already holds a string, so forwarding the row untouched
+    // satisfies it. `normalizeDbTimestamp` is typed `unknown -> string | null`
+    // and the registry's own deserializer types the raw column as
+    // `Date | string | number`, so a Date reaching here is a shape the code
+    // already admits — and it is the one that makes the conversion do work.
+    const registry = {
+      listSingles: async () => ({
+        data: [
+          { ...rowAsStored(), createdAt: new Date("2026-01-02T03:04:05Z") },
+        ],
+        total: 1,
+      }),
+    } as unknown as SingleRegistryService;
+
+    const [record] = (await wrapSinglesForPlugin(registry).list()).data;
+
+    // ISO, not `Date.prototype.toString()`. The same column yields ISO text
+    // when a driver hands back a string, so a `String(date)` conversion would
+    // make the published FORMAT depend on which dialect answered — different
+    // shape, same field, no error anywhere.
+    expect(record!.createdAt).toBe("2026-01-02T03:04:05.000Z");
+  });
+
+  it("reports an unreadable timestamp as absent rather than as text", async () => {
+    // `String(value)` on an object produces "[object Object]" — a string that
+    // looks like data and is not, and one a caller cannot tell from a real
+    // timestamp. Null is visible; mangled text is not.
+    const registry = {
+      listSingles: async () => ({
+        data: [{ ...rowAsStored(), createdAt: { nested: true } }],
+        total: 1,
+      }),
+    } as unknown as SingleRegistryService;
+
+    const [record] = (await wrapSinglesForPlugin(registry).list()).data;
+
+    expect(record!.createdAt).toBeNull();
+  });
+
+  it("keeps a null timestamp null instead of stringifying it", async () => {
+    // The other side of the same conversion. `normalizeDbTimestamp` returns
+    // `string | null`, and a naive `String(value)` turns the null half into the
+    // four-character string "null" — which is truthy, parses as a date to
+    // `Invalid Date`, and is worse than the absence it replaced.
+    const registry = {
+      listSingles: async () => ({
+        data: [{ ...rowAsStored(), createdAt: null }],
+        total: 1,
+      }),
+    } as unknown as SingleRegistryService;
+
+    const [record] = (await wrapSinglesForPlugin(registry).list()).data;
+
+    expect(record!.createdAt).toBeNull();
+  });
+
+  it("does not carry `admin`, whose preview URL cannot survive storage", async () => {
+    // `SinglePreviewConfig.url` is `(document) => string | null`. It is read
+    // back through `JSON.parse`, so a plugin calling it gets a TypeError from a
+    // member the type promised was callable. Absent beats present-and-broken.
+    const record = await listOne();
+
+    expect(record).not.toHaveProperty("admin");
+  });
+
+  it("publishes exactly the members it can honour", async () => {
+    // Pinned exhaustively, and this is the assertion that outlives the two
+    // above. They cover the members that were wrong TODAY; this one fails when
+    // a member is added, which is how both of those arrived — inherited from
+    // the registry record without anyone deciding they belonged.
+    const record = await listOne();
+
+    expect(Object.keys(record).sort()).toEqual([
+      "createdAt",
+      "description",
+      "fields",
+      "id",
+      "label",
+      "slug",
+      "source",
+      "updatedAt",
+    ]);
+  });
+});
