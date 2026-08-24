@@ -573,3 +573,13 @@ export type {
   FormLayoutProps,
   FormMeasure,
 } from "./types/form-layout";
+
+/**
+ * @experimental The page shell: the gutter, the measure and the sanctioned
+ * full-bleed escape, spent as grid columns so a second wrapper cannot add a
+ * second inset and a full-bleed child does not have to be rendered outside the
+ * measure in order to escape it. No first-party plugin has exercised it yet.
+ */
+export { Bleed, PageShell } from "./components/page-shell";
+/** @experimental */
+export type { BleedProps, PageShellProps } from "./components/page-shell";
