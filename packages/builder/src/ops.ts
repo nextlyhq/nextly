@@ -498,19 +498,47 @@ const COMPARISON_BUDGET = MAX_VALUE_PARTS;
 function comparableKeys(
   left: Readonly<Record<string, unknown>>,
   right: Readonly<Record<string, unknown>>,
-  keyOrderMatters: boolean
+  keyOrderMatters: boolean,
+  limit: number
 ): readonly string[] | null {
-  const leftKeys = keyOrderMatters
-    ? Object.keys(left)
-    : Object.keys(left).sort();
-  const rightKeys = keyOrderMatters
-    ? Object.keys(right)
-    : Object.keys(right).sort();
+  const leftKeys = ownKeysWithin(left, limit);
+  if (leftKeys === null) return null;
+  const rightKeys = ownKeysWithin(right, limit);
+  if (rightKeys === null) return null;
   if (leftKeys.length !== rightKeys.length) return null;
+  if (!keyOrderMatters) {
+    leftKeys.sort();
+    rightKeys.sort();
+  }
   for (let index = 0; index < leftKeys.length; index += 1) {
     if (leftKeys[index] !== rightKeys[index]) return null;
   }
   return leftKeys;
+}
+
+/**
+ * A record's own enumerable keys, or `null` when there are more than `limit`.
+ *
+ * Counted DURING enumeration rather than after it. `Object.keys(value)` builds
+ * the whole list before anything can refuse it, and sorting it costs more
+ * again — so a value carrying hundreds of thousands of keys, which an import or
+ * a corrupt document can produce, is paid for in full before the budget is
+ * consulted even once.
+ *
+ * `for...in` reaches the prototype, so `Object.hasOwn` filters; the pair reads
+ * exactly what `Object.keys` would, one key at a time and interruptibly.
+ */
+function ownKeysWithin(
+  value: Readonly<Record<string, unknown>>,
+  limit: number
+): string[] | null {
+  const keys: string[] = [];
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
+    if (keys.length >= limit) return null;
+    keys.push(key);
+  }
+  return keys;
 }
 
 function equalWithin(
@@ -549,12 +577,26 @@ function equalWithin(
       continue;
     }
     if (isPlainRecord(left) && isPlainRecord(right)) {
-      const keys = comparableKeys(left, right, keyOrderMatters);
+      const keys = comparableKeys(
+        left,
+        right,
+        keyOrderMatters,
+        budget - queued
+      );
       if (keys === null) return false;
-      if (queued + keys.length > budget) return false;
       queued += keys.length;
       for (const key of keys) {
-        pending.push([left[key], right[key], depth + 1]);
+        // DESCRIPTORS, not `left[key]`. A bracket read runs an own accessor,
+        // and this comparison is performed while a panel is inspecting a
+        // selection — so a getter with a side effect would run from rendering,
+        // and a throwing one would abort the read. An accessor-bearing value is
+        // reported different instead, without being invoked: the same direction
+        // the budget takes, and the one that cannot hide a disagreement.
+        const leftPart = Object.getOwnPropertyDescriptor(left, key);
+        const rightPart = Object.getOwnPropertyDescriptor(right, key);
+        if (leftPart === undefined || !("value" in leftPart)) return false;
+        if (rightPart === undefined || !("value" in rightPart)) return false;
+        pending.push([leftPart.value, rightPart.value, depth + 1]);
       }
       continue;
     }

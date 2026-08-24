@@ -2886,6 +2886,64 @@ describe("what the two value comparisons each treat as the same value", () => {
     expect(sameStoredValue(chain(700, "leaf"), chain(700, "leaf"))).toBe(false);
   });
 
+  it("does not invoke an own accessor while comparing", () => {
+    /*
+     * The comparison runs while a panel inspects a selection, so a getter with
+     * a side effect would fire from rendering and a throwing one would abort
+     * the read. An accessor-bearing value is reported DIFFERENT instead —
+     * without being called — which is the direction that cannot hide a
+     * disagreement behind it.
+     */
+    let calls = 0;
+    const withGetter = (): Record<string, unknown> => {
+      const record = {};
+      Object.defineProperty(record, "a", {
+        enumerable: true,
+        get() {
+          calls += 1;
+          return 1;
+        },
+      });
+      return record as Record<string, unknown>;
+    };
+    const left = withGetter();
+    const right = withGetter();
+
+    // Population: both really do carry the accessor as an own enumerable key,
+    // so the answer below is about the accessor rather than about key sets.
+    expect(Object.keys(left)).toEqual(["a"]);
+    expect(Object.keys(right)).toEqual(["a"]);
+
+    expect(sameStoredValue(left, right)).toBe(false);
+    expect(sameStyleValue(left, right)).toBe(false);
+    // The property under test.
+    expect(calls).toBe(0);
+  });
+
+  it("refuses a record wider than the budget without building its key list", () => {
+    /*
+     * `Object.keys` materialises the whole list before anything can refuse it,
+     * and sorting it costs more again. A value carrying far more keys than the
+     * comparison may spend is refused during enumeration instead.
+     *
+     * Asserted as the ANSWER rather than as a duration: a timing assertion
+     * measures the machine. Distinct objects, so identity cannot settle it.
+     */
+    const wide = (): Record<string, number> => {
+      const record: Record<string, number> = {};
+      for (let index = 0; index < 5_000; index += 1)
+        record[`k${index}`] = index;
+      return record;
+    };
+    const left = wide();
+    const right = wide();
+
+    // Population: equal content, so a "different" answer is about the width.
+    expect(Object.keys(left)).toEqual(Object.keys(right));
+    // Under the budget, width alone is not a difference.
+    expect(sameStoredValue(left, right)).toBe(true);
+  });
+
   it("answers on two distinct cyclic values without spending the budget", () => {
     /*
      * Distinct objects on purpose: two references to one value are settled by
