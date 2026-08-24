@@ -27,8 +27,10 @@ let generation = 1;
 const SHARER = { id: "minter-1", roles: ["editor"], role: "editor" };
 const resolvePreviewIdentity = vi.hoisted(() => vi.fn());
 vi.mock("../preview-identity", () => ({ resolvePreviewIdentity }));
-const assertSinglePreviewable = vi.hoisted(() => vi.fn());
-vi.mock("../../../api/preview-access", () => ({ assertSinglePreviewable }));
+const singleDocumentEditable = vi.hoisted(() => vi.fn());
+vi.mock("../../../domains/singles/services/single-document-access", () => ({
+  singleDocumentEditable,
+}));
 
 vi.mock("../preview-route-defaults", () => ({
   defaultSecret: () => TEST_SECRET,
@@ -61,8 +63,8 @@ beforeEach(() => {
   generation = 1;
   resolvePreviewIdentity.mockClear();
   resolvePreviewIdentity.mockResolvedValue(SHARER);
-  assertSinglePreviewable.mockClear();
-  assertSinglePreviewable.mockResolvedValue(undefined);
+  singleDocumentEditable.mockClear();
+  singleDocumentEditable.mockResolvedValue(true);
 });
 
 describe("previewSingleDraftGate", () => {
@@ -169,7 +171,7 @@ describe("previewSingleDraftGate", () => {
   // Single's own document rules bypassed, so without this the link kept serving
   // the draft until it expired.
   it("refuses once the sharer may no longer preview the Single", async () => {
-    assertSinglePreviewable.mockRejectedValue(new Error("forbidden"));
+    singleDocumentEditable.mockResolvedValue(false);
     await cookieFor({ kind: "single", single: "homepage" });
 
     await expect(previewSingleDraftGate()({ slug: "homepage" })).resolves.toBe(
@@ -178,12 +180,10 @@ describe("previewSingleDraftGate", () => {
     // Asked about the Single the TOKEN names, as the SHARER, and told that
     // nothing gated this request — a render has no route gate, and claiming one
     // ran skips the only check that notices a withdrawn role.
-    expect(assertSinglePreviewable).toHaveBeenCalledWith(
-      "homepage",
-      undefined,
-      SHARER,
-      { routeAuthorized: false }
-    );
+    expect(singleDocumentEditable).toHaveBeenCalledWith("homepage", {
+      user: SHARER,
+      routeAuthorized: false,
+    });
   });
   // A token minted BEFORE the claim existed, built the way one would actually
   // arrive: signed with the same derived key, carrying no `mnt`. The signer

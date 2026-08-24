@@ -31,6 +31,20 @@ describe("normalizeSingleDraftGrant", () => {
     expect(normalizeSingleDraftGrant({ readAs })).toEqual({ readAs });
   });
 
+  // A non-null object can still name NOBODY, and an identity with no `id` is
+  // judged as an anonymous-like user whose every property is absent — where a
+  // rule such as `user?.role !== "restricted"` PERMITS rather than denies.
+  it("refuses an identity that names nobody", () => {
+    expect(normalizeSingleDraftGrant({ readAs: {} })).toBeNull();
+    expect(
+      normalizeSingleDraftGrant({ readAs: { roles: ["editor"] } })
+    ).toBeNull();
+    expect(normalizeSingleDraftGrant({ readAs: { id: "" } })).toBeNull();
+    expect(normalizeSingleDraftGrant({ readAs: { id: "   " } })).toBeNull();
+    // Arrays are objects too.
+    expect(normalizeSingleDraftGrant({ readAs: [] })).toBeNull();
+  });
+
   // An OBJECT grant is a hook trying to name someone. One that failed to name
   // anyone must REFUSE, not fall back to the empty grant: an empty grant means
   // "trusted read, judged by nobody", which hands back the working draft with

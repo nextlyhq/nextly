@@ -112,9 +112,21 @@ export function normalizeSingleDraftGrant(
   if (grant === true) return {};
   if (typeof grant !== "object") return null;
   const readAs = (grant as { readAs?: unknown }).readAs;
-  return typeof readAs === "object" && readAs !== null
-    ? { readAs: readAs as UserContext }
-    : null;
+  // A non-null object can still name NOBODY. `UserContext` requires a string
+  // `id`, and an identity without one is judged as an anonymous-like user whose
+  // every property is absent — where a rule such as `user?.role !== "restricted"`
+  // PERMITS rather than denies. Absence is not the safe direction, so the id is
+  // required rather than assumed. Arrays are objects too, and name nobody.
+  if (
+    typeof readAs !== "object" ||
+    readAs === null ||
+    Array.isArray(readAs) ||
+    typeof (readAs as { id?: unknown }).id !== "string" ||
+    (readAs as { id: string }).id.trim() === ""
+  ) {
+    return null;
+  }
+  return { readAs: readAs as UserContext };
 }
 
 export interface SingleDraftRequest {

@@ -15,9 +15,9 @@
  *
  * @module runtime/preview/preview-single-draft-gate
  */
-import { assertSinglePreviewable } from "../../api/preview-access";
 import { previewTokenCovers } from "../../auth/preview/preview-token";
 import type { UserContext } from "../../direct-api/types/shared";
+import { singleDocumentEditable } from "../../domains/singles/services/single-document-access";
 import type { SingleDraftRequest } from "../routing/single-route";
 
 import { resolvePreviewIdentity } from "./preview-identity";
@@ -89,19 +89,34 @@ export function previewSingleDraftGate(
     // whoever holds the link until it expired — an account that is still
     // ACTIVE, so the deactivation check does not reach it either.
     //
-    // The SAME function the mint uses, rather than a second implementation of
-    // "may this person preview this Single". `routeAuthorized: false` because a
-    // render is an anonymous public request: nothing ran the coarse access gate
-    // for it, and claiming otherwise skips the only part that notices a
-    // withdrawn role.
-    try {
-      await assertSinglePreviewable(slug, locale, readAs, {
+    // **The EDITABLE half alone, and the exclusion is the point.** The mint
+    // asks both halves through `assertSinglePreviewable`, and the readable one
+    // cannot run here: it goes through `SingleQueryService.get`, which
+    // AUTO-CREATES a missing Single — row, localized defaults and a first
+    // version — and runs the Single's read hooks. A render is an anonymous
+    // public request, so that would let whoever holds a link persist a document
+    // and fire hook side effects, attributed to the sharer, on a page view.
+    // Reads do not write.
+    //
+    // What the editable half answers is also the question this gate needs. The
+    // working-draft overlay is gated on being able to EDIT the document, so
+    // edit capability is what decides whether a draft may be handed out at all;
+    // and it is non-mutating by construction, loading the row through the
+    // adapter and evaluating the stored rules against it.
+    //
+    // What it does NOT catch, stated rather than left to be found: a sharer who
+    // keeps update access and loses READ access through a custom rule. Closing
+    // that needs a readable probe that neither materializes nor runs hooks,
+    // which the Single read path does not currently offer.
+    if (
+      !(await singleDocumentEditable(slug, {
+        user: readAs,
+        // FALSE: a render is an anonymous public request. Nothing ran the
+        // coarse access gate for it, and claiming otherwise skips the only part
+        // that notices a withdrawn role.
         routeAuthorized: false,
-      });
-    } catch {
-      // Refused rather than propagated. A revoked link is an ordinary request
-      // outcome — the visitor sees the published document or a 404, the same as
-      // an expired one — not a 500 on a page that was working yesterday.
+      }))
+    ) {
       return false;
     }
 
