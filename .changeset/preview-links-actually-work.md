@@ -73,13 +73,35 @@ The "Copy shareable link" button still appears either way, deliberately: hiding 
 editor with a feature that vanished and nothing explaining why. Refusing at the click puts the
 cause, and the fact that a developer is the one who fixes it, in front of the person who hit it.
 
-The page builder's own `pages` collection now declares one, defaulted to the site root and
-overridable with `pageBuilder({ pagePreviewPath: "/blocks/{slug}" })` for a site that mounts its
-pages elsewhere.
+The page builder's own `pages` collection declares one when — and only when — the host says where
+those pages are served: `pageBuilder({ pagePreviewPath: "/{slug}" })` for pages at the site root,
+`"/blocks/{slug}"` for a site that mounts them under a prefix. There is deliberately no default.
+The plugin cannot install your preview route or your draft gate and cannot discover where you
+mounted your pages, so a defaulted path would let an editor mint a link that resolves to nothing —
+strictly worse than the refusal, which names what a developer needs to add. Passing the option is
+how an app states that it has done the wiring.
 
 In development, a content route that receives a valid preview link while declaring no
 `draft` hook now says so, naming the hook to add. Production is unchanged: every refusal stays an
 identical 404, because one that varied by cause would let a stranger discover which entries have
 drafts.
+
+The preview mount is validated when configuration is read, rather than when an editor clicks "Copy
+shareable link". `preview.route` names where your app mounts `createPreviewRoute`, and a value that
+cannot produce a working link — one pointing at another origin, or carrying a query, a fragment or a
+`..` segment — stops the boot with a message naming the value and the remedy. Previously the first
+sign of a bad mount was an editor being refused a link, and the person who can fix it is not the
+person reading that message.
+
+It is resolved after plugin `setup` transformers run, so a mount a plugin adds or replaces is
+checked as the one a link is actually built from, and the normalised value is what the container
+carries: `"/api/preview/"` no longer means one thing where it is read and another where it is used.
+
+A mount carrying its own query is refused rather than accepted and mangled. The link's `token`
+parameter is appended to this path, so `"/api/preview?tenant=a"` was assigned as a pathname and
+handed out as `/api/preview%3Ftenant=a` — a link that reaches no route and carries no token. A `..`
+is refused for a related reason: it resolves against whatever base the link is built on, and a site
+URL carrying its own path is a different base from the origin, so the mount would not be the one the
+value names.
 
 New guide: **Draft Preview Links**.

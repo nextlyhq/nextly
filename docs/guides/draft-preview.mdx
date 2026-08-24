@@ -54,6 +54,12 @@ export default defineConfig({
 });
 ```
 
+It is a mount path and nothing else — site-relative, with no host, no query and
+no fragment. A value carrying any of those is refused when the configuration is
+read, rather than at the moment an editor clicks copy: the link's own `token`
+parameter is appended to this path, so a path already carrying a `?` has nowhere
+to put it.
+
 ### 2. Add the draft gate to your content route
 
 This is the step most easily missed, and its failure is the most confusing.
@@ -140,6 +146,21 @@ If a collection declares neither, **the admin refuses to mint a link** and
 tells the editor that a developer needs to add a preview URL. That refusal is
 deliberate: the alternative was reporting success and handing over a link with
 nowhere to open.
+
+#### Pages built in the page builder
+
+The `pages` collection comes from the page-builder plugin, so you do not declare
+it — you tell the plugin where you serve it:
+
+```ts
+// nextly.config.ts
+plugins: [pageBuilder({ pagePreviewPath: "/{slug}" })];
+```
+
+Use `"/blocks/{slug}"`, or whatever prefix your blocks route is mounted under.
+There is no default, for the reason above: the plugin cannot see your routing,
+and a guessed path would trade the refusal that names the remedy for a 404 that
+names nothing.
 
 ## Using it
 
