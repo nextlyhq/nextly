@@ -62,6 +62,9 @@ export async function find<TSlug extends CollectionSlug>(
     page: args.page,
     limit: args.limit,
     where: args.where,
+    // From `args`, never from `config`: an exemption that `mergeConfig` could
+    // supply would reach nested reads the caller's own `where` travels into.
+    frameworkFilter: args.frameworkFilter,
     // Lifecycle-aware publish scope (also constrains localized companion _status).
     status: args.status,
     depth: config.depth,
@@ -401,6 +404,9 @@ export async function count(
   const result = await ctx.collectionsHandler.countEntries({
     collectionName: args.collection,
     where: args.where,
+    // From `args`, never `config` -- same reason as `find`: an inheritable
+    // exemption would reach nested reads a caller's own `where` travels into.
+    frameworkFilter: args.frameworkFilter,
     ...accessOptions(config),
     // i18n M4: parity with find() so locale-scoped counts match.
     locale: config.locale,
