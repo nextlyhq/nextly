@@ -287,11 +287,13 @@ describe("PageShell", () => {
 });
 
 describe("nested PageShell", () => {
-  it("adds no second grid and says so", async () => {
-    // An outer shell has already inset this content. A second grid would add
-    // another pair of gutter tracks and inset it twice, which is the defect
-    // this primitive exists to make unrepresentable — so nesting must not be
-    // left to every caller knowing whether an ancestor layout owns a shell.
+  it("reports the double inset rather than silently correcting it", async () => {
+    // Both ways of auto-correcting are worse than the warning. Keeping a
+    // wrapper puts a `Bleed` below it out of reach of the outer
+    // `.nx-page-shell > .nx-bleed` rule, so a full-bleed block collapses to the
+    // measure in PRODUCTION; dropping the wrapper takes the caller's className,
+    // style and ref with it. A double inset is visible and arrives with a
+    // message naming the fix.
     vi.resetModules();
     const fresh = await import("./page-shell");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -299,56 +301,30 @@ describe("nested PageShell", () => {
       const { container } = render(
         <fresh.PageShell>
           <fresh.PageShell>
-            <p>inner</p>
+            <fresh.Bleed>inner bleed</fresh.Bleed>
           </fresh.PageShell>
         </fresh.PageShell>
       );
 
-      expect(
-        container.querySelectorAll("[data-slot='page-shell']")
-      ).toHaveLength(1);
-      const inner = container.querySelector("[data-slot='page-shell-nested']");
-      expect(inner).not.toBeNull();
-      expect(inner?.classList.contains("nx-page-shell")).toBe(false);
+      const shells = container.querySelectorAll("[data-slot='page-shell']");
+      expect(shells).toHaveLength(2);
+
+      // The inner shell keeps its own grid, so a `Bleed` inside it is still the
+      // direct child the stylesheet rule requires — which is the property the
+      // suppressed-wrapper version broke.
+      const bleed = container.querySelector("[data-slot='bleed']");
+      expect(bleed?.parentElement).toBe(shells[1]);
+
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]?.[0])).toContain(
-        "ancestor already renders"
-      );
+      expect(String(warn.mock.calls[0]?.[0])).toContain("inset twice");
     } finally {
       warn.mockRestore();
     }
   });
 
-  it("keeps the caller's own style, dropping only the measure", async () => {
-    // Only `width` stops meaning anything when an ancestor owns the grid.
-    // Everything else the caller wrote is theirs, and losing it because a
-    // layout elsewhere in the tree added a shell is a defect they cannot see.
-    vi.resetModules();
-    const fresh = await import("./page-shell");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      const { container } = render(
-        <fresh.PageShell>
-          <fresh.PageShell width="wide" style={{ paddingTop: "7px" }}>
-            <p>inner</p>
-          </fresh.PageShell>
-        </fresh.PageShell>
-      );
-
-      const inner = container.querySelector<HTMLElement>(
-        "[data-slot='page-shell-nested']"
-      );
-      expect(inner?.style.paddingTop).toBe("7px");
-      // The measure would name a track that does not exist here.
-      expect(inner?.style.getPropertyValue("--nx-shell-measure")).toBe("");
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it("still owns the grid when shells are siblings rather than nested", async () => {
+  it("stays silent when shells are siblings rather than nested", async () => {
     // The negative control: the context must not leak across the tree, or two
-    // ordinary pages rendered side by side would silently lose their inset.
+    // ordinary pages rendered side by side would each report a false nesting.
     vi.resetModules();
     const fresh = await import("./page-shell");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -368,6 +344,37 @@ describe("nested PageShell", () => {
         container.querySelectorAll("[data-slot='page-shell']")
       ).toHaveLength(2);
       expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps every caller prop on a nested shell", async () => {
+    // Nothing is taken away from the caller because nothing is suppressed —
+    // which is the whole reason this reports instead of correcting.
+    vi.resetModules();
+    const fresh = await import("./page-shell");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { container } = render(
+        <fresh.PageShell>
+          <fresh.PageShell
+            width="wide"
+            style={{ paddingTop: "7px" }}
+            className="pb-0"
+            id="inner"
+          >
+            <p>inner</p>
+          </fresh.PageShell>
+        </fresh.PageShell>
+      );
+
+      const inner = container.querySelector<HTMLElement>("#inner");
+      expect(inner?.style.paddingTop).toBe("7px");
+      expect(inner?.classList.contains("pb-0")).toBe(true);
+      expect(inner?.style.getPropertyValue("--nx-shell-measure")).toBe(
+        "var(--nx-measure-wide)"
+      );
     } finally {
       warn.mockRestore();
     }

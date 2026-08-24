@@ -58,12 +58,26 @@ function hasBareTextChild(shell: HTMLElement): boolean {
 /**
  * A shell already owns the inset somewhere up the tree.
  *
- * Nesting is what would otherwise reintroduce the exact defect this primitive
- * exists to end: an outer shell places the inner one in its content column and
- * the inner grid adds a second pair of gutter tracks, so content is inset
- * twice. Relying on every caller to know whether an ancestor layout already
- * rendered a shell is the kind of unwritten precondition that holds until one
- * page is composed differently.
+ * Nesting reintroduces the exact defect this primitive exists to end: an outer
+ * shell places the inner one in its content column and the inner grid adds a
+ * second pair of gutter tracks, so content is inset twice. Relying on every
+ * caller to know whether an ancestor layout already rendered a shell is the
+ * kind of unwritten precondition that holds until one page is composed
+ * differently, so it is REPORTED.
+ *
+ * It is reported and not silently corrected, which is a deliberate choice
+ * between two imperfect options. Suppressing the inner grid means either
+ * keeping its wrapper — which lands in the outer content column and puts a
+ * `Bleed` below it out of reach of `.nx-page-shell > .nx-bleed`, collapsing a
+ * full-bleed block to the measure in PRODUCTION — or dropping the wrapper, and
+ * with it the caller's `className`, `style` and `ref`. Both trade a visible,
+ * warned mistake for a silent one. A double inset is conspicuous and arrives
+ * with a message naming the fix.
+ *
+ * React context crosses a portal while DOM ancestry does not, so a shell
+ * rendered through `createPortal` into a host outside this tree is reported as
+ * nested when it is not. That costs a spurious development message and nothing
+ * else: what renders no longer depends on this value.
  */
 const InsideShell = createContext(false);
 
@@ -149,6 +163,13 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
       const shell = shellRef.current;
       if (!shell) return;
 
+      devWarnOnce(
+        !nested,
+        "PageShell: an ancestor already renders a PageShell. The two grids each add a pair of " +
+          "gutter tracks, so this page's content is inset twice. Remove this shell, or move " +
+          "the outer one."
+      );
+
       const check = () => {
         devWarnOnce(
           !hasBareTextChild(shell),
@@ -203,36 +224,6 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
       ...style,
       "--nx-shell-measure": MEASURE[width],
     };
-
-    // A nested shell contributes NO second grid: the outer one already inset
-    // this content, and adding another pair of gutter tracks is precisely the
-    // double inset this primitive exists to make unrepresentable. It renders a
-    // plain box so its children stay in the outer measure, and says so, because
-    // the redundant shell is what the author should remove.
-    if (nested) {
-      devWarnOnce(
-        false,
-        "PageShell: an ancestor already renders a PageShell. A nested one would add a second " +
-          "pair of gutter tracks and inset its content twice, so this one renders as a plain " +
-          "box and its `width` is ignored. Remove it, or move the outer shell."
-      );
-      return (
-        <div
-          ref={attachRef}
-          data-slot="page-shell-nested"
-          className={className}
-          // The caller's own `style`, NOT the computed one. Only `width` stops
-          // meaning anything here, because the measure it selects has no grid
-          // to select a track in; everything else the caller wrote — spacing,
-          // positioning, their own custom properties — is theirs and must not
-          // vanish because an ancestor elsewhere in the tree added a shell.
-          style={style}
-          {...props}
-        >
-          {children}
-        </div>
-      );
-    }
 
     return (
       <InsideShell.Provider value={true}>
