@@ -358,7 +358,22 @@ function assembleSlots(
     // A slot absent from `built` held something this rebuild could not walk.
     // Keeping the stored value is the point: an unrelated edit must not be the
     // thing that destroys it.
-    slots[name] = built.get(name) ?? original;
+    const value = built.get(name) ?? original;
+    // DEFINED rather than assigned. Slot names come from unvalidated stored
+    // data, and plain assignment is not a plain write for all of them: an own
+    // `__proto__` slot invokes the legacy prototype setter instead of creating
+    // a property, so the stored value becomes the object's prototype and
+    // serialization emits `{}` — the slot silently emptied by an edit that
+    // named a different node.
+    //
+    // This is the write-side twin of reading through a `Map`. Fixing only the
+    // read left the one slot name that defeats the write.
+    Object.defineProperty(slots, name, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return { ...mapped, slots };
 }
@@ -534,7 +549,7 @@ function reidOne(node: BlockNode): BlockNode {
 }
 
 /**
- * Whether a subtree contains a node reached through itself.
+ * Whether a forest contains a node reached through itself.
  *
  * Asked of the walk rather than looked for here. `walkNodes` is cycle-TOLERANT
  * by design — a reader counting classes or measuring a document must answer
@@ -542,9 +557,9 @@ function reidOne(node: BlockNode): BlockNode {
  * walk REPORTS is the only account of it. A second traversal written here would
  * be a second definition of the same thing.
  */
-function isCyclic(node: BlockNode): boolean {
+function isCyclic(nodes: BlockNode[]): boolean {
   let cyclic = false;
-  walkNodes([node], () => undefined, {
+  walkNodes(nodes, () => undefined, {
     onCycle: () => {
       cyclic = true;
     },
@@ -565,7 +580,14 @@ export function duplicateNode(nodes: BlockNode[], id: string): BlockNode[] {
   // is what makes that safe to say: silently rebuilding the source would edit a
   // node the caller never named, on an operation they asked to be additive.
   // `insertNode` refuses a cyclic subtree for the same reason.
-  if (isCyclic(found)) return nodes;
+  // The WHOLE forest, not just the subtree being copied. A cycle in a sibling
+  // branch leaves the result equally unstorable — `JSON.stringify` refuses the
+  // forest, not the node — so an operation reporting success while handing back
+  // something that cannot be persisted is the thing worth refusing.
+  //
+  // The forest was already in that state before the call, so this declines to
+  // ADD to a document that cannot be saved rather than claiming to repair one.
+  if (isCyclic(nodes)) return nodes;
   const location = locateNode(nodes, id);
   if (!location) return nodes;
   return insertNode(nodes, reidSubtree(found), {

@@ -336,6 +336,24 @@ describe("a forest whose slots form a cycle", () => {
     expect(duplicateNode(nodes, nodes[0]!.id)).toBe(nodes);
   });
 
+  it("refuses a duplicate when a SIBLING branch carries the cycle", () => {
+    // The selected node is perfectly fine; the cycle is somewhere else in the
+    // forest. The result is equally unstorable, because `JSON.stringify`
+    // refuses the FOREST rather than the node — so a guard that inspected only
+    // the subtree being copied reported success and handed back something that
+    // cannot be persisted.
+    //
+    // The previous test cannot separate these implementations: it selects the
+    // cyclic node itself, so checking the subtree and checking the forest give
+    // the same answer.
+    const cyclic = makeNode("core/box", 1, {}, { main: [] });
+    cyclic.slots!.main.push(cyclic);
+    const target = makeNode("core/text", 1);
+    const forest = [cyclic, target];
+
+    expect(duplicateNode(forest, target.id)).toBe(forest);
+  });
+
   it("still duplicates an ACYCLIC subtree, so the refusal is not blanket", () => {
     // The control. A `duplicateNode` that refused everything would satisfy the
     // case above while never duplicating anything for anyone.
@@ -421,6 +439,29 @@ describe("a forest whose slots form a cycle", () => {
     const next = updateNode([holder, other], other.id, { props: { x: 1 } });
 
     expect(next[0]?.slots?.constructor).toEqual({ nope: true });
+  });
+
+  it("keeps an own `__proto__` slot, which plain assignment would swallow", () => {
+    // The write-side twin of the `constructor` case. Reading through a `Map`
+    // fixed the lookup; the STORE was still `slots[name] = value`, and that is
+    // not a plain write for `__proto__` — it invokes the legacy prototype
+    // setter, so the stored value becomes the object's prototype and
+    // serialization emits `{}`. The constructor test stays green throughout,
+    // because it exercises the read and not the write.
+    const holder = makeNode("core/box", 1);
+    const slots: Record<string, BlockNode[]> = {};
+    Object.defineProperty(slots, "__proto__", {
+      value: { nope: true } as unknown as BlockNode[],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    holder.slots = slots;
+    const other = makeNode("core/text", 1);
+
+    const next = updateNode([holder, other], other.id, { props: { x: 1 } });
+
+    expect(JSON.stringify(next[0]?.slots)).toBe('{"__proto__":{"nope":true}}');
   });
 
   it("passes a malformed ENTRY through rather than mapping it", () => {
