@@ -30,6 +30,8 @@ export {
   MAX_NAMED_CLASSES,
   isTokenRef,
   isBindingSource,
+  isBlockType,
+  MAX_BLOCK_TYPE_LENGTH,
   isComponentInstance,
 } from "./document";
 export type {
@@ -238,6 +240,10 @@ export {
   // trimming with the language's own function normalises spellings the engine
   // then refuses — or worse, converts one into a value it accepts.
   trimCssWhitespace,
+  // The longest style value the compiler reads: anything past it is refused
+  // before parsing, so a writer honours it and a reader keyed on what the sheet
+  // contains stops reading where the compiler does.
+  MAX_VALUE_LENGTH,
 } from "./style/css-value";
 export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";
@@ -304,7 +310,12 @@ export {
   resolveSiteTokens,
   emitFontFaces,
   emitTokenBlocks,
+  isAuthorableTokenName,
   isTokenName,
+  tokenNamingProblem,
+  MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
+  MAX_TOKEN_PREFIX_LENGTH,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package
   // pins it, and one that cannot reach these has no way to do that except to
@@ -416,6 +427,13 @@ export type { BreakpointAxis } from "./style/breakpoint-axes";
 
 // Where each emitted declaration came from, for an editor that has to tell an author which of
 // several tiers they are looking at. Produced only when `StyleCompileContext.trace` asks for it.
+// Every bound on a string the compiler can emit, as DATA rather than as prose.
+// A consumer that digests these inputs must keep enough of each string to tell
+// two apart whenever they compile differently, and this is the set that decides
+// how much "enough" is.
+export { EMITTABLE_STRING_BOUNDS } from "./style/emittable-string-bounds";
+export { MAX_SCOPE_LENGTH } from "./style/compile-page";
+export type { EmittableStringBound } from "./style/emittable-string-bounds";
 export type { StyleOrigin, StyleTraceEntry } from "./style/style-trace";
 export type { StyleQuery, StyleSubject } from "./style/style-origin";
 

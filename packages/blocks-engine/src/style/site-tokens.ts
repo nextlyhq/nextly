@@ -62,6 +62,10 @@ import {
   unitCategory,
 } from "./css-value";
 import {
+  MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
+  MAX_TOKEN_PREFIX_LENGTH,
+  isAuthorableTokenName,
   isTokenName,
   safeTokenPrefix,
   tokenCustomProperty,
@@ -155,7 +159,30 @@ export function tokenIdentity(token: SiteToken): string {
  * froze, so an identity is pinned once and never again.
  */
 export function renameSiteToken(token: SiteToken, name: string): SiteToken {
-  return { ...token, id: tokenIdentity(token), name };
+  const current = tokenIdentity(token);
+  // An identity this engine cannot write is not resolving for anything, so
+  // carrying it forward pins a token permanently unusable: the rename is
+  // accepted, the label changes, and the token still emits nothing with no
+  // remaining way to repair it.
+  //
+  // Re-pinning is safe in exactly that case and only there. A WORKING identity
+  // must never move, because every stored `$token` reads it — which is what
+  // this function exists to protect. One that cannot be emitted resolves for
+  // nothing, so no reference that WORKS is lost by replacing it.
+  //
+  // What that does not mean is that no references exist. A name refused today
+  // may have been valid when a document was saved, so stored `$token` values
+  // can still name it — already resolving to nothing, and still doing so after
+  // the token is repaired under a new identity. This makes the TOKEN usable
+  // again; the documents pointing at the old name are a separate repair, and
+  // one this helper cannot make: it is handed a token and never sees them.
+  if (
+    identityProblem(current, token.id === undefined ? "name" : "id") !==
+    undefined
+  ) {
+    return { ...token, id: undefined, name };
+  }
+  return { ...token, id: current, name };
 }
 
 /** One file a font face can be loaded from. */
@@ -189,6 +216,27 @@ export interface FontFaceDef {
 export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
 
 /** The `format()` hints a face may declare: plain keywords, nothing else. */
+/**
+ * The longest font format this engine will write.
+ *
+ * The grammar below constrains the alphabet and not the length, and a format is
+ * emitted into `format("...")` on every source of every face. Real values are
+ * `woff2`, `truetype`, `opentype` — so this sits far above anything meaningful
+ * and is only met by data already wrong.
+ */
+export const MAX_FONT_FORMAT_LENGTH = 32;
+
+/**
+ * The longest selector `emitTokenBlocks` will write a token block under.
+ *
+ * The selector is supplied by the caller and inserted into the emitted CSS
+ * verbatim — once for the light block and once more for a dark one — so an
+ * oversized one is copied into the sheet rather than merely held.
+ *
+ * Generous against what a caller passes: a page-scope class or `:root`.
+ */
+export const MAX_TOKEN_SELECTOR_LENGTH = 256;
+
 const FONT_FORMAT = /^[a-z0-9-]+$/i;
 
 /**
@@ -234,7 +282,13 @@ function tokenIssue(
  * everything after it is CSS the site never wrote. `x:1}body{color` is the
  * whole attack.
  */
-export { isTokenName };
+export {
+  isAuthorableTokenName,
+  isTokenName,
+  MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
+  MAX_TOKEN_PREFIX_LENGTH,
+};
 
 /**
  * A font descriptor that goes inside a quoted CSS string, made safe to put
@@ -684,7 +738,12 @@ export function validateFontFace(
     }
   }
   for (const source of face.src) {
-    if (source.format !== undefined && !FONT_FORMAT.test(source.format)) {
+    if (
+      source.format !== undefined &&
+      (typeof source.format !== "string" ||
+        source.format.length > MAX_FONT_FORMAT_LENGTH ||
+        !FONT_FORMAT.test(source.format))
+    ) {
       fail(`"${face.family}" has a font format that cannot be used.`);
     }
   }
@@ -764,17 +823,114 @@ export function emitFontFaces(faces: readonly FontFaceDef[]): {
 }
 
 /**
- * The custom-property blocks a site's tokens resolve in.
+ * What is wrong with the name a token carries, or nothing.
  *
- * Emitted onto a selector the caller supplies rather than `:root`, so a page's
- * tokens reach the page and stop there. Writing them at the document root would
- * make a site's values apply to a host's own markup, which is the collision
- * this styling layer spends its effort avoiding everywhere else.
+ * Answered once, for every gate that decides whether a token can be written —
+ * the emitter, the DTCG exporter and the DTCG importer all ask it, and each
+ * phrases its own message from the result. Returning the PROBLEM rather than a
+ * sentence is what lets them share the rule without sharing wording that would
+ * be wrong in two of the three.
  *
- * The dark block is only written when some token actually differs in dark. An
- * empty block is not free: it is a selector a host reads in devtools and takes
- * for a place where something should be happening.
+ * The split between grammar and length is the rule itself. A token's identity is
+ * `id ?? name`, so a renamed token is written under its id and its display name
+ * reaches no stylesheet and no exported file. Both fields meet the grammar,
+ * because either can BE the identity and either would reach a selector; only the
+ * identity meets the emission cap. Capping the display name instead drops a
+ * working token the moment an author gives it a long label.
  */
+export type TokenNamingProblem =
+  | { field: "name" | "id"; reason: "grammar" }
+  | { field: "name" | "id"; reason: "length" }
+  | { field: "name"; reason: "depth" };
+
+/**
+ * Why a LABEL cannot be used, or nothing.
+ *
+ * A label is what an author reads. It never becomes a custom property, so the
+ * emission cap does not reach it — that belongs to the identity.
+ *
+ * It does reach an exported file, though, and that is why it carries rules at
+ * all: the DTCG exporter splits it on dots and makes each part a key, so its
+ * grammar decides what those keys may contain and its DEPTH decides how far the
+ * reader has to descend to find the token underneath them.
+ */
+export function labelProblem(name: unknown): TokenNamingProblem | undefined {
+  // Persisted settings reach here unvalidated, and `RegExp.test` COERCES: a
+  // stored `123` becomes "123" and satisfies the grammar, after which the value
+  // travels on as a number and throws where a string was assumed.
+  if (typeof name !== "string") return { field: "name", reason: "grammar" };
+  if (!isAuthorableTokenName(name)) return { field: "name", reason: "grammar" };
+  // Counted in place: a label carries no length cap, so splitting it
+  // materialises every part of an oversized one only to refuse it.
+  let parts = 1;
+  for (let at = 0; at < name.length && parts <= MAX_TOKEN_NAME_SEGMENTS; at++) {
+    if (name[at] === ".") parts++;
+  }
+  if (parts > MAX_TOKEN_NAME_SEGMENTS)
+    return { field: "name", reason: "depth" };
+  return undefined;
+}
+
+/**
+ * Why an IDENTITY cannot be used, or nothing.
+ *
+ * An identity is what a token is WRITTEN under — it becomes the custom property
+ * and every stored reference reads it — so the emission cap applies. Depth does
+ * not: an identity never becomes DTCG groups, and refusing one for its depth is
+ * what clears a working id and breaks every reference to it.
+ *
+ * Separate from {@link labelProblem} rather than a flag on it, because the two
+ * subjects take different rules and a caller holding a bare string cannot be
+ * relied on to say which it has.
+ */
+export function identityProblem(
+  identity: unknown,
+  field: "name" | "id"
+): TokenNamingProblem | undefined {
+  if (typeof identity !== "string") return { field, reason: "grammar" };
+  if (!isAuthorableTokenName(identity)) return { field, reason: "grammar" };
+  if (identity.length > MAX_TOKEN_NAME_LENGTH)
+    return { field, reason: "length" };
+  return undefined;
+}
+
+/**
+ * Why a token cannot be written, or nothing.
+ *
+ * Composed from the two rules above so each applies to its own subject: the
+ * label is checked as a label, the identity as an identity. A token with an id
+ * is checked as both, because the id is the identity and the name is the label.
+ */
+export function tokenNamingProblem(token: {
+  name: unknown;
+  id?: unknown;
+}): TokenNamingProblem | undefined {
+  const label = labelProblem(token.name);
+  if (label !== undefined) return label;
+  if (token.id !== undefined) {
+    const stated = identityProblem(token.id, "id");
+    if (stated !== undefined) return stated;
+    return undefined;
+  }
+  // With no id the label IS the identity, so it meets the emission cap too.
+  return identityProblem(token.name, "name");
+}
+
+/** The emitter's wording for {@link tokenNamingProblem}. */
+function tokenNamingRefusal(token: SiteToken): string | undefined {
+  const problem = tokenNamingProblem(token);
+  if (problem === undefined) return undefined;
+  if (problem.reason === "depth") {
+    return `"${String(token.name)}" is nested too deeply, so it was not written. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
+  }
+  if (problem.reason === "length") {
+    return `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was not written. The ${problem.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
+  }
+  return problem.field === "name"
+    ? `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`
+    : `"${token.name}" has an id that is not a token name, so it was not written. An id is dot-separated words of letters, digits and dashes, like "color.primary".`;
+}
+
 export function emitTokenBlocks(
   set: SiteTokenSet,
   selector: string
@@ -787,28 +943,9 @@ export function emitTokenBlocks(
   const seen = new Map<string, string>();
 
   for (const token of set.tokens) {
-    // The name becomes the custom PROPERTY, so it is checked before it is
-    // composed: a name holding `}` closes the rule this opened, and everything
-    // after it is CSS the site never wrote.
-    if (!isTokenName(token.name)) {
-      issues.push(
-        tokenIssue(
-          `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`
-        )
-      );
-      continue;
-    }
-    // An id reaches the same selector by the same route, so it is held to the
-    // same grammar. Checked separately from the name rather than through the
-    // identity alone, so the report names the field the author has to repair —
-    // a token whose id is unwritable and whose name is fine reads as a good
-    // token otherwise, and "rename it" would be advice that fixes nothing.
-    if (token.id !== undefined && !isTokenName(token.id)) {
-      issues.push(
-        tokenIssue(
-          `"${token.name}" has an id that is not a token name, so it was not written. An id is dot-separated words of letters, digits and dashes, like "color.primary".`
-        )
-      );
+    const naming = tokenNamingRefusal(token);
+    if (naming !== undefined) {
+      issues.push(tokenIssue(naming));
       continue;
     }
     // A token with no values record at all. Site tokens are one settings row read on every page
@@ -903,6 +1040,20 @@ export function emitTokenBlocks(
     }
   }
 
+  // Refused rather than truncated: a selector cut in half is a different
+  // selector, and writing tokens under it would put the site's values on
+  // whatever it happens to match.
+  if (
+    typeof selector !== "string" ||
+    selector.length > MAX_TOKEN_SELECTOR_LENGTH
+  ) {
+    issues.push(
+      tokenIssue(
+        `The selector these tokens would be written under is longer than ${MAX_TOKEN_SELECTOR_LENGTH} characters, so none were written.`
+      )
+    );
+    return { css: "", issues };
+  }
   if (light.length === 0) return { css: "", issues };
 
   let css = `${selector}{${light.join(";")}}`;

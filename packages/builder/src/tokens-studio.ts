@@ -39,7 +39,9 @@
 import {
   TOKEN_KINDS,
   emitTokenBlocks,
-  isTokenName,
+  MAX_TOKEN_NAME_LENGTH,
+  MAX_TOKEN_NAME_SEGMENTS,
+  tokenNamingProblem,
   renameSiteToken,
   tokenCustomProperty,
   tokenIdentity,
@@ -238,7 +240,7 @@ function collisionFor(
 /**
  * Why this name cannot be used, or `undefined`.
  *
- * The GRAMMAR is the engine's `isTokenName`, which is the same rule a stored
+ * The GRAMMAR is the engine's own rule, which is the same one a stored
  * `$token` reference is held to — so a table cannot hold a name that no
  * reference could spell. Checked before the edit rather than after, because the
  * emitter's answer to a bad name is to drop the token silently.
@@ -250,13 +252,69 @@ export function tokenNameIssue(
 ): string | undefined {
   const trimmed = name.trim();
   if (trimmed === "") return "A token needs a name.";
-  if (!isTokenName(trimmed)) {
+  // Asked of the token the rename would PRODUCE, not of the label alone. A
+  // rename keeps a working identity pinned, so a long label is fine — but where
+  // the current identity is one the engine cannot write, the rename re-pins to
+  // this label and it becomes the identity, which the emission cap does reach.
+  // Validating the label alone accepts an edit that still leaves the token
+  // dropped from CSS, which is the repair appearing to succeed and not.
+  const existing = tokens?.tokens?.[at];
+  const proposed =
+    existing === undefined
+      ? { name: trimmed }
+      : renameSiteToken(existing, trimmed);
+  const problem = tokenNamingProblem(proposed);
+  if (problem?.reason === "grammar") {
     return 'A name is dot-separated words of letters, digits and dashes, like "color.primary".';
   }
-  const taken = (tokens?.tokens ?? []).some(
-    (token, index) => index !== at && token.name === trimmed
-  );
-  return taken ? `Another token is already called "${trimmed}".` : undefined;
+  if (problem?.reason === "depth") {
+    return `A name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
+  }
+  if (problem?.reason === "length") {
+    return `A name is at most ${MAX_TOKEN_NAME_LENGTH} characters when it is what the token is written under.`;
+  }
+  // Compared by the custom property each token is WRITTEN under, not by the
+  // name an author reads. The mapping is deliberately not injective — a dot and
+  // a dash both become a dash — so `color.primary-dark` and `color-primary.dark`
+  // are two legal names that land on one property, and the engine drops
+  // whichever it reaches second. A check on raw names accepts that edit and
+  // leaves a token silently unwritten.
+  const others = (tokens?.tokens ?? []).filter((_, index) => index !== at);
+
+  // Two questions, and neither answers the other. This one is what an author
+  // reads: two tokens answering to one name is a table nobody can use, whatever
+  // each is written under.
+  if (others.some(token => token.name === trimmed)) {
+    return `Another token is already called "${trimmed}".`;
+  }
+
+  // And this one is what the engine writes. The name-to-property mapping is
+  // deliberately not injective — a dot and a dash both become a dash — so
+  // `color.primary-dark` and `color-primary.dark` are two legal, visibly
+  // different names landing on one custom property, and the compiler drops
+  // whichever it reaches second. The name check above cannot see that.
+  const identityOf = (token: { name: string; id?: string }) =>
+    token.id ?? token.name;
+  const claimedIdentity = identityOf(proposed);
+  const claimed = tokenCustomProperty(claimedIdentity, "");
+  // Whether this row ALREADY shared its identity with another before the edit.
+  // That is a repair in progress — reporting it leaves the row unfixable
+  // whatever the author types — and it is a property of the row, not of the
+  // name being proposed. Deciding it from the PROPOSED identity instead
+  // suppresses the error whenever an edit newly claims another row's identity,
+  // which is the collision this check exists for.
+  const wasAlreadyTwinned =
+    existing !== undefined &&
+    others.some(token => identityOf(token) === identityOf(existing));
+
+  const clash = others.find(token => {
+    if (wasAlreadyTwinned && identityOf(token) === claimedIdentity)
+      return false;
+    return tokenCustomProperty(identityOf(token), "") === claimed;
+  });
+  return clash === undefined
+    ? undefined
+    : `"${trimmed}" is written under the same custom property as "${clash.name}".`;
 }
 
 /** Replace one token in the set, leaving every other entry untouched. */

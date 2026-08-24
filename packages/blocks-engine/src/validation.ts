@@ -18,6 +18,7 @@ import {
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
   isBindingSource,
+  isBlockType,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
@@ -256,9 +257,6 @@ export const ISSUE_CODES = {
 /** A stable validation issue code. */
 export type IssueCode = keyof typeof ISSUE_CODES;
 
-/** A node type is a namespaced slug, e.g. "core/heading". */
-const NODE_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
 /**
  * Whether a value is a well-formed node type, independent of any registry.
  *
@@ -273,7 +271,7 @@ const NODE_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * agree today.
  */
 export function isNodeType(value: unknown): value is string {
-  return typeof value === "string" && NODE_TYPE_RE.test(value);
+  return isBlockType(value);
 }
 
 /**

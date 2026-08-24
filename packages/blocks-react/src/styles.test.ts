@@ -14,9 +14,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import { compilePageCss } from "@nextlyhq/blocks-engine";
 
 import { createBlockResolver } from "./resolver";
-import { resolvePageStyles, type PageStyles } from "./styles";
+import { resolvePageStyles, toPageStyles, type PageStyles } from "./styles";
 
 const blocks = createBlockResolver([]);
 
@@ -193,5 +194,55 @@ describe("a stored artifact carrying gated rules", () => {
 
     expect(styles.css).toBe("");
     expect(styles.css).not.toContain("rebeccapurple");
+  });
+});
+
+describe("the scope an artifact records", () => {
+  // Declared here rather than imported: the engine's own fixture is internal to
+  // that package, and this file only needs one axis with a base.
+  const BREAKPOINTS = {
+    viewport: [{ id: "base", label: "Base" }],
+    container: [],
+  };
+
+  // A scope keeps two documents rendered into one DOM apart, and the renderer
+  // attaches whatever the artifact names. So an artifact recording a scope the
+  // COMPILER refused claims an isolation its own selectors do not carry, and
+  // the rules reach whatever else is on the page — which is the collision
+  // scoping exists to prevent, arriving with a scope class visibly present.
+  const doc = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "n1",
+        type: "core/box",
+        version: 1,
+        props: {},
+        styles: { base: { base: { color: "#111" } } },
+      },
+    ],
+  } as BlockDocument;
+
+  it("records nothing when the compiler refused the scope", () => {
+    // Whitespace is refused by shape rather than by length, so this holds
+    // whatever the length bound is.
+    const compiled = compilePageCss(doc, {
+      breakpoints: BREAKPOINTS,
+      scope: "two words",
+    });
+    expect(compiled.css).not.toContain("two words");
+    expect(toPageStyles(compiled, "two words").scope).toBeUndefined();
+  });
+
+  it("records the scope when the compiler wrote it", () => {
+    // The control. Without it, dropping every scope would satisfy the case
+    // above and silently unscope every page in the product.
+    const compiled = compilePageCss(doc, {
+      breakpoints: BREAKPOINTS,
+      scope: "nx-doc-1",
+    });
+    expect(compiled.css).toContain("nx-doc-1");
+    expect(toPageStyles(compiled, "nx-doc-1").scope).toBe("nx-doc-1");
   });
 });

@@ -13,9 +13,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EMITTABLE_STRING_BOUNDS,
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
+  MAX_VALUE_LENGTH,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -49,6 +51,29 @@ function inputs(over: Partial<SharedStyleInputs> = {}): SharedStyleInputs {
 }
 
 describe("the stamp", () => {
+  it("keeps every emittable string shorter than the length it truncates at", () => {
+    // The walk keeps at most `MAX_VALUE_LENGTH` characters of any string it
+    // reads, and carries no notion of WHERE it is — which is the property that
+    // stops it becoming a second reading of the envelope. Soundness therefore
+    // rests on one relationship rather than on the walk: no string the compiler
+    // can emit may be longer than the walk keeps, or two inputs agreeing to the
+    // cut and differing after it stamp alike and compile apart.
+    //
+    // Read from the ENGINE'S own list rather than named here, because a list
+    // restated at the consumer is a copy of the producer's set with nothing
+    // keeping the two in step — and it would assert over the members it names
+    // while the member it omits is the one whose bound nobody has written.
+    // Reading the array means a bound added to the compiler is covered without
+    // this file being edited.
+    //
+    // The length check is the population assertion: an empty set satisfies the
+    // loop below perfectly, so without it this passes by reading nothing.
+    expect(EMITTABLE_STRING_BOUNDS.length).toBeGreaterThan(0);
+    for (const bound of EMITTABLE_STRING_BOUNDS) {
+      expect(bound.max, bound.what).toBeLessThanOrEqual(MAX_VALUE_LENGTH);
+    }
+  });
+
   it("is stable for the same inputs", () => {
     // Nothing else here means anything if this does not hold: a stamp that
     // varied run to run would recompile every page on every render.
@@ -659,20 +684,49 @@ describe("what a corrupt or hostile settings row costs", () => {
     );
   });
 
-  it("notices a change DEEP inside an oversized envelope", () => {
-    // The case a truncating bound could not see. These two serialize to the
-    // same length and differ only far past any prefix a cut would keep, while
-    // the compiler emits different CSS for them.
+  it("notices a change DEEP inside a large envelope the compiler still reads", () => {
+    // The case a truncating bound could not see: these differ only far past any
+    // prefix a cut would keep, and the compiler emits different CSS for them.
+    //
+    // Sized UNDER `MAX_VALUE_LENGTH`, which is what makes the case real: the
+    // engine refuses a longer value outright before parsing, so two variants of
+    // one would both emit nothing and agree for a reason that has nothing to do
+    // with the walk. A value the compiler will not read cannot demonstrate
+    // sensitivity to a change inside it.
     const big = (tail: string) => ({
       id: "c1",
       slug: "hero",
       orderIndex: 0,
-      styles: { base: { base: { content: "x".repeat(9000) + tail } } },
+      styles: {
+        base: {
+          base: { content: "x".repeat(MAX_VALUE_LENGTH - 100) + tail },
+        },
+      },
     });
 
     expect(
       sharedStyleInputsId(inputs({ namedClasses: [big("aaa")] }))
     ).not.toBe(sharedStyleInputsId(inputs({ namedClasses: [big("bbb")] })));
+  });
+
+  it("holds still for two values the compiler refuses as too long", () => {
+    // The other side of the same bound. Past `MAX_VALUE_LENGTH` the engine
+    // rejects the value before parsing and emits no declaration, so two of them
+    // produce identical CSS — and carrying both in full invalidated a
+    // byte-identical sheet over a suffix nothing reads, with an arbitrarily
+    // large allocation on every cache check.
+    const rejected = (tail: string) => ({
+      id: "c1",
+      slug: "hero",
+      orderIndex: 0,
+      styles: {
+        base: { base: { content: "x".repeat(MAX_VALUE_LENGTH + 1) + tail } },
+      },
+    });
+
+    expect(
+      sharedStyleInputsId(inputs({ namedClasses: [rejected("aaa")] }))
+    ).toBe(sharedStyleInputsId(inputs({ namedClasses: [rejected("bbb")] })));
   });
 
   it("reads no further than the compiler does", () => {
@@ -817,8 +871,16 @@ describe("the label the stamp is taken over", () => {
   });
 
   it("carries its encoding version, so a later change invalidates rather than matches", () => {
-    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v1");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v1:[0-9a-z]+$/);
+    // Pinned to a LITERAL rather than compared against the constant, which is
+    // the point of the test: reading the constant would agree with whatever it
+    // says and assert only that a string was copied. Written out, a bump cannot
+    // happen without someone editing this line and deciding it should.
+    //
+    // Both surfaces, because they can disagree — the label is what the stamp is
+    // taken over, so a version reaching one and not the other would key
+    // artifacts on a value the label never carried.
+    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v2");
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v2:[0-9a-z]+$/);
   });
 
   it("omits the label a breakpoint carries", () => {

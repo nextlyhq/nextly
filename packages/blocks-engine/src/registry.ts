@@ -10,7 +10,7 @@
  * at boot with a named error rather than producing broken pages later.
  */
 import type { AnyBlockDefinition, BlockSupports } from "./block";
-import { COMPONENT_INSTANCE_TYPE } from "./document";
+import { COMPONENT_INSTANCE_TYPE, isBlockType } from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
@@ -80,9 +80,6 @@ function supportStore(): Map<string, SupportDefinition> {
   return globalForBlocks.__nextly_blockSupports;
 }
 
-/** A block name is a namespaced slug, e.g. "core/heading". */
-const BLOCK_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
 /**
  * Whether a string is a well-formed block name: two lowercase slug segments around one `/`.
  *
@@ -92,7 +89,7 @@ const BLOCK_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * every instance of the declaring block becomes unsaveable with the declaration looking correct.
  */
 export function isBlockName(value: unknown): value is string {
-  return typeof value === "string" && BLOCK_NAME_RE.test(value);
+  return typeof value === "string" && isBlockType(value);
 }
 
 /**
@@ -138,7 +135,7 @@ function describeSupportValue(value: unknown): string {
  * caller can validate a definition without committing it to the registry.
  */
 function assertValidDefinition(def: AnyBlockDefinition): void {
-  if (typeof def.name !== "string" || !BLOCK_NAME_RE.test(def.name)) {
+  if (typeof def.name !== "string" || !isBlockType(def.name)) {
     fail(
       "NEXTLY_BLOCK_INVALID",
       `block name "${String(def.name)}" must be a namespaced slug like "core/heading".`
@@ -246,9 +243,7 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
   if (def.parent !== undefined) {
     if (
       !Array.isArray(def.parent) ||
-      def.parent.some(
-        name => typeof name !== "string" || !BLOCK_NAME_RE.test(name)
-      )
+      def.parent.some(name => !isBlockType(name))
     ) {
       fail(
         "NEXTLY_BLOCK_INVALID",
