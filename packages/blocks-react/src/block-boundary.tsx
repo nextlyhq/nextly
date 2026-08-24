@@ -1,5 +1,11 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
-import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
+import {
+  Fragment,
+  Suspense,
+  cloneElement,
+  isValidElement,
+  type ReactNode,
+} from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
@@ -423,6 +429,31 @@ function noHostRootReason(output: ReactNode): string | null {
 }
 
 /**
+ * Why this output is DEFINITELY not the single element the contract asks for,
+ * or `null` when it might be.
+ *
+ * Deliberately NARROWER than {@link noHostRootReason}, and the difference is
+ * the point rather than a duplication of it. That one asks whether the renderer
+ * may attach root fields, and answers no for a component root because it cannot
+ * know the component forwards them — conservative in the direction of refusing,
+ * which is right when an anchor is at stake.
+ *
+ * This one asks whether to tell an author their block is broken, where the safe
+ * direction is the opposite. A component that renders one host element and
+ * forwards `className` is a legitimate shape whose compiled styles DO apply, so
+ * warning about it would be false, and a diagnostic that is sometimes false is
+ * one people learn to scroll past. Only shapes with nowhere for the class to go
+ * at all are named: no element, or a fragment.
+ */
+function brokenRootReason(output: ReactNode): string | null {
+  if (!isValidElement(output)) return "returned no element";
+  if (output.type === Fragment) {
+    return "returned a fragment rather than an element";
+  }
+  return null;
+}
+
+/**
  * Tells a BLOCK AUTHOR, in development, that their block does not conform.
  *
  * `BlockRenderArgs.className` states the contract every block is handed: "The
@@ -453,21 +484,47 @@ function warnNoHostRoot(
   node: BlockNode,
   declaresNothing: boolean
 ): void {
-  // Read at render rather than module scope, so a consumer's bundler can inline
-  // it per build and a test can exercise both modes in one process. Read
-  // defensively: this renderer runs anywhere React does, and an Edge or Worker
-  // runtime need not define `process` at all.
+  /*
+   * Read at render rather than module scope, so a consumer's bundler can inline
+   * it per build and a test can exercise both modes in one process.
+   *
+   * An ABSENT `process` counts as production here, which is the opposite of how
+   * the placeholder reads the same signal — and deliberately so. This renderer
+   * runs anywhere React does, and an Edge or Worker runtime need not define
+   * `process` at all; a placeholder that appears there is a visible box on a
+   * block that is already broken, while this is an undeduplicated line written
+   * on every render of every such block. Unable to tell, a diagnostic says
+   * nothing.
+   */
   const isProduction =
-    typeof process !== "undefined" && process.env?.NODE_ENV === "production";
+    typeof process === "undefined" || process.env?.NODE_ENV === "production";
   if (isProduction) return;
-  // Rendering nothing is a DECISION, not a violation — the same exemption the
-  // placeholder grants, asked the same way.
-  if (declaresNothing || rendersNothing(output)) return;
-  const shape = noHostRootReason(output);
-  if (shape === null) return;
-  console.warn(
-    `[nextly] Block "${node.type}" ${shape}. Blocks render a single element and never wrap it, so the generated class has nowhere to go and this block's styles do not apply. Setting an id or an attribute on it will replace it with a placeholder.`
-  );
+  try {
+    // Rendering nothing is a DECISION, not a violation — the same exemption the
+    // placeholder grants, asked the same way.
+    if (declaresNothing || rendersNothing(output)) return;
+    const shape = brokenRootReason(output);
+    if (shape === null) return;
+    console.warn(
+      `[nextly] Block "${node.type}" ${shape}. Blocks render a single element and never wrap it, so the generated class has nowhere to go and this block's styles do not apply. Setting an id or an attribute on it will replace it with a placeholder.`
+    );
+  } catch {
+    /*
+     * A DIAGNOSTIC must never be the thing that fails the page. Reading `.type`
+     * touches author-controlled output, and this call sits past the try block
+     * that contains `render` — the comment at the second `checkedOutput` call
+     * says what happens to a predicate that raises out here.
+     *
+     * UNREACHED in testing, and stated as such rather than implied by a test.
+     * An element whose `type` misbehaves is refused by `normalizeRenderable`
+     * before this runs — a proxy answering differently on a later read comes
+     * back `invalid-output` and returns above — so no case was found that
+     * arrives here. `nodeRootReason` carries the same exposure on the same
+     * value and has no floor of its own; the difference is that it runs only
+     * for a document that set root fields while this runs on every render, so
+     * the cheap guard is kept rather than removed for want of a witness.
+     */
+  }
 }
 
 /**

@@ -5397,7 +5397,7 @@ describe("a block that does not render a single element", () => {
       expect(html).toContain("<p>");
       const said = warn.mock.calls.map(call => String(call[0])).join("\n");
       expect(said).toContain("test/wrapped");
-      expect(said).toContain("returned a wrapper rather than an element");
+      expect(said).toContain("returned a fragment rather than an element");
     } finally {
       warn.mockRestore();
     }
@@ -5410,6 +5410,61 @@ describe("a block that does not render a single element", () => {
       await renderWith(text as AnyBlockDefinition);
       expect(warn).not.toHaveBeenCalled();
     } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a block whose root is a COMPONENT", async () => {
+    /*
+     * The shape this must not scold. A component that renders one host element
+     * and forwards `className` gets its compiled styles applied, so it is not
+     * broken — even though the placeholder path still refuses to attach root
+     * fields to it, because the renderer cannot know the component forwards
+     * those. Two questions, two answers, and only the narrower one belongs in a
+     * diagnostic: a warning that is sometimes false is one people scroll past.
+     */
+    const Root = ({ className }: { className: string }) => (
+      <div className={className}>via a component</div>
+    );
+    const componentRoot = defineBlock({
+      name: "test/component-root",
+      version: 1,
+      description: "Renders its root through a component.",
+      example: { props: {} },
+      defaultProps: {},
+      render: ({ className }) => <Root className={className} />,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(componentRoot as AnyBlockDefinition);
+      // Population first: the block rendered AND its class landed, which is
+      // what makes "not broken" a measurement rather than an assumption.
+      expect(html).toContain("via a component");
+      expect(html).toMatch(bothClasses("test/component-root"));
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing in production, including where `process` is absent", async () => {
+    /*
+     * The diagnostic is undeduplicated by design, so a production runtime that
+     * still evaluated it would write a line on every render of every such
+     * block. An Edge or Worker runtime need not define `process` at all, and
+     * unable to tell, this says nothing — the opposite default to the
+     * placeholder, which is a visible box rather than a log.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const original = globalThis.process;
+    try {
+      // @ts-expect-error deleting a global for the duration of one assertion.
+      delete globalThis.process;
+      await renderWith(wrapped as AnyBlockDefinition);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      globalThis.process = original;
       warn.mockRestore();
     }
   });
