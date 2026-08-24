@@ -190,12 +190,14 @@ describe("previewSingleDraftGate", () => {
   // refuses to produce one now, so it is hand-built rather than asserted
   // against a shape this module can no longer make. Honouring it would read the
   // document with no field rules at all, which is the leak.
-  it("refuses a token minted before it recorded who shared it", async () => {
-    const legacy = await new SignJWT({
-      kind: "single",
-      sng: "homepage",
-      gen: 1,
-    })
+  //
+  // Hand-built in a HELPER shared with the control below, because the refusal
+  // this asserts is only attributable to the missing `mnt` if the token is
+  // valid in every other respect. A drifted claim name, audience or key
+  // derivation would refuse it too, and this test would go on passing while
+  // proving nothing about the claim it names.
+  const legacyToken = async (extra: Record<string, unknown> = {}) =>
+    new SignJWT({ kind: "single", sng: "homepage", gen: 1, ...extra })
       .setProtectedHeader({ alg: "HS256" })
       .setAudience("nextly:preview")
       .setSubject("single:homepage")
@@ -206,12 +208,27 @@ describe("previewSingleDraftGate", () => {
           hkdfSync("sha256", TEST_SECRET, "", "nextly:preview-token:v1", 32)
         )
       );
-    cookieValue = encodeURIComponent(legacy);
+
+  it("refuses a token minted before it recorded who shared it", async () => {
+    cookieValue = encodeURIComponent(await legacyToken());
 
     await expect(previewSingleDraftGate()({ slug: "homepage" })).resolves.toBe(
       false
     );
     // And it never reached the identity lookup: there was no id to look up.
     expect(resolvePreviewIdentity).not.toHaveBeenCalled();
+  });
+
+  // The positive control for the case above, and the whole reason the token is
+  // built by a shared helper: the SAME hand-built token, differing only by the
+  // claim under test, must be GRANTED. Without it the refusal above is
+  // satisfied by any defect in the hand-signing, and would survive the signer
+  // changing its key derivation, audience or claim names underneath it.
+  it("grants that same hand-built token once it records a minter", async () => {
+    cookieValue = encodeURIComponent(await legacyToken({ mnt: "minter-1" }));
+
+    await expect(
+      previewSingleDraftGate()({ slug: "homepage" })
+    ).resolves.toEqual({ readAs: SHARER });
   });
 });
