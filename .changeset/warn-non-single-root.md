@@ -1,5 +1,4 @@
 ---
-
 "nextly": patch
 "create-nextly-app": patch
 "@nextlyhq/admin": patch
@@ -25,6 +24,7 @@
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
 "@nextlyhq/module-specifiers": patch
+---
 
 Warns a block author, in development, when their block does not render a single
 element. The block contract states that a block renders one element and never
