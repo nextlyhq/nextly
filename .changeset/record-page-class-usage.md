@@ -83,3 +83,13 @@ completely alone. On a drafts-enabled collection, publishing sends `status` by
 itself and the mutation service folds the promoted draft UNDER the post-hook
 payload, so a value derived here from the outgoing live row replaced the record
 the draft accumulated from the very content being published.
+
+An incomplete derivation is no longer recorded. `classUsageOf` replaces
+`classIdsUsedBy` and returns whether the whole document was read; when a bound
+stopped the selection, the write hook removes the field and the rebuild counts
+the page as `undetermined` rather than storing a list. The record exists so a
+class can be deleted safely, and a delete check reads a missing id as evidence
+the class is unused — so a list truncated by a bound would licence exactly the
+deletion it is there to prevent. A page with no record blocks deletion until a
+rebuild can give it one, which is the same position a page written before the
+field existed is already in.

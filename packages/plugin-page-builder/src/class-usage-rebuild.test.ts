@@ -61,7 +61,7 @@ describe("rebuildClassUsage", () => {
     const { store, writes } = storeOf([[page("a", ["hero", "card"])]]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 1, repaired: 1 });
+      expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes).toEqual([
         { id: "a", data: { usedClasses: ["card", "hero"] } },
       ]);
@@ -77,7 +77,7 @@ describe("rebuildClassUsage", () => {
     ]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 1, repaired: 0 });
+      expect(report).toEqual({ scanned: 1, repaired: 0, undetermined: 0 });
       expect(writes).toEqual([]);
     });
   });
@@ -94,7 +94,7 @@ describe("rebuildClassUsage", () => {
     ]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 1, repaired: 0 });
+      expect(report).toEqual({ scanned: 1, repaired: 0, undetermined: 0 });
       expect(writes).toEqual([]);
     });
   });
@@ -114,7 +114,7 @@ describe("rebuildClassUsage", () => {
     ]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 1, repaired: 1 });
+      expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes).toEqual([{ id: "a", data: { usedClasses: ["hero"] } }]);
     });
   });
@@ -123,7 +123,7 @@ describe("rebuildClassUsage", () => {
     const { store, writes } = storeOf([[page("a", ["hero"], ["stale"])]]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 1, repaired: 1 });
+      expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes).toEqual([{ id: "a", data: { usedClasses: ["hero"] } }]);
     });
   });
@@ -181,7 +181,7 @@ describe("rebuildClassUsage", () => {
     ]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 3, repaired: 3 });
+      expect(report).toEqual({ scanned: 3, repaired: 3, undetermined: 0 });
       expect(writes.map(write => write.id)).toEqual(["a", "b", "c"]);
       expect(queries).toEqual([
         { page: 1, sort: "id" },
@@ -197,7 +197,7 @@ describe("rebuildClassUsage", () => {
     const { store } = storeOf([[]]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 0, repaired: 0 });
+      expect(report).toEqual({ scanned: 0, repaired: 0, undetermined: 0 });
     });
   });
 
@@ -210,7 +210,7 @@ describe("rebuildClassUsage", () => {
     ]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 1, repaired: 1 });
+      expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes.map(write => write.id)).toEqual(["b"]);
     });
   });
@@ -241,7 +241,42 @@ describe("rebuildClassUsage", () => {
     const { store } = storeOf([[page("a", ["hero"])]]);
 
     return rebuildClassUsage({ store }).then(report => {
-      expect(report).toEqual({ scanned: 1, repaired: 1 });
+      expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
+    });
+  });
+
+  it("does not write a record for a page it could not read to the end", () => {
+    // The list would be a PREFIX of the answer, and the record exists so a
+    // class can be deleted safely — so writing it would licence exactly the
+    // deletion it is there to prevent. Counted as undetermined instead, which
+    // is what stops the run reading as a clean sweep over pages it could not
+    // determine.
+    const wide = Array.from({ length: 20 }, (_, i) => ({
+      id: `n${i}`,
+      type: "text",
+      classes: [`c${i}`],
+    }));
+    const { store, writes } = storeOf([
+      [{ id: "a", content: { nodes: wide } }],
+    ]);
+
+    return rebuildClassUsage({
+      store,
+      limits: { maxDepth: 12, maxNodes: 5, maxBytes: 2_097_152 },
+    }).then(report => {
+      expect(report).toEqual({ scanned: 1, repaired: 0, undetermined: 1 });
+      expect(writes).toEqual([]);
+    });
+  });
+
+  it("still repairs a page it CAN read whole, so the refusal is not blanket", () => {
+    // The control. A rebuild that declined every page would satisfy the case
+    // above while repairing nothing for anyone.
+    const { store, writes } = storeOf([[page("a", ["hero"])]]);
+
+    return rebuildClassUsage({ store }).then(report => {
+      expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
+      expect(writes).toHaveLength(1);
     });
   });
 

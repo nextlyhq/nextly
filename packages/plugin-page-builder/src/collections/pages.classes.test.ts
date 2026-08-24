@@ -181,22 +181,27 @@ describe("the referenced-class record on a page write", () => {
     expect(data.usedClasses).toEqual([]);
   });
 
-  it("derives under the LIMITS the page is rendered with, not the defaults", () => {
-    // `PageRenderer` takes `limits`, so a host can render more of a document
-    // than the engine defaults select. The record has to select the same nodes:
-    // a class on a node the page draws but this never reached is absent from
-    // the list a safe-delete check reads, and absence there means "not used".
+  it("derives under the LIMITS it was configured with, and records nothing past them", () => {
+    // Two properties in one document, because they are the same mechanism seen
+    // from either side.
     //
-    // Asserted in BOTH directions on one document, because a raised bound that
-    // changed nothing would satisfy a one-sided version of this test whatever
-    // it was wired to.
+    // The limits ARE threaded: the same page yields a record under the engine
+    // defaults and none under a bound that truncates it. And a truncated
+    // derivation is not written at all — the list would be a PREFIX of the
+    // answer, and a delete check reads a missing id as evidence the class is
+    // unused, which is exactly the deletion the record exists to prevent.
+    //
+    // Note the two cannot be separated: any bound that CHANGES the outcome is
+    // by definition one that stopped the walk. A test asserting "the lowered
+    // bound found fewer classes" would be asserting a state this hook refuses
+    // to record.
     const deepPage = () => {
       let nested: Record<string, unknown> = {
         id: "deep",
         type: "core/text",
         version: 1,
         props: {},
-        classes: ["only-visible-when-raised"],
+        classes: ["deep-class"],
       };
       for (let i = 0; i < 3; i++) {
         nested = {
@@ -208,16 +213,24 @@ describe("the referenced-class record on a page write", () => {
           slots: { main: [nested] },
         };
       }
-      return { title: "Home", content: { nodes: [nested] } };
+      return { title: "Home", content: { nodes: [nested] } } as Record<
+        string,
+        unknown
+      >;
     };
 
-    const shallow = deepPage() as Record<string, unknown>;
-    runBeforeChange(shallow, {}, { ...DEFAULT_LIMITS, maxDepth: 2 });
-    expect(shallow.usedClasses).not.toContain("only-visible-when-raised");
+    // Truncated by a depth bound the document exceeds: no record.
+    const truncated = deepPage();
+    runBeforeChange(truncated, {}, { ...DEFAULT_LIMITS, maxDepth: 2 });
+    expect("usedClasses" in truncated).toBe(false);
 
-    const raised = deepPage() as Record<string, unknown>;
-    runBeforeChange(raised, {}, { ...DEFAULT_LIMITS, maxDepth: 10 });
-    expect(raised.usedClasses).toContain("only-visible-when-raised");
+    // The control: the SAME document under the engine defaults is read whole,
+    // so a record is written and carries the deepest class. Without this, a
+    // hook that recorded nothing under any circumstances would pass above.
+    const whole = deepPage();
+    runBeforeChange(whole, {});
+    expect(whole.usedClasses).toContain("deep-class");
+    expect(whole.usedClasses).toContain("wrap-0");
   });
 
   it("does not fail the write for a document nobody validated", () => {

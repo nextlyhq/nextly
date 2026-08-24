@@ -8,7 +8,7 @@ import {
   text,
 } from "nextly/config";
 
-import { classIdsUsedBy } from "../class-usage";
+import { classUsageOf } from "../class-usage";
 import { blocks } from "../fields/blocksHelper";
 /**
  * There is no page-level custom CSS field.
@@ -76,6 +76,33 @@ import { blocks } from "../fields/blocksHelper";
  * wiring. It costs one line and it is the only signal available that the link
  * will land.
  */
+/**
+ * Store a derived usage list, or remove the field when it is not the whole
+ * answer.
+ *
+ * An incomplete derivation must not be written. The record exists so a class
+ * can be deleted safely, and a delete check reads a missing id as evidence the
+ * class is unused — so a list truncated by a bound would licence exactly the
+ * deletion it is there to prevent. An ABSENT record cannot be misread that way:
+ * a page written before this field existed has none either, and the contract is
+ * already that a page without a record blocks deletion until a rebuild gives it
+ * one.
+ *
+ * That leaves an oversized or unreadable document permanently without a record,
+ * which is the honest outcome: its usage genuinely cannot be determined, and
+ * saying so is better than a number nobody can qualify.
+ */
+function record(
+  data: Record<string, unknown>,
+  usage: { ids: string[]; complete: boolean }
+): void {
+  if (!usage.complete) {
+    delete data.usedClasses;
+    return;
+  }
+  data.usedClasses = usage.ids;
+}
+
 export function pagesCollection(
   previewPath?: string,
   // The limits the PAGE is rendered under, when the host raised them.
@@ -200,7 +227,7 @@ export function pagesCollection(
             // that gets a live class deleted.
             if ("content" in data) {
               // The document is part of this write, so it is the authority.
-              data.usedClasses = classIdsUsedBy(data.content, limits);
+              record(data, classUsageOf(data.content, limits));
             } else if (!("usedClasses" in data)) {
               // The write carries neither the document nor a claim about it, so
               // it has nothing to say here and must say nothing. Returning the
@@ -227,10 +254,7 @@ export function pagesCollection(
               // read in the same operation as this write, so a list derived
               // from a document that has since changed is replaced by one
               // derived from what is actually stored, rather than accepted.
-              data.usedClasses = classIdsUsedBy(
-                context.originalData.content,
-                limits
-              );
+              record(data, classUsageOf(context.originalData.content, limits));
             } else {
               delete data.usedClasses;
             }

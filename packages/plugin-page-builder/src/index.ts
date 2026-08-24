@@ -76,7 +76,8 @@ export type { SiteStyleReader } from "./site-style-storage";
 // outside the hook — a restore, an import, a direct database edit — needs the
 // rebuild to bring the record back into agreement with the documents, and a
 // cache with no reachable way to rebuild it is a second source of truth.
-export { classIdsUsedBy } from "./class-usage";
+export { classUsageOf } from "./class-usage";
+export type { ClassUsage } from "./class-usage";
 export { rebuildClassUsage } from "./class-usage-rebuild";
 export type { PageUsageStore, RebuildReport } from "./class-usage-rebuild";
 /*

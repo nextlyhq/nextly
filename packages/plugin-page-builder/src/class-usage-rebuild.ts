@@ -41,7 +41,7 @@
  */
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
-import { classIdsUsedBy } from "./class-usage";
+import { classUsageOf } from "./class-usage";
 import { readStoredJson } from "./stored-json";
 
 /** How many pages one query asks for. */
@@ -96,6 +96,16 @@ export interface RebuildReport {
   scanned: number;
   /** Pages whose stored record disagreed with their document and was rewritten. */
   repaired: number;
+  /**
+   * Pages whose usage could not be determined, and which therefore still have
+   * no trustworthy record.
+   *
+   * Reported rather than folded into `scanned`, because the two mean opposite
+   * things to a caller deciding whether a class is safe to delete: a scanned
+   * page answered, and one of these did not. A rebuild that hid them would
+   * report a clean sweep over pages it could not read.
+   */
+  undetermined: number;
 }
 
 /** Whether a value is the shape this walk can read a page out of. */
@@ -126,6 +136,62 @@ function recordMatches(stored: unknown, derived: readonly string[]): boolean {
   if (!Array.isArray(record)) return false;
   if (record.length !== derived.length) return false;
   return record.every((value, index) => value === derived[index]);
+}
+
+/** What one page's inspection concluded. */
+type PageVerdict = "undetermined" | "repaired" | "agreed";
+
+/** Bring one page's record into agreement with its document, if it can. */
+async function repairPage(
+  item: StoredPage,
+  collection: string,
+  args: { store: PageUsageStore; limits?: DocumentLimits }
+): Promise<PageVerdict> {
+  const usage = classUsageOf(item.content, args.limits);
+  if (!usage.complete) {
+    // The document could not be read to the end, so the list is a PREFIX of the
+    // answer rather than the answer. Writing it would licence exactly the
+    // deletion the record exists to prevent, and writing an empty one would be
+    // worse. Reported instead, so the run says which pages it could not
+    // determine rather than reading as a clean sweep over them.
+    return "undetermined";
+  }
+  if (recordMatches(item.usedClasses, usage.ids)) return "agreed";
+  await args.store.update({
+    collection,
+    id: item.id,
+    // Only this field. A rebuild that sent the whole row back would rewrite a
+    // page from what THIS walk happened to read, discarding any edit made
+    // between the read and the write.
+    data: { usedClasses: usage.ids },
+  });
+  return "repaired";
+}
+
+/**
+ * Inspect one query's worth of rows, repairing what disagrees.
+ *
+ * A row this cannot read an id out of is SKIPPED rather than counted. Persisted
+ * data reaches here unvalidated, and losing the whole rebuild over one
+ * unreadable row would leave every later page stale — and the later pages are
+ * the ones nobody knows to look at.
+ */
+async function scanOnePage(
+  items: readonly unknown[],
+  collection: string,
+  args: { store: PageUsageStore; limits?: DocumentLimits }
+): Promise<{ scanned: number; repaired: number; undetermined: number }> {
+  let scanned = 0;
+  let repaired = 0;
+  let undetermined = 0;
+  for (const item of items) {
+    if (!isStoredPage(item)) continue;
+    scanned += 1;
+    const verdict = await repairPage(item, collection, args);
+    if (verdict === "undetermined") undetermined += 1;
+    if (verdict === "repaired") repaired += 1;
+  }
+  return { scanned, repaired, undetermined };
 }
 
 /**
@@ -161,6 +227,7 @@ export async function rebuildClassUsage(args: {
   const collection = args.collection ?? "pages";
   let scanned = 0;
   let repaired = 0;
+  let undetermined = 0;
   let reachedTheEnd = false;
 
   for (let page = 1; page <= MAX_PAGES; page++) {
@@ -171,21 +238,10 @@ export async function rebuildClassUsage(args: {
       sort: "id",
     });
 
-    for (const item of result.items) {
-      if (!isStoredPage(item)) continue;
-      scanned++;
-      const derived = classIdsUsedBy(item.content, args.limits);
-      if (recordMatches(item.usedClasses, derived)) continue;
-      await args.store.update({
-        collection,
-        id: item.id,
-        // Only this field. A rebuild that sent the whole row back would rewrite
-        // a page from what THIS walk happened to read, discarding any edit made
-        // between the read and the write.
-        data: { usedClasses: derived },
-      });
-      repaired++;
-    }
+    const tally = await scanOnePage(result.items, collection, args);
+    scanned += tally.scanned;
+    repaired += tally.repaired;
+    undetermined += tally.undetermined;
 
     if (!result.meta.hasNext) {
       reachedTheEnd = true;
@@ -210,5 +266,5 @@ export async function rebuildClassUsage(args: {
     );
   }
 
-  return { scanned, repaired };
+  return { scanned, repaired, undetermined };
 }

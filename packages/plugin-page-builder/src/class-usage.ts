@@ -69,26 +69,46 @@ function namesAClass(value: unknown): value is string {
 }
 
 /**
- * The class ids a document references, sorted, without repeats.
+ * What a page's stored document says about the classes it references.
+ *
+ * Two values, because an empty list and an unreadable document are different
+ * answers and a caller must be able to tell them apart. The whole point of the
+ * record is to decide whether a class may be DELETED, and a delete check reads
+ * absence as evidence — so an absence produced by a bound rather than by the
+ * document has to be visible, or it is indistinguishable from "not used".
+ */
+export interface ClassUsage {
+  /** The class ids the document references, sorted, without repeats. */
+  ids: string[];
+  /**
+   * Whether the whole document was read.
+   *
+   * False when a bound ended the selection early, which means `ids` is a
+   * PREFIX of the answer rather than the answer. A caller must not treat a
+   * missing id as absent when this is false.
+   */
+  complete: boolean;
+}
+
+/**
+ * The classes a stored document references, and whether it could all be read.
  *
  * Total by construction. This reads persisted data that nothing is guaranteed
- * to have validated — `documentFrom` deliberately admits any value whose
- * `nodes` is an array, so a malformed tree reaches storage intact — and it runs
- * inside a write hook, where throwing would fail the author's save over a
- * bookkeeping record. Every level is therefore guarded rather than trusted, and
- * a shape this cannot read contributes nothing instead of raising.
+ * to have validated — the blocks field deliberately admits any value whose
+ * `nodes` is an array, so a malformed tree reaches storage intact — and a shape
+ * this cannot read contributes nothing instead of raising.
  *
  * Sorted so two documents with the same references produce the same list, which
  * is what lets a caller compare a stored list against a fresh one without
  * re-sorting or set arithmetic.
  */
-export function classIdsUsedBy(
+export function classUsageOf(
   stored: unknown,
   limits: DocumentLimits = DEFAULT_LIMITS
-): string[] {
+): ClassUsage {
   const document = readStoredJson(stored);
-  if (!isPlainRecord(document)) return [];
-  if (!Array.isArray(document.nodes)) return [];
+  if (!isPlainRecord(document)) return { ids: [], complete: true };
+  if (!Array.isArray(document.nodes)) return { ids: [], complete: true };
 
   // WHICH nodes are read is the engine's, shared with the style compiler rather
   // than reproduced here. The question is which classes this page RENDERS, so a
@@ -123,5 +143,6 @@ export function classIdsUsedBy(
       if (namesAClass(id)) ids.add(id);
     }
   }
-  return [...ids].sort();
+
+  return { ids: [...ids].sort(), complete: selection.stopped === undefined };
 }

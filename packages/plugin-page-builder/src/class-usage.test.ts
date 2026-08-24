@@ -17,8 +17,19 @@ import {
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_NODES,
 } from "@nextlyhq/blocks-engine";
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
-import { classIdsUsedBy } from "./class-usage";
+import { classUsageOf } from "./class-usage";
+
+/**
+ * The ids alone, for the cases that are about WHICH classes are found.
+ *
+ * Completeness has its own tests below; folding it into every assertion here
+ * would say nothing extra about traversal, bounds or malformed input, which is
+ * what these cases exist to pin.
+ */
+const classIdsUsedBy = (stored: unknown, limits?: DocumentLimits) =>
+  classUsageOf(stored, limits).ids;
 
 /** A document holding one node with the given `classes` value. */
 const withClasses = (classes: unknown) => ({
@@ -448,5 +459,50 @@ describe("what it must never do", () => {
     expect(
       classIdsUsedBy({ nodes: [{ id: "a", classes: ["hero", "card"] }] })
     ).toEqual(["card", "hero"]);
+  });
+});
+
+describe("whether the whole document was read", () => {
+  it("reports COMPLETE for a document it read to the end", () => {
+    // The half that carries the meaning. Without it a caller cannot tell a
+    // page that references nothing from one whose document it could not finish,
+    // and a delete check reads both as "not used".
+    expect(
+      classUsageOf({ formatVersion: 1, kind: "page", nodes: [] }).complete
+    ).toBe(true);
+    expect(classUsageOf(withClasses(["hero"])).complete).toBe(true);
+  });
+
+  it("reports INCOMPLETE when a bound stopped the selection", () => {
+    // The list is then a PREFIX of the answer rather than the answer, and an id
+    // missing from it is missing because the walk stopped — not because the
+    // document does not use it.
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      id: `n${i}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes: [`c${i}`],
+    }));
+
+    const usage = classUsageOf(
+      { formatVersion: 1, kind: "page", nodes: many },
+      { ...DEFAULT_LIMITS, maxNodes: 5 }
+    );
+
+    expect(usage.complete).toBe(false);
+    // And it still returns what it DID read, so a caller that wants the prefix
+    // for another purpose is not forced to re-derive it.
+    expect(usage.ids.length).toBeGreaterThan(0);
+  });
+
+  it("reports complete for a shape it cannot read at all", () => {
+    // Not the same as truncated. A document that is not a document was read to
+    // the end and references nothing, which is an answer rather than a refusal
+    // — so it must not block a delete forever.
+    for (const shape of [null, "x", 7, {}, { nodes: 5 }]) {
+      expect(classUsageOf(shape).complete).toBe(true);
+      expect(classUsageOf(shape).ids).toEqual([]);
+    }
   });
 });
