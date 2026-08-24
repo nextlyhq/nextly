@@ -855,23 +855,23 @@ describe("bringing a token file in", () => {
   });
 });
 
-describe("an export that could not be written", () => {
-  /** A token whose vendor data JSON has no form for. */
-  const UNWRITABLE: SiteTokenSet = (() => {
-    const cyclic: Record<string, unknown> = {};
-    cyclic["self"] = cyclic;
-    return {
-      tokens: [
-        {
-          name: "color.ink",
-          kind: "color",
-          values: { light: "#111111" },
-          extensions: { vendor: cyclic },
-        },
-      ],
-    };
-  })();
+/** A token whose vendor data JSON has no form for. */
+const UNWRITABLE: SiteTokenSet = (() => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic["self"] = cyclic;
+  return {
+    tokens: [
+      {
+        name: "color.ink",
+        kind: "color",
+        values: { light: "#111111" },
+        extensions: { vendor: cyclic },
+      },
+    ],
+  };
+})();
 
+describe("an export that could not be written", () => {
   it("says it could not be written, and says it as a refusal", () => {
     // The tone decides how the report is announced, so calling this "done"
     // would headline "Saved ..." directly above a line saying nothing was, and
@@ -902,5 +902,43 @@ describe("an export that could not be written", () => {
     const said = screen.getByRole("status");
     expect(said.textContent).toContain("Saved tokens.json");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("an export that produces no file", () => {
+  it("says so when there is nothing to write", () => {
+    /*
+     * A site with no token values compiles to an empty stylesheet and warns
+     * about nothing, so there is no file AND no list of reasons. The silence
+     * that is right for a successful export — the file is the confirmation —
+     * covered this too, and the button did nothing at all: no download, no
+     * message, nothing to act on.
+     */
+    render(<Panel tokens={{ tokens: [] }} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export CSS" }));
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("no token values to write");
+    // And it is not worded as a failure, because nothing failed.
+    expect(said.textContent).not.toContain("could not be written");
+  });
+
+  it("still says COULD NOT when something actually went wrong", () => {
+    // The control: an artefact that is empty because the write was refused
+    // keeps the fault wording and its list of reasons.
+    render(<Panel tokens={UNWRITABLE} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+    const said = screen.getByRole("alert");
+    expect(said.textContent).toContain("could not be written");
+    expect(said.textContent).not.toContain("no token values");
+  });
+
+  it("stays silent when a file DID arrive with nothing to report", () => {
+    // The other control, and the reason the silence exists: exporting is the
+    // common next step after an import, and a clean export must not wipe the
+    // import's report of what the source file could not carry.
+    render(<Panel tokens={TOKENS} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Export CSS" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

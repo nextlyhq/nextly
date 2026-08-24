@@ -221,6 +221,23 @@ export function TokensPanel({
 }
 
 /**
+ * Why no file arrived, in the author's terms rather than the compiler's.
+ *
+ * Two different things produce an empty artefact and they need different words.
+ * Something went WRONG — vendor data that cannot be written, a stylesheet the
+ * compiler refused — and the reasons are listed beneath. Or there was simply
+ * nothing to write, which is not a fault and must not be worded as one: a site
+ * with no token values compiles to an empty sheet and warns about nothing, and
+ * telling that author the file "could not be written" describes a failure that
+ * did not happen.
+ */
+function refusalFor(made: ExportResult): string {
+  return made.skipped.length > 0
+    ? `${made.filename} could not be written.`
+    : `${made.filename} was not created, because this site has no token values to write.`;
+}
+
+/**
  * Bringing a token file in, and taking one out.
  *
  * ## In: a file, not a paste
@@ -428,19 +445,21 @@ function TokenTransfer({
      * action had no news of its own destroys the one thing the author still
      * needed, and does it without them dismissing anything.
      *
-     * The file arriving is the confirmation that an export worked. A report is
-     * for what the author could not otherwise see.
+     * The FILE ARRIVING is what makes that silence acceptable: it is the
+     * confirmation, and a report is for what the author could not otherwise
+     * see. So the silence is conditional on `wrote`. Without that it also
+     * covered the case with no file and nothing to say — an empty site, whose
+     * stylesheet compiles to nothing and warns about nothing — and the button
+     * did nothing at all, which is the one outcome an author cannot act on.
      */
-    if (made.skipped.length === 0) return;
+    if (wrote && made.skipped.length === 0) return;
     setReport({
       // An export that WROTE nothing is a refusal, whatever it has to say. The
       // tone also decides how the report is announced, so calling this "done"
       // would headline "Saved …" directly above a line saying nothing was, and
       // announce a failure as a passive status update.
       tone: wrote ? "done" : "refused",
-      headline: wrote
-        ? `Saved ${made.filename}.`
-        : `${made.filename} could not be written.`,
+      headline: wrote ? `Saved ${made.filename}.` : refusalFor(made),
       detail: made.skipped,
     });
   };
