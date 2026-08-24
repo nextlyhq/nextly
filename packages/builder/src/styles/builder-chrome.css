@@ -1494,3 +1494,50 @@
   line-height: 1.4;
   color: var(--nx-muted-foreground);
 }
+
+/*
+ * Where a control's value came from, as a dot beside its label.
+ *
+ * Two states are drawn and a third is not: a property nothing set gets no dot,
+ * because eight empty dots per section is the shape that trains an author to
+ * stop reading the panel. The dot is EMPTY and drawn here, so its meaning
+ * travels in the accessible label the component sets rather than in the mark.
+ *
+ * The colours are chart tokens rather than semantic status ones, and WHICH chart
+ * tokens is load-bearing. Inheriting a value is the ordinary, correct state for
+ * most controls on most blocks, so the destructive ramp would read as something
+ * being wrong with a page that is fine — `--nx-chart-5` is red-500 and is not
+ * used here for that reason.
+ *
+ * `--nx-chart-1` is not used either, and it is the trap: it resolves to
+ * `--nx-primary`, which is BLACK in light mode and WHITE in dark. A dot drawn in
+ * it is the same colour as the label text beside it in both themes, so the one
+ * state an author most needs to spot reads as a full stop.
+ *
+ * What is left is the pair the affordance actually wants: `--nx-chart-2` for a
+ * value set here and `--nx-chart-4`, amber-500, for one arriving from elsewhere
+ * — the blue-and-orange distinction the prior art established, in tokens that
+ * are retuned with the theme rather than pinned to a hex.
+ */
+.nx-style-inspector__provenance {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-inline-start: 0.375rem;
+  border-radius: 50%;
+  /* Aligned to the text rather than the line box, so it sits with the label's
+     letters instead of riding the descender space below them. */
+  vertical-align: middle;
+  /* Never a pointer target of its own: the label it sits inside is the control's
+     own click affordance, and a dot that swallowed the press would stop the
+     label focusing its field. */
+  pointer-events: none;
+}
+
+.nx-style-inspector__provenance[data-provenance="authored"] {
+  background-color: var(--nx-chart-2);
+}
+
+.nx-style-inspector__provenance[data-provenance="inherited"] {
+  background-color: var(--nx-chart-4);
+}

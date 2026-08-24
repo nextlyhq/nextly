@@ -35,6 +35,8 @@ import {
   MAX_BREAKPOINTS_PER_AXIS,
   type BreakpointAxis,
   type BreakpointDef,
+  breakpointContexts,
+  type BreakpointId,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
@@ -248,4 +250,78 @@ export function inCascadeOrder(defs: BreakpointDef[]): BreakpointDef[] {
   return [...defs].sort(
     (a, b) => (b.maxWidth ?? Infinity) - (a.maxWidth ?? Infinity)
   );
+}
+
+/**
+ * Every breakpoint whose rules are live while the editor is showing one.
+ *
+ * `styleProvenance` needs this and cannot derive it: which declarations are in
+ * PLAY is a fact about the width being viewed, while the breakpoint being edited
+ * only decides whether the winner among them belongs to this control. An editor
+ * simulating a narrow viewport inside a wide window is the ordinary case.
+ *
+ * ## Read from what is EMITTED, never from the stored set
+ *
+ * The stored axes and the emitted ones disagree, and this is the one question
+ * where that matters. `breakpointContexts` drops a definition whose bound is
+ * missing, non-finite or at or below zero; keeps only the FIRST of a duplicated
+ * id; allows one unbounded definition on the container axis and none on the
+ * viewport; and slices each axis to the per-axis cap. A set read raw therefore
+ * names breakpoints no stylesheet ever mentions, and reports a value keyed to a
+ * dropped id as live.
+ *
+ * That failure is SILENT in both directions: a badge naming a real-looking id
+ * looks identical whether or not a rule was written under it, and a value whose
+ * breakpoint was dropped is a value the author cannot see the source of. Asking
+ * the compiler's own normaliser is what keeps the panel and the page saying the
+ * same thing.
+ *
+ * ## Outward, never inward
+ *
+ * The model is DESKTOP-FIRST — every bounded definition compiles to
+ * `@media (max-width: N)` — so a narrow width satisfies its own query and every
+ * WIDER one as well. Showing a 768px breakpoint means the 768 rules apply, the
+ * 1024 rules apply, and the base rules underneath them all. The set therefore
+ * runs outward from the edited definition, never inward.
+ *
+ * ## The other axis contributes its unbounded context and nothing more
+ *
+ * A stated limit rather than an oversight. Viewport and container widths are
+ * independent: choosing to edit a 768px viewport breakpoint says nothing about
+ * how wide any container on the page is, so no BOUNDED container definition can
+ * be known to apply. Claiming one does would report a control as inheriting from
+ * a container rule that is not matching.
+ *
+ * The cost is the reverse — a value that genuinely arrives from a narrow
+ * container breakpoint is attributed to whatever the viewport axis says — and
+ * that is the safer of the two, because a control that under-reports its origin
+ * is quiet where one that over-reports is wrong.
+ *
+ * An id belonging to no emitted context yields the unbounded contexts alone,
+ * which is what an unknown breakpoint actually leaves matching.
+ *
+ * @experimental
+ */
+export function liveBreakpointsFor(
+  set: BreakpointSet | undefined,
+  edited: BreakpointId
+): BreakpointId[] {
+  const contexts = breakpointContexts(set);
+  const unbounded = contexts
+    .filter(context => !isUsableWidth(context.maxWidth))
+    .map(context => context.id);
+  const chosen = contexts.find(context => context.id === edited);
+  // An unknown id, or the unconditional context itself: neither adds anything
+  // to the contexts that match at every width.
+  if (chosen === undefined || !isUsableWidth(chosen.maxWidth)) return unbounded;
+  const width = chosen.maxWidth;
+  const wider = contexts
+    .filter(
+      context =>
+        context.axis === chosen.axis &&
+        isUsableWidth(context.maxWidth) &&
+        context.maxWidth >= width
+    )
+    .map(context => context.id);
+  return [...unbounded, ...wider];
 }

@@ -1258,3 +1258,197 @@ describe("what the arrow keys do and do not claim", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 });
+
+describe("where a control's value came from", () => {
+  /** The dot for one property's single control. */
+  const dotIn = (property: string) =>
+    document.querySelector(
+      `[data-property="${property}"] .nx-style-inspector__provenance`
+    );
+
+  /**
+   * A trace entry as the compiler records one.
+   *
+   * Hand-built rather than compiled, because these tests are about the WIRING —
+   * that the panel resolves one subject, asks per control and renders the
+   * answer. Whether the cascade itself is read correctly is
+   * `style-provenance.test.ts`'s question and is settled there.
+   */
+  const entry = (over: Record<string, unknown> = {}) =>
+    ({
+      origin: { kind: "node", id: "a" },
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint: BASE_BREAKPOINT,
+      ...over,
+    }) as never;
+
+  function mountWithTrace(trace: readonly unknown[] | undefined) {
+    register({ color: true });
+    const editor = editorFor(
+      documentOf({ base: { [BASE_BREAKPOINT]: { color: "#111" } } })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        {...(trace === undefined ? {} : { trace: trace as never })}
+      />
+    );
+    return editor;
+  }
+
+  it("marks a value the author set on THIS block as set here", () => {
+    mountWithTrace([entry()]);
+    const dot = dotIn("color");
+    expect(dot?.getAttribute("data-provenance")).toBe("authored");
+    // Named for assistive technology, not only in a tooltip: a `title` reaches
+    // a mouse and nothing else.
+    expect(dot?.getAttribute("aria-label")).toBe("Set here");
+  });
+
+  it("names the CLASS an inherited value came from, by its slug", () => {
+    /*
+     * The slug, never the id. The id is storage and must not reach anything
+     * rendered or queried; the slug is what the author typed and what the
+     * canvas shows.
+     */
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        trace={
+          [
+            entry({
+              origin: { kind: "class", id: "cls-1", slug: "card" },
+            }),
+          ] as never
+        }
+      />
+    );
+    const dot = dotIn("color");
+    expect(dot?.getAttribute("data-provenance")).toBe("inherited");
+    expect(dot?.getAttribute("aria-label")).toBe("Inherited from .card");
+  });
+
+  it("draws NOTHING for a property no tier set", () => {
+    // Eight empty dots per section is the shape that trains an author to stop
+    // reading the panel.
+    register({ color: true });
+    const editor = editorFor(documentOf());
+    render(<StyleInspectorPanel editor={editor} trace={[] as never} />);
+    expect(dotIn("color")).toBeNull();
+  });
+
+  it("draws nothing at all when the host supplies no trace", () => {
+    /*
+     * Absent means the question was never asked, which is NOT "nothing is
+     * inherited". A host that cannot compile gets no indicators rather than a
+     * panel confidently reporting every control as unset.
+     *
+     * The control itself still renders, which is the separating half: a panel
+     * that had thrown would also show no dots.
+     */
+    mountWithTrace(undefined);
+    expect(dotIn("color")).toBeNull();
+    expect(fieldsOf("color").getByLabelText("Color")).toBeTruthy();
+  });
+
+  it("draws nothing when the trace cannot say WHICH control wrote it", () => {
+    /*
+     * The case the record reports rather than guesses, and the one a dot must
+     * not claim. `background-image` is written by TWO catalog controls —
+     * `background.url` and `backgroundGradient` — and the trace identifies a
+     * declaration by its CSS property and selector, which does not separate
+     * them. With one of the pair stored, treating the winner as this control's
+     * would light the dot on a control the author never touched.
+     *
+     * Reported as ambiguous by `styleProvenance`; drawn as nothing here, which
+     * is the same judgement one level up.
+     */
+    register({ background: { image: true } });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { background: { url: "/a.png" } } },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        trace={
+          [
+            entry({
+              property: "background-image",
+              value: 'url("/a.png")',
+            }),
+          ] as never
+        }
+      />
+    );
+
+    /*
+     * The separating half: the control IS on screen and IS showing the stored
+     * value, so the absent dot is the ambiguity being respected rather than the
+     * panel having failed to render the field at all.
+     */
+    expect(fieldsOf("background").getByLabelText("Url")).toBeTruthy();
+    expect(dotIn("background")).toBeNull();
+  });
+
+  it("resolves the subject ONCE however many controls are shown", () => {
+    /*
+     * The cost this indicator was designed around. Every control asks about the
+     * same node, so the document must be walked once per render and not once
+     * per control — the panel's own comments call walking it per control the
+     * thing that must not happen.
+     *
+     * Asserted through the rendered result rather than by counting calls: with
+     * several controls on screen, all of them answer, which is only possible
+     * from one shared subject.
+     */
+    register({ spacing: true });
+    const editor = editorFor(
+      documentOf({
+        base: {
+          [BASE_BREAKPOINT]: {
+            padding: { blockStart: "8px", blockEnd: "12px" },
+          },
+        },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        trace={
+          [
+            entry({ property: "padding-block-start", value: "8px" }),
+            entry({ property: "padding-block-end", value: "12px" }),
+          ] as never
+        }
+      />
+    );
+
+    // `spacing` draws a field per side, so the panel is answering for several
+    // controls at once — which one shared subject is what makes affordable.
+    const dots = document.querySelectorAll(
+      '[data-property="padding"] .nx-style-inspector__provenance'
+    );
+    expect(dots.length).toBe(2);
+    expect(
+      Array.from(dots).map(dot => dot.getAttribute("data-provenance"))
+    ).toEqual(["authored", "authored"]);
+  });
+});

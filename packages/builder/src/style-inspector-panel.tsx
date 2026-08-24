@@ -34,13 +34,16 @@ import {
   isTokenRef,
   trimCssWhitespace,
   type BreakpointId,
+  type BreakpointSet,
   type ContrastResult,
   type NodeStyles,
   type SiteTokenSet,
   type TokenMode,
   type StyleLeaf,
   type StyleShape,
+  type StyleOrigin,
   type StyleState,
+  type StyleTraceEntry,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -62,6 +65,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { liveBreakpointsFor } from "./breakpoints";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
 import {
@@ -97,6 +101,8 @@ import {
   unitChoicesFor,
   withUnit,
 } from "./style-numeric";
+import { styleProvenance, type StyleProvenance } from "./style-provenance";
+import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
   styleClearOp,
@@ -104,6 +110,19 @@ import {
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
+
+/**
+ * Where one control's value came from, asked per control against a subject and a
+ * trace the panel resolved ONCE.
+ *
+ * A function rather than a precomputed map because the key would have to be the
+ * control's CSS property AND its descendant selector — the catalog writes
+ * `color` from three different controls — and a map keyed on that pair is a
+ * second spelling of the filter `styleProvenance` already applies.
+ *
+ * `undefined` means nothing can answer, which is not the same as "unset".
+ */
+type ProvenanceOf = (leaf: StyleLeaf) => StyleProvenance | undefined;
 
 export interface StyleInspectorPanelProps {
   /**
@@ -141,6 +160,27 @@ export interface StyleInspectorPanelProps {
    * by the identity the document holds, because that is the only name it has.
    */
   tokens?: SiteTokenSet;
+  /**
+   * The declarations the compiler wrote for this document, in emission order.
+   *
+   * What lets a control say where its value came from. Supplied by the host
+   * rather than compiled here, and that is the point: the panel renders once per
+   * control, so compiling in this component would walk the cascade per control
+   * — the thing this file's own comments say must not happen.
+   *
+   * Absent means the question was never asked, not that nothing is inherited: a
+   * host that supplies no trace gets no indicators, which is the honest answer
+   * for a surface that cannot compile.
+   */
+  trace?: readonly StyleTraceEntry[];
+  /**
+   * The site's breakpoints, for deciding which declarations are live.
+   *
+   * Carried rather than derived from {@link breakpoint}: which rules are in PLAY
+   * is a fact about the width being viewed, and the edited breakpoint only says
+   * which of them counts as authored here.
+   */
+  breakpoints?: BreakpointSet;
 }
 
 export function StyleInspectorPanel({
@@ -149,6 +189,8 @@ export function StyleInspectorPanel({
   tokens,
   state,
   breakpoint,
+  trace,
+  breakpoints,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -219,6 +261,39 @@ export function StyleInspectorPanel({
     );
   }
 
+  /*
+   * ONE subject for the whole panel, and one live-breakpoint set.
+   *
+   * Every control on this panel asks about the SAME node, so building either per
+   * control would walk the document per control — which is the cost this file's
+   * own comments say the indicator must not pay.
+   *
+   * Recomputed each render rather than memoised, exactly as the inspection above
+   * is: both are only valid against the document they were read from, and an
+   * edit anywhere changes the document and the values shown together.
+   */
+  const subject =
+    editor.selectedId === null
+      ? undefined
+      : styleSubjectFor(editor.document.nodes, editor.selectedId);
+  const provenanceOf: ProvenanceOf = leaf => {
+    // Absent means the question was never asked. A host that supplies no trace
+    // gets no indicators, which is the honest answer for a surface that cannot
+    // compile — and not the same as "nothing is inherited".
+    if (trace === undefined || subject === undefined) return undefined;
+    return styleProvenance({
+      trace,
+      subject,
+      // The control's own leaf, never the catalog key: two keys can write one
+      // CSS property, and the trace records what was WRITTEN.
+      cssProperty: leaf.cssProperty,
+      descendant: leaf.descendant,
+      state: inspection.state,
+      breakpoint: inspection.breakpoint,
+      liveBreakpoints: liveBreakpointsFor(breakpoints, inspection.breakpoint),
+    });
+  };
+
   const groups = inspection.sections.map(section => section.group);
   // Held rather than left to the accordion, so the open section survives a
   // change of selection. Falling back to the first is what keeps it valid when
@@ -254,6 +329,7 @@ export function StyleInspectorPanel({
             policy={policy}
             tokens={tokens}
             prefersDark={prefersDark}
+            provenanceOf={provenanceOf}
             onChooseForm={chooseForm}
           />
         ))}
@@ -310,6 +386,7 @@ function StyleSectionItem({
   policy,
   tokens,
   prefersDark,
+  provenanceOf,
   onChooseForm,
 }: {
   section: StyleSection;
@@ -320,6 +397,7 @@ function StyleSectionItem({
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
+  provenanceOf: ProvenanceOf;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   // How many of this section's properties this node sets HERE, so an author can
@@ -353,6 +431,7 @@ function StyleSectionItem({
               policy={policy}
               tokens={tokens}
               prefersDark={prefersDark}
+              provenanceOf={provenanceOf}
               onChooseForm={onChooseForm}
             />
           ))}
@@ -379,6 +458,7 @@ function StylePropertyFields({
   policy,
   tokens,
   prefersDark,
+  provenanceOf,
   onChooseForm,
 }: {
   property: InspectedStyleProperty;
@@ -389,6 +469,7 @@ function StylePropertyFields({
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
+  provenanceOf: ProvenanceOf;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   const many = property.controls.length > 1;
@@ -468,6 +549,7 @@ function StylePropertyFields({
           policy={policy}
           tokens={tokens}
           prefersDark={prefersDark}
+          provenanceOf={provenanceOf}
         />
       ))}
     </div>
@@ -617,6 +699,7 @@ function StyleControlField({
   policy,
   tokens,
   prefersDark,
+  provenanceOf,
 }: {
   control: StyleControl;
   label: string;
@@ -649,6 +732,7 @@ function StyleControlField({
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
+  provenanceOf: ProvenanceOf;
 }): React.JSX.Element {
   const id = React.useId();
   // The message's own id, so the control can point at it. A `role="alert"`
@@ -714,6 +798,7 @@ function StyleControlField({
     <div className="nx-inspector__field" data-control={control.kind}>
       <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
         {label}
+        <ProvenanceDot provenance={provenanceOf(control.leaf)} />
       </Label>
       <ControlValue
         id={id}
@@ -1188,6 +1273,97 @@ function writeStyleValue({
     return "refused";
   }
   return "applied";
+}
+
+/**
+ * Where a control's value came from, as a dot beside its label.
+ *
+ * Three visible states, following the affordance `style-provenance.ts` already
+ * says it follows: nothing set draws no dot at all, a value authored here is
+ * accented, and one arriving from anywhere else is warned. An author scanning a
+ * section sees at a glance which fields are theirs and which they would be
+ * taking over by typing.
+ *
+ * **A dot rather than a written badge**, because a section holds eight or more
+ * controls and a label naming the source would have to name its AXIS too once
+ * breakpoints are in play — which does not fit beside a numeric input without
+ * widening the panel or wrapping every row.
+ *
+ * **The source is named in the accessible label, not only in the tooltip.** A
+ * `title` reaches a mouse and nothing else, so a dot carrying its meaning only
+ * there is decoration to a screen-reader user and to anyone navigating by
+ * keyboard. The text is the same in both.
+ *
+ * **`ambiguous` deliberately draws NOTHING.** One CSS property can be written by
+ * two catalog controls — `background-image` comes from both `background.url`
+ * and `backgroundGradient` — and with one of the pair stored, the trace cannot
+ * say which control wrote it. A dot claiming a value this control does not hold
+ * is worse than no dot, which is the same judgement `StyleProvenance` makes by
+ * reporting the case rather than guessing.
+ */
+function ProvenanceDot({
+  provenance,
+}: {
+  provenance: StyleProvenance | undefined;
+}): React.JSX.Element | null {
+  const described = describeProvenance(provenance);
+  if (described === null) return null;
+  return (
+    <span
+      className="nx-style-inspector__provenance"
+      data-provenance={described.kind}
+      title={described.text}
+      /*
+       * A role, because the element is empty: the dot is drawn by the
+       * stylesheet, so without one the label is the only content and assistive
+       * technology has nothing to attach the description to.
+       */
+      role="img"
+      aria-label={described.text}
+    />
+  );
+}
+
+/**
+ * The dot's state and the sentence that names it, or `null` to draw nothing.
+ *
+ * Separated from the component so the wording is testable without rendering,
+ * and so the two cannot drift: the tooltip and the accessible label are the same
+ * string by construction rather than by two call sites agreeing.
+ */
+export function describeProvenance(
+  provenance: StyleProvenance | undefined
+): { kind: "authored" | "inherited"; text: string } | null {
+  if (provenance === undefined) return null;
+  if (provenance.kind === "authored") {
+    return { kind: "authored", text: "Set here" };
+  }
+  if (provenance.kind !== "inherited") return null;
+  return {
+    kind: "inherited",
+    text: `Inherited from ${originName(provenance.from)}`,
+  };
+}
+
+/**
+ * What to call the place a value came from.
+ *
+ * A class is named by its SLUG rather than its id: the slug is what an author
+ * typed and what the canvas shows, while the id is storage. The id is never
+ * interpolated anywhere — see `canvas.tsx`'s `nodeElement` for why a class id
+ * must not reach a selector or a queried attribute.
+ */
+function originName(origin: StyleOrigin): string {
+  switch (origin.kind) {
+    case "class":
+      return `.${origin.slug}`;
+    case "blockType":
+      return "this block's defaults";
+    case "page":
+      return "the page";
+    case "node":
+      return "this block";
+  }
 }
 
 /**

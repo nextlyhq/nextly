@@ -17,6 +17,7 @@ import {
   inCascadeOrder,
   type BreakpointIssueCode,
   type BreakpointSet,
+  liveBreakpointsFor,
 } from "./breakpoints";
 
 function set(partial: Partial<BreakpointSet>): BreakpointSet {
@@ -263,5 +264,170 @@ describe("cascade order", () => {
     inCascadeOrder(defs);
 
     expect(defs.map(d => d.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("which breakpoints are live while one is being edited", () => {
+  /**
+   * Both axes populated and the widths deliberately interleaved ACROSS them, so
+   * a implementation that pooled the two axes and compared widths would pick up
+   * a container definition here and be caught.
+   */
+  const SET = {
+    viewport: [
+      { id: "base", label: "Base" },
+      { id: "vp-lg", label: "Large", maxWidth: 1024 },
+      { id: "vp-md", label: "Medium", maxWidth: 768 },
+      { id: "vp-sm", label: "Small", maxWidth: 480 },
+    ],
+    container: [
+      { id: "c-base", label: "Container base" },
+      { id: "c-wide", label: "Wide", maxWidth: 900 },
+      { id: "c-narrow", label: "Narrow", maxWidth: 600 },
+    ],
+  };
+
+  it("runs OUTWARD from the edited breakpoint, never inward", () => {
+    /*
+     * Desktop-first: every bounded definition compiles to `max-width`, so a
+     * narrow width satisfies its own query and every wider one too. The
+     * narrower `vp-sm` is NOT live at 768 — an implementation that returned the
+     * whole axis would include it, and the control would report a value from a
+     * rule the browser is not applying.
+     */
+    const live = liveBreakpointsFor(SET, "vp-md");
+    expect([...live].sort()).toEqual(
+      ["base", "c-base", "vp-lg", "vp-md"].sort()
+    );
+  });
+
+  it("includes the edited breakpoint itself", () => {
+    expect(liveBreakpointsFor(SET, "vp-sm")).toContain("vp-sm");
+  });
+
+  it("takes the widest breakpoint to be live with only the bases", () => {
+    const live = liveBreakpointsFor(SET, "vp-lg");
+    expect([...live].sort()).toEqual(["base", "c-base", "vp-lg"].sort());
+  });
+
+  it("contributes only the OTHER axis's base, never its bounded ones", () => {
+    /*
+     * A stated limit rather than an oversight. Editing a 768px VIEWPORT
+     * breakpoint says nothing about how wide any container on the page is, so
+     * no bounded container definition can be known to apply — and `c-wide` at
+     * 900 would be picked up by any rule that compared widths across the axes.
+     */
+    const live = liveBreakpointsFor(SET, "vp-md");
+    expect(live).not.toContain("c-wide");
+    expect(live).not.toContain("c-narrow");
+    expect(live).toContain("c-base");
+  });
+
+  it("reads the container axis the same way when a container is edited", () => {
+    // The symmetry matters: the axes are peers, and a rule written only for the
+    // viewport would silently report every container edit against the bases.
+    const live = liveBreakpointsFor(SET, "c-narrow");
+    expect([...live].sort()).toEqual(
+      ["base", "c-base", "c-narrow", "c-wide"].sort()
+    );
+    expect(live).not.toContain("vp-md");
+  });
+
+  it("yields both bases for the unconditional breakpoint", () => {
+    expect([...liveBreakpointsFor(SET, "base")].sort()).toEqual(
+      ["base", "c-base"].sort()
+    );
+  });
+
+  it("yields both bases for an id belonging to neither axis", () => {
+    // What an unrecognised breakpoint actually leaves matching, rather than an
+    // empty set that would report every control as unset.
+    expect([...liveBreakpointsFor(SET, "gone")].sort()).toEqual(
+      ["base", "c-base"].sort()
+    );
+  });
+
+  it("never names a definition the COMPILER dropped", () => {
+    /*
+     * The whole reason this reads `breakpointContexts` rather than the stored
+     * set, and the case a raw read gets wrong in both directions.
+     *
+     * `vp-broken` has a bound of zero. A `@media (max-width: 0px)` query is
+     * well-formed and can never match, so the compiler drops the definition
+     * entirely — the id is simply not one this site defines. Read raw it looks
+     * like an ordinary breakpoint, and naming it would tell an author a value
+     * came from a rule no stylesheet contains.
+     */
+    const set = {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "vp-broken", label: "Broken", maxWidth: 0 },
+        { id: "vp-md", label: "Medium", maxWidth: 768 },
+      ],
+      container: [],
+    };
+    const live = liveBreakpointsFor(set, "vp-md");
+    expect(live).toContain("vp-md");
+    // The separating half: it IS wider by the stored number, so anything
+    // comparing stored widths would include it.
+    expect(live).not.toContain("vp-broken");
+  });
+
+  it("yields only the unbounded contexts when the edited id was dropped", () => {
+    // An author can be sitting on a breakpoint whose definition the compiler
+    // refuses. Reporting its own id as live would claim rules exist under a
+    // query that was never emitted.
+    const set = {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "vp-broken", label: "Broken", maxWidth: Number.NaN },
+      ],
+      container: [],
+    };
+    expect(liveBreakpointsFor(set, "vp-broken")).toEqual(["base"]);
+  });
+
+  it("keeps only the FIRST of a duplicated id, as the compiler does", () => {
+    /*
+     * One id resolves to one definition. The second `dup` is not a breakpoint
+     * this site defines, and the width that decides liveness is the first
+     * one's — so a reader that took the last would answer against a bound no
+     * rule was emitted under.
+     */
+    const set = {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "dup", label: "First", maxWidth: 1024 },
+        { id: "dup", label: "Second", maxWidth: 320 },
+        { id: "vp-md", label: "Medium", maxWidth: 768 },
+      ],
+      container: [],
+    };
+    // Live at 768 because the surviving `dup` is the 1024 one, which is wider.
+    expect(liveBreakpointsFor(set, "vp-md")).toContain("dup");
+    // And editing `dup` itself puts the narrower `vp-md` out of play, which is
+    // only true if the 1024 definition is the one that survived.
+    expect(liveBreakpointsFor(set, "dup")).not.toContain("vp-md");
+  });
+
+  it("drops an unbounded VIEWPORT definition rather than adding a second base", () => {
+    // It would emit no at-rule at all and override the real base at every
+    // width. The compiler refuses it, so naming it would report a value as
+    // arriving from a context that does not exist.
+    const set = {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "vp-nobound", label: "No bound" },
+      ],
+      container: [],
+    };
+    expect(liveBreakpointsFor(set, "base")).toEqual(["base"]);
+  });
+
+  it("survives a settings record with no breakpoints at all", () => {
+    // `breakpointContexts` accepts undefined and answers with the base context,
+    // so an unconfigured site gets an honest answer rather than an empty one
+    // that would report every control as unset.
+    expect(liveBreakpointsFor(undefined, "base")).toEqual(["base"]);
   });
 });

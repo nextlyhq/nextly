@@ -52,6 +52,7 @@ import {
   DropIndicator,
   InsertPanel,
   InspectorPanel,
+  pageStyleTrace,
   LayersPanel,
   TokensPanel,
   OnboardingChecklist,
@@ -651,6 +652,25 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     [canvasSiteStyle, remotePatterns]
   );
 
+  /*
+   * The cascade behind the canvas, compiled ONCE per document.
+   *
+   * The inspector's Style tab uses it to say whether a control's value was set
+   * on this block or arrived from a class, the block's defaults or the page.
+   * Only this surface can compile it: the panel sits several layers down and
+   * holds neither the site's breakpoints nor the document, and compiling nearer
+   * the controls would walk the cascade once per control.
+   *
+   * The breakpoints come from `siteBreakpoints(canvasSiteStyle)` — the same
+   * expression the canvas compiles with, deliberately. Two readings of "what
+   * are this site's breakpoints" is the shape where the panel names a
+   * breakpoint the page never emitted under.
+   */
+  const styleTrace = useMemo(
+    () => pageStyleTrace(editor.document, siteBreakpoints(canvasSiteStyle)),
+    [editor.document, canvasSiteStyle]
+  );
+
   useCheckpoints({ name, control, document: editor.document });
 
   /*
@@ -734,6 +754,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           <InspectorPanel
             editor={editor}
             policy={stylePolicy}
+            trace={styleTrace}
+            breakpoints={siteBreakpoints(canvasSiteStyle)}
             tokens={offerableTokens(
               canvasSiteStyle,
               siteStylePending,
