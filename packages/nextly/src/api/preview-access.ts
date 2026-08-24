@@ -25,6 +25,10 @@
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { getService } from "../di";
+import {
+  singleDocumentEditable,
+  singleDocumentReadable,
+} from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
@@ -144,6 +148,44 @@ export async function assertEntryPreviewable(
         collection,
         entryId,
       },
+    });
+  }
+}
+
+/**
+ * Confirm the caller may be handed a preview link for this Single.
+ *
+ * The Single counterpart of {@link assertEntryPreviewable}, asking the same two
+ * questions for the same reason. It is NOT redundant with the route's own gate:
+ * that gate is per-slug RBAC, and a Single's stored rules — owner-only, role
+ * based, custom — are evaluated against the loaded document and can deny a
+ * caller who holds the coarse permission. Stopping at the permission would mint
+ * a bearer credential for a draft the real update path refuses to show them.
+ *
+ * One answer for every refusal, deliberately: a caller who is refused a link
+ * learns only that they are refused.
+ *
+ * @throws {NextlyError} `forbidden` when no link may be minted.
+ */
+export async function assertSinglePreviewable(
+  single: string,
+  user: UserContext,
+  actor?: AuthenticatedScope
+): Promise<void> {
+  const subject = { user, ...(actor === undefined ? {} : { actor }) };
+
+  if (!(await singleDocumentReadable(single, subject))) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "preview-link-single-not-visible", single },
+    });
+  }
+
+  // The token's view is the DRAFT, and the draft overlay surfaces a pending
+  // working draft only to a caller trusted to EDIT the document. Reading the
+  // published one proves nothing about that.
+  if (!(await singleDocumentEditable(single, subject))) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "preview-link-single-not-editable", single },
     });
   }
 }

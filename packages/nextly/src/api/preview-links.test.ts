@@ -21,6 +21,8 @@ const {
   previewDeclaration,
   singleDeclaration,
   findSingle,
+  singleReadable,
+  singleEditable,
 } = vi.hoisted(() => ({
   getEntry: vi.fn(),
   canUpdateEntry: vi.fn(),
@@ -28,6 +30,8 @@ const {
   previewDeclaration: vi.fn(),
   singleDeclaration: vi.fn(),
   findSingle: vi.fn(),
+  singleReadable: vi.fn(),
+  singleEditable: vi.fn(),
 }));
 
 /** The application's `preview` config for the test in hand. */
@@ -55,6 +59,13 @@ vi.mock("./preview-url", () => ({
       slug,
       ...(locale === undefined ? {} : { locale }),
     })) ?? null,
+}));
+
+// The gate itself is exercised where it lives; what these cover is that the
+// mint ASKS it, and that a refusal stops short of signing anything.
+vi.mock("../domains/singles/services/single-document-access", () => ({
+  singleDocumentReadable: (...args: unknown[]) => singleReadable(...args),
+  singleDocumentEditable: (...args: unknown[]) => singleEditable(...args),
 }));
 
 vi.mock("../di", () => ({
@@ -160,6 +171,58 @@ describe("mintPreviewLink for a Single", () => {
   beforeEach(() => {
     singleDeclaration.mockResolvedValue({ url: () => "/" });
     findSingle.mockResolvedValue({ id: "homepage" });
+    singleReadable.mockResolvedValue(true);
+    singleEditable.mockResolvedValue(true);
+  });
+
+  /**
+   * The route gate answers a COARSE question — may this caller update this slug
+   * — while a Single's stored rules are evaluated against the loaded document
+   * and can deny a caller who holds that permission. A link minted on the
+   * permission alone is a bearer credential for a draft the real update path
+   * refuses to show them.
+   */
+  describe("the Single's own stored rules", () => {
+    it("refuses when the caller cannot see the document", async () => {
+      singleReadable.mockResolvedValue(false);
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(403);
+    });
+
+    // Reading proves nothing about this. Where a Single allows broad reads and
+    // restricts updates, a caller reads the published document and would
+    // otherwise be handed the author's unpublished edits.
+    it("refuses when the caller cannot edit the document", async () => {
+      singleEditable.mockResolvedValue(false);
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(403);
+    });
+
+    // The property that matters: a refusal must stop short of SIGNING. A token
+    // that exists is a working credential whatever the response says.
+    it("signs nothing when it refuses", async () => {
+      singleEditable.mockResolvedValue(false);
+
+      const body = await json(
+        await mintPreviewLink(post({ single: "homepage" }))
+      );
+
+      expect(JSON.stringify(body)).not.toContain("eyJ");
+    });
+
+    // Asked BEFORE the trusted read that builds the redirect, so a refused
+    // caller never reaches a document they may not see.
+    it("asks before loading the document", async () => {
+      singleReadable.mockResolvedValue(false);
+
+      await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(findSingle).not.toHaveBeenCalled();
+    });
   });
 
   it("mints a link scoped to the Single", async () => {

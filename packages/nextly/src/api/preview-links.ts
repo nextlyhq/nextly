@@ -37,13 +37,17 @@ import {
 } from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
+import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
-import { assertEntryPreviewable } from "./preview-access";
+import {
+  assertEntryPreviewable,
+  assertSinglePreviewable,
+} from "./preview-access";
 import {
   loadSingleForPreview,
   previewDeclarationFor,
@@ -273,17 +277,53 @@ async function respondWithPreviewLink(
 }
 
 /**
+ * Who is asking, resolved the one way both mint paths must resolve it.
+ *
+ * An API key is authorized on the grants stamped on the KEY, never on its
+ * owner's roles. Without that distinction the probe resolves the owner's RBAC —
+ * including a super-admin bypass — so a key holding `update-*` but not `read-*`
+ * would mint a link on the strength of an account that can read, handing out a
+ * bearer credential for a document the key itself may not fetch.
+ *
+ * Shared rather than derived per call site: an entry link and a Single link
+ * confer the same kind of credential, so a difference in who they think is
+ * asking would be a difference in who can obtain one.
+ */
+async function callerFor(
+  auth: Awaited<ReturnType<typeof requireRouteCollectionAccess>>
+): Promise<{
+  user: UserContext;
+  actor: AuthenticatedScope | undefined;
+}> {
+  const roles = await resolveRoleSlugs(auth);
+  return {
+    user: buildUserContext({
+      claims: auth.claims,
+      id: auth.userId,
+      name: auth.userName,
+      email: auth.userEmail,
+      roles,
+    }),
+    actor:
+      auth.authMethod === "api-key"
+        ? { actorType: "apiKey", permissions: auth.permissions }
+        : undefined,
+  };
+}
+
+/**
  * Mint a link scoped to one Single.
  *
- * Authorized with the SAME gate a Single's document update asks for, keyed on
- * its slug — which is what the dispatcher uses for every write to it. So a
- * caller who cannot edit the Single cannot mint a credential to read its draft.
+ * Two gates, because the route's own is one axis short of what the token hands
+ * out. `requireRouteCollectionAccess` answers the coarse RBAC question — may
+ * this caller update this slug — while a Single's STORED rules (owner-only,
+ * role based, custom) are evaluated against the loaded document and can deny a
+ * caller who holds that permission. A link minted on the permission alone is a
+ * bearer credential for a draft the real update path refuses to show them.
  *
- * There is no second, row-level probe as there is for an entry, and there is
- * nothing missing: that probe exists because a collection gate answers about
- * the COLLECTION while the token names one ENTRY, and a row-level rule makes
- * the two diverge. A Single has exactly one document, so the gate's subject and
- * the token's subject are the same thing.
+ * That the token's subject and the gate's subject are the same document does
+ * not close it: the divergence here is between a PERMISSION and a stored RULE,
+ * not between a collection and a row.
  */
 async function mintForSingle(
   req: Request,
@@ -291,8 +331,16 @@ async function mintForSingle(
 ): Promise<Response> {
   const { single, locale, ttlSeconds } = args;
 
-  await requireRouteCollectionAccess(req, "update", single);
+  const auth = await requireRouteCollectionAccess(req, "update", single);
+  // Booted first because the gate below resolves services from the container,
+  // and on a cold process the permission lookup itself needs them registered.
   await getCachedNextly();
+
+  // The Single's STORED rules, against the real document. Runs before anything
+  // is signed and before the trusted read below, so a refused caller reaches
+  // neither.
+  const { user, actor } = await callerFor(auth);
+  await assertSinglePreviewable(single, user, actor);
 
   const declaration = await singlePreviewDeclarationFor(single);
 
@@ -363,35 +411,14 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // read. Booted first because that gate resolves services from the container,
   // and on a cold process the permission lookup itself needs them registered.
   await getCachedNextly();
-  const roles = await resolveRoleSlugs(auth);
-
-  // An API key is authorized on the grants stamped on the KEY, never on its
-  // owner's roles. Without this the probe resolves the owner's RBAC — including
-  // a super-admin bypass — so a key holding `update-*` but not `read-*` would
-  // mint a link on the strength of an account that can read, handing out a
-  // bearer credential for a document the key itself may not fetch.
-  const actor: AuthenticatedScope | undefined =
-    auth.authMethod === "api-key"
-      ? { actorType: "apiKey", permissions: auth.permissions }
-      : undefined;
+  const { user, actor } = await callerFor(auth);
   // Authorized through the gate that serves collection reads and writes, so the
   // verdict here is the verdict the bearer's own read will reach. It asks two
   // questions the previous by-id probe could not express: whether the entry is
   // visible at all INCLUDING one never published, and whether this caller may
   // edit it — which is what the draft overlay requires before surfacing the
   // working draft the token hands out.
-  await assertEntryPreviewable(
-    collection,
-    entryId,
-    buildUserContext({
-      claims: auth.claims,
-      id: auth.userId,
-      name: auth.userName,
-      email: auth.userEmail,
-      roles,
-    }),
-    actor
-  );
+  await assertEntryPreviewable(collection, entryId, user, actor);
 
   // Refused BEFORE a token is signed, because a link that cannot land is worse
   // than no link: the reviewer who opens it sees a 404 indistinguishable from
