@@ -99,8 +99,22 @@ export function ownEntry<T>(
  *
  * - `{ ...stored }`
  * - `Object.fromEntries(...)`
- * - `Object.assign({}, stored)`
  * - `structuredClone(stored)`
+ *
+ * **`Object.assign({}, stored)` is NOT among them.** It copies through the
+ * target's ordinary `[[Set]]` path, so it behaves exactly like the plain
+ * assignment this module exists to replace: the own key is dropped and the
+ * target's prototype is replaced. It sits beside three functions that look
+ * interchangeable with it and is the one that fails, which is the reason this
+ * list names it rather than leaving it off:
+ *
+ * ```js
+ * const src = JSON.parse('{"__proto__":["a"],"content":["b"]}');
+ * Object.keys({ ...src });                 // ['__proto__', 'content']
+ * Object.keys(Object.fromEntries(Object.entries(src)));  // ['__proto__', 'content']
+ * Object.keys(structuredClone(src));       // ['__proto__', 'content']
+ * Object.keys(Object.assign({}, src));     // ['content']       ← drops it
+ * ```
  *
  * And plain assignment is safe when the TARGET has no prototype to inherit
  * from. `Object.create(null)` carries no `__proto__` accessor, so

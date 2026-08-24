@@ -45,6 +45,25 @@
  * different question. It is about an invariant these primitives depend on to
  * work at all, and it concerns caller-supplied input rather than the state the
  * document was already in.
+ *
+ * ## What a rebuild keeps, and the one thing it drops
+ *
+ * Rebuilding preserves everything it cannot interpret — a malformed entry, a
+ * slot whose value is not an array, a slot named `__proto__`. An unrelated edit
+ * must not be what destroys stored content.
+ *
+ * A cycle-closing entry is the single exception, and the reason generalises:
+ * **it is the one thing in a stored document that cannot round-trip through
+ * storage.** `JSON.stringify` refuses it, so it was never readable back and
+ * dropping it loses nothing a caller could have saved — while KEEPING it during
+ * a rebuild emits the same id twice and makes every lookup ambiguous. A
+ * malformed value is the opposite on both counts: it writes, it reads back, and
+ * it breaks nothing.
+ *
+ * So the test is not "did the caller name it" but "could this have been
+ * stored". That distinction is why `withoutCycleEdges` is applied to a forest a
+ * primitive was ALREADY going to rebuild, and never as a repair pass of its
+ * own.
  */
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
@@ -434,7 +453,10 @@ function clampIndex(index: number, length: number): number {
  * subtree handed in by a caller ADDS a cycle to a forest that may not have had
  * one, rather than declining to work on damage that was already there.
  */
-function insertionIsUnsafe(nodes: BlockNode[], node: BlockNode): boolean {
+function checkInsertion(
+  nodes: BlockNode[],
+  node: BlockNode
+): { unsafe: boolean; destinationCyclic: boolean } {
   const incoming = new Set<string>();
   let internalDuplicate = false;
   let cyclic = false;
@@ -450,12 +472,47 @@ function insertionIsUnsafe(nodes: BlockNode[], node: BlockNode): boolean {
       },
     }
   );
-  if (cyclic || internalDuplicate) return true;
+  if (cyclic || internalDuplicate) {
+    return { unsafe: true, destinationCyclic: false };
+  }
   let overlapsForest = false;
-  walkNodes(nodes, n => {
-    if (incoming.has(n.id)) overlapsForest = true;
-  });
-  return overlapsForest;
+  let destinationCyclic = false;
+  // Taken from the walk this already performs. The destination's own state is
+  // needed to keep the two insertion paths in agreement, and asking for it
+  // separately would be a second traversal answering a question this one has
+  // already passed through.
+  walkNodes(
+    nodes,
+    n => {
+      if (incoming.has(n.id)) overlapsForest = true;
+    },
+    {
+      onCycle: () => {
+        destinationCyclic = true;
+      },
+    }
+  );
+  return { unsafe: overlapsForest, destinationCyclic };
+}
+
+/** A node, unchanged. The rebuild is the point; `mapForest` does the rest. */
+function identity(node: BlockNode): BlockNode {
+  return node;
+}
+
+/**
+ * Rebuild a forest, dropping any entry that closes a cycle.
+ *
+ * Named because two callers need it for the same reason and neither is
+ * transforming anything: a cycle-closing entry is the one thing in a stored
+ * document that CANNOT round-trip through storage — `JSON.stringify` refuses
+ * it — so a rebuild that omits it destroys nothing a caller could ever have
+ * saved. That is what separates it from a malformed slot value, which is
+ * preserved exactly: a strange value still writes and reads back, so dropping
+ * one would lose real content.
+ */
+function withoutCycleEdges(nodes: BlockNode[]): BlockNode[] {
+  return mapForest(nodes, identity);
 }
 
 /**
@@ -473,9 +530,17 @@ export function insertNode(
   node: BlockNode,
   at: TreePosition
 ): BlockNode[] {
-  if (insertionIsUnsafe(nodes, node)) return nodes;
+  const check = checkInsertion(nodes, node);
+  if (check.unsafe) return nodes;
   if (at.parentId === undefined) {
-    const next = [...nodes];
+    // Rebuilt rather than copied when the destination carries a cycle, so both
+    // insertion paths answer the same way. The path below reaches `mapForest`,
+    // which drops a cycle-closing entry as it rebuilds; a plain array copy here
+    // does not, so the same operation left the cycle in place for a top-level
+    // target and removed it for a nested one — one primitive with two answers,
+    // decided by where the caller happened to point it.
+    const base = check.destinationCyclic ? withoutCycleEdges(nodes) : nodes;
+    const next = [...base];
     next.splice(clampIndex(at.index, next.length), 0, node);
     return next;
   }
@@ -544,7 +609,14 @@ export function moveNode(
     if (!findNode(nodes, to.parentId)) return nodes;
   }
   const without = removeNode(nodes, id);
-  const next = insertNode(without, moving, to);
+  // Rebuilt before it is re-inserted, because the subtree came out of the
+  // DOCUMENT rather than from the caller. `checkInsertion` refuses a cyclic
+  // argument to stop a caller adding a cycle to a healthy forest, and a node
+  // extracted from a document that was already cyclic is not that — refusing it
+  // meant a damaged block could never be moved, which is the one thing an
+  // author might do to get it out of the way.
+  const [relocated] = withoutCycleEdges([moving]);
+  const next = insertNode(without, relocated ?? moving, to);
   // The move must be atomic. If the re-insert refused — which happens only when
   // the moving subtree is itself already malformed (an internal duplicate id) —
   // `insertNode` returns the `without` forest unchanged; committing that would

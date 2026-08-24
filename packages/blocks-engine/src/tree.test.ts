@@ -379,39 +379,126 @@ describe("a forest whose slots form a cycle", () => {
     expect(next[2]!.type).toBe("core/text");
   });
 
-  it("leaves the cycle in place rather than repairing what the caller did not name", () => {
-    // The other half of tolerating: the operation does not quietly rewrite the
-    // damaged part of the document. An author asked to copy one node, and a
-    // primitive that "helpfully" dropped the back edge would be editing content
-    // nobody selected — and would report success for a repair no one can audit.
-    const nodes = cyclic();
+  it("answers the same way whether the target is TOP-LEVEL or NESTED", () => {
+    // One primitive must not give two answers decided by where the caller
+    // pointed it. The nested path rebuilds through `mapForest`, which drops a
+    // cycle-closing entry; the top-level path copied the array instead, so the
+    // same duplicate removed an unrelated cycle or left it standing depending
+    // on the target's depth.
+    //
+    // Both fixtures share a shape so DEPTH is the only difference between them.
+    function siblingCycle(nested: boolean): {
+      forest: BlockNode[];
+      targetId: string;
+    } {
+      const looped = makeNode("core/box", 1, {}, { main: [] });
+      looped.slots!.main.push(looped);
+      const target = makeNode("core/text", 1);
+      if (!nested) return { forest: [looped, target], targetId: target.id };
+      const host = makeNode("core/box", 1, {}, { main: [target] });
+      return { forest: [looped, host], targetId: target.id };
+    }
 
-    const next = duplicateNode(nodes, nodes[0]!.id);
+    const results = [false, true].map(nested => {
+      const { forest, targetId } = siblingCycle(nested);
+      const next = duplicateNode(forest, targetId);
+      let cycles = 0;
+      walkNodes(next, () => undefined, {
+        onCycle: () => {
+          cycles += 1;
+        },
+      });
+      return { duplicated: next !== forest, cycles };
+    });
 
-    // The duplicate has to have HAPPENED for the rest to mean anything —
-    // returning the forest untouched leaves the cycle in place too, and would
-    // satisfy the assertion below while doing no work at all.
-    expect(next).toHaveLength(2);
+    // Both duplicated rather than refusing, and both say the same thing about
+    // the unrelated cycle. The equality is the property; the absolute value is
+    // asserted too, so two equally broken implementations cannot satisfy it.
+    expect(results[0]!.duplicated).toBe(true);
+    expect(results[1]!.duplicated).toBe(true);
+    expect(results[0]!.cycles).toBe(results[1]!.cycles);
+    expect(results[0]!.cycles).toBe(0);
+  });
+
+  it("keeps a malformed slot VALUE while dropping the cycle edge", () => {
+    // The distinction the whole rule turns on, asserted as a PAIR because
+    // either half alone reads as a policy about damage in general. A cycle edge
+    // cannot round-trip through storage, so dropping it loses nothing a caller
+    // could have saved. A malformed value writes and reads back unchanged, so
+    // dropping that would destroy content the edit never named.
+    const looped = makeNode("core/box", 1, {}, { main: [] });
+    looped.slots!.main.push(looped);
+    const odd = makeNode("core/box", 1, {}, {});
+    // Not an array — the shape unvalidated stored documents actually arrive in.
+    odd.slots = { broken: "kept" as unknown as BlockNode[] };
+    const target = makeNode("core/text", 1);
+
+    const next = duplicateNode([looped, odd, target], target.id);
+
     let cycles = 0;
     walkNodes(next, () => undefined, {
       onCycle: () => {
         cycles += 1;
       },
     });
-    expect(cycles).toBeGreaterThan(0);
+    expect(cycles).toBe(0);
+    expect(next[1]!.slots).toEqual({ broken: "kept" });
   });
 
-  it("hands the unstorable verdict to the writer, which still refuses", () => {
-    // The refusal MOVED; it did not disappear. This is the assertion that would
-    // catch someone reading the tolerance rule as "cycles are fine now" — the
-    // document still cannot be saved, and the check that says so is the one the
-    // write path already calls.
-    const source = cyclic();
-    const nodes = duplicateNode(source, source[0]!.id);
+  it("relocates a node whose own subtree is already cyclic", () => {
+    // The insertion guard refuses a cyclic ARGUMENT so a caller cannot add a
+    // cycle to a healthy forest. A move is not that: the subtree came out of
+    // the document, and refusing it meant a damaged block could never be moved
+    // — the one thing an author might reasonably do to get it out of the way.
+    //
+    // `moveNode` is atomic, so a refused re-insert returns the ORIGINAL forest.
+    // That is why this asserts the node arrived at its destination rather than
+    // merely that something changed: an implementation that still refuses
+    // returns a forest identical to the input, and "no throw" cannot see it.
+    const selfLoop = makeNode("core/box", 1, {}, { main: [] });
+    selfLoop.slots!.main.push(selfLoop);
+    const dest = makeNode("core/box", 1, {}, { main: [] });
 
-    // Same reason as above: an implementation that refused would hand back an
-    // unstorable forest as well, so the verdict alone does not separate them.
-    expect(nodes).toHaveLength(2);
+    const next = moveNode([selfLoop, dest], selfLoop.id, {
+      parentId: dest.id,
+      slot: "main",
+      index: 0,
+    });
+
+    expect(next).toHaveLength(1);
+    expect(next[0]!.id).toBe(dest.id);
+    expect(next[0]!.slots!.main).toHaveLength(1);
+    expect(next[0]!.slots!.main[0]!.id).toBe(selfLoop.id);
+    // Relocated, and the edge that could never have been stored is gone with
+    // it, so the document the author is left with can actually be saved.
+    let cycles = 0;
+    walkNodes(next, () => undefined, {
+      onCycle: () => {
+        cycles += 1;
+      },
+    });
+    expect(cycles).toBe(0);
+  });
+
+  it("hands an unstorable document to the writer, which still refuses", () => {
+    // The refusal MOVED to the write; it did not disappear. The fixture is a
+    // malformed slot VALUE holding a back-reference to its owner — the case a
+    // cycle check cannot see, because the loop runs through a value that is not
+    // a slot array, and the case that must therefore still be preserved.
+    //
+    // A plain cycle would NOT serve here: the rebuild drops that edge, so the
+    // result is storable and the assertion would be about the wrong thing.
+    const holder = makeNode("core/box", 1, {}, {});
+    const value: Record<string, unknown> = {};
+    value.back = holder;
+    holder.slots = { bad: value as unknown as BlockNode[] };
+    const target = makeNode("core/text", 1);
+
+    const nodes = duplicateNode([holder, target], target.id);
+
+    // The operation did its work rather than declining, which is what separates
+    // this from an implementation that refuses and hands back the same forest.
+    expect(nodes).toHaveLength(3);
     const verdict = measureBytes({ nodes }, 1_000_000);
 
     // Matched as a whole rather than field by field: `reason` exists only on
