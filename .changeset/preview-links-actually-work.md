@@ -52,6 +52,15 @@ so a relative path resolves against the origin the visitor is standing on. Where
 to compare against, the path's shape is checked instead, so a protocol-relative value cannot pass
 itself off as a local path.
 
+The absolute URL the admin hands out no longer requires one either. The **Site URL** setting still
+wins where it is set, because it is the only value that can name a site on a different origin from
+the admin — but where it is empty, `NEXT_PUBLIC_APP_URL` answers, which is the same chain media
+URLs and email links already resolve through and is already required in production. That setting
+starts empty on every installation and nothing prompts anyone to fill it in, so "Copy shareable
+link" previously answered "ask an administrator" on every fresh install, including one where the
+admin and the site are plainly the same application. A value that is not http(s) is refused from
+either source rather than copied to a clipboard.
+
 Add `draft: previewDraftGate()` to the content route the link lands on. Without it the route serves
 published entries only, and a preview link verifies, redirects, and then answers 404 from a page
 that looks entirely correct.

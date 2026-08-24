@@ -22,6 +22,7 @@ import {
   resolvePreviewRedirect,
   type PreviewRedirectScope,
 } from "../../domains/collections/services/preview-redirect-resolver";
+import { resolvePreviewSiteUrl } from "../../domains/preview/site-url";
 import { NextlyError } from "../../errors/nextly-error";
 import { getCachedNextly } from "../../init";
 import { env } from "../../lib/env";
@@ -138,7 +139,9 @@ export async function defaultRedirectTo(
       },
       loadDeclaration: previewDeclarationFor,
       loadSiteUrl: async () =>
-        (await settingsService()).getSettings().then(s => s.siteUrl),
+        resolvePreviewSiteUrl(
+          await (await settingsService()).getSettings().then(s => s.siteUrl)
+        ),
     },
     context?.requestOrigin
   );
