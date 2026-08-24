@@ -90,6 +90,56 @@ const CONVERTED = [
  * still reports a whole element. Brace depth and quote state are what separate
  * a `>` that closes the tag from one that is part of an expression.
  */
+/**
+ * The index just past the string literal starting at `at`, or `at` itself when
+ * nothing starts there.
+ *
+ * Pulled out so the tag scan below reads as one question per branch. A `>`
+ * inside an attribute string is not the tag's end, and treating it as one is
+ * half of what makes later attributes invisible.
+ */
+function skipString(source: string, at: number): number {
+  const quote = source[at];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return at;
+
+  const close = source.indexOf(quote, at + 1);
+  return close === -1 ? source.length : close + 1;
+}
+
+/**
+ * The index of the `>` that closes the tag opened at `open`, or -1 when the
+ * text runs out or another tag starts first.
+ *
+ * Brace depth is the other half. A `>` inside `{e => f(e)}` is part of an
+ * expression, and a scan that stops there truncates the element mid-attribute.
+ *
+ * Template-literal interpolation is not tracked, which is a real limit rather
+ * than an oversight: an attribute value written as a template with a `>` inside
+ * `${...}` would end the tag early. No file in the scanned population does
+ * that, and a JSX parser is a heavy dependency for a check this size — so the
+ * limit is written down here instead of being discovered later.
+ */
+function tagEnd(source: string, open: number): number {
+  let depth = 0;
+
+  for (let i = open + 1; i < source.length; i++) {
+    const past = skipString(source, i);
+    if (past !== i) {
+      i = past - 1;
+      continue;
+    }
+
+    const c = source[i];
+    if (c === "{") depth++;
+    else if (c === "}") depth--;
+    else if (depth > 0) continue;
+    else if (c === ">") return i;
+    else if (c === "<") return -1;
+  }
+
+  return -1;
+}
+
 function openingTags(source: string): string[] {
   const tags: string[] = [];
 
@@ -97,29 +147,11 @@ function openingTags(source: string): string[] {
     if (source[i] !== "<") continue;
     if (!/[A-Za-z]/.test(source[i + 1] ?? "")) continue;
 
-    let depth = 0;
-    let quote = "";
-    for (let j = i + 1; j < source.length; j++) {
-      const c = source[j];
+    const end = tagEnd(source, i);
+    if (end === -1) continue;
 
-      if (quote) {
-        if (c === quote) quote = "";
-        continue;
-      }
-      if (c === '"' || c === "'" || c === "`") {
-        quote = c;
-        continue;
-      }
-      if (c === "{") depth++;
-      else if (c === "}") depth--;
-      else if (c === ">" && depth === 0) {
-        tags.push(source.slice(i, j + 1));
-        i = j;
-        break;
-      }
-      // An unterminated tag ends the scan rather than swallowing the file.
-      if (c === "<" && depth === 0) break;
-    }
+    tags.push(source.slice(i, end + 1));
+    i = end;
   }
 
   return tags;
