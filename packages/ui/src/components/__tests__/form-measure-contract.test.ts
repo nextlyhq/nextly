@@ -98,10 +98,13 @@ const FORM_BODY = /<(FormSection|FormActions|FieldShell)\b/;
  * A tab body of plain elements renders no part of the kit, so the scan cannot
  * find it the way it finds the rest. Each entry is here because it is a form
  * body, not because it once was: check that before adding one.
+ *
+ * Empty at present. It held the form-builder settings tab until that tab
+ * adopted `FormSection`, which is what makes a body discoverable — the entry
+ * came out in the same change, which is the edit the assertion below exists to
+ * force.
  */
-const UNMARKED = [
-  "packages/plugin-form-builder/src/admin/components/builder/FormSettingsTab.tsx",
-];
+const UNMARKED: string[] = [];
 
 /** Every `.tsx` under `dir`, recursively, as repo-relative paths. */
 function tsxFilesIn(dir: string): string[] {
