@@ -166,6 +166,13 @@ function FormBuilderViewInner({
     string[] | null
   >(null);
 
+  // Whether the configuration request FAILED, kept apart from what it
+  // returned. A 403 or a 500 mapped to an empty list is indistinguishable from
+  // "this site configures no redirect targets" — so the Settings tab would
+  // state that as fact, hide the option, and offer no way to tell the
+  // difference or try again.
+  const [redirectConfigFailed, setRedirectConfigFailed] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     const allTypes = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
@@ -198,6 +205,8 @@ function FormBuilderViewInner({
           );
           setNotificationDefaults(config?.notifications ?? {});
           setSpamDefaults(config?.spamProtection ?? {});
+          // `config === null` is the failure branch: the response was not ok.
+          setRedirectConfigFailed(config === null);
           setRedirectCollections(config?.redirectCollections ?? []);
         }
       )
@@ -206,6 +215,7 @@ function FormBuilderViewInner({
         setEnabledTypes(allTypes);
         setNotificationDefaults({});
         setSpamDefaults({});
+        setRedirectConfigFailed(true);
         setRedirectCollections([]);
       });
     return () => {
@@ -535,6 +545,7 @@ function FormBuilderViewInner({
         <FormSettingsTab
           spamDefaults={spamDefaults}
           redirectCollections={redirectCollections}
+          redirectConfigFailed={redirectConfigFailed}
         />
       )}
 

@@ -137,6 +137,12 @@ interface FormSettingsTabProps {
    * offered — choosing it could only ever produce a form with no destination.
    */
   redirectCollections: string[] | null;
+  /**
+   * The configuration request failed, as distinct from returning nothing. An
+   * empty list is a valid answer; a failure is not an answer at all, and
+   * saying "no collection is configured" on a 403 states something false.
+   */
+  redirectConfigFailed: boolean;
 }
 
 /**
@@ -152,19 +158,52 @@ interface FormSettingsTabProps {
  * request can fail; both arrive here as an empty list, which is why the stored
  * value rather than the configuration decides whether this renders.
  */
+/**
+ * What the "Redirect to a page" option should show.
+ *
+ * Four outcomes, named because they were four nested conditions and the
+ * difference between two of them is not visual — an empty configuration is an
+ * ANSWER, a failed configuration read is not, and stating the first when the
+ * second happened tells an author something false about their site.
+ */
+export type RedirectOptionState =
+  /** Not offered: nothing stored, nothing configured, nothing unknown. */
+  | "hidden"
+  /** Offered, but the choices could not be loaded. */
+  | "unknown"
+  /** Offered because a page is stored, though none can be chosen now. */
+  | "stored-only"
+  /** Offered with choices. */
+  | "ready";
+
+export function redirectOptionState(input: {
+  stored: boolean;
+  collections: string[] | null;
+  configFailed: boolean;
+}): RedirectOptionState {
+  const configured = input.collections !== null && input.collections.length > 0;
+  if (configured) return "ready";
+  if (input.stored) return "stored-only";
+  return input.configFailed ? "unknown" : "hidden";
+}
+
 function PageRedirectOption({
   redirectCollections,
+  configFailed,
   settings,
   updateSettings,
 }: {
   redirectCollections: string[] | null;
+  configFailed: boolean;
   settings: { confirmationType?: string; redirectPage?: unknown };
   updateSettings: (patch: { redirectPage?: unknown }) => void;
 }) {
-  const stored = settings.confirmationType === "relationship";
-  const configured =
-    redirectCollections !== null && redirectCollections.length > 0;
-  if (!stored && !configured) return null;
+  const state = redirectOptionState({
+    stored: settings.confirmationType === "relationship",
+    collections: redirectCollections,
+    configFailed,
+  });
+  if (state === "hidden") return null;
 
   return (
     <div className="flex items-start gap-3">
@@ -175,27 +214,27 @@ function PageRedirectOption({
       />
       <div className="w-full space-y-2">
         <Label htmlFor="settings-confirm-page">Redirect to a page</Label>
-        {stored && (
-          <>
-            {!configured && (
-              <p className="text-[12px] text-muted-foreground">
-                No collection is configured as a redirect target right now. The
-                page below is still saved, and stays until you choose a
-                different confirmation.
-              </p>
-            )}
-            {/* Mounted whenever a page is stored, including with NO configured
-                collections. The picker is what recovers the stored target by
-                id and labels it, so leaving it out in exactly that case tells
-                an author a page is saved without telling them which — and the
-                only way out of the state is to see it. */}
+
+        {state !== "ready" && (
+          <p className="text-[12px] text-muted-foreground">
+            {configFailed
+              ? "The redirect configuration could not be loaded, so the pages you can choose from are not listed. Reload to try again."
+              : "No collection is configured as a redirect target right now. The page below is still saved, and stays until you choose a different confirmation."}
+          </p>
+        )}
+
+        {/* Mounted whenever a page is stored, including with NO configured
+            collections: the picker is what recovers the stored target by id
+            and labels it, so leaving it out there tells an author a page is
+            saved without telling them which. */}
+        {state !== "unknown" &&
+          settings.confirmationType === "relationship" && (
             <RedirectPagePicker
               collections={redirectCollections ?? []}
               value={settings.redirectPage}
               onChange={next => updateSettings({ redirectPage: next })}
             />
-          </>
-        )}
+          )}
       </div>
     </div>
   );
@@ -204,6 +243,7 @@ function PageRedirectOption({
 export function FormSettingsTab({
   spamDefaults,
   redirectCollections,
+  redirectConfigFailed,
 }: FormSettingsTabProps) {
   const { settings, updateSettings } = useFormBuilder();
 
@@ -310,6 +350,7 @@ export function FormSettingsTab({
             </div>
             <PageRedirectOption
               redirectCollections={redirectCollections}
+              configFailed={redirectConfigFailed}
               settings={settings}
               updateSettings={updateSettings}
             />

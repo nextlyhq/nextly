@@ -562,3 +562,52 @@ describe("updating a form that already redirects to a page", () => {
     );
   });
 });
+
+describe("a target collection with the publish lifecycle", () => {
+  /**
+   * The picker offers drafts deliberately (`status=all`), so the save
+   * invariant must accept one. Pinned because the two reads are different code
+   * paths and could drift: if a by-id read ever became published-only, this
+   * would refuse a page the picker had just offered, telling the author it
+   * "no longer exists" while it is on screen.
+   */
+  const draftingPages = defineCollection({
+    slug: "pages",
+    status: true,
+    versions: { drafts: true },
+    fields: [text({ name: "title" }), text({ name: "slug" })],
+  } as never);
+
+  it("accepts a draft page as a redirect target", async () => {
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [draftingPages],
+    });
+
+    const made = await current.nextly.create({
+      collection: "pages",
+      data: { title: "Draft page", slug: "draft-page", status: "draft" },
+    });
+    const draft = made as { item: { id: string; status?: string } };
+    // The fixture is only meaningful if it really is a draft.
+    expect(draft.item.status).toBe("draft");
+
+    const saved = await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "pages", value: draft.item.id },
+        },
+      },
+    });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
+  });
+});
