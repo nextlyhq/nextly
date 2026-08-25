@@ -135,10 +135,18 @@ enumerated; immunity by case analysis survives exactly the cases listed.
 
 ### Two things this rule is not
 
-**It is not "be more careful".** Nine of the ten instances were produced by
-people actively applying the other rules in this directory, and two were
-produced while reading or writing about this very shape. Care is not the
-variable.
+**It is not "be more careful".** Most of these were produced by people actively
+applying the other rules in this directory. **Three were produced while reading
+or writing this file**, and the third is the load-bearing one: a reply was
+addressed to the name a correspondent SIGNED with rather than to the structural
+field the transport carries — a self-reported label standing in for the real
+identifier, committed inside the paragraph about self-reported labels standing
+in for real identifiers.
+
+That is not irony. It is the evidence. Care was maximal — the author was
+attending to this exact failure, in this exact section, at that exact moment —
+and the failure occurred anyway. Whatever prevents these, it is not attention,
+because attention was the one input already at its ceiling.
 
 **It is not a reason to distrust green.** A control that moves is real evidence,
 and treating every clean result as suspect costs more than the failures do. The
