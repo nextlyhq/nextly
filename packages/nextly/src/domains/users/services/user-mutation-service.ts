@@ -58,6 +58,7 @@ import {
 import { affectedRowCount } from "../../auth/services/auth-service";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import { eraseRecipientDeliveries } from "../../email/erase-recipient";
+import { revalidateMedia } from "../../media/revalidate-media";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
@@ -116,6 +117,15 @@ interface DrizzleTransactionLike {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+  // Whole-row read, which Drizzle spells as `select()` with no projection.
+  // Named as its own overload rather than widening the one below: the
+  // projected form ends in `.limit()`, and collapsing the two would make a
+  // caller that forgot the limit type-check.
+  select(): {
+    from(table: unknown): {
+      where(condition: unknown): Promise<Record<string, unknown>[]>;
+    };
+  };
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
@@ -310,6 +320,19 @@ function userExtValueError(name: string, expected: string): NextlyError {
       },
     ],
   });
+}
+
+/**
+ * The media columns the detach reads back.
+ *
+ * Deliberately loose: the row is forwarded whole as the event's `previous` and,
+ * with two fields overlaid, as its `data`. Naming each column here would be a
+ * second declaration of the media shape that nothing keeps in step with the
+ * schema — the event only needs the id and the identity of the row.
+ */
+interface MediaRow {
+  id: string;
+  [column: string]: unknown;
 }
 
 export class UserMutationService extends BaseService {
@@ -1473,6 +1496,10 @@ export class UserMutationService extends BaseService {
     // all three driver packages); the fluent query API is identical across
     // dialects.
     let userDeletedRecorded = false;
+    // Collected inside the transaction, used after it commits: the cache bust
+    // must not run until the detach is durable, and the rows cannot be found
+    // afterwards because the column that named them is exactly what changed.
+    let detachedMediaIds: string[] = [];
     try {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
@@ -1563,10 +1590,41 @@ export class UserMutationService extends BaseService {
         // Inside the transaction, so files are never detached from an account
         // whose removal then rolls back.
         if (mediaExists) {
-          await txDb
-            .update(media)
-            .set({ uploadedBy: null })
-            .where(eq(media.uploadedBy as Column, userId));
+          // Read before writing: the event carries a before and an after, and
+          // the ids cannot be recovered once the column naming them is null.
+          const detaching = (await txDb
+            .select()
+            .from(media)
+            .where(
+              eq(media.uploadedBy as Column, userId)
+            )) as unknown[] as MediaRow[];
+
+          if (detaching.length > 0) {
+            const detachedAt = new Date();
+            await txDb
+              .update(media)
+              .set({ uploadedBy: null, updatedAt: detachedAt })
+              .where(eq(media.uploadedBy as Column, userId));
+
+            // `updatedAt` and the outbox row are what `updateMedia` emits for
+            // any other metadata change, and a detach is one. Without them a
+            // timestamp-based sync sees an unchanged row and media subscribers
+            // are never told, so a downstream replica keeps serving the
+            // attribution of an account that no longer exists — the erasure
+            // holding on this side and not on the other.
+            for (const row of detaching) {
+              await recordMutationEventInTx(txDb, this.dialect, {
+                type: "media.updated",
+                resource: { kind: "media", id: String(row.id) },
+                data: { ...row, uploadedBy: null, updatedAt: detachedAt },
+                previous: row,
+                fields: [],
+                actor: actor ?? null,
+              });
+            }
+
+            detachedMediaIds = detaching.map(row => String(row.id));
+          }
         }
 
         // Strip the person out of the delivery log for the same reason, and in
@@ -1631,6 +1689,16 @@ export class UserMutationService extends BaseService {
       if (NextlyError.is(err)) throw err;
       // Normalise raw driver errors so fk/etc. produce the right NextlyError kind.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+
+    // The detached files changed, so anything cached against them is stale —
+    // `uploadedBy` is part of the media shape a read returns. AFTER the commit,
+    // because a bust for a detach that then rolled back would be a lie about
+    // rows that never moved; best-effort, because the deletion has already
+    // happened and reporting it as failed would invite a retry that answers
+    // not-found.
+    if (detachedMediaIds.length > 0) {
+      await revalidateMedia(detachedMediaIds, this.logger);
     }
 
     // The removed account's recovery points, swept once the deletion is
