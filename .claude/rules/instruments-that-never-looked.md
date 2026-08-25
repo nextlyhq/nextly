@@ -116,6 +116,34 @@ instrument, on an input whose answer you already know, run in the same
 conditions. If the control and the treatment produce the same result, the
 instrument is not discriminating and neither result is evidence.
 
+**A control has to be CAPABLE of the outcome you are ruling out**, and this is
+where a control that looks correct fails silently. Measured today, verifying a
+merge by comparing files between two revisions: the discrimination control was
+`README.md`, which is byte-identical on both sides. It passed — and it could
+only ever have passed, so it certified the comparison by never asking it
+anything. Fourteen-of-fourteen identical meant nothing until a file the other
+branch HAD touched came back different.
+
+The axis follows from the claim being made, and both reduce to the same test:
+
+- an ABSENCE claim ("this marker is gone", "no violation was found") needs a
+  control that must be FOUND. Otherwise a search that can find nothing at all
+  satisfies it.
+- a SAMENESS claim ("these are identical", "nothing changed") needs a control
+  that must come out DIFFERENT. Otherwise a comparison that reports everything
+  as equal satisfies it.
+
+Concretely, for the merge case:
+
+```sh
+git rev-parse <merge>:README.md <head>:README.md    # one sha twice — proves nothing
+git rev-parse <merge>:<a-file-the-other-branch-touched> <head>:<same>   # must DIFFER
+```
+
+Worth stating because the second kind is the one nobody builds: a lane that had
+been constructing must-be-found controls for years had never once built a
+must-differ control, and neither had the author of this file.
+
 **A break that moves something is not yet a regression test.** The control tells
 you the instrument discriminates; it does not tell you WHAT it discriminates on.
 A test dying to some mutation proves only that it reaches some code. Both
