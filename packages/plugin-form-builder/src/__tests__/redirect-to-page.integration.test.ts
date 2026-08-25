@@ -600,11 +600,13 @@ describe("updating a form that already redirects to a page", () => {
 
 describe("a target collection with the publish lifecycle", () => {
   /**
-   * The picker offers drafts deliberately (`status=all`), so the save
-   * invariant must accept one. Pinned because the two reads are different code
-   * paths and could drift: if a by-id read ever became published-only, this
-   * would refuse a page the picker had just offered, telling the author it
-   * "no longer exists" while it is on screen.
+   * The picker offers drafts deliberately (`status=all`), and the save rule is
+   * conditional rather than absolute: refused only when a PUBLISHED form
+   * points at an unpublished page, which is the one pairing that sends a
+   * visitor to a "page not found". A draft form pointing at a draft page is
+   * allowed, because the two go live together.
+   *
+   * Founder ruling, 2026-08-25 (decision:form-redirect-draft-targets).
    */
   const draftingPages = defineCollection({
     slug: "pages",
@@ -613,7 +615,7 @@ describe("a target collection with the publish lifecycle", () => {
     fields: [text({ name: "title" }), text({ name: "slug" })],
   } as never);
 
-  it("accepts a draft page as a redirect target", async () => {
+  async function bootWithDraftingPages() {
     const { plugin } = formBuilder({
       redirectRelationships: { pages: "/{slug}" },
     });
@@ -621,14 +623,187 @@ describe("a target collection with the publish lifecycle", () => {
       plugins: [plugin],
       collections: [draftingPages],
     });
+    return current;
+  }
 
-    const made = await current.nextly.create({
+  async function page(status: "draft" | "published", slug: string) {
+    const made = await current!.nextly.create({
       collection: "pages",
-      data: { title: "Draft page", slug: "draft-page", status: "draft" },
+      data: { title: slug, slug, status },
     });
-    const draft = made as { item: { id: string; status?: string } };
-    // The fixture is only meaningful if it really is a draft.
-    expect(draft.item.status).toBe("draft");
+    const row = made as { item: { id: string; status?: string } };
+    // The fixture is only meaningful if it really carries the status it names.
+    // A collection whose lifecycle was not actually enabled would answer
+    // `undefined` here and every assertion below would pass for the wrong
+    // reason.
+    expect(row.item.status).toBe(status);
+    return row.item.id;
+  }
+
+  const formData = (
+    status: string,
+    pageId: string
+  ): Record<string, unknown> => ({
+    name: "Contact",
+    slug: "contact",
+    status,
+    fields: [{ type: "text", name: "message", label: "Message" }],
+    settings: {
+      confirmationType: "relationship",
+      redirectPage: { relationTo: "pages", value: pageId },
+    },
+  });
+
+  it("accepts a draft page when the form is itself a draft", async () => {
+    // Also pins that a by-id read REACHES drafts at all. If it ever became
+    // published-only this would refuse a page the picker had just offered,
+    // telling the author it "no longer exists" while it is on screen.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+
+    const saved = await current!.nextly.create({
+      collection: "forms",
+      data: formData("draft", target),
+    });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
+  });
+
+  it("refuses a published form pointing at a draft page", async () => {
+    // The pairing the rule exists for: this form accepts submissions, so a
+    // visitor really would be redirected to a page the public route 404s.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+
+    await expectRedirectRefusal(
+      current!.nextly.create({
+        collection: "forms",
+        data: formData("published", target),
+      })
+    );
+  });
+
+  it("accepts a published form pointing at a published page", async () => {
+    // The control. Without it the refusal above passes just as well against a
+    // rule that refuses every published form, and nothing would say so.
+    await bootWithDraftingPages();
+    const target = await page("published", "live-page");
+
+    const saved = await current!.nextly.create({
+      collection: "forms",
+      data: formData("published", target),
+    });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
+  });
+
+  it("refuses publishing a form over a draft target it never touches", async () => {
+    // Publishing is a separate save that carries `status` and nothing else.
+    // Judging only the write that PICKS a page would guard one path and leave
+    // this one open, while looking like it covered both.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("draft", target),
+    })) as { item: { id: string } };
+
+    await expectRedirectRefusal(
+      current!.nextly.update({
+        collection: "forms",
+        id: created.item.id,
+        data: { status: "published" },
+      })
+    );
+  });
+
+  it("refuses repointing a published form at a draft page", async () => {
+    // This write carries `settings` and NOT `status`, so the form's published
+    // state can only come from the stored row. Reading an absent `status` as
+    // "not published" would wave this through — the same broken redirect,
+    // reached by editing rather than by publishing.
+    await bootWithDraftingPages();
+    const live = await page("published", "live-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("published", live),
+    })) as { item: { id: string } };
+
+    const draftTarget = await page("draft", "draft-page");
+    await expectRedirectRefusal(
+      current!.nextly.update({
+        collection: "forms",
+        id: created.item.id,
+        data: {
+          settings: {
+            confirmationType: "relationship",
+            redirectPage: { relationTo: "pages", value: draftTarget },
+          },
+        },
+      })
+    );
+  });
+
+  it("lets a rename through after the stored target is deleted", async () => {
+    // A write that does not name a page does not answer for that page still
+    // existing. Refusing here would make a deleted target block every future
+    // edit to the form, with a message about a setting the author never
+    // touched.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("draft", target),
+    })) as { item: { id: string } };
+
+    await current!.nextly.delete({ collection: "pages", id: target });
+
+    const renamed = await current!.nextly.update({
+      collection: "forms",
+      id: created.item.id,
+      data: { name: "Renamed" },
+    });
+    expect(renamed).toMatchObject({ item: { id: created.item.id } });
+  });
+
+  it("lets an unrelated edit through while the target is still a draft", async () => {
+    // The other half of the partial-update trap: a rename inherits the stored
+    // target and does not answer for it. Refusing here would block editing a
+    // form's name because of a setting the write never mentioned.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("draft", target),
+    })) as { item: { id: string } };
+
+    const renamed = await current!.nextly.update({
+      collection: "forms",
+      id: created.item.id,
+      data: { name: "Renamed" },
+    });
+    expect(renamed).toMatchObject({ item: { id: created.item.id } });
+  });
+});
+
+describe("a target collection with NO publish lifecycle", () => {
+  it("never refuses a published form, because nothing there can be a draft", async () => {
+    // A collection without the lifecycle carries no `status` field at all.
+    // Read for truthiness that is the same absence as a draft and means the
+    // opposite: every one of its documents is reachable. Getting this backwards
+    // would refuse every redirect on every site that never turned drafts on.
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+
+    const made = (await current.nextly.create({
+      collection: "pages",
+      data: { title: "Thanks", slug: "thanks" },
+    })) as { item: { id: string; status?: string } };
+    // The fixture only proves anything if this collection really has no status.
+    expect(made.item.status).toBeUndefined();
 
     const saved = await current.nextly.create({
       collection: "forms",
@@ -639,7 +814,7 @@ describe("a target collection with the publish lifecycle", () => {
         fields: [{ type: "text", name: "message", label: "Message" }],
         settings: {
           confirmationType: "relationship",
-          redirectPage: { relationTo: "pages", value: draft.item.id },
+          redirectPage: { relationTo: "pages", value: made.item.id },
         },
       },
     });

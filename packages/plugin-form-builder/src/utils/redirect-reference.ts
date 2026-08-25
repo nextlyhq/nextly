@@ -77,3 +77,25 @@ function referenceId(value: unknown): string | null {
   }
   return null;
 }
+
+/**
+ * Whether a visitor can reach this document.
+ *
+ * A collection with no publish lifecycle carries no `status` field at all and
+ * its documents are always reachable; a collection that HAS the lifecycle
+ * carries the field on every row. Read for truthiness the two are the same
+ * absence of `"published"`, and they mean opposite things — so this asks
+ * whether the field is THERE, not whether it says yes. Treating the first as
+ * unpublished would refuse every redirect on every site that never turned
+ * drafts on.
+ *
+ * Lives here, beside the reference parser, because the save rule and the
+ * admin picker have to agree about which pages are reachable. Two readers
+ * that agree today would drift, and a picker marking the wrong rows as drafts
+ * still looks like a working picker.
+ */
+export function documentIsReachable(document: RedirectTargetDocument): boolean {
+  const status = document.status;
+  if (typeof status !== "string") return true;
+  return status === "published";
+}

@@ -21,7 +21,10 @@ import {
 } from "nextly";
 
 import type { ResolvedFormBuilderConfig } from "../types";
-import { parseRedirectReference } from "../utils/redirect-reference";
+import {
+  documentIsReachable,
+  parseRedirectReference,
+} from "../utils/redirect-reference";
 import {
   applyRedirectPattern,
   type RedirectRelationships,
@@ -153,14 +156,90 @@ function withHostHooks<T>(
  * rather than the merged document, so treating an absent `settings` as empty
  * would refuse a rename for a setting it never touched.
  */
+function relationshipSettings(
+  settings: unknown
+): Record<string, unknown> | null {
+  if (typeof settings !== "object" || settings === null) return null;
+  const record = settings as Record<string, unknown>;
+  return record.confirmationType === "relationship" ? record : null;
+}
+
 function pageRedirectSettings(
   data: Record<string, unknown> | undefined,
   operation: string
 ): Record<string, unknown> | null {
   if (!data) return null;
   if (operation !== "create" && data.settings === undefined) return null;
-  const settings = data.settings as Record<string, unknown> | undefined;
-  return settings?.confirmationType === "relationship" ? settings : null;
+  return relationshipSettings(data.settings);
+}
+
+/**
+ * Whether the form this write leaves behind can receive a submission.
+ *
+ * A form's `status` is its own lifecycle — draft, published, closed — and only
+ * a published form accepts submissions, so only a published form can send a
+ * visitor anywhere at all. That is the whole reason this rule is conditional:
+ * a draft form pointing at a draft page is fine, because the two go live
+ * together.
+ *
+ * The stored status is consulted when the write does not carry one. Publishing
+ * a form and editing its settings are separate saves, and an update that never
+ * mentions `status` leaves the stored one standing — so reading an absent
+ * field as "not published" would wave through exactly the case this rule
+ * exists to catch.
+ */
+export function formAcceptsSubmissions(
+  data: Record<string, unknown> | undefined,
+  originalData: Record<string, unknown> | undefined
+): boolean {
+  return (data?.status ?? originalData?.status) === "published";
+}
+
+/**
+ * The stored `settings`, which is not the shape the payload uses.
+ *
+ * Measured on 2026-08-25: the incoming write carries `settings` as an OBJECT,
+ * and the same field on `originalData` comes back as JSON TEXT. Reading the
+ * stored row with the payload's reader answers "no redirect configured" for
+ * every form that has one — silently, and indistinguishably from a form that
+ * genuinely has none.
+ */
+function storedSettings(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      return relationshipSettings(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  return relationshipSettings(value);
+}
+
+/**
+ * The redirect target already stored on the form, for a write that does not
+ * mention it.
+ *
+ * Publishing a form is such a write: it carries `status` and nothing else, and
+ * the target it inherits is the one a visitor will be sent to. Without this,
+ * the rule would guard the save that PICKS a draft page and ignore the save
+ * that makes that same pairing reachable — protecting one path while appearing
+ * to protect both.
+ *
+ * Nothing here is written back. `originalData` is the stored row, not the
+ * payload; normalising it would edit a document this write never touched.
+ */
+function storedRedirectReference(
+  originalData: Record<string, unknown> | undefined,
+  patterns: RedirectRelationships
+): { collection: string; id: string } | null {
+  const settings = storedSettings(originalData?.settings);
+  if (!settings) return null;
+
+  const collections = Object.keys(patterns);
+  const reference = parseRedirectReference(settings.redirectPage, collections);
+  return reference && collections.includes(reference.collection)
+    ? reference
+    : null;
 }
 
 /**
@@ -226,16 +305,93 @@ function assertRedirectTargetNamed(
  * is in front of them, rather than leaving a form that saves cleanly and
  * redirects nobody.
  */
-async function assertRedirectTargetUsable(
+/**
+ * Whether this write leaves a form that would send visitors to a page they
+ * cannot reach.
+ *
+ * One question, so it has one implementation and one name. It is the whole
+ * rule: a form that accepts submissions is the only kind that redirects
+ * anyone, and an unreachable target is the only thing that 404s them. A draft
+ * form pointing at a draft page satisfies neither half and is allowed — the
+ * picker offers unpublished pages on purpose, because a form is usually
+ * configured beside the page it points at and the two go live together.
+ */
+export function wouldStrandVisitors(
+  data: Record<string, unknown> | undefined,
+  originalData: Record<string, unknown> | undefined,
+  target: RedirectTargetDocument
+): boolean {
+  return (
+    formAcceptsSubmissions(data, originalData) && !documentIsReachable(target)
+  );
+}
+
+/**
+ * The page this write leaves the form pointing at, and whether the write
+ * CHOSE it.
+ *
+ * The distinction decides which refusals apply. A write that names a page
+ * answers for that page; a write that only publishes the form, or renames it,
+ * inherits whatever is stored and must not be refused for it.
+ */
+function redirectReferenceForWrite(
   context: HookContext,
   patterns: RedirectRelationships
-) {
-  const reference = assertRedirectTargetNamed(
+): { reference: { collection: string; id: string }; chosen: boolean } | null {
+  const chosen = assertRedirectTargetNamed(
     context.data,
     context.operation,
     patterns
   );
-  if (!reference) return;
+  if (chosen) return { reference: chosen, chosen: true };
+
+  const stored = storedRedirectReference(
+    context.originalData as Record<string, unknown> | undefined,
+    patterns
+  );
+  return stored ? { reference: stored, chosen: false } : null;
+}
+
+/**
+ * Whether the collection's configured pattern can build a URL for this
+ * document.
+ *
+ * A pattern may be a FUNCTION, which is host code and can throw. Authoring
+ * must not be blocked by that: the submission path contains the same throw and
+ * degrades to no redirect with a log line, so a broken pattern costs a
+ * destination rather than the ability to edit forms.
+ */
+function assertPatternBuildsUrl(
+  patterns: RedirectRelationships,
+  reference: { collection: string; id: string },
+  target: RedirectTargetDocument
+) {
+  let url: string | undefined;
+  try {
+    url = applyRedirectPattern(patterns[reference.collection], target);
+  } catch {
+    return;
+  }
+  if (url) return;
+
+  // Pattern-agnostic. The configured pattern may depend on any field, or be a
+  // function that declines for its own reasons, so naming a slug states a
+  // remedy that often cannot fix the actual failure — and the save is
+  // correctly blocked either way, leaving the author following wrong advice.
+  throw redirectRefusal(
+    `No URL could be built for that page from the pattern configured for ` +
+      `"${reference.collection}". Choose another page, or ask a developer ` +
+      `to check that collection's redirect pattern.`
+  );
+}
+
+export async function assertRedirectTargetUsable(
+  context: HookContext,
+  patterns: RedirectRelationships
+) {
+  const write = redirectReferenceForWrite(context, patterns);
+  if (!write) return;
+  const { reference, chosen } = write;
 
   const nextly = context.req?.nextly;
   if (!nextly) return;
@@ -257,34 +413,32 @@ async function assertRedirectTargetUsable(
   const found = await readRedirectTarget(nextly, reference);
   if (found.status === "unreadable") return;
   if (found.status === "missing") {
+    // Only the write that NAMES a page answers for that page still existing.
+    // A rename inherits whatever is stored, and refusing it would block an
+    // edit for a setting it never touched.
+    if (!chosen) return;
     throw redirectRefusal(
       `That page no longer exists in "${reference.collection}". Pick another.`
     );
   }
-  const target = found.document;
 
-  // A pattern may be a FUNCTION, which is host code and can throw. Authoring
-  // must not be blocked by that: the submission path contains the same throw
-  // and degrades to no redirect with a log line, so a broken pattern costs a
-  // destination rather than the ability to edit forms.
-  let url: string | undefined;
-  try {
-    url = applyRedirectPattern(patterns[reference.collection], target);
-  } catch {
-    return;
-  }
-
-  if (!url) {
-    // Pattern-agnostic. The configured pattern may depend on any field, or be
-    // a function that declines for its own reasons, so naming a slug states a
-    // remedy that often cannot fix the actual failure — and the save is
-    // correctly blocked either way, leaving the author following wrong advice.
+  if (
+    wouldStrandVisitors(
+      context.data as Record<string, unknown> | undefined,
+      context.originalData as Record<string, unknown> | undefined,
+      found.document
+    )
+  ) {
     throw redirectRefusal(
-      `No URL could be built for that page from the pattern configured for ` +
-        `"${reference.collection}". Choose another page, or ask a developer ` +
-        `to check that collection's redirect pattern.`
+      `That page is not published yet, and this form is. A visitor sent ` +
+        `there would reach a "page not found". Publish the page, or save ` +
+        `this form as a draft until you do.`
     );
   }
+
+  // The pattern belongs to the write that CHOOSES a page. A form being
+  // published does not get refused for a pattern its author never edited.
+  if (chosen) assertPatternBuildsUrl(patterns, reference, found.document);
 }
 
 /**

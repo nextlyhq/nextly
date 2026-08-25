@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   documentLabel,
   labelFieldsFor,
+  selectFieldsFor,
   selectParam,
   selectionKey,
   groupChoices,
@@ -269,5 +270,31 @@ describe("documentLabel with a collection's own title field", () => {
       "pg1"
     );
     expect(documentLabel({}, labelFieldsFor("headline"))).toBe("Untitled");
+  });
+});
+
+describe("selectFieldsFor", () => {
+  it("requests the status, so a draft can be marked as one", () => {
+    expect(selectFieldsFor("headline")).toContain("status");
+  });
+
+  it("requests everything the label needs", () => {
+    // Derived from the label list rather than written out again: a field added
+    // for labelling that is never requested comes back absent, and the label
+    // falls silently to the id.
+    for (const field of labelFieldsFor("headline")) {
+      expect(selectFieldsFor("headline")).toContain(field);
+    }
+  });
+
+  it("never lets the status become a document's name", () => {
+    // `documentLabel` walks whatever list it is handed, in order. If `status`
+    // were a label field, a page with no title would be offered to an author
+    // as "draft" — which reads as a page called Draft.
+    expect(labelFieldsFor("headline")).not.toContain("status");
+    expect(labelFieldsFor(undefined)).not.toContain("status");
+    expect(documentLabel({ id: "1", status: "draft" }, labelFieldsFor())).toBe(
+      "1"
+    );
   });
 });

@@ -23,7 +23,10 @@ import {
 } from "@nextlyhq/ui";
 import { useEffect, useState } from "react";
 
-import { parseRedirectReference } from "../../../utils/redirect-reference";
+import {
+  documentIsReachable,
+  parseRedirectReference,
+} from "../../../utils/redirect-reference";
 
 /** Rows per request. Search, not paging, is how the rest are reached. */
 const PAGE_SIZE = 50;
@@ -71,6 +74,21 @@ export function labelFieldsFor(useAsTitle?: string): readonly string[] {
  * so the encoding is the whole difference between projecting a read and
  * appearing to project it.
  */
+/**
+ * The fields to REQUEST, which is the label fields plus `status`.
+ *
+ * Kept apart from `labelFieldsFor` on purpose. `status` decides whether a page
+ * is marked as a draft; it must never become a document's name, and
+ * `documentLabel` walks whatever list it is given — so a page with no title
+ * would otherwise be offered to an author as "draft".
+ *
+ * Derived from the label list rather than written out again, so a field added
+ * for labelling is still requested.
+ */
+export function selectFieldsFor(useAsTitle?: string): readonly string[] {
+  return [...labelFieldsFor(useAsTitle), "status"];
+}
+
 export function selectParam(fields: readonly string[]): string {
   return encodeURIComponent(
     JSON.stringify(Object.fromEntries(fields.map(field => [field, true])))
@@ -82,6 +100,13 @@ interface Choice {
   collection: string;
   id: string;
   label: string;
+  /**
+   * Whether a visitor could reach this page today. Unpublished pages are
+   * offered on purpose — a form is usually configured beside the page it
+   * points at — but an author choosing one should be able to see that it is
+   * not live yet.
+   */
+  reachable: boolean;
 }
 
 interface RedirectPagePickerProps {
@@ -134,7 +159,7 @@ async function fetchChoices(
   collection: string,
   query: string,
   page: number,
-  fields: readonly string[]
+  titleField: string | undefined
 ): Promise<{ rows: Choice[]; hasMore: boolean } | null> {
   const search = query ? `&search=${encodeURIComponent(query)}` : "";
   try {
@@ -145,7 +170,7 @@ async function fetchChoices(
     const response = await fetch(
       `/admin/api/collections/${collection}/entries` +
         `?limit=${PAGE_SIZE}&page=${page}&status=all&depth=0` +
-        `&select=${selectParam(fields)}${search}`,
+        `&select=${selectParam(selectFieldsFor(titleField))}${search}`,
       { credentials: "include" }
     );
     if (!response.ok) return null;
@@ -159,7 +184,8 @@ async function fetchChoices(
         .map(row => ({
           collection,
           id: row.id as string,
-          label: documentLabel(row, fields),
+          label: documentLabel(row, labelFieldsFor(titleField)),
+          reachable: documentIsReachable(row as { id: string }),
         })),
       // Reported rather than assumed, so the control can offer the rest
       // instead of truncating where the author cannot see it.
@@ -196,7 +222,19 @@ function renderChoice(choice: Choice) {
       key={`${choice.collection}:${choice.id}`}
       value={`${choice.collection}:${choice.id}`}
     >
-      {choice.label}
+      <span className="inline-flex items-center gap-2">
+        <span>{choice.label}</span>
+        {/* Unpublished pages are offered deliberately — a form is usually
+            configured beside the page it points at — so the marker is what
+            keeps "offered" from reading as "live". A published form saved
+            against one is refused, and an author who cannot see which pages
+            are drafts has no way to predict that. */}
+        {!choice.reachable && (
+          <span className="shrink-0 rounded-sm border px-1 py-px text-[10px] uppercase tracking-wide text-muted-foreground">
+            Draft
+          </span>
+        )}
+      </span>
     </SelectItem>
   );
 }
@@ -248,7 +286,7 @@ async function fetchTitleField(
 function useTitleFields(key: string) {
   const [fields, setFields] = useState<Record<
     string,
-    readonly string[]
+    string | undefined
   > | null>(null);
 
   useEffect(() => {
@@ -258,8 +296,7 @@ function useTitleFields(key: string) {
 
     void Promise.all(
       wanted.map(async collection => {
-        const configured = await fetchTitleField(collection);
-        return [collection, labelFieldsFor(configured)] as const;
+        return [collection, await fetchTitleField(collection)] as const;
       })
     ).then(pairs => {
       if (!cancelled) setFields(Object.fromEntries(pairs));
@@ -280,7 +317,7 @@ function useTitleFields(key: string) {
 function useChoices(
   key: string,
   applied: string,
-  titleFields: Record<string, readonly string[]> | null
+  titleFields: Record<string, string | undefined> | null
 ) {
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [failed, setFailed] = useState<readonly string[]>([]);
@@ -320,7 +357,7 @@ function useChoices(
           collection,
           applied,
           pages[collection] ?? 1,
-          titleFields[collection] ?? labelFieldsFor(undefined)
+          titleFields[collection]
         )
       )
     ).then(results => {
@@ -402,7 +439,7 @@ function useSelectedChoice(
   selected: string | undefined,
   choices: Choice[] | null,
   setChoices: (update: (current: Choice[] | null) => Choice[]) => void,
-  titleFields: Record<string, readonly string[]> | null
+  titleFields: Record<string, string | undefined> | null
 ) {
   // Whether the stored selection could not be read. A controlled `Select`
   // holding a value with no matching option renders BLANK, which looks
@@ -457,7 +494,11 @@ function useSelectedChoice(
             // The same fields the listing labels by. Labelling the recovered
             // document differently would show one document under two names
             // depending on whether the listing happened to reach it.
-            label: documentLabel(row, titleFields?.[collection]),
+            label: documentLabel(
+              row,
+              labelFieldsFor(titleFields?.[collection])
+            ),
+            reachable: documentIsReachable(row as { id: string }),
           },
           ...(current ?? []),
         ]);

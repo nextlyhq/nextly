@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyRedirectPattern,
+  documentIsReachable,
   DEFAULT_REDIRECT_PATTERN,
   normalizeRedirectRelationships,
   parseRedirectReference,
@@ -215,5 +216,37 @@ describe("applyRedirectPattern", () => {
   it("returns nothing when the function declines", () => {
     expect(applyRedirectPattern(() => undefined, page)).toBeUndefined();
     expect(applyRedirectPattern(() => "", page)).toBeUndefined();
+  });
+});
+
+describe("documentIsReachable", () => {
+  it("treats a collection with no publish lifecycle as reachable", () => {
+    // No `status` FIELD at all — the ordinary case for a site that never
+    // turned drafts on. Reading this as "not published" would refuse every
+    // redirect on every such site.
+    expect(documentIsReachable({ id: "1", slug: "thanks" })).toBe(true);
+  });
+
+  it("reads a published document as reachable", () => {
+    expect(documentIsReachable({ id: "1", status: "published" })).toBe(true);
+  });
+
+  it("reads a draft as unreachable", () => {
+    expect(documentIsReachable({ id: "1", status: "draft" })).toBe(false);
+  });
+
+  it("reads any other lifecycle state as unreachable", () => {
+    // Whatever a collection adds to its lifecycle, only "published" is a
+    // promise that the public route serves the page. Anything else is a state
+    // this rule has never seen and must not assume is live.
+    for (const status of ["archived", "scheduled", "", "review"]) {
+      expect(documentIsReachable({ id: "1", status })).toBe(false);
+    }
+  });
+
+  it("does not mistake a non-string status for a lifecycle answer", () => {
+    // A field that is present but not a string is not a lifecycle this
+    // function understands; the absence check is on the TYPE for that reason.
+    expect(documentIsReachable({ id: "1", status: null })).toBe(true);
   });
 });
