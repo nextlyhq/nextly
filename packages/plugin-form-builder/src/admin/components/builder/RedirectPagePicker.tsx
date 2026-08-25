@@ -24,6 +24,10 @@ import { useEffect, useState } from "react";
 
 import { parseRedirectReference } from "../../../utils/redirect-reference";
 
+/** Rows per request, and the ceiling on how many requests one collection costs. */
+const PAGE_SIZE = 100;
+const MAX_PAGES = 10;
+
 /** One selectable document, reduced to what the control shows and stores. */
 interface Choice {
   collection: string;
@@ -75,49 +79,69 @@ export function RedirectPagePicker({
   // refetch forever; the join is the value that actually decides the request.
   const key = collections.join(",");
 
+  const [unreadable, setUnreadable] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     const wanted = key ? key.split(",") : [];
 
-    Promise.all(
-      wanted.map(async (collection): Promise<Choice[]> => {
-        try {
-          // `limit`, not `pageSize` — the other name is accepted and ignored,
-          // leaving the default of 10. `status=all` because a form is usually
-          // configured alongside the page it points at: filtering to published
-          // only shows "publish one first" while the page sits in the next tab,
-          // which reads as the control being broken.
-          const response = await fetch(
-            `/admin/api/collections/${collection}/entries?limit=100&status=all`,
-            { credentials: "include" }
-          );
-          if (!response.ok) return [];
-          const body = (await response.json()) as {
-            items?: Record<string, unknown>[];
-          };
-          return (body.items ?? [])
-            .filter(row => typeof row.id === "string")
-            .map(row => ({
-              collection,
-              id: row.id as string,
-              label: documentLabel(row),
-            }));
-        } catch {
-          // One unreadable collection must not blank the whole control; the
-          // others are still choosable and the empty state explains the rest.
-          return [];
+    /** One collection's documents, or null when it could not be read. */
+    const load = async (collection: string): Promise<Choice[] | null> => {
+      const page = async (offset: number) => {
+        // `limit`, not `pageSize` — the other name is accepted and ignored,
+        // leaving the default of 10. `status=all` because a form is usually
+        // configured alongside the page it points at, and filtering to
+        // published shows "publish one first" while the page sits in the next
+        // tab. `depth=0` because this reads five fields and would otherwise
+        // inherit the collection API's default expansion, pulling every
+        // nested relation of every row to fill a dropdown.
+        const response = await fetch(
+          `/admin/api/collections/${collection}/entries` +
+            `?limit=${PAGE_SIZE}&page=${offset}&status=all&depth=0`,
+          { credentials: "include" }
+        );
+        if (!response.ok) throw new Error(String(response.status));
+        return (await response.json()) as {
+          items?: Record<string, unknown>[];
+          meta?: { totalPages?: number };
+        };
+      };
+
+      try {
+        const first = await page(1);
+        const rows = [...(first.items ?? [])];
+        // Follow the pagination rather than stopping at one page: an author
+        // whose document is number 101 could otherwise never select it, and a
+        // form already pointing there would show blank. Bounded so a large
+        // collection cannot hang the tab — what it cannot show, it says.
+        const totalPages = Math.min(first.meta?.totalPages ?? 1, MAX_PAGES);
+        for (let next = 2; next <= totalPages; next++) {
+          rows.push(...((await page(next)).items ?? []));
         }
-      })
-    )
-      .then(perCollection => {
-        if (!cancelled) setChoices(perCollection.flat());
-      })
-      // Each request already degrades to an empty list, so this is only
-      // reachable if the state update itself throws; an empty list is the
-      // honest result either way.
-      .catch(() => {
-        if (!cancelled) setChoices([]);
-      });
+        return rows
+          .filter(row => typeof row.id === "string")
+          .map(row => ({
+            collection,
+            id: row.id as string,
+            label: documentLabel(row),
+          }));
+      } catch {
+        return null;
+      }
+    };
+
+    void Promise.all(wanted.map(load)).then(perCollection => {
+      if (cancelled) return;
+      const readable = perCollection.filter(
+        (rows): rows is Choice[] => rows !== null
+      );
+      // "Nothing to choose" and "could not read anything" are different
+      // answers, and only one of them is the author's to fix. Reported apart,
+      // because an editor without read permission was otherwise told the
+      // collection was empty.
+      setUnreadable(readable.length === 0 && wanted.length > 0);
+      setChoices(readable.flat());
+    });
 
     return () => {
       cancelled = true;
@@ -125,16 +149,71 @@ export function RedirectPagePicker({
   }, [key]);
 
   const selected = selectionKey(value, collections);
+
+  /**
+   * The selected document, when the listing did not reach it.
+   *
+   * Its own effect, keyed on the selection rather than on the collection list,
+   * because the stored value arrives with the form and often AFTER this mounts
+   * — an effect that only watched the collections would capture the moment
+   * when nothing was selected yet and never look again.
+   *
+   * A control that silently drops its own value is worse than one that cannot
+   * list everything: the author sees blank, re-picks, and saves a different
+   * destination than the one that was stored.
+   */
+  useEffect(() => {
+    if (!selected || choices === null) return;
+    const [collection, ...rest] = selected.split(":");
+    const id = rest.join(":");
+    if (!id || choices.some(choice => choice.id === id)) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/admin/api/collections/${collection}/entries/${id}?depth=0`,
+          { credentials: "include" }
+        );
+        if (!response.ok) return;
+        const body = (await response.json()) as {
+          item?: Record<string, unknown>;
+        };
+        const row = body.item;
+        if (cancelled || !row || typeof row.id !== "string") return;
+        setChoices(current => [
+          { collection, id: row.id as string, label: documentLabel(row) },
+          ...(current ?? []),
+        ]);
+      } catch {
+        // The list still renders; the selection simply cannot be named.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, choices]);
+
   const grouped = collections.length > 1;
 
   if (choices === null) {
     return <p className="text-[12px] text-muted-foreground">Loading pages…</p>;
   }
 
+  if (unreadable) {
+    return (
+      <p className="text-[12px] text-destructive">
+        Could not read {collections.join(" or ")}. You may not have permission
+        to list them, or the request failed.
+      </p>
+    );
+  }
+
   if (choices.length === 0) {
     return (
       <p className="text-[12px] text-muted-foreground">
-        No documents to redirect to yet. Publish one in{" "}
+        No documents to redirect to yet. Create one in{" "}
         {collections.join(" or ")} first.
       </p>
     );

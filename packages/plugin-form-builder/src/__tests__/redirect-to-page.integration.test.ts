@@ -126,6 +126,27 @@ describe("a form that redirects to a picked page", () => {
     expect(result.redirect).toBeUndefined();
   });
 
+  it("still submits when a pattern function throws", async () => {
+    // A pattern may be host code. Letting it throw would reach submitForm's
+    // outer catch AFTER the submission row exists, telling the caller the
+    // submission failed — and a caller that retries creates a duplicate of a
+    // submission that was already saved.
+    const result = await submitPointingAt(
+      (id: string) => ({ relationTo: "pages", value: id }),
+      {
+        redirectRelationships: {
+          pages: () => {
+            throw new Error("pattern exploded");
+          },
+        },
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.submission).toBeDefined();
+    expect(result.redirect).toBeUndefined();
+  });
+
   it("has no destination when the collection carries no pattern", async () => {
     const result = await submitPointingAt(
       (id: string) => ({ relationTo: "pages", value: id }),
@@ -134,5 +155,66 @@ describe("a form that redirects to a picked page", () => {
 
     expect(result.success).toBe(true);
     expect(result.redirect).toBeUndefined();
+  });
+});
+
+describe("saving a form that redirects to a page", () => {
+  /** Create through the collection, which is what the browser posts to. */
+  async function create(settings: Record<string, unknown>) {
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+
+    return current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings,
+      },
+    });
+  }
+
+  it("refuses one that names no page", async () => {
+    // Through the write path the admin actually uses. `validateFormConfig` is
+    // a library entry point that no save goes through, so a rule living only
+    // there would let this save and fail at submit time instead.
+    await expect(
+      create({ confirmationType: "relationship" })
+    ).rejects.toThrow();
+  });
+
+  it("refuses a reference that names nothing", async () => {
+    // Truthy and unreadable: a presence check admits exactly the values that
+    // resolve to no destination.
+    await expect(
+      create({ confirmationType: "relationship", redirectPage: {} })
+    ).rejects.toThrow();
+    await expect(
+      create({
+        confirmationType: "relationship",
+        redirectPage: { relationTo: "pages" },
+      })
+    ).rejects.toThrow();
+  });
+
+  it("accepts one that names a page", async () => {
+    const saved = await create({
+      confirmationType: "relationship",
+      redirectPage: { relationTo: "pages", value: "pg1" },
+    });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
+  });
+
+  it("leaves the other confirmations alone", async () => {
+    // The rule is about one option; a message form has no page to name.
+    const saved = await create({ confirmationType: "message" });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
   });
 });

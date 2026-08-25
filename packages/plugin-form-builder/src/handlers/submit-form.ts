@@ -27,6 +27,7 @@ import {
   applyRedirectPattern,
   parseRedirectReference,
   type RedirectTargetDocument,
+  type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
 import { checkSpam } from "./spam-detection";
@@ -484,14 +485,42 @@ async function urlForPickedDocument(
   const target = await readTarget(reference, form, pluginContext);
   if (!target) return undefined;
 
-  const url = applyRedirectPattern(pattern, target);
-  if (!url) {
-    logger.warn?.(
-      "Form redirect pattern could not be filled from the target document",
-      { form: form.slug, collection: reference.collection }
-    );
+  return buildUrl(pattern, target, reference.collection, form, pluginContext);
+}
+
+/**
+ * The pattern applied, or undefined with the reason logged.
+ *
+ * Separate because a configured pattern may be a FUNCTION — host code, which
+ * can throw. Letting that escape would reach `submitForm`'s outer catch AFTER
+ * the submission row exists, reporting a failure the caller may retry into a
+ * duplicate of a submission that was already saved.
+ */
+function buildUrl(
+  pattern: RedirectUrlPattern,
+  target: RedirectTargetDocument,
+  collection: string,
+  form: FormDocument,
+  pluginContext: PluginContext
+): string | undefined {
+  const { logger } = pluginContext;
+  try {
+    const url = applyRedirectPattern(pattern, target);
+    if (!url) {
+      logger.warn?.(
+        "Form redirect pattern could not be filled from the target document",
+        { form: form.slug, collection }
+      );
+    }
+    return url;
+  } catch (error) {
+    logger.warn?.("Form redirect pattern threw while building a URL", {
+      form: form.slug,
+      collection,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
   }
-  return url;
 }
 
 /** The target row, or undefined — a deleted target and a failed read differ. */

@@ -21,6 +21,7 @@ import {
 } from "nextly";
 
 import type { ResolvedFormBuilderConfig } from "../types";
+import { parseRedirectReference } from "../utils/redirect-reference";
 
 // ============================================================
 // Type Augmentation for Custom Admin Components
@@ -406,6 +407,42 @@ export function formsCollection(
                   path: "fields",
                   code: "REQUIRED",
                   message: "Form must have at least one field.",
+                },
+              ],
+            });
+          }
+
+          // A form set to redirect to a page must name a page the resolver can
+          // read. Enforced HERE rather than only in `validateFormConfig`,
+          // which is a library entry point that no write goes through: the
+          // browser posts `settings` straight to this collection, so a rule
+          // that lives only there protects nobody.
+          //
+          // The shape is checked, not merely presence. `{}` and
+          // `{ relationTo: "pages" }` are truthy and name no document, so a
+          // presence test admits exactly the values that resolve to no
+          // destination at submit time — which is the failure being prevented.
+          const setsSettings =
+            operation === "create" || data?.settings !== undefined;
+          const settings = data?.settings as
+            | Record<string, unknown>
+            | undefined;
+          if (
+            data &&
+            setsSettings &&
+            settings?.confirmationType === "relationship" &&
+            parseRedirectReference(
+              settings.redirectPage,
+              redirectCollections
+            ) === null
+          ) {
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: "settings.redirectPage",
+                  code: "REQUIRED",
+                  message:
+                    "Choose a page to redirect to, or pick a different confirmation.",
                 },
               ],
             });
