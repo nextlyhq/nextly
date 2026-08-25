@@ -196,14 +196,16 @@ try {
   // the entry editor.
   //
   // The DECLARATION is what is checked, not the class name. A name can be
-  // renamed away — `.editor-bleed { @apply -mx-8; }` emits the same margin
-  // under a selector that says nothing — and it can be absent from every source
+  // renamed away — an `@apply` alias emits the same margin under a selector
+  // that says nothing — and it can be absent from every source
   // it was compiled from, because a `@source inline(...)` safelist spells out
   // no class at all. What survives every spelling is the rule that reaches the
   // browser, which is this file.
   //
-  // `margin` and `margin-inline` only. `margin-block` is the vertical half,
-  // which the editors legitimately use to reach the panel's top and bottom.
+  // Two shapes of property: the shorthands `margin` and `margin-inline`, read
+  // by position, and the four longhands that set a single side outright. The
+  // vertical family is deliberately absent — cancelling the page's vertical
+  // inset is what lets the editors reach the panel's top and bottom.
   const shipped = fs.readFileSync(outputFile, "utf-8");
 
   /**
@@ -220,7 +222,23 @@ try {
       .split(/\s+/)
       .filter(Boolean);
 
-  const NEGATIVE_8 = /^calc\(var\(--spacing\)\*-8\)$/;
+  /**
+   * The page's own inset, negated, in every serialisation Tailwind emits for
+   * it. `--spacing` is 0.25rem, so the eight-step is 2rem: the utility compiles
+   * to the calc form, its arbitrary-value spelling to the literal `-2rem`, and
+   * a pixel value would be `-32px`.
+   *
+   * Spelled as a value rather than as a class ON PURPOSE. This file sits in a
+   * tree Tailwind scans, so naming the utility here emits the rule — which is
+   * what the error below tells the reader not to do.
+   *
+   * This is a check on ONE DISTANCE, not on negative horizontal margins in
+   * general. Smaller ones are legitimate and shipped — a card pulling its own
+   * edge past its padding, a -1px rule overlap — and refusing those would make
+   * the guard something to switch off rather than something to keep.
+   */
+  const NEGATIVE_INSET =
+    /^(?:calc\(var\(--spacing\)\*-8\)|-2rem|-32px)$/;
 
   /**
    * Every property that can move a box's LEFT or RIGHT edge, enumerated from
@@ -266,8 +284,11 @@ try {
   for (const [, prop, value] of shipped.matchAll(
     new RegExp(`[;{]\\s*(${PROPERTIES.join("|")})\\s*:\\s*([^;}]+)`, "g")
   )) {
-    const parts = components(value.trim());
-    if (horizontalValues(prop, parts).some(part => NEGATIVE_8.test(part))) {
+    // `!important` is a suffix on the declaration, not part of the value, and
+    // The important-flagged utility emits it. Left in place it defeats the
+    // match on the very declaration that wins hardest.
+    const parts = components(value.replace(/!important\s*$/, "").trim());
+    if (horizontalValues(prop, parts).some(part => NEGATIVE_INSET.test(part))) {
       offenders.push(`${prop}: ${value.trim()}`);
     }
   }
