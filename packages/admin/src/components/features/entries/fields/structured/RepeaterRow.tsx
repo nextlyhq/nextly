@@ -267,6 +267,14 @@ interface RepeaterRowSubFieldsProps<
   renderField?: RenderFieldFunction<TFieldValues>;
 }
 
+/**
+ * Centralized sub-field renderer for repeater rows.
+ *
+ * Encapsulates the empty state (no sub-fields configured), fallback rendering
+ * (when renderField is unavailable), width-based row packing with responsive
+ * CSS grid columns, and delegated sub-field rendering. Centralizing these decisions
+ * ensures uniform layout, gap alignment, and fallback behavior across repeater rows.
+ */
 function RepeaterRowSubFields<TFieldValues extends FieldValues = FieldValues>({
   field,
   basePath,

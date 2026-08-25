@@ -230,6 +230,25 @@ describe("createDefaultFieldValues", () => {
       });
     });
 
+    it("seeds empty array for text fields with hasMany: true when no defaultValue declared", () => {
+      const fields: FieldConfig[] = [
+        { type: "text", name: "tags", hasMany: true } as never,
+        { type: "text", name: "title" } as never,
+        {
+          type: "text",
+          name: "keywords",
+          hasMany: true,
+          defaultValue: ["featured"],
+        } as never,
+      ];
+      const result = createDefaultFieldValues(fields);
+      expect(result).toEqual({
+        tags: [],
+        title: "",
+        keywords: ["featured"],
+      });
+    });
+
     it("corrects prior drift where nested repeatable component in repeater produced null instead of empty array", () => {
       const repeaterFieldsWithNestedComponent: FieldConfig[] = [
         { type: "component", name: "slides", repeatable: true } as never,

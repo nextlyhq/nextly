@@ -51,6 +51,21 @@ function getSelectDefault(field: FieldConfig, declared: unknown): unknown {
 }
 
 /**
+ * Normalizes defaults for text fields based on their hasMany configuration.
+ * When hasMany is true, seeds an empty array `[]` rather than empty string `""` to match array schema.
+ */
+function getTextDefault(field: FieldConfig, declared: unknown): unknown {
+  const hasMany = (field as { hasMany?: boolean }).hasMany;
+  if (hasMany) {
+    if (Array.isArray(declared)) return declared;
+    return declared !== undefined && declared !== null && declared !== ""
+      ? [declared]
+      : [];
+  }
+  return declared ?? "";
+}
+
+/**
  * Returns the type-specific fallback default for a field that has no explicit defaultValue.
  * Uses Object.hasOwn to prevent Object.prototype key collision and allocates mutable collections per field.
  */
@@ -81,7 +96,13 @@ function getFieldDefault(subField: FieldConfig): unknown {
     if (subField.type === "select" || subField.type === "radio") {
       return getSelectDefault(subField, declared);
     }
+    if (subField.type === "text") {
+      return getTextDefault(subField, declared);
+    }
     return declared;
+  }
+  if (subField.type === "text") {
+    return getTextDefault(subField, undefined);
   }
   if (STRING_SEED_TYPES.has(subField.type)) return "";
   if ((subField.type as string) === "chips") return [];
