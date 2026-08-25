@@ -57,5 +57,20 @@ The table is written by the plugin and closed to everything else. `internal` set
 the access rules are the only thing keeping these rows private, not a second layer behind
 a first.
 
+A document whose references cannot all be read contributes ONE row with an empty class id
+rather than a row per class it managed to read. Skipping the write preserves whatever rows a
+subject already had and preserves nothing when it has none - which is the state an oversized
+document is in the first time anything indexes it - so without the marker that subject looks
+exactly like one referencing nothing, and a class its unread part applies reads as unused. A
+lookup for a real class never matches a marker, since a class id is never empty.
+
+The table records no webhook events. An omitted `webhooks` option RECORDS - the registry
+reads `webhooks?.record !== false`, which `undefined` satisfies - so a site with an endpoint
+subscribed to `entry.*` would otherwise receive every row this table writes, carrying the
+full document, and access rules are not consulted for outbox delivery.
+
 This release adds the table and the logic that decides its contents. Nothing maintains it
-yet; the write path follows.
+yet; the write path follows, and it owes reconciliation one guarantee this cannot give
+itself: the diff must be serialised with the document write it derives from, or re-derived
+from the row that won, because two writes diffing against the same stored rows can otherwise
+let the loser's removals delete rows the winning document still justifies.

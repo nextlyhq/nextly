@@ -100,6 +100,34 @@ describe("deriving a document's index rows", () => {
     // union is that there is nothing there to reach for.
     expect("rows" in derivation).toBe(false);
   });
+
+  it("carries a marker row for a document it could not read whole", () => {
+    // Skipping the write preserves rows the subject ALREADY has and preserves
+    // nothing when it has none — the state an oversized document is in the
+    // first time anything indexes it. Without the marker that subject looks
+    // exactly like one referencing nothing, and the class its unread suffix
+    // applies reads as unused.
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      id: `n${i}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes: [`c${i}`],
+    }));
+
+    const derivation = deriveClassUsageRows(
+      page,
+      { formatVersion: 1, kind: "page", nodes: many },
+      { ...DEFAULT_LIMITS, maxNodes: 5 }
+    );
+
+    expect(derivation).toEqual({
+      complete: false,
+      // Empty class id, not one of the ids it managed to read. A marker naming
+      // a real class would be counted as a reference by every lookup for it.
+      undetermined: { ...page, classId: "" },
+    });
+  });
 });
 
 describe("reconciling derived rows against stored ones", () => {
@@ -165,6 +193,24 @@ describe("reconciling derived rows against stored ones", () => {
     expect(reconcileClassUsage(derived, stored)).toEqual({
       insert: [],
       remove: ["r2"],
+    });
+  });
+
+  it("clears a stale marker once the document can be read again", () => {
+    // The marker is a row like any other, so a complete derivation that does
+    // not name it removes it by the ordinary rule. Asserted rather than left
+    // implicit: a marker that outlived the condition would report a readable
+    // document as permanently unverifiable, and the library would keep telling
+    // an author a count could not be checked when it now can.
+    const derived = [{ ...page, classId: "hero" }];
+    const stored = [
+      { id: "m1", classId: "" },
+      { id: "r1", classId: "hero" },
+    ];
+
+    expect(reconcileClassUsage(derived, stored)).toEqual({
+      insert: [],
+      remove: ["m1"],
     });
   });
 

@@ -73,6 +73,15 @@ describe("the class-usage index collection", () => {
     expect(contributed().indexes).toBeUndefined();
   });
 
+  it("records no webhook event for its writes", () => {
+    // An OMITTED option records: the registry reads `webhooks?.record !== false`
+    // and `undefined` satisfies it. So a site with an endpoint subscribed to
+    // `entry.*` would receive every row this table writes, carrying the full
+    // document — and access rules are not consulted for outbox delivery, so
+    // the closed rules above do not cover that path.
+    expect(contributed().webhooks).toBe(false);
+  });
+
   it("stores no timestamps", () => {
     // A row is a fact derived from a document, not an event. A `createdAt` here
     // answers when the ROW was written, which is not when the reference

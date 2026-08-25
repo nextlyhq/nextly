@@ -65,7 +65,25 @@ export interface ClassUsageRow {
   entityKey: string;
   /** The blocks field the reference was found in. */
   field: string;
-  /** The named class's id, as stored in `node.classes`. */
+  /**
+   * The named class's id, as stored in `node.classes`, or empty on a marker
+   * row.
+   *
+   * A document whose references could not all be read contributes ONE row with
+   * this empty rather than a row per class it managed to read. Without it, a
+   * document nobody has been able to read looks exactly like one that
+   * references nothing — and "references nothing" is the answer that permits
+   * deleting a class the unread part of the document still applies.
+   *
+   * Empty rather than a separate column, and rather than a flag on every row,
+   * because the state belongs to the SUBJECT and there may be no rows to carry
+   * a flag: an oversized document indexed for the first time has none. It
+   * reads the way the empty `entityKey` does, as "there is no such thing here".
+   *
+   * A lookup for a real class never matches one, since a class id is never
+   * empty; asking for the empty id is how the library counts the documents it
+   * could not check.
+   */
   classId: string;
 }
 
@@ -123,6 +141,17 @@ export function classUsageIndexCollection() {
       // reads this through the plugin, on the same overriding path.
       read: () => false,
     },
+    // No webhook recording. An omitted option RECORDS — the registry reads
+    // `webhooks?.record !== false`, which `undefined` satisfies — so a site
+    // with an endpoint subscribed to `entry.*` receives every row this table
+    // writes, carrying the full document. Access rules are not consulted for
+    // outbox delivery, so the rules above do not cover this path.
+    //
+    // Two reasons, either sufficient. These rows enumerate which documents
+    // exist and what they reference, which is a map of the site's content;
+    // and reconciliation writes on every save, so recording them would put an
+    // event on the outbox for each reference that changed.
+    webhooks: false,
     admin: {
       description:
         "Which documents reference which named classes. Maintained automatically; editing it cannot change what any page renders.",

@@ -67,10 +67,16 @@ export interface ClassUsageSubject {
  * A discriminated union rather than a list plus a flag: the incomplete arm has
  * no `rows` member, so a caller that forgets to check cannot read a truncated
  * list. The narrowing is the control.
+ *
+ * It carries a single marker row instead, which is a different thing from a
+ * shorter list and is written rather than skipped. Skipping preserves whatever
+ * rows the subject already had, and preserves NOTHING when it has none — which
+ * is the state an oversized document is in the first time anything indexes it.
+ * The marker is what stops that reading as "references nothing".
  */
 export type ClassUsageDerivation =
   | { complete: true; rows: ClassUsageRow[] }
-  | { complete: false };
+  | { complete: false; undetermined: ClassUsageRow };
 
 /**
  * Enough of a stored row to reconcile against it.
@@ -111,7 +117,12 @@ export function deriveClassUsageRows(
   limits?: DocumentLimits
 ): ClassUsageDerivation {
   const usage = classUsageOf(document, limits);
-  if (!usage.complete) return { complete: false };
+  if (!usage.complete) {
+    // The prefix it DID read is discarded rather than recorded. A partial list
+    // stored as a list is indistinguishable from a complete one, and the whole
+    // point of the marker is to be distinguishable.
+    return { complete: false, undetermined: { ...subject, classId: "" } };
+  }
   return {
     complete: true,
     rows: usage.ids.map(classId => ({ ...subject, classId })),
@@ -148,11 +159,19 @@ export function reconcileClassUsage(
     //
     // This is the ONLY thing keeping the rows unique. The database holds no
     // composite constraint over the key columns, because a collection's
-    // declared indexes do not reach the schema pipeline, so two writes racing
-    // on one document can both insert. What that leaves is a count reading
-    // HIGH until the next write to that document, which is the safe direction:
-    // an over-count warns about a delete that was safe, where an under-count
-    // permits one that was not.
+    // declared indexes do not reach the schema pipeline, so two concurrent
+    // writes to one document can both insert.
+    //
+    // A duplicate insert is the benign outcome, and it is NOT the only one a
+    // race produces. Both writes diff against the same stored rows, so the
+    // loser's diff describes a document that is no longer the live one: if it
+    // commits second, its removals delete rows the winning document still
+    // justifies, and the count reads LOW — the direction that permits deleting
+    // a class the page renders. Reconciliation is therefore only sound when
+    // the caller serialises it with the document write it derives from, or
+    // re-derives from the row that won. That is a property of the write path,
+    // which cannot be established here, and this comment is where it is
+    // recorded rather than assumed.
     const duplicate = kept.has(row.classId);
     if (duplicate || !wanted.has(row.classId)) {
       remove.push(row.id);
