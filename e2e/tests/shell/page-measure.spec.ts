@@ -72,22 +72,29 @@ const aControl = (page: Page) =>
     .first();
 
 /**
- * The error branch, which every one of these routes renders INSIDE the shell.
+ * The page failed instead of rendering, in either shape the admin uses.
  *
- * `Alert` defaults to `role="alert"`, so this is asked of the role rather than
- * of the copy each route happens to use.
+ * Two, because measurement showed one is not enough. `Alert` defaults to
+ * `role="alert"` and the entry and single routes use it; `/settings/api-keys`
+ * hands its query failure to `PageErrorFallback`, which renders an error PAGE
+ * and so carries no alert role at all. Measured in that state: zero skeletons,
+ * zero alerts, three controls still mounted — indistinguishable from a loaded
+ * page by everything this file checked before.
+ *
+ * `page-error` is page-scoped rather than shell-scoped because the fallback
+ * replaces the page's content, including the shell it was rendered in.
  */
-const errors = (page: Page) => shellOf(page).getByRole("alert");
+const errors = (page: Page) =>
+  page.locator('[data-slot="page-error"]').or(shellOf(page).getByRole("alert"));
 
 /**
- * The page is in its LOADED state — asserted as all three of the states these
- * routes settle into, not as one of them.
+ * The page is in its LOADED state — asserted as all the states these routes
+ * settle into, not as one of them.
  *
  * Each clause is here because a check without it passed on a page that was not
- * the editor: the skeleton renders the same shell, the error branch removes
- * the skeleton and keeps a Back button, and a page that rendered nothing at
- * all satisfies both absences perfectly. So absence is never the whole test —
- * a real control has to be present as well.
+ * the editor: the skeleton renders the same shell, the error branches keep a
+ * control mounted, and a page that rendered nothing satisfies every absence
+ * perfectly — so a real control must be present as well.
  *
  * `timeout` is a parameter so the tests below can ask this to fail fast while
  * the sweep still waits properly for a cold route.
@@ -282,30 +289,47 @@ test.describe("a measured page keeps its children inside the page", () => {
 
   // Readiness is the part of this file that has been wrong most often, and
   // always the same way: satisfied by a page that was not the editor. These
-  // two force the states it must refuse. Without them the sweep's green is
-  // equally consistent with a readiness check that accepts anything.
-  test("readiness refuses a page that is still loading", async ({ page }) => {
-    await page.route("**/api/collections/schema/**", async route => {
+  // force the states it must refuse.
+  //
+  // Both use `/settings/api-keys` deliberately. It is the route whose loading
+  // AND error branches keep a control mounted — its Create API Key button
+  // lives in the layout, outside the part that varies — so each test can only
+  // pass by way of the clause it is named for. On the entry route the skeleton
+  // renders no control at all, so `aControl` alone would reject it and the
+  // skeleton clause would go unexercised.
+  const holdApiKeys = (page: Page, respond: "delay" | "fail") =>
+    page.route("**/admin/api/**", async route => {
+      const url = route.request().url();
+      if (/me\/permissions|dev-reload|\/me$|auth/.test(url))
+        return route.continue();
+      if (respond === "fail") {
+        return route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "forced" } }),
+        });
+      }
       await new Promise(resolve => setTimeout(resolve, 10_000));
       await route.continue();
     });
-    await gotoAdmin(page, "/collections/posts/create");
+
+  test("readiness refuses a page that is still loading", async ({ page }) => {
+    await holdApiKeys(page, "delay");
+    await gotoAdmin(page, "/settings/api-keys");
+    // The control this route keeps mounted while loading, so the rejection
+    // below cannot come from `aControl`.
+    await expect(aControl(page)).toBeVisible();
 
     await expect(awaitLoaded(page, 2_000)).rejects.toThrow();
   });
 
   test("readiness refuses a page that failed to load", async ({ page }) => {
-    // The state the skeleton check cannot see: placeholders are gone, a Back
-    // button is mounted, and the editor never rendered.
-    await page.route("**/api/collections/schema/**", route =>
-      route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({ error: { message: "forced" } }),
-      })
-    );
-    await gotoAdmin(page, "/collections/posts/create");
-    await expect(errors(page).first()).toBeVisible();
+    await holdApiKeys(page, "fail");
+    await gotoAdmin(page, "/settings/api-keys");
+    // `PageErrorFallback`, which carries no alert role — the shape that got
+    // past the previous version of this check.
+    await expect(page.locator('[data-slot="page-error"]')).toBeVisible();
+    await expect(skeletons(page)).toHaveCount(0);
 
     await expect(awaitLoaded(page, 2_000)).rejects.toThrow();
   });
