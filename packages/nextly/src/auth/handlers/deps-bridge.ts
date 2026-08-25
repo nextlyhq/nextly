@@ -16,6 +16,7 @@ import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
+import type { RateLimitStore } from "../../middleware/rate-limit";
 import { createPluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { parseTrustedProxyIpsEnv } from "../../utils/get-trusted-client-ip";
@@ -579,10 +580,22 @@ function readTrustProxy(getService: (name: string) => unknown): boolean {
 function readAuthRateLimit(getService: (name: string) => unknown): {
   requestsPerHour: number;
   windowMs: number;
+  store?: RateLimitStore;
 } {
   const fallback = { requestsPerHour: 30, windowMs: 3_600_000 };
   try {
     const config = getService("config");
+    // The window's home, read from a DIFFERENT block than the numbers: the
+    // limits are security config, the store is rate-limit config, and one app
+    // has one store. Read before the early returns below so a deployment that
+    // configures a store but leaves the auth limits at their defaults still
+    // gets a shared window — the case that would otherwise look configured and
+    // behave per-process.
+    const store =
+      config && typeof config === "object" && "rateLimit" in config
+        ? (config as { rateLimit?: { store?: RateLimitStore } }).rateLimit
+            ?.store
+        : undefined;
     if (config && typeof config === "object" && "security" in config) {
       const security = (config as { security?: unknown }).security;
       if (
@@ -604,10 +617,11 @@ function readAuthRateLimit(getService: (name: string) => unknown): {
             typeof arl?.windowMs === "number"
               ? arl.windowMs
               : fallback.windowMs,
+          ...(store === undefined ? {} : { store }),
         };
       }
     }
-    return fallback;
+    return { ...fallback, ...(store === undefined ? {} : { store }) };
   } catch {
     return fallback;
   }

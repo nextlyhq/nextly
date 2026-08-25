@@ -1,27 +1,23 @@
 /**
- * API Key Rate Limiter
+ * Rate limiting for the credential paths: auth writes and API keys.
  *
- * Lightweight in-memory sliding-window rate limiter scoped to API key IDs.
- * Each key tracks its own sliding window of request timestamps; old entries
- * are pruned on every `check()` call so the array stays bounded at `limit`
- * entries; no background cleanup interval is needed.
+ * Sliding-window, keyed by API key id or by client IP. The window itself lives
+ * in a {@link RateLimitStore}, so a deployment that spans more than one process
+ * can supply a shared one and have the limit mean what it says.
  *
- * Intended for per-key rate limiting of API key authenticated requests.
- * Session-based requests are not rate-limited by this module.
+ * **Why that matters more here than on the REST limiter.** This is what stands
+ * between an attacker and a login form. With per-process state on a serverless
+ * deployment, every instance holds its own window and the effective limit
+ * becomes `configured × instances` — a number the operator never chose and
+ * cannot see. It fails OPEN, and only under load, which is what an attack looks
+ * like.
  *
  * @module auth/middleware/rate-limiter
- * @since 1.0.0
- *
- * @example
- * ```typescript
- * import { rateLimiter } from './rate-limiter';
- *
- * const result = rateLimiter.check(keyId, 1000, 3_600_000);
- * if (!result.allowed) {
- *   // return 429 with Retry-After header
- * }
- * ```
  */
+
+import type { RateLimitStore } from "../../middleware/rate-limit";
+
+import { SlidingWindowMemoryStore } from "./sliding-window-store";
 
 /**
  * Result of a sliding-window rate limit check.
@@ -31,97 +27,90 @@ export interface RateLimitCheckResult {
   allowed: boolean;
   /** Number of requests remaining in the current window. */
   remaining: number;
-  /** The Date at which the oldest in-window timestamp expires and the window slides forward. */
+  /** When the oldest in-window entry expires and the window slides forward. */
   resetAt: Date;
 }
 
 /**
- * In-memory sliding-window rate limiter keyed by API key ID.
+ * A rate limiter over some store.
  *
- * Each key maintains a sorted array of request timestamps (ms since epoch).
- * On every `check()` call:
- * 1. Timestamps older than `windowMs` are dropped.
- * 2. The remaining count is compared against `limit`.
- * 3. If allowed, the current timestamp is appended (keeping the array bounded).
- *
- * Memory is bounded: the array for any given key never exceeds `limit` entries
- * because entries are only added when the request is allowed.
- *
- * This class is safe to use as a module-level singleton within a single
- * Node.js process. For multi-instance deployments (serverless / multi-pod),
- * rate limit state is not shared across processes; this is an accepted
- * limitation.
+ * Holds no state of its own — every window lives in the store — so
+ * constructing one per request is free, and two limiters over the same store
+ * enforce one shared limit.
  */
 export class RateLimiter {
-  /**
-   * Internal store: keyId → sorted array of allowed request timestamps (ms).
-   * Arrays are bounded at `limit` entries per key.
-   */
-  private readonly windows: Map<string, number[]> = new Map();
+  constructor(
+    private readonly store: RateLimitStore = new SlidingWindowMemoryStore()
+  ) {}
 
   /**
-   * Check whether a request for `keyId` is allowed under the given rate limit.
+   * Whether a request for `key` is allowed, recording it if so.
    *
-   * @param keyId   - The API key ID (used as the map key — NOT the raw key string).
-   * @param limit   - Maximum number of requests allowed within `windowMs`.
-   * @param windowMs - Sliding window size in milliseconds (e.g. 3_600_000 for 1 hour).
-   * @returns `{ allowed, remaining, resetAt }`
+   * Asynchronous because a shared store is reached over the network. That is
+   * the contract every production limiter uses (`express-rate-limit` promisifies
+   * synchronous stores rather than supporting them; `@upstash/ratelimit` is
+   * HTTP-only by design) and it is the reason the previous synchronous
+   * signature could never have taken a shared store.
+   *
+   * @param key      - API key id, or `auth-ip:<ip>`. Never a raw key string.
+   * @param limit    - Maximum requests allowed within `windowMs`.
+   * @param windowMs - Sliding window size in milliseconds.
    */
-  check(keyId: string, limit: number, windowMs: number): RateLimitCheckResult {
-    const now = Date.now();
-    const windowStart = now - windowMs;
+  async check(
+    key: string,
+    limit: number,
+    windowMs: number
+  ): Promise<RateLimitCheckResult> {
+    // Counted first, then taken back if refused. The order matters: asking
+    // "would this be allowed?" and then recording it separately is two round
+    // trips to a shared store with a gap in between, and concurrent requests
+    // race through that gap. One increment is the only part that a store can
+    // make atomic.
+    const { count, resetTime } = await this.store.increment(key, windowMs);
+    const allowed = count <= limit;
 
-    let timestamps = this.windows.get(keyId) ?? [];
-
-    timestamps = timestamps.filter(t => t > windowStart);
-
-    const count = timestamps.length;
-    const allowed = count < limit;
-
-    if (allowed) {
-      // Record this request only when allowed; keeps the array bounded at `limit`
-      timestamps.push(now);
-      this.windows.set(keyId, timestamps);
+    if (!allowed) {
+      // A refused attempt must not extend its own window, or an attacker who
+      // keeps hammering keeps the window from ever draining and locks the key
+      // out permanently. A store that cannot take an increment back leaves the
+      // attempt counted, which is the safe direction to degrade in.
+      await this.store.decrement?.(key);
     }
 
-    const remaining = Math.max(0, limit - timestamps.length);
-
-    // resetAt = when the oldest in-window timestamp ages out of the window.
-    // If the window is empty (first request was just allowed), reset is in `windowMs`.
-    const oldestInWindow = timestamps[0];
-    const resetAt = new Date(
-      oldestInWindow !== undefined ? oldestInWindow + windowMs : now + windowMs
-    );
-
-    return { allowed, remaining, resetAt };
+    return {
+      allowed,
+      remaining: Math.max(0, limit - count),
+      resetAt: new Date(resetTime),
+    };
   }
 
   /**
-   * Remove all state for a given key.
-   *
-   * Useful for tests or if a key is revoked and its slot should be freed
-   * immediately rather than waiting for natural expiry.
-   *
-   * @param keyId - The API key ID whose window should be cleared.
+   * Drop all state for a key — a revoked key's slot, or a test's fixture.
    */
-  clear(keyId: string): void {
-    this.windows.delete(keyId);
-  }
-
-  /**
-   * Return the number of keys currently tracked.
-   * Intended for testing and monitoring only.
-   */
-  get size(): number {
-    return this.windows.size;
+  async clear(key: string): Promise<void> {
+    await this.store.reset(key);
   }
 }
 
 /**
- * Shared `RateLimiter` instance used by `requireApiKeyAuth()`.
+ * The process-local limiter, used when no shared store is configured.
  *
- * A module-level singleton is sufficient here: rate limit state is
- * per-process and API key auth middleware runs in the same process.
- * Instantiated once at module load; no DI registration needed.
+ * Correct for a single-instance deployment and nothing else. See the module
+ * note above for what it costs anywhere else.
  */
 export const rateLimiter = new RateLimiter();
+
+/**
+ * The limiter to use for this request.
+ *
+ * Resolved per call rather than set once at boot, because config is loaded
+ * after this module and a limiter captured at import time would be the
+ * in-memory one forever — silently, and only in production, where boot order
+ * differs from a test's.
+ *
+ * Returns the shared singleton when nothing is configured, so the default path
+ * keeps one window map rather than building a new one per request.
+ */
+export function authRateLimiter(store?: RateLimitStore): RateLimiter {
+  return store === undefined ? rateLimiter : new RateLimiter(store);
+}

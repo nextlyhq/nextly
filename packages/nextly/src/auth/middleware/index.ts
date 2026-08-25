@@ -18,7 +18,7 @@ import {
 // to the new jose-based session/get-session.ts module internally.
 import { getSession } from "../session";
 
-import { rateLimiter } from "./rate-limiter";
+import { authRateLimiter } from "./rate-limiter";
 
 /** Fallback maximum requests per sliding window (1 000 req/hour). */
 const DEFAULT_RATE_LIMIT = 1_000;
@@ -252,7 +252,15 @@ export async function requireApiKeyAuth(
   const resolvedWindowMs =
     cfg?.apiKeys?.rateLimit.windowMs ?? DEFAULT_RATE_WINDOW_MS;
 
-  const rl = rateLimiter.check(keyAuth.id, resolvedLimit, resolvedWindowMs);
+  // Resolved per request rather than captured at import: config is registered
+  // after this module loads, so a limiter bound at module scope would be the
+  // in-memory one forever — and only in production, where boot order differs
+  // from a test's.
+  const rl = await authRateLimiter(cfg?.rateLimit?.store).check(
+    keyAuth.id,
+    resolvedLimit,
+    resolvedWindowMs
+  );
   if (!rl.allowed) {
     const retryAfterSecs = Math.ceil(
       (rl.resetAt.getTime() - Date.now()) / 1000

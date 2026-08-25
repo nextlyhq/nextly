@@ -96,6 +96,21 @@ export interface RateLimitStore {
    * @param key - Unique identifier to reset
    */
   reset(key: string): Promise<void>;
+
+  /**
+   * Take back the most recent increment for a key.
+   *
+   * Optional, and only meaningful to a caller that decides AFTER incrementing
+   * that the attempt should not have counted. The auth limiter is that caller:
+   * a refused login must not extend its own window, or an attacker holding
+   * themselves refused would keep the window from ever draining.
+   *
+   * Modelled on `express-rate-limit`'s `decrement`, which exists for the same
+   * reason — a request the caller chose to skip. A store that cannot support it
+   * omits it, and the caller degrades to counting the refused attempt rather
+   * than failing.
+   */
+  decrement?(key: string): Promise<void>;
 }
 
 /**
