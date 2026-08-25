@@ -235,14 +235,16 @@ function PageRedirectOption({
 
   return (
     <div className="flex items-start gap-3">
-      {/* Not selectable while the configuration is unknown. Choosing it there
-          leads only to a save that must be refused, since there is nothing to
-          pick and the rule requires a page. */}
+      {/* Selectable only when there are collections to pick from. In every
+          other state choosing it leads to a save the server must refuse: the
+          rule requires a page, and a page can only come from a configured
+          collection. `stored-only` shows what is already saved; it is not an
+          invitation to switch a different form into that state. */}
       <RadioGroupItem
         value="relationship"
         id="settings-confirm-page"
         className="mt-0.5"
-        disabled={state === "unknown"}
+        disabled={state !== "ready"}
       />
       <div className="w-full space-y-2">
         <Label htmlFor="settings-confirm-page">Redirect to a page</Label>

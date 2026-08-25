@@ -163,6 +163,34 @@ function pageRedirectSettings(
   return settings?.confirmationType === "relationship" ? settings : null;
 }
 
+/**
+ * Writes the parser's normalised names back into the row being saved.
+ *
+ * Not merely read: trimming only the parsed copy leaves the padded name in
+ * `data`, so this rule accepts the write and the framework's own relationship
+ * validator downstream still sees `" pages "`. The plugin and the framework
+ * then disagree about a value this parser has already decided.
+ */
+function normalizeStoredReference(
+  settings: Record<string, unknown>,
+  reference: { collection: string; id: string }
+) {
+  const stored = settings.redirectPage;
+
+  if (typeof stored === "string") {
+    if (stored !== reference.id) settings.redirectPage = reference.id;
+    return;
+  }
+  if (typeof stored !== "object" || stored === null || Array.isArray(stored)) {
+    return;
+  }
+
+  const record = stored as Record<string, unknown>;
+  if (record.relationTo !== reference.collection) {
+    settings.redirectPage = { ...record, relationTo: reference.collection };
+  }
+}
+
 function assertRedirectTargetNamed(
   data: Record<string, unknown> | undefined,
   operation: string,
@@ -178,6 +206,9 @@ function assertRedirectTargetNamed(
       "Choose a page to redirect to, or pick a different confirmation."
     );
   }
+
+  normalizeStoredReference(settings, reference);
+
   return reference;
 }
 
@@ -244,8 +275,14 @@ async function assertRedirectTargetUsable(
   }
 
   if (!url) {
+    // Pattern-agnostic. The configured pattern may depend on any field, or be
+    // a function that declines for its own reasons, so naming a slug states a
+    // remedy that often cannot fix the actual failure — and the save is
+    // correctly blocked either way, leaving the author following wrong advice.
     throw redirectRefusal(
-      "That page has no URL yet — give it a slug, or pick another page."
+      `No URL could be built for that page from the pattern configured for ` +
+        `"${reference.collection}". Choose another page, or ask a developer ` +
+        `to check that collection's redirect pattern.`
     );
   }
 }

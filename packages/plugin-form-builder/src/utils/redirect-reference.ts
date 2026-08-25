@@ -36,11 +36,13 @@ export function parseRedirectReference(
   if (value == null) return null;
 
   if (typeof value === "string") {
-    // Emptiness checked here as `referenceId` already does below. Without it a
-    // CLEARED `redirectPage` reads as a reference to id "", which validation
-    // then accepts as a usable target and the submit path resolves to nothing.
-    return value && collections.length === 1
-      ? { collection: collections[0], id: value }
+    // Trimmed, as the object branch trims its collection name. A cleared or
+    // whitespace-only `redirectPage` reads as a reference otherwise, which
+    // validation accepts as a usable target while the collection hook refuses
+    // it as missing and the submit path resolves to nothing.
+    const id = value.trim();
+    return id && collections.length === 1
+      ? { collection: collections[0], id }
       : null;
   }
 
@@ -68,7 +70,7 @@ export function parseRedirectReference(
 }
 
 function referenceId(value: unknown): string | null {
-  if (typeof value === "string") return value || null;
+  if (typeof value === "string") return value.trim() || null;
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const { id } = value as Record<string, unknown>;
     if (typeof id === "string" && id) return id;

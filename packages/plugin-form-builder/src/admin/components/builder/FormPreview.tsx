@@ -39,6 +39,8 @@ import { isKnownFormField } from "../../../types";
 import { evaluateConditions } from "../../../utils/evaluate-conditions";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
+import { hasStoredRedirectPage } from "./FormSettingsTab";
+
 // ---------------------------------------------------------------------------
 // Field rendering
 // ---------------------------------------------------------------------------
@@ -227,6 +229,7 @@ function Confirmation({
     confirmationType?: string;
     redirectUrl?: string;
     successMessage?: string;
+    redirectPage?: unknown;
   };
 }) {
   const panel = "border border-border bg-muted/40 p-4 text-sm text-foreground";
@@ -244,11 +247,16 @@ function Confirmation({
   }
 
   if (settings.confirmationType === "relationship") {
+    // Whether a page is actually named, not merely that this confirmation is
+    // chosen. Claiming a redirect with no page saved describes something that
+    // cannot happen: the save is refused, and a form that reached this state
+    // another way resolves to no redirect at all.
+    const named = hasStoredRedirectPage(settings);
     return (
       <p className={panel}>
-        The visitor would now be redirected to the linked page. Its URL is built
-        when the form is submitted, from the pattern the site configured for
-        that collection.
+        {named
+          ? "The visitor would now be redirected to the linked page. Its URL is built when the form is submitted, from the pattern the site configured for that collection."
+          : "No page is selected yet, so this form has no destination. Choose one under Settings, or pick a different confirmation."}
       </p>
     );
   }

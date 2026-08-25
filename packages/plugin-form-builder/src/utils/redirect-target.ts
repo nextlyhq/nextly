@@ -72,7 +72,9 @@ export function normalizeRedirectRelationships(
   // it, and every submission then resolves to nothing — a form that passes
   // every check and sends nobody anywhere.
   return Object.fromEntries(
-    entries.filter(([, pattern]) => typeof pattern !== "string" || pattern)
+    entries.filter(
+      ([, pattern]) => typeof pattern !== "string" || pattern.trim()
+    )
   );
 }
 

@@ -363,6 +363,41 @@ describe("saving a form that redirects to a page", () => {
     );
   });
 
+  it("stores the collection name trimmed, not merely accepts it", async () => {
+    // Trimming only the parsed copy leaves the padded name in the row, so the
+    // plugin accepts the write while the framework's own relationship
+    // validator still sees a name that matches no collection.
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+    const pageId = await seedPage(current);
+
+    const saved = (await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "  pages  ", value: pageId },
+        },
+      },
+    })) as { item: { id: string } };
+
+    const row = (await current.nextly.findByID({
+      collection: "forms",
+      id: saved.item.id,
+    })) as { settings?: { redirectPage?: { relationTo?: string } } };
+
+    expect(row.settings?.redirectPage?.relationTo).toBe("pages");
+  });
+
   it("accepts one that names a page", async () => {
     const saved = await create({
       confirmationType: "relationship",

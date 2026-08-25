@@ -28,6 +28,14 @@ import { parseRedirectReference } from "../../../utils/redirect-reference";
 /** Rows per request. Search, not paging, is how the rest are reached. */
 const PAGE_SIZE = 50;
 
+/**
+ * The only fields this control reads, in the order `documentLabel` prefers.
+ *
+ * One declaration, used to build the request AND to choose the label, so a
+ * field added to one cannot go missing from the other.
+ */
+const LABEL_FIELDS = ["id", "title", "name", "label", "slug"] as const;
+
 /** One selectable document, reduced to what the control shows and stores. */
 interface Choice {
   collection: string;
@@ -61,7 +69,7 @@ export function selectionKey(
 
 /** What to call a document, preferring the field an author would recognise. */
 export function documentLabel(row: Record<string, unknown>): string {
-  for (const field of ["title", "name", "label", "slug"]) {
+  for (const field of LABEL_FIELDS.filter(name => name !== "id")) {
     const candidate = row[field];
     if (typeof candidate === "string" && candidate.trim()) return candidate;
   }
@@ -85,9 +93,14 @@ async function fetchChoices(
 ): Promise<{ rows: Choice[]; hasMore: boolean } | null> {
   const search = query ? `&search=${encodeURIComponent(query)}` : "";
   try {
+    // `select` as well as `depth=0`. Without it every scalar and JSON field of
+    // up to fifty documents is downloaded per collection — for page-builder
+    // documents that is the whole block tree — to fill a dropdown that reads
+    // five fields.
     const response = await fetch(
       `/admin/api/collections/${collection}/entries` +
-        `?limit=${PAGE_SIZE}&page=${page}&status=all&depth=0${search}`,
+        `?limit=${PAGE_SIZE}&page=${page}&status=all&depth=0` +
+        `&select=${LABEL_FIELDS.join(",")}${search}`,
       { credentials: "include" }
     );
     if (!response.ok) return null;
@@ -399,7 +412,13 @@ function Options({
   );
 }
 
-/** What to say when there is nothing to choose, and why. */
+/**
+ * What to say when there is nothing to choose, and why.
+ *
+ * `collections` here is the READABLE ones. Passing the full configured list
+ * asserted that a collection which could not be read is empty — printed
+ * directly beneath the notice saying it could not be read.
+ */
 function Empty({
   applied,
   collections,
@@ -543,7 +562,10 @@ export function RedirectPagePicker({
 
       {choices.length === 0 ? (
         failed.length < collections.length && (
-          <Empty applied={applied} collections={collections} />
+          <Empty
+            applied={applied}
+            collections={collections.filter(name => !failed.includes(name))}
+          />
         )
       ) : (
         <Select

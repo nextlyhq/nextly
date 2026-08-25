@@ -24,6 +24,15 @@ describe("normalizeRedirectRelationships", () => {
     ).toEqual({ pages: "/{slug}", posts: "/blog/{slug}" });
   });
 
+  it("drops a whitespace-only pattern, which produces a blank URL", () => {
+    // `previewUrlFromTemplate` returns whitespace unchanged and it is truthy,
+    // so a kept collection would be offered, validated, and then hand a
+    // successful submission "   " as its destination.
+    expect(
+      normalizeRedirectRelationships({ pages: "   ", posts: "/blog/{slug}" })
+    ).toEqual({ posts: "/blog/{slug}" });
+  });
+
   it("drops a collection whose pattern cannot produce a URL", () => {
     // Kept, it would be offered in the picker and accepted by validation while
     // resolving to nothing at submit time.
@@ -78,6 +87,16 @@ describe("parseRedirectReference", () => {
       collection: "pages",
       id: "pg1",
     });
+  });
+
+  it("refuses a whitespace-only bare id", () => {
+    expect(parseRedirectReference("   ", ["pages"])).toBeNull();
+  });
+
+  it("refuses a whitespace-only id inside a reference", () => {
+    expect(
+      parseRedirectReference({ relationTo: "pages", value: "  " }, ["pages"])
+    ).toBeNull();
   });
 
   it("refuses an empty bare id", () => {
