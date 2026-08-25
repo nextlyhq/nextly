@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { documentLabel, selectionKey } from "./RedirectPagePicker";
+import {
+  documentLabel,
+  selectionKey,
+  groupChoices,
+} from "./RedirectPagePicker";
 
 describe("selectionKey", () => {
   const many = ["pages", "posts"];
@@ -50,5 +54,54 @@ describe("documentLabel", () => {
   it("falls back to the id, then to a placeholder", () => {
     expect(documentLabel({ id: "pg1" })).toBe("pg1");
     expect(documentLabel({})).toBe("Untitled");
+  });
+});
+
+describe("groupChoices", () => {
+  const choice = (collection: string, id: string) => ({
+    collection,
+    id,
+    label: id,
+  });
+
+  it("orders groups by configuration", () => {
+    const groups = groupChoices(
+      [choice("posts", "p1"), choice("pages", "g1")],
+      ["pages", "posts"]
+    );
+    expect(groups.map(g => g.collection)).toEqual(["pages", "posts"]);
+    expect(groups.every(g => !g.removed)).toBe(true);
+  });
+
+  it("keeps a collection that is no longer configured, marked and last", () => {
+    // The case that made the control blank: a stored target is recovered by
+    // id, and filtering the render by configuration dropped it — over a value
+    // that is still saved, with the unreadable warning cleared because the
+    // recovery had succeeded.
+    const groups = groupChoices(
+      [choice("pages", "g1"), choice("retired", "r1")],
+      ["pages", "posts"]
+    );
+    expect(groups.map(g => g.collection)).toEqual(["pages", "retired"]);
+    expect(groups[1].removed).toBe(true);
+    expect(groups[1].label).toContain("no longer configured");
+  });
+
+  it("does not invent a group for a configured collection with no choices", () => {
+    expect(
+      groupChoices([choice("pages", "g1")], ["pages", "posts"]).map(
+        g => g.collection
+      )
+    ).toEqual(["pages"]);
+  });
+
+  it("puts every choice in exactly one group", () => {
+    const choices = [
+      choice("pages", "a"),
+      choice("pages", "b"),
+      choice("x", "c"),
+    ];
+    const groups = groupChoices(choices, ["pages"]);
+    expect(groups.flatMap(g => g.choices)).toHaveLength(choices.length);
   });
 });

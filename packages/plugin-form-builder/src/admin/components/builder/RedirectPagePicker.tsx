@@ -313,7 +313,60 @@ function useSelectedChoice(
   return unreadable;
 }
 
-/** The options, grouped by collection only when there is more than one. */
+/**
+ * The options, grouped by the collection each one came from.
+ *
+ * The groups are derived from the CHOICES, not from the configured list. A
+ * stored target whose collection was removed since the form was saved is
+ * recovered by id and belongs in the list — filtering by configuration
+ * dropped it, leaving the control blank over a value that is still stored,
+ * with the unreadable warning cleared because the recovery had succeeded.
+ *
+ * That divergence was visible in the code before it was visible on screen: the
+ * single-collection branch rendered every choice and the grouped branch
+ * filtered them, so the same state produced different pickers depending on how
+ * many collections a site happened to configure. One path now.
+ */
+export interface ChoiceGroup {
+  collection: string;
+  label: string;
+  /** True when this collection is no longer a configured redirect target. */
+  removed: boolean;
+  choices: Choice[];
+}
+
+/**
+ * The choices arranged into groups, in configuration order, with collections
+ * that are no longer configured last and marked.
+ *
+ * Derived from the CHOICES rather than from the configured list, which is the
+ * whole point: a stored target whose collection was removed is recovered by id
+ * and belongs in the list.
+ */
+export function groupChoices(
+  choices: readonly Choice[],
+  collections: readonly string[]
+): ChoiceGroup[] {
+  const present = [...new Set(choices.map(choice => choice.collection))];
+  const order = [
+    ...collections.filter(name => present.includes(name)),
+    ...present.filter(name => !collections.includes(name)),
+  ];
+
+  return order.map(collection => {
+    const removed = !collections.includes(collection);
+    return {
+      collection,
+      // Named as unavailable rather than hidden: the value is still stored and
+      // the server refuses a save into a collection with no pattern, so an
+      // author needs to see what is set in order to change it.
+      label: removed ? `${collection} — no longer configured` : collection,
+      removed,
+      choices: choices.filter(choice => choice.collection === collection),
+    };
+  });
+}
+
 function Options({
   choices,
   collections,
@@ -321,21 +374,18 @@ function Options({
   choices: Choice[];
   collections: readonly string[];
 }) {
-  if (collections.length <= 1) return <>{choices.map(renderChoice)}</>;
+  const groups = groupChoices(choices, collections);
+  if (groups.length <= 1 && !groups[0]?.removed) {
+    return <>{choices.map(renderChoice)}</>;
+  }
   return (
     <>
-      {collections.map(collection => {
-        const inCollection = choices.filter(
-          choice => choice.collection === collection
-        );
-        if (inCollection.length === 0) return null;
-        return (
-          <SelectGroup key={collection}>
-            <SelectLabel>{collection}</SelectLabel>
-            {inCollection.map(renderChoice)}
-          </SelectGroup>
-        );
-      })}
+      {groups.map(group => (
+        <SelectGroup key={group.collection}>
+          <SelectLabel>{group.label}</SelectLabel>
+          {group.choices.map(renderChoice)}
+        </SelectGroup>
+      ))}
     </>
   );
 }
