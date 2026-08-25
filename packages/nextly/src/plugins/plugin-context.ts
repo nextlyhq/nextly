@@ -753,6 +753,18 @@ export function definePlugin(definition: PluginDefinition): PluginDefinition {
  *   await plugin.init?.(context);
  * }
  * ```
+ *
+ * @internal Core wiring, not an entry point for plugin authors. It is exported
+ * because the DI container and the auth deps bridge both build a context, and
+ * it is deliberately absent from `@nextlyhq/plugin-sdk` and from that package's
+ * STABILITY.md — a plugin receives a context, it does not construct one.
+ *
+ * The consequence worth stating: `getServiceFn` is typed from
+ * {@link PLUGIN_SERVICE_NAMES}, so a name added there widens what a resolver
+ * must answer. That is a source-level change for anyone who wrote a resolver
+ * against the previous set, and it is accepted rather than absorbed behind an
+ * overload — the alternative is a second signature carried permanently on an
+ * internal seam so that a caller outside the supported surface keeps compiling.
  */
 /**
  * Every service name `createPluginContext` may ask its resolver for.

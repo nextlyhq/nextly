@@ -257,10 +257,10 @@ describe("the published record says what the registry can actually return", () =
   });
 
   it("publishes exactly the members it can honour", async () => {
-    // Pinned exhaustively, and this is the assertion that outlives the two
-    // above. They cover the members that were wrong TODAY; this one fails when
-    // a member is added, which is how both of those arrived — inherited from
-    // the registry record without anyone deciding they belonged.
+    // Pinned exhaustively rather than per member. The projection copies from a
+    // registry record that carries more than this surface can honour, so the
+    // property worth holding is that a member cannot ENTER the published shape
+    // without someone choosing it — which a per-member assertion cannot express.
     const record = await listOne();
 
     expect(Object.keys(record).sort()).toEqual([

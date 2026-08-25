@@ -369,12 +369,6 @@ export function isDataField(field: { type: string }): field is DataFieldConfig {
  */
 export const NESTED_FIELD_TYPES = ["repeater", "group"] as const;
 
-export function hasNestedFields(
-  field: FieldConfig
-): field is RepeaterFieldConfig | GroupFieldConfig {
-  return (NESTED_FIELD_TYPES as readonly string[]).includes(field.type);
-}
-
 /**
  * The same question asked of a field whose `type` is an open string.
  *
@@ -391,6 +385,16 @@ export function hasNestedFields(
  */
 export function typeHasNestedFields(type: string): boolean {
   return (NESTED_FIELD_TYPES as readonly string[]).includes(type);
+}
+
+export function hasNestedFields(
+  field: FieldConfig
+): field is RepeaterFieldConfig | GroupFieldConfig {
+  // Delegated rather than repeating the membership test. Sharing only the SET
+  // leaves two evaluations of one question, and a later change to what counts
+  // as a container — a type that carries nested fields conditionally, say —
+  // would reach whichever of them the author was editing.
+  return typeHasNestedFields(field.type);
 }
 
 /**

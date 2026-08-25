@@ -185,9 +185,9 @@ export interface PluginSinglesService {
   /**
    * List the declared Singles, with their field definitions.
    *
-   * Returns registry records: `slug`, `label`, `fields`, `source` and the
-   * migration bookkeeping. It does NOT return any Single's content, and it
-   * creates nothing — see the module note.
+   * Returns what {@link PluginSingleRecord} declares — identity, label,
+   * description, field definitions and origin. It does NOT return any Single's
+   * content, and it creates nothing; see the module note.
    *
    * A returned entry says a Single is DECLARED, never that it has been written
    * to. `fields` is the declaration, so a consumer looking for a particular
