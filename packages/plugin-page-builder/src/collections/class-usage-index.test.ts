@@ -15,7 +15,6 @@ import { pageBuilder } from "../plugin";
 
 import {
   CLASS_USAGE_INDEX_SLUG,
-  CLASS_USAGE_KEY_FIELDS,
   classUsageIndexCollection,
 } from "./class-usage-index";
 
@@ -52,40 +51,26 @@ describe("the class-usage index collection", () => {
     }
   });
 
-  it("constrains exactly the five columns that identify a reference", () => {
-    // The empty-string entity key is only sound if these columns really are a
-    // uniqueness constraint — a comment saying they form a total key is not
-    // one. Written out here rather than compared against the constant the
-    // collection builds from: a test that reads the same source the code reads
-    // agrees with it however that source changes, and would not notice a
-    // column leaving the key.
-    const unique = (contributed().indexes ?? []).filter(i => i.unique === true);
-
-    expect(unique).toHaveLength(1);
-    expect(unique[0]?.fields).toEqual([
-      "scope",
-      "entity",
-      "entityKey",
-      "field",
-      "classId",
-    ]);
-    // And the constant the collection is built from says the same, so the two
-    // are checked against each other rather than only one being checked.
-    expect([...CLASS_USAGE_KEY_FIELDS]).toEqual(unique[0]?.fields);
-  });
-
-  it("carries an index leading with the column the library filters on", () => {
+  it("indexes the column the library filters on, in a form the pipeline builds", () => {
     // The read this table exists to serve is "given a class, which documents
-    // reference it". Without an index led by `classId` that question scans
-    // every row — which is the cost the table was chosen to avoid, so its
-    // absence would not fail anything, it would just make the feature slow in
-    // exactly the way the design rejected.
-    const byClass = (contributed().indexes ?? []).filter(
-      i => i.unique !== true
+    // reference it". A collection-level `indexes` entry does not reach the
+    // schema pipeline — `buildDesiredTableFromFields` is given the fields and
+    // derives only system and per-field indexes — so the index has to be
+    // declared on the field or it exists only in the config.
+    const classId = contributed().fields.find(
+      f => "name" in f && f.name === "classId"
     );
 
-    expect(byClass).toHaveLength(1);
-    expect(byClass[0]?.fields[0]).toBe("classId");
+    expect(classId).toBeDefined();
+    expect(classId).toMatchObject({ index: true });
+  });
+
+  it("declares no collection-level index, which would not be built", () => {
+    // Asserted rather than left absent: a declared index reads as a constraint
+    // to anyone who finds it, and this one would never exist in the database.
+    // The empty-string entity key and the reconciler's duplicate removal are
+    // what the design rests on instead.
+    expect(contributed().indexes).toBeUndefined();
   });
 
   it("stores no timestamps", () => {

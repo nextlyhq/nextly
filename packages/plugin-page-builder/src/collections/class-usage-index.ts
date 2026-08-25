@@ -41,21 +41,6 @@ export const CLASS_USAGE_INDEX_SLUG = "nx_pb_class_usage";
  */
 export type ClassUsageScope = "collection" | "single";
 
-/**
- * The columns that together identify one reference.
- *
- * Named once and used by both the uniqueness constraint and the type, so the
- * key cannot be widened in one and left alone in the other — the failure that
- * leaves a constraint enforcing a key nobody means any more.
- */
-export const CLASS_USAGE_KEY_FIELDS = [
-  "scope",
-  "entity",
-  "entityKey",
-  "field",
-  "classId",
-] as const;
-
 /** One reference: this document, through this field, uses this class. */
 export interface ClassUsageRow {
   scope: ClassUsageScope;
@@ -70,9 +55,12 @@ export interface ClassUsageRow {
    * absent until somebody types.
    *
    * Kept as an empty string rather than null so the five columns form a total
-   * key: a nullable member of a uniqueness constraint compares as unknown on
-   * most dialects, which would let duplicate rows through exactly where the
-   * index needs them not to.
+   * key. Nothing in the database enforces that today — a collection's declared
+   * indexes do not reach the schema pipeline, so the composite constraint this
+   * key describes cannot currently be created — and it is the reconciler that
+   * keeps the rows unique instead. A null here would still be wrong the day
+   * that changes, because a nullable member of a uniqueness constraint compares
+   * as unknown on most dialects.
    */
   entityKey: string;
   /** The blocks field the reference was found in. */
@@ -104,35 +92,12 @@ export function classUsageIndexCollection() {
       text({ name: "entity", label: "Entity" }),
       text({ name: "entityKey", label: "Entity key" }),
       text({ name: "field", label: "Field" }),
-      text({ name: "classId", label: "Class id" }),
-    ],
-    indexes: [
-      {
-        // What makes reconciliation idempotent rather than merely intended. The
-        // maintenance path derives a document's rows and writes the ones that
-        // are missing, so a save applied twice — a retry, a concurrent write,
-        // a rebuild racing an edit — must be unable to leave two rows saying
-        // the same thing. Without this the duplicate is invisible: nothing
-        // reads a row's identity, so the library would just report a class as
-        // used in more places than it is, and the number would drift upward
-        // with every retry the site ever performs.
-        fields: [...CLASS_USAGE_KEY_FIELDS],
-        unique: true,
-        name: "nx_pb_class_usage_reference_unique",
-      },
-      {
-        // The read this table exists to serve: given a class, which documents
-        // reference it. Without an index that question scans every row, which
-        // is the cost the whole design was chosen to avoid — the count is shown
-        // ambiently beside every class in the library, so it is asked once per
-        // class per render rather than once per delete.
-        //
-        // `classId` leads because it is the column the question filters on, and
-        // `scope` follows so a caller narrowing to one kind of content reads
-        // the index rather than the rows behind it.
-        fields: ["classId", "scope"],
-        name: "nx_pb_class_usage_by_class_idx",
-      },
+      // Indexed because this is the column the library filters on: the count
+      // is shown beside every class, so "which documents use this one" is asked
+      // once per class per render rather than once per delete. Declared on the
+      // FIELD rather than as a collection-level index, which is the form the
+      // schema pipeline materialises.
+      text({ name: "classId", label: "Class id", index: true }),
     ],
     access: {
       // Derived from documents on every write, and rebuilt from them on demand.

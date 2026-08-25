@@ -144,8 +144,15 @@ export function reconcileClassUsage(
   for (const row of stored) {
     // A duplicate is not a reference held twice — a document applying one class
     // to ten nodes references it once — so a second row for a class already
-    // kept is removed rather than counted. Rows predating the uniqueness
-    // constraint are why this is handled rather than assumed away by it.
+    // kept is removed rather than counted.
+    //
+    // This is the ONLY thing keeping the rows unique. The database holds no
+    // composite constraint over the key columns, because a collection's
+    // declared indexes do not reach the schema pipeline, so two writes racing
+    // on one document can both insert. What that leaves is a count reading
+    // HIGH until the next write to that document, which is the safe direction:
+    // an over-count warns about a delete that was safe, where an under-count
+    // permits one that was not.
     const duplicate = kept.has(row.classId);
     if (duplicate || !wanted.has(row.classId)) {
       remove.push(row.id);

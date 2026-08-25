@@ -39,10 +39,18 @@ contributes three rows. The question the library asks is "which documents use TH
 so a row per pair answers it with an indexed lookup instead of a walk over every document.
 
 A single is addressed by its SLUG, with an empty entity key, because its row may not exist
-until somebody edits it - an unedited single still renders its declared defaults. The key
-is kept non-null so the five columns form a real uniqueness constraint: a nullable member
-compares as unknown on most dialects, which would let duplicate rows through exactly where
-the count needs them not to.
+until somebody edits it - an unedited single still renders its declared defaults. The key is
+kept non-null rather than nullable, because a nullable member of a uniqueness constraint
+compares as unknown on most dialects.
+
+No composite constraint is created over those columns, and that is a limitation rather than
+a choice: a collection's declared `indexes` do not reach the schema pipeline, which derives
+a table's indexes from its FIELDS. Uniqueness is kept by reconciliation instead - a second
+row for a class already recorded is removed rather than counted - so a race between two
+writes to one document leaves the count reading HIGH until that document is next written.
+That is the safe direction: an over-count warns about a delete that was safe, where an
+under-count permits one that was not. The `classId` lookup is a field-level index, which the
+pipeline does build.
 
 The table is written by the plugin and closed to everything else. `internal` sets
 `admin.hidden` and nothing more - no API route, dispatcher or registry sync reads it - so
