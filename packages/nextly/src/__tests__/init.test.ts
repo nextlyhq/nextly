@@ -2,7 +2,15 @@
  * Tests for Nextly initialization API
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  vi,
+  expectTypeOf,
+} from "vitest";
 
 import { defineConfig } from "../collections/config/define-config";
 import { isServicesRegistered, registerServices } from "../di/register";
@@ -23,6 +31,12 @@ afterEach(() => {
   console.log = originalLog;
 });
 
+function testOptions(): Parameters<typeof getNextly>[0] {
+  return {
+    config: defineConfig({}),
+  };
+}
+
 describe("init - Nextly API", () => {
   // Clean up after each test
   afterEach(async () => {
@@ -31,25 +45,7 @@ describe("init - Nextly API", () => {
 
   describe("getNextly()", () => {
     it("should return a Nextly instance with all services", async () => {
-      // Mock config (minimal for testing)
-      // config is now required on getNextly. We pass a
-      // sanitized empty config plus the original mock service primitives.
-      const config = {
-        config: defineConfig({}),
-        storage: {
-          upload: vi.fn(),
-          delete: vi.fn(),
-          getUrl: vi.fn(),
-          exists: vi.fn(),
-          getMetadata: vi.fn(),
-        } as any,
-        imageProcessor: {
-          resize: vi.fn(),
-          optimize: vi.fn(),
-        } as any,
-      } satisfies Parameters<typeof getNextly>[0];
-
-      const nextly = await getNextly(config);
+      const nextly = await getNextly(testOptions());
 
       // Verify structure
       expect(nextly).toBeDefined();
@@ -62,25 +58,8 @@ describe("init - Nextly API", () => {
     });
 
     it("should return the same instance on subsequent calls (singleton)", async () => {
-      // config is now required on getNextly. We pass a
-      // sanitized empty config plus the original mock service primitives.
-      const config = {
-        config: defineConfig({}),
-        storage: {
-          upload: vi.fn(),
-          delete: vi.fn(),
-          getUrl: vi.fn(),
-          exists: vi.fn(),
-          getMetadata: vi.fn(),
-        } as any,
-        imageProcessor: {
-          resize: vi.fn(),
-          optimize: vi.fn(),
-        } as any,
-      } satisfies Parameters<typeof getNextly>[0];
-
-      const nextly1 = await getNextly(config);
-      const nextly2 = await getNextly(config);
+      const nextly1 = await getNextly(testOptions());
+      const nextly2 = await getNextly(testOptions());
 
       // Should be the exact same instance
       expect(nextly1).toBe(nextly2);
@@ -91,24 +70,7 @@ describe("init - Nextly API", () => {
       const mockLog = vi.fn();
       console.log = mockLog;
 
-      // config is now required on getNextly. We pass a
-      // sanitized empty config plus the original mock service primitives.
-      const config = {
-        config: defineConfig({}),
-        storage: {
-          upload: vi.fn(),
-          delete: vi.fn(),
-          getUrl: vi.fn(),
-          exists: vi.fn(),
-          getMetadata: vi.fn(),
-        } as any,
-        imageProcessor: {
-          resize: vi.fn(),
-          optimize: vi.fn(),
-        } as any,
-      } satisfies Parameters<typeof getNextly>[0];
-
-      await getNextly(config);
+      await getNextly(testOptions());
 
       // Should have logged initialization message
       expect(mockLog).toHaveBeenCalledWith(
@@ -120,32 +82,15 @@ describe("init - Nextly API", () => {
     });
 
     it("should not log on subsequent calls (cached)", async () => {
-      // config is now required on getNextly. We pass a
-      // sanitized empty config plus the original mock service primitives.
-      const config = {
-        config: defineConfig({}),
-        storage: {
-          upload: vi.fn(),
-          delete: vi.fn(),
-          getUrl: vi.fn(),
-          exists: vi.fn(),
-          getMetadata: vi.fn(),
-        } as any,
-        imageProcessor: {
-          resize: vi.fn(),
-          optimize: vi.fn(),
-        } as any,
-      } satisfies Parameters<typeof getNextly>[0];
-
       // First call
-      await getNextly(config);
+      await getNextly(testOptions());
 
       // Clear mock
       const mockLog = vi.fn();
       console.log = mockLog;
 
       // Second call - should not log
-      await getNextly(config);
+      await getNextly(testOptions());
 
       expect(mockLog).not.toHaveBeenCalled();
     });
@@ -153,52 +98,18 @@ describe("init - Nextly API", () => {
 
   describe("shutdownNextly()", () => {
     it("should shutdown the instance and clear cache", async () => {
-      // config is now required on getNextly. We pass a
-      // sanitized empty config plus the original mock service primitives.
-      const config = {
-        config: defineConfig({}),
-        storage: {
-          upload: vi.fn(),
-          delete: vi.fn(),
-          getUrl: vi.fn(),
-          exists: vi.fn(),
-          getMetadata: vi.fn(),
-        } as any,
-        imageProcessor: {
-          resize: vi.fn(),
-          optimize: vi.fn(),
-        } as any,
-      } satisfies Parameters<typeof getNextly>[0];
-
-      const nextly1 = await getNextly(config);
+      const nextly1 = await getNextly(testOptions());
       await shutdownNextly();
 
       // After shutdown, new call should create new instance
-      const nextly2 = await getNextly(config);
+      const nextly2 = await getNextly(testOptions());
 
       // Should be different instances
       expect(nextly1).not.toBe(nextly2);
     });
 
     it("should log shutdown message", async () => {
-      // config is now required on getNextly. We pass a
-      // sanitized empty config plus the original mock service primitives.
-      const config = {
-        config: defineConfig({}),
-        storage: {
-          upload: vi.fn(),
-          delete: vi.fn(),
-          getUrl: vi.fn(),
-          exists: vi.fn(),
-          getMetadata: vi.fn(),
-        } as any,
-        imageProcessor: {
-          resize: vi.fn(),
-          optimize: vi.fn(),
-        } as any,
-      } satisfies Parameters<typeof getNextly>[0];
-
-      await getNextly(config);
+      await getNextly(testOptions());
 
       const mockLog = vi.fn();
       console.log = mockLog;
@@ -218,24 +129,7 @@ describe("init - Nextly API", () => {
 
   describe("Nextly instance methods", () => {
     it("should allow shutdown via instance method", async () => {
-      // config is now required on getNextly. We pass a
-      // sanitized empty config plus the original mock service primitives.
-      const config = {
-        config: defineConfig({}),
-        storage: {
-          upload: vi.fn(),
-          delete: vi.fn(),
-          getUrl: vi.fn(),
-          exists: vi.fn(),
-          getMetadata: vi.fn(),
-        } as any,
-        imageProcessor: {
-          resize: vi.fn(),
-          optimize: vi.fn(),
-        } as any,
-      } satisfies Parameters<typeof getNextly>[0];
-
-      const nextly = await getNextly(config);
+      const nextly = await getNextly(testOptions());
 
       const mockLog = vi.fn();
       console.log = mockLog;
@@ -250,16 +144,7 @@ describe("init - Nextly API", () => {
 
   describe("Type exports", () => {
     it("should export Nextly type", () => {
-      // This is a compile-time check - if it compiles, the type exists
-      const nextly: Nextly = {
-        collections: {} as any,
-        users: {} as any,
-        media: {} as any,
-        adapter: {} as any,
-        shutdown: async () => {},
-      };
-
-      expect(nextly).toBeDefined();
+      expectTypeOf<Nextly>().toBeObject();
     });
   });
 
@@ -310,23 +195,6 @@ describe("init - Nextly API", () => {
       "verifyEmail",
     ];
 
-    function testOptions(): Parameters<typeof getNextly>[0] {
-      return {
-        config: defineConfig({}),
-        storage: {
-          upload: vi.fn(),
-          delete: vi.fn(),
-          getUrl: vi.fn(),
-          exists: vi.fn(),
-          getMetadata: vi.fn(),
-        } as any,
-        imageProcessor: {
-          resize: vi.fn(),
-          optimize: vi.fn(),
-        } as any,
-      };
-    }
-
     function shapeOf(instance: Nextly): Record<string, string> {
       const shape: Record<string, string> = {};
       for (const key of Object.keys(instance).sort()) {
@@ -367,7 +235,7 @@ describe("init - Nextly API", () => {
       expect(isServicesRegistered()).toBe(false);
       // Both construction paths share one shutdown, so the fallback logs
       // the completion line the factory path always has. Pins the unified
-      // behavior; before the unification the fallback shut down silently.
+      // behavior.
       expect(mockLog).toHaveBeenCalledWith("Nextly shutdown complete");
     });
   });
