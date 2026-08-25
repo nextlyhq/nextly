@@ -40,10 +40,7 @@ import { MAX_NAMED_CLASS_NAME_LENGTH } from "@nextlyhq/blocks-engine";
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import { classUsageOf } from "./class-usage";
-import type {
-  ClassUsageRow,
-  ClassUsageScope,
-} from "./collections/class-usage-index";
+import type { ClassUsageRow } from "./collections/class-usage-index";
 
 /**
  * The class id a marker row carries, chosen so no real reference can wear it.
@@ -67,17 +64,38 @@ export const UNDETERMINED_CLASS_ID = `undetermined:${"-".repeat(
 /**
  * The document being described, minus the classes it references.
  *
- * These four columns are constant for one document's rows, which is what lets
- * everything below identify a row by its `classId` alone.
+ * DERIVED from {@link ClassUsageRow} rather than restated. The two are the same
+ * four columns, and a second declaration of one shape agrees with the first on
+ * the day it is written: a column added to the row would silently not be part
+ * of a subject, so derivation would go on producing rows missing it.
  */
-export interface ClassUsageSubject {
-  scope: ClassUsageScope;
-  /** The collection's or single's slug. */
-  entity: string;
-  /** The row id for a collection, or the empty string for a single. */
-  entityKey: string;
-  /** The blocks field the document was read from. */
-  field: string;
+export type ClassUsageSubject = Omit<ClassUsageRow, "classId">;
+
+/**
+ * The columns that identify a subject, as values rather than as types.
+ *
+ * Built through a `Record` keyed by the subject's own keys, which is what makes
+ * it exhaustive: a `Record<K, ...>` requires EVERY member of `K`, so adding a
+ * column to {@link ClassUsageRow} fails to compile here until it is listed.
+ * An array annotated `(keyof ClassUsageSubject)[]` type-checks perfectly while
+ * missing a member, which is how a comparison silently stops covering one.
+ */
+const SUBJECT_KEYS = Object.keys({
+  scope: true,
+  entity: true,
+  entityKey: true,
+  field: true,
+} satisfies Record<
+  keyof ClassUsageSubject,
+  true
+>) as (keyof ClassUsageSubject)[];
+
+/** Whether a row describes the subject being reconciled. */
+function describesSubject(
+  row: ClassUsageSubject,
+  subject: ClassUsageSubject
+): boolean {
+  return SUBJECT_KEYS.every(key => row[key] === subject[key]);
 }
 
 /**
@@ -99,18 +117,18 @@ export type ClassUsageDerivation =
   | { complete: false; undetermined: ClassUsageRow };
 
 /**
- * Enough of a stored row to reconcile against it.
+ * A stored row, as reconciliation needs to see it.
  *
- * Narrower than {@link ClassUsageRow} on purpose. The four subject columns are
- * fixed by the query that fetched these, so repeating them here would invite a
- * caller to pass rows belonging to some OTHER document — and reconciliation
- * would then read those as references this document has dropped and remove
- * them. Asking only for what varies makes that mistake harder to make.
+ * Carries its subject columns rather than only what varies. An earlier shape
+ * asked for `{ id, classId }` alone, on the reasoning that a caller cannot
+ * misuse what it is not asked for — which is false: a caller maps its rows to
+ * the narrow shape and a misbound query is exactly as wrong, only now
+ * undetectable. Reconciliation issues REMOVALS, so it has to be able to refuse
+ * rows that are not the subject's rather than trust that they are.
  */
-export interface StoredClassUsageRow {
+export interface StoredClassUsageRow extends ClassUsageRow {
   /** The row's own id, which is what a removal names. */
   id: string;
-  classId: string;
 }
 
 /** The writes that bring a document's stored rows into agreement with it. */
@@ -162,11 +180,43 @@ export function deriveClassUsageRows(
  * Takes derived ROWS rather than a derivation, so an incomplete read cannot be
  * reconciled: there is no value of {@link ClassUsageDerivation} whose
  * incomplete arm can be passed here.
+ *
+ * THROWS when any row belongs to a different subject, rather than skipping it.
+ * The caller supplies `stored` from a query, and a query missing or misbinding
+ * one of the four subject predicates hands over another document's rows — which
+ * this would otherwise report as references the subject has dropped, returning
+ * their ids to be deleted. Refusing is what a guard on a destructive operation
+ * owes: skipping silently would leave the misbound query in place, correcting
+ * its damage invisibly on every call.
+ *
+ * The check is an equality over values already in hand, so it costs nothing on
+ * the path where it never rejects.
  */
 export function reconcileClassUsage(
+  subject: ClassUsageSubject,
   derived: readonly ClassUsageRow[],
   stored: readonly StoredClassUsageRow[]
 ): ClassUsageReconciliation {
+  for (const row of derived) {
+    if (!describesSubject(row, subject)) {
+      throw new Error(
+        `Derived row for ${row.scope}:${row.entity}:${row.entityKey}:${row.field} ` +
+          `does not describe the subject being reconciled ` +
+          `(${subject.scope}:${subject.entity}:${subject.entityKey}:${subject.field}).`
+      );
+    }
+  }
+  for (const row of stored) {
+    if (!describesSubject(row, subject)) {
+      throw new Error(
+        `Stored row ${row.id} belongs to ` +
+          `${row.scope}:${row.entity}:${row.entityKey}:${row.field}, ` +
+          `not to the subject being reconciled ` +
+          `(${subject.scope}:${subject.entity}:${subject.entityKey}:${subject.field}).`
+      );
+    }
+  }
+
   const wanted = new Set(derived.map(row => row.classId));
   // Which classes a SURVIVING stored row records. A class reaches this set only
   // by having a row that is both wanted and the first of its class, which is

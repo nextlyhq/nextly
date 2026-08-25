@@ -166,11 +166,11 @@ describe("reconciling derived rows against stored ones", () => {
       { ...page, classId: "card" },
     ];
     const stored = [
-      { id: "r1", classId: "hero" },
-      { id: "r2", classId: "card" },
+      { id: "r1", ...page, classId: "hero" },
+      { id: "r2", ...page, classId: "card" },
     ];
 
-    expect(reconcileClassUsage(derived, stored)).toEqual({
+    expect(reconcileClassUsage(page, derived, stored)).toEqual({
       insert: [],
       remove: [],
     });
@@ -181,12 +181,12 @@ describe("reconciling derived rows against stored ones", () => {
       { ...page, classId: "hero" },
       { ...page, classId: "card" },
     ];
-    const stored = [{ id: "r1", classId: "hero" }];
+    const stored = [{ id: "r1", ...page, classId: "hero" }];
 
     // `hero` is untouched rather than removed and re-added. A reference that
     // survives an edit must never be absent from the table, because a usage
     // count read between the two writes would not see it.
-    expect(reconcileClassUsage(derived, stored)).toEqual({
+    expect(reconcileClassUsage(page, derived, stored)).toEqual({
       insert: [{ ...page, classId: "card" }],
       remove: [],
     });
@@ -195,11 +195,11 @@ describe("reconciling derived rows against stored ones", () => {
   it("removes the row for a reference the document has dropped", () => {
     const derived = [{ ...page, classId: "hero" }];
     const stored = [
-      { id: "r1", classId: "hero" },
-      { id: "r2", classId: "card" },
+      { id: "r1", ...page, classId: "hero" },
+      { id: "r2", ...page, classId: "card" },
     ];
 
-    expect(reconcileClassUsage(derived, stored)).toEqual({
+    expect(reconcileClassUsage(page, derived, stored)).toEqual({
       insert: [],
       remove: ["r2"],
     });
@@ -212,11 +212,11 @@ describe("reconciling derived rows against stored ones", () => {
     // the reference out of the table for the duration of the write.
     const derived = [{ ...page, classId: "hero" }];
     const stored = [
-      { id: "r1", classId: "hero" },
-      { id: "r2", classId: "hero" },
+      { id: "r1", ...page, classId: "hero" },
+      { id: "r2", ...page, classId: "hero" },
     ];
 
-    expect(reconcileClassUsage(derived, stored)).toEqual({
+    expect(reconcileClassUsage(page, derived, stored)).toEqual({
       insert: [],
       remove: ["r2"],
     });
@@ -230,14 +230,42 @@ describe("reconciling derived rows against stored ones", () => {
     // an author a count could not be checked when it now can.
     const derived = [{ ...page, classId: "hero" }];
     const stored = [
-      { id: "m1", classId: "" },
-      { id: "r1", classId: "hero" },
+      { id: "m1", ...page, classId: UNDETERMINED_CLASS_ID },
+      { id: "r1", ...page, classId: "hero" },
     ];
 
-    expect(reconcileClassUsage(derived, stored)).toEqual({
+    expect(reconcileClassUsage(page, derived, stored)).toEqual({
       insert: [],
       remove: ["m1"],
     });
+  });
+
+  it("refuses stored rows belonging to a different document", () => {
+    // The failure this guards is a maintenance query that omits or misbinds one
+    // of the four subject predicates. Those rows are not references the subject
+    // has dropped — they belong to somebody else — and reconciliation would
+    // return their ids to be deleted, taking another document's record with it
+    // and leaving ITS count reading low.
+    const other = { ...page, entityKey: "page-2" };
+    const derived = [{ ...page, classId: "hero" }];
+    const stored = [{ id: "r9", ...other, classId: "hero" }];
+
+    // Refused rather than skipped. Skipping would correct the misbound query's
+    // damage invisibly on every call, so nothing would ever report it.
+    expect(() => reconcileClassUsage(page, derived, stored)).toThrow(
+      /belongs to collection:pages:page-2:content/
+    );
+  });
+
+  it("refuses derived rows that do not describe the subject", () => {
+    // The same guard from the other side. A caller reconciling one subject with
+    // another's derivation would insert rows attributing this document's
+    // classes to that one.
+    const derived = [{ ...page, entity: "posts", classId: "hero" }];
+
+    expect(() => reconcileClassUsage(page, derived, [])).toThrow(
+      /does not describe the subject/
+    );
   });
 
   it("removes every row of a dropped class, naming each id exactly once", () => {
@@ -247,12 +275,12 @@ describe("reconciling derived rows against stored ones", () => {
     // no longer exists by the time the second one runs.
     const derived = [{ ...page, classId: "hero" }];
     const stored = [
-      { id: "r1", classId: "hero" },
-      { id: "r2", classId: "card" },
-      { id: "r3", classId: "card" },
+      { id: "r1", ...page, classId: "hero" },
+      { id: "r2", ...page, classId: "card" },
+      { id: "r3", ...page, classId: "card" },
     ];
 
-    const result = reconcileClassUsage(derived, stored);
+    const result = reconcileClassUsage(page, derived, stored);
 
     expect(result.insert).toEqual([]);
     expect(result.remove).toEqual(["r2", "r3"]);

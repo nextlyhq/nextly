@@ -55,12 +55,18 @@ The table is written by the plugin and closed to everything else. `internal` set
 the access rules are the only thing keeping these rows private, not a second layer behind
 a first.
 
-A document whose references cannot all be read contributes ONE row with an empty class id
-rather than a row per class it managed to read. Skipping the write preserves whatever rows a
-subject already had and preserves nothing when it has none - which is the state an oversized
-document is in the first time anything indexes it - so without the marker that subject looks
-exactly like one referencing nothing, and a class its unread part applies reads as unused. A
-lookup for a real class never matches a marker, since a class id is never empty.
+A document whose references cannot all be read contributes ONE marker row rather than a row
+per class it managed to read. Skipping the write preserves whatever rows a subject already
+had and preserves nothing when it has none - which is the state an oversized document is in
+the first time anything indexes it - so without the marker that subject looks exactly like
+one referencing nothing, and a class its unread part applies reads as unused.
+
+The marker's class id is LONGER than the engine's cap on a class id, which is what keeps it
+disjoint from every real reference. Not the empty string: `isUsableNamedClass` constrains an
+id by type and length only - no pattern and no minimum - so the empty string is a usable
+class id and a document can genuinely reference one. Length is the only lever that rule
+leaves, so anything building on this design must use the exported constant rather than
+inventing a sentinel.
 
 The table records no webhook events. An omitted `webhooks` option RECORDS - the registry
 reads `webhooks?.record !== false`, which `undefined` satisfies - so a site with an endpoint
