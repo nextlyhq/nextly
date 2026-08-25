@@ -1,12 +1,15 @@
 /**
  * The arithmetic behind the build's refusal to ship a page-cancelling inset.
  *
- * The build can only say pass or fail on one stylesheet. These say what the
- * parts do, which is where the mistakes were: six revisions of this check each
- * compared a SPELLING — a class, a property, a value anchored whole, a
- * shorthand read at one position — and each was correct about the case in
- * front of it. Computing the distance is what ended that, so the computation is
- * what is worth pinning.
+ * A build can only report pass or fail on one stylesheet, so what it cannot say
+ * is whether the parts agree about a distance — and that is the whole property:
+ * one displacement has unbounded spellings, and a check that compares strings
+ * is answering a narrower question than the one that matters.
+ *
+ * The separating cases are therefore the ones where spelling and distance come
+ * apart: several forms that must evaluate alike, and a nested calculation that
+ * must be allowed because its VALUE is legitimate rather than refused because
+ * its shape looks suspicious.
  */
 import { describe, expect, it } from "vitest";
 
@@ -86,5 +89,39 @@ describe("whether a term cancels the page's inset", () => {
 
   it("allows a positive margin of the same size", () => {
     expect(cancelsInset("2rem", SPACING)).toBe(false);
+  });
+
+  it("refuses a calculation it cannot evaluate", () => {
+    // Addition is not implemented, and `calc(var(--spacing) * 4 + 1rem)` is
+    // exactly the inset on this sheet. An unreadable calc on this axis is
+    // unexamined, so it is reported rather than allowed — the failure mode
+    // here is a displacement arriving in a form nobody enumerated.
+    expect(
+      cancelsInset("calc(calc(var(--spacing) * 4 + 1rem) * -1)", SPACING)
+    ).toBe(true);
+  });
+
+  it("leaves ordinary non-lengths alone", () => {
+    // Failing closed applies to calculations, not to every value it cannot
+    // turn into a number — otherwise `auto` becomes a finding.
+    expect(cancelsInset("auto", SPACING)).toBe(false);
+    expect(cancelsInset("var(--sidebar-width)", SPACING)).toBe(false);
+  });
+
+  it("allows an unevaluatable calculation with no negative in it", () => {
+    // The sheet ships dozens of these: `space-x-*` multiplies a length by a
+    // runtime reverse flag, which cannot be evaluated here and is never
+    // negative. Refusing them would make this a check to switch off, so the
+    // fail-closed rule asks for a written-down minus rather than for
+    // certainty.
+    expect(
+      cancelsInset("calc(.25rem * var(--nx-tw-space-x-reverse))", SPACING)
+    ).toBe(false);
+    expect(
+      cancelsInset(
+        "calc(.5rem * calc(1 - var(--nx-tw-space-x-reverse)))",
+        SPACING
+      )
+    ).toBe(false);
   });
 });

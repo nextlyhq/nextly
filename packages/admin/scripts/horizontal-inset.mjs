@@ -6,14 +6,14 @@
  * pulls content PAST its own column. Measured, that was 64px on the entry
  * editor.
  *
- * The distance is COMPUTED, not matched. The same 32px arrives as a calc over
- * the spacing variable, as a literal, in pixels, and as a calc over a calc —
- * every one a different string and the same distance, so the string is the
- * wrong thing to compare.
+ * The distance is COMPUTED rather than matched, because one distance has
+ * unbounded spellings: a calc over the spacing variable, a literal in rem, the
+ * same in pixels, a calc over a calc, an arbitrary value nesting further. They
+ * are different strings and the same displacement, so the string is the wrong
+ * thing to compare.
  *
- * Separate from `build-css.mjs` so it can be tested: these are the parts with
- * arithmetic in them, and the build that uses them has no other way to say
- * whether they are right.
+ * Separate from `build-css.mjs` so it can be tested: this is the part with
+ * arithmetic in it, and a build can only report pass or fail on one stylesheet.
  */
 
 /**
@@ -37,9 +37,9 @@ export function components(value) {
 /**
  * A CSS length term evaluated to rem, or NaN when it is not one.
  *
- * Only what these declarations actually contain is handled: multiplication,
- * nesting, and the two length units in the sheet. Anything else is NaN and is
- * left alone — the safe direction for a term this does not understand.
+ * Multiplication, nesting and the sheet's two length units are evaluated.
+ * Anything else — addition, division, a variable that is not the spacing step
+ * — returns NaN, and what the caller does with that is its decision.
  */
 export function toRem(term, spacingRem) {
   let text = term.replaceAll("var(--spacing)", `${spacingRem}rem`);
@@ -84,8 +84,26 @@ export function horizontalOfMargin(parts) {
  * At-least rather than exactly: a wider negative bleeds further out, and the
  * smaller ones the sheet legitimately ships — a card pulling its edge past its
  * padding, a rule overlap — sit well inside it.
+ *
+ * A calculation this cannot evaluate counts as one. That direction is
+ * deliberate: an unreadable term is unexamined, and the whole failure mode here
+ * is a displacement arriving in a form nobody thought to enumerate.
  */
 export function cancelsInset(term, spacingRem) {
   const rem = toRem(term, spacingRem);
-  return Number.isFinite(rem) && rem <= -(spacingRem * 8);
+  if (Number.isFinite(rem)) return rem <= -(spacingRem * 8);
+
+  // Fail closed on a calculation this cannot evaluate — but only one carrying
+  // a negative operand. Blanket refusal was measured and is wrong: Tailwind's
+  // `space-x-*` emits `calc(<len> * var(--…-reverse))`, unevaluatable because
+  // the reverse flag is a runtime value, non-negative in every case, and
+  // present dozens of times. Refusing those would make this a check to switch
+  // off.
+  //
+  // `-` followed by a digit, so a negated factor counts while `- var(…)` and
+  // the leading dashes of a custom property do not. That is a heuristic and
+  // its limit is real: a calc whose negativity comes from a variable alone
+  // reads as safe here. What it does cover is the case where the sign is
+  // written down.
+  return term.includes("calc(") && /-\s*[\d.]/.test(term);
 }
