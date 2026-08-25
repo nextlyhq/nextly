@@ -207,26 +207,20 @@ try {
   const shipped = fs.readFileSync(outputFile, "utf-8");
 
   /**
-   * One declaration's value split into top-level components, so a `calc(...)`
-   * counts as one term however many spaces are inside it.
+   * One declaration's value split into its top-level components.
+   *
+   * `calc(...)` has spaces inside it, so its interior is collapsed before the
+   * split — otherwise `calc(var(--spacing) * -8)` becomes three components and
+   * every position after it is read wrong.
    */
-  const components = value => {
-    const parts = [];
-    let depth = 0;
-    let current = "";
-    for (const ch of value) {
-      if (ch === "(") depth++;
-      else if (ch === ")") depth--;
-      if (depth === 0 && /\s/.test(ch)) {
-        if (current) parts.push(current);
-        current = "";
-      } else current += ch;
-    }
-    if (current) parts.push(current);
-    return parts;
-  };
+  const components = value =>
+    value
+      .replace(/calc\((?:[^()]|\([^()]*\))*\)/g, term => term.replace(/\s+/g, ""))
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
 
-  const NEGATIVE_8 = /^calc\(var\(--spacing\)\s*\*\s*-8\)$/;
+  const NEGATIVE_8 = /^calc\(var\(--spacing\)\*-8\)$/;
 
   /**
    * The components of a `margin` shorthand that set the HORIZONTAL sides.
