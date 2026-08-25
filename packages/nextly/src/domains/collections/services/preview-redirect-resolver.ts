@@ -46,6 +46,36 @@ export type PreviewDocumentRead =
   | { kind: "unreadable" };
 
 /**
+ * A service ENVELOPE reduced to one of the three outcomes.
+ *
+ * One translator, called by every loader that reads through a service result,
+ * because this is a single decision — which envelope means the document is
+ * absent — and two copies of it agree only until one is edited. They would
+ * then disagree about the SAME entry: the mint would hand out a link the route
+ * refuses, or the two would diagnose one read differently. That the rule is
+ * currently `statusCode === 404` is exactly why it belongs in one place; the
+ * day it becomes the envelope's canonical code instead, it moves once.
+ *
+ * `undefined` data counts as absent alongside `null`: a success envelope that
+ * carries no document is not a document, and a loader reading `data` off a
+ * partially-populated result must not present that as one.
+ */
+export function readFromEnvelope(read: {
+  success: boolean;
+  statusCode?: number;
+  data?: unknown;
+}): PreviewDocumentRead {
+  if (!read.success) {
+    return read.statusCode === 404
+      ? { kind: "absent" }
+      : { kind: "unreadable" };
+  }
+  return read.data === null || read.data === undefined
+    ? { kind: "absent" }
+    : { kind: "document", document: read.data as Record<string, unknown> };
+}
+
+/**
  * A read whose failures arrive as THROWN errors, as one of the three outcomes.
  *
  * The Direct API does not hand back a failure envelope: `findSingle` throws for
@@ -56,8 +86,8 @@ export type PreviewDocumentRead =
  *
  * Written ONCE and shared by every caller with a throwing loader, because two
  * copies of "which status counts as absent" agree until one is edited. Only a
- * 404 is evidence of absence; anything else means the question went unanswered,
- * which is the same rule the entry loader applies to its envelope.
+ * not-found is evidence of absence; anything else means the question went
+ * unanswered, which is the same rule {@link readFromEnvelope} applies.
  */
 export async function readOrReport(
   load: () => Promise<Record<string, unknown> | null>
@@ -201,9 +231,35 @@ function pathOrNull(outcome: PreviewPathOutcome): string | null {
  */
 const AUTHORIZED_PREVIEW_CALLER = Symbol("nextly.preview.authorizedCaller");
 
-/** Proof that the caller was authorized before a refusal reason was handed over. */
+/**
+ * The one document a witness was granted for.
+ *
+ * A grant is per-DOCUMENT because that is what the mint checks: `update` on
+ * this entry, or on this Single. A witness that named only its holder would
+ * claim something broader than anything was ever verified.
+ */
+export type AuthorizedPreviewScope =
+  | { collection: string; entryId: string }
+  | { single: string };
+
+/**
+ * Proof that the caller was authorized FOR THIS DOCUMENT before a refusal
+ * reason was handed over.
+ *
+ * The scope travels inside the proof because authentication is not the property
+ * being relied on. `requireRouteAuthentication` returns a full `AuthContext`
+ * without consulting a single permission — it exists for handlers that do their
+ * own per-resource filtering — so a witness demanding only that shape would be
+ * obtainable by any signed-in account, including one with no access to the
+ * document it then asked about. The explainer's whole premise is that its
+ * caller could already read this draft; the witness now carries the fact that
+ * makes that true.
+ */
 export interface AuthorizedPreviewCaller {
-  readonly [AUTHORIZED_PREVIEW_CALLER]: string;
+  readonly [AUTHORIZED_PREVIEW_CALLER]: {
+    userId: string;
+    scope: AuthorizedPreviewScope;
+  };
 }
 
 /**
@@ -226,12 +282,15 @@ export interface AuthorizedPreviewCaller {
  * path cannot be reached by accident — which, with the export manifest beside
  * it, is the enforcement this boundary can actually have.
  */
-export function previewCallerAuthorized(auth: {
-  userId: string;
-  permissions: string[];
-  roles: string[];
-  authMethod: "session" | "api-key";
-}): AuthorizedPreviewCaller {
+export function previewCallerAuthorized(
+  auth: {
+    userId: string;
+    permissions: string[];
+    roles: string[];
+    authMethod: "session" | "api-key";
+  },
+  authorizedFor: AuthorizedPreviewScope
+): AuthorizedPreviewCaller {
   if (auth.userId === "") {
     /*
      * The public message stays generic and the detail goes to the log: reaching
@@ -246,7 +305,43 @@ export function previewCallerAuthorized(auth: {
         "previewCallerAuthorized requires the authenticated caller's id",
     });
   }
-  return { [AUTHORIZED_PREVIEW_CALLER]: auth.userId };
+  return {
+    [AUTHORIZED_PREVIEW_CALLER]: { userId: auth.userId, scope: authorizedFor },
+  };
+}
+
+/**
+ * Refuse a witness granted for some OTHER document.
+ *
+ * Checked rather than trusted, because the grant and the question are supplied
+ * by the same caller and nothing else compares them. Without this the witness
+ * would still only prove "was authorized for something", and a handler holding
+ * a grant for a document it may read could ask about one it may not.
+ *
+ * A throw rather than a refusal outcome: this is a handler passing mismatched
+ * arguments, not a document that cannot be previewed, and answering it with a
+ * refusal cause would hide a bug behind a legitimate-looking response.
+ */
+function assertGrantCovers(
+  caller: AuthorizedPreviewCaller,
+  asked: AuthorizedPreviewScope
+): void {
+  const granted = caller[AUTHORIZED_PREVIEW_CALLER].scope;
+  const covers =
+    "single" in asked
+      ? "single" in granted && granted.single === asked.single
+      : "collection" in granted &&
+        granted.collection === asked.collection &&
+        granted.entryId === asked.entryId;
+
+  if (!covers) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "An unexpected error occurred.",
+      logMessage:
+        "a preview refusal was asked for a document the caller's grant does not cover",
+    });
+  }
 }
 
 /**
@@ -263,8 +358,13 @@ export async function explainPreviewRedirect(
   caller: AuthorizedPreviewCaller,
   requestOrigin?: string
 ): Promise<PreviewPathOutcome> {
-  // The parameter IS the control; nothing is read from it.
-  void caller;
+  // READ, not merely required. A witness nobody inspects proves only that the
+  // caller could construct one, which is a weaker claim than the explainer
+  // relies on.
+  assertGrantCovers(caller, {
+    collection: scope.collection,
+    entryId: scope.entryId,
+  });
   return computePreviewRedirect(scope, deps, requestOrigin);
 }
 
@@ -479,8 +579,9 @@ export async function explainSinglePreviewRedirect(
   caller: AuthorizedPreviewCaller,
   requestOrigin?: string
 ): Promise<PreviewPathOutcome> {
-  // The parameter IS the control; nothing is read from it.
-  void caller;
+  // See {@link explainPreviewRedirect}: the grant is compared against the
+  // document actually being asked about, not merely presented.
+  assertGrantCovers(caller, { single: scope.single });
   return computeSinglePreviewRedirect(scope, deps, requestOrigin);
 }
 

@@ -23,6 +23,7 @@ import {
 } from "../../auth/preview/preview-token";
 import { container, getService } from "../../di";
 import {
+  readFromEnvelope,
   readOrReport,
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
@@ -176,24 +177,13 @@ export async function defaultRedirectTo(
 
         /*
          * The route flattens every refusal to one 404 regardless, so the
-         * distinction changes nothing it will say. It is drawn anyway because
-         * the loader is the only place that still HOLDS it: leaving the route's
-         * copy folding both into "absent" would leave a second definition of
-         * this read that answers differently from the mint's, and the next
-         * caller to want the reason would inherit whichever one it happened to
-         * be handed.
+         * distinction changes nothing it will say here. It is drawn anyway, and
+         * by the SAME translator the mint uses, because a second copy of "which
+         * envelope means absent" would agree only until one was edited — and
+         * the two would then disagree about the same entry, minting a link the
+         * route refuses.
          */
-        if (!read.success) {
-          return read.statusCode === 404
-            ? { kind: "absent" as const }
-            : { kind: "unreadable" as const };
-        }
-        return read.data === null
-          ? { kind: "absent" as const }
-          : {
-              kind: "document" as const,
-              document: read.data as Record<string, unknown>,
-            };
+        return readFromEnvelope(read);
       },
       loadDeclaration: previewDeclarationFor,
       loadSiteUrl: async () =>

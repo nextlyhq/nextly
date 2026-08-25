@@ -17,6 +17,7 @@ import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
   previewCallerAuthorized,
+  readFromEnvelope,
   readOrReport,
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
@@ -46,11 +47,19 @@ const unreadable = () => vi.fn().mockResolvedValue({ kind: "unreadable" });
  * symbol behind the type is not exported, so no anonymous handler can conjure
  * one and reach a refusal cause.
  */
-const CALLER = previewCallerAuthorized({
+const PRINCIPAL = {
   userId: "u1",
   permissions: [],
   roles: [],
-  authMethod: "session",
+  authMethod: "session" as const,
+};
+
+/** A grant for the entry `SCOPE` names, which is what most cases ask about. */
+const CALLER = previewCallerAuthorized(PRINCIPAL, SCOPE);
+
+/** A grant for the Single the Single cases ask about. */
+const SINGLE_CALLER = previewCallerAuthorized(PRINCIPAL, {
+  single: "homepage",
 });
 
 /**
@@ -472,6 +481,7 @@ describe("what this module lets anyone reach", () => {
       "explainPreviewRedirect",
       "explainSinglePreviewRedirect",
       "previewCallerAuthorized",
+      "readFromEnvelope",
       "readOrReport",
       "resolvePreviewRedirect",
       "resolveSinglePreviewRedirect",
@@ -507,6 +517,132 @@ describe("what the ANONYMOUS preview path is wired to", () => {
       expect(source).not.toMatch(/\bexplainSinglePreviewRedirect\b/);
       expect(source).not.toMatch(/\bpreviewCallerAuthorized\b/);
     }
+  });
+});
+
+describe("who decides which envelope means absent", () => {
+  it("is decided here, and not re-decided by either loader", () => {
+    /*
+     * The mint and the anonymous route both read entries through a service
+     * envelope, and each used to map it itself. Two copies of one decision
+     * agree until one is edited — and these two would then disagree about the
+     * SAME entry, minting a link the route refuses. A source-level assertion
+     * rather than a behavioural one because the defect IS the second copy: both
+     * behaved identically the day it was written.
+     */
+    const loaders = [
+      "../../../../api/preview-links.ts",
+      "../../../../runtime/preview/preview-route-defaults.ts",
+    ];
+
+    for (const relative of loaders) {
+      const source = readFileSync(new URL(relative, import.meta.url), "utf8");
+      // Control: a mistyped path reads as "" and would let this pass having
+      // examined nothing.
+      expect(source.length).toBeGreaterThan(0);
+      expect(source).toMatch(/\breadFromEnvelope\b/);
+      expect(source).not.toMatch(/statusCode === 404/);
+    }
+  });
+});
+
+describe("a grant covers ONE document, not the holder", () => {
+  /*
+   * `requireRouteAuthentication` returns a full `AuthContext` without consulting
+   * any permission — it exists for handlers doing their own per-resource
+   * filtering — so a witness that demanded only that shape would be obtainable
+   * by any signed-in account, including one with no access to the document it
+   * then asked about. The grant names its document, and the façade compares.
+   */
+  it("refuses a question about a DIFFERENT entry", async () => {
+    const forAnotherEntry = previewCallerAuthorized(PRINCIPAL, {
+      collection: "pages",
+      entryId: "entry-2",
+    });
+
+    await expect(
+      explainPreviewRedirect(SCOPE, deps(), forAnotherEntry)
+    ).rejects.toThrow();
+  });
+
+  it("refuses a question about a different COLLECTION", async () => {
+    // Same entry id, different collection: ids are not unique across them, so
+    // comparing only the id would let a grant travel between collections.
+    const forAnotherCollection = previewCallerAuthorized(PRINCIPAL, {
+      collection: "posts",
+      entryId: "entry-1",
+    });
+
+    await expect(
+      explainPreviewRedirect(SCOPE, deps(), forAnotherCollection)
+    ).rejects.toThrow();
+  });
+
+  it("refuses a Single's grant on a collection question, and the reverse", async () => {
+    await expect(
+      explainPreviewRedirect(SCOPE, deps(), SINGLE_CALLER)
+    ).rejects.toThrow();
+
+    await expect(
+      explainSinglePreviewRedirect(
+        { single: "homepage" },
+        {
+          loadSingle: reads({ path: "welcome" }),
+          loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
+          loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
+        },
+        CALLER
+      )
+    ).rejects.toThrow();
+  });
+
+  it("ALLOWS the document the grant names", async () => {
+    // The control for all four refusals above: a matching grant works, so the
+    // comparison discriminates rather than rejecting everything.
+    expect(await explainPreviewRedirect(SCOPE, deps(), CALLER)).toEqual({
+      kind: "path",
+      path: "/about",
+    });
+  });
+});
+
+describe("readFromEnvelope, the one place a service result becomes an outcome", () => {
+  /*
+   * One translator because this is a single decision. Two copies would agree
+   * until one was edited, and the mint and the anonymous route would then
+   * disagree about the SAME entry — minting a link the route refuses.
+   */
+  it("reads a 404 envelope as absence", () => {
+    expect(readFromEnvelope({ success: false, statusCode: 404 })).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("reads any other failure as unreadable", () => {
+    expect(readFromEnvelope({ success: false, statusCode: 500 })).toEqual({
+      kind: "unreadable",
+    });
+  });
+
+  it("reads a failure with NO status as unreadable rather than absent", () => {
+    // Absence has to be established. An envelope that reports failure without
+    // saying how is not evidence the document is gone.
+    expect(readFromEnvelope({ success: false })).toEqual({
+      kind: "unreadable",
+    });
+  });
+
+  it("reads a success carrying no document as absence", () => {
+    expect(readFromEnvelope({ success: true, data: null })).toEqual({
+      kind: "absent",
+    });
+    expect(readFromEnvelope({ success: true })).toEqual({ kind: "absent" });
+  });
+
+  it("hands back the document when there is one", () => {
+    expect(
+      readFromEnvelope({ success: true, data: { id: "7", slug: "seven" } })
+    ).toEqual({ kind: "document", document: { id: "7", slug: "seven" } });
   });
 });
 
@@ -678,12 +814,15 @@ describe("the authenticated boundary on the explaining form", () => {
     // no principal cannot satisfy it with a placeholder.
     let thrown: unknown;
     try {
-      previewCallerAuthorized({
-        userId: "",
-        permissions: [],
-        roles: [],
-        authMethod: "session",
-      });
+      previewCallerAuthorized(
+        {
+          userId: "",
+          permissions: [],
+          roles: [],
+          authMethod: "session",
+        },
+        SCOPE
+      );
     } catch (error) {
       thrown = error;
     }
@@ -756,7 +895,7 @@ describe("explainSinglePreviewRedirect", () => {
       await explainSinglePreviewRedirect(
         { single: "homepage" },
         singleDeps({ loadSingle: absent() }),
-        CALLER
+        SINGLE_CALLER
       )
     ).toEqual({ kind: "refused", cause: "documentGone" });
   });
@@ -772,7 +911,7 @@ describe("explainSinglePreviewRedirect", () => {
             .fn()
             .mockResolvedValue({ url: () => "https://elsewhere.test/" }),
         }),
-        CALLER
+        SINGLE_CALLER
       )
     ).toEqual({ kind: "refused", cause: "foreignOrigin" });
   });
@@ -782,7 +921,7 @@ describe("explainSinglePreviewRedirect", () => {
       await explainSinglePreviewRedirect(
         { single: "homepage" },
         singleDeps(),
-        CALLER
+        SINGLE_CALLER
       )
     ).toEqual({ kind: "path", path: "/" });
   });

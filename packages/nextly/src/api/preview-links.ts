@@ -34,6 +34,7 @@ import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
   previewCallerAuthorized,
+  readFromEnvelope,
   readOrReport,
   type PreviewPathOutcome,
   type PreviewRefusalCause,
@@ -674,9 +675,10 @@ async function mintForSingle(
             readOrReport(() => loadSingleForPreview(slug, singleLocale)),
           ...sharedRedirectDeps(declaration),
         },
-        // The gate above already required `update` on this Single, which is
-        // what makes naming a cause safe here.
-        previewCallerAuthorized(auth)
+        // The gate above already required `update` on THIS Single, and the
+        // witness carries which one — so the grant proves the thing the
+        // explainer relies on rather than merely that somebody signed in.
+        previewCallerAuthorized(auth, { single })
       )
     : { kind: "refused", cause: "notConfigured" };
 
@@ -808,33 +810,25 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
               includeWorkingDraft: true,
             });
             /*
-             * A FAILED read is not an absent entry. Folding both into `null`
-             * made a transient database error, a rate limit or a throwing read
-             * hook arrive as "this may have been deleted" — telling an editor
-             * their work is gone while it sits there intact. Only a 404 is
-             * evidence of absence; every other failure means the question was
-             * not answered.
+             * A FAILED read is not an absent entry: a transient database error,
+             * a rate limit or a throwing read hook would otherwise arrive as
+             * "this may have been deleted", telling an editor their work is
+             * gone while it sits there intact. Which envelope means absence is
+             * decided in ONE place, so this loader and the anonymous route's
+             * cannot come to disagree about the same entry.
              */
-            if (!read.success) {
-              return read.statusCode === 404
-                ? { kind: "absent" }
-                : { kind: "unreadable" };
-            }
-            return read.data === null
-              ? { kind: "absent" }
-              : {
-                  kind: "document",
-                  document: read.data as Record<string, unknown>,
-                };
+            return readFromEnvelope(read);
           },
           // Already resolved above, so this hands back the value rather than
           // fetching it again — the resolver takes a loader and this call site
           // happens to have the answer.
           ...sharedRedirectDeps(declaration),
         },
-        // The route gate above already required `update` on this entry, so its
-        // holder learns nothing from a cause they could not read anyway.
-        previewCallerAuthorized(auth)
+        // The route gate above already required `update` on THIS entry, so its
+        // holder learns nothing from a cause they could not read anyway — and
+        // the witness names the entry, so that claim is checked rather than
+        // assumed.
+        previewCallerAuthorized(auth, { collection, entryId })
       )
     : // Stated rather than resolved, so an undeclared collection costs no entry
       // read to learn what the absent declaration already says.
