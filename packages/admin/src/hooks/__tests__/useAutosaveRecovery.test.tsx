@@ -5,11 +5,18 @@
  * that asymmetry rather than around the happy path: a spurious offer costs one
  * dismissal, while a suppressed offer loses work that was recorded specifically
  * so it could not be lost.
+ *
+ * Accepting an offer is tested here too, because it is the same rule: the hook
+ * owns HOW a recovery point is applied, so the entry and Single editors cannot
+ * answer that differently from each other.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { useForm } from "react-hook-form";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+import type { VersionScope } from "@admin/services/versionApi";
 
 const { getSpy } = vi.hoisted(() => ({ getSpy: vi.fn() }));
 
@@ -21,11 +28,31 @@ import { useAutosaveRecovery } from "../useAutosaveRecovery";
 
 const SCOPE = { kind: "collection" as const, slug: "posts", entryId: "e1" };
 
+/** What the server holds, so a restore can be told apart from the baseline. */
+const STORED = { title: "stored" };
+
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+/**
+ * The hook against a real form, because the restore path is only meaningful
+ * through one: a stubbed `reset` would let a test pass while the values never
+ * reached the form, and `isDirty` is exactly the thing being asserted.
+ */
+function renderRecovery(scope: VersionScope | null) {
+  return renderHook(
+    () => {
+      const form = useForm<Record<string, unknown>>({
+        defaultValues: STORED,
+      });
+      return { form, recovery: useAutosaveRecovery({ scope, form }) };
+    },
+    { wrapper }
+  );
 }
 
 beforeEach(() => {
@@ -47,17 +74,13 @@ describe("useAutosaveRecovery", () => {
       locale: null,
     });
 
-    const { result } = renderHook(
-      () =>
-        useAutosaveRecovery({
-          scope: SCOPE,
-        }),
-      { wrapper }
-    );
+    const { result } = renderRecovery(SCOPE);
 
-    await waitFor(() => expect(result.current.offer).not.toBeNull());
-    expect(result.current.offer?.snapshot).toEqual({ title: "recovered" });
-    expect(result.current.offer?.savedAt).toEqual(
+    await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+    expect(result.current.recovery.offer?.snapshot).toEqual({
+      title: "recovered",
+    });
+    expect(result.current.recovery.offer?.savedAt).toEqual(
       new Date("2026-08-17T10:00:00.000Z")
     );
   });
@@ -65,15 +88,13 @@ describe("useAutosaveRecovery", () => {
   it("stays silent when the author has no recovery point", async () => {
     getSpy.mockResolvedValue(null);
 
-    const { result } = renderHook(() => useAutosaveRecovery({ scope: SCOPE }), {
-      wrapper,
-    });
+    const { result } = renderRecovery(SCOPE);
 
     // Waits for the ANSWER, not merely for the request. Asserting on
     // `offer === null` before the read returns is satisfied by the result not
     // having arrived, which passes whether or not the rule under test exists.
-    await waitFor(() => expect(result.current.isResolved).toBe(true));
-    expect(result.current.offer).toBeNull();
+    await waitFor(() => expect(result.current.recovery.isResolved).toBe(true));
+    expect(result.current.recovery.offer).toBeNull();
   });
 
   /**
@@ -82,11 +103,9 @@ describe("useAutosaveRecovery", () => {
    * editor open.
    */
   it("asks nothing while the document has no address", async () => {
-    const { result } = renderHook(() => useAutosaveRecovery({ scope: null }), {
-      wrapper,
-    });
+    const { result } = renderRecovery(null);
 
-    expect(result.current.offer).toBeNull();
+    expect(result.current.recovery.offer).toBeNull();
     expect(getSpy).not.toHaveBeenCalled();
   });
 
@@ -102,16 +121,61 @@ describe("useAutosaveRecovery", () => {
       locale: null,
     });
 
-    const { result } = renderHook(() => useAutosaveRecovery({ scope: SCOPE }), {
-      wrapper,
-    });
-    await waitFor(() => expect(result.current.offer).not.toBeNull());
+    const { result } = renderRecovery(SCOPE);
+    await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
 
-    result.current.dismiss();
+    act(() => result.current.recovery.dismiss());
 
-    await waitFor(() => expect(result.current.offer).toBeNull());
+    await waitFor(() => expect(result.current.recovery.offer).toBeNull());
     // No delete call exists on the mocked surface, so a dismissal that tried to
     // discard would fail loudly rather than silently destroying the row.
     expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Accepting writes the recovered values in AND leaves the form dirty.
+   *
+   * The dirty flag is the point rather than a detail: the recovered values are
+   * not what the server holds, so a restore that reset the baseline would let
+   * the unsaved-changes guard stay quiet and the author navigate away believing
+   * the work was stored. Asserted on `isDirty` rather than on a spy, because a
+   * spy records that `reset` was called and not what it did.
+   */
+  it("restores the offered values and leaves the form dirty", async () => {
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+
+    const { result } = renderRecovery(SCOPE);
+    await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+    expect(result.current.form.getValues()).toEqual(STORED);
+
+    act(() => result.current.recovery.restore());
+
+    await waitFor(() =>
+      expect(result.current.form.getValues()).toEqual({ title: "recovered" })
+    );
+    expect(result.current.form.formState.isDirty).toBe(true);
+    // Accepting also closes the offer: the banner has done its job and must not
+    // keep asking about work the author has already taken back.
+    expect(result.current.recovery.offer).toBeNull();
+  });
+
+  /**
+   * Callers wire `restore` to a control they may render before the read has
+   * come back, so it has to be safe to call with nothing on offer.
+   */
+  it("does nothing when restore is called with no offer", async () => {
+    getSpy.mockResolvedValue(null);
+
+    const { result } = renderRecovery(SCOPE);
+    await waitFor(() => expect(result.current.recovery.isResolved).toBe(true));
+
+    act(() => result.current.recovery.restore());
+
+    expect(result.current.form.getValues()).toEqual(STORED);
+    expect(result.current.form.formState.isDirty).toBe(false);
   });
 });
