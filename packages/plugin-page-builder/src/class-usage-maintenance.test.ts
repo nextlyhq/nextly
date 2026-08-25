@@ -15,6 +15,7 @@ import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import {
   blockDocumentFields,
   forgetClassUsage,
+  forgetRemovedFields,
   maintainClassUsage,
   type ClassUsageIndexStore,
 } from "./class-usage-maintenance";
@@ -300,5 +301,64 @@ describe("forgetting a document that no longer exists", () => {
       "delete:r1",
       "delete:r2",
     ]);
+  });
+});
+
+describe("forgetting fields the document no longer has", () => {
+  it("removes rows for a path that has disappeared from the row", async () => {
+    // A repeater shrinking from two entries to one removes `sections[1].body`
+    // from the value entirely, so the walk over the new row cannot name it and
+    // maintenance is never invoked for it. Its rows would survive for ever,
+    // because nothing will visit that path again.
+    const calls: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async args => {
+        calls.push(`find:where=${Object.keys(args.where).sort().join(",")}`);
+        return {
+          items: [
+            { ...page, field: "sections[0].body", id: "r1", classId: "hero" },
+            { ...page, field: "sections[1].body", id: "r2", classId: "card" },
+          ],
+          meta: { hasNext: false },
+        };
+      },
+      create: async () => ({}),
+      delete: async args => {
+        calls.push(`delete:${args.id}`);
+        return {};
+      },
+    };
+
+    const report = await forgetRemovedFields({
+      store,
+      document: { scope: "collection", entity: "pages", entityKey: "page-1" },
+      presentFields: ["sections[0].body"],
+    });
+
+    expect(report).toEqual({ removed: 1 });
+    // Queried by the DOCUMENT, not by one subject: a query naming `field` could
+    // never return the row whose field has gone.
+    expect(calls).toEqual(["find:where=entity,entityKey,scope", "delete:r2"]);
+  });
+
+  it("keeps every row whose field is still present", async () => {
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [{ ...page, field: "content", id: "r1", classId: "hero" }],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async () => {
+        throw new Error("must not delete a field that is still there");
+      },
+    };
+
+    const report = await forgetRemovedFields({
+      store,
+      document: { scope: "collection", entity: "pages", entityKey: "page-1" },
+      presentFields: ["content"],
+    });
+
+    expect(report).toEqual({ removed: 0 });
   });
 });

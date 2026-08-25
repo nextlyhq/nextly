@@ -51,4 +51,8 @@ forced rather than chosen: a row id does not exist until the insert has happened
 pre-write phase can name the document it would be indexing. Those phases run POST-COMMIT, so
 a failure there cannot roll the document back and must not be raised as one - reporting a
 failed save for a save that succeeded is the most confusing direction a failure can take.
-The rebuild is what repairs the record instead.
+
+There is NO repair path for a swallowed failure yet. The only exported rebuild rewrites the
+legacy per-page `usedClasses` column and never reads or writes `nx_pb_class_usage`, so a
+failed insert leaves the subject stale until its document is next saved. Do not wire the
+write path on the strength of a rebuild that has not been built.

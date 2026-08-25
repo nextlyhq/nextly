@@ -260,9 +260,10 @@ function readStoredRow(item: unknown): StoredClassUsageRow | null {
  * expected values onto whatever came back is precisely the operation that hides
  * that. Its removals would then delete another document's rows.
  */
-async function storedRowsFor(
+async function storedRowsWhere(
   store: ClassUsageIndexStore,
-  subject: ClassUsageSubject
+  where: Record<string, { equals: string }>,
+  describe: string
 ): Promise<StoredClassUsageRow[]> {
   const rows: StoredClassUsageRow[] = [];
   // Bounded by PAGES REQUESTED rather than by rows collected: a store answering
@@ -272,13 +273,7 @@ async function storedRowsFor(
   for (let page = 1; page <= MAX_PAGES; page++) {
     const result = await store.find({
       collection: CLASS_USAGE_INDEX_SLUG,
-      where: {
-        scope: { equals: subject.scope },
-        entity: { equals: subject.entity },
-        entityKey: { equals: subject.entityKey },
-        field: { equals: subject.field },
-        locale: { equals: subject.locale },
-      },
+      where,
       limit: PAGE_SIZE,
       page,
       // Ordered by a column these writes cannot move. Offset paging reads
@@ -297,9 +292,38 @@ async function storedRowsFor(
   // against reads every unread row as a reference the document has dropped.
   throw new Error(
     `Class-usage index still reported more rows after ${MAX_PAGES} pages of ` +
-      `${PAGE_SIZE} for ` +
-      `${subject.scope}:${subject.entity}:${subject.entityKey}:${subject.field}, ` +
+      `${PAGE_SIZE} for ${describe}, ` +
       `which is more than any document can reference — the store's paging is wrong.`
+  );
+}
+
+/** Every column that identifies one subject, as a query. */
+function subjectWhere(
+  subject: ClassUsageSubject
+): Record<string, { equals: string }> {
+  return {
+    scope: { equals: subject.scope },
+    entity: { equals: subject.entity },
+    entityKey: { equals: subject.entityKey },
+    field: { equals: subject.field },
+    locale: { equals: subject.locale },
+  };
+}
+
+/** How a subject reads in an error, so a refusal names what it was reading. */
+function describeSubject(subject: ClassUsageSubject): string {
+  return `${subject.scope}:${subject.entity}:${subject.entityKey}:${subject.field}`;
+}
+
+/** The rows the index currently holds for one subject. */
+async function storedRowsFor(
+  store: ClassUsageIndexStore,
+  subject: ClassUsageSubject
+): Promise<StoredClassUsageRow[]> {
+  return storedRowsWhere(
+    store,
+    subjectWhere(subject),
+    describeSubject(subject)
   );
 }
 
@@ -377,4 +401,52 @@ export async function forgetClassUsage(args: {
     });
   }
   return { removed: stored.length };
+}
+
+/**
+ * Drop rows for fields the document no longer has.
+ *
+ * The walk over a written row reports the paths that are THERE. It cannot
+ * report one that has gone: a repeater shrinking from two entries to one
+ * removes `sections[1].body` from the value entirely, so no candidate names it
+ * and maintenance is never invoked for it. Its rows then survive the edit, and
+ * a class only that entry applied goes on reading as used — for ever, because
+ * nothing will ever visit that path again.
+ *
+ * Answerable only against the INDEX, which is the one place the departed path
+ * still exists. Every row for the document is read and any whose field is not
+ * among the paths present now is removed.
+ *
+ * Safe because the `after*` phases carry the whole stored row rather than the
+ * caller's patch — `data: entry` is the record the database returned — so
+ * "not present" means the document really does not have it, rather than that
+ * this particular write did not mention it. A caller handing over a PARTIAL
+ * document would delete the rows of every field it omitted.
+ */
+export async function forgetRemovedFields(args: {
+  store: ClassUsageIndexStore;
+  /** The document, without the field and locale a subject also carries. */
+  document: Pick<ClassUsageSubject, "scope" | "entity" | "entityKey">;
+  /** Every blocks-field path the stored row holds now. */
+  presentFields: readonly string[];
+}): Promise<{ removed: number }> {
+  const { document } = args;
+  const rows = await storedRowsWhere(
+    args.store,
+    {
+      scope: { equals: document.scope },
+      entity: { equals: document.entity },
+      entityKey: { equals: document.entityKey },
+    },
+    `${document.scope}:${document.entity}:${document.entityKey}`
+  );
+
+  const present = new Set(args.presentFields);
+  let removed = 0;
+  for (const row of rows) {
+    if (present.has(row.field)) continue;
+    await args.store.delete({ collection: CLASS_USAGE_INDEX_SLUG, id: row.id });
+    removed += 1;
+  }
+  return { removed };
 }
