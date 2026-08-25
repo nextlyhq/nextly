@@ -123,12 +123,20 @@ describe("a preview compile", () => {
       previewContainer: PREVIEW_VIEWPORT_CONTAINER,
     });
 
-    expect(ruleFor(contexts, "card-narrow")).toBe(
-      `@container ${UNPREVIEWABLE_CONTAINER} (max-width: 400px)`
-    );
-    expect(ruleFor(contexts, "card-wide")).toBe(
-      `@container ${UNPREVIEWABLE_CONTAINER} (min-width: 0)`
-    );
+    /*
+     * An UNSATISFIABLE condition, not merely an unused name. A CSS identifier
+     * cannot be reserved globally — blocks render host-defined markup and
+     * stylesheets, so anything may declare `container-name: nx-not-previewable`,
+     * and a rule kept inert only by nobody using that name becomes live the
+     * moment somebody does. A width is never negative, so `(width < 0px)` is
+     * false against every container whatever names are in scope.
+     */
+    expect(ruleFor(contexts, "card-narrow")).toContain("(width < 0px)");
+    expect(ruleFor(contexts, "card-wide")).toContain("(width < 0px)");
+    // And the bound they would otherwise have matched on is gone entirely, so
+    // no browser can evaluate them against a real container width.
+    expect(ruleFor(contexts, "card-narrow")).not.toContain("400px");
+    expect(ruleFor(contexts, "card-wide")).not.toContain("min-width: 0");
     expect(UNPREVIEWABLE_CONTAINER).not.toBe(PREVIEW_VIEWPORT_CONTAINER);
   });
 
@@ -401,5 +409,32 @@ describe("the bound on a preview container name", () => {
 
     expect(entry).toBeDefined();
     expect(entry?.max).toBe(MAX_PREVIEW_CONTAINER_LENGTH);
+  });
+});
+
+describe("refusing an oversized name", () => {
+  it("does not scan the whole string to reach a refusal", () => {
+    /*
+     * The raw length is checked before `trim` or any other linear pass. This
+     * name is caller-controlled and is normalised again while deriving artifact
+     * identities, so the scan would recur on render paths rather than once.
+     *
+     * Asserted on the ANSWER as well as on the size, since a correct refusal is
+     * the property and the early exit is how it is reached: a megabyte of
+     * whitespace still refuses, and refuses for the length rather than for
+     * being blank after trimming.
+     */
+    const huge = " ".repeat(1_000_000) + "nx-box";
+
+    expect(previewContainerName(huge)).toBeUndefined();
+    // And a value that only fits AFTER trimming is refused too, because
+    // trimming cannot make an over-cap string legal.
+    expect(
+      previewContainerName(` ${"a".repeat(MAX_PREVIEW_CONTAINER_LENGTH)} `)
+    ).toBeUndefined();
+    // The control: at the cap with no padding, still accepted.
+    expect(previewContainerName("a".repeat(MAX_PREVIEW_CONTAINER_LENGTH))).toBe(
+      "a".repeat(MAX_PREVIEW_CONTAINER_LENGTH)
+    );
   });
 });

@@ -109,6 +109,16 @@ export interface InspectorPanelProps {
   /** The site's breakpoints, which decide which of those declarations are live. */
   breakpoints?: BreakpointSet;
   /**
+   * The container the canvas compiled its breakpoints against, when it is
+   * previewing rather than rendering at the browser's own width.
+   *
+   * Forwarded for the reason the Style tab states: which declarations are LIVE
+   * is a question about the queries the sheet was emitted under, and a panel
+   * given only the set compares the window against rules a preview compile
+   * never wrote.
+   */
+  previewContainer?: string;
+  /**
    * The site's design tokens, forwarded to the Style tab's colour controls.
    *
    * Carried rather than defaulted, as `policy` is: omitting it means the
@@ -146,6 +156,7 @@ export function InspectorPanel({
   breakpoint,
   cascade,
   breakpoints,
+  previewContainer,
   tokens,
   blocks,
 }: InspectorPanelProps): React.JSX.Element {
@@ -286,6 +297,7 @@ export function InspectorPanel({
             breakpoint={breakpoint}
             cascade={cascade}
             breakpoints={breakpoints}
+            previewContainer={previewContainer}
             tokens={tokens}
           />
         </TabsContent>

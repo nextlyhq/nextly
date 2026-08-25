@@ -51,24 +51,37 @@ describe("the preview box style", () => {
     });
   });
 
-  it("falls back to the default for a name the compiler would refuse", () => {
+  it("establishes NO container when the compiler refused the name", () => {
     /*
-     * Normalised through the compiler's own rule, so a refusal here matches a
-     * refusal there: the sheet compiles published, and a box declaring the
-     * default container for queries nobody emitted is at worst inert. Declaring
-     * the refused name instead would be a container nothing can ever query.
+     * The symmetry is the property, not a nicety. A refused name makes the
+     * compile PUBLISHED — viewport tiers emit `@media` and container tiers emit
+     * unnamed `@container` rules. A box that established a query container
+     * anyway would let those unnamed rules resolve against IT, so viewport tiers
+     * would follow the window while container tiers followed the canvas: a
+     * hybrid neither mode intends, and exactly the capture a valid preview is
+     * named to prevent.
      *
-     * The reserved keywords are included because they match an identifier's
-     * SHAPE and are still excluded from a custom identifier — a validator
-     * checking only the pattern would let them through here.
+     * Asserted as an empty object, so a caller spreading it onto a style adds
+     * nothing at all.
      */
     for (const refused of ["", "   ", "has space", "none", "initial"]) {
-      expect(previewContainerStyle(refused).containerName).toBe(
-        PREVIEW_VIEWPORT_CONTAINER
-      );
+      expect(previewContainerStyle(refused)).toEqual({});
     }
-    expect(previewContainerStyle().containerName).toBe(
-      PREVIEW_VIEWPORT_CONTAINER
-    );
+  });
+
+  it("establishes one for a name the compiler ACCEPTS, which is the control", () => {
+    /*
+     * The control. Without it, a helper returning `{}` for every input would
+     * satisfy the refusal case above while making previewing impossible — the
+     * assertion there is satisfied by absence, so its meaning depends on this.
+     */
+    expect(previewContainerStyle(PREVIEW_VIEWPORT_CONTAINER)).toEqual({
+      containerName: PREVIEW_VIEWPORT_CONTAINER,
+      containerType: "inline-size",
+    });
+    expect(PREVIEW_CONTAINER_STYLE).toEqual({
+      containerName: PREVIEW_VIEWPORT_CONTAINER,
+      containerType: "inline-size",
+    });
   });
 });

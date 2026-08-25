@@ -33,12 +33,30 @@ import {
  * content in the block direction and containing that too would collapse the
  * page's height.
  */
-export function previewContainerStyle(name?: string): {
-  readonly containerName: string;
-  readonly containerType: "inline-size";
-} {
+export function previewContainerStyle(
+  name?: string
+):
+  | { readonly containerName: string; readonly containerType: "inline-size" }
+  | Record<string, never> {
+  const resolved = previewContainerName(name);
+  /*
+   * NO container when the compiler refused the name, and that symmetry is the
+   * whole point rather than a nicety.
+   *
+   * A refused name makes the compile PUBLISHED: viewport tiers emit `@media`
+   * and container tiers emit unnamed `@container` rules. A box that established
+   * a query container anyway would let those unnamed rules resolve against IT,
+   * so viewport tiers would follow the window while container tiers followed
+   * the canvas — a hybrid neither mode intends, and precisely the capture a
+   * valid preview is named to prevent.
+   *
+   * An empty object rather than a thrown error or a null: a caller spreads this
+   * onto a style, and the honest answer for "this is not previewing" is that
+   * the box carries nothing.
+   */
+  if (resolved === undefined) return {};
   return Object.freeze({
-    containerName: previewContainerName(name) ?? PREVIEW_VIEWPORT_CONTAINER,
+    containerName: resolved,
     containerType: "inline-size",
   } as const);
 }
@@ -46,7 +64,9 @@ export function previewContainerStyle(name?: string): {
 /**
  * The style for a surface previewing under the default container name.
  *
- * The common case as a value, so a caller naming nothing does not have to call
- * a function to get the pair.
+ * For a caller that compiled with {@link PREVIEW_VIEWPORT_CONTAINER} and has no
+ * name of its own to pass.
  */
-export const PREVIEW_CONTAINER_STYLE = previewContainerStyle();
+export const PREVIEW_CONTAINER_STYLE = previewContainerStyle(
+  PREVIEW_VIEWPORT_CONTAINER
+);

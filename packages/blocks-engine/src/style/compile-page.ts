@@ -404,10 +404,22 @@ const RESERVED_CONTAINER_NAMES: ReadonlySet<string> = new Set([
  */
 export function previewContainerName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
+  /*
+   * The RAW length first, before `trim` or any other linear pass.
+   *
+   * Trimming a megabyte of whitespace to reach a refusal that was certain from
+   * the length alone is work done on every compile, and this name is
+   * caller-controlled and is normalised again while deriving artifact
+   * identities — so the scan recurs on render paths rather than once.
+   *
+   * Whitespace cannot make an over-cap string legal: trimming only shortens,
+   * and a value longer than the cap by more than its own surrounding
+   * whitespace is refused either way. Comparing raw is therefore the same
+   * answer, sooner.
+   */
+  if (value.length > MAX_PREVIEW_CONTAINER_LENGTH) return undefined;
   const name = value.trim();
-  if (name.length === 0 || name.length > MAX_PREVIEW_CONTAINER_LENGTH) {
-    return undefined;
-  }
+  if (name.length === 0) return undefined;
   if (name === UNPREVIEWABLE_CONTAINER) return undefined;
   // The CSS-wide keywords and `none`, which the grammar excludes from a
   // `<custom-ident>` however well they match its shape. Emitted, they make an
@@ -458,6 +470,20 @@ export const PREVIEW_VIEWPORT_CONTAINER = "nx-preview-viewport";
  * one and collecting a warning on every render.
  */
 export const UNPREVIEWABLE_CONTAINER = "nx-not-previewable";
+
+/**
+ * A container condition no container can satisfy.
+ *
+ * The NAME is a label and this is the guarantee. A CSS identifier cannot be
+ * reserved globally — blocks render host-defined markup and stylesheets, so
+ * anything may declare `container-name: nx-not-previewable`, and a rule kept
+ * inert only by nobody using that name becomes live the moment somebody does.
+ *
+ * A width is never negative, so `(width < 0px)` is false against every
+ * container, in every browser, whatever names are in scope. Valid syntax that
+ * evaluates false is a boundary; an unused name is a convention.
+ */
+const UNSATISFIABLE_CONDITION = "(width < 0px)";
 
 /**
  * How to emit the contexts, when the caller is not the published page.
@@ -660,9 +686,11 @@ export function breakpointContexts(
               // container breakpoint stays a known breakpoint rather than
               // becoming an unknown one.
               atRule:
-                def.maxWidth === undefined
-                  ? `${queryPrefix("container", preview)} (min-width: 0)`
-                  : `${queryPrefix("container", preview)} (max-width: ${def.maxWidth}px)`,
+                preview !== undefined
+                  ? `@container ${UNPREVIEWABLE_CONTAINER} ${UNSATISFIABLE_CONDITION}`
+                  : def.maxWidth === undefined
+                    ? `@container (min-width: 0)`
+                    : `@container (max-width: ${def.maxWidth}px)`,
             }
       );
     }

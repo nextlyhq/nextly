@@ -196,6 +196,18 @@ export interface StyleInspectorPanelProps {
    * which of them counts as authored here.
    */
   breakpoints?: BreakpointSet;
+  /**
+   * The container the page's breakpoints were compiled against, when the canvas
+   * is previewing rather than rendering at the browser's own width.
+   *
+   * Carried because this panel decides which declarations are LIVE, and that is
+   * a question about the queries the sheet was EMITTED under. Given only the
+   * breakpoint set, it compares the window against `@media` rules a preview
+   * compile never wrote — a confident wrong answer rather than a stale one,
+   * since a narrow admin window then reports the small breakpoints live while a
+   * wide canvas box is showing the large ones.
+   */
+  previewContainer?: string;
 }
 
 export function StyleInspectorPanel({
@@ -206,6 +218,7 @@ export function StyleInspectorPanel({
   breakpoint,
   cascade,
   breakpoints,
+  previewContainer,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -220,7 +233,7 @@ export function StyleInspectorPanel({
     {}
   );
   const prefersDark = usePrefersDark();
-  const matched = useMatchedBreakpoints(breakpoints);
+  const matched = useMatchedBreakpoints(breakpoints, previewContainer);
 
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
@@ -476,11 +489,23 @@ function usePrefersDark(): boolean {
  * mismatch.
  */
 function useMatchedBreakpoints(
-  breakpoints: BreakpointSet | undefined
+  breakpoints: BreakpointSet | undefined,
+  previewContainer: string | undefined
 ): readonly BreakpointId[] {
+  /*
+   * The emission the sheet was compiled under, carried so this asks the SAME
+   * queries. Without it the window is compared against `@media` rules a preview
+   * compile never wrote, which is not a stale answer but a confident wrong one:
+   * a narrow admin window reports the small breakpoints live while a wide canvas
+   * box is showing the large ones.
+   */
+  const options = React.useMemo(
+    () => (previewContainer === undefined ? undefined : { previewContainer }),
+    [previewContainer]
+  );
   const never = React.useCallback(() => false, []);
   const [matches, setMatches] = React.useState<readonly BreakpointId[]>(() =>
-    matchedBreakpoints(breakpoints, never)
+    matchedBreakpoints(breakpoints, never, options)
   );
   React.useEffect(() => {
     // Detected by CALLABILITY rather than presence, the lesson `usePrefersDark`
@@ -493,21 +518,22 @@ function useMatchedBreakpoints(
       return;
     }
     const ask = (query: string): boolean => window.matchMedia(query).matches;
-    const read = (): void => setMatches(matchedBreakpoints(breakpoints, ask));
+    const read = (): void =>
+      setMatches(matchedBreakpoints(breakpoints, ask, options));
     read();
     /*
      * Subscribed to every emitted query, not to a resize. A resize fires
      * continuously and would re-measure on each frame of a drag, while a media
      * query change event fires exactly when an answer here would differ.
      */
-    const lists = breakpointQueries(breakpoints).map(query =>
+    const lists = breakpointQueries(breakpoints, options).map(query =>
       window.matchMedia(query)
     );
     for (const list of lists) list.addEventListener("change", read);
     return () => {
       for (const list of lists) list.removeEventListener("change", read);
     };
-  }, [breakpoints]);
+  }, [breakpoints, options]);
   return matches;
 }
 
