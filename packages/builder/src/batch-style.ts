@@ -28,6 +28,7 @@
  * @module batch-style
  */
 
+import { measureBytes } from "@nextlyhq/blocks-engine";
 import type {
   BlockNode,
   StyleValue,
@@ -254,12 +255,41 @@ function batchPolicy(policy: StylePolicy | undefined): StylePolicy | undefined {
   };
 }
 
+/**
+ * How many bytes this op adds to the node it targets, or takes away.
+ *
+ * EXACT rather than estimated: a style op replaces the node'"'"'s whole `styles`
+ * envelope, so the difference between what the patch carries and what the node
+ * holds today is the difference the document will see. Nothing here is a proxy
+ * for size — measuring the op itself, or counting keys, would order by
+ * something correlated with the answer instead of by the answer.
+ *
+ * Measured with the engine'"'"'s own counter, which walks and stops as soon as the
+ * question is settled, rather than by serialising: a value far past any cap
+ * would otherwise be built as a string twice just to decide it is large.
+ *
+ * An unmeasurable side answers 0 — a value that cannot be sized cannot be
+ * ordered by size, and the op layer will refuse it on its own terms. Ordering
+ * is an optimisation of the PEAK, never a gate.
+ */
+function growth(node: BlockNode, op: BuilderOp): number {
+  const after = op.kind === "update" ? op.patch.styles : undefined;
+  const before = node.styles;
+  return sizeOf(after) - sizeOf(before);
+}
+
+function sizeOf(value: unknown): number {
+  if (value === undefined) return 0;
+  const measured = measureBytes(value, Number.MAX_SAFE_INTEGER);
+  return measured.exceeded ? 0 : measured.bytes;
+}
+
 /** The shared walk, so writing and clearing cannot come to differ. */
 function collect(
   nodes: readonly BlockNode[],
   build: (node: BlockNode) => ReturnType<typeof styleWriteOp>
 ): BatchStyleWrite {
-  const ops: BuilderOp[] = [];
+  const ops: { readonly op: BuilderOp; readonly delta: number }[] = [];
   // Keyed on every field an issue carries, so two findings that differ only in
   // `path` or `suggestion` both survive. `code` and `message` alone would merge
   // the same complaint about two different sub-values into one.
@@ -290,7 +320,32 @@ function collect(
     // `null` is the value already being there, which is not a refusal and not
     // an op. Six blocks where two already match produce four ops, and the two
     // are as successful as the four.
-    if (result.op !== null) ops.push(result.op);
+    if (result.op !== null)
+      ops.push({ op: result.op, delta: growth(node, result.op) });
   }
-  return { ops, refused: undefined, warnings: [...warnings.values()] };
+  // SHRINKING FIRST, which is what keeps the gesture'"'"'s outcome independent of
+  // the order the author happened to select in.
+  //
+  // The editor applies a group by folding it, and every step is judged against
+  // the document'"'"'s byte cap — as it must be, since a document that transiently
+  // breaks its own invariant is one whose UNDO may not be applicable. So a
+  // selection sitting at the cap, where one block grows to the shared value and
+  // another shrinks by more, was refused when the growing block came first and
+  // accepted when it came second, for the same resulting document.
+  //
+  // Sound to reorder HERE, where it is not sound in general: these ops target
+  // DISTINCT nodes — one per selected block — so no two of them touch the same
+  // subtree and the resulting document is the same whatever order they run in.
+  // Only the peak size along the way changes, and taking the reductions first
+  // makes that peak the lowest any order can reach.
+  //
+  // A stable sort, so blocks that cost the same keep selection order and the
+  // ops a reader sees still line up with the selection they came from.
+  return {
+    ops: [...ops]
+      .sort((left, right) => left.delta - right.delta)
+      .map(entry => entry.op),
+    refused: undefined,
+    warnings: [...warnings.values()],
+  };
 }

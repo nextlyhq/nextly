@@ -342,6 +342,71 @@ describe("the ops that change a whole selection", () => {
     ).toEqual({ kind: "same", value: { blockStart: "1px", blockEnd: "2px" } });
   });
 
+  it("puts the SHRINKING blocks first, so selection order cannot decide it", () => {
+    /*
+     * The editor folds a group and judges every step against the document's
+     * byte cap — as it must, since a document that transiently breaks its own
+     * invariant is one whose UNDO may not be applicable. So a selection at the
+     * cap, where one block grows to the shared value and another shrinks by
+     * more, was refused when the growing block came first and accepted when it
+     * came second, for the same resulting document.
+     *
+     * Reordering is sound HERE and not in general: these ops target DISTINCT
+     * nodes, so the resulting document is the same whatever order they run in
+     * and only the peak along the way changes.
+     *
+     * Asserted on the ORDER of the ops, which is the thing this decides. The
+     * fixture puts the growing block first in the selection so that selection
+     * order and cost order genuinely disagree — a fixture where they already
+     * agree passes whether or not anything sorts.
+     */
+    const small = padNode("grows", { blockStart: "1px" });
+    const large = padNode("shrinks", {
+      blockStart: "1px",
+      blockEnd: "2px",
+      inlineStart: "3px",
+      inlineEnd: "4px",
+    });
+
+    // Population first: the selection really is growing-block-first, and the
+    // two blocks really do differ in what they hold.
+    expect([small.id, large.id]).toEqual(["grows", "shrinks"]);
+
+    const { ops, refused } = batchStyleWriteOps([small, large], PAD, {
+      blockStart: "9px",
+      blockEnd: "9px",
+    } as never);
+
+    expect(refused).toBeUndefined();
+    expect(ops).toHaveLength(2);
+    // The block that gets smaller is written first.
+    expect(ops.map(op => (op as { id: string }).id)).toEqual([
+      "shrinks",
+      "grows",
+    ]);
+  });
+
+  it("keeps selection order when the blocks cost the same", () => {
+    /*
+     * The control, and the reason the sort is stable: blocks that change the
+     * document by the same amount must stay in the order the author selected
+     * them, or the ops a reader sees stop lining up with the selection they
+     * came from. A sort that reordered equals would pass the test above and
+     * scramble every ordinary batch.
+     */
+    const first = padNode("first", { blockStart: "1px" });
+    const second = padNode("second", { blockStart: "1px" });
+
+    const { ops } = batchStyleWriteOps([first, second], PAD, {
+      blockStart: "2px",
+    } as never);
+
+    expect(ops.map(op => (op as { id: string }).id)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
   it("asks the SITE about a token once for the whole selection", () => {
     /*
      * `kindOf` is the site's own lookup and may be expensive — a table read, a

@@ -3000,7 +3000,7 @@ describe("what the two value comparisons each treat as the same value", () => {
   });
 });
 
-describe("a group of ops judged against the caps once", () => {
+describe("a group of ops applied as one edit", () => {
   /**
    * A node whose single prop is `size` bytes of text, so a document's size can
    * be steered precisely enough to sit either side of a cap.
@@ -3022,35 +3022,6 @@ describe("a group of ops judged against the caps once", () => {
       patch: { props: { text: "x".repeat(size) } },
     } as BuilderOp;
   }
-
-  it("accepts a batch that ends smaller, in EITHER order", () => {
-    /*
-     * The defect, and the reason it is worth a test rather than a comment: the
-     * outcome depended on the order the ops arrived in.
-     *
-     * `grow` takes the document past the cap on its own; `shrink` takes back
-     * more than `grow` added. Folding op by op measured the intermediate, so
-     * putting `grow` first refused an edit whose RESULT is smaller than what
-     * the document started from — while the same two ops the other way round
-     * succeeded. A multi-selection style batch is exactly this shape: one
-     * gesture, one op per selected block, in selection order.
-     */
-    const start = doc([sized("a", 200), sized("b", 2_000)]);
-    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
-    const grow = resize("a", 1_500);
-    const shrink = resize("b", 100);
-
-    // Population before the property: the intermediate really does cross the
-    // cap, so this fixture exercises the mechanism rather than passing because
-    // nothing was ever near a limit.
-    expect(() => applyOp(start, grow, limits)).toThrow(OpError);
-
-    const growFirst = applyOps(start, [grow, shrink], limits);
-    const shrinkFirst = applyOps(start, [shrink, grow], limits);
-
-    // Same document either way, which is what makes the order irrelevant.
-    expect(growFirst.document.nodes).toEqual(shrinkFirst.document.nodes);
-  });
 
   it("still refuses a group whose RESULT crosses the cap", () => {
     /*
@@ -3138,28 +3109,6 @@ describe("a group of ops judged against the caps once", () => {
     expect(() => applyOps(start, [insert, remove], limits)).toThrow(OpError);
   });
 
-  it("refuses a group that holds far more than a document may, in passing", () => {
-    /*
-     * An op's inverse SNAPSHOTS the value it replaced, so a group free to write
-     * an arbitrarily large intermediate leaves that value alive in undo history
-     * behind a final document that fits. The ceiling bounds what a group may
-     * transiently hold — the document it started with, plus one more document's
-     * worth — so the oversized value is refused as it is written rather than
-     * retained afterwards.
-     */
-    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
-    const start = doc([sized("a", 100)]);
-
-    // Population: the FINAL document here is tiny and would pass the end check
-    // on its own, so a refusal is about the transient, not the result.
-    const finalOnly = applyOps(start, [resize("a", 120)], limits);
-    expect(finalOnly.document.nodes).toHaveLength(1);
-
-    expect(() =>
-      applyOps(start, [resize("a", 50_000), resize("a", 120)], limits)
-    ).toThrow(OpError);
-  });
-
   it("records nothing when the group leaves the document as it found it", () => {
     /*
      * Every op changed something and the net effect is still nothing. An entry
@@ -3181,34 +3130,6 @@ describe("a group of ops judged against the caps once", () => {
     expect(applied.document.nodes).toEqual(start.nodes);
     // ...so there is nothing for the caller to record.
     expect(applied.inverses).toEqual([]);
-  });
-
-  it("bounds what an undo entry has to remember, not just each step", () => {
-    /*
-     * Bounding each intermediate does not bound their SUM. Every op's inverse
-     * snapshots the value it replaced, so a group whose steps each sit just
-     * under the raised ceiling hands back an undo entry holding many times what
-     * any document may hold — and repeated batches accumulate that in history
-     * behind final documents that all fit.
-     *
-     * Ten updates of one node, each a little under twice the cap, ending on a
-     * small value: every document along the way is inside the ceiling and the
-     * result is tiny, and it is still refused.
-     */
-    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
-    const start = doc([sized("a", 100)]);
-    const many = [
-      ...Array.from({ length: 10 }, (_, index) => resize("a", 4_000 + index)),
-      resize("a", 120),
-    ];
-
-    // Population first: a single step of that size IS allowed by the ceiling,
-    // so the refusal is about the aggregate rather than about any one step.
-    expect(() =>
-      applyOps(start, [resize("a", 4_000), resize("a", 120)], limits)
-    ).not.toThrow();
-
-    expect(() => applyOps(start, many, limits)).toThrow(OpError);
   });
 
   it("leaves a single-op group on the plain path", () => {
