@@ -72,13 +72,31 @@ const aControl = (page: Page) =>
     .first();
 
 /**
- * Both halves of "the page is ready": every placeholder gone, and a real
- * control present.
+ * The error branch, which every one of these routes renders INSIDE the shell.
+ *
+ * `Alert` defaults to `role="alert"`, so this is asked of the role rather than
+ * of the copy each route happens to use.
  */
-async function awaitLoaded(page: Page) {
-  await expect(shellOf(page)).toBeVisible();
-  await expect(skeletons(page)).toHaveCount(0, { timeout: 20_000 });
-  await expect(aControl(page)).toBeVisible();
+const errors = (page: Page) => shellOf(page).getByRole("alert");
+
+/**
+ * The page is in its LOADED state — asserted as all three of the states these
+ * routes settle into, not as one of them.
+ *
+ * Each clause is here because a check without it passed on a page that was not
+ * the editor: the skeleton renders the same shell, the error branch removes
+ * the skeleton and keeps a Back button, and a page that rendered nothing at
+ * all satisfies both absences perfectly. So absence is never the whole test —
+ * a real control has to be present as well.
+ *
+ * `timeout` is a parameter so the tests below can ask this to fail fast while
+ * the sweep still waits properly for a cold route.
+ */
+async function awaitLoaded(page: Page, timeout = 20_000) {
+  await expect(shellOf(page)).toBeVisible({ timeout });
+  await expect(skeletons(page)).toHaveCount(0, { timeout });
+  await expect(errors(page)).toHaveCount(0, { timeout });
+  await expect(aControl(page)).toBeVisible({ timeout });
 }
 
 /**
@@ -261,6 +279,36 @@ test.describe("a measured page keeps its children inside the page", () => {
       expect([...gutters].sort()).toEqual(["1.5rem", "1rem", "2rem"]);
     });
   }
+
+  // Readiness is the part of this file that has been wrong most often, and
+  // always the same way: satisfied by a page that was not the editor. These
+  // two force the states it must refuse. Without them the sweep's green is
+  // equally consistent with a readiness check that accepts anything.
+  test("readiness refuses a page that is still loading", async ({ page }) => {
+    await page.route("**/api/collections/schema/**", async route => {
+      await new Promise(resolve => setTimeout(resolve, 10_000));
+      await route.continue();
+    });
+    await gotoAdmin(page, "/collections/posts/create");
+
+    await expect(awaitLoaded(page, 2_000)).rejects.toThrow();
+  });
+
+  test("readiness refuses a page that failed to load", async ({ page }) => {
+    // The state the skeleton check cannot see: placeholders are gone, a Back
+    // button is mounted, and the editor never rendered.
+    await page.route("**/api/collections/schema/**", route =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { message: "forced" } }),
+      })
+    );
+    await gotoAdmin(page, "/collections/posts/create");
+    await expect(errors(page).first()).toBeVisible();
+
+    await expect(awaitLoaded(page, 2_000)).rejects.toThrow();
+  });
 
   test("the loading skeleton keeps its children inside the page", async ({
     page,
