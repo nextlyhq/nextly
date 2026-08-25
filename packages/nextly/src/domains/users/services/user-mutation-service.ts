@@ -1370,7 +1370,7 @@ export class UserMutationService extends BaseService {
     userId: number | string,
     actor?: RequestActor
   ): Promise<void> {
-    const { users, accounts, userRoles } = this.tables;
+    const { users, accounts, userRoles, media } = this.tables;
 
     // Asked once, before the transaction opens, because a failed statement
     // aborts an open Postgres transaction and there would be no way back.
@@ -1427,6 +1427,26 @@ export class UserMutationService extends BaseService {
       deliveriesExist = await this.adapter.tableExists("email_deliveries");
     } catch {
       deliveriesExist = true;
+    }
+
+    // Asked out here for the same reason, and treated as present when the
+    // probe cannot answer, for the same reason too. `media.uploaded_by`
+    // cascades, so skipping the detach on a transient metadata failure would
+    // delete the account and let the database destroy its files — silently and
+    // permanently, since no later run revisits a deletion that has happened.
+    // Attempting it against a genuinely absent table fails the UPDATE and takes
+    // the deletion with it, which is the invariant the audit erasure protects:
+    // an account is never removed while data belonging to it is left behind.
+    //
+    // Databases without the table exist. The SQLite fallback bootstrap in
+    // earlier releases created a subset of the core tables, and neither
+    // first-run setup nor boot repairs an existing database that is missing
+    // one.
+    let mediaExists: boolean;
+    try {
+      mediaExists = await this.adapter.tableExists("media");
+    } catch {
+      mediaExists = true;
     }
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
@@ -1524,6 +1544,29 @@ export class UserMutationService extends BaseService {
             new Date(),
             unstampedAuditTables
           );
+        }
+
+        // Detach the account's uploads before the row goes.
+        //
+        // `media.uploaded_by` declares ON DELETE CASCADE, so without this the
+        // database destroys every image, document and video the account ever
+        // added — beneath every service, hook and access check, with nothing
+        // able to intercept it and nothing to warn the admin who asked only to
+        // remove a person. An asset library is shared property: a logo uploaded
+        // by someone who has since left is still the site's logo, and the
+        // attribution is the only part that belonged to them.
+        //
+        // Nulling the column first leaves the cascade nothing to act on, which
+        // is why this is a write rather than a change to the constraint: the
+        // rule itself cannot be altered on an existing PostgreSQL database
+        // without resolver support the schema pipeline does not have yet.
+        // Inside the transaction, so files are never detached from an account
+        // whose removal then rolls back.
+        if (mediaExists) {
+          await txDb
+            .update(media)
+            .set({ uploadedBy: null })
+            .where(eq(media.uploadedBy as Column, userId));
         }
 
         // Strip the person out of the delivery log for the same reason, and in
