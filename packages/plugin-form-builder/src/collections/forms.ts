@@ -22,6 +22,13 @@ import {
 
 import type { ResolvedFormBuilderConfig } from "../types";
 import { parseRedirectReference } from "../utils/redirect-reference";
+import {
+  applyRedirectPattern,
+  type RedirectRelationships,
+  type RedirectTargetDocument,
+} from "../utils/redirect-target";
+
+import { accessWithDefaults } from "./access-defaults";
 
 // ============================================================
 // Type Augmentation for Custom Admin Components
@@ -85,24 +92,6 @@ interface ExtendedCollectionConfig extends Omit<CollectionConfig, "admin"> {
  * ```
  */
 /**
- * Whether a stored value names a page this plugin is configured to reach.
- *
- * `parseRedirectReference` answers which document a value names; it trusts an
- * explicit `relationTo` on purpose, because a form validated without plugin
- * config cannot judge one. Here the configuration IS known, so membership is
- * checked too: a reference into a collection with no URL pattern is a value
- * the resolver cannot use, and accepting it saves a form whose every
- * submission ends nowhere.
- */
-function namesAConfiguredPage(
-  value: unknown,
-  collections: readonly string[]
-): boolean {
-  const reference = parseRedirectReference(value, collections);
-  return reference !== null && collections.includes(reference.collection);
-}
-
-/**
  * The plugin's hooks, with a host's own appended per phase.
  *
  * A host may pass `formOverrides.hooks`, and the trailing `...overrides` spread
@@ -156,31 +145,101 @@ function withHostHooks<T>(
  * would reject every partial update — renaming a form — for a setting it never
  * touched.
  */
-function assertRedirectTargetUsable(
+/**
+ * The settings a write is SETTING to a page redirect, or null for every other
+ * write.
+ *
+ * `setsSettings` mirrors the fields rule above. An update carries the patch
+ * rather than the merged document, so treating an absent `settings` as empty
+ * would refuse a rename for a setting it never touched.
+ */
+function pageRedirectSettings(
+  data: Record<string, unknown> | undefined,
+  operation: string
+): Record<string, unknown> | null {
+  if (!data) return null;
+  if (operation !== "create" && data.settings === undefined) return null;
+  const settings = data.settings as Record<string, unknown> | undefined;
+  return settings?.confirmationType === "relationship" ? settings : null;
+}
+
+function assertRedirectTargetNamed(
   data: Record<string, unknown> | undefined,
   operation: string,
-  redirectCollections: readonly string[]
+  patterns: RedirectRelationships
+): { collection: string; id: string } | null {
+  const settings = pageRedirectSettings(data, operation);
+  if (!settings) return null;
+
+  const collections = Object.keys(patterns);
+  const reference = parseRedirectReference(settings.redirectPage, collections);
+  if (!reference || !collections.includes(reference.collection)) {
+    throw redirectRefusal(
+      "Choose a page to redirect to, or pick a different confirmation."
+    );
+  }
+  return reference;
+}
+
+/**
+ * The same rule, plus the one question that needs a read: can this document
+ * actually fill its collection's pattern?
+ *
+ * Split from the shape check so the cheap half stays synchronous — the early
+ * `beforeValidate` call wants an error, not a database round trip, and making
+ * that hook async changes what a caller has to do to observe its rejection.
+ *
+ * Best effort by design: `req.nextly` is optional, and a slug can be emptied
+ * AFTER this form is saved. The submit path keeps its own check and its log
+ * line. What this buys is telling the author NOW, while the page they picked
+ * is in front of them, rather than leaving a form that saves cleanly and
+ * redirects nobody.
+ */
+async function assertRedirectTargetUsable(
+  context: HookContext,
+  patterns: RedirectRelationships
 ) {
-  const setsSettings = operation === "create" || data?.settings !== undefined;
-  const settings = data?.settings as Record<string, unknown> | undefined;
-  if (
-    !data ||
-    !setsSettings ||
-    settings?.confirmationType !== "relationship" ||
-    namesAConfiguredPage(settings.redirectPage, redirectCollections)
-  ) {
+  const reference = assertRedirectTargetNamed(
+    context.data,
+    context.operation,
+    patterns
+  );
+  if (!reference) return;
+
+  const nextly = context.req?.nextly;
+  if (!nextly) return;
+
+  const target = (await nextly
+    .findByID({ collection: reference.collection, id: reference.id })
+    .catch(() => null)) as RedirectTargetDocument | null;
+
+  if (!target) {
+    throw redirectRefusal(
+      `That page no longer exists in "${reference.collection}". Pick another.`
+    );
+  }
+  // A pattern may be a FUNCTION, which is host code and can throw. Authoring
+  // must not be blocked by that: the submission path contains the same throw
+  // and degrades to no redirect with a log line, so a broken pattern costs a
+  // destination rather than the ability to edit forms.
+  let url: string | undefined;
+  try {
+    url = applyRedirectPattern(patterns[reference.collection], target);
+  } catch {
     return;
   }
 
-  throw NextlyError.validation({
-    errors: [
-      {
-        path: "settings.redirectPage",
-        code: "REQUIRED",
-        message:
-          "Choose a page to redirect to, or pick a different confirmation.",
-      },
-    ],
+  if (!url) {
+    throw redirectRefusal(
+      "That page has no URL yet — give it a slug, or pick another page."
+    );
+  }
+}
+
+/** One shape for every refusal this rule makes, so callers see one field. */
+function redirectRefusal(message: string) {
+  return NextlyError.validation({
+    errors: [{ path: "settings.redirectPage", code: "REQUIRED", message }],
   });
 }
 
@@ -460,18 +519,9 @@ export function formsCollection(
     },
 
     // Access control with sensible defaults
-    access: {
-      // Anyone can read forms (needed for frontend rendering)
-      read: accessOverrides?.read ?? true,
-      // Only authenticated users can create/update forms
-      create: accessOverrides?.create ?? (({ user }) => !!user),
-      update: accessOverrides?.update ?? (({ user }) => !!user),
-      // Only admins can delete forms (falls back to DB permissions)
-      delete:
-        accessOverrides?.delete ??
-        (({ roles }) =>
-          roles.includes("admin") || roles.includes("super-admin")),
-    },
+    // `read: true` — a form is public because a site renders it. The rest are
+    // the shared defaults.
+    access: accessWithDefaults(accessOverrides, { read: true }),
 
     hooks: withHostHooks(
       {
@@ -518,7 +568,11 @@ export function formsCollection(
             // Reported here so an author sees it beside the form's other
             // errors. The GUARANTEE is the trailing `beforeChange` call below,
             // which a host hook cannot run after.
-            assertRedirectTargetUsable(data, operation, redirectCollections);
+            assertRedirectTargetNamed(
+              data,
+              operation,
+              pluginConfig.redirectRelationships
+            );
 
             return data;
           },
@@ -526,13 +580,24 @@ export function formsCollection(
       },
       hookOverrides,
       {
-        // The authoritative call. A host `beforeValidate` may rewrite the
-        // payload after the check above passed, and `beforeChange` is the last
-        // phase before the write — so this is where the guarantee lives.
+        // The last COLLECTION-level phase, after every host handler in it. A
+        // host `beforeValidate` may rewrite the payload once the earlier call
+        // has passed, so the check has to run again here.
+        //
+        // It is not the last mutating point in the write, and saying so would
+        // be false: `collection-mutation-service` runs FIELD-level
+        // `beforeChange` hooks after this one, and a host may contribute a
+        // field through `formOverrides.fields`. Nothing collection-level can
+        // sit after that — the next steps are hashing and the insert. What
+        // bounds the consequence is the submit path, which resolves an
+        // unusable target to NO redirect and logs it, never to a wrong one.
         beforeChange: [
-          ({ data, operation }: HookContext) => {
-            assertRedirectTargetUsable(data, operation, redirectCollections);
-            return data;
+          async (context: HookContext) => {
+            await assertRedirectTargetUsable(
+              context,
+              pluginConfig.redirectRelationships
+            );
+            return context.data;
           },
         ],
       }

@@ -212,6 +212,54 @@ export interface FormPreviewProps {
   };
 }
 
+/**
+ * What the visitor is told after a successful submission.
+ *
+ * Its own component because the fall-through belongs to the MESSAGE branch: a
+ * confirmation this does not name is previewed as a thank-you note, which is
+ * how the page redirect came to be previewed as something it is not. Each
+ * confirmation that is not a message has to be named here.
+ */
+function Confirmation({
+  settings,
+}: {
+  settings: {
+    confirmationType?: string;
+    redirectUrl?: string;
+    successMessage?: string;
+  };
+}) {
+  const panel = "border border-border bg-muted/40 p-4 text-sm text-foreground";
+
+  if (settings.confirmationType === "redirect") {
+    return (
+      <p className={panel}>
+        The visitor would now be redirected to{" "}
+        <span className="font-mono">
+          {settings.redirectUrl || "(no redirect URL set)"}
+        </span>
+        .
+      </p>
+    );
+  }
+
+  if (settings.confirmationType === "relationship") {
+    return (
+      <p className={panel}>
+        The visitor would now be redirected to the linked page. Its URL is built
+        when the form is submitted, from the pattern the site configured for
+        that collection.
+      </p>
+    );
+  }
+
+  return (
+    <p className={panel}>
+      {settings.successMessage || "Thank you for your submission!"}
+    </p>
+  );
+}
+
 export function FormPreview({ fields, formData }: FormPreviewProps) {
   const { settings } = useFormBuilder();
   const [values, setValues] = useState<Record<string, unknown>>({});
@@ -326,29 +374,7 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
 
           {confirmed ? (
             <div className="space-y-4">
-              {/* Every confirmation the settings offer, because the fall-through
-                  belongs to the MESSAGE branch: a redirect that this did not
-                  recognise was previewed as a thank-you note while the saved
-                  form would navigate away. */}
-              {settings.confirmationType === "redirect" ? (
-                <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
-                  The visitor would now be redirected to{" "}
-                  <span className="font-mono">
-                    {settings.redirectUrl || "(no redirect URL set)"}
-                  </span>
-                  .
-                </p>
-              ) : settings.confirmationType === "relationship" ? (
-                <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
-                  The visitor would now be redirected to the linked page. Its
-                  URL is built when the form is submitted, from the pattern the
-                  site configured for that collection.
-                </p>
-              ) : (
-                <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
-                  {settings.successMessage || "Thank you for your submission!"}
-                </p>
-              )}
+              <Confirmation settings={settings} />
               <Button type="button" variant="outline" onClick={reset}>
                 Fill again
               </Button>

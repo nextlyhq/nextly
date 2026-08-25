@@ -59,6 +59,36 @@ const pagesCollection = defineCollection({
   fields: [text({ name: "title" }), text({ name: "slug" })],
 });
 
+/**
+ * Stands in for the page id a caller cannot know yet.
+ *
+ * The harness — and therefore the page — is created INSIDE the helpers below,
+ * so a test naming its target has nothing real to name at the point it writes
+ * the settings. It names this instead and the helper substitutes.
+ */
+const SEEDED_PAGE = "__seeded_page__";
+
+/** Settings with the sentinel replaced by the page that now exists. */
+function withSeededPage(
+  settings: Record<string, unknown>,
+  pageId: string
+): Record<string, unknown> {
+  const target = settings.redirectPage as
+    | { relationTo?: string; value?: unknown }
+    | undefined;
+  if (!target || target.value !== SEEDED_PAGE) return settings;
+  return { ...settings, redirectPage: { ...target, value: pageId } };
+}
+
+/** A real page in the harness, so a reference points at something. */
+async function seedPage(harness: TestNextly, slug = "thank-you") {
+  const page = await harness.nextly.create({
+    collection: "pages",
+    data: { title: "Thank you", slug },
+  });
+  return (page as { item: { id: string } }).item.id;
+}
+
 /** A form pointed at `pageId`, submitted; returns what the handler answered. */
 async function submitPointingAt(
   redirectPage: unknown,
@@ -141,11 +171,46 @@ describe("a form that redirects to a picked page", () => {
   });
 
   it("still submits, with no destination, when the target was deleted", async () => {
-    // The submission is the thing that must not fail: the visitor's data is
-    // already saved by the time a destination is looked up.
-    const result = await submitPointingAt(
-      { relationTo: "pages", value: "pg_missing" },
-      { redirectRelationships: { pages: "/{slug}" } }
+    // Reached the way it happens in practice: the form is saved against a real
+    // page and the page is deleted afterwards. A fabricated id cannot get here
+    // any more — the save reads the target and refuses one that is not there —
+    // and that difference is the point. The submission is what must not fail:
+    // the visitor's data is already saved by the time a destination is looked
+    // up.
+    const { plugin, config } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+
+    const pageId = await seedPage(current);
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "pages", value: pageId },
+        },
+      },
+    });
+
+    await current.nextly.delete({ collection: "pages", id: pageId });
+
+    const pluginContext = createPluginContext(
+      ((name: string) =>
+        name === "db" ? {} : current?.getService(name as never)) as never,
+      current.hooks as never
+    );
+
+    const result = await submitForm(
+      { formSlug: "contact", data: { message: "hello" } },
+      { pluginContext, pluginConfig: config }
     );
 
     expect(result.success).toBe(true);
@@ -197,6 +262,7 @@ describe("saving a form that redirects to a page", () => {
       collections: [pagesCollection],
     });
 
+    const pageId = await seedPage(current);
     return current.nextly.create({
       collection: "forms",
       data: {
@@ -204,7 +270,7 @@ describe("saving a form that redirects to a page", () => {
         slug: "contact",
         status: "published",
         fields: [{ type: "text", name: "message", label: "Message" }],
-        settings,
+        settings: withSeededPage(settings, pageId),
       },
     });
   }
@@ -230,10 +296,44 @@ describe("saving a form that redirects to a page", () => {
     );
   });
 
+  it("refuses a page that cannot fill the URL pattern", async () => {
+    // Shape and membership are not enough: `/{slug}` over a page whose slug is
+    // blank produces no URL, so the form would save cleanly and redirect
+    // nobody. Caught while the author still has the page in front of them.
+    // The pattern names a field these pages do not carry, which is the same
+    // condition as a blank slug and does not depend on how the store treats an
+    // empty string.
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{section}/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+
+    const blankId = await seedPage(current);
+
+    await expectRedirectRefusal(
+      current.nextly.create({
+        collection: "forms",
+        data: {
+          name: "Contact",
+          slug: "contact",
+          status: "published",
+          fields: [{ type: "text", name: "message", label: "Message" }],
+          settings: {
+            confirmationType: "relationship",
+            redirectPage: { relationTo: "pages", value: blankId },
+          },
+        },
+      })
+    );
+  });
+
   it("accepts one that names a page", async () => {
     const saved = await create({
       confirmationType: "relationship",
-      redirectPage: { relationTo: "pages", value: "pg1" },
+      redirectPage: { relationTo: "pages", value: SEEDED_PAGE },
     });
     expect(saved).toMatchObject({ item: { id: expect.any(String) } });
   });
@@ -289,18 +389,21 @@ describe("a host that overrides the forms collection's hooks", () => {
     await expectRedirectRefusal(save({ confirmationType: "relationship" }));
 
     // ...and the host's hook is genuinely wired, not merely tolerated.
+    const pageId = await seedPage(current);
     await save({
       confirmationType: "relationship",
-      redirectPage: { relationTo: "pages", value: "pg1" },
+      redirectPage: { relationTo: "pages", value: pageId },
     });
     expect(hostRan).toContain("beforeValidate");
   });
 });
 
 describe("a host hook that rewrites the payload after validation", () => {
+  let seededPageId = "";
+
   /** A host `beforeValidate` that turns a valid form into an invalid one. */
   async function saveThrough(
-    hostHook: (data: Record<string, unknown>) => void
+    hostHook: (data: Record<string, unknown>, pageId: string) => void
   ) {
     const { plugin } = formBuilder({
       redirectRelationships: { pages: "/{slug}" },
@@ -308,7 +411,7 @@ describe("a host hook that rewrites the payload after validation", () => {
         hooks: {
           beforeValidate: [
             (context: { data?: Record<string, unknown> }) => {
-              if (context.data) hostHook(context.data);
+              if (context.data) hostHook(context.data, seededPageId);
               return context.data;
             },
           ],
@@ -321,6 +424,9 @@ describe("a host hook that rewrites the payload after validation", () => {
       collections: [pagesCollection],
     });
 
+    // Seeded BEFORE the write, so the host hook has a real page to name when
+    // it rewrites the payload mid-flight.
+    seededPageId = await seedPage(current);
     return current.nextly.create({
       collection: "forms",
       data: {
@@ -358,10 +464,10 @@ describe("a host hook that rewrites the payload after validation", () => {
 
   it("accepts what the host rewrites into something usable", async () => {
     // The guarantee must not become "reject anything a host touched".
-    const saved = await saveThrough(data => {
+    const saved = await saveThrough((data, pageId) => {
       data.settings = {
         confirmationType: "relationship",
-        redirectPage: { relationTo: "pages", value: "pg1" },
+        redirectPage: { relationTo: "pages", value: pageId },
       };
     });
     expect(saved).toMatchObject({ item: { id: expect.any(String) } });
@@ -379,6 +485,7 @@ describe("updating a form that already redirects to a page", () => {
       collections: [pagesCollection],
     });
 
+    const pageId = await seedPage(current);
     const created = await current.nextly.create({
       collection: "forms",
       data: {
@@ -388,7 +495,7 @@ describe("updating a form that already redirects to a page", () => {
         fields: [{ type: "text", name: "message", label: "Message" }],
         settings: {
           confirmationType: "relationship",
-          redirectPage: { relationTo: "pages", value: "pg1" },
+          redirectPage: { relationTo: "pages", value: pageId },
         },
       },
     });
