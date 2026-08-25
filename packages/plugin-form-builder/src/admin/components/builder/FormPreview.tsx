@@ -39,6 +39,8 @@ import { isKnownFormField } from "../../../types";
 import { evaluateConditions } from "../../../utils/evaluate-conditions";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
+import { hasStoredRedirectPage } from "./FormSettingsTab";
+
 // ---------------------------------------------------------------------------
 // Field rendering
 // ---------------------------------------------------------------------------
@@ -212,6 +214,60 @@ export interface FormPreviewProps {
   };
 }
 
+/**
+ * What the visitor is told after a successful submission.
+ *
+ * Its own component because the fall-through belongs to the MESSAGE branch: a
+ * confirmation this does not name is previewed as a thank-you note, which is
+ * how the page redirect came to be previewed as something it is not. Each
+ * confirmation that is not a message has to be named here.
+ */
+function Confirmation({
+  settings,
+}: {
+  settings: {
+    confirmationType?: string;
+    redirectUrl?: string;
+    successMessage?: string;
+    redirectPage?: unknown;
+  };
+}) {
+  const panel = "border border-border bg-muted/40 p-4 text-sm text-foreground";
+
+  if (settings.confirmationType === "redirect") {
+    return (
+      <p className={panel}>
+        The visitor would now be redirected to{" "}
+        <span className="font-mono">
+          {settings.redirectUrl || "(no redirect URL set)"}
+        </span>
+        .
+      </p>
+    );
+  }
+
+  if (settings.confirmationType === "relationship") {
+    // Whether a page is actually named, not merely that this confirmation is
+    // chosen. Claiming a redirect with no page saved describes something that
+    // cannot happen: the save is refused, and a form that reached this state
+    // another way resolves to no redirect at all.
+    const named = hasStoredRedirectPage(settings);
+    return (
+      <p className={panel}>
+        {named
+          ? "The visitor would now be redirected to the linked page. Its URL is built when the form is submitted, from the pattern the site configured for that collection."
+          : "No page is selected yet, so this form has no destination. Choose one under Settings, or pick a different confirmation."}
+      </p>
+    );
+  }
+
+  return (
+    <p className={panel}>
+      {settings.successMessage || "Thank you for your submission!"}
+    </p>
+  );
+}
+
 export function FormPreview({ fields, formData }: FormPreviewProps) {
   const { settings } = useFormBuilder();
   const [values, setValues] = useState<Record<string, unknown>>({});
@@ -326,19 +382,7 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
 
           {confirmed ? (
             <div className="space-y-4">
-              {settings.confirmationType === "redirect" ? (
-                <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
-                  The visitor would now be redirected to{" "}
-                  <span className="font-mono">
-                    {settings.redirectUrl || "(no redirect URL set)"}
-                  </span>
-                  .
-                </p>
-              ) : (
-                <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
-                  {settings.successMessage || "Thank you for your submission!"}
-                </p>
-              )}
+              <Confirmation settings={settings} />
               <Button type="button" variant="outline" onClick={reset}>
                 Fill again
               </Button>

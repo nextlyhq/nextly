@@ -31,6 +31,7 @@ import type {
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
+import { normalizeRedirectRelationships } from "./utils/redirect-target";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -96,7 +97,9 @@ function resolveConfig(
       hidden: options.fields?.hidden ?? true,
     },
 
-    redirectRelationships: options.redirectRelationships || [],
+    redirectRelationships: normalizeRedirectRelationships(
+      options.redirectRelationships
+    ),
     beforeEmail: options.beforeEmail,
 
     notifications: {
@@ -356,6 +359,12 @@ export function formBuilder(
                 // Runtime-resolved collection slugs (through ctx.self, so a
                 // framework .rename() is honored too) — admin components
                 // never hardcode "forms"/"form-submissions".
+                // Names only. A pattern may be a function, which does not
+                // survive JSON and which the browser has no use for — the
+                // admin picks a document, the server builds the URL.
+                redirectCollections: Object.keys(
+                  resolvedConfig.redirectRelationships
+                ),
                 slugs: {
                   forms:
                     ctx.self.collections[resolvedConfig.formOverrides.slug] ??

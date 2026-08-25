@@ -159,6 +159,20 @@ function FormBuilderViewInner({
   // "inherit" resolves to. `null` while the config request settles.
   const [spamDefaults, setSpamDefaults] = useState<SpamDefaults | null>(null);
 
+  // Collections a form may redirect to. `null` while the config request
+  // settles, so the Settings tab can tell "not configured" from "not known
+  // yet" and not flash the option away.
+  const [redirectCollections, setRedirectCollections] = useState<
+    string[] | null
+  >(null);
+
+  // Whether the configuration request FAILED, kept apart from what it
+  // returned. A 403 or a 500 mapped to an empty list is indistinguishable from
+  // "this site configures no redirect targets" — so the Settings tab would
+  // state that as fact, hide the option, and offer no way to tell the
+  // difference or try again.
+  const [redirectConfigFailed, setRedirectConfigFailed] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     const allTypes = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
@@ -173,6 +187,7 @@ function FormBuilderViewInner({
             fields?: Record<string, boolean>;
             notifications?: NotificationDefaults;
             spamProtection?: SpamDefaults;
+            redirectCollections?: string[];
           } | null
         ) => {
           if (cancelled) return;
@@ -190,6 +205,9 @@ function FormBuilderViewInner({
           );
           setNotificationDefaults(config?.notifications ?? {});
           setSpamDefaults(config?.spamProtection ?? {});
+          // `config === null` is the failure branch: the response was not ok.
+          setRedirectConfigFailed(config === null);
+          setRedirectCollections(config?.redirectCollections ?? []);
         }
       )
       .catch(() => {
@@ -197,6 +215,8 @@ function FormBuilderViewInner({
         setEnabledTypes(allTypes);
         setNotificationDefaults({});
         setSpamDefaults({});
+        setRedirectConfigFailed(true);
+        setRedirectCollections([]);
       });
     return () => {
       cancelled = true;
@@ -278,11 +298,11 @@ function FormBuilderViewInner({
         body: JSON.stringify(saveData),
       });
       if (!response.ok) {
-        const err = (await response.json().catch(() => ({}))) as {
-          error?: { message?: string };
-        };
         throw new Error(
-          err.error?.message ?? `Failed to save form: ${response.statusText}`
+          saveErrorMessage(
+            await response.json().catch(() => ({})),
+            response.statusText
+          )
         );
       }
 
@@ -522,7 +542,11 @@ function FormBuilderViewInner({
 
       {/* Settings tab */}
       {activeTab === "settings" && (
-        <FormSettingsTab spamDefaults={spamDefaults} />
+        <FormSettingsTab
+          spamDefaults={spamDefaults}
+          redirectCollections={redirectCollections}
+          redirectConfigFailed={redirectConfigFailed}
+        />
       )}
 
       {/* Notifications tab */}
@@ -597,6 +621,35 @@ function FormBuilderViewInner({
 // ============================================================================
 // Main Component (provides context)
 // ============================================================================
+
+/**
+ * What to tell an author when a save is refused.
+ *
+ * A validation refusal carries the generic `"Validation failed."` at the top
+ * level and puts the actionable part in `data.errors`. Reporting only the top
+ * level tells an author their form was rejected and nothing about what to
+ * change — every rule in the collection produces that same sentence.
+ */
+export function saveErrorMessage(body: unknown, statusText: string): string {
+  const error = (
+    body as {
+      error?: {
+        message?: string;
+        data?: { errors?: { message?: string }[] };
+      };
+    }
+  )?.error;
+
+  const fieldIssues = (error?.data?.errors ?? [])
+    .map(issue => issue.message)
+    .filter((message): message is string => Boolean(message));
+
+  return (
+    fieldIssues.join(" ") ||
+    error?.message ||
+    `Failed to save form: ${statusText}`
+  );
+}
 
 export function FormBuilderView({
   id,

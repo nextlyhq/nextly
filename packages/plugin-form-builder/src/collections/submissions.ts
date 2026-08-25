@@ -13,6 +13,8 @@ import { text, textarea, select, json, date, relationship } from "nextly";
 
 import type { ResolvedFormBuilderConfig } from "../types";
 
+import { accessWithDefaults } from "./access-defaults";
+
 /**
  * Extended CollectionConfig with isPlugin support.
  * This extends the base CollectionConfig to include the isPlugin property.
@@ -239,19 +241,9 @@ export function submissionsCollection(
 
     // Access control with sensible defaults
     // Public can create (submit forms), but only authenticated users can read/update/delete
-    access: {
-      // Anyone can submit forms (public access)
-      create: accessOverrides?.create ?? true,
-      // Only authenticated users can view submissions
-      read: accessOverrides?.read ?? (({ user }) => !!user),
-      // Only authenticated users can update submissions (e.g., change status, add notes)
-      update: accessOverrides?.update ?? (({ user }) => !!user),
-      // Only admins can delete submissions (falls back to DB permissions)
-      delete:
-        accessOverrides?.delete ??
-        (({ roles }) =>
-          roles.includes("admin") || roles.includes("super-admin")),
-    },
+    // `create: true` — a visitor submits without an account. Reading, updating
+    // and deleting are the shared defaults.
+    access: accessWithDefaults(accessOverrides, { create: true }),
 
     hooks: {
       // Auto-set submittedAt timestamp on creation. (The edit stamp for

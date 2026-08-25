@@ -9,6 +9,8 @@
 import type { CollectionConfig, FieldDefinition, RequestContext } from "nextly";
 import type { ComponentType } from "react";
 
+import type { RedirectRelationships } from "./utils/redirect-target";
+
 // ============================================================
 // Supporting Types
 // ============================================================
@@ -173,6 +175,46 @@ export interface SubmissionDocument {
 /**
  * Configuration options for the form builder plugin.
  */
+/**
+ * Which field types the builder offers, and how each one is customised.
+ *
+ * Declared ONCE and viewed twice: the options surface takes
+ * `Partial<FormFieldToggles>` and the resolved config takes it whole, because
+ * "resolved" means exactly "every toggle now has a value". Written out twice
+ * the two lists agree until someone adds a field type to one of them.
+ */
+export interface FormFieldToggles {
+  text: boolean | Partial<FieldBlockConfig>;
+  email: boolean | Partial<FieldBlockConfig>;
+  number: boolean | Partial<FieldBlockConfig>;
+  phone: boolean | Partial<FieldBlockConfig>;
+  url: boolean | Partial<FieldBlockConfig>;
+  textarea: boolean | Partial<FieldBlockConfig>;
+  select: boolean | Partial<FieldBlockConfig>;
+  checkbox: boolean | Partial<FieldBlockConfig>;
+  radio: boolean | Partial<FieldBlockConfig>;
+  file: boolean | Partial<FieldBlockConfig>;
+  date: boolean | Partial<FieldBlockConfig>;
+  time: boolean | Partial<FieldBlockConfig>;
+  hidden: boolean | Partial<FieldBlockConfig>;
+}
+
+/** What a host may override on a collection this plugin contributes. */
+export type CollectionOverrides = Partial<CollectionConfig> & {
+  slug?: string;
+  labels?: { singular?: string; plural?: string };
+  /** Fields can be an array or a function receiving defaultFields */
+  fields?:
+    | FieldDefinition[]
+    | ((args: { defaultFields: FieldDefinition[] }) => FieldDefinition[]);
+};
+
+/** The same, once the plugin's defaults have filled in what a host omitted. */
+export type ResolvedCollectionOverrides = {
+  slug: string;
+  labels: { singular: string; plural: string };
+} & Partial<CollectionConfig>;
+
 export interface FormBuilderPluginOptions {
   /**
    * Override the default Forms collection configuration.
@@ -215,17 +257,7 @@ export interface FormBuilderPluginOptions {
    * }
    * ```
    */
-  formOverrides?: Partial<CollectionConfig> & {
-    slug?: string;
-    labels?: {
-      singular?: string;
-      plural?: string;
-    };
-    /** Fields can be an array or a function receiving defaultFields */
-    fields?:
-      | FieldDefinition[]
-      | ((args: { defaultFields: FieldDefinition[] }) => FieldDefinition[]);
-  };
+  formOverrides?: CollectionOverrides;
 
   /**
    * Override the default Form Submissions collection configuration.
@@ -272,17 +304,7 @@ export interface FormBuilderPluginOptions {
    * }
    * ```
    */
-  formSubmissionOverrides?: Partial<CollectionConfig> & {
-    slug?: string;
-    labels?: {
-      singular?: string;
-      plural?: string;
-    };
-    /** Fields can be an array or a function receiving defaultFields */
-    fields?:
-      | FieldDefinition[]
-      | ((args: { defaultFields: FieldDefinition[] }) => FieldDefinition[]);
-  };
+  formSubmissionOverrides?: CollectionOverrides;
 
   /**
    * Configure which field types are available in the form builder.
@@ -306,34 +328,31 @@ export interface FormBuilderPluginOptions {
    * }
    * ```
    */
-  fields?: {
-    text?: boolean | Partial<FieldBlockConfig>;
-    email?: boolean | Partial<FieldBlockConfig>;
-    number?: boolean | Partial<FieldBlockConfig>;
-    phone?: boolean | Partial<FieldBlockConfig>;
-    url?: boolean | Partial<FieldBlockConfig>;
-    textarea?: boolean | Partial<FieldBlockConfig>;
-    select?: boolean | Partial<FieldBlockConfig>;
-    checkbox?: boolean | Partial<FieldBlockConfig>;
-    radio?: boolean | Partial<FieldBlockConfig>;
-    file?: boolean | Partial<FieldBlockConfig>;
-    date?: boolean | Partial<FieldBlockConfig>;
-    time?: boolean | Partial<FieldBlockConfig>;
-    hidden?: boolean | Partial<FieldBlockConfig>;
-  };
+  fields?: Partial<FormFieldToggles>;
 
   /**
-   * Collections that can be used as redirect targets after form submission.
+   * Collections whose documents a form may redirect to after submission, and
+   * how each one's documents become URLs.
    *
-   * When specified, the form builder will allow selecting documents from
-   * these collections as redirect destinations.
+   * The mapping is configuration because it cannot be derived: a site's URL
+   * structure belongs to the site. `{field}` placeholders are filled from the
+   * document; a function covers a path this package cannot express.
+   *
+   * The array shorthand names the collections and takes `/{slug}` for all of
+   * them, which is the routing the page builder ships.
    *
    * @example
    * ```typescript
-   * redirectRelationships: ['pages', 'posts', 'landing-pages']
+   * redirectRelationships: ['pages']
+   *
+   * redirectRelationships: {
+   *   pages: '/{slug}',
+   *   posts: '/blog/{slug}',
+   *   docs: page => `/docs/${String(page.section)}/${String(page.slug)}`,
+   * }
    * ```
    */
-  redirectRelationships?: string[];
+  redirectRelationships?: string[] | RedirectRelationships;
 
   /**
    * Hook called before sending email notifications.
@@ -1159,39 +1178,20 @@ export interface FormSubmission {
  * Used internally by the plugin.
  */
 export interface ResolvedFormBuilderConfig {
-  formOverrides: {
-    slug: string;
-    labels: {
-      singular: string;
-      plural: string;
-    };
-  } & Partial<CollectionConfig>;
+  formOverrides: ResolvedCollectionOverrides;
 
-  formSubmissionOverrides: {
-    slug: string;
-    labels: {
-      singular: string;
-      plural: string;
-    };
-  } & Partial<CollectionConfig>;
+  formSubmissionOverrides: ResolvedCollectionOverrides;
 
-  fields: {
-    text: boolean | Partial<FieldBlockConfig>;
-    email: boolean | Partial<FieldBlockConfig>;
-    number: boolean | Partial<FieldBlockConfig>;
-    phone: boolean | Partial<FieldBlockConfig>;
-    url: boolean | Partial<FieldBlockConfig>;
-    textarea: boolean | Partial<FieldBlockConfig>;
-    select: boolean | Partial<FieldBlockConfig>;
-    checkbox: boolean | Partial<FieldBlockConfig>;
-    radio: boolean | Partial<FieldBlockConfig>;
-    file: boolean | Partial<FieldBlockConfig>;
-    date: boolean | Partial<FieldBlockConfig>;
-    time: boolean | Partial<FieldBlockConfig>;
-    hidden: boolean | Partial<FieldBlockConfig>;
-  };
+  fields: FormFieldToggles;
 
-  redirectRelationships: string[];
+  /**
+   * The collection-to-URL map, with the array shorthand already expanded.
+   *
+   * ONE shape, so nothing downstream branches on which spelling was written.
+   * The list of redirect collections is `Object.keys` of this rather than a
+   * second field beside it, which would agree with it today and drift later.
+   */
+  redirectRelationships: RedirectRelationships;
 
   beforeEmail?: FormBuilderPluginOptions["beforeEmail"];
 

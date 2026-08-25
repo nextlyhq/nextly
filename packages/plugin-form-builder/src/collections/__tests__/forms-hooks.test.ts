@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "nextly";
 
-import { formsCollection } from "../forms";
+import { formsCollection, isMissingTarget } from "../forms";
 import type { ResolvedFormBuilderConfig } from "../../types";
 
 /** The hook under test, as the collection factory produces it. */
@@ -100,5 +100,33 @@ describe("forms beforeValidate", () => {
 
   it("accepts an update that replaces the fields", () => {
     expect(() => run({ fields: [{ name: "email" }] }, "update")).not.toThrow();
+  });
+});
+
+describe("isMissingTarget", () => {
+  /**
+   * The two outcomes a failed lookup can carry, and why the difference is
+   * load-bearing: a missing page is the author's to fix and must refuse the
+   * save, while an unreadable one must not — refusing there blocks a save a
+   * retry would complete and tells the author to change a correct setting.
+   *
+   * This has been wrong in BOTH directions, so both are pinned.
+   */
+  it("treats NOT_FOUND as a missing document", () => {
+    expect(isMissingTarget({ code: "NOT_FOUND" })).toBe(true);
+  });
+
+  it("treats every other failure as unreadable, not missing", () => {
+    for (const error of [
+      { code: "DATABASE_ERROR" },
+      { code: "FORBIDDEN" },
+      new Error("connection reset"),
+      { message: "Not found." },
+      undefined,
+      null,
+      "NOT_FOUND",
+    ]) {
+      expect(isMissingTarget(error)).toBe(false);
+    }
   });
 });
