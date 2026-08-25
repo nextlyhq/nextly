@@ -9,6 +9,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  explainPreviewRedirect,
+  explainSinglePreviewRedirect,
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
   type PreviewRedirectDeps,
@@ -271,5 +273,180 @@ describe("resolveSinglePreviewRedirect", () => {
     expect(await resolveSinglePreviewRedirect({ single: "homepage" }, d)).toBe(
       "/about"
     );
+  });
+});
+
+/**
+ * Every refusal, as the deps that produce it.
+ *
+ * A table because the pair of assertions below has to run over the SAME set:
+ * one says each cause is named, the other says none of them is visible from
+ * the route. Two hand-written lists would agree on the day they were written,
+ * and the one that fell behind would be the one facing the public.
+ */
+const CAUSES: ReadonlyArray<{
+  cause: string;
+  why: string;
+  deps: () => PreviewRedirectDeps;
+}> = [
+  {
+    cause: "documentGone",
+    why: "the entry was deleted between minting and clicking",
+    deps: () => deps({ loadEntry: vi.fn().mockResolvedValue(null) }),
+  },
+  {
+    cause: "notConfigured",
+    why: "the collection declares no preview at all",
+    deps: () => deps({ loadDeclaration: vi.fn().mockResolvedValue(undefined) }),
+  },
+  {
+    cause: "unavailable",
+    why: "declared, but this document has no slug yet",
+    deps: () =>
+      deps({ loadEntry: vi.fn().mockResolvedValue({ id: "entry-1" }) }),
+  },
+  {
+    cause: "foreignOrigin",
+    why: "the declaration named another site",
+    deps: () =>
+      deps({
+        loadDeclaration: vi
+          .fn()
+          .mockResolvedValue({ url: () => "https://elsewhere.test/about" }),
+      }),
+  },
+  {
+    cause: "unresolvable",
+    why: "a protocol-relative path escapes this origin",
+    deps: () =>
+      deps({
+        loadSiteUrl: vi.fn().mockResolvedValue(null),
+        loadDeclaration: vi
+          .fn()
+          .mockResolvedValue({ url: () => "//evil.test" }),
+      }),
+  },
+  {
+    cause: "unresolvable",
+    why: "an absolute url arrives with no origin to compare it against",
+    /*
+     * The branch reached only when BOTH origins are missing: no site URL is
+     * configured AND the caller passed no request origin, while the declaration
+     * returned something absolute. There is then nothing to judge the target
+     * against, which is not the same as judging it and finding it foreign —
+     * conflating the two would tell a developer their preview URL points at
+     * another site when in fact nothing was configured to compare it to.
+     */
+    deps: () =>
+      deps({
+        loadSiteUrl: vi.fn().mockResolvedValue(null),
+        loadDeclaration: vi
+          .fn()
+          .mockResolvedValue({ url: () => "https://anywhere.test/about" }),
+      }),
+  },
+];
+
+describe("explainPreviewRedirect", () => {
+  it.each(CAUSES)("names $cause when $why", async ({ cause, deps: build }) => {
+    expect(await explainPreviewRedirect(SCOPE, build())).toEqual({
+      kind: "refused",
+      cause,
+    });
+  });
+
+  it("answers a path when there is one", async () => {
+    // The control for the table above: these are refusals rather than a
+    // function that refuses everything put to it.
+    expect(await explainPreviewRedirect(SCOPE, deps())).toEqual({
+      kind: "path",
+      path: "/about",
+    });
+  });
+});
+
+describe("the route sees ONE refusal, whatever the cause", () => {
+  /*
+   * The security property, and the reason `resolvePreviewRedirect` was kept
+   * rather than replaced. The preview route answers `null` with the same 404 an
+   * invalid token gets, so a stranger must not be able to tell a deleted entry
+   * from an unconfigured collection from one whose slug is merely empty. The
+   * moment any cause reaches that caller, the endpoint is an oracle for which
+   * documents exist in draft.
+   */
+  it.each(CAUSES)(
+    "collapses $cause to a bare null",
+    async ({ deps: build }) => {
+      expect(await resolvePreviewRedirect(SCOPE, build())).toBeNull();
+    }
+  );
+
+  it("returns the path when there is one, so null MEANS refused", async () => {
+    // Without this the assertions above are satisfied by a function that
+    // returns null unconditionally — which would pass while telling a visitor
+    // nothing and a valid preview nothing either.
+    expect(await resolvePreviewRedirect(SCOPE, deps())).toBe("/about");
+  });
+
+  it("gives every cause a byte-identical answer", async () => {
+    // Stronger than each being null on its own: it is the INDISTINGUISHABILITY
+    // that matters, so the set of distinct answers must have exactly one member.
+    const answers = await Promise.all(
+      CAUSES.map(c => resolvePreviewRedirect(SCOPE, c.deps()))
+    );
+    expect(new Set(answers).size).toBe(1);
+    expect(answers).toHaveLength(CAUSES.length);
+  });
+});
+
+describe("explainSinglePreviewRedirect", () => {
+  function singleDeps(
+    overrides: Partial<SinglePreviewRedirectDeps> = {}
+  ): SinglePreviewRedirectDeps {
+    return {
+      loadSingle: vi.fn().mockResolvedValue({ path: "welcome" }),
+      loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
+      loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
+      ...overrides,
+    };
+  }
+
+  it("names documentGone when the Single was removed from the config", async () => {
+    expect(
+      await explainSinglePreviewRedirect(
+        { single: "homepage" },
+        singleDeps({ loadSingle: vi.fn().mockResolvedValue(null) })
+      )
+    ).toEqual({ kind: "refused", cause: "documentGone" });
+  });
+
+  it("names foreignOrigin rather than blaming the document", async () => {
+    // The case the editor can do nothing about, and the one they were
+    // previously told to fix by filling in a slug.
+    expect(
+      await explainSinglePreviewRedirect(
+        { single: "homepage" },
+        singleDeps({
+          loadDeclaration: vi
+            .fn()
+            .mockResolvedValue({ url: () => "https://elsewhere.test/" }),
+        })
+      )
+    ).toEqual({ kind: "refused", cause: "foreignOrigin" });
+  });
+
+  it("answers a path when there is one", async () => {
+    expect(
+      await explainSinglePreviewRedirect({ single: "homepage" }, singleDeps())
+    ).toEqual({ kind: "path", path: "/" });
+  });
+
+  it("still collapses to null for the route", async () => {
+    expect(
+      await resolveSinglePreviewRedirect(
+        { single: "homepage" },
+        singleDeps({ loadSingle: vi.fn().mockResolvedValue(null) })
+      )
+    ).toBeNull();
   });
 });

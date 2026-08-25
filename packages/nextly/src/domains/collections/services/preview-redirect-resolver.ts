@@ -59,19 +59,74 @@ export interface PreviewRedirectScope {
 }
 
 /**
+ * Why a document has no preview path, when it has none.
+ *
+ * Every member names a DIFFERENT person and a different next action, which is
+ * the whole reason they are separate values. A missing declaration is a
+ * developer's job; a document that cannot be addressed yet is usually one empty
+ * field the editor can fill; a foreign origin is a settings or declaration
+ * problem that no field on the entry will ever fix. Collapsing them meant the
+ * editor was told to fill in a slug that was already correct.
+ */
+export type PreviewRefusalCause =
+  /** The document the token names is gone, or was never readable. */
+  | "documentGone"
+  /** No `preview.url` or `urlTemplate` on this collection or Single at all. */
+  | "notConfigured"
+  /** Declared, but it yields no address for THIS document yet — usually an empty slug. */
+  | "unavailable"
+  /** The declaration named a different origin than the site is served from. */
+  | "foreignOrigin"
+  /** A URL that would not parse, or a path that escapes this origin. */
+  | "unresolvable";
+
+/** A site-relative path, or the reason there is not one. */
+export type PreviewPathOutcome =
+  | { kind: "path"; path: string }
+  | { kind: "refused"; cause: PreviewRefusalCause };
+
+/**
  * The site-relative path a preview token should land on, or `null` to refuse.
  *
- * `null` is not an error channel. The preview route answers it with exactly the
- * 404 an invalid token gets, which is what keeps the endpoint from becoming an
- * oracle for which entries exist in draft: a stranger must not be able to tell
- * a deleted entry from one that was never previewable from one whose token was
- * forged.
+ * `null` is not an error channel, and this function exists to keep it that way.
+ * The preview route answers `null` with exactly the 404 an invalid token gets,
+ * which is what stops the endpoint becoming an oracle for which entries exist
+ * in draft: a stranger must not be able to tell a deleted entry from one that
+ * was never previewable from one whose token was forged.
+ *
+ * So the flattening lives HERE, in one place, DERIVED from
+ * {@link explainPreviewRedirect} rather than computed beside it. The route goes
+ * on calling this and cannot leak a cause even by accident, while the
+ * authenticated mint path — where the caller already holds `update` on the
+ * document and learns nothing by being told why — calls the explaining form.
+ * Two functions each deciding when to refuse would agree until one was edited,
+ * and the one that drifted would be the one facing the public.
  */
 export async function resolvePreviewRedirect(
   scope: PreviewRedirectScope,
   deps: PreviewRedirectDeps,
   requestOrigin?: string
 ): Promise<string | null> {
+  return pathOrNull(await explainPreviewRedirect(scope, deps, requestOrigin));
+}
+
+/** The one place an outcome becomes the route's deliberately uninformative `null`. */
+function pathOrNull(outcome: PreviewPathOutcome): string | null {
+  return outcome.kind === "path" ? outcome.path : null;
+}
+
+/**
+ * The same answer as {@link resolvePreviewRedirect}, saying why when it refuses.
+ *
+ * For AUTHENTICATED callers only. The cause distinguishes documents a stranger
+ * must not be able to tell apart, so handing it to an anonymous request would
+ * rebuild the oracle the `null` above exists to prevent.
+ */
+export async function explainPreviewRedirect(
+  scope: PreviewRedirectScope,
+  deps: PreviewRedirectDeps,
+  requestOrigin?: string
+): Promise<PreviewPathOutcome> {
   const [entry, preview, siteUrl] = await Promise.all([
     // The locale the token names, not the site's default. A localized entry's
     // slug lives in its companion row, so reading without one resolves the
@@ -85,7 +140,7 @@ export async function resolvePreviewRedirect(
 
   // A link outlives what it points at: an entry can be deleted between minting
   // and clicking, and that is a refusal rather than a fault.
-  if (entry === null) return null;
+  if (entry === null) return { kind: "refused", cause: "documentGone" };
 
   return reduceToSitePath({ preview, document: entry, siteUrl, requestOrigin });
 }
@@ -109,7 +164,7 @@ export function reduceToSitePath({
   document: Record<string, unknown>;
   siteUrl: string | null;
   requestOrigin?: string;
-}): string | null {
+}): PreviewPathOutcome {
   const resolution = resolvePreviewUrl({ preview, entry: document, siteUrl });
 
   // `noSiteUrl` is ACCEPTED here, and it is the case that matters most: having
@@ -123,10 +178,20 @@ export function reduceToSitePath({
   // the origin it is standing on. Refusing here would make preview depend on a
   // settings field it never reads.
   if (resolution.status === "noSiteUrl") {
-    return siteRelativePath(resolution.path);
+    const path = siteRelativePath(resolution.path);
+    return path === null
+      ? { kind: "refused", cause: "unresolvable" }
+      : { kind: "path", path };
   }
 
-  if (resolution.status !== "resolved") return null;
+  // The two remaining non-resolved statuses are kept APART rather than folded
+  // into one refusal, because they are the pair this whole return type exists
+  // for: `notConfigured` is a collection nobody has declared a preview for, and
+  // `unavailable` is a declared collection whose document has no address YET.
+  // The first is a developer's job and the second is usually one empty field.
+  if (resolution.status !== "resolved") {
+    return { kind: "refused", cause: resolution.status };
+  }
 
   // The origin is COMPARED, never stripped from the URL.
   //
@@ -142,16 +207,26 @@ export function reduceToSitePath({
   // installation whose declaration returns an absolute same-origin URL still
   // gets a 404.
   const comparisonOrigin = siteUrl ?? requestOrigin;
-  if (comparisonOrigin === undefined) return null;
+  if (comparisonOrigin === undefined) {
+    return { kind: "refused", cause: "unresolvable" };
+  }
   try {
     const target = new URL(resolution.url);
     const site = new URL(comparisonOrigin);
-    if (target.origin !== site.origin) return null;
-    return `${target.pathname}${target.search}${target.hash}`;
+    // Named rather than folded into `unresolvable`: this is the one refusal an
+    // editor can neither cause nor cure, so telling them to fill in a field
+    // sends them to look at a slug that was correct all along.
+    if (target.origin !== site.origin) {
+      return { kind: "refused", cause: "foreignOrigin" };
+    }
+    return {
+      kind: "path",
+      path: `${target.pathname}${target.search}${target.hash}`,
+    };
   } catch {
     // An unparseable site URL or target. Both are configuration a visitor
     // cannot act on, and both refuse the same way everything else here does.
-    return null;
+    return { kind: "refused", cause: "unresolvable" };
   }
 }
 
@@ -221,6 +296,23 @@ export async function resolveSinglePreviewRedirect(
   deps: SinglePreviewRedirectDeps,
   requestOrigin?: string
 ): Promise<string | null> {
+  return pathOrNull(
+    await explainSinglePreviewRedirect(scope, deps, requestOrigin)
+  );
+}
+
+/**
+ * The same answer as {@link resolveSinglePreviewRedirect}, saying why it refused.
+ *
+ * Authenticated callers only, on the same grounds as
+ * {@link explainPreviewRedirect}: the cause separates cases a stranger must not
+ * be able to tell apart.
+ */
+export async function explainSinglePreviewRedirect(
+  scope: SinglePreviewRedirectScope,
+  deps: SinglePreviewRedirectDeps,
+  requestOrigin?: string
+): Promise<PreviewPathOutcome> {
   const [document, preview, siteUrl] = await Promise.all([
     deps.loadSingle(scope.single, scope.locale),
     deps.loadDeclaration(scope.single),
@@ -229,7 +321,7 @@ export async function resolveSinglePreviewRedirect(
 
   // A Single is never deleted the way an entry is, but it can be removed from
   // the configuration, and a link minted before that is a link to nothing.
-  if (document === null) return null;
+  if (document === null) return { kind: "refused", cause: "documentGone" };
 
   return reduceToSitePath({ preview, document, siteUrl, requestOrigin });
 }
