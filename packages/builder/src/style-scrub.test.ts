@@ -3,6 +3,7 @@ import {
   escapeIdentifier,
   nodeClassName,
   PAGE_ROOT_SELECTOR,
+  PREVIEW_VIEWPORT_CONTAINER,
   STYLE_STATES,
   type BlockDocument,
   type StyleState,
@@ -639,5 +640,71 @@ describe("committing at a breakpoint the site no longer defines", () => {
     const live: ScrubTarget = { ...TARGET, breakpoints: BREAKPOINTS };
     expect(scrubPreviewCss(live, "32px").ok).toBe(true);
     expect(scrubCommitOp(live, undefined, "32px").ok).toBe(true);
+  });
+});
+
+describe("a scrub override under a preview compile", () => {
+  const breakpoints = {
+    viewport: [
+      { id: "base", label: "Desktop" },
+      { id: "tablet", label: "Tablet", maxWidth: 991 },
+    ],
+    container: [],
+  } as never;
+
+  const wrapperFor = (previewContainer?: string): string => {
+    const preview = scrubPreviewCss(
+      {
+        nodeId: "n1",
+        nodeClass: nodeClassName("n1"),
+        breakpoints,
+        ...(previewContainer === undefined ? {} : { previewContainer }),
+        address: {
+          state: "base",
+          breakpoint: "tablet",
+          property: "margin",
+          path: ["blockEnd"],
+        },
+      },
+      "32px"
+    );
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error("expected a preview");
+    return preview.css.split("{")[0].trim();
+  };
+
+  it("is wrapped in the SAME at-rule the page rule was compiled under", () => {
+    /*
+     * The override has to outrank a rule that lives inside the breakpoint's own
+     * query. Wrapped in `@media` while the page rule sits in a container query,
+     * it matches nothing in a narrow canvas inside a wide window — so the drag
+     * appears frozen and the value jumps into place on commit.
+     *
+     * The published half is asserted first, and it is the population: a preview
+     * wrapper containing no at-rule at all would satisfy the negative below.
+     */
+    expect(wrapperFor()).toContain("@media (max-width: 991px)");
+
+    const previewed = wrapperFor(PREVIEW_VIEWPORT_CONTAINER);
+
+    expect(previewed).toContain(
+      `@container ${PREVIEW_VIEWPORT_CONTAINER} (max-width: 991px)`
+    );
+    expect(previewed).not.toContain("@media");
+  });
+
+  it("does not serve one mode's wrapper from the other's cache", () => {
+    /*
+     * The derived at-rule is cached per breakpoint set, and the preview name
+     * changes it for the same set. Left out of the identity, whichever mode
+     * asked first would answer for both — and the second caller would get a
+     * wrapper that looks right and matches nothing.
+     *
+     * Asked in this order deliberately: published first, so a cache keyed only
+     * on the set would already hold the `@media` answer when the preview asks.
+     */
+    expect(wrapperFor()).toContain("@media");
+    expect(wrapperFor(PREVIEW_VIEWPORT_CONTAINER)).toContain("@container");
+    expect(wrapperFor()).toContain("@media");
   });
 });

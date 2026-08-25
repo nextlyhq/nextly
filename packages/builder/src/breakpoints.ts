@@ -37,6 +37,7 @@ import {
   type BreakpointAxis,
   type BreakpointDef,
   breakpointContexts,
+  type BreakpointContextOptions,
   type BreakpointId,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
@@ -445,10 +446,25 @@ export function liveBreakpointsFor(
  */
 export function matchedBreakpoints(
   set: BreakpointSet | undefined,
-  matches: (query: string) => boolean
+  matches: (query: string) => boolean,
+  options?: BreakpointContextOptions
 ): BreakpointId[] {
   const live: BreakpointId[] = [];
-  for (const context of breakpointContexts(set)) {
+  /*
+   * The queries the sheet was actually EMITTED under, preview option included.
+   *
+   * Asked without it, this compares the window against `@media` rules a preview
+   * compile never wrote — and the answer is not merely stale, it is confidently
+   * wrong in a direction that looks plausible: a narrow admin window reports
+   * tablet and mobile live while a wide canvas box is showing desktop.
+   *
+   * Passing the option makes the viewport contexts container queries, which the
+   * `@media` test below then declines to answer, so the result is the base
+   * context alone. That is silence rather than a wrong claim, and it is what a
+   * `matchMedia` caller can honestly say: a container query is a question about
+   * an element, and this function is only given a way to ask the window.
+   */
+  for (const context of breakpointContexts(set, options)) {
     if (context.atRule === undefined) {
       // The unconditional VIEWPORT context: no query to ask, and always
       // applying. A container's widest context is not this case — it still
@@ -480,9 +496,12 @@ export function matchedBreakpoints(
  *
  * @experimental
  */
-export function breakpointQueries(set: BreakpointSet | undefined): string[] {
+export function breakpointQueries(
+  set: BreakpointSet | undefined,
+  options?: BreakpointContextOptions
+): string[] {
   const queries: string[] = [];
-  for (const context of breakpointContexts(set)) {
+  for (const context of breakpointContexts(set, options)) {
     if (context.atRule === undefined) continue;
     const condition = context.atRule.replace(/^@media\s*/, "");
     // The same single test {@link matchedBreakpoints} applies, deliberately.

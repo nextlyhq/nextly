@@ -73,6 +73,17 @@ export interface ScrubTarget {
    */
   readonly nodeClass: string;
   /**
+   * The container a preview surface compiled this page's breakpoints against.
+   *
+   * Carried because the override must be wrapped in the SAME at-rule the rule
+   * it outranks was emitted under. Compiled without it while the page was
+   * compiled with it, a non-base override sits in `@media` while its target sits
+   * in a container query — so in a narrow canvas inside a wide window the
+   * override matches nothing, the drag looks frozen, and the value jumps into
+   * place on commit.
+   */
+  readonly previewContainer?: string;
+  /**
    * The document's compile scope, when it has one.
    *
    * `compilePageCss` anchors every rule to `${PAGE_ROOT_SELECTOR}.${scope}`, so
@@ -225,9 +236,13 @@ const AT_RULES = new WeakMap<BreakpointSet, AtRuleCache>();
  */
 function breakpointAtRule(
   breakpoints: BreakpointSet,
+  preview: string | undefined,
   id: string
 ): string | null {
-  const content = JSON.stringify(breakpoints);
+  // The preview name joins the cache identity, because it changes the derived
+  // at-rule for the same breakpoint set — cached without it, the first caller's
+  // mode would be served to the other.
+  const content = JSON.stringify([breakpoints, preview]);
   let entry = AT_RULES.get(breakpoints);
   if (entry === undefined || entry.content !== content) {
     entry = { content, perId: new Map() };
@@ -248,7 +263,14 @@ function breakpointAtRule(
       },
     ],
   };
-  const css = compilePageCss(document, { breakpoints }).css.trim();
+  const css = compilePageCss(document, {
+    breakpoints,
+    // The SAME emission the page rule was compiled under. A scrub override
+    // wrapped in `@media` while the rule it must outrank sits in a container
+    // query matches nothing in a narrow canvas, so the drag looks frozen and
+    // then jumps on commit.
+    ...(preview === undefined ? {} : { previewContainer: preview }),
+  }).css.trim();
   const wrapper = /^@[a-z-]+[^{]*/.exec(css);
   const derived = css === "" ? null : wrapper === null ? "" : wrapper[0].trim();
   entry.perId.set(id, derived);
@@ -267,7 +289,11 @@ function breakpointAtRule(
  */
 function atRuleFor(target: ScrubTarget): string | null {
   if (target.breakpoints !== undefined) {
-    return breakpointAtRule(target.breakpoints, target.address.breakpoint);
+    return breakpointAtRule(
+      target.breakpoints,
+      target.previewContainer,
+      target.address.breakpoint
+    );
   }
   return target.address.breakpoint === BASE_BREAKPOINT ? "" : null;
 }

@@ -334,6 +334,7 @@ describe("the root entry", () => {
       "pageStyleTrace",
       "prepareDocumentForRead",
       "preparePageForRead",
+      "previewContainerStyle",
       "pruneHiddenNodes",
       "registeredBlocks",
       "rendersOwnMarkup",
