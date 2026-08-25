@@ -123,23 +123,36 @@ function isComposite(value: StyleValue | undefined): value is CompositeValue {
  * an author a value the page will not carry, and spread it into the op that
  * stores it; an inherited accessor would also RUN during the read.
  */
+/**
+ * The value an own DATA property holds, or `undefined` when there is none to
+ * read.
+ *
+ * The single descriptor read this module addresses anything through. A bracket
+ * read runs an own accessor, and every tier of a style address is walked while
+ * `sharedValueAt` inspects a selection for a panel — so a getter with a side
+ * effect fires from rendering and a throwing one aborts the read.
+ *
+ * Every tier, because the address has four and they were not all covered by
+ * fixing the innermost one: the state, the breakpoint, the property, and each
+ * path segment inside the value. A guard on some of them is a guard on none, as
+ * the first getter met decides the outcome.
+ *
+ * The descriptor subsumes the ownership check — an inherited property has none
+ * here — so this replaces `Object.hasOwn` rather than joining it.
+ */
+function ownData(holder: object, key: string): unknown {
+  const part = Object.getOwnPropertyDescriptor(holder, key);
+  return part !== undefined && "value" in part ? part.value : undefined;
+}
+
 function ownValue(value: CompositeValue, name: string): StyleValue | undefined {
-  // A DESCRIPTOR, never `value[name]`. The bracket read runs an own accessor,
-  // and this reader is reached from `sharedValueAt` while a panel inspects a
-  // selection — so a getter with a side effect fires from rendering and a
-  // throwing one aborts the read. The descriptor also subsumes the ownership
-  // check: an inherited property has none here.
-  //
   // An accessor reads as ABSENT rather than as a value, and the residue is
   // worth naming: two nodes that both hold one at the same address then look
   // equally unset, so a control shows nothing and typing sets them both. That
   // is benign — nothing real is overwritten, because such a value cannot be
   // stored at all. `applyOp` refuses it: "styles" holds a value JSON cannot
   // carry unchanged. So it is only ever met on nodes a caller built in memory.
-  const part = Object.getOwnPropertyDescriptor(value, name);
-  return part !== undefined && "value" in part
-    ? (part.value as StyleValue)
-    : undefined;
+  return ownData(value, name) as StyleValue | undefined;
 }
 
 /** The value at a path inside one property's stored value. */
@@ -281,12 +294,10 @@ function valuesAt(
   state: StyleState,
   breakpoint: BreakpointId
 ): StyleValues | undefined {
-  if (!hasOwnKeys(styles) || !Object.hasOwn(styles, state)) return undefined;
-  const breakpoints = styles[state];
-  if (!hasOwnKeys(breakpoints) || !Object.hasOwn(breakpoints, breakpoint)) {
-    return undefined;
-  }
-  const values = breakpoints[breakpoint];
+  if (!hasOwnKeys(styles)) return undefined;
+  const breakpoints = ownData(styles, state);
+  if (!hasOwnKeys(breakpoints)) return undefined;
+  const values = ownData(breakpoints, breakpoint);
   return hasOwnKeys(values) ? values : undefined;
 }
 
@@ -298,8 +309,12 @@ function withValues(
   values: StyleValues | undefined
 ): NodeStyles {
   const states: NodeStyles = { ...styles };
+  // Read through the descriptor like every other tier: a spread of
+  // `states[state]` invokes an own accessor exactly as a bare bracket read
+  // does, and this runs on the way to writing rather than only on the way to
+  // reading.
   const breakpoints: Partial<Record<BreakpointId, StyleValues>> = {
-    ...states[state],
+    ...(ownData(states, state) as Partial<Record<BreakpointId, StyleValues>>),
   };
   if (values === undefined || Object.keys(values).length === 0) {
     delete breakpoints[breakpoint];

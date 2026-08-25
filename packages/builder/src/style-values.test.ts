@@ -113,10 +113,70 @@ describe("what reading an address will and will not run", () => {
     expect(read).toBeUndefined();
   });
 
-  it("still reads an ordinary stored value at both", () => {
+  it("does not invoke an accessor at the STATE tier", () => {
     /*
-     * The control on both assertions above. A reader that returned `undefined`
-     * for everything would satisfy them and make every control look unset.
+     * The outermost tier, and one this suite claimed to cover before it did.
+     * The docblock above listed four tiers while the fixtures placed getters at
+     * two — a description of coverage rather than coverage, which is the
+     * sentence no gate reads.
+     *
+     * It matters most here: the state is read FIRST, so a getter on it decides
+     * the outcome before any inner guard is consulted.
+     */
+    let calls = 0;
+    const styles: Record<string, unknown> = {};
+    Object.defineProperty(styles, "base", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        calls += 1;
+        return { base: { padding: { blockStart: "1px" } } };
+      },
+    });
+
+    expect(Object.keys(styles)).toEqual(["base"]);
+
+    const read = readStyleValue(styles as never, {
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: [],
+    });
+
+    expect(calls).toBe(0);
+    expect(read).toBeUndefined();
+  });
+
+  it("does not invoke an accessor at the BREAKPOINT tier", () => {
+    // The second tier, asserted separately: a guard on the state alone would
+    // pass the test above and still run this getter.
+    let calls = 0;
+    const breakpoints: Record<string, unknown> = {};
+    Object.defineProperty(breakpoints, "base", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        calls += 1;
+        return { padding: { blockStart: "1px" } };
+      },
+    });
+
+    const read = readStyleValue({ base: breakpoints } as never, {
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: [],
+    });
+
+    expect(calls).toBe(0);
+    expect(read).toBeUndefined();
+  });
+
+  it("still reads an ordinary stored value through all four tiers", () => {
+    /*
+     * The control on all four assertions above. A reader that returned
+     * `undefined` for everything would satisfy every one of them and make each
+     * control look unset.
      */
     expect(
       readStyleValue(
