@@ -1,0 +1,175 @@
+"use client";
+
+/**
+ * The entry being edited, beside the page it becomes.
+ *
+ * A WRAPPER rather than a second editor, for the reason `TranslationPanes` is
+ * one: the document keeps the form it already had — same context, same unsaved
+ * guard, same autosave, same save intent — and this puts a frame beside it. A
+ * route of its own would duplicate all four and give the guard a second address
+ * to learn.
+ *
+ * Inactive it renders `children` and nothing else: no wrapper element, no
+ * suppression request, no credential minted. An editor who never opens the
+ * preview gets the ordinary page, and that has to be true STRUCTURALLY rather
+ * than by the styles happening to agree.
+ *
+ * ## Why this asks for the page frame and nothing else
+ *
+ * The editor's measure is a 56rem column, declared by `MeasuredPageFrame`, and
+ * two panes cannot share it. The frame is released the way the page builder
+ * releases it — by asking, from inside — rather than by the page passing a
+ * different width: `MeasuredPageFrame` states that framed and immersive are the
+ * whole vocabulary, and a third value would be a second way to answer a
+ * question it already answers.
+ *
+ * The admin's NAVIGATION stays. This is an auxiliary pane rather than a
+ * takeover: an author opening a preview has not left the admin, and taking the
+ * rail would make the editor behave like the page builder for a control that is
+ * closed again a moment later.
+ *
+ * @module components/features/entries/PreviewMode/PreviewPanes
+ */
+
+import { useEffect, useRef, type ReactNode } from "react";
+
+import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@admin/components/ui";
+
+import { PreviewFrame } from "./PreviewFrame";
+import { usePreviewFrame, type UsePreviewFrameResult } from "./usePreviewFrame";
+
+export interface PreviewPanesProps {
+  /** Whether the pane is open. Closed renders `children` untouched. */
+  open: boolean;
+  /** Close the pane. Rendered by this component, so it cannot be forgotten. */
+  onClose: () => void;
+  collection: string;
+  /** The SAVED entry id. */
+  entryId: string;
+  /** The language to scope the preview credential to, when there is one. */
+  locale?: string | undefined;
+  /** The collection's own word for its preview. */
+  label: string;
+  /**
+   * Changes whenever the document is saved.
+   *
+   * A TOKEN rather than a callback the form invokes, because the pane may not
+   * be open when a save happens and a callback would need the form to know
+   * whether anyone is listening. A value that changes is a fact about the
+   * document; whether it causes a reload is this component's business.
+   */
+  savedAt: number;
+  children: ReactNode;
+}
+
+export function PreviewPanes({ open, children, ...rest }: PreviewPanesProps) {
+  if (!open) return <>{children}</>;
+  return <ActivePreviewPanes {...rest}>{children}</ActivePreviewPanes>;
+}
+
+/**
+ * A separate component so the chrome request and the mint run only while the
+ * pane is open — the same split `TranslationPanes` and `BlocksField` both make.
+ * Calling either from the wrapper would release the page frame for every entry
+ * whether or not anyone asked, and mint a credential for a pane nobody opened.
+ */
+function ActivePreviewPanes({
+  onClose,
+  collection,
+  entryId,
+  locale,
+  label,
+  savedAt,
+  children,
+}: Omit<PreviewPanesProps, "open">) {
+  /*
+   * `pageFrame` alone. The rail, the sidebars and the header stay: this is a
+   * pane beside the editor, not a surface that took the window, and an author
+   * who can still see the navigation has not been stranded by it.
+   *
+   * `canExit` is nonetheless true and honest — the frame renders its own close
+   * control — so the claim stays correct if this ever asks for the rail too.
+   */
+  useSuppressAdminChrome({ layers: ["pageFrame"], canExit: true });
+
+  const frame = usePreviewFrame({ collection, entryId, locale, active: true });
+
+  return (
+    <ResizablePanelGroup
+      orientation="horizontal"
+      className="min-h-0 flex-1"
+      // Percentage STRINGS: this library reads a bare number as pixels, so
+      // `defaultSize={55}` would be a 55-pixel pane rather than 55 percent.
+    >
+      <ResizablePanel id="entry-editor" minSize="35%" defaultSize="55%">
+        {/*
+         * `@container/content` is declared HERE, and it is what stops the
+         * editor laying itself out against the page while rendering into half
+         * of it. The dashboard's `<main>` carries that container and stays
+         * full-page width, so without this every `@4xl/content:` query inside
+         * the form measures the window: the document rail is placed beside a
+         * column that no longer has room for it and overflows the pane.
+         */}
+        <div className="@container/content h-full overflow-y-auto">
+          {/* The pane stands in for `PageContainer`, so it owes the same
+              horizontal inset — and stops owing it where the editor's own
+              columns go edge-to-edge. On an INNER element because a container
+              cannot query itself. */}
+          <div className="px-4 @sm/content:px-6 @2xl/content:px-8 @4xl/content:px-0">
+            {children}
+          </div>
+        </div>
+      </ResizablePanel>
+      <ResizableHandle withGrip />
+      <ResizablePanel id="entry-preview" minSize="25%">
+        <PreviewFrameOnSave
+          frame={frame}
+          savedAt={savedAt}
+          onClose={onClose}
+          label={label}
+        />
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  );
+}
+
+/**
+ * Turns "the document was saved" into "show it again".
+ *
+ * Its own component so the effect that watches `savedAt` sits beside the frame
+ * it refreshes rather than in the layout above.
+ *
+ * The first value is REMEMBERED rather than acted on. The frame has just minted
+ * and loaded when the pane opens, and treating the token's initial value as a
+ * save would load the same page a second time on every open — visible as a
+ * flash, and a wasted render of the site.
+ */
+function PreviewFrameOnSave({
+  frame,
+  savedAt,
+  onClose,
+  label,
+}: {
+  frame: UsePreviewFrameResult;
+  savedAt: number;
+  onClose: () => void;
+  label: string;
+}) {
+  const { refresh } = frame;
+  const lastSeen = useRef(savedAt);
+
+  useEffect(() => {
+    if (lastSeen.current === savedAt) return;
+    lastSeen.current = savedAt;
+    refresh();
+  }, [savedAt, refresh]);
+
+  return <PreviewFrame {...frame} onClose={onClose} label={label} />;
+}
+
+export { PreviewFrame };
