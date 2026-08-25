@@ -350,6 +350,10 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # Commenting on a pull request needs the pull-requests scope even though
+      # it goes through the issue-comments API, so issues:write alone made the
+      # post step 403 and the report never left the step summary.
+      pull-requests: write
 
     steps:
       - name: Checkout
