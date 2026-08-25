@@ -159,7 +159,16 @@ function useChoices(key: string, applied: string) {
   const [pages, setPages] = useState<Record<string, number>>({});
 
   // A new query is a new list, not more of the old one.
-  useEffect(() => setPages({}), [key, applied]);
+  //
+  // The SAME reference is returned when there is nothing to clear. Writing a
+  // fresh `{}` every time is a state change even when the map is already
+  // empty, and the fetch effect below depends on `pages` — so each query
+  // change ran the fetch once with the old map, cancelled it, and ran it
+  // again. Every collection was requested twice per search and the first
+  // answer discarded.
+  useEffect(() => {
+    setPages(current => (Object.keys(current).length === 0 ? current : {}));
+  }, [key, applied]);
 
   useEffect(() => {
     let cancelled = false;
