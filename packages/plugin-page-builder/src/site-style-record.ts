@@ -171,6 +171,15 @@ export function checkStoredTokens(
       ...(isPlainRecord(entry.extensions)
         ? { extensions: entry.extensions }
         : {}),
+      // Shape only, like the extensions above: what is inside came from a
+      // design-token file and this layer has no more opinion on it than the
+      // build that stored it had. Named here because this object is a
+      // WHITELIST — a token field the list omits is dropped by the save that
+      // reports success, which for this field would mean the data survives an
+      // import and is lost the moment the site is written.
+      ...(isPlainRecord(entry.unreadExtension)
+        ? { unreadExtension: entry.unreadExtension }
+        : {}),
     });
   });
 

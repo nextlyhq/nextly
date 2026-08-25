@@ -65,6 +65,33 @@ describe("only what differs from the site's own defaults is stored", () => {
     expect(override.tokens[0]?.values.light).toBe("#ff0000");
   });
 
+  it("stores a token that differs ONLY in the extension fields it preserves", () => {
+    /*
+     * `unreadExtension` holds what a newer build of this system wrote under its
+     * own extension key and this one cannot read. It is kept for exactly one
+     * reason — that an export written here still carries it — and a comparison
+     * blind to it would call this token identical to the default, drop it from
+     * the payload, and lose the data on an edit made about a different token.
+     *
+     * Population first: this really is the only difference, so a pass cannot
+     * come from some other field having changed too.
+     */
+    const edited = merged().tokens.map(token =>
+      token.name === "color.ink"
+        ? { ...token, unreadExtension: { future: "keep-me" } }
+        : token
+    );
+    const changed = edited.find(token => token.name === "color.ink");
+    expect({ ...changed, unreadExtension: undefined }).toEqual({
+      ...ink,
+      unreadExtension: undefined,
+    });
+
+    const override = tokenOverrideOf(DEFAULTS, { tokens: edited });
+    expect(override.tokens.map(t => t.name)).toEqual(["color.ink"]);
+    expect(override.tokens[0]?.unreadExtension).toEqual({ future: "keep-me" });
+  });
+
   it("stores a token the config never supplied", () => {
     const edited = [
       ...merged().tokens,

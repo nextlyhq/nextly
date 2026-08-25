@@ -1102,12 +1102,12 @@ describe("a file describing one token twice", () => {
 });
 
 describe("this system's own extension, on the way in", () => {
-  it("names a field this version does not read", () => {
+  it("keeps a field this version does not read, and says nothing", () => {
     /*
-     * Another vendor's block is carried through untouched; THIS one is consumed
-     * — deleted from what the token keeps, with only the fields the reader
-     * knows taken out of it. Anything else a producer wrote there is gone, and
-     * the next export writes a freshly generated block with no sign of it.
+     * This key is SPLIT, where another vendor's block is carried whole: the
+     * fields the reader knows are taken into the model, and the rest is kept
+     * beside them. A field a newer build wrote survives an import by an older
+     * one, so there is no loss to report.
      */
     const read = dtcgToTokens({
       one: {
@@ -1119,17 +1119,106 @@ describe("this system's own extension, on the way in", () => {
       },
     });
     expect(read.tokens[0]?.id).toBe("stable");
-    expect(read.issues.map(issue => issue.message).join(" ")).toContain(
-      "future"
-    );
+    expect(read.tokens[0]?.unreadExtension).toEqual({ future: "keep-me" });
+    expect(read.issues).toEqual([]);
   });
 
-  it("reportsEveryFieldItWrites: a round trip carries no such report", () => {
+  it("writes that field back out where it was found", () => {
     /*
-     * What holds the list of read fields to the emitter. The report above is
-     * driven by a NAMED set, so a field added to the emitter and not to that
-     * set would be announced as dropped on every file this system writes —
-     * naming a loss that did not happen. This fails the moment the two drift.
+     * Keeping it is only half the requirement — the point of preserving is that
+     * the NEXT export carries it, which is what makes an older build safe to
+     * round-trip a newer file. Read back rather than compared as an object, so
+     * the assertion is about the key the field lands under and not only about
+     * its presence somewhere.
+     */
+    const { document } = tokensToDtcg({
+      tokens: [
+        {
+          name: "one",
+          kind: "number",
+          values: { light: "1" },
+          unreadExtension: { future: "keep-me" },
+        },
+      ],
+    });
+    const written = (document.one as { $extensions: Record<string, unknown> })
+      .$extensions[NEXTLY_EXTENSION] as Record<string, unknown>;
+    expect(written.future).toBe("keep-me");
+    // And the fields the model states are still there beside it.
+    expect(written.kind).toBe("number");
+    expect(written.css).toEqual({ light: "1" });
+  });
+
+  it("does not let a stored copy shadow a field the model states", () => {
+    /*
+     * The staleness case, and the reason the filter runs on the way OUT as well
+     * as on the way in. A token stored by a build that could not read `css`
+     * carries a copy of it; this build reads `css` into the model, so the copy
+     * is a stale statement of a value the site may since have changed. The live
+     * value has to win.
+     *
+     * Population first: the fixture really does carry the colliding keys, so a
+     * pass cannot come from an empty preserved set.
+     */
+    const stale = { css: { light: "#stale" }, kind: "color", future: "keep" };
+    expect(Object.keys(stale)).toEqual(["css", "kind", "future"]);
+
+    const { document } = tokensToDtcg({
+      tokens: [
+        {
+          name: "one",
+          kind: "number",
+          values: { light: "1" },
+          unreadExtension: stale,
+        },
+      ],
+    });
+    const written = (document.one as { $extensions: Record<string, unknown> })
+      .$extensions[NEXTLY_EXTENSION] as Record<string, unknown>;
+    expect(written.css).toEqual({ light: "1" });
+    expect(written.kind).toBe("number");
+    // The field that is genuinely unread still survives.
+    expect(written.future).toBe("keep");
+  });
+
+  it("keeps a field named `__proto__` rather than losing it to the prototype", () => {
+    /*
+     * A file is arbitrary JSON, and `JSON.parse` makes `__proto__` an ordinary
+     * own property. Building the preserved set by ASSIGNMENT would reach
+     * `Object.prototype`'s setter instead of storing anything, so the one name
+     * that most needs preserving would be the one silently dropped.
+     *
+     * Parsed rather than written as a literal, because `{ __proto__: x }` in
+     * source sets the prototype and would make this test pass against a
+     * fixture that never held the key. Asserted before it is used.
+     */
+    const own = JSON.parse(
+      '{"kind":"number","css":{"light":"1"},"__proto__":7}'
+    );
+    expect(Object.hasOwn(own, "__proto__")).toBe(true);
+
+    const read = dtcgToTokens({
+      one: {
+        $type: "number",
+        $value: 1,
+        $extensions: { [NEXTLY_EXTENSION]: own },
+      },
+    });
+    const kept = read.tokens[0]?.unreadExtension;
+    expect(kept === undefined ? [] : Object.keys(kept)).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(kept)).toBe(Object.prototype);
+  });
+
+  it("writesNoFieldItDoesNotDeclare: a round trip preserves nothing", () => {
+    /*
+     * What holds the named field set to the emitter, asserted by BUILDING a
+     * file rather than by reading the set. Every field the emitter writes under
+     * this key is one the reader takes into the model, so re-importing this
+     * system's own export must find nothing left over — a field added to the
+     * emitter and not to the set arrives here as preserved data and fails this.
+     *
+     * Two tokens, so the assertion covers the branch that writes an id and the
+     * branch that omits it.
      */
     const { document } = tokensToDtcg({
       tokens: [
@@ -1145,6 +1234,10 @@ describe("this system's own extension, on the way in", () => {
     const read = dtcgToTokens(JSON.parse(JSON.stringify(document)));
     expect(read.issues).toEqual([]);
     expect(read.tokens).toHaveLength(2);
+    expect(read.tokens.map(token => token.unreadExtension)).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   it("says nothing about ANOTHER vendor's fields", () => {

@@ -44,6 +44,35 @@ describe("checkStoredTokens", () => {
     expect(result.value?.darkMode).toBe("media");
   });
 
+  it("carries both extension records through, because this shape is a WHITELIST", () => {
+    /*
+     * The narrowed token is rebuilt field by field, so a field this list omits
+     * is dropped by a save that reports success — the quietest way to lose
+     * data there is. `extensions` holds what another tool wrote and
+     * `unreadExtension` what a newer build of this one did, and both exist for
+     * the same reason: an export has to carry what this build cannot read.
+     *
+     * Shape only, as the rest of this list is: what is inside came from a
+     * design-token file and this layer has no opinion on it.
+     */
+    const result = checkStoredTokens({
+      tokens: [
+        {
+          ...token("color.primary", "#111111"),
+          extensions: { "com.figma": { anything: "at all" } },
+          unreadExtension: { future: "keep-me" },
+        },
+      ],
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.value?.tokens[0]?.extensions).toEqual({
+      "com.figma": { anything: "at all" },
+    });
+    expect(result.value?.tokens[0]?.unreadExtension).toEqual({
+      future: "keep-me",
+    });
+  });
+
   it("reports a shape-broken entry AND excludes it from the narrowed value", () => {
     const result = checkStoredTokens({
       tokens: [token("color.primary", "#111111"), { name: "color.broken" }],

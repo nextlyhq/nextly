@@ -237,7 +237,16 @@ function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
     $value: value,
     $extensions: {
       ...(token.extensions ?? {}),
-      [NEXTLY_EXTENSION]: extension,
+      // `unreadIn` is what keeps the two halves apart, HERE as much as on the
+      // way in: a token stored while a field was unread still carries a copy of
+      // it, and once this build learns to read that field the stored copy is a
+      // stale statement of a value the site may since have changed. The filter
+      // drops it, so the model is the only thing that can state it.
+      //
+      // Spread order says the same thing a second way and cannot be observed
+      // while the filter holds, since no key survives it that the fields below
+      // could collide with.
+      [NEXTLY_EXTENSION]: { ...unreadIn(token.unreadExtension), ...extension },
     },
   };
   if (token.description !== undefined) entry.$description = token.description;
@@ -680,7 +689,10 @@ function readToken(
   // Carried, not consumed: everything except this vendor's own key goes back
   // out with the token, which is what the format requires of any tool.
   delete extensions[NEXTLY_EXTENSION];
-  reportUnreadFields(own, name, issues);
+  // Its own key is PARTITIONED instead: the fields below are read into the
+  // model, and whatever else it holds is kept beside them so the export can
+  // write it back.
+  const unread = unreadIn(own);
 
   const description =
     typeof node.$description === "string" ? node.$description : undefined;
@@ -747,6 +759,7 @@ function readToken(
       values,
       ...(description !== undefined ? { description } : {}),
       ...(carried !== undefined ? { extensions: carried } : {}),
+      ...(unread !== undefined ? { unreadExtension: unread } : {}),
     };
   };
 
@@ -793,45 +806,49 @@ function readToken(
 }
 
 /**
- * The fields this reader takes out of its own extension.
+ * The fields this system reads out of its own extension and writes back from
+ * the model.
  *
- * Named beside the reads below rather than inferred, because a field this list
- * does not know is REPORTED as dropped: a field added to the reader and not to
- * this list would name a loss that did not happen. `reportsEveryFieldItWrites`
- * in the tests is what holds the two together — it round-trips this system's
- * own export and requires no such report, so adding a field to the emitter
- * without adding it here fails.
+ * The boundary between the two halves of that key: a field named here is the
+ * model's to state, and a field not named here is a producer's to keep. Named
+ * rather than inferred, because the set is consulted from both ends and a
+ * missing name is silent at each — on the way in a model field would be stored
+ * a second time as preserved data, and on the way out that stale copy would be
+ * written beside the live one.
+ *
+ * `writesNoFieldItDoesNotDeclare` in the tests is what holds this to the
+ * emitter: it reads the key this system writes and requires every field in it
+ * to be named here, so adding a field to the emitter without adding it here
+ * fails.
  */
 const NEXTLY_FIELDS = new Set(["id", "css", "kind"]);
 
 /**
- * Say which parts of this system's OWN extension were thrown away.
+ * The half of this system's OWN extension key that the model does not state.
  *
- * Unlike another vendor's block, which is carried through untouched, this key is
- * consumed: it is deleted from the extensions the token keeps, and only the
- * fields above are read out of it. Anything else a producer wrote there — a
- * newer version of this system, or a tool imitating it — is gone, and the next
- * export writes a freshly generated block in its place with no sign that
- * something was lost.
+ * Another vendor's block is carried whole; this key is split, because part of
+ * it IS the model — `css`, `kind` and `id` are read into the token and written
+ * back from it, so keeping the file's copy of those would let an export state a
+ * value the site no longer holds. Everything else came from a producer this
+ * build cannot interpret, most likely a newer version of this system, and is
+ * kept exactly as it arrived.
  *
- * Reported rather than preserved. Preserving would be better and is a change to
- * what a `SiteToken` holds, since there is nowhere on the model today for a
- * field this system does not understand; saying so is what can be done without
- * that.
+ * Filtered here AND again on the way out, which are two different guarantees
+ * rather than the same one twice: this call decides what a token stores, and
+ * the emitter's decides what a token stored by an EARLIER build may write. A
+ * token saved while a field was unread still carries that field, and once this
+ * build learns to read it only the emitter's filter can stop the stored copy
+ * shadowing the live value.
+ *
+ * Built with `Object.fromEntries` rather than by assignment: these keys come
+ * from a file, and assigning `__proto__` onto an object literal reaches
+ * `Object.prototype`'s setter instead of storing anything — the field would
+ * vanish from the very set that exists to keep it.
  */
-function reportUnreadFields(
-  own: unknown,
-  name: string,
-  issues: ValidationIssue[]
-): void {
-  if (!isPlainObject(own)) return;
-  const dropped = Object.keys(own).filter(key => !NEXTLY_FIELDS.has(key));
-  if (dropped.length === 0) return;
-  issues.push(
-    issue(
-      `"${name}" carries ${dropped.map(key => `"${key}"`).join(", ")} in this system's own extension, which this version does not read, so it was not kept.`
-    )
-  );
+function unreadIn(own: unknown): Readonly<Record<string, unknown>> | undefined {
+  if (!isPlainObject(own)) return undefined;
+  const kept = Object.entries(own).filter(([key]) => !NEXTLY_FIELDS.has(key));
+  return kept.length === 0 ? undefined : Object.fromEntries(kept);
 }
 
 /**
