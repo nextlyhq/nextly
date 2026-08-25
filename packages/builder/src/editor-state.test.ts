@@ -78,6 +78,87 @@ describe("applying edits", () => {
   });
 });
 
+describe("a group of ONE", () => {
+  /*
+   * The property the style panel now depends on. Every style edit in the
+   * builder goes through the batch layer, including the ordinary single-block
+   * one, so that there is a single implementation of "what ops set this
+   * address" rather than two that drift. That collapse is only safe if a group
+   * of one is indistinguishable from the single-op call it replaced.
+   *
+   * Asserted rather than reasoned from the source. `apply` and `applyAll` do
+   * read as the same `run(ops, "new")` today, and a claim about what another
+   * function does is exactly the sentence no gate checks — so it is pinned
+   * here, where a future divergence between the two fails instead of quietly
+   * giving multi-selection different behaviour from a single click.
+   */
+  const insertB = {
+    kind: "insert",
+    node: node("b"),
+    at: { index: 1 },
+  } as const;
+
+  it("moves the document exactly as the single-op call does", () => {
+    const one = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    const grouped = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      one.result.current.apply(insertB);
+    });
+    act(() => {
+      grouped.result.current.applyAll([insertB]);
+    });
+
+    // The DOCUMENT is the oracle, not the op that was handed over: two ways of
+    // asking the store to do one thing have to leave the same tree behind.
+    expect(ids(grouped.result.current.document)).toEqual(
+      ids(one.result.current.document)
+    );
+    expect(ids(grouped.result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("costs exactly one undo step, and undoes in one press", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.applyAll([insertB]);
+    });
+
+    // One entry, not one per op — which is what would make a batch of six take
+    // six presses to take back, and is the whole reason the group exists.
+    expect(result.current.undoDepth).toBe(1);
+
+    act(() => result.current.undo());
+
+    expect(ids(result.current.document)).toEqual(["a"]);
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("refuses the whole group when its single op is refused", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    let returned: BlockDocument | null = null;
+    act(() => {
+      returned = result.current.applyAll([{ kind: "remove", id: "nobody" }]);
+    });
+
+    // Null rather than a document, and nothing recorded — the same answer
+    // `apply` gives, so a caller cannot tell the two apart on the failure path
+    // either.
+    expect(returned).toBeNull();
+    expect(ids(result.current.document)).toEqual(["a"]);
+    expect(result.current.undoDepth).toBe(0);
+  });
+});
+
 describe("undo and redo", () => {
   it("takes an edit back and puts it forward again", () => {
     const { result } = renderHook(() =>

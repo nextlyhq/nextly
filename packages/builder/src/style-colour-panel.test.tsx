@@ -88,7 +88,7 @@ function register(): void {
 
 function editorFor(
   document: BlockDocument
-): EditorState & { apply: ReturnType<typeof vi.fn> } {
+): EditorState & { applyAll: ReturnType<typeof vi.fn> } {
   return {
     document,
     selectedId: "a",
@@ -101,7 +101,7 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
-  } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
+  } as unknown as EditorState & { applyAll: ReturnType<typeof vi.fn> };
 }
 
 /**
@@ -213,9 +213,9 @@ describe("a colour leaf draws a colour control", () => {
     const editor = mount(styles("#3b82f6"));
     const field = screen.getByRole("textbox", { name: "Color" });
     fireEvent.change(field, { target: { value: "#ff0000" } });
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     fireEvent.blur(field);
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("CLEARS rather than storing an empty colour", () => {
@@ -223,8 +223,8 @@ describe("a colour leaf draws a colour control", () => {
     const field = screen.getByRole("textbox", { name: "Color" });
     fireEvent.change(field, { target: { value: "" } });
     fireEvent.blur(field);
-    const op = editor.apply.mock.calls[0]?.[0] as { patch?: unknown };
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    const op = editor.applyAll.mock.calls[0]?.[0]?.[0] as { patch?: unknown };
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
     // The entry is removed, so the property falls back through the cascade.
     // Written as an empty string it would instead pin the property to nothing.
     expect(JSON.stringify(op.patch)).not.toContain('"color":""');
@@ -274,7 +274,7 @@ describe("a stored token reference", () => {
   it("offers a clear that removes the reference", () => {
     const editor = mount(styles({ $token: "color.ink" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear Color" }));
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -410,14 +410,14 @@ describe("a picker gesture is ONE editor operation", () => {
     fireEvent.change(hex, { target: { value: "#0000ff" } });
 
     // Three moves, no writes.
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
 
     // Closing ends the gesture and writes once.
     fireEvent.keyDown(document.activeElement ?? document.body, {
       key: "Escape",
     });
     await settle();
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -557,11 +557,11 @@ describe("a picker gesture survives the field being replaced", () => {
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
 
     // Unmount without ever closing the popover.
     cleanup();
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("writes nothing when the picker was opened and not moved", () => {
@@ -570,7 +570,7 @@ describe("a picker gesture survives the field being replaced", () => {
     const editor = mount(styles("#3b82f6"));
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
     cleanup();
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 });
 
@@ -592,14 +592,14 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
 
     // Now pick a token preset, which commits immediately.
     fireEvent.click(screen.getByRole("button", { name: "color.ink" }));
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
 
     // Leave without closing the popover.
     cleanup();
 
     // Still one write, and it is the token.
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(editor.apply.mock.calls[0])).toContain("$token");
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("$token");
   });
 
   it("does not let one overwrite a CLEAR either", async () => {
@@ -616,9 +616,9 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     fireEvent.change(hex, { target: { value: "#ff0000" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Clear Color" }));
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
     cleanup();
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -631,7 +631,7 @@ describe("a superseded gesture stays superseded even when the choice is refused"
     // replace it. Both paths now read the one pending value.
     const editor = mount(styles("#3b82f6"));
     // Every write is refused: `apply` answering null is the store declining.
-    editor.apply.mockReturnValue(null);
+    editor.applyAll.mockReturnValue(null);
 
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
     const hex = screen
@@ -642,16 +642,16 @@ describe("a superseded gesture stays superseded even when the choice is refused"
     fireEvent.change(hex, { target: { value: "#ff0000" } });
 
     fireEvent.click(screen.getByRole("button", { name: "color.ink" }));
-    const afterToken = editor.apply.mock.calls.length;
+    const afterToken = editor.applyAll.mock.calls.length;
     expect(afterToken).toBe(1);
-    expect(JSON.stringify(editor.apply.mock.calls[0])).toContain("$token");
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("$token");
 
     // Closing must not resurrect the literal the token choice replaced.
     fireEvent.keyDown(document.activeElement ?? document.body, {
       key: "Escape",
     });
     await settle();
-    expect(editor.apply.mock.calls.length).toBe(afterToken);
+    expect(editor.applyAll.mock.calls.length).toBe(afterToken);
   });
 });
 
@@ -684,9 +684,11 @@ describe("clearing a token while the picker is open", () => {
     fireEvent.click(clear);
     await settle();
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
     // A clear removes the entry rather than writing one.
-    expect(JSON.stringify(editor.apply.mock.calls[0])).not.toContain("#ff0000");
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).not.toContain(
+      "#ff0000"
+    );
   });
 });
 
@@ -744,14 +746,14 @@ describe("a dismissal that is NOT a superseding control", () => {
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
 
     // Somewhere outside the picker that commits nothing of its own.
     fireEvent.pointerDown(document.body);
     await settle();
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(editor.apply.mock.calls[0])).toContain("#ff0000");
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
   });
 });
 

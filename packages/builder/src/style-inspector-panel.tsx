@@ -68,6 +68,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
@@ -112,8 +113,6 @@ import {
 import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
-  styleClearOp,
-  styleWriteOp,
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
@@ -780,8 +779,11 @@ function FormChoice({
     // Read at this position for the same reason: `property.set` answers for the
     // whole property, which is true whenever any sibling holds a value.
     if (readStyleValue(current.styles, address) === undefined) return;
-    const cleared = styleClearOp(nodeId, current.styles, address, policy);
-    if (cleared.ok && cleared.op !== null) editor.apply(cleared.op);
+    // Through the batch layer as a group of ONE, like every other style write
+    // in this panel. A refusal or an already-absent value both come back as no
+    // ops, which is what the two conditions here used to say separately.
+    const cleared = batchStyleClearOps([current], address, policy);
+    if (cleared.ops.length > 0) editor.applyAll(cleared.ops);
   };
 
   return (
@@ -1397,26 +1399,45 @@ function writeStyleValue({
 }): CommitOutcome {
   const current = findNode(editor.document.nodes, nodeId);
   if (current === undefined) return "refused";
+  /*
+   * A ONE-NODE BATCH, and the single write path for a style edit in this
+   * builder.
+   *
+   * Not because this panel needs batching — it edits one block — but because
+   * the alternative is two implementations of "what ops set this address".
+   * They agree the day they are written: `batchStyleWriteOps` was in fact
+   * written from this function. Then one of them learns something — a policy
+   * that varies, a refusal worded differently, a value the other still
+   * accepts — and the surface an author reaches through a multi-selection
+   * behaves unlike the one they reach through a single click, for a reason no
+   * test names because each path passes its own.
+   *
+   * A group of one is exactly the single-op case: `applyAll(ops)` and
+   * `apply(op)` are both `run(ops, "new")` in the store, so one op through
+   * here costs one history entry and behaves identically. The batch layer is
+   * therefore not a detour around the simple case — it IS the simple case,
+   * with the count left open.
+   */
   const write =
     value === null
-      ? styleClearOp(nodeId, current.styles, address, policy)
-      : styleWriteOp(nodeId, current.styles, address, value, policy);
-  if (!write.ok) {
-    setIssue(write.issues[0]?.message ?? "This value cannot be used here.");
+      ? batchStyleClearOps([current], address, policy)
+      : batchStyleWriteOps([current], address, value, policy);
+  if (write.refused !== undefined) {
+    setIssue(write.refused);
     return "refused";
   }
   setIssue(null);
-  // Null is the store saying the document already holds this value, which is
-  // the ordinary case for a field blurred without being changed. Applying it
+  // No ops is the document already holding this value, which is the ordinary
+  // case for a field blurred without being changed. Applying an empty group
   // would ask the op store for a history entry that undoes to no visible
   // effect, which it refuses.
-  if (write.op === null) return "unchanged";
+  if (write.ops.length === 0) return "unchanged";
   // The store's own refusal, which the validator cannot anticipate: it judges
   // the edited leaf, while `applyOp` judges the whole document — a page at its
   // byte limit rejects an edit whose value is perfectly valid. Unreported, the
   // field goes on showing the draft and reads as saved while neither the
   // document nor the undo history moved.
-  if (editor.apply(write.op) === null) {
+  if (editor.applyAll(write.ops) === null) {
     setIssue("This edit could not be applied to the document.");
     return "refused";
   }
