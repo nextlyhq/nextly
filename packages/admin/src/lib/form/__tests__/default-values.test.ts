@@ -373,6 +373,31 @@ describe("getDefaultValues — multiplicity and declared values", () => {
     });
   });
 
+  it("seeds a group's children against the declared group value", () => {
+    // The same seed-once mistake as the repeater case, and worth its own test
+    // because it reaches a different handler: a group's children were computed
+    // before the declaration was overlaid, so a child reading a sibling the
+    // declaration supplies read it as absent.
+    expect(
+      getDefaultValues([
+        f({
+          name: "order",
+          type: "group",
+          fields: [
+            { name: "isUrgent", type: "checkbox" },
+            {
+              name: "shipping",
+              type: "text",
+              defaultValue: (data: Record<string, unknown>) =>
+                data.isUrgent ? "express" : "standard",
+            },
+          ],
+          defaultValue: { isUrgent: true },
+        }),
+      ])
+    ).toEqual({ order: { isUrgent: true, shipping: "express" } });
+  });
+
   it("keeps a row key the schema does not name, such as the dynamic-zone discriminator", () => {
     // Seeding from the field list alone would drop `_componentType`, and the
     // row would no longer say which component it is.
