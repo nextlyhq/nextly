@@ -81,6 +81,23 @@ export interface PageStyles {
    * is the one that serves a stale sheet forever.
    */
   sharedInputsId?: string;
+  /**
+   * The container this sheet's breakpoints were aimed at, when it is a PREVIEW
+   * artifact — and absent for every publishable one.
+   *
+   * A preview sheet is not publishable and the difference is invisible in the
+   * CSS: its viewport tiers are `@container` rules naming a box only the
+   * previewing surface declares, so on a published page they match nothing and
+   * every breakpoint above the base one silently disappears. The page still
+   * renders, still looks styled at desktop width, and stops being responsive.
+   *
+   * Recorded on the ARTIFACT because `resolvePageStyles` is exported and
+   * returns this shape, so a preview result can be persisted and later handed
+   * back with no compile context — and a context-free read has nothing else to
+   * judge it by. Every other staleness field here is compared against inputs a
+   * context supplies; this one has to be refusable without one.
+   */
+  previewContainer?: string;
   /** Node id to generated class name. */
   classes: Record<string, string>;
   /**
@@ -141,9 +158,17 @@ export function toPageStyles(
   //
   // The parameter is no longer read for this: a caller cannot know whether the
   // compiler accepted its scope, and only the compiler does.
-  return compiled.scope === undefined
-    ? withGated
-    : { ...withGated, scope: compiled.scope };
+  const withScope =
+    compiled.scope === undefined
+      ? withGated
+      : { ...withGated, scope: compiled.scope };
+  // The container the compiler actually AIMED AT, for the same reason the scope
+  // above is the written one rather than the requested one: a refused name
+  // compiles published, and stamping that artifact as a preview would withhold
+  // a perfectly publishable sheet on every later context-free read.
+  return compiled.previewContainer === undefined
+    ? withScope
+    : { ...withScope, previewContainer: compiled.previewContainer };
 }
 
 /**
@@ -1014,14 +1039,49 @@ export function resolvePageStylesWithTrace(
     compileContext !== undefined &&
     (styles.sharedInputsId !== sharedInputsId ||
       styles.sharedInputsId === UNIDENTIFIED_SHARED_INPUTS);
+  /*
+   * A PREVIEW artifact, refused WITHOUT a context — the one staleness rule here
+   * that must not be gated on having one.
+   *
+   * Every other check above compares the artifact against an input the context
+   * supplies, so with no context there is nothing to compare and asking would
+   * be meaningless. This one is a property of the artifact ALONE: its viewport
+   * tiers are `@container` rules naming a box that only the previewing surface
+   * declares, so on a published page they match nothing.
+   *
+   * That is why the reasoning above — that withholding a sheet is worse than
+   * serving a stale one — inverts here. A stale sheet is a page styled with
+   * yesterday's values, which is wrong and recognisable. A preview sheet served
+   * published renders the base tier and silently drops every breakpoint above
+   * it, so the page looks deliberately styled at one width and stops responding
+   * at every other. Refusing produces a page that is visibly unstyled, which
+   * someone notices.
+   *
+   * `resolvePageStyles` is exported and returns this shape, so this is reachable
+   * rather than theoretical: a caller can persist a preview result and hand it
+   * back later with `styles` and no `styleContext`.
+   */
+  const compiledForPreview =
+    styles !== undefined && styles.previewContainer !== undefined;
 
-  if (
-    styles &&
-    !repairedDocument &&
-    !compiledFromAnotherTree &&
-    !compiledUnderAnotherPolicy &&
-    !compiledAgainstOtherInputs
-  ) {
+  /*
+   * ONE answer to "may this stored sheet be served as it stands", used by both
+   * the trust branch and the context-free refusal below.
+   *
+   * They were the same list written twice, once negated and once positive, so a
+   * reason added to one and missed in the other would trust an artifact on one
+   * path and withhold it on the other — for the same document, decided by
+   * whether a context happened to be supplied. Naming it once makes the two
+   * unable to disagree.
+   */
+  const untrusted =
+    repairedDocument ||
+    compiledFromAnotherTree ||
+    compiledUnderAnotherPolicy ||
+    compiledAgainstOtherInputs ||
+    compiledForPreview;
+
+  if (styles && !untrusted) {
     const normalized = normalizeStoredStyles(styles, document);
     // A refused artifact had its classes rebuilt, so the gated rules — written
     // against the classes it USED to carry — would select nothing. Nothing is
@@ -1032,14 +1092,7 @@ export function resolvePageStylesWithTrace(
         : withGatedRules(normalized.styles, document, drawsNothing),
     };
   }
-  if (
-    styles &&
-    (repairedDocument ||
-      compiledFromAnotherTree ||
-      compiledUnderAnotherPolicy ||
-      compiledAgainstOtherInputs) &&
-    styleContext === undefined
-  ) {
+  if (styles && untrusted && styleContext === undefined) {
     return {
       styles: { ...normalizeStoredStyles(styles, document).styles, css: "" },
     };

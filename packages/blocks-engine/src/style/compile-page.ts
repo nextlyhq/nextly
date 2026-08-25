@@ -229,6 +229,24 @@ export interface CompiledPageCss {
    */
   scope?: string;
   /**
+   * The container these breakpoints were aimed at, when the compile was a
+   * PREVIEW one, and absent when it was published.
+   *
+   * Returned rather than assumed to equal the requested name, for the reason
+   * {@link CompiledPageCss.scope} gives about scopes: `previewContainerName`
+   * refuses an empty, reserved, malformed or oversized value and the compile
+   * falls back to published `@media`, so a caller recording what it ASKED for
+   * would stamp a published sheet as a preview one — and, worse, the reverse
+   * never happens, so the mistake is silent in exactly one direction.
+   *
+   * It is on the output because a preview sheet is not publishable: its
+   * viewport tiers are `@container` rules naming a box only the previewing
+   * surface declares, so served on a published page they match nothing and the
+   * page silently loses every breakpoint above the base one. A reader handed a
+   * stored artifact has no other way to tell the two apart.
+   */
+  previewContainer?: string;
+  /**
    * What was not written, and why. Every entry names a value that is in the
    * document and absent from the stylesheet, so "my style did nothing" always
    * has an answer.
@@ -1873,6 +1891,9 @@ export function compilePageCss(
 
   return {
     ...(effectiveScope === undefined ? {} : { scope: effectiveScope }),
+    // The NORMALISED name, so a refused one leaves this absent and the artifact
+    // reads as the published sheet it actually is.
+    ...(preview === undefined ? {} : { previewContainer: preview }),
     css: serializeRules(rules),
     warnings,
     classes: attributeClasses,

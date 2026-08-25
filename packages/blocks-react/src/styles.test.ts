@@ -367,3 +367,116 @@ describe("the cascade the compiler produced, alongside the sheet", () => {
     );
   });
 });
+
+describe("a stored artifact that was compiled for a PREVIEW", () => {
+  /*
+   * `resolvePageStyles` is exported, so this path is reachable rather than
+   * theoretical: a caller can compile with a preview container, persist what
+   * comes back, and hand it to a published render later with no context.
+   */
+  const breakpoints = {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  } as never;
+
+  /*
+   * A node carrying a real declaration at a real breakpoint.
+   *
+   * `node()` above has no styles, so compiling it produces an EMPTY sheet — and
+   * a refusal assertion of `css === ""` against that passes without the refusal
+   * ever running. The control below is what exposed that, which is the reason
+   * it is here rather than as a courtesy.
+   */
+  const styled: BlockNode = {
+    id: "a",
+    type: "test/text",
+    version: 1,
+    props: {},
+    styles: { base: { base: { color: "teal" }, tablet: { color: "salmon" } } },
+  } as never;
+
+  const compiled = (previewContainer?: string): PageStyles =>
+    toPageStyles(
+      compilePageCss(doc(styled), {
+        breakpoints,
+        ...(previewContainer === undefined ? {} : { previewContainer }),
+      })
+    );
+
+  it("records the container the compiler AIMED AT, not the one requested", () => {
+    // The population for everything below: without the stamp there is nothing
+    // for a context-free read to judge, so the refusal could not be reached.
+    // The population first: the fixture must really compile a breakpoint rule,
+    // or every assertion below is about an empty sheet.
+    expect(compiled().css).toContain("@media (max-width: 991px)");
+    expect(compiled("nx-preview-viewport").css).toContain(
+      "@container nx-preview-viewport (max-width: 991px)"
+    );
+    expect(compiled("nx-preview-viewport").previewContainer).toBe(
+      "nx-preview-viewport"
+    );
+    // A REFUSED name compiles published, so the artifact must not claim to be a
+    // preview — stamped on request rather than on outcome, every surface that
+    // passed a bad name would have its perfectly publishable sheet withheld.
+    expect(compiled("none").previewContainer).toBeUndefined();
+    expect(compiled().previewContainer).toBeUndefined();
+  });
+
+  it("is REFUSED on a context-free read, which no other staleness rule is", () => {
+    /*
+     * Every other check in `resolvePageStyles` compares the artifact against an
+     * input the compile context supplies, so with no context there is nothing
+     * to compare and the sheet is trusted. This one is a property of the
+     * artifact alone and has to survive that.
+     *
+     * Served instead, the page renders its base tier and silently loses every
+     * breakpoint above it: the `@container` rules name a box only a previewing
+     * surface declares, so they match nothing. It looks deliberately styled at
+     * one width and stops responding at every other, which is the failure mode
+     * worth refusing a sheet over.
+     */
+    const styles = resolvePageStyles(
+      doc(styled),
+      compiled("nx-preview-viewport"),
+      undefined,
+      blocks
+    );
+
+    expect(styles.css).toBe("");
+    // The classes survive the refusal, so a host stylesheet still has something
+    // to select: refusing the CSS is not refusing the artifact.
+    expect(styles.classes).toHaveProperty("a");
+  });
+
+  it("SERVES a published artifact on the same path, which is the control", () => {
+    /*
+     * Without this the refusal above is satisfied by absence — a resolver that
+     * returned an empty sheet for every context-free read would pass it while
+     * making stored styles useless.
+     *
+     * Same document, same call, same absent context; only the stamp differs.
+     */
+    const styles = resolvePageStyles(
+      doc(styled),
+      compiled(),
+      undefined,
+      blocks
+    );
+
+    expect(styles.css).not.toBe("");
+  });
+
+  it("SERVES an artifact whose preview name the compiler refused", () => {
+    // The other direction of the stamp-on-outcome rule: a refused name means a
+    // published sheet, and withholding it would break previewing surfaces that
+    // passed a bad name rather than protecting anyone.
+    const styles = resolvePageStyles(
+      doc(styled),
+      compiled("none"),
+      undefined,
+      blocks
+    );
+
+    expect(styles.css).not.toBe("");
+  });
+});
