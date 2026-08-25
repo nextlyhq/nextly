@@ -83,6 +83,7 @@ import {
   type MediaParams,
   type Media as LegacyMedia,
 } from "../../../types/media";
+import { withMediaRevalidationBatch } from "../revalidate-media";
 import type {
   MediaFile,
   UploadMediaInput,
@@ -648,6 +649,25 @@ export class MediaService {
   ): Promise<BulkUploadOperationResult<MediaFile>> {
     this.logger.debug("Bulk uploading media files", { count: inputs.length });
 
+    // ONE cache flush for the whole fan-out. Every file below reaches the
+    // single-item method, which invalidates against its own commit, and each of
+    // their tag sets carries the same `nextly:media` — so without a scope here
+    // N files re-invalidate that one collection tag N times.
+    return withMediaRevalidationBatch(
+      () => this.fanOutUploads(inputs, context, actor),
+      this.logger
+    );
+  }
+
+  /**
+   * The per-file upload fan-out, split out so the method above owns nothing but
+   * the batch scope its invalidation needs.
+   */
+  private async fanOutUploads(
+    inputs: UploadMediaInput[],
+    context: RequestContext,
+    actor?: RequestActor
+  ): Promise<BulkUploadOperationResult<MediaFile>> {
     // Phase 4.5: per-file uploads run concurrently via Promise.allSettled
     // so the wall time matches today's client-side fan-out pattern. Each
     // closure resolves to a discriminated outcome (success|failure); we
@@ -754,6 +774,24 @@ export class MediaService {
   ): Promise<BulkOperationResult<{ id: string }>> {
     this.logger.debug("Bulk deleting media files", { count: mediaIds.length });
 
+    // ONE cache flush for the whole fan-out — see `bulkUpload`. The scope is
+    // flushed even when the fan-out throws, so ids that did commit are still
+    // busted rather than left serving a deleted file from cache.
+    return withMediaRevalidationBatch(
+      () => this.fanOutDeletes(mediaIds, context, actor),
+      this.logger
+    );
+  }
+
+  /**
+   * The per-id delete fan-out, split out so the method above owns nothing but
+   * the batch scope its invalidation needs.
+   */
+  private async fanOutDeletes(
+    mediaIds: string[],
+    context: RequestContext,
+    actor?: RequestActor
+  ): Promise<BulkOperationResult<{ id: string }>> {
     // Phase 4.5: per-id deletions run concurrently via Promise.allSettled.
     // Same rationale as bulkUpload: HTTP single round-trip plus parallel
     // server-side processing matches today's wall-time. Per-row hooks

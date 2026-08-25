@@ -143,6 +143,7 @@ Pages pre-render at build time via `generateStaticParams`, then stay fresh throu
 | Rename a post's slug                                  | The new `/blog/[slug]` renders; the old URL 404s (its page regenerated and no published post matches)                                                                                                                 |
 | Edit a category / tag                                 | Its listing page and any post detail that shows it                                                                                                                                                                    |
 | Edit an author's profile                              | The `users` collection emits no cache tags, so the author's name / bio / avatar refresh within the safety-net window — on `/authors/[slug]` and wherever the author appears in post lists / details — never instantly |
+| Replace / rename / delete an image                    | Every page that rendered it, immediately — a media write busts that file's tags on commit                                                                                                                             |
 | Edit the Site settings / Navigation / Homepage single | Every page that reads that global                                                                                                                                                                                     |
 
 ### Opting a write out of revalidation
@@ -151,7 +152,7 @@ A bulk import or seed script can skip the cache bust by passing `disableRevalida
 
 ### Time-based safety net
 
-Tag busting is exact, so post, category, tag, and single edits need no timer. The exceptions are the system collections that do not emit cache tags yet — `users` (authors) and `media`. So the author page (`src/lib/queries/authors.ts`) and the post reads that embed author or image records (`src/lib/queries/posts.ts`) ship a one-hour backstop (`AUTHOR_REVALIDATE_SECONDS` / `RELATION_REVALIDATE_SECONDS`) so an author-profile or image-metadata edit appears within that window — lower it for fresher pages. To add a backstop to any other read, pass `revalidate: <seconds>` to its `cachedFind` call.
+Tag busting is exact, so post, category, tag, single, and media edits need no timer. The one exception left is `users` (authors), which still emits no cache tags. So the author page (`src/lib/queries/authors.ts`) and the post reads that embed author records (`src/lib/queries/posts.ts`) ship a one-hour backstop (`AUTHOR_REVALIDATE_SECONDS` / `RELATION_REVALIDATE_SECONDS`) so an author-profile edit appears within that window — lower it for fresher author data. Image edits no longer depend on it: a media write busts that file's tags on commit. To add a backstop to any other read, pass `revalidate: <seconds>` to its `cachedFind` call.
 
 Images use `next/image` with a `sizes` attribute so phones don't download desktop-sized files. The `unoptimized` prop is set on avatar images since they can come from arbitrary remote URLs that aren't in `next.config.images.remotePatterns`.
 

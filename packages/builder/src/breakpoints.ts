@@ -30,8 +30,10 @@
  * @module breakpoints
  */
 import {
+  authoredBreakpoints,
   BASE_BREAKPOINT,
   BREAKPOINT_AXES,
+  inCascadeOrder,
   MAX_BREAKPOINT_ID_LENGTH,
   MAX_BREAKPOINTS_PER_AXIS,
   type BreakpointAxis,
@@ -60,7 +62,13 @@ import {
  *
  * @experimental
  */
-export { BASE_BREAKPOINT, BREAKPOINT_AXES, MAX_BREAKPOINTS_PER_AXIS };
+export {
+  authoredBreakpoints,
+  BASE_BREAKPOINT,
+  BREAKPOINT_AXES,
+  inCascadeOrder,
+  MAX_BREAKPOINTS_PER_AXIS,
+};
 export type { BreakpointAxis, BreakpointDef, BreakpointSet };
 
 /**
@@ -108,35 +116,6 @@ export function storedLimitFor(axis: BreakpointAxis): number {
   return axis === "viewport"
     ? MAX_BREAKPOINTS_PER_AXIS - 1
     : MAX_BREAKPOINTS_PER_AXIS;
-}
-
-/**
- * The set with the built-in base removed from both axes.
- *
- * The base is not a definition an author added: `breakpointContexts` prepends
- * its context whether or not one is stored, and `validateBreakpoints` reports
- * the id as reserved. But a stored set CAN carry a `base` row and the plugin's
- * README documents a host config that does, so every surface that asks "what
- * has this site actually defined" has to strip it — and each one that forgets
- * gets a different wrong answer from the same set.
- *
- * Published rather than repeated, because it has three askers already: the
- * dialog's draft, the trigger's count, and the host deciding whether config
- * defaults exist. The first two disagreeing is what made Save unreachable on
- * the documented configuration; the third disagreeing made a site with only a
- * base row unable to return to it.
- *
- * @experimental
- */
-export function authoredBreakpoints(
-  set: BreakpointSet | undefined
-): BreakpointSet {
-  const authored = (axis: readonly BreakpointDef[] | undefined) =>
-    (axis ?? []).filter(def => def?.id !== BASE_BREAKPOINT);
-  return {
-    viewport: authored(set?.viewport),
-    container: authored(set?.container),
-  };
 }
 
 /**
@@ -308,21 +287,6 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
   }
 
   return issues;
-}
-
-/**
- * The definitions of one axis in the order the compiler applies them: widest
- * first, an unbounded definition ahead of every bounded one.
- *
- * Presenting them in stored order instead would show an author a list whose
- * cascade runs in a different direction than it reads.
- *
- * @experimental
- */
-export function inCascadeOrder(defs: BreakpointDef[]): BreakpointDef[] {
-  return [...defs].sort(
-    (a, b) => (b.maxWidth ?? Infinity) - (a.maxWidth ?? Infinity)
-  );
 }
 
 /**
