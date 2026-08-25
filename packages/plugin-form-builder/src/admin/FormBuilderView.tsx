@@ -407,7 +407,13 @@ function FormBuilderViewInner({
           have a surface to sit on. The builder canvas below is deliberately
           NOT carded: it draws its own drop zone, and a frame around a frame
           reads as a nested box rather than as structure. */}
-      <Card className="mb-6 px-6 py-5">
+      {/* `pb-6` against `pt-5`: the box padding is equal at 20px, but the
+          first thing inside is a LABEL and the last is a control. A label's
+          line box carries 3px of leading above its glyphs, so the ink starts
+          lower than the box does while the control's border ends flush —
+          measured 24px of visible space above and 21px below. The extra step
+          on the bottom is what makes the two read as equal. */}
+      <Card className="mb-6 px-6 pt-5 pb-6">
         <div className="flex flex-wrap gap-4">
           <FieldShell
             label="Form Name"

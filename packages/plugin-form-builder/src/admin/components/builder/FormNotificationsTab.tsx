@@ -256,7 +256,11 @@ function NotificationCard({
   }
 
   return (
-    <div className="border border-border bg-background">
+    // `bg-card` and the container radius, which is what every other surface in
+    // this admin sits on. `bg-background` is the PAGE's colour, so a panel
+    // painted with it reads as a bordered hole in the page rather than as a
+    // sheet on top of it.
+    <div className="rounded-lg border border-border bg-card">
       {/* The dimming is the SUMMARY's, not the card's. A disabled rule reads as
           inactive at a glance, but an expanded editor inside a faded card fades
           every label, input and validation message the author is reading while
