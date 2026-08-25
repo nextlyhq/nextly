@@ -3200,3 +3200,78 @@ export function applyOp(
     }
   }
 }
+
+/**
+ * A GROUP of ops applied as one edit, with the document's caps judged once.
+ *
+ * Atomic in the sense that matters for a cap: the ops fold onto a working
+ * document, and only what the group LEAVES is measured. Intermediate states are
+ * not documents — nothing renders them, saves them or puts them in history — so
+ * refusing one is refusing a document that never exists.
+ *
+ * Folding through {@link applyOp} instead makes the outcome depend on ORDER. A
+ * selection at the byte cap where one block grows to the shared value and
+ * another shrinks by more is refused when the growing node comes first and
+ * accepted when it comes second, for an edit whose result is smaller than what
+ * it started from either way. Measured on a multi-selection style batch, which
+ * is one gesture producing one op per selected block: the author sees the same
+ * edit succeed or fail depending on the order they happened to select in.
+ *
+ * The caps are RELAXED for the fold and applied once at the end, rather than
+ * skipped. `assertFitsCaps` is asked the same question it is always asked —
+ * does the result cross a cap the document was inside, or worsen an overage it
+ * already had — with the group's starting document on one side and its final
+ * document on the other. So a group that ends over the cap is refused exactly
+ * as a single op would be, and a group that ends smaller is allowed exactly as
+ * a shrinking edit already is.
+ *
+ * All three caps, not just bytes. A cap describes the document, and a group
+ * produces one document; a rule that judged depth per op and bytes per group
+ * would answer the same question two ways. The machine bounds are untouched and
+ * still per op — `MAX_WALKABLE_DEPTH` and the value-parts ceiling are about
+ * what this module can walk without exhausting the stack, which an intermediate
+ * state can do as readily as a final one.
+ *
+ * Inverses come back in UNDO order — the last op's inverse first — because each
+ * one describes the document as it stood when that op ran, and replaying them
+ * forwards would meet a tree the later ops had already changed.
+ *
+ * `applyOps(document, [op], limits)` is exactly `applyOp(document, op, limits)`:
+ * with one op the group's endpoints are that op's endpoints, so the relaxed
+ * fold and the single assertion see the same pair.
+ */
+export interface AppliedOps {
+  readonly document: BlockDocument;
+  readonly inverses: readonly BuilderOp[];
+}
+
+export function applyOps(
+  document: BlockDocument,
+  ops: readonly BuilderOp[],
+  limits: DocumentLimits = DEFAULT_LIMITS
+): AppliedOps {
+  assertUsableLimits(limits);
+  if (ops.length === 0) return { document, inverses: [] };
+
+  // A finite stand-in rather than an infinity: `assertUsableLimits` refuses a
+  // non-finite limit outright, because every comparison against one answers the
+  // same way and the cap would be removed rather than raised. This is the
+  // largest a limit may be, so the fold is bounded by the same rule it defers.
+  const deferred: DocumentLimits = {
+    ...limits,
+    maxDepth: Number.MAX_SAFE_INTEGER,
+    maxNodes: Number.MAX_SAFE_INTEGER,
+    maxBytes: Number.MAX_SAFE_INTEGER,
+  };
+
+  let working = document;
+  const inverses: BuilderOp[] = [];
+  for (const op of ops) {
+    const applied = applyOp(working, op, deferred);
+    working = applied.document;
+    inverses.unshift(applied.inverse);
+  }
+
+  assertFitsCaps(document, working, "these edits", limits);
+  return { document: working, inverses };
+}

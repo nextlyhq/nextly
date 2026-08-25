@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyOp,
+  applyOps,
   OpError,
   sameStoredValue,
   sameStyleValue,
@@ -2996,5 +2997,127 @@ describe("what the two value comparisons each treat as the same value", () => {
     right.self = right;
 
     expect(sameStoredValue(left, right)).toBe(false);
+  });
+});
+
+describe("a group of ops judged against the caps once", () => {
+  /**
+   * A node whose single prop is `size` bytes of text, so a document's size can
+   * be steered precisely enough to sit either side of a cap.
+   */
+  function sized(id: string, size: number): BlockNode {
+    return {
+      id,
+      type: "core/box",
+      version: 1,
+      props: { text: "x".repeat(size) },
+    } as unknown as BlockNode;
+  }
+
+  /** An update that replaces one node's text with `size` bytes of it. */
+  function resize(id: string, size: number): BuilderOp {
+    return {
+      kind: "update",
+      id,
+      patch: { props: { text: "x".repeat(size) } },
+    } as BuilderOp;
+  }
+
+  it("accepts a batch that ends smaller, in EITHER order", () => {
+    /*
+     * The defect, and the reason it is worth a test rather than a comment: the
+     * outcome depended on the order the ops arrived in.
+     *
+     * `grow` takes the document past the cap on its own; `shrink` takes back
+     * more than `grow` added. Folding op by op measured the intermediate, so
+     * putting `grow` first refused an edit whose RESULT is smaller than what
+     * the document started from — while the same two ops the other way round
+     * succeeded. A multi-selection style batch is exactly this shape: one
+     * gesture, one op per selected block, in selection order.
+     */
+    const start = doc([sized("a", 200), sized("b", 2_000)]);
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
+    const grow = resize("a", 1_500);
+    const shrink = resize("b", 100);
+
+    // Population before the property: the intermediate really does cross the
+    // cap, so this fixture exercises the mechanism rather than passing because
+    // nothing was ever near a limit.
+    expect(() => applyOp(start, grow, limits)).toThrow(OpError);
+
+    const growFirst = applyOps(start, [grow, shrink], limits);
+    const shrinkFirst = applyOps(start, [shrink, grow], limits);
+
+    // Same document either way, which is what makes the order irrelevant.
+    expect(growFirst.document.nodes).toEqual(shrinkFirst.document.nodes);
+  });
+
+  it("still refuses a group whose RESULT crosses the cap", () => {
+    /*
+     * The control on the test above. Deferring the caps to the end must not
+     * become skipping them: a group that LEAVES the document over the cap is
+     * refused exactly as one op would be, because the same `assertFitsCaps`
+     * question is asked with the group's own endpoints.
+     */
+    const start = doc([sized("a", 200), sized("b", 200)]);
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
+
+    expect(() =>
+      applyOps(start, [resize("a", 1_800), resize("b", 1_800)], limits)
+    ).toThrow(OpError);
+  });
+
+  it("is exactly `applyOp` for a group of one", () => {
+    /*
+     * With one op the group's endpoints ARE that op's endpoints, so the relaxed
+     * fold and the single assertion see the same pair. Pinned rather than
+     * reasoned, because the editor now routes every single-block edit through
+     * this path.
+     */
+    const start = doc([sized("a", 200)]);
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
+
+    const one = applyOp(start, resize("a", 400), limits);
+    const grouped = applyOps(start, [resize("a", 400)], limits);
+
+    expect(grouped.document).toEqual(one.document);
+    expect(grouped.inverses).toEqual([one.inverse]);
+
+    // And refusal agrees too, not just success.
+    expect(() => applyOp(start, resize("a", 9_000), limits)).toThrow(OpError);
+    expect(() => applyOps(start, [resize("a", 9_000)], limits)).toThrow(
+      OpError
+    );
+  });
+
+  it("returns inverses in UNDO order", () => {
+    /*
+     * Each inverse describes the document as it stood when its op ran, so
+     * replaying them forwards would meet a tree the later ops had already
+     * changed. The last op's inverse has to run first.
+     */
+    const start = doc([sized("a", 100), sized("b", 100)]);
+    const applied = applyOps(start, [resize("a", 150), resize("b", 250)], {
+      ...DEFAULT_LIMITS,
+      maxBytes: 10_000,
+    });
+
+    expect(applied.inverses).toHaveLength(2);
+    // Undoing in the order returned puts the document back exactly.
+    let undone = applied.document;
+    for (const inverse of applied.inverses) {
+      undone = applyOp(undone, inverse, DEFAULT_LIMITS).document;
+    }
+    expect(undone.nodes).toEqual(start.nodes);
+  });
+
+  it("records nothing for an empty group", () => {
+    // No ops, no inverses, and the same document back — an empty group that
+    // produced a history entry would undo to no visible effect.
+    const start = doc([sized("a", 100)]);
+    const applied = applyOps(start, []);
+
+    expect(applied.document).toBe(start);
+    expect(applied.inverses).toEqual([]);
   });
 });

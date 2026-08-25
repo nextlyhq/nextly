@@ -30,7 +30,7 @@
 import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { applyOp, type BuilderOp } from "./ops";
+import { applyOps, type BuilderOp } from "./ops";
 import {
   EMPTY_SELECTION,
   applySelection,
@@ -140,8 +140,12 @@ export function useEditorState({
   const latestDocument = useRef(document);
   latestDocument.current = document;
 
-  const undoStack = useRef<BuilderOp[][]>([]);
-  const redoStack = useRef<BuilderOp[][]>([]);
+  // READONLY groups. A recorded inverse describes the document as it stood when
+  // its op ran, so nothing may append to or reorder one after the fact — the
+  // history would then describe an edit that never happened. `applyOps` returns
+  // them already in undo order and already frozen to the type.
+  const undoStack = useRef<(readonly BuilderOp[])[]>([]);
+  const redoStack = useRef<(readonly BuilderOp[])[]>([]);
   // Mirrors the stack lengths so the flags below are STATE and re-render when
   // they change. Reading `undoStack.current.length` directly would leave an
   // undo button disabled after the first edit, because a ref mutation does not
@@ -189,27 +193,28 @@ export function useEditorState({
       // the history being broken.
       if (ops.length === 0) return latestDocument.current;
 
-      let working = latestDocument.current;
-      const inverses: BuilderOp[] = [];
-      for (const op of ops) {
-        let applied;
-        try {
-          applied = applyOp(working, op, limits);
-        } catch {
-          // A refused op is an ordinary outcome, not a crash: an insert past a
-          // cap, a move onto a node that no longer exists, an update to a node
-          // a concurrent edit removed. The caller decides what to say about it.
-          // Nothing is committed — see the atomicity note above.
-          return null;
-        }
-        working = applied.document;
-        // Front, so undoing the group runs the LAST op's inverse first. Applied
-        // in the order they were collected, each inverse would meet a document
-        // the later ops had already changed.
-        inverses.unshift(applied.inverse);
+      let group;
+      try {
+        // ONE call rather than a fold here, so the group's caps are judged
+        // where the group is understood. Folding `applyOp` in this file
+        // measured every intermediate document against the cap, which made a
+        // batch's outcome depend on the order its ops happened to arrive in:
+        // a selection at the byte cap where one block grows and another shrinks
+        // by more was refused when the growing one came first and accepted when
+        // it came second, for the same resulting document.
+        //
+        // The inverses come back in undo order already — see `applyOps`, which
+        // owns that ordering rule along with the cap one.
+        group = applyOps(latestDocument.current, ops, limits);
+      } catch {
+        // A refused group is an ordinary outcome, not a crash: an insert past a
+        // cap, a move onto a node that no longer exists, an update to a node
+        // a concurrent edit removed. The caller decides what to say about it.
+        // Nothing is committed — see the atomicity note above.
+        return null;
       }
 
-      const applied = { document: working, inverse: inverses };
+      const applied = { document: group.document, inverse: group.inverses };
 
       if (into === "new") {
         undoStack.current.push(applied.inverse);
