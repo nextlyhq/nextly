@@ -122,6 +122,31 @@ export interface SiteToken {
    * put data this system has no opinion on.
    */
   extensions?: Readonly<Record<string, unknown>>;
+  /**
+   * Fields found under THIS system's own extension key that this build does not
+   * read, kept so it can write them back out.
+   *
+   * A reverse-domain key names the vendor, not the build. Under
+   * `com.nextlyhq.nextly` a field this build has no reader for is exactly as
+   * foreign as another vendor's block, and the reason the format gives for
+   * preserving one applies unchanged to the other: a tool that cannot interpret
+   * data should not be the tool that destroys it. The format's own requirement
+   * covers only other vendors, and says nothing about a producer meeting a
+   * newer version of itself — so this is the same rule, extended to the case
+   * the format leaves open.
+   *
+   * Separate from `extensions` because that field is what other tools wrote and
+   * this is what a different build of THIS one wrote. Merging them would make
+   * `com.nextlyhq.nextly` look like a foreign vendor to every later reader, and
+   * the emitter regenerates that key from the model on every export.
+   *
+   * Safe to re-emit because the format asks that extension data stay "optional
+   * meta-data that is not crucial to understanding that token's value": a
+   * conforming producer puts nothing here that a stale copy could corrupt. The
+   * cost that remains is staleness — a preserved field describing something the
+   * model later changes is written back as it arrived.
+   */
+  unreadExtension?: Readonly<Record<string, unknown>>;
 }
 
 /** Everything a site defines for its pages to read. */

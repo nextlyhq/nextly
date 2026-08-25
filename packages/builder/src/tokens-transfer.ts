@@ -894,8 +894,16 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
 function unwritable(tokens: SiteTokenSet): string[] {
   const lost: string[] = [];
   for (const token of tokens.tokens) {
-    if (token.extensions === undefined) continue;
-    if (holdsOnlyJson(token.extensions)) continue;
+    // BOTH halves of what rides in `$extensions`, because they reach the file
+    // by the same route and fail the same way: `tokensToDtcg` spreads each into
+    // an object `JSON.stringify` then writes. A `toJSON` inside either is the
+    // worst of it — spread into a block, it replaces that whole block, and for
+    // the preserved half the block it replaces is this system's own record of
+    // the token's identity and exact CSS.
+    const carried = [token.extensions, token.unreadExtension].filter(
+      part => part !== undefined
+    );
+    if (carried.every(part => holdsOnlyJson(part))) continue;
     lost.push(
       `"${token.name}" carries vendor data that a file cannot hold, so the exported token is missing it. Importing this file back would give that token a different identity.`
     );

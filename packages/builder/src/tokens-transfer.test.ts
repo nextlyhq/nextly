@@ -512,6 +512,50 @@ describe("what goes in", () => {
     expect(made.skipped.join(" ")).toContain("cannot be written to a file");
   });
 
+  it("names a preserved extension field a file cannot hold", () => {
+    /*
+     * `unreadExtension` reaches the file by the same route as `extensions` —
+     * spread into an object `JSON.stringify` then writes — so it fails the same
+     * way, and worse in one respect: it is spread into THIS system's own block,
+     * so a `toJSON` there replaces the record of the token's identity and exact
+     * CSS. Importing the result gives the token a new identity and every
+     * document referencing the old one stops resolving.
+     *
+     * Population first: the export SUCCEEDS, so this is the quiet case where
+     * writing drops something rather than throwing, and the report is the only
+     * thing that says so.
+     */
+    const made = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111" },
+          unreadExtension: { future: { toJSON: () => 1 } },
+        },
+      ],
+    });
+    expect(made.text).not.toBe("");
+    expect(made.skipped.join(" ")).toContain("color.ink");
+  });
+
+  it("says nothing about a preserved field a file CAN hold", () => {
+    // The control: ordinary preserved data is written, so a report here would
+    // fire on every file carrying anything a newer build wrote.
+    const made = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111" },
+          unreadExtension: { future: "keep-me" },
+        },
+      ],
+    });
+    expect(made.skipped).toEqual([]);
+    expect(made.text).toContain("keep-me");
+  });
+
   it("names an entry that is neither a token nor a group", () => {
     // The engine's walk descends into every non-`$` child and simply continues
     // when it is not an object — nothing reported. Part of the source file is
