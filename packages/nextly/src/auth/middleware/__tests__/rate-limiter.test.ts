@@ -161,18 +161,68 @@ describe("the store seam", () => {
     expect((await limiter.check("k", 2, WINDOW)).allowed).toBe(false);
   });
 
-  it("never asks a store to take an increment back", async () => {
-    // The property that closes the cross-window erasure: a rollback issued in
-    // one window can land in the next and delete an attempt that WAS budgeted,
-    // admitting excess logins right at a reset boundary. There is no rollback
-    // to mistime, and this fails if one is reintroduced.
-    const store = new SlidingWindowMemoryStore();
-    expect("decrement" in store).toBe(false);
+  /**
+   * A store that offers a rollback and records every call it receives.
+   *
+   * `consume` is included or omitted by the caller, because that is what
+   * selects the branch under test — and the two branches must be covered
+   * separately: the historical rollback lived in the FALLBACK branch, so a test
+   * that only drives the atomic one cannot see it come back.
+   */
+  function recordingStore(opts: { atomic: boolean }): {
+    store: RateLimitStore & { decrement(key: string): Promise<void> };
+    calls: string[];
+  } {
+    const calls: string[] = [];
+    const over = { count: 9, resetTime: Date.now() + WINDOW };
+    const store: RateLimitStore & { decrement(key: string): Promise<void> } = {
+      increment(): Promise<RateLimitRecord> {
+        calls.push("increment");
+        return Promise.resolve(over);
+      },
+      reset(): Promise<void> {
+        calls.push("reset");
+        return Promise.resolve();
+      },
+      decrement(): Promise<void> {
+        calls.push("decrement");
+        return Promise.resolve();
+      },
+      ...(opts.atomic
+        ? {
+            consume: (): Promise<RateLimitRecord & { allowed: boolean }> => {
+              calls.push("consume");
+              return Promise.resolve({ ...over, allowed: false });
+            },
+          }
+        : {}),
+    };
+    return { store, calls };
+  }
 
-    // The control: the object is not simply empty — the methods it should have
-    // are present, so the absence above is meaningful.
-    expect(typeof store.consume).toBe("function");
-    expect(typeof store.increment).toBe("function");
+  it("issues no rollback on the ATOMIC path when it refuses", async () => {
+    const { store, calls } = recordingStore({ atomic: true });
+
+    const result = await new RateLimiter(store).check("k", 1, WINDOW);
+
+    // The control. Without it, "no rollback" is satisfied by a request that was
+    // never refused — and a limiter has no reason to roll back an allowed one.
+    expect(result.allowed).toBe(false);
+    expect(calls).toEqual(["consume"]);
+  });
+
+  it("issues no rollback on the FALLBACK path when it refuses", async () => {
+    // The branch the unsafe rollback actually lived in. A store WITHOUT
+    // `consume` is what reaches it; one with `consume` returns from the atomic
+    // branch first and never executes a line of this path, so the test above
+    // stays green when the historical rollback is put back here. Verified: it
+    // does.
+    const { store, calls } = recordingStore({ atomic: false });
+
+    const result = await new RateLimiter(store).check("k", 1, WINDOW);
+
+    expect(result.allowed).toBe(false);
+    expect(calls).toEqual(["increment"]);
   });
 
   it("keeps sliding while every attempt is being refused", async () => {
