@@ -36,6 +36,7 @@
  *
  * @module class-usage-reconcile
  */
+import { MAX_NAMED_CLASS_NAME_LENGTH } from "@nextlyhq/blocks-engine";
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import { classUsageOf } from "./class-usage";
@@ -43,6 +44,25 @@ import type {
   ClassUsageRow,
   ClassUsageScope,
 } from "./collections/class-usage-index";
+
+/**
+ * The class id a marker row carries, chosen so no real reference can wear it.
+ *
+ * The engine constrains a class id by TYPE and LENGTH and nothing else —
+ * `isUsableNamedClass` tests `typeof id === "string"` and
+ * `id.length <= MAX_NAMED_CLASS_NAME_LENGTH`, with no pattern and no minimum.
+ * So the empty string is a usable id, and a document really can reference one;
+ * a marker wearing it would be indistinguishable from that reference, and a
+ * lookup could not tell a class in use from a subject nobody could read.
+ *
+ * Exceeding the cap is therefore the ONLY way to be disjoint by construction
+ * rather than by convention, because length is the only lever the rule offers.
+ * A test asserts the engine rejects this value, so the day that rule changes,
+ * this fails rather than silently starting to collide.
+ */
+export const UNDETERMINED_CLASS_ID = `undetermined:${"-".repeat(
+  MAX_NAMED_CLASS_NAME_LENGTH
+)}`;
 
 /**
  * The document being described, minus the classes it references.
@@ -121,7 +141,10 @@ export function deriveClassUsageRows(
     // The prefix it DID read is discarded rather than recorded. A partial list
     // stored as a list is indistinguishable from a complete one, and the whole
     // point of the marker is to be distinguishable.
-    return { complete: false, undetermined: { ...subject, classId: "" } };
+    return {
+      complete: false,
+      undetermined: { ...subject, classId: UNDETERMINED_CLASS_ID },
+    };
   }
   return {
     complete: true,

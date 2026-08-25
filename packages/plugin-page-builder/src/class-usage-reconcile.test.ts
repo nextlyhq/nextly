@@ -12,9 +12,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import { DEFAULT_LIMITS, isUsableNamedClass } from "@nextlyhq/blocks-engine";
 
 import {
+  UNDETERMINED_CLASS_ID,
   deriveClassUsageRows,
   reconcileClassUsage,
   type ClassUsageSubject,
@@ -123,10 +124,35 @@ describe("deriving a document's index rows", () => {
 
     expect(derivation).toEqual({
       complete: false,
-      // Empty class id, not one of the ids it managed to read. A marker naming
+      // The marker id, not one of the ids it managed to read. A marker naming
       // a real class would be counted as a reference by every lookup for it.
-      undetermined: { ...page, classId: "" },
+      undetermined: { ...page, classId: UNDETERMINED_CLASS_ID },
     });
+  });
+
+  it("uses a marker id the engine will not accept as a class", () => {
+    // What makes the marker disjoint from every real reference, and the reason
+    // it is not the empty string: `isUsableNamedClass` constrains an id by TYPE
+    // and LENGTH only — no pattern, no minimum — so the empty string IS a
+    // usable class id and a document can genuinely reference one. Exceeding the
+    // cap is the only lever the rule leaves.
+    //
+    // Asserted against the engine's own predicate rather than by restating the
+    // cap, so this fails if that rule ever changes rather than the marker
+    // silently starting to collide.
+    expect(
+      isUsableNamedClass({
+        id: UNDETERMINED_CLASS_ID,
+        slug: "undetermined",
+        styles: {},
+      })
+    ).toBe(false);
+
+    // The control: the same entry with a short id IS accepted, so the rejection
+    // above is caused by the marker's length and not by the rest of the shape.
+    expect(
+      isUsableNamedClass({ id: "hero", slug: "undetermined", styles: {} })
+    ).toBe(true);
   });
 });
 

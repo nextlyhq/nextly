@@ -22,8 +22,15 @@
  * Measured: `internal: true` sets `admin.hidden` and stops there. No API
  * routing, no dispatcher and no registry sync reads the flag, so an internal
  * collection is reachable over the Direct API and the wire API exactly like any
- * other. The access rules below are therefore the ONLY thing keeping this
- * private, rather than a second layer behind a first.
+ * other. The access rules below are what close it, rather than a second layer
+ * behind a first.
+ *
+ * They do not close it for everyone. `checkCollectionAccess` returns before
+ * evaluating a collection's own rules when the caller is a super-admin session,
+ * so a super-admin can address this slug directly and write to it. That is a
+ * property of the access service rather than of this collection, and it is why
+ * the rebuild exists: a row authored by hand disagrees with the document it
+ * claims to describe until a rebuild replaces it.
  *
  * @module collections/class-usage-index
  */
@@ -66,23 +73,23 @@ export interface ClassUsageRow {
   /** The blocks field the reference was found in. */
   field: string;
   /**
-   * The named class's id, as stored in `node.classes`, or empty on a marker
-   * row.
+   * The named class's id, as stored in `node.classes`, or the marker id on a
+   * marker row.
    *
-   * A document whose references could not all be read contributes ONE row with
-   * this empty rather than a row per class it managed to read. Without it, a
+   * A document whose references could not all be read contributes ONE row
+   * carrying the marker id, rather than a row per class it managed to read. Without it, a
    * document nobody has been able to read looks exactly like one that
    * references nothing — and "references nothing" is the answer that permits
    * deleting a class the unread part of the document still applies.
    *
-   * Empty rather than a separate column, and rather than a flag on every row,
-   * because the state belongs to the SUBJECT and there may be no rows to carry
-   * a flag: an oversized document indexed for the first time has none. It
-   * reads the way the empty `entityKey` does, as "there is no such thing here".
+   * A marker row rather than a separate column, and rather than a flag on every
+   * row, because the state belongs to the SUBJECT and there may be no rows to
+   * carry a flag: an oversized document indexed for the first time has none.
    *
-   * A lookup for a real class never matches one, since a class id is never
-   * empty; asking for the empty id is how the library counts the documents it
-   * could not check.
+   * The marker id is longer than the engine's cap on a class id, which is what
+   * makes it disjoint from every real reference. NOT the empty string: the
+   * engine constrains an id by type and length only, so the empty string is a
+   * usable class id and a document can genuinely reference one.
    */
   classId: string;
 }
@@ -130,8 +137,11 @@ export function classUsageIndexCollection() {
       // A constant rather than a role check: an administrator editing this by hand
       // is not a privilege to grant, it is a way to make the record wrong. The
       // plugin's own maintenance runs through the Direct API, which defaults to
-      // `overrideAccess: true`, so these close the wire API without closing the
-      // path that maintains the rows.
+      // `overrideAccess: true`, so these close the wire API for an ordinary
+      // caller without closing the path that maintains the rows.
+      //
+      // A super-admin session is not an ordinary caller and bypasses these
+      // entirely; the rebuild is what repairs a table written that way.
       create: () => false,
       update: () => false,
       delete: () => false,
