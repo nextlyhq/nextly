@@ -30,6 +30,7 @@ import {
   compilePageCss,
   previewContainerName,
 } from "./compile-page";
+import { EMITTABLE_STRING_BOUNDS } from "./emittable-string-bounds";
 import { compileSiteSheet } from "./site-sheet";
 
 /** Both axes populated, so neither can pass by being empty. */
@@ -274,6 +275,19 @@ describe("the preview container name", () => {
       UNPREVIEWABLE_CONTAINER,
       "has space",
       "1leading-digit",
+      // CSS-wide keywords and `none` match the identifier shape and are
+      // excluded from a `<custom-ident>` anyway. Emitted, they produce an
+      // at-rule the browser drops AND a `container-name` the surface cannot
+      // declare — so the preview loses its rules rather than degrading to the
+      // published compile the way every other refusal here does.
+      "none",
+      "NONE",
+      "initial",
+      "inherit",
+      "unset",
+      "revert",
+      "revert-layer",
+      "default",
       "){color:red}",
       "a".repeat(MAX_PREVIEW_CONTAINER_LENGTH + 1),
       undefined,
@@ -362,5 +376,30 @@ describe("the shared site tier", () => {
 
     expect(published.css).toContain("@media (max-width: 991px)");
     expect(published.css).not.toContain(PREVIEW_VIEWPORT_CONTAINER);
+  });
+});
+
+describe("the bound on a preview container name", () => {
+  it("is registered in the catalog that promises to list every one", () => {
+    /*
+     * `EMITTABLE_STRING_BOUNDS` exists so a consumer choosing a digest
+     * truncation can verify it against the producer's own set rather than a
+     * prose description of it. A caller-controlled string the compiler writes
+     * into CSS and does not register is exactly the member such a consumer
+     * silently stops covering.
+     *
+     * The larger style-value entry happens to mask this one today, so the
+     * omission costs nothing until that unrelated bound changes — which is what
+     * makes it worth pinning rather than leaving to be noticed.
+     *
+     * Asserted by MATCHING the constant rather than a literal, so the entry
+     * cannot drift from the cap it describes.
+     */
+    const entry = EMITTABLE_STRING_BOUNDS.find(bound =>
+      bound.what.includes("preview container")
+    );
+
+    expect(entry).toBeDefined();
+    expect(entry?.max).toBe(MAX_PREVIEW_CONTAINER_LENGTH);
   });
 });

@@ -284,10 +284,17 @@ export function sharedStyleInputs(
       stored.tokens?.prefix,
       route.tokenPrefix
     ),
-    // Carried so the SITE sheet and the artifact identity see it too. A page
-    // compiled for a preview surface whose shared tier was compiled for the
-    // published one puts two answers to the same breakpoint in one document.
-    previewContainer: route.previewContainer,
+    // Reconciled from BOTH tiers, like every other shared field. Read from the
+    // route alone, a caller stating it on `siteStyles` would have it reach the
+    // site sheet through `...siteInput` while the page context compiled node
+    // rules published — one render carrying two answers to one breakpoint.
+    //
+    // The route wins where both state it: which surface is doing the previewing
+    // is a fact about this render, while the stored tier describes the site.
+    previewContainer: firstStated(
+      route.previewContainer,
+      stored.previewContainer
+    ),
   });
 }
 

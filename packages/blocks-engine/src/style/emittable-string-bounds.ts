@@ -31,7 +31,7 @@
  */
 import { MAX_BLOCK_TYPE_LENGTH, MAX_BREAKPOINT_ID_LENGTH } from "../document";
 
-import { MAX_SCOPE_LENGTH } from "./compile-page";
+import { MAX_PREVIEW_CONTAINER_LENGTH, MAX_SCOPE_LENGTH } from "./compile-page";
 import { MAX_VALUE_LENGTH } from "./css-value";
 import { MAX_TOKEN_NAME_LENGTH, MAX_TOKEN_PREFIX_LENGTH } from "./declarations";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./named-class";
@@ -70,6 +70,10 @@ export const EMITTABLE_STRING_BOUNDS: readonly EmittableStringBound[] =
       max: MAX_NAMED_CLASS_NAME_LENGTH,
     }),
     Object.freeze({ what: "a breakpoint id", max: MAX_BREAKPOINT_ID_LENGTH }),
+    Object.freeze({
+      what: "a preview container name",
+      max: MAX_PREVIEW_CONTAINER_LENGTH,
+    }),
     Object.freeze({ what: "a design token name", max: MAX_TOKEN_NAME_LENGTH }),
     Object.freeze({ what: "a block type", max: MAX_BLOCK_TYPE_LENGTH }),
     Object.freeze({

@@ -256,3 +256,4 @@ export {
   PREVIEW_VIEWPORT_CONTAINER,
   UNPREVIEWABLE_CONTAINER,
 } from "@nextlyhq/blocks-engine";
+export { PREVIEW_CONTAINER_STYLE } from "./preview-container";

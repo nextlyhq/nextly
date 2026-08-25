@@ -360,6 +360,23 @@ function emittableBound(maxWidth: unknown): boolean {
 export const MAX_PREVIEW_CONTAINER_LENGTH = 64;
 
 /**
+ * Names a `<custom-ident>` may not take, whatever its shape.
+ *
+ * `none` is excluded from `container-name` by its own grammar, and the CSS-wide
+ * keywords are excluded from every custom identifier. Matching the identifier
+ * pattern is therefore necessary and not sufficient.
+ */
+const RESERVED_CONTAINER_NAMES: ReadonlySet<string> = new Set([
+  "none",
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
+
+/**
  * A preview container name this compiler is willing to write into an at-rule,
  * or `undefined` for anything it is not.
  *
@@ -392,6 +409,12 @@ export function previewContainerName(value: unknown): string | undefined {
     return undefined;
   }
   if (name === UNPREVIEWABLE_CONTAINER) return undefined;
+  // The CSS-wide keywords and `none`, which the grammar excludes from a
+  // `<custom-ident>` however well they match its shape. Emitted, they make an
+  // at-rule the browser drops AND a `container-name` the surface cannot declare,
+  // so the preview loses its rules rather than degrading to the published
+  // compile the way every other refusal here does.
+  if (RESERVED_CONTAINER_NAMES.has(name.toLowerCase())) return undefined;
   // A CSS custom identifier, conservatively: letters, digits, hyphen and
   // underscore, not starting with a digit. Narrower than the grammar allows,
   // because the escapes the full grammar permits are exactly what this refuses
