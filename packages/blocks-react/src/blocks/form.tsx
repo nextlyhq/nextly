@@ -231,6 +231,7 @@ export const form = defineBlock<FormProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Form",
+    icon: "form",
     category: INTERACTIVE,
     keywords: ["contact", "input", "submit", "fields"],
   },

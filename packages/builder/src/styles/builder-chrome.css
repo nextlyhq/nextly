@@ -237,6 +237,40 @@
 }
 
 /*
+ * Mark, then the two lines of text beside it.
+ *
+ * A GRID rather than a flex row, because the row holds three children on two
+ * lines: laid out as a flex row the label and the description sit side by side,
+ * and the two-line reading the panel is built around disappears. The mark spans
+ * both rows so it stays level with the label whether the description wraps to
+ * one line or two.
+ */
+.nx-insert-panel [cmdk-item] {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+  /*
+   * ZERO, stated rather than inherited. The command primitive sets `gap-3` on
+   * every item, which is a column gap while the item is a flex ROW and becomes
+   * a row gap as well the moment it is a grid — pushing 12px between a label
+   * and the description belonging to it, so the two lines of one entry read as
+   * two entries and the row grows by the height of a line.
+   */
+  row-gap: 0;
+}
+
+/*
+ * Nudged down by the difference between the glyph's box and the label's first
+ * line: `align-items: start` above puts both at the top of the row, where a
+ * 16px mark reads as sitting slightly high against 13px text.
+ */
+.nx-insert-panel .nx-block-icon {
+  grid-row: 1 / span 2;
+  align-self: start;
+  padding-block-start: 0.125rem;
+}
+
+/*
  * The label keeps its own column and never wraps mid-word. A block named
  * "Collection loop" breaks at the space; one named "Collectionloop" would
  * otherwise break mid-word and read as two words.
@@ -846,6 +880,25 @@
  * the value the design system already checks.
  */
 .nx-layer-row__badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * A block's mark, wherever one is drawn.
+ *
+ * `flex: none` for the same reason the badge has it: the mark is a fixed-size
+ * glyph beside text that may be long, and a shrinkable icon squashes to an
+ * unreadable sliver rather than letting the name ellipsise as it is meant to.
+ *
+ * `--nx-builder-text-muted` rather than an alpha on the foreground, which is
+ * the token the design system checks and the reason the badge beside it uses
+ * the same one: a blended colour's contrast depends on whatever is behind it,
+ * and that changes between a panel row and a selected one.
+ */
+.nx-block-icon {
   display: inline-flex;
   flex: none;
   align-items: center;

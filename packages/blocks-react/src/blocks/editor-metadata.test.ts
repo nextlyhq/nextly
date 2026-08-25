@@ -14,6 +14,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { BLOCK_ICONS } from "@nextlyhq/blocks-engine";
+
 import { CORE_CATEGORIES } from "./categories";
 import { coreBlocks } from "./index";
 
@@ -56,6 +58,20 @@ describe("core block editor metadata", () => {
         expect(typeof keyword).toBe("string");
         expect(keyword).toBe(keyword.toLowerCase());
       }
+    }
+  );
+
+  it.each(coreBlocks.map(block => [block.name, block] as const))(
+    "%s names an icon from the vocabulary",
+    (_name, block) => {
+      const icon = block.editor?.icon;
+
+      // Membership rather than "is a string", for the same reason the category
+      // is checked that way and a stronger one: the type admits any string so a
+      // plugin can name a concept a newer engine added, which means a typo in a
+      // FIRST-PARTY block is accepted by the compiler and draws the generic
+      // mark. The palette then looks correct and says nothing.
+      expect(BLOCK_ICONS as readonly string[]).toContain(icon);
     }
   );
 

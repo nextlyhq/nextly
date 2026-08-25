@@ -88,10 +88,88 @@ export type BlockSupports = Record<string, BlockSupportValue>;
 /** A path to an editor component, resolved through the admin import map. */
 export type ComponentPath = string;
 
+/**
+ * The icon names an editor can draw.
+ *
+ * CONCEPTS, not the names of any icon library's exports. This list is part of
+ * the block contract, and `lucide-react` — what the builder happens to draw
+ * with today — is a PEER dependency admitting any `>=0.400.0`, so a host may
+ * supply a release in which a given export was renamed or dropped. Naming its
+ * exports here would let that break a stored plugin block whose author did
+ * nothing wrong, and would freeze the editor's art direction into every block
+ * definition ever written. A concept is stable in a way an export is not: the
+ * builder can re-skin, or change libraries entirely, without a block file
+ * changing.
+ *
+ * Deliberately small and generic rather than one entry per core block. A
+ * per-block list would say nothing a block's own name does not, and would leave
+ * a plugin author with nothing to choose from — the point of a vocabulary is
+ * that a block nobody has written yet already has a word for what it looks
+ * like.
+ */
+export const BLOCK_ICONS = [
+  // Structure
+  "section",
+  "container",
+  "columns",
+  "column",
+  "card",
+  "grid",
+  "accordion",
+  "panel",
+  "tabs",
+  "divider",
+  "spacer",
+  // Content
+  "heading",
+  "text",
+  "list",
+  "quote",
+  "code",
+  "table",
+  "link",
+  // Media
+  "image",
+  "gallery",
+  "video",
+  "audio",
+  "embed",
+  "map",
+  // Interactive and data
+  "button",
+  "form",
+  "search",
+  "loop",
+  "chart",
+  "calendar",
+  "user",
+  "cart",
+  "star",
+] as const;
+
+/**
+ * A block's icon: one of the concepts above, or a name an editor knows of its
+ * own.
+ *
+ * The `(string & {})` arm keeps autocomplete for the vocabulary while admitting
+ * a name only a particular editor can resolve, the same bargain
+ * `FieldTypeId` strikes for plugin-contributed field types. An editor that
+ * meets a name it cannot draw falls back to a generic mark rather than
+ * refusing the block — an unknown icon is a cosmetic gap, and a block missing
+ * from the palette over one would be a functional loss out of all proportion.
+ */
+export type BlockIcon = (typeof BLOCK_ICONS)[number] | (string & {});
+
 /** Editor-only metadata. Never serialized into a document. */
 export interface BlockEditorMeta<P extends object = Record<string, unknown>> {
   label?: string;
-  icon?: string;
+  /**
+   * What the palette and the layers tree draw beside this block's name.
+   *
+   * Absent is legitimate and stays legitimate: the editor draws its generic
+   * mark, which is why no block is required to answer this.
+   */
+  icon?: BlockIcon;
   /** Palette grouping, e.g. "structure" | "content" | "media". */
   category?: string;
   /** Extra search terms for the block palette. */

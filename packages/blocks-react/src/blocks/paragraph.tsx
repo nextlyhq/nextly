@@ -48,6 +48,7 @@ export const paragraph = defineBlock<ParagraphProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Text",
+    icon: "text",
     category: CONTENT,
     keywords: ["paragraph", "copy", "body", "prose"],
   },

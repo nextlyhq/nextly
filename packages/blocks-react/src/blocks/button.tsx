@@ -97,6 +97,7 @@ export const button = defineBlock<ButtonProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Button",
+    icon: "button",
     category: INTERACTIVE,
     keywords: ["link", "cta", "call to action"],
   },

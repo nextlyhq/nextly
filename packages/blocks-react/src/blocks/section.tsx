@@ -28,6 +28,7 @@ export const section = defineBlock<ContainerProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Section",
+    icon: "section",
     category: LAYOUT,
     keywords: ["container", "wrapper", "band", "region"],
   },

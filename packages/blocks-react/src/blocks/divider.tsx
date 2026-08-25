@@ -37,6 +37,7 @@ export const divider = defineBlock<DividerProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Divider",
+    icon: "divider",
     category: CONTENT,
     keywords: ["hr", "rule", "separator", "break"],
   },

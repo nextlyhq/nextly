@@ -105,6 +105,7 @@ export const embed = defineBlock<EmbedProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Embed",
+    icon: "embed",
     category: MEDIA,
     keywords: ["video", "iframe", "youtube", "external"],
   },

@@ -112,6 +112,50 @@ describe("InsertPanel", () => {
     expect(onInsert).toHaveBeenCalledWith(op.node);
   });
 
+  it("draws a mark on every row, so the rows are distinguishable at a glance", () => {
+    /*
+     * The palette is scanned rather than read: an author looking for a layout
+     * block sees a column of near-identical two-line entries, and the mark is
+     * what separates them before the labels are read at all.
+     *
+     * Population before the property. `.nx-block-icon` is asserted against the
+     * NUMBER OF ROWS rather than "at least one", because one mark drawn for a
+     * single row satisfies any nonzero count while every other row goes
+     * unmarked — and a panel that rendered no rows at all would satisfy a
+     * comparison of two zeroes, which is why the row count is checked to be
+     * what was registered.
+     */
+    registerBlocks(
+      [
+        { ...base, name: "acme/text", editor: { label: "Text", icon: "text" } },
+        { ...base, name: "acme/pic", editor: { label: "Pic", icon: "image" } },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    const rows = document.querySelectorAll("[cmdk-item]");
+    expect(rows.length).toBe(2);
+    expect(document.querySelectorAll(".nx-block-icon").length).toBe(2);
+    // Drawn, not merely present: an empty span would satisfy the count above.
+    expect(document.querySelectorAll(".nx-block-icon svg").length).toBe(2);
+  });
+
+  it("draws a mark for a block that names no icon", () => {
+    // The control on the assertion above. `icon` is optional on the engine's
+    // metadata, so a row for a block that answers nothing must still carry a
+    // mark — otherwise its row is a different shape from every row beside it,
+    // which is the scanning the mark exists to support.
+    registerBlocks(
+      [{ ...base, name: "acme/bare", editor: { label: "Bare" } }] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    expect(document.querySelectorAll("[cmdk-item]").length).toBe(1);
+    expect(document.querySelectorAll(".nx-block-icon svg").length).toBe(1);
+  });
+
   it("appends after the existing blocks rather than at a fixed index", () => {
     // The separating case for the assertion above.
     registerBlocks(

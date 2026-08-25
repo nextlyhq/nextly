@@ -148,6 +148,7 @@ export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Collection loop",
+    icon: "loop",
     category: CONTENT,
     keywords: ["repeat", "query", "entries", "dynamic"],
   },

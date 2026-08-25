@@ -133,6 +133,7 @@ export const accordionItem = defineBlock<AccordionItemProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Accordion item",
+    icon: "panel",
     category: INTERACTIVE,
     keywords: ["disclosure", "panel", "faq"],
   },

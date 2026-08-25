@@ -42,6 +42,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { BlockIconMark } from "./block-icon";
 import type { EditorState } from "./editor-state";
 import {
   allowedEntries,
@@ -213,6 +214,7 @@ export function InsertPanel({
                   value={entry.id}
                   onSelect={() => insert(entry)}
                 >
+                  <BlockIconMark icon={entry.icon} />
                   <span className="nx-insert-panel__label">{entry.label}</span>
                   <span className="nx-insert-panel__description">
                     {entry.description}

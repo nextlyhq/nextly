@@ -35,10 +35,12 @@
  * @module layers-panel
  */
 
+import { allBlocks } from "@nextlyhq/blocks-engine";
 import { Input, TreeView, type TreeNode } from "@nextlyhq/ui";
 import { EyeOff, Lock, SlidersHorizontal } from "lucide-react";
 import * as React from "react";
 
+import { BlockIconMark } from "./block-icon";
 import type { EditorState } from "./editor-state";
 import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
 
@@ -68,8 +70,29 @@ function Badge({
   );
 }
 
-/** A layer as a row: its name, and what is true about it. */
-function rowOf(node: LayerNode): TreeNode {
+/**
+ * What each block type draws, by type.
+ *
+ * A layer node carries the block's TYPE and nothing about its definition —
+ * `layersOf` reads a document, and a document does not hold editor metadata. So
+ * the lookup happens here, where the registry is already reachable, rather than
+ * by widening what the derivation returns.
+ *
+ * Read ONCE per mount, for the reason the insert panel gives for reading the
+ * registry the same way: it is global mutable state with no change
+ * notification, so there is nothing to subscribe to.
+ */
+function iconsByType(): ReadonlyMap<string, string | undefined> {
+  return new Map(
+    allBlocks().map(definition => [definition.name, definition.editor?.icon])
+  );
+}
+
+/** A layer as a row: its mark, its name, and what is true about it. */
+function rowOf(
+  node: LayerNode,
+  icons: ReadonlyMap<string, string | undefined>
+): TreeNode {
   return {
     id: node.id,
     // `textValue` carries the NAME alone even though the label renders badges
@@ -79,6 +102,7 @@ function rowOf(node: LayerNode): TreeNode {
     textValue: node.label,
     label: (
       <span className="nx-layer-row">
+        <BlockIconMark icon={icons.get(node.type)} size={14} />
         <span className="nx-layer-row__label">{node.label}</span>
         {node.locked ? <Badge icon={<Lock size={12} />} text="Locked" /> : null}
         {node.breakpointHidden ? (
@@ -95,7 +119,7 @@ function rowOf(node: LayerNode): TreeNode {
         ) : null}
       </span>
     ),
-    children: node.children.map(rowOf),
+    children: node.children.map(child => rowOf(child, icons)),
   };
 }
 
@@ -149,7 +173,11 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
     [opened, search.expand]
   );
 
-  const nodes = React.useMemo(() => search.roots.map(rowOf), [search.roots]);
+  const icons = React.useMemo(iconsByType, []);
+  const nodes = React.useMemo(
+    () => search.roots.map(root => rowOf(root, icons)),
+    [search.roots, icons]
+  );
 
   return (
     <div className="nx-layers-panel">
