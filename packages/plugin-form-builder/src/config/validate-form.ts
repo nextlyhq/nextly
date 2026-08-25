@@ -66,6 +66,7 @@ export type FormValidationErrorCode =
   // Settings errors
   | "SETTINGS_INVALID_TYPE"
   | "REDIRECT_URL_REQUIRED"
+  | "REDIRECT_PAGE_REQUIRED"
   // Access errors
   | "ACCESS_INVALID_TYPE"
   | "ACCESS_FUNCTION_INVALID";
@@ -604,6 +605,18 @@ function validateSettings(
         code: "REDIRECT_URL_REQUIRED",
       });
     }
+  }
+
+  // A form set to redirect to a page needs the page. Without this the form
+  // saves, the admin shows it as redirecting, and every submission finishes
+  // with nowhere to go — the destination is missing at submit time, when
+  // there is no one to tell.
+  if (s.confirmationType === "relationship" && !s.redirectPage) {
+    errors.push({
+      path: "settings.redirectPage",
+      message: "A page is required when confirmation type is 'relationship'",
+      code: "REDIRECT_PAGE_REQUIRED",
+    });
   }
 }
 

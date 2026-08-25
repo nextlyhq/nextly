@@ -23,7 +23,7 @@
  * runtime ignores this field. See packages/nextly/src/auth/handlers/session.ts.
  */
 
-import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";
+import { formBuilder } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { defineConfig } from "nextly/config";
 
@@ -114,7 +114,14 @@ export default defineConfig({
       siteStyle: SITE_STYLE_DEFAULTS,
       pagePreviewPath: "/{slug}",
     }),
-    formBuilderPlugin,
+    // `redirectRelationships` states where each collection's documents are
+    // served, for the same reason `pagePreviewPath` above does and in the same
+    // syntax: the plugin cannot discover that this app mounts
+    // `(frontend)/[...slug]` at the site root. Without it a form can still
+    // show a message or redirect to a typed URL, but "redirect to a page" is
+    // not offered, because choosing it could only produce a form with nowhere
+    // to send anyone.
+    formBuilder({ redirectRelationships: { pages: "/{slug}" } }).plugin,
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
       : []),

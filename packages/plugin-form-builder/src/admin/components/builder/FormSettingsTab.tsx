@@ -29,6 +29,8 @@ import type React from "react";
 
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
+import { RedirectPagePicker } from "./RedirectPagePicker";
+
 // ---------------------------------------------------------------------------
 // Layout helpers
 // ---------------------------------------------------------------------------
@@ -129,9 +131,18 @@ export interface SpamDefaults {
 interface FormSettingsTabProps {
   /** Plugin-level spam defaults (from builder-config); null while loading. */
   spamDefaults: SpamDefaults | null;
+  /**
+   * Collections a form may redirect to (from builder-config); null while
+   * loading. Empty means the site configured none, and the option is not
+   * offered — choosing it could only ever produce a form with no destination.
+   */
+  redirectCollections: string[] | null;
 }
 
-export function FormSettingsTab({ spamDefaults }: FormSettingsTabProps) {
+export function FormSettingsTab({
+  spamDefaults,
+  redirectCollections,
+}: FormSettingsTabProps) {
   const { settings, updateSettings } = useFormBuilder();
 
   return (
@@ -177,17 +188,14 @@ export function FormSettingsTab({ spamDefaults }: FormSettingsTabProps) {
       <section>
         <SectionHeading>After submission</SectionHeading>
         <div className="flex flex-col gap-4 pt-4">
-          {settings.confirmationType === "relationship" && (
-            <p className="border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-              This form redirects to a linked page (configured via the API).
-              Picking an option below replaces that behavior.
-            </p>
-          )}
           <RadioGroup
             value={settings.confirmationType ?? "message"}
             onValueChange={value =>
               updateSettings({
-                confirmationType: value as "message" | "redirect",
+                confirmationType: value as
+                  | "message"
+                  | "redirect"
+                  | "relationship",
               })
             }
             className="flex flex-col gap-3"
@@ -238,6 +246,27 @@ export function FormSettingsTab({ spamDefaults }: FormSettingsTabProps) {
                 )}
               </div>
             </div>
+            {redirectCollections !== null && redirectCollections.length > 0 && (
+              <div className="flex items-start gap-3">
+                <RadioGroupItem
+                  value="relationship"
+                  id="settings-confirm-page"
+                  className="mt-0.5"
+                />
+                <div className="w-full space-y-2">
+                  <Label htmlFor="settings-confirm-page">
+                    Redirect to a page
+                  </Label>
+                  {settings.confirmationType === "relationship" && (
+                    <RedirectPagePicker
+                      collections={redirectCollections}
+                      value={settings.redirectPage}
+                      onChange={next => updateSettings({ redirectPage: next })}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
           </RadioGroup>
         </div>
       </section>

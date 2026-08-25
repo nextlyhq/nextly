@@ -94,6 +94,11 @@ export function formsCollection(
     ...overrides
   } = pluginConfig.formOverrides;
 
+  // Derived from the map rather than carried beside it: the collections a form
+  // may redirect to are exactly the ones with a URL pattern configured, so
+  // there is no second list to fall out of step with the first.
+  const redirectCollections = Object.keys(pluginConfig.redirectRelationships);
+
   // Build settings group fields based on plugin configuration
   const settingsFields: FieldConfig[] = [
     text({
@@ -112,7 +117,7 @@ export function formsCollection(
       options: [
         { label: "Show Message", value: "message" },
         { label: "Redirect to URL", value: "redirect" },
-        ...(pluginConfig.redirectRelationships.length > 0
+        ...(redirectCollections.length > 0
           ? [{ label: "Redirect to Page", value: "relationship" }]
           : []),
       ],
@@ -148,12 +153,12 @@ export function formsCollection(
   ];
 
   // Add redirect relationship field if configured
-  if (pluginConfig.redirectRelationships.length > 0) {
+  if (redirectCollections.length > 0) {
     settingsFields.push(
       relationship({
         name: "redirectPage",
         label: "Redirect Page",
-        relationTo: pluginConfig.redirectRelationships,
+        relationTo: redirectCollections,
         admin: {
           description: "Select a page to redirect to after submission",
           condition: {

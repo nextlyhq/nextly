@@ -9,6 +9,8 @@
 import type { CollectionConfig, FieldDefinition, RequestContext } from "nextly";
 import type { ComponentType } from "react";
 
+import type { RedirectRelationships } from "./utils/redirect-target";
+
 // ============================================================
 // Supporting Types
 // ============================================================
@@ -323,17 +325,28 @@ export interface FormBuilderPluginOptions {
   };
 
   /**
-   * Collections that can be used as redirect targets after form submission.
+   * Collections whose documents a form may redirect to after submission, and
+   * how each one's documents become URLs.
    *
-   * When specified, the form builder will allow selecting documents from
-   * these collections as redirect destinations.
+   * The mapping is configuration because it cannot be derived: a site's URL
+   * structure belongs to the site. `{field}` placeholders are filled from the
+   * document; a function covers a path this package cannot express.
+   *
+   * The array shorthand names the collections and takes `/{slug}` for all of
+   * them, which is the routing the page builder ships.
    *
    * @example
    * ```typescript
-   * redirectRelationships: ['pages', 'posts', 'landing-pages']
+   * redirectRelationships: ['pages']
+   *
+   * redirectRelationships: {
+   *   pages: '/{slug}',
+   *   posts: '/blog/{slug}',
+   *   docs: page => `/docs/${String(page.section)}/${String(page.slug)}`,
+   * }
    * ```
    */
-  redirectRelationships?: string[];
+  redirectRelationships?: string[] | RedirectRelationships;
 
   /**
    * Hook called before sending email notifications.
@@ -1191,7 +1204,14 @@ export interface ResolvedFormBuilderConfig {
     hidden: boolean | Partial<FieldBlockConfig>;
   };
 
-  redirectRelationships: string[];
+  /**
+   * The collection-to-URL map, with the array shorthand already expanded.
+   *
+   * ONE shape, so nothing downstream branches on which spelling was written.
+   * The list of redirect collections is `Object.keys` of this rather than a
+   * second field beside it, which would agree with it today and drift later.
+   */
+  redirectRelationships: RedirectRelationships;
 
   beforeEmail?: FormBuilderPluginOptions["beforeEmail"];
 

@@ -23,6 +23,11 @@ import {
   transformFormData,
   getValidationErrors,
 } from "../utils/generate-schema";
+import {
+  applyRedirectPattern,
+  parseRedirectReference,
+  type RedirectTargetDocument,
+} from "../utils/redirect-target";
 
 import { checkSpam } from "./spam-detection";
 
@@ -329,7 +334,11 @@ export async function submitForm(
 
     // 6. Determine redirect URL. Spam gets the same success shape as a real
     // submission (minus the stored row reference) so bots can't diff the two.
-    const redirect = determineRedirectUrl(form);
+    const redirect = await resolveRedirectUrl(
+      form,
+      pluginConfig,
+      pluginContext
+    );
 
     if (isContentSpam) {
       return { success: true, redirect };
@@ -394,38 +403,133 @@ export async function fetchFormBySlug(
 }
 
 /**
- * Determine the redirect URL based on form settings.
+ * Where a successful submission sends the visitor, or undefined for nowhere.
  *
- * @param form - Form document
- * @returns Redirect URL or undefined
+ * A destination is either TYPED as a URL or PICKED as a document, and the two
+ * are answered differently: a typed URL is returned verbatim, since it may
+ * legitimately point off-site, while a picked document has to be read and put
+ * through its collection's configured URL pattern.
+ *
+ * Two settings hold a picked document — `redirectPage` under the
+ * "Redirect to Page" option, and `redirectRelation` under the URL option —
+ * and both resolve through the same path, because they ask the same question.
+ *
+ * Every way of failing to produce a URL is logged. A form whose destination
+ * cannot be built behaves exactly like one configured to stay put, so without
+ * a line in the log the two are indistinguishable from the outside.
  */
-function determineRedirectUrl(form: FormDocument): string | undefined {
-  if (!form.settings) {
+async function resolveRedirectUrl(
+  form: FormDocument,
+  pluginConfig: ResolvedFormBuilderConfig,
+  pluginContext: PluginContext
+): Promise<string | undefined> {
+  const settings = form.settings;
+  if (!settings) return undefined;
+
+  const { confirmationType } = settings;
+  if (confirmationType !== "redirect" && confirmationType !== "relationship") {
     return undefined;
   }
 
-  // Check confirmation type
-  if (form.settings.confirmationType !== "redirect") {
+  // A typed URL is returned verbatim: it is the whole point of that option,
+  // and it may legitimately point off-site.
+  if (confirmationType === "redirect" && settings.redirectUrl) {
+    return settings.redirectUrl;
+  }
+
+  return urlForPickedDocument(
+    confirmationType === "relationship"
+      ? settings.redirectPage
+      : settings.redirectRelation,
+    form,
+    pluginConfig,
+    pluginContext
+  );
+}
+
+/**
+ * The URL for a picked document, or undefined with a reason in the log.
+ *
+ * Every branch reports. A form whose destination cannot be built behaves
+ * exactly like one configured to stay put, so without a line here the two are
+ * indistinguishable from outside — which is how a redirect that never fired
+ * went unnoticed.
+ */
+async function urlForPickedDocument(
+  stored: unknown,
+  form: FormDocument,
+  pluginConfig: ResolvedFormBuilderConfig,
+  pluginContext: PluginContext
+): Promise<string | undefined> {
+  const { logger } = pluginContext;
+  const patterns = pluginConfig.redirectRelationships;
+  const reference = parseRedirectReference(stored, Object.keys(patterns));
+
+  if (!reference) {
+    logger.warn?.("Form redirects to a page, but names no readable document", {
+      form: form.slug,
+    });
     return undefined;
   }
 
-  // Direct URL redirect
-  if (form.settings.redirectUrl) {
-    return form.settings.redirectUrl;
+  const pattern = patterns[reference.collection];
+  if (!pattern) {
+    logger.warn?.(
+      "Form redirects to a collection that is not in redirectRelationships",
+      { form: form.slug, collection: reference.collection }
+    );
+    return undefined;
   }
 
-  // Relationship-based redirect (requires additional lookup)
-  // Note: For relationship redirects, the admin UI should resolve
-  // the URL before saving to redirectUrl, or the frontend should
-  // handle the relationship lookup.
-  if (form.settings.redirectRelation) {
-    // Return a placeholder that the frontend can resolve
-    // Format: relationship://{collection}/{id}
-    const { relationTo, value } = form.settings.redirectRelation;
-    return `relationship://${relationTo}/${value}`;
+  const target = await readTarget(reference, form, pluginContext);
+  if (!target) return undefined;
+
+  const url = applyRedirectPattern(pattern, target);
+  if (!url) {
+    logger.warn?.(
+      "Form redirect pattern could not be filled from the target document",
+      { form: form.slug, collection: reference.collection }
+    );
+  }
+  return url;
+}
+
+/** The target row, or undefined — a deleted target and a failed read differ. */
+async function readTarget(
+  reference: { collection: string; id: string },
+  form: FormDocument,
+  pluginContext: PluginContext
+): Promise<RedirectTargetDocument | undefined> {
+  const { logger } = pluginContext;
+  const context = {
+    form: form.slug,
+    collection: reference.collection,
+    id: reference.id,
+  };
+
+  let row: unknown;
+  try {
+    row = await pluginContext.services.collections.findEntryById(
+      reference.collection,
+      reference.id,
+      { as: "system" }
+    );
+  } catch (error) {
+    // The submission already succeeded, so this degrades to "no redirect"
+    // rather than failing the request — reported, because a broken read and a
+    // deleted target are different problems with the same symptom.
+    logger.warn?.("Form redirect target could not be read", {
+      ...context,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
   }
 
-  return undefined;
+  if (!row || typeof row !== "object") {
+    logger.warn?.("Form redirect target no longer exists", context);
+    return undefined;
+  }
+  return row as RedirectTargetDocument;
 }
 
 // ============================================================

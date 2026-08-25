@@ -159,6 +159,13 @@ function FormBuilderViewInner({
   // "inherit" resolves to. `null` while the config request settles.
   const [spamDefaults, setSpamDefaults] = useState<SpamDefaults | null>(null);
 
+  // Collections a form may redirect to. `null` while the config request
+  // settles, so the Settings tab can tell "not configured" from "not known
+  // yet" and not flash the option away.
+  const [redirectCollections, setRedirectCollections] = useState<
+    string[] | null
+  >(null);
+
   useEffect(() => {
     let cancelled = false;
     const allTypes = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
@@ -173,6 +180,7 @@ function FormBuilderViewInner({
             fields?: Record<string, boolean>;
             notifications?: NotificationDefaults;
             spamProtection?: SpamDefaults;
+            redirectCollections?: string[];
           } | null
         ) => {
           if (cancelled) return;
@@ -190,6 +198,7 @@ function FormBuilderViewInner({
           );
           setNotificationDefaults(config?.notifications ?? {});
           setSpamDefaults(config?.spamProtection ?? {});
+          setRedirectCollections(config?.redirectCollections ?? []);
         }
       )
       .catch(() => {
@@ -197,6 +206,7 @@ function FormBuilderViewInner({
         setEnabledTypes(allTypes);
         setNotificationDefaults({});
         setSpamDefaults({});
+        setRedirectCollections([]);
       });
     return () => {
       cancelled = true;
@@ -522,7 +532,10 @@ function FormBuilderViewInner({
 
       {/* Settings tab */}
       {activeTab === "settings" && (
-        <FormSettingsTab spamDefaults={spamDefaults} />
+        <FormSettingsTab
+          spamDefaults={spamDefaults}
+          redirectCollections={redirectCollections}
+        />
       )}
 
       {/* Notifications tab */}

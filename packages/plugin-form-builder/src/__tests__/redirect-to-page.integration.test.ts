@@ -1,0 +1,138 @@
+/**
+ * A form whose author picked a PAGE as its destination, through the real
+ * submission handler.
+ *
+ * The unit tests beside the resolver cover its decisions; this covers the
+ * wiring, which is where the behaviour was missing. Every part existed — the
+ * `redirectPage` relationship field, a `"relationship"` confirmation type the
+ * admin offers as "Redirect to Page", a settings normaliser that preserved the
+ * value — and a submission still returned no destination, because nothing
+ * joined them up. Only a test that submits can see that.
+ */
+import {
+  createTestNextly,
+  type TestNextly,
+} from "@nextlyhq/plugin-sdk/testing";
+import { createPluginContext } from "nextly";
+import { defineCollection, text } from "nextly/config";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { submitForm } from "../handlers/submit-form";
+import { formBuilder } from "../plugin";
+
+let current: TestNextly | undefined;
+
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+});
+
+const pagesCollection = defineCollection({
+  slug: "pages",
+  fields: [text({ name: "title" }), text({ name: "slug" })],
+});
+
+/** A form pointed at `pageId`, submitted; returns what the handler answered. */
+async function submitPointingAt(
+  redirectPage: unknown,
+  options: Parameters<typeof formBuilder>[0]
+) {
+  const { plugin, config } = formBuilder(options);
+
+  current = await createTestNextly({
+    plugins: [plugin],
+    collections: [pagesCollection],
+  });
+
+  const page = await current.nextly.create({
+    collection: "pages",
+    data: { title: "Thank you", slug: "thank-you" },
+  });
+  const pageId = (page as { item: { id: string } }).item.id;
+
+  await current.nextly.create({
+    collection: "forms",
+    data: {
+      name: "Contact",
+      slug: "contact",
+      status: "published",
+      fields: [{ type: "text", name: "message", label: "Message" }],
+      settings: {
+        confirmationType: "relationship",
+        redirectPage:
+          typeof redirectPage === "function"
+            ? (redirectPage as (id: string) => unknown)(pageId)
+            : redirectPage,
+      },
+    },
+  });
+
+  // `db` is the raw-database escape hatch, resolved eagerly when the context
+  // is built and not registered by the harness. The submission path never
+  // touches it — it goes through the collections service — so a stub keeps the
+  // rest of the context real rather than mocking the part under test.
+  const getService = ((name: string) =>
+    name === "db" ? {} : current?.getService(name as never)) as never;
+
+  const pluginContext = createPluginContext(getService, current.hooks as never);
+
+  return submitForm(
+    { formSlug: "contact", data: { message: "hello" } },
+    { pluginContext, pluginConfig: config }
+  );
+}
+
+describe("a form that redirects to a picked page", () => {
+  it("answers with the page's real URL", async () => {
+    const result = await submitPointingAt(
+      (id: string) => ({ relationTo: "pages", value: id }),
+      { redirectRelationships: { pages: "/{slug}" } }
+    );
+
+    expect(result.success).toBe(true);
+    // The destination, built from the page that was picked — not a protocol
+    // for somebody else to resolve, and not nothing.
+    expect(result.redirect).toBe("/thank-you");
+  });
+
+  it("uses the collection's own pattern", async () => {
+    const result = await submitPointingAt(
+      (id: string) => ({ relationTo: "pages", value: id }),
+      { redirectRelationships: { pages: "/help/{slug}" } }
+    );
+
+    expect(result.redirect).toBe("/help/thank-you");
+  });
+
+  it("takes /{slug} for the array shorthand", async () => {
+    const result = await submitPointingAt(
+      (id: string) => ({ relationTo: "pages", value: id }),
+      { redirectRelationships: ["pages"] }
+    );
+
+    expect(result.redirect).toBe("/thank-you");
+  });
+
+  it("still submits, with no destination, when the target was deleted", async () => {
+    // The submission is the thing that must not fail: the visitor's data is
+    // already saved by the time a destination is looked up.
+    const result = await submitPointingAt(
+      { relationTo: "pages", value: "pg_missing" },
+      { redirectRelationships: { pages: "/{slug}" } }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.submission).toBeDefined();
+    expect(result.redirect).toBeUndefined();
+  });
+
+  it("has no destination when the collection carries no pattern", async () => {
+    const result = await submitPointingAt(
+      (id: string) => ({ relationTo: "pages", value: id }),
+      { redirectRelationships: { posts: "/blog/{slug}" } }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.redirect).toBeUndefined();
+  });
+});
