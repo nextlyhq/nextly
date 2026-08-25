@@ -2886,6 +2886,47 @@ describe("what the two value comparisons each treat as the same value", () => {
     expect(sameStoredValue(chain(700, "leaf"), chain(700, "leaf"))).toBe(false);
   });
 
+  it("does not invoke an accessor at an ARRAY index either", () => {
+    /*
+     * The same guarantee as the record case, and the site it was first left
+     * out of: fixing one branch and leaving its sibling is the recurring
+     * defect on this work, so the pair is asserted together.
+     *
+     * A HOLE in a sparse array has no descriptor at all and answers different
+     * for the same reason — there is nothing to read without consulting the
+     * prototype.
+     */
+    let calls = 0;
+    const withGetter = (): unknown[] => {
+      const list: unknown[] = [];
+      Object.defineProperty(list, 0, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          calls += 1;
+          return 1;
+        },
+      });
+      list.length = 1;
+      return list;
+    };
+    const left = withGetter();
+    const right = withGetter();
+
+    // Population: both really are one-element arrays carrying the accessor at
+    // index 0, so the answer is about the accessor rather than about length.
+    expect(left).toHaveLength(1);
+    expect(right).toHaveLength(1);
+
+    expect(sameStoredValue(left, right)).toBe(false);
+    expect(sameStyleValue(left, right)).toBe(false);
+    expect(calls).toBe(0);
+
+    // The control: ordinary arrays of equal content still compare equal, so the
+    // guard cannot be satisfied by calling every array different.
+    expect(sameStoredValue([1, "2", null], [1, "2", null])).toBe(true);
+  });
+
   it("does not invoke an own accessor while comparing", () => {
     /*
      * The comparison runs while a panel inspects a selection, so a getter with

@@ -541,6 +541,39 @@ function ownKeysWithin(
   return keys;
 }
 
+/**
+ * What two holders store at one position, or `null` when either cannot be read
+ * without running code.
+ *
+ * The comparison walks values a caller supplied and does it while a panel is
+ * inspecting a selection, so a bracket read is not a neutral act: an own
+ * accessor would run — a side-effecting getter from rendering alone, a throwing
+ * one aborting the read — and an inherited one would answer for a value the
+ * holder does not have. Descriptors read only what is stored, and only what is
+ * stored HERE.
+ *
+ * `null` for three cases that are all "there is nothing to compare": an
+ * accessor, an inherited property, and a HOLE in a sparse array. The caller
+ * reports different, which is the same direction the budget and the depth bound
+ * take — the one that cannot hide a disagreement behind something unreadable.
+ *
+ * Asked as a PAIR because the two sides are only ever read together, and asked
+ * once because an array index and a record key are the same question about
+ * different positions. Answering it in both branches is how one of them came to
+ * read descriptors while the other still used brackets.
+ */
+function ownDataPair(
+  left: object,
+  right: object,
+  key: string | number
+): [unknown, unknown] | null {
+  const leftPart = Object.getOwnPropertyDescriptor(left, key);
+  if (leftPart === undefined || !("value" in leftPart)) return null;
+  const rightPart = Object.getOwnPropertyDescriptor(right, key);
+  if (rightPart === undefined || !("value" in rightPart)) return null;
+  return [leftPart.value, rightPart.value];
+}
+
 function equalWithin(
   a: unknown,
   b: unknown,
@@ -572,8 +605,11 @@ function equalWithin(
       if (left.length !== right.length) return false;
       if (queued + left.length > budget) return false;
       queued += left.length;
-      for (let i = 0; i < left.length; i += 1)
-        pending.push([left[i], right[i], depth + 1]);
+      for (let i = 0; i < left.length; i += 1) {
+        const pair = ownDataPair(left, right, i);
+        if (pair === null) return false;
+        pending.push([pair[0], pair[1], depth + 1]);
+      }
       continue;
     }
     if (isPlainRecord(left) && isPlainRecord(right)) {
@@ -586,17 +622,9 @@ function equalWithin(
       if (keys === null) return false;
       queued += keys.length;
       for (const key of keys) {
-        // DESCRIPTORS, not `left[key]`. A bracket read runs an own accessor,
-        // and this comparison is performed while a panel is inspecting a
-        // selection — so a getter with a side effect would run from rendering,
-        // and a throwing one would abort the read. An accessor-bearing value is
-        // reported different instead, without being invoked: the same direction
-        // the budget takes, and the one that cannot hide a disagreement.
-        const leftPart = Object.getOwnPropertyDescriptor(left, key);
-        const rightPart = Object.getOwnPropertyDescriptor(right, key);
-        if (leftPart === undefined || !("value" in leftPart)) return false;
-        if (rightPart === undefined || !("value" in rightPart)) return false;
-        pending.push([leftPart.value, rightPart.value, depth + 1]);
+        const pair = ownDataPair(left, right, key);
+        if (pair === null) return false;
+        pending.push([pair[0], pair[1], depth + 1]);
       }
       continue;
     }
