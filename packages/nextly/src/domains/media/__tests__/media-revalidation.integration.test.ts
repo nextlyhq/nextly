@@ -221,6 +221,75 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
   });
 
+  it("invalidates a file that arrives while the folder is being deleted", async () => {
+    // The window Codex named: `media.folder_id` is ON DELETE SET NULL, so
+    // deleting the folder CHANGES any row that arrived after the delete
+    // collected its list — and that row is in nobody's invalidation set.
+    //
+    // The injected storage is the seam that makes the race deterministic:
+    // `removeStoredFiles` calls it between the collection and the folder
+    // delete, which is exactly the gap a concurrent upload lands in.
+    const { handle, flush } = await bootWithSpy();
+    await handle.adapter.insert("users", {
+      id: "racer-1",
+      email: "racer-1@test.local",
+    });
+    const unified = handle.getService("mediaService") as UnifiedMediaService;
+    const ctx = { user: { id: "racer-1" } } as Parameters<
+      typeof unified.createFolder
+    >[1];
+    const folder = await unified.createFolder({ name: "contested" }, ctx);
+
+    const original = await handle.nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "original.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      folder: folder.id,
+    });
+    expect(original.folderId).toBe(folder.id);
+
+    const lateId = "late-arrival-1";
+    const folders = new MediaFolderService(handle.adapter, console as never);
+    const racingStorage = {
+      async bulkDelete(): Promise<{
+        successful: string[];
+        failed: Array<{ filePath: string; error: string }>;
+      }> {
+        // The concurrent upload, landing mid-delete.
+        await handle.adapter.insert("media", {
+          id: lateId,
+          filename: "late.pdf",
+          originalFilename: "late.pdf",
+          mimeType: "application/pdf",
+          size: 1,
+          url: "/uploads/late.pdf",
+          folderId: folder.id,
+          uploadedAt: new Date(),
+          updatedAt: new Date(),
+        });
+        return { successful: [], failed: [] };
+      },
+    };
+
+    flush.mockClear();
+    const result = await folders.deleteFolder(folder.id, true, racingStorage);
+    expect(result.success).toBe(true);
+
+    // The control, and it is the whole test: the row really did land inside
+    // the window, and the folder delete really did change it. Without both,
+    // the tag assertion below is about a row that was never contended.
+    const after = (await handle.adapter.select("media", {
+      where: { and: [{ column: "id", op: "=", value: lateId }] },
+    })) as Array<{ folderId: string | null }>;
+    expect(after).toHaveLength(1);
+    expect(after[0]?.folderId ?? null).toBeNull();
+
+    expect(flushedTags(flush)).toContain(`nextly:media:id:${lateId}`);
+  });
+
   it("invalidates a file moved between folders through the folder service", async () => {
     // Reachable through `ServiceContainer.mediaFolders`, the same public
     // surface the published actions use — and it writes the media row directly

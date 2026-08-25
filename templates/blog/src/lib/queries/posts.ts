@@ -45,10 +45,10 @@ const PUBLISHED = { status: { equals: "published" } };
 /**
  * Tags for a read that populates related records (depth>=1). Carries the post,
  * category, tag, user, and media collection tags so an edit to any embedded
- * relation busts these pages. Categories and tags emit their tags on write; the
- * `users` and `media` tags are inert today (those system collections do not
- * emit cache tags — see `RELATION_REVALIDATE_SECONDS`) but future-proof the
- * read for when they do.
+ * relation busts these pages. Categories, tags and media emit their tags on
+ * write, so an edited image refreshes these pages immediately. The `users` tag
+ * is still inert (that system collection emits no cache tags — see
+ * `RELATION_REVALIDATE_SECONDS`) but future-proofs the read for when it does.
  */
 const POST_WITH_RELATIONS_TAGS = [
   ...nextlyTags("posts"),
@@ -59,11 +59,12 @@ const POST_WITH_RELATIONS_TAGS = [
 ];
 
 /**
- * Time-based safety net (seconds) for reads that embed author (user) or media
- * fields. The `users` and `media` system collections do not emit revalidation
- * tags today, so this window is how an author's updated name / bio / avatar, or
- * an edited featured / OG image's alt text or crop, becomes visible inside
- * posts. Lower it for fresher relation data at a higher DB cost.
+ * Time-based safety net (seconds) for reads that embed author (user) fields.
+ * The `users` system collection emits no revalidation tags, so this window is
+ * how an author's updated name / bio / avatar becomes visible inside posts.
+ * Media no longer depends on it — a media write busts that file's tags on
+ * commit, so an edited image's alt text or crop appears on the next visit.
+ * Lower it for fresher author data at a higher DB cost.
  */
 const RELATION_REVALIDATE_SECONDS = 3600;
 

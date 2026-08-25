@@ -585,6 +585,45 @@ export class MediaFolderService extends BaseService {
   /**
    * Delete folder (and optionally its contents)
    */
+  /**
+   * The reasons this folder may not be deleted, or null to proceed.
+   *
+   * A PRECONDITION, so it runs before any of the work below: refusing after
+   * the media rows are gone would report failure on a delete that already
+   * happened.
+   */
+  private async refuseUndeletableFolder(
+    folderId: string,
+    deleteContents: boolean
+  ): Promise<DeleteFolderOutcome | null> {
+    const existing = await this.getFolderById(folderId);
+    if (!existing.success || !existing.data) {
+      return {
+        success: false,
+        statusCode: 404,
+        code: "NOT_FOUND",
+        message: "Folder not found",
+      };
+    }
+
+    const contents = await this.getFolderContents(folderId);
+    const hasContents =
+      (contents.data?.subfolders.length ?? 0) > 0 ||
+      (contents.data?.mediaFiles.length ?? 0) > 0;
+
+    if (hasContents && !deleteContents) {
+      return {
+        success: false,
+        statusCode: 400,
+        code: "INVALID_INPUT",
+        message:
+          "Folder is not empty. Set deleteContents=true to delete all contents.",
+      };
+    }
+
+    return null;
+  }
+
   async deleteFolder(
     folderId: string,
     deleteContents: boolean = false,
@@ -593,43 +632,24 @@ export class MediaFolderService extends BaseService {
     try {
       const { mediaFolders } = this.tables;
 
-      const existing = await this.getFolderById(folderId);
-      if (!existing.success || !existing.data) {
-        return {
-          success: false,
-          statusCode: 404,
-          code: "NOT_FOUND",
-          message: "Folder not found",
-        };
-      }
-
-      const contents = await this.getFolderContents(folderId);
-      if (contents.data) {
-        const hasContents =
-          contents.data.subfolders.length > 0 ||
-          contents.data.mediaFiles.length > 0;
-
-        if (hasContents && !deleteContents) {
-          return {
-            success: false,
-            statusCode: 400,
-            code: "INVALID_INPUT",
-            message:
-              "Folder is not empty. Set deleteContents=true to delete all contents.",
-          };
-        }
-      }
+      const refusal = await this.refuseUndeletableFolder(
+        folderId,
+        deleteContents
+      );
+      if (refusal) return refusal;
 
       let deletedMediaCount = 0;
       let deletedFoldersCount = 0;
+      // Hoisted: the folder delete below needs this list too, because
+      // `media.folder_id` nulls on its parent's removal and any row still
+      // pointing at one of these folders is changed by it.
+      const subfolderIds = await this.collectAllSubfolderIds(folderId);
+      const allFolderIds = [folderId, ...subfolderIds];
+
       if (deleteContents) {
-        const subfolderIds = await this.collectAllSubfolderIds(folderId);
         deletedFoldersCount = subfolderIds.length;
 
-        const records = await this.collectMediaInFolders([
-          folderId,
-          ...subfolderIds,
-        ]);
+        const records = await this.collectMediaInFolders(allFolderIds);
         deletedMediaCount = records.length;
 
         // ONE shared-tag flush for a delete that commits in chunks. Each
@@ -647,8 +667,26 @@ export class MediaFolderService extends BaseService {
         });
       }
 
+      // A file uploaded or moved INTO one of these folders after the
+      // collection above is absent from `records`, and `media.folder_id` is
+      // ON DELETE SET NULL — so the folder delete silently changes that row
+      // while nothing busts its tags. Collected here, as close to the delete
+      // as the code can get, because the gap otherwise spans the storage
+      // cleanup and its retry backoffs.
+      //
+      // This NARROWS the window; it does not close it. A row arriving between
+      // this query and the statement below is still missed, and closing that
+      // needs the two to share a transaction or a lock on the folder rows,
+      // which this method does not have.
+      const strays = await this.collectMediaInFolders(allFolderIds);
+
       // Delete folder (CASCADE handles subfolder records)
       await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));
+
+      // After the statement, so this only names rows the delete really changed.
+      if (strays.length > 0) {
+        await revalidateMedia(strays.map(record => record.id));
+      }
 
       return {
         success: true,
