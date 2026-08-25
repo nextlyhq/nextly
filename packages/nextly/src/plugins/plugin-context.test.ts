@@ -79,11 +79,15 @@ describe("createPluginContext (P1 reshape)", () => {
     expect(ctx.services.collections).not.toBe(collections);
     // The shape and the non-collection services are unchanged.
     expect(ctx.services.email).toBe(email);
+    // Pinned as an exact list rather than a set of `toHaveProperty` checks:
+    // this surface is public API, so a member ARRIVING is as much a change as
+    // one going, and only an exhaustive comparison catches the first.
     expect(Object.keys(ctx.services).sort()).toEqual([
       "collections",
       "email",
       "media",
       "plugins",
+      "singles",
       "users",
       "versions",
     ]);

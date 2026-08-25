@@ -367,10 +367,34 @@ export function isDataField(field: { type: string }): field is DataFieldConfig {
  * }
  * ```
  */
+export const NESTED_FIELD_TYPES = ["repeater", "group"] as const;
+
+/**
+ * The same question asked of a field whose `type` is an open string.
+ *
+ * A contributed field type is not a member of `FieldType`, so it cannot reach
+ * {@link hasNestedFields} — and `PluginFieldInput` carries an index signature,
+ * so such a field may legally hold a `fields` option of ANY shape as its own
+ * private configuration. Reading that as a nested field list runs other types'
+ * rules over data that is not a field list, which is why `fields-payload.ts`
+ * walks nested fields for the container types only.
+ *
+ * Sharing the set rather than repeating the two names keeps the answer in one
+ * place: a third container type added to the union would otherwise be a nested
+ * list here and not there.
+ */
+export function typeHasNestedFields(type: string): boolean {
+  return (NESTED_FIELD_TYPES as readonly string[]).includes(type);
+}
+
 export function hasNestedFields(
   field: FieldConfig
 ): field is RepeaterFieldConfig | GroupFieldConfig {
-  return ["repeater", "group"].includes(field.type);
+  // Delegated rather than repeating the membership test. Sharing only the SET
+  // leaves two evaluations of one question, and a later change to what counts
+  // as a container — a type that carries nested fields conditionally, say —
+  // would reach whichever of them the author was editing.
+  return typeHasNestedFields(field.type);
 }
 
 /**
