@@ -116,6 +116,22 @@ export interface EntrySystemHeaderProps {
   /** Label for the preview action. Defaults to "Preview". */
   previewLabel?: string;
   /**
+   * Opens and closes the preview PANE, which is a different action from opening
+   * the preview in a tab.
+   *
+   * Two controls rather than one with a mode, because they answer different
+   * questions: a tab is for looking at the page on its own — on a phone, on a
+   * second monitor, to send to someone standing beside you — and the pane is
+   * for watching it while you edit. A single control would have to guess which,
+   * and the wrong guess costs a page load and the editor's place on screen.
+   *
+   * Absent means the surface offers no pane at all, which is what an embedded
+   * editor in a modal does.
+   */
+  onTogglePreviewPane?: () => void;
+  /** Whether that pane is currently open, for the control's pressed state. */
+  previewPaneOpen?: boolean;
+  /**
    * Whether there is a saved document for a link to name.
    *
    * Deliberately NOT ANDed with `update-{slug}` here. The mint endpoint
@@ -256,6 +272,8 @@ export function EntrySystemHeader({
   isPreviewAvailable = false,
   onPreview,
   previewLabel,
+  onTogglePreviewPane,
+  previewPaneOpen = false,
   isLinkAvailable = false,
   onCopyLink,
   isCopyingLink = false,
@@ -491,6 +509,30 @@ export function EntrySystemHeader({
             isCopyingLink={isCopyingLink}
             disabled={isSubmitting}
           />
+          {/* The pane toggle, beside the preview actions rather than inside
+              them: `PreviewActions` decides its own shape from which of OPEN
+              and COPY are available, and a third action would make that a
+              three-way decision for a control whose whole design is that it
+              collapses to one button when only one thing can be done.
+
+              Offered only where a pane exists to open — an embedded editor in
+              a modal passes no handler and gets no control. */}
+          {onTogglePreviewPane !== undefined && (
+            <Button
+              type="button"
+              variant={previewPaneOpen ? "secondary" : "ghost"}
+              size="sm"
+              onClick={onTogglePreviewPane}
+              disabled={isSubmitting}
+              aria-pressed={previewPaneOpen}
+              title={previewPaneOpen ? "Hide the preview" : "Show the preview"}
+            >
+              <PanelRight className="h-4 w-4" aria-hidden="true" />
+              <ToolbarLabel priority="secondary">
+                {previewPaneOpen ? "Hide preview" : "Show preview"}
+              </ToolbarLabel>
+            </Button>
+          )}
           {/* Sits with the actions rather than beside the title: it reports on
             the same work the save buttons act on, and reads as status for that
             cluster.

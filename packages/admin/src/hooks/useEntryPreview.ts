@@ -166,8 +166,21 @@ export const PREVIEW_MESSAGES: Record<PreviewUnavailableReason, string> = {
  * opener and closing it again are all forced by how browsers treat a click,
  * while this is a mapping that can be read on its own.
  */
-type PreviewOutcome =
-  | { kind: "open"; url: string }
+export type PreviewOutcome =
+  | {
+      kind: "open";
+      url: string;
+      /**
+       * When the credential in that URL stops working.
+       *
+       * Carried even though opening a tab has no use for it, because the
+       * SURFACE decides what it needs and the mint is the only thing that
+       * knows. A pane that keeps the frame on screen has to re-mint before the
+       * token lapses; dropping the value here would make it ask again for
+       * something this call already learned.
+       */
+      expiresAt: string;
+    }
   | { kind: "report"; reason: PreviewUnavailableReason };
 
 /**
@@ -233,7 +246,13 @@ function reasonForRefusal(error: unknown): PreviewUnavailableReason {
 }
 
 /**
- * Mints the credential this preview opens with.
+ * Mints the credential a preview surface opens with.
+ *
+ * Exported because there is more than one surface — a tab and an in-admin
+ * pane — and "a self-preview credential for this document" is ONE question. A
+ * pane that minted its own would be a second implementation of the TTL, the
+ * refusal mapping and the null-url case, and the two would agree until one of
+ * them was edited.
  *
  * The mint is the ONLY question asked, and that is deliberate. It already
  * resolves the destination through the same function the preview route will
@@ -246,7 +265,7 @@ function reasonForRefusal(error: unknown): PreviewUnavailableReason {
  * locale travels with it: on a localized collection an unscoped token opens the
  * default language whichever one was being edited.
  */
-async function authorizedOutcome(
+export async function mintSelfPreview(
   collection: string,
   entryId: string,
   locale: string | undefined
@@ -264,7 +283,7 @@ async function authorizedOutcome(
     // missing, which is a thing an administrator can fix, so it is reported as
     // itself rather than as an opaque failure.
     if (link.url === null) return { kind: "report", reason: "noSiteUrl" };
-    return { kind: "open", url: link.url };
+    return { kind: "open", url: link.url, expiresAt: link.expiresAt };
   } catch (error) {
     return { kind: "report", reason: reasonForRefusal(error) };
   }
@@ -368,7 +387,7 @@ export function useEntryPreview({
 
     settle(
       claimed.target,
-      await authorizedOutcome(collection.name, target.entryId, locale),
+      await mintSelfPreview(collection.name, target.entryId, locale),
       onUnavailable
     );
   }, [collection.name, entry, locale, onUnavailable, previewConfig]);
