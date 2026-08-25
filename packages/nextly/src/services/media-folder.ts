@@ -674,11 +674,21 @@ export class MediaFolderService extends BaseService {
       // as the code can get, because the gap otherwise spans the storage
       // cleanup and its retry backoffs.
       //
+      // The DESCENDANT list is re-derived rather than reused: a folder created
+      // under this one during that same gap is absent from the earlier
+      // snapshot, the root delete cascades into it, and its media would be
+      // re-parented with nothing naming it. Reusing the snapshot covers a file
+      // added to a known folder and misses a file added to a new one.
+      //
       // This NARROWS the window; it does not close it. A row arriving between
       // this query and the statement below is still missed, and closing that
       // needs the two to share a transaction or a lock on the folder rows,
       // which this method does not have.
-      const strays = await this.collectMediaInFolders(allFolderIds);
+      const currentFolderIds = [
+        folderId,
+        ...(await this.collectAllSubfolderIds(folderId)),
+      ];
+      const strays = await this.collectMediaInFolders(currentFolderIds);
 
       // Delete folder (CASCADE handles subfolder records)
       await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));

@@ -466,6 +466,93 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
     expect(firstFlush).toBeLessThan(lastCleanup);
   });
 
+  it("pays the shared tag once through the unified bulkUpload", async () => {
+    const { handle, flush } = await bootWithSpy();
+    const unified = handle.getService("mediaService") as UnifiedMediaService;
+    const ctx = {} as Parameters<typeof unified.bulkUpload>[1];
+
+    flush.mockClear();
+    const result = await unified.bulkUpload(
+      [0, 1, 2].map(i => ({
+        buffer: Buffer.from(`u${i}`),
+        filename: `unified-${i}.pdf`,
+        mimeType: "application/pdf",
+        size: 1,
+      })),
+      ctx
+    );
+
+    // The control: three files really were written. A fan-out where every item
+    // failed returns normally and flushes nothing, satisfying a count of one
+    // shared tag by never emitting any.
+    expect(result.successCount).toBe(3);
+
+    const tags = flushedTags(flush);
+    for (const file of result.successes) {
+      expect(tags).toContain(`nextly:media:id:${file.id}`);
+    }
+    expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
+  });
+
+  it("pays the shared tag once through the legacy uploadMediaBulk", async () => {
+    // Reached by the published `nextly/actions` subpath and by
+    // `ServiceContainer.media`, neither of which goes through DI or the
+    // unified wrapper — so a scope on the wrapper alone leaves this path
+    // re-invalidating the shared tag once per file.
+    const { handle, flush } = await bootWithSpy();
+    const legacy = new LegacyMediaService(handle.adapter, console as never);
+
+    flush.mockClear();
+    const result = await legacy.uploadMediaBulk(
+      [0, 1, 2].map(i => ({
+        file: Buffer.from(`l${i}`),
+        filename: `legacy-${i}.pdf`,
+        mimeType: "application/pdf",
+        size: 1,
+        uploadedBy: null,
+      }))
+    );
+
+    expect(result.successCount).toBe(3);
+
+    const tags = flushedTags(flush);
+    for (const item of result.results) {
+      if (item.success && item.data) {
+        expect(tags).toContain(`nextly:media:id:${item.data.id}`);
+      }
+    }
+    expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
+  });
+
+  it("pays the shared tag once through the legacy deleteMediaBulk", async () => {
+    const { handle, flush } = await bootWithSpy();
+    const legacy = new LegacyMediaService(handle.adapter, console as never);
+    const uploaded = await legacy.uploadMediaBulk(
+      [0, 1, 2].map(i => ({
+        file: Buffer.from(`d${i}`),
+        filename: `doomed-${i}.pdf`,
+        mimeType: "application/pdf",
+        size: 1,
+        uploadedBy: null,
+      }))
+    );
+    expect(uploaded.successCount).toBe(3);
+    const ids = uploaded.results
+      .filter(r => r.success && r.data)
+      .map(r => (r.data as { id: string }).id);
+
+    flush.mockClear();
+    const result = await legacy.deleteMediaBulk(ids);
+
+    expect(result.successCount).toBe(3);
+
+    const tags = flushedTags(flush);
+    for (const id of ids) {
+      expect(tags).toContain(`nextly:media:id:${id}`);
+    }
+    expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
+  });
+
   it("keeps flushing per write when no batch is open", async () => {
     // The scope must not leak past the operation that opened it. Two separate
     // single deletes are two separate events for the caller, and collapsing

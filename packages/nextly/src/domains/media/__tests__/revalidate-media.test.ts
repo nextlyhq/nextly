@@ -191,7 +191,31 @@ describe("withMediaRevalidationBatch", () => {
   });
 });
 
-describe("every media fan-out opens a batch scope", () => {
+describe("every media fan-out has a test that drives it", () => {
+  /**
+   * The fan-outs a test actually DRIVES, asserting one `nextly:media` flush for
+   * N items, in `media-revalidation.integration.test.ts`.
+   *
+   * This replaced a scan of each method's source for the wrapper's NAME, which
+   * proved nothing: `Function#toString()` includes comments, and every one of
+   * these methods carries a comment mentioning `withMediaRevalidationBatch`.
+   * Deleting the call and keeping the comment left that check green while
+   * restoring one shared-tag flush per file — the exact regression it claimed
+   * to catch.
+   *
+   * What this list cannot do is verify that the named test exists or still
+   * drives the method; it is a tripwire that makes adding a fan-out fail until
+   * someone writes one, not a proof that they did.
+   */
+  const DRIVEN_BY_A_TEST = new Set([
+    // domains/media/services/media-service.ts — the DI-built wrapper
+    "bulkUpload",
+    "bulkDelete",
+    // services/media.ts — reached by nextly/actions and ServiceContainer.media
+    "uploadMediaBulk",
+    "deleteMediaBulk",
+  ]);
+
   /**
    * The two services, CONSTRUCTED — which is what lets this see a class field.
    *
@@ -243,7 +267,7 @@ describe("every media fan-out opens a batch scope", () => {
       .sort();
   }
 
-  it.each(instances())("$label wraps each fan-out in a scope", ({ value }) => {
+  it.each(instances())("$label has every fan-out driven", ({ value }) => {
     const members = fanOutMembers(value);
 
     // The control. Without it an empty list satisfies the loop perfectly, and a
@@ -253,9 +277,24 @@ describe("every media fan-out opens a batch scope", () => {
     expect(members.length).toBeGreaterThan(0);
 
     for (const name of members) {
-      const source = String((value as Record<string, unknown>)[name]);
-      expect(source, `${name} must open a batch scope`).toContain(
-        "withMediaRevalidationBatch"
+      expect(
+        DRIVEN_BY_A_TEST.has(name),
+        `${name} fans out over a single-item write, so it needs a test that ` +
+          `drives it and asserts ONE nextly:media flush for N items — then ` +
+          `add it here`
+      ).toBe(true);
+    }
+  });
+
+  it("lists nothing that has since been removed or renamed", () => {
+    const found = new Set(
+      instances().flatMap(instance => fanOutMembers(instance.value))
+    );
+    // The other direction, so the list shrinks with the code instead of
+    // accumulating names whose tests now drive nothing.
+    for (const name of DRIVEN_BY_A_TEST) {
+      expect(found.has(name), `${name} is listed but no longer exists`).toBe(
+        true
       );
     }
   });

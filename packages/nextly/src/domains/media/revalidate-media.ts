@@ -153,16 +153,27 @@ export async function revalidateMedia(
   const own = new Set<string>();
   const shared = new Set<string>();
   for (const id of mediaIds) {
-    const idTag = entryIdTag(MEDIA_TARGET, id);
-    for (const tag of computeEntryRevalidation({
-      collection: MEDIA_TARGET,
-      id,
-    }).tags) {
-      // Partitioned by whether the tag names THIS row. Anything that does not
-      // is shared with every other row in the collection, so a fan-out repeats
-      // it once per file.
-      if (tag === idTag) own.add(tag);
-      else shared.add(tag);
+    // Per id, because tag computation THROWS: `requireSegment` rejects a blank
+    // or whitespace-only segment with an internal error, and it runs outside
+    // the flush's own catch. One unusable id would otherwise abandon every
+    // other id in the same call — and, since the rows are already committed
+    // when this runs, turn a successful write into a failed request.
+    try {
+      const idTag = entryIdTag(MEDIA_TARGET, id);
+      for (const tag of computeEntryRevalidation({
+        collection: MEDIA_TARGET,
+        id,
+      }).tags) {
+        // Partitioned by whether the tag names THIS row. Anything that does
+        // not is shared with every other row in the collection, so a fan-out
+        // repeats it once per file.
+        if (tag === idTag) own.add(tag);
+        else shared.add(tag);
+      }
+    } catch (error) {
+      logger?.error?.("Skipped a media id with no computable cache tag", {
+        error,
+      });
     }
   }
 
