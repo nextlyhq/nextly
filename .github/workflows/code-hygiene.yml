@@ -160,19 +160,52 @@ jobs:
             // about a pre-existing unused dependency in a file the PR never
             // opened. The gate already excludes those from the verdict, so
             // posting them is noise that arrives again on every push.
-            const attribution = audit && audit.attribution;
-            if (attribution) {
-              const introduced = Object.entries(attribution)
-                .filter(([key]) => key.endsWith('_introduced'))
-                .reduce((sum, [, count]) => sum + (count || 0), 0);
-              if (introduced === 0) {
-                console.log('The change introduced no findings. Inherited findings are reported by the whole-repository job, not as review threads here.');
-                return;
-              }
-            } else {
-              console.log('No attribution available, so introduced findings cannot be separated from inherited ones. Posting nothing rather than every inherited finding.');
+            //
+            // The filter is PER FINDING rather than a count, because the two
+            // differ exactly when it matters: one genuine new finding alongside
+            // inherited ones would otherwise re-admit the whole inherited set.
+            if (!audit) {
+              console.log('No audit JSON available, so introduced findings cannot be separated from inherited ones. Posting nothing rather than every inherited finding.');
               return;
             }
+
+            // Every finding fallow attributes carries `introduced`; walking for
+            // that key reaches all three analyses without naming their
+            // containers, which differ per analysis and change between
+            // versions. A finding locates itself either by `path` or, for one
+            // spanning several files (an import cycle), by `files[]`.
+            const attributed = [];
+            const walk = (node) => {
+              if (Array.isArray(node)) return node.forEach(walk);
+              if (!node || typeof node !== 'object') return;
+              if ('introduced' in node) attributed.push(node);
+              Object.values(node).forEach(walk);
+            };
+            walk(audit);
+
+            const locations = (finding) => {
+              const paths = finding.path ? [finding.path] : (finding.files || []);
+              return paths.map(p => `${p}:${finding.line}`);
+            };
+
+            const introducedKeys = new Set(
+              attributed.filter(f => f.introduced === true).flatMap(locations)
+            );
+
+            if (introducedKeys.size === 0) {
+              console.log(`The change introduced no findings (${attributed.length} inherited). Inherited findings are reported by the whole-repository job, not as review threads here.`);
+              return;
+            }
+
+            const introducedComments = review.comments.filter(
+              c => introducedKeys.has(`${c.path}:${c.line}`)
+            );
+
+            if (introducedComments.length === 0) {
+              console.log(`None of the ${review.comments.length} envelope comments matched an introduced finding. Posting nothing.`);
+              return;
+            }
+            console.log(`${introducedComments.length} of ${review.comments.length} envelope comments are attributed to this change.`);
 
             // Fetch existing review comments on this PR to prevent duplicate threads
             let existingComments = [];
@@ -217,7 +250,7 @@ jobs:
               existingComments.map(c => fingerprintOf(c.body)).filter(Boolean)
             );
 
-            const newComments = review.comments.filter(c => {
+            const newComments = introducedComments.filter(c => {
               const fingerprint = c.fingerprint || fingerprintOf(c.body);
               // A finding with no fingerprint cannot be reconciled across runs,
               // so it falls back to path and line rather than posting blind.
