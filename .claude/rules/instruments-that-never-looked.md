@@ -137,8 +137,8 @@ where a control that looks correct fails silently. Measured today, verifying a
 merge by comparing files between two revisions: the discrimination control was
 `README.md`, which is byte-identical on both sides. It passed — and it could
 only ever have passed, so it certified the comparison by never asking it
-anything. Fourteen-of-fourteen identical meant nothing until a file the other
-branch HAD touched came back different.
+anything. Fourteen-of-fourteen identical meant nothing until a path whose two
+endpoint blobs were KNOWN to differ came back different.
 
 The axis follows from the claim being made, and both reduce to the same test:
 
@@ -153,11 +153,24 @@ Concretely, for the merge case:
 
 ```sh
 git rev-parse <merge>:README.md <head>:README.md    # one sha twice — proves nothing
-git rev-parse <merge>:<a-file-the-other-branch-touched> <head>:<same>   # must DIFFER
+git rev-parse <merge>:<path> <head>:<path>          # must return TWO DIFFERENT shas
 ```
 
-Worth stating because the second kind is the one nobody builds: a lane that had
-been constructing must-be-found controls for years had never once built a
+**Pick the control by the PROPERTY, never by its provenance.** "A file the other
+branch touched" sounds like it guarantees a difference and does not: the change
+can be reverted before the endpoint, or a conflict resolution can keep the
+head's content, and the two blobs come out identical while the comparison is
+working perfectly. Then the must-differ control cannot fail either, and you are
+back where you started with an extra step that felt like rigour.
+
+So verify the control's own precondition before using it — the two shas must
+already be known to differ. That is the same move this file makes about
+identifying by structure rather than by someone else's spelling, applied to the
+control itself, and it means a control is not free: it costs one check of its
+own, which is the price of it meaning anything.
+
+Worth stating because the must-differ kind is the one nobody builds: a lane that
+had been constructing must-be-found controls for years had never once built a
 must-differ control, and neither had the author of this file.
 
 **A break that moves something is not yet a regression test.** The control tells
@@ -192,6 +205,35 @@ moves: unfetched, a genuine merge reports non-ancestor; later, unrelated
 commits can make ancestry true. `verifying-merged-work.md` already requires
 fetching both objects and probing the merge commit rather than `origin/main`,
 and that requirement is exactly this failure seen from the other side.
+
+**A result implausible in the ALARMING direction is the trigger to control the
+instrument — but the trigger is not the test.** Measured today: a scan of icon
+imports against a dependency's oldest supported version reported nine
+violations, one of them an icon old and ubiquitous enough that its absence was
+not credible. That implausibility said to look; what SETTLED it was having an
+input whose answer was independently known, and asking the instrument that. The
+type declarations re-export most names through one enormous
+`export { CircleAlert as AlertCircle, ... }` alias list, which a reader matching
+only `declare const` never sees — an instrument reading a form its subject does
+not use. Re-measured against both forms, the real count was two, and nine false
+findings were never sent.
+
+Name the gap rather than letting the rule overreach: where no independently
+known answer exists, the trigger fires and there is nothing to do with it. This
+is not "surprising results are wrong". It is that surprise is cheap to act on
+only when you hold a case the instrument must get right.
+
+**The step most likely to be missing is the one with no output of its own.**
+Every part of a change announces itself — a suite prints, a break-verify prints,
+a reply posts, a thread visibly resolves — except `git commit`, which from a
+transcript looks identical whether it ran or not. Measured here: a fix was
+written, tested, break-verified in both directions, reported as done and its
+thread resolved, and never committed; the pull request merged without it and the
+defect went live while every visible signal said complete. So make that step's
+absence visible mechanically rather than remembering it —
+`git log origin/<branch>..HEAD --oneline` returning EMPTY before you claim a fix
+is in, not after the merge. A cheap precondition that catches nothing is what
+one looks like when it is working.
 
 **Assert what the instrument CONSUMED, not the verdict it emitted** — the
 substitutions made, the files read, the rows fetched.
