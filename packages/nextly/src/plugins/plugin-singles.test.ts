@@ -387,3 +387,63 @@ describe("a contributed field carrying its own `fields` option", () => {
     expect(published[0]!.fields?.[0]).not.toHaveProperty("fields");
   });
 });
+
+describe("what a listed field publishes", () => {
+  async function listFirstField(field: Record<string, unknown>) {
+    const registry = {
+      listSingles: async () => ({
+        data: [
+          {
+            id: "s1",
+            slug: "homepage",
+            label: "Homepage",
+            fields: [field],
+            source: "code",
+          },
+        ],
+        total: 1,
+      }),
+    } as unknown as SingleRegistryService;
+    return (await wrapSinglesForPlugin(registry).list()).data[0]!.fields[0]!;
+  }
+
+  it("carries only the declared members, not everything the registry stored", async () => {
+    // `pluginOptions` is documented on `PluginFieldInput` as "Options belonging
+    // to the field's own plugin type". Publishing it here hands one plugin's
+    // configuration to a different one, and `admin` and `required` are simply
+    // more than this surface declares.
+    const published = await listFirstField({
+      name: "title",
+      type: "text",
+      required: true,
+      admin: { description: "internal note" },
+      pluginOptions: { apiKey: "private" },
+    });
+
+    expect(Object.keys(published).sort()).toEqual(["name", "type"]);
+  });
+
+  it("omits an absent name rather than writing the key as undefined", async () => {
+    // A presentational field carries no name. `name: undefined` would satisfy
+    // the optional type and still appear in `Object.keys` and in `"name" in
+    // field`, so a caller enumerating members sees one that is not there.
+    const published = await listFirstField({ type: "ui/divider" });
+
+    expect("name" in published).toBe(false);
+  });
+
+  it("carries the declared members through a container's children too", async () => {
+    // The positive control, and the recursion: a nested field is built by the
+    // same function, so an implementation that allowlisted only the top level
+    // would pass the first assertion and leak one level down.
+    const published = await listFirstField({
+      name: "section",
+      type: "group",
+      admin: { description: "outer" },
+      fields: [{ name: "body", type: "blocks", pluginOptions: { secret: 1 } }],
+    });
+
+    expect(Object.keys(published).sort()).toEqual(["fields", "name", "type"]);
+    expect(Object.keys(published.fields![0]!).sort()).toEqual(["name", "type"]);
+  });
+});

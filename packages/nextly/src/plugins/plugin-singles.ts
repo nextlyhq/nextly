@@ -221,12 +221,22 @@ export interface PluginSinglesService {
 function toSerializedField(
   field: SerializedFieldConfig
 ): SerializedFieldConfig {
+  // BUILT from the declared members rather than spread and trimmed. A spread
+  // publishes every enumerable property and removes the named one, so the
+  // shape a caller receives is whatever the registry happened to store —
+  // including `pluginOptions`, which belongs to the field's own plugin and has
+  // no business reaching a different one. Constructing means a property is
+  // published because it appears here, not because nobody excluded it.
+  const serialized: SerializedFieldConfig = { type: field.type };
+  // Assigned conditionally so an absent name stays absent. Writing `undefined`
+  // would put the key in `Object.keys` and in a `in` check while the type says
+  // the member is optional.
+  if (field.name !== undefined) serialized.name = field.name;
   const nested = field.fields;
-  if (!typeHasNestedFields(field.type) || !Array.isArray(nested)) {
-    const { fields: _dropped, ...rest } = field;
-    return rest;
+  if (typeHasNestedFields(field.type) && Array.isArray(nested)) {
+    serialized.fields = nested.map(toSerializedField);
   }
-  return { ...field, fields: nested.map(toSerializedField) };
+  return serialized;
 }
 
 function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
