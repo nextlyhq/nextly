@@ -147,6 +147,83 @@ export interface RepeaterInputProps<
  * </FormProvider>
  * ```
  */
+function RepeaterHeader({
+  isOpen,
+  title,
+  count,
+}: {
+  isOpen: boolean;
+  title: string;
+  count: number;
+}) {
+  return (
+    <CardHeader
+      className="bg-primary/5 border-b border-border dark:border-border p-0"
+      noBorder
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex items-center gap-2 w-full text-left cursor-pointer",
+            "rounded-md p-4",
+            "hover-unified focus:outline-none"
+          )}
+          aria-expanded={isOpen}
+        >
+          {isOpen ? (
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
+          <span className="text-sm font-semibold text-foreground dark:text-muted-foreground">
+            {title}
+          </span>
+          <span className="text-xs text-muted-foreground ml-1">({count})</span>
+        </button>
+      </CollapsibleTrigger>
+    </CardHeader>
+  );
+}
+
+function RepeaterEmptyState({
+  pluralLabel,
+  canAdd,
+}: {
+  pluralLabel: string;
+  canAdd: boolean;
+}) {
+  return (
+    <div className="text-center py-8 text-muted-foreground border border-border border-dashed rounded-md bg-primary/5">
+      <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
+      {canAdd && <p className="text-sm">Click the button below to add one.</p>}
+    </div>
+  );
+}
+
+function RepeaterAddButton({
+  singularLabel,
+  disabled,
+  onAdd,
+}: {
+  singularLabel: string;
+  disabled?: boolean;
+  onAdd: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      onClick={onAdd}
+      className="w-full"
+      disabled={disabled}
+    >
+      <Plus className="h-4 w-4" />
+      Add {singularLabel}
+    </Button>
+  );
+}
+
 export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
   name,
   field,
@@ -156,7 +233,6 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
   className,
   renderField,
 }: RepeaterInputProps<TFieldValues>) {
-  // Get control from context if not provided
   const formContext = useFormContext<TFieldValues>();
   const control = controlProp ?? formContext?.control;
 
@@ -166,7 +242,6 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
     );
   }
 
-  // useFieldArray for managing array state
   const {
     fields: items,
     append,
@@ -177,10 +252,8 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
     name,
   });
 
-  // Sensor setup for drag-and-drop
   const { sensors, handleDragEnd } = useSortableFieldArray(items, move);
 
-  // Handle adding a new row
   const handleAdd = useCallback(() => {
     const defaultValues = createDefaultFieldValues(
       field.fields as FieldConfig[]
@@ -188,7 +261,6 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
     append(defaultValues as TFieldValues[FieldArrayPath<TFieldValues>][number]);
   }, [append, field.fields]);
 
-  // Constraints
   const { canAdd, canRemove, isSortable } = getFieldArrayConstraints({
     count: items.length,
     minRows: field.minRows,
@@ -198,54 +270,24 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
     readOnly,
   });
 
-  // Labels
   const singularLabel = field.labels?.singular || "Item";
   const pluralLabel = field.labels?.plural || "Items";
+  const title = field.label || pluralLabel;
 
-  // Collapsible state
   const [isOpen, setIsOpen] = useState(!field.admin?.initCollapsed);
 
   return (
     <Card
       className={cn(
-        "shadow-none  border border-border dark:border-border overflow-hidden",
+        "shadow-none border border-border dark:border-border overflow-hidden",
         className
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        {/* Collapsible Header */}
-        <CardHeader
-          className="bg-primary/5 border-b border-border dark:border-border p-0"
-          noBorder
-        >
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                "flex items-center gap-2 w-full text-left cursor-pointer",
-                "rounded-md p-4",
-                "hover-unified focus:outline-none"
-              )}
-              aria-expanded={isOpen}
-            >
-              {isOpen ? (
-                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-              )}
-              <span className="text-sm font-semibold text-foreground dark:text-muted-foreground">
-                {field.label || pluralLabel}
-              </span>
-              <span className="text-xs text-muted-foreground ml-1">
-                ({items.length})
-              </span>
-            </button>
-          </CollapsibleTrigger>
-        </CardHeader>
+        <RepeaterHeader isOpen={isOpen} title={title} count={items.length} />
 
         <CollapsibleContent>
           <CardContent className="p-3 space-y-3">
-            {/* Sortable List */}
             <SortableFieldArrayContainer
               items={items}
               sensors={sensors}
@@ -273,31 +315,18 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
               ))}
             </SortableFieldArrayContainer>
 
-            {/* Empty State */}
             {items.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-md bg-primary/5">
-                <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
-                {canAdd && (
-                  <p className="text-sm">Click the button below to add one.</p>
-                )}
-              </div>
+              <RepeaterEmptyState pluralLabel={pluralLabel} canAdd={canAdd} />
             )}
 
-            {/* Add Button */}
             {canAdd && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleAdd}
-                className="w-full"
+              <RepeaterAddButton
+                singularLabel={singularLabel}
                 disabled={disabled}
-              >
-                <Plus className="h-4 w-4" />
-                Add {singularLabel}
-              </Button>
+                onAdd={handleAdd}
+              />
             )}
 
-            {/* Min / Max Rows Notices */}
             <RowLimitNotice
               count={items.length}
               minRows={field.minRows}

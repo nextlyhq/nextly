@@ -237,73 +237,75 @@ interface SingleComponentNonRepeatableProps {
   readOnly?: boolean;
 }
 
-function SingleComponentNonRepeatable({
+function getSingleComponentLabel(field: EnrichedComponentFieldConfig): string {
+  if (field.label) return field.label;
+  const schemaLabel = field.component
+    ? field.componentSchemas?.[field.component]?.label
+    : undefined;
+  return schemaLabel || field.component || "Field Group";
+}
+
+function SingleComponentSidebar({
   name,
   field,
   componentFields,
+  label,
   disabled,
   readOnly,
-}: SingleComponentNonRepeatableProps) {
-  const label =
-    field.label ||
-    (field.componentSchemas?.[field.component!]?.label ??
-      field.component ??
-      "Field Group");
-
-  const isSidebar = field.admin?.position === "sidebar";
+}: SingleComponentNonRepeatableProps & { label: string }) {
   const [isOpen, setIsOpen] = useState(true);
-
-  // ---- Sidebar: Accordion style ----
-  if (isSidebar) {
-    return (
-      // Wrapper has -mt-px to physically overlap previous bottom borders
-      <div
-        className={cn("flex flex-col relative -mt-px", field.admin?.className)}
-      >
-        {/* Accordion header — top and bottom  border border-border always */}
-        <button
-          type="button"
-          onClick={() => setIsOpen(v => !v)}
-          className={cn(
-            "w-full flex items-center justify-between bg-primary/5 px-8 py-4 transition-all duration-200 cursor-pointer",
-            "border-y border-border hover:border-primary relative z-10"
-          )}
-        >
-          {/* Accordion label and its disclosure chevron are content, so they
-              take the page ink; the primary tint stays on the header fill. */}
-          <span className="text-xs font-bold tracking-[0.08em] uppercase text-foreground">
-            {label}
-          </span>
-          <ChevronDown
-            className={cn(
-              "h-4 w-4 text-foreground transition-transform duration-200",
-              isOpen ? "rotate-0" : "-rotate-90"
-            )}
-          />
-        </button>
-
-        {/* Accordion content */}
-        {isOpen && (
-          <div className="space-y-4 px-6 pt-4 pb-4  border-b border-border z-0">
-            {field.admin?.description && (
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {field.admin.description}
-              </p>
-            )}
-            <ComponentSubFieldList
-              fields={componentFields}
-              basePath={name}
-              disabled={disabled}
-              readOnly={readOnly}
-              emptyMessage="No fields configured."
-            />
-          </div>
+  return (
+    <div
+      className={cn("flex flex-col relative -mt-px", field.admin?.className)}
+    >
+      <button
+        type="button"
+        onClick={() => setIsOpen(v => !v)}
+        className={cn(
+          "w-full flex items-center justify-between bg-primary/5 px-8 py-4 transition-all duration-200 cursor-pointer",
+          "border-y border-border hover:border-primary relative z-10"
         )}
-      </div>
-    );
-  }
+      >
+        <span className="text-xs font-bold tracking-[0.08em] uppercase text-foreground">
+          {label}
+        </span>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 text-foreground transition-transform duration-200",
+            isOpen ? "rotate-0" : "-rotate-90"
+          )}
+        />
+      </button>
 
-  // ---- Main content: Card / repeater-row style ----
+      {isOpen && (
+        <div className="space-y-4 px-6 pt-4 pb-4 border-b border-border z-0">
+          {field.admin?.description && (
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              {field.admin.description}
+            </p>
+          )}
+          <ComponentSubFieldList
+            fields={componentFields}
+            basePath={name}
+            disabled={disabled}
+            readOnly={readOnly}
+            emptyMessage="No fields configured."
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SingleComponentCard({
+  name,
+  field,
+  componentFields,
+  label,
+  disabled,
+  readOnly,
+}: SingleComponentNonRepeatableProps & { label: string }) {
+  const [isOpen, setIsOpen] = useState(true);
   return (
     <div
       className={cn(
@@ -311,11 +313,10 @@ function SingleComponentNonRepeatable({
         field.admin?.className
       )}
     >
-      {/* Card header — same style as repeater rows */}
       <button
         type="button"
         onClick={() => setIsOpen(v => !v)}
-        className="w-full flex items-center gap-2 px-4 py-3 bg-primary/5 hover:bg-primary/5 dark:hover:bg-accent transition-colors  border-b border-border dark:border-border"
+        className="w-full flex items-center gap-2 px-4 py-3 bg-primary/5 hover:bg-primary/5 dark:hover:bg-accent transition-colors border-b border-border dark:border-border"
       >
         <ChevronDown
           className={cn(
@@ -328,7 +329,6 @@ function SingleComponentNonRepeatable({
         </span>
       </button>
 
-      {/* Card content */}
       {isOpen && (
         <div className="p-4 space-y-4">
           {field.admin?.description && (
@@ -349,6 +349,16 @@ function SingleComponentNonRepeatable({
   );
 }
 
+function SingleComponentNonRepeatable(
+  props: SingleComponentNonRepeatableProps
+) {
+  const label = getSingleComponentLabel(props.field);
+  if (props.field.admin?.position === "sidebar") {
+    return <SingleComponentSidebar {...props} label={label} />;
+  }
+  return <SingleComponentCard {...props} label={label} />;
+}
+
 // ============================================================
 // Multi-Component (Non-Repeatable) - Single instance with type selector
 // ============================================================
@@ -362,6 +372,119 @@ interface MultiComponentNonRepeatableProps {
   readOnly?: boolean;
 }
 
+function MultiComponentTypeSelector({
+  currentType,
+  availableSlugs,
+  componentSchemas,
+  onChange,
+  disabled,
+}: {
+  currentType: string | undefined;
+  availableSlugs: string[];
+  componentSchemas: Record<string, ComponentSchema>;
+  onChange: (type: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="text-sm font-medium">Field Group</label>
+      <Select
+        value={currentType || ""}
+        onValueChange={onChange}
+        disabled={disabled}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder="Select a field group..." />
+        </SelectTrigger>
+        <SelectContent>
+          {availableSlugs.map(slug => {
+            const schema = componentSchemas[slug];
+            return (
+              <SelectItem key={slug} value={slug}>
+                {schema?.label || slug}
+              </SelectItem>
+            );
+          })}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function MultiComponentHeader({
+  label,
+  description,
+  canClear,
+  onClear,
+}: {
+  label: string;
+  description?: string;
+  canClear: boolean;
+  onClear: () => void;
+}) {
+  return (
+    <CardHeader className="pb-2">
+      <div className="flex items-center justify-between">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Puzzle className="h-4 w-4 text-muted-foreground" />
+          {label}
+        </CardTitle>
+        {canClear && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            onClick={onClear}
+            className="text-muted-foreground hover:text-destructive"
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+      {description && (
+        <p className="text-xs text-muted-foreground leading-relaxed mt-1">
+          {description}
+        </p>
+      )}
+    </CardHeader>
+  );
+}
+
+function MultiComponentContent({
+  currentType,
+  currentFields,
+  name,
+  disabled,
+  readOnly,
+}: {
+  currentType: string | undefined;
+  currentFields: FieldConfig[];
+  name: string;
+  disabled?: boolean;
+  readOnly?: boolean;
+}) {
+  if (!currentType) {
+    return (
+      <p className="text-sm text-muted-foreground text-center py-4 border border-border border-dashed rounded-md bg-primary/5">
+        Select a field group to add fields.
+      </p>
+    );
+  }
+  if (currentFields.length === 0) {
+    return null;
+  }
+  return (
+    <div className="space-y-4 pt-2 border-t border-border">
+      <ComponentSubFieldList
+        fields={currentFields}
+        basePath={name}
+        disabled={disabled}
+        readOnly={readOnly}
+      />
+    </div>
+  );
+}
+
 function MultiComponentNonRepeatable({
   name,
   field,
@@ -372,15 +495,11 @@ function MultiComponentNonRepeatable({
 }: MultiComponentNonRepeatableProps) {
   const { watch, setValue } = useFormContext();
 
-  // Watch the current component type
   const currentData = watch(name) as Record<string, unknown> | null;
   const currentType = readFieldGroupType(currentData);
-
-  // Get the schema for the current type
   const currentSchema = currentType ? componentSchemas[currentType] : null;
   const currentFields = currentSchema?.fields || [];
 
-  // Handle type change
   const handleTypeChange = useCallback(
     (newType: string) => {
       const newSchema = componentSchemas[newType];
@@ -392,83 +511,36 @@ function MultiComponentNonRepeatable({
     [componentSchemas, name, setValue]
   );
 
-  // Handle clear
   const handleClear = useCallback(() => {
     setValue(name, null, { shouldDirty: true });
   }, [name, setValue]);
 
-  // Shown when the field carries no label of its own. The field TYPE stays `component`; only
-  // what the editor is called changed.
   const label = field.label || "Field Group";
+  const isInteractive = !disabled && !readOnly;
 
   return (
     <Card className={cn("", field.admin?.className)}>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Puzzle className="h-4 w-4 text-muted-foreground" />
-            {label}
-          </CardTitle>
-          {currentType && !disabled && !readOnly && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="md"
-              onClick={handleClear}
-              className="text-muted-foreground hover:text-destructive"
-            >
-              Clear
-            </Button>
-          )}
-        </div>
-        {field.admin?.description && (
-          <p className="text-xs text-muted-foreground leading-relaxed mt-1">
-            {field.admin.description}
-          </p>
-        )}
-      </CardHeader>
+      <MultiComponentHeader
+        label={label}
+        description={field.admin?.description}
+        canClear={Boolean(currentType && isInteractive)}
+        onClear={handleClear}
+      />
       <CardContent className="space-y-4">
-        {/* Type Selector */}
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Field Group</label>
-          <Select
-            value={currentType || ""}
-            onValueChange={handleTypeChange}
-            disabled={disabled || readOnly}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select a field group..." />
-            </SelectTrigger>
-            <SelectContent>
-              {availableSlugs.map(slug => {
-                const schema = componentSchemas[slug];
-                return (
-                  <SelectItem key={slug} value={slug}>
-                    {schema?.label || slug}
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Component Fields */}
-        {currentType && currentFields.length > 0 && (
-          <div className="space-y-4 pt-2  border-t border-border">
-            <ComponentSubFieldList
-              fields={currentFields}
-              basePath={name}
-              disabled={disabled}
-              readOnly={readOnly}
-            />
-          </div>
-        )}
-
-        {!currentType && (
-          <p className="text-sm text-muted-foreground text-center py-4  border border-border border-dashed rounded-md bg-primary/5">
-            Select a field group to add fields.
-          </p>
-        )}
+        <MultiComponentTypeSelector
+          currentType={currentType}
+          availableSlugs={availableSlugs}
+          componentSchemas={componentSchemas}
+          onChange={handleTypeChange}
+          disabled={!isInteractive}
+        />
+        <MultiComponentContent
+          currentType={currentType}
+          currentFields={currentFields}
+          name={name}
+          disabled={disabled}
+          readOnly={readOnly}
+        />
       </CardContent>
     </Card>
   );
@@ -528,6 +600,97 @@ interface RepeatableComponentProps<
   readOnly?: boolean;
 }
 
+function RepeatableEmptyState({
+  pluralLabel,
+  canAdd,
+}: {
+  pluralLabel: string;
+  canAdd: boolean;
+}) {
+  return (
+    <div className="text-center py-8 text-muted-foreground border border-border border-dashed rounded-md bg-primary/5">
+      <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+      <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
+      {canAdd && <p className="text-sm">Click the button below to add one.</p>}
+    </div>
+  );
+}
+
+function RepeatableAddButton({
+  isMultiMode,
+  singularLabel,
+  pluralLabel,
+  disabled,
+  onAdd,
+  componentSchemas,
+  availableSlugs,
+}: {
+  isMultiMode: boolean;
+  singularLabel: string;
+  pluralLabel: string;
+  disabled?: boolean;
+  onAdd: (type?: string) => void;
+  componentSchemas?: Record<string, ComponentSchema>;
+  availableSlugs: string[];
+}) {
+  const [selectorOpen, setSelectorOpen] = useState(false);
+
+  if (isMultiMode) {
+    return (
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setSelectorOpen(true)}
+          className="w-full"
+          disabled={disabled}
+        >
+          <Plus className="h-4 w-4" />
+          Add {singularLabel}
+        </Button>
+        <ComponentSelector
+          open={selectorOpen}
+          onOpenChange={setSelectorOpen}
+          componentSchemas={componentSchemas || {}}
+          availableSlugs={availableSlugs}
+          onSelect={onAdd}
+          title={`Add ${singularLabel}`}
+          description={`Choose a field group to add to ${pluralLabel.toLowerCase()}.`}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => onAdd()}
+        className="w-full"
+        disabled={disabled}
+      >
+        <Plus className="h-4 w-4" />
+        Add {singularLabel}
+      </Button>
+    </div>
+  );
+}
+
+function getFieldsForDefaults(
+  isMultiMode: boolean,
+  componentType: string | undefined,
+  componentSchemas: Record<string, ComponentSchema> | undefined,
+  singleComponentFields: FieldConfig[] | undefined
+): FieldConfig[] | undefined {
+  if (isMultiMode) {
+    return componentType && componentSchemas
+      ? componentSchemas[componentType]?.fields
+      : undefined;
+  }
+  return singleComponentFields;
+}
+
 function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
   name,
   field,
@@ -556,13 +719,12 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
   // Handle adding a new row
   const handleAdd = useCallback(
     (componentType?: string) => {
-      let fieldsForDefaults: FieldConfig[] | undefined;
-
-      if (isMultiMode && componentType && componentSchemas) {
-        fieldsForDefaults = componentSchemas[componentType]?.fields;
-      } else if (!isMultiMode && singleComponentFields) {
-        fieldsForDefaults = singleComponentFields;
-      }
+      const fieldsForDefaults = getFieldsForDefaults(
+        isMultiMode,
+        componentType,
+        componentSchemas,
+        singleComponentFields
+      );
 
       const defaultValues = createDefaultFieldValues(
         fieldsForDefaults,
@@ -575,9 +737,6 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
     },
     [append, isMultiMode, singleComponentFields, componentSchemas]
   );
-
-  // State for component selector dialog (multi-mode only)
-  const [selectorOpen, setSelectorOpen] = useState(false);
 
   // Constraints
   const { canAdd, canRemove, isSortable } = getFieldArrayConstraints({
@@ -639,55 +798,20 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
 
       {/* Empty State */}
       {items.length === 0 && (
-        <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-md bg-primary/5">
-          <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-          <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
-          {canAdd && (
-            <p className="text-sm">Click the button below to add one.</p>
-          )}
-        </div>
+        <RepeatableEmptyState pluralLabel={pluralLabel} canAdd={canAdd} />
       )}
 
       {/* Add Button(s) */}
       {canAdd && (
-        <div className="flex gap-2">
-          {isMultiMode ? (
-            // Multi-mode: Open component selector dialog
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setSelectorOpen(true)}
-                className="w-full"
-                disabled={disabled}
-              >
-                <Plus className="h-4 w-4" />
-                Add {singularLabel}
-              </Button>
-              <ComponentSelector
-                open={selectorOpen}
-                onOpenChange={setSelectorOpen}
-                componentSchemas={componentSchemas || {}}
-                availableSlugs={availableSlugs}
-                onSelect={handleAdd}
-                title={`Add ${singularLabel}`}
-                description={`Choose a field group to add to ${pluralLabel.toLowerCase()}.`}
-              />
-            </>
-          ) : (
-            // Single-mode: Simple add button
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => handleAdd()}
-              className="w-full"
-              disabled={disabled}
-            >
-              <Plus className="h-4 w-4" />
-              Add {singularLabel}
-            </Button>
-          )}
-        </div>
+        <RepeatableAddButton
+          isMultiMode={isMultiMode}
+          singularLabel={singularLabel}
+          pluralLabel={pluralLabel}
+          disabled={disabled}
+          onAdd={handleAdd}
+          componentSchemas={componentSchemas}
+          availableSlugs={availableSlugs}
+        />
       )}
 
       {/* Min / Max Rows Notices */}

@@ -152,6 +152,203 @@ export interface RepeaterRowProps<
  * />
  * ```
  */
+interface RepeaterRowHeaderProps {
+  index: number;
+  field: EnrichedRepeaterFieldConfig;
+  data: Record<string, unknown>;
+  isOpen: boolean;
+  isSortable: boolean;
+  isInteractive: boolean;
+  canRemove: boolean;
+  onRemove: () => void;
+  attributes: ReturnType<typeof useSortable>["attributes"];
+  listeners: ReturnType<typeof useSortable>["listeners"];
+}
+
+function RepeaterRowHeader({
+  index,
+  field,
+  data,
+  isOpen,
+  isSortable,
+  isInteractive,
+  canRemove,
+  onRemove,
+  attributes,
+  listeners,
+}: RepeaterRowHeaderProps) {
+  const singular = field.labels?.singular || "item";
+  return (
+    <CardHeader
+      className="p-0 pl-2 pr-1 border-b border-border dark:border-border bg-primary/5 hover:bg-primary/5 dark:hover:bg-accent/80 transition-colors"
+      noBorder
+    >
+      <div className="flex items-center gap-2">
+        {isSortable && isInteractive ? (
+          <button
+            type="button"
+            className={cn(
+              "cursor-grab active:cursor-grabbing p-2 rounded-md",
+              "focus:outline-none",
+              "touch-none"
+            )}
+            aria-label={`Drag to reorder ${singular} ${index + 1}`}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="h-4 w-4 text-muted-foreground" />
+          </button>
+        ) : (
+          <div className="w-6" />
+        )}
+
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
+              "rounded-md px-2 py-3",
+              "focus:outline-none"
+            )}
+            aria-expanded={isOpen}
+          >
+            {isOpen ? (
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            )}
+            <RepeaterRowLabel index={index} field={field} data={data} />
+          </button>
+        </CollapsibleTrigger>
+
+        {canRemove && isInteractive && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onRemove}
+            className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
+            aria-label={`Remove ${singular} ${index + 1}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+    </CardHeader>
+  );
+}
+
+function RepeaterRowFallbackList({ fields }: { fields: FieldConfig[] }) {
+  return (
+    <div className="text-sm text-muted-foreground bg-primary/5 rounded-lg p-4 border border-border border-dashed">
+      <p className="font-medium mb-2">Sub-fields:</p>
+      <ul className="list-disc list-inside space-y-1">
+        {fields.map((subField, idx) => {
+          const fieldWithName = subField as {
+            name?: string;
+            type: string;
+          };
+          return (
+            <li key={fieldWithName.name || idx}>
+              {fieldWithName.name ? (
+                <>
+                  <span className="font-mono text-xs">
+                    {fieldWithName.name}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({fieldWithName.type})
+                  </span>
+                </>
+              ) : (
+                <span className="text-muted-foreground">
+                  {fieldWithName.type} (layout)
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-xs text-muted-foreground mt-3 italic">
+        Full field rendering will be available when FieldRenderer is integrated.
+      </p>
+    </div>
+  );
+}
+
+interface RepeaterRowSubFieldsProps<
+  TFieldValues extends FieldValues = FieldValues,
+> {
+  field: EnrichedRepeaterFieldConfig;
+  basePath: string;
+  control: Control<TFieldValues>;
+  disabled: boolean;
+  readOnly: boolean;
+  renderField?: (
+    field: unknown,
+    basePath: string,
+    control: Control<TFieldValues>,
+    options?: { disabled?: boolean; readOnly?: boolean }
+  ) => ReactNode;
+}
+
+function RepeaterRowSubFields<TFieldValues extends FieldValues = FieldValues>({
+  field,
+  basePath,
+  control,
+  disabled,
+  readOnly,
+  renderField,
+}: RepeaterRowSubFieldsProps<TFieldValues>) {
+  if (!field.fields || field.fields.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground text-center py-4">
+        No sub-fields configured for this array.
+      </div>
+    );
+  }
+
+  if (!renderField) {
+    return <RepeaterRowFallbackList fields={field.fields} />;
+  }
+
+  const rows = packFieldsIntoRows(field.fields);
+  return (
+    <>
+      {rows.map((row, rIdx) => {
+        const weights = row.map(fieldWeight);
+        const sum = weights.reduce((a, b) => a + b, 0);
+        const cols =
+          sum < 100
+            ? [...weights, 100 - sum].map(w => `${w}fr`).join(" ")
+            : weights.map(w => `${w}fr`).join(" ");
+
+        return (
+          <div
+            key={rIdx}
+            className="grid gap-6 items-start [&>*]:!w-full"
+            style={{ gridTemplateColumns: cols }}
+          >
+            {row.map((subField, idx) => {
+              if (!("name" in subField) || !subField.name) {
+                return null;
+              }
+              return (
+                <div key={(subField as { name: string }).name || idx}>
+                  {renderField(subField, basePath, control, {
+                    disabled,
+                    readOnly,
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
   id,
   index,
@@ -166,10 +363,8 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
   renderField,
   isSortable = field.admin?.isSortable !== false,
 }: RepeaterRowProps<TFieldValues>) {
-  // Collapsible state - respect initCollapsed from field config
   const [isOpen, setIsOpen] = useState(!field.admin?.initCollapsed);
 
-  // @dnd-kit sortable hook
   const {
     attributes,
     listeners,
@@ -182,13 +377,11 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
     disabled: disabled || readOnly || !isSortable,
   });
 
-  // Apply transform styles for drag animation
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
   };
 
-  // Determine if row can be interacted with
   const isInteractive = !disabled && !readOnly;
 
   return (
@@ -201,151 +394,28 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        <CardHeader
-          className="p-0 pl-2 pr-1 border-b border-border dark:border-border bg-primary/5 hover:bg-primary/5 dark:hover:bg-accent/80 transition-colors"
-          noBorder
-        >
-          <div className="flex items-center gap-2">
-            {/* Drag Handle */}
-            {isSortable && isInteractive && (
-              <button
-                type="button"
-                className={cn(
-                  "cursor-grab active:cursor-grabbing p-2 rounded-md",
-                  "focus:outline-none",
-                  "touch-none" // Prevent touch scrolling interference
-                )}
-                aria-label={`Drag to reorder ${field.labels?.singular || "item"} ${index + 1}`}
-                {...attributes}
-                {...listeners}
-              >
-                <GripVertical className="h-4 w-4 text-muted-foreground" />
-              </button>
-            )}
-
-            {/* Spacer when drag handle is hidden */}
-            {(!isSortable || !isInteractive) && <div className="w-6" />}
-
-            {/* Collapse Toggle + Label */}
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className={cn(
-                  "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
-                  "rounded-md px-2 py-3",
-                  "focus:outline-none"
-                )}
-                aria-expanded={isOpen}
-              >
-                {isOpen ? (
-                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                )}
-                <RepeaterRowLabel index={index} field={field} data={data} />
-              </button>
-            </CollapsibleTrigger>
-
-            {/* Remove Button */}
-            {canRemove && isInteractive && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={onRemove}
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
-                aria-label={`Remove ${field.labels?.singular || "item"} ${index + 1}`}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-
+        <RepeaterRowHeader
+          index={index}
+          field={field}
+          data={data}
+          isOpen={isOpen}
+          isSortable={isSortable}
+          isInteractive={isInteractive}
+          canRemove={canRemove}
+          onRemove={onRemove}
+          attributes={attributes}
+          listeners={listeners}
+        />
         <CollapsibleContent>
           <CardContent className="p-5 pt-5 space-y-6">
-            {/* Render sub-fields */}
-            {field.fields && field.fields.length > 0 ? (
-              renderField ? (
-                (() => {
-                  const rows = packFieldsIntoRows(
-                    field.fields as unknown as FieldConfig[]
-                  );
-                  return rows.map((row, rIdx) => {
-                    const weights = row.map(fieldWeight);
-                    const sum = weights.reduce((a, b) => a + b, 0);
-                    const cols =
-                      sum < 100
-                        ? [...weights, 100 - sum].map(w => `${w}fr`).join(" ")
-                        : weights.map(w => `${w}fr`).join(" ");
-
-                    return (
-                      <div
-                        key={rIdx}
-                        className="grid gap-6 items-start [&>*]:!w-full"
-                        style={{ gridTemplateColumns: cols }}
-                      >
-                        {row.map((subField, idx) => {
-                          if (!("name" in subField) || !subField.name) {
-                            return null;
-                          }
-                          return (
-                            <div
-                              key={(subField as { name: string }).name || idx}
-                            >
-                              {renderField(subField, basePath, control, {
-                                disabled,
-                                readOnly,
-                              })}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  });
-                })()
-              ) : (
-                // Default placeholder when no renderField provided
-                <div className="text-sm text-muted-foreground bg-primary/5 rounded-lg p-4  border border-border border-dashed">
-                  <p className="font-medium mb-2">Sub-fields:</p>
-                  <ul className="list-disc list-inside space-y-1">
-                    {field.fields.map((subField, idx) => {
-                      const fieldWithName = subField as {
-                        name?: string;
-                        type: string;
-                      };
-                      return (
-                        <li key={fieldWithName.name || idx}>
-                          {fieldWithName.name ? (
-                            <>
-                              <span className="font-mono text-xs">
-                                {fieldWithName.name}
-                              </span>
-                              <span className="text-muted-foreground">
-                                {" "}
-                                ({fieldWithName.type})
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-muted-foreground">
-                              {fieldWithName.type} (layout)
-                            </span>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  <p className="text-xs text-muted-foreground mt-3 italic">
-                    Full field rendering will be available when FieldRenderer is
-                    integrated.
-                  </p>
-                </div>
-              )
-            ) : (
-              <div className="text-sm text-muted-foreground text-center py-4">
-                No sub-fields configured for this array.
-              </div>
-            )}
+            <RepeaterRowSubFields
+              field={field}
+              basePath={basePath}
+              control={control}
+              disabled={disabled}
+              readOnly={readOnly}
+              renderField={renderField}
+            />
           </CardContent>
         </CollapsibleContent>
       </Collapsible>
