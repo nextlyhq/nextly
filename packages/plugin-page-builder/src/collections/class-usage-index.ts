@@ -166,10 +166,18 @@ export function classUsageIndexCollection() {
       description:
         "Which documents reference which named classes. Maintained automatically; editing it cannot change what any page renders.",
     },
-    // No timestamps. A row is a fact derived from a document, not an event, and
+    // A row is a fact derived from a document, not an event, and
     // `createdAt`/`updatedAt` on a derived row invite exactly the question they
     // cannot answer — when the REFERENCE appeared, which is a property of the
     // document's history rather than of this row's.
+    //
+    // Declared even though nothing honours it today. The schema pipeline is
+    // given `{ builtBy, hasStatus, localized }` and injects both timestamp
+    // columns unconditionally, and the mutation service stamps them on every
+    // create, so this table carries two values per reference that mean nothing.
+    // Kept rather than dropped because it is the correct statement for this
+    // collection and a pipeline that learns to read it should apply it here;
+    // removing it would make that future fix silently skip this table.
     timestamps: false,
   });
 }

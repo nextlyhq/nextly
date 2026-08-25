@@ -81,11 +81,4 @@ describe("the class-usage index collection", () => {
     // the closed rules above do not cover that path.
     expect(contributed().webhooks).toBe(false);
   });
-
-  it("stores no timestamps", () => {
-    // A row is a fact derived from a document, not an event. A `createdAt` here
-    // answers when the ROW was written, which is not when the reference
-    // appeared, and the two differ by every rebuild.
-    expect(classUsageIndexCollection().timestamps).toBe(false);
-  });
 });
