@@ -27,7 +27,6 @@ import {
   retentionPoliciesFrom,
 } from "../../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import type { CacheRevalidator } from "../../revalidation/types";
 import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
@@ -39,6 +38,7 @@ import { CollectionsHandler } from "../../services/collections-handler";
 import type { FieldGroupDataService } from "../../services/field-groups";
 import { container } from "../container";
 
+import { cacheRevalidatorDep } from "./cache-revalidator-dep";
 import { createNoOpHookRegistry } from "./no-op-hook-registry";
 import type { RegistrationContext } from "./types";
 
@@ -197,10 +197,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       // this service is constructed during boot, before a Next cache adapter
       // registers — an eager capture would memoize the no-op and ignore the
       // real adapter that registers later, at request time.
-      () =>
-        container.has("cacheRevalidator")
-          ? container.get<CacheRevalidator>("cacheRevalidator")
-          : undefined
+      cacheRevalidatorDep(container)
     );
 
     return new CollectionService(
