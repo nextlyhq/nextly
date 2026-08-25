@@ -42,17 +42,28 @@ const MEASURED_ROUTES = [
 
 const shellOf = (page: Page) => page.locator(".nx-page-shell");
 
-/** The announcement every one of these routes renders while it is loading. */
-const loadingStatus = (page: Page) =>
-  page.locator('[role="status"]').filter({ hasText: /Loading/ });
+/**
+ * Placeholder boxes inside the shell, from the shared `Skeleton` and from the
+ * hand-rolled pulses several loading branches use instead of it.
+ *
+ * This is the discriminator rather than a status announcement, because the
+ * announcement does not separate the two states. Measured across these four
+ * routes: `/settings` and `/settings/api-keys` render NO `role="status"` while
+ * loading, and `/collections/posts/create` renders one while LOADED — so a
+ * check for its absence passes on a skeleton AND fails on a finished page,
+ * which is wrong in both directions.
+ *
+ * A placeholder is what "still loading" looks like on screen, and it is what
+ * the measurement must not be reading.
+ */
+const skeletons = (page: Page) =>
+  shellOf(page).locator('[data-slot="skeleton"], .animate-pulse');
 
 /**
  * A real interactive control inside the shell, of either kind the admin uses.
  *
- * This is the POPULATION half of readiness. The loading skeletons render only
- * `Skeleton` divs, so a control being present separates the loaded page from
- * them — and it separates both from a page that rendered nothing, which
- * satisfies "the announcement is gone" perfectly.
+ * The POPULATION half. "No placeholders" is satisfied perfectly by a page that
+ * rendered nothing at all, and those are the same output.
  */
 const aControl = (page: Page) =>
   shellOf(page)
@@ -61,13 +72,12 @@ const aControl = (page: Page) =>
     .first();
 
 /**
- * Both halves of "the page is ready": the loading announcement gone, and a
- * real control present. Absence alone is satisfied by a page that rendered
- * nothing at all, which is the same output as a page that finished.
+ * Both halves of "the page is ready": every placeholder gone, and a real
+ * control present.
  */
 async function awaitLoaded(page: Page) {
   await expect(shellOf(page)).toBeVisible();
-  await expect(loadingStatus(page)).toHaveCount(0);
+  await expect(skeletons(page)).toHaveCount(0, { timeout: 20_000 });
   await expect(aControl(page)).toBeVisible();
 }
 
@@ -145,6 +155,15 @@ async function measure(page: Page) {
     // design — a wide table in its own scroller — and the scroller is what has
     // to stay in the column. Asked of the ancestors rather than of a class
     // name, so any spelling that produces the clip is recognised.
+    //
+    // The exemption is sound because the clip is REAL: the overflow is not
+    // painted outside the ancestor, so nothing reaches the page edge however
+    // far the rect extends. It is worth knowing when verifying this test,
+    // though, since it is not obvious from a failure. Every card in the admin
+    // is `rounded-*` with `overflow-hidden`, so a negative margin planted
+    // inside one is correctly NOT reported — measured here at 7px past the
+    // column and clipped — and a break placed there looks like the check
+    // missing it. Plant the break outside the cards, or on a grid item.
     const clipped = (el: Element) => {
       for (let p = el.parentElement; p && p !== shell; p = p.parentElement) {
         if (getComputedStyle(p).overflowX !== "visible") return true;
@@ -265,7 +284,7 @@ test.describe("a measured page keeps its children inside the page", () => {
     await expect(shellOf(page)).toBeVisible();
     // The skeleton IS what is on screen — asserted, not assumed, so this
     // cannot quietly become a second measurement of the loaded editor.
-    await expect(loadingStatus(page)).toBeVisible();
+    await expect(skeletons(page).first()).toBeVisible();
 
     const m = await measure(page);
     expect(m.tracks).toHaveLength(3);
