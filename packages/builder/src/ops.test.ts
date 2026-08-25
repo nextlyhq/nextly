@@ -3111,6 +3111,78 @@ describe("a group of ops judged against the caps once", () => {
     expect(undone.nodes).toEqual(start.nodes);
   });
 
+  it("keeps the per-op node bound, so a group cannot smuggle a huge subtree", () => {
+    /*
+     * `maxNodes` is not only a product cap. `assertNodeShape` refuses at
+     * `maxNodes + 1` precisely so the work stays proportional to what a
+     * document may HOLD rather than to what a caller sent — its own comment
+     * says so. Deferring it to the end of the group would let an op validate,
+     * snapshot, insert and scan a subtree of any size first, on the main
+     * thread, even if a later op removed it again.
+     *
+     * So this must be refused even though the group's FINAL document is empty
+     * of it.
+     */
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 20 };
+    const start = doc([sized("a", 10)]);
+    const many = Array.from({ length: 200 }, (_, index) =>
+      sized(`n${index}`, 1)
+    );
+    const insert = {
+      kind: "insert",
+      node: { ...sized("big", 1), slots: { children: many } },
+      at: { index: 1 },
+    } as unknown as BuilderOp;
+    const remove = { kind: "remove", id: "big" } as BuilderOp;
+
+    expect(() => applyOps(start, [insert, remove], limits)).toThrow(OpError);
+  });
+
+  it("refuses a group that holds far more than a document may, in passing", () => {
+    /*
+     * An op's inverse SNAPSHOTS the value it replaced, so a group free to write
+     * an arbitrarily large intermediate leaves that value alive in undo history
+     * behind a final document that fits. The ceiling bounds what a group may
+     * transiently hold — the document it started with, plus one more document's
+     * worth — so the oversized value is refused as it is written rather than
+     * retained afterwards.
+     */
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
+    const start = doc([sized("a", 100)]);
+
+    // Population: the FINAL document here is tiny and would pass the end check
+    // on its own, so a refusal is about the transient, not the result.
+    const finalOnly = applyOps(start, [resize("a", 120)], limits);
+    expect(finalOnly.document.nodes).toHaveLength(1);
+
+    expect(() =>
+      applyOps(start, [resize("a", 50_000), resize("a", 120)], limits)
+    ).toThrow(OpError);
+  });
+
+  it("records nothing when the group leaves the document as it found it", () => {
+    /*
+     * Every op changed something and the net effect is still nothing. An entry
+     * recording it would undo to no visible change, which is the failure the
+     * empty-group rule already refuses one level up — and which deferring the
+     * byte cap made newly reachable, since the growing op used to be refused
+     * outright.
+     */
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 6_000 };
+    const start = doc([sized("a", 100)]);
+
+    const applied = applyOps(
+      start,
+      [resize("a", 2_000), resize("a", 100)],
+      limits
+    );
+
+    // The document really is back where it started...
+    expect(applied.document.nodes).toEqual(start.nodes);
+    // ...so there is nothing for the caller to record.
+    expect(applied.inverses).toEqual([]);
+  });
+
   it("records nothing for an empty group", () => {
     // No ops, no inverses, and the same document back — an empty group that
     // produced a history entry would undo to no visible effect.

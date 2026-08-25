@@ -214,6 +214,12 @@ export function useEditorState({
         return null;
       }
 
+      // NO inverses means the group left the document as it found it — every op
+      // changed something and the net effect was nothing. Recording it would be
+      // a history entry whose undo has no visible effect, which is the same
+      // refusal an empty group already gets above.
+      if (group.inverses.length === 0) return latestDocument.current;
+
       const applied = { document: group.document, inverse: group.inverses };
 
       if (into === "new") {

@@ -42,8 +42,18 @@ that never exists. The caps are now judged once, with the group's starting
 document on one side and its final document on the other — the same question a
 single op is judged by, asked of the group.
 
-Deferring is not skipping: a group that leaves the document over a cap is
+Deferring is not skipping: a group that leaves the document over the cap is
 refused exactly as one op would be, and a group that shrinks an already-oversized
-document is allowed exactly as a shrinking edit already was. All three caps move
-together, because a cap describes the document and a group produces one
-document.
+document is allowed exactly as a shrinking edit already was.
+
+Only the size cap defers, and only up to a ceiling. The node and depth caps stay
+per op, because they also bound the WORK an edit may cost before it is refused —
+a group free of them could validate and insert a subtree of any size before
+anything objected. The size cap defers to what the document started with plus one
+more document's worth, because an op's inverse snapshots the value it replaced,
+so a group free to write an arbitrarily large intermediate would leave that value
+alive in undo history behind a document that fits.
+
+A group whose ops cancel out records nothing. Each op changed something, the
+document ended where it began, and an entry recording that would undo to no
+visible effect.
