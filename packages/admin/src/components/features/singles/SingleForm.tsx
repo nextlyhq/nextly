@@ -619,13 +619,16 @@ export function SingleForm({
                     className="mx-6 mt-3"
                   />
 
-                  <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+                  <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
                     {/* Main column */}
                     <div className="flex-1 min-w-0 flex flex-col">
-                      {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
-                already cancels PageContainer's px-8, so wrapping the header / meta
-                strip in another -mx-8 was double-negative and pushed them
-                past the page edges. */}
+                      {/* No horizontal compensation here, and none needed. The
+                parent's `-my-8` cancels the page's VERTICAL inset only; the
+                horizontal inset is spent as grid columns on a measured page and
+                is not a padding any margin can pull back from. A horizontal one here
+                would not cancel anything — it would push the header and meta
+                strip past the content column, which is what it did when the
+                parent still cancelled both axes. */}
                       <EntrySystemHeader
                         autosaveEnabled={autosaveScope !== null}
                         autosaveStatus={autosave.status}

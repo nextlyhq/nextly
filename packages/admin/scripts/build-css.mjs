@@ -190,6 +190,7 @@ try {
     process.exit(1);
   }
 
+
   // Get file size
   const stats = fs.statSync(outputFile);
   const sizeKB = (stats.size / 1024).toFixed(2);

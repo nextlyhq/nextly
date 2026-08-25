@@ -15,9 +15,9 @@ import { describe, expect, it } from "vitest";
 import {
   ChromeSuppressionProvider,
   useSuppressAdminChrome,
-} from "@admin/components/layout/ChromeSuppression";
+} from "./ChromeSuppression";
 
-import { CustomEntryView } from "./CustomEntryView";
+import { MeasuredPageFrame } from "./MeasuredPageFrame";
 
 /** A view that asks for the whole panel on mount, as an immersive plugin does. */
 function ImmersiveView() {
@@ -31,14 +31,14 @@ function ImmersiveView() {
 function renderIn(children: React.ReactNode) {
   return render(
     <ChromeSuppressionProvider>
-      <CustomEntryView breadcrumbs={<nav>trail</nav>}>
+      <MeasuredPageFrame breadcrumbs={<nav>trail</nav>}>
         {children}
-      </CustomEntryView>
+      </MeasuredPageFrame>
     </ChromeSuppressionProvider>
   );
 }
 
-describe("CustomEntryView", () => {
+describe("MeasuredPageFrame", () => {
   it("frames a view that asked for nothing, and measures the page", () => {
     renderIn(<p>framed body</p>);
 
@@ -96,5 +96,70 @@ describe("CustomEntryView", () => {
     // would also read "view 1" if a second mount replaced the first.
     expect(mounts).toBe(1);
     expect(screen.getByText("view 1")).toBeDefined();
+  });
+
+  it("frames content that renders no trail", () => {
+    // The default entry form carries its own header chrome and passes no
+    // breadcrumbs. The slot still renders, so this caller and the custom-view
+    // caller reconcile identically — a slot that appeared only sometimes would
+    // shift the content's position and remount it.
+    render(
+      <ChromeSuppressionProvider>
+        <MeasuredPageFrame>
+          <p>default form</p>
+        </MeasuredPageFrame>
+      </ChromeSuppressionProvider>
+    );
+
+    expect(screen.getByText("default form")).toBeDefined();
+    const container = screen.getByTestId("page-container");
+    expect(container.className).toContain("nx-page-shell");
+
+    // The slot stays in the tree so both callers reconcile the same way, but
+    // it reserves no space: a margin around nothing pushes this editor down by
+    // the height of a breadcrumb it never renders.
+    const trail = container.firstElementChild;
+    expect(trail?.childNodes.length).toBe(0);
+    expect(trail?.className).toBe("");
+  });
+
+  it("drops the frame for a takeover field inside the default form", () => {
+    // `BlocksField` asks from INSIDE the form rather than as a registered
+    // view, so the default branch has to honour the request too. A page that
+    // declared a measure without honouring it would hand the page builder a
+    // 56rem column to work in.
+    function FormWithTakeoverField() {
+      useSuppressAdminChrome({ layers: ["pageFrame"], canExit: false });
+      return <p>builder canvas</p>;
+    }
+
+    render(
+      <ChromeSuppressionProvider>
+        <MeasuredPageFrame>
+          <FormWithTakeoverField />
+        </MeasuredPageFrame>
+      </ChromeSuppressionProvider>
+    );
+
+    expect(screen.getByText("builder canvas")).toBeDefined();
+    expect(screen.getByTestId("page-container").className).toContain(
+      "contents"
+    );
+  });
+
+  it("reserves no space for a null trail either", () => {
+    // `null` is the other way a caller says "no trail" — a conditional that
+    // renders nothing yields it, and a strict `undefined` check would give
+    // that caller the 24px gap this slot exists to avoid.
+    render(
+      <ChromeSuppressionProvider>
+        <MeasuredPageFrame breadcrumbs={null}>
+          <p>body</p>
+        </MeasuredPageFrame>
+      </ChromeSuppressionProvider>
+    );
+
+    const trail = screen.getByTestId("page-container").firstElementChild;
+    expect(trail?.className).toBe("");
   });
 });

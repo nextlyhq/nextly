@@ -15,11 +15,11 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
-import { CustomEntryView } from "@admin/components/features/entries/CustomEntryView";
 import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -87,15 +87,21 @@ function EditEntryBreadcrumbs({
  */
 function EditEntryPageSkeleton() {
   return (
-    <PageContainer>
+    <PageContainer width="form">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading entry...
       </div>
 
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
+      {/* Cancels the page's vertical inset only.
+          The horizontal half would pull this skeleton past the measured
+          column, and the editor that replaces it would then jump 64px
+          narrower. */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
         {/* Main Content */}
-        <div className="flex-1 space-y-6 lg:p-8 pt-6">
+        {/* `min-w-0` as the editor that replaces this carries it: without it
+            this pane will not shrink and pushes the rail past the column. */}
+        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />
@@ -299,10 +305,25 @@ export default function EditEntryPage({
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;
 
+  /**
+   * The page's measure, on every branch.
+   *
+   * `form` because an entry is a labelled form: an unbounded panel stretches a
+   * short text input across the whole of it. These early-return branches never
+   * reach `MeasuredPageFrame`, which carries the same reasoning for the branch
+   * that does, so they state it here rather than inheriting it.
+   *
+   * Every branch carries it — loading, each error state, and the editor —
+   * because they are the SAME page at different moments. Measuring only the
+   * editor would leave the skeleton full-width and reflow the page the instant
+   * data arrived, which reads as the layout breaking rather than as content
+   * appearing.
+   */
+
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             No collection was specified in the URL.
@@ -320,7 +341,7 @@ export default function EditEntryPage({
   // Missing ID error state
   if (!id) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             No entry ID was specified in the URL.
@@ -353,7 +374,7 @@ export default function EditEntryPage({
   // Error state
   if (error) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load entry:{" "}
@@ -372,7 +393,7 @@ export default function EditEntryPage({
   // Collection not found
   if (!collection) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Collection &quot;{slug}&quot; not found.
@@ -390,7 +411,7 @@ export default function EditEntryPage({
   // Entry not found
   if (!entry) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Entry &quot;{id}&quot; not found in collection &quot;{slug}&quot;.
@@ -448,7 +469,7 @@ export default function EditEntryPage({
 
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <CustomEntryView
+        <MeasuredPageFrame
           breadcrumbs={
             <EditEntryBreadcrumbs
               collectionSlug={slug}
@@ -457,11 +478,20 @@ export default function EditEntryPage({
             />
           }
         >
-          <PluginSlot
-            path={customEditViewPath}
-            props={customViewProps as unknown as Record<string, unknown>}
-          />
-        </CustomEntryView>
+          {/* Boxed for the same reason the injection slots are: under the
+              measured frame this is a direct child of a CSS grid, and the rule
+              that puts a child in the content column can only place a
+              generated element box. A view rooted in bare text, or in an
+              element with `display: contents`, produces none and is
+              auto-placed into a gutter. The registry imposes no root-element
+              contract, so the page provides the box. */}
+          <div>
+            <PluginSlot
+              path={customEditViewPath}
+              props={customViewProps as unknown as Record<string, unknown>}
+            />
+          </div>
+        </MeasuredPageFrame>
       </QueryErrorBoundary>
     );
   }
@@ -480,9 +510,18 @@ export default function EditEntryPage({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <MeasuredPageFrame>
+        {/* Each injection slot gets a box of its own. Under the measured
+            frame these are direct children of a CSS grid, and the rule that
+            puts a child in the content column can only place a generated
+            element box: a plugin whose root is bare text, or an element with
+            `display: contents`, produces none and is auto-placed into a gutter
+            instead. The registry imposes no root-element contract on a plugin,
+            so the page provides the box rather than trusting it to. */}
         {beforeEditPath && (
-          <PluginSlot path={beforeEditPath} props={editInjectionProps} />
+          <div>
+            <PluginSlot path={beforeEditPath} props={editInjectionProps} />
+          </div>
         )}
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
@@ -504,9 +543,11 @@ export default function EditEntryPage({
           onCancel={handleCancel}
         />
         {afterEditPath && (
-          <PluginSlot path={afterEditPath} props={editInjectionProps} />
+          <div>
+            <PluginSlot path={afterEditPath} props={editInjectionProps} />
+          </div>
         )}
-      </PageContainer>
+      </MeasuredPageFrame>
     </QueryErrorBoundary>
   );
 }

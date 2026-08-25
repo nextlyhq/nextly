@@ -144,8 +144,10 @@ export const PageContainer = React.forwardRef<
       className={cn(
         surface,
         // Horizontal padding scales with the content-panel width (not the
-        // viewport): 16px -> 24px -> 32px. The 32px step aligns with the
-        // edge-to-edge forms' -m-8, which fires at a wider panel (@4xl).
+        // viewport): 16px -> 24px -> 32px. This is the UNMEASURED path, where
+        // the inset is padding on this box; a measured page spends it as grid
+        // columns from `--nx-gutter` instead, which runs through the same
+        // three values on its own thresholds rather than these.
         "px-4 @sm/content:px-6 @2xl/content:px-8",
         rhythm,
         className
