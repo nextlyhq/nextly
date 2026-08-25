@@ -78,6 +78,57 @@ describe("applying edits", () => {
   });
 });
 
+describe("an empty group", () => {
+  it("changes nothing and records nothing", () => {
+    /*
+     * One question — is there anything to record — answered in one place. An
+     * entry for a group with no ops would undo to no visible effect, which is
+     * the same refusal a group whose ops cancel out already gets.
+     */
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    let returned: BlockDocument | null = null;
+    act(() => {
+      returned = result.current.applyAll([]);
+    });
+
+    expect(returned).not.toBeNull();
+    expect(ids(result.current.document)).toEqual(["a"]);
+    // The property: no history entry, so undo stays unavailable.
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("still answers through the op layer, so limits are judged the same", () => {
+    /*
+     * A short-cut here would answer before the limits were checked, and the
+     * same call would then throw through `applyOps` and succeed through
+     * `applyAll` — one question with two answers. The empty case goes through
+     * the same path as any other, so an unusable limit is refused either way.
+     *
+     * `maxBytes: 0` is unusable rather than merely small: every cap is a `>`
+     * comparison, so a limit below 1 cannot decide anything.
+     */
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([node("a")]),
+        limits: { maxDepth: 10, maxNodes: 10, maxBytes: 0 },
+      })
+    );
+
+    let returned: BlockDocument | null = null;
+    act(() => {
+      returned = result.current.applyAll([]);
+    });
+
+    expect(returned).toBeNull();
+    // And nothing was recorded on the way to refusing.
+    expect(result.current.undoDepth).toBe(0);
+  });
+});
+
 describe("a group of ONE", () => {
   /*
    * The property the style panel now depends on. Every style edit in the

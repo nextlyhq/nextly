@@ -344,12 +344,16 @@ describe("the ops that change a whole selection", () => {
 
   it("returns the ops in SELECTION order", () => {
     /*
-     * The contract the interface states, pinned because a reason to break it
-     * exists and was acted on once: writing the shrinking blocks first would
-     * keep a batch at the byte cap from depending on selection order. Knowing
-     * which block shrinks means measuring what each holds, and `measureBytes`
-     * invokes a value's own `toJSON` on data no guard has accepted — so the
-     * ordering was withdrawn and the ops stay as the caller selected them.
+     * The contract the interface states, pinned because there is a standing
+     * reason to want a different one: writing the shrinking blocks first would
+     * keep a batch at the byte cap from depending on the order its blocks were
+     * selected in.
+     *
+     * Selection order holds anyway, because knowing which block shrinks means
+     * measuring what each one currently holds — and `measureBytes` invokes a
+     * value's own `toJSON`, on nodes no guard has accepted yet. An ordering is
+     * an optimisation of the peak, never a gate, so running author code to
+     * obtain one is the wrong trade.
      */
     const first = padNode("first", { blockStart: "1px" });
     const second = padNode("second", { blockStart: "1px" });

@@ -3244,7 +3244,11 @@ export function applyOps(
   limits: DocumentLimits = DEFAULT_LIMITS
 ): AppliedOps {
   assertUsableLimits(limits);
-  if (ops.length === 0) return { document, inverses: [] };
+  // No branch for an EMPTY group: the fold runs no times, so the endpoints are
+  // the same object and the comparison below already answers with the document
+  // unchanged and nothing to record. A branch saying that again would be a
+  // second statement of it, waiting to disagree.
+  //
   // A group of one IS the single call. `applyOp` has already refused an op that
   // changes nothing, so the endpoint comparison below would walk two documents
   // to re-answer a question it just answered — on the commonest edit in the

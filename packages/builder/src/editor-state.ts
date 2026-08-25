@@ -188,11 +188,6 @@ export function useEditorState({
       ops: readonly BuilderOp[],
       into: "undo" | "redo" | "new"
     ): BlockDocument | null => {
-      // Nothing to do, and nothing to record. An empty group must NOT push an
-      // entry: that would be an undo that appears to do nothing, which reads as
-      // the history being broken.
-      if (ops.length === 0) return latestDocument.current;
-
       let group;
       try {
         // ONE call rather than a fold here, so the group's atomicity and its
@@ -218,10 +213,16 @@ export function useEditorState({
         return null;
       }
 
-      // NO inverses means the group left the document as it found it — every op
-      // changed something and the net effect was nothing. Recording it would be
-      // a history entry whose undo has no visible effect, which is the same
-      // refusal an empty group already gets above.
+      // NO inverses is the ONE answer to "is there anything to record", and it
+      // covers both ways of arriving at nothing: a group with no ops, and a
+      // group whose ops left the document as they found it. Either would be a
+      // history entry whose undo has no visible effect, which reads as the
+      // history being broken.
+      //
+      // Asked of `applyOps` rather than decided here. An empty group short-cut
+      // in this file answered before the limits were checked, so the same call
+      // threw from `applyOps` and succeeded through `applyAll` — one question
+      // with two answers, waiting to drift further.
       if (group.inverses.length === 0) return latestDocument.current;
 
       const applied = { document: group.document, inverse: group.inverses };
