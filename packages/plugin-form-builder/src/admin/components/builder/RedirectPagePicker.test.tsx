@@ -43,6 +43,8 @@ beforeAll(() => {
 
 /** Every URL the component requested, in order. */
 let requested: string[] = [];
+/** The document a by-id read should answer with, for the recovery path. */
+let recoverable: Record<string, unknown> | undefined;
 
 /**
  * A server whose `pages` collection is titled by `headline`.
@@ -51,12 +53,25 @@ let requested: string[] = [];
  * fixture titled by `title` returns the same green whether the configured
  * field was honoured or ignored.
  */
-function serve(rows: Record<string, unknown>[], useAsTitle?: string) {
+function serve(
+  rows: Record<string, unknown>[],
+  useAsTitle?: string,
+  localized?: boolean
+) {
   requested = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       requested.push(url);
+      // A by-id read answers with the document ITSELF; the listing answers
+      // with `{ items }`. Matching both on "/entries" would hand the recovery
+      // path a list it cannot read, and it would report the selection
+      // unreadable rather than exercising the marker.
+      const byId = /\/entries\/([^?]+)/.exec(url);
+      if (byId) {
+        const found = rows.find(r => r.id === byId[1]) ?? recoverable;
+        return { ok: Boolean(found), json: async () => found };
+      }
       if (url.includes("/entries")) {
         return {
           ok: true,
@@ -65,7 +80,10 @@ function serve(rows: Record<string, unknown>[], useAsTitle?: string) {
       }
       return {
         ok: true,
-        json: async () => (useAsTitle ? { admin: { useAsTitle } } : {}),
+        json: async () => ({
+          ...(useAsTitle ? { admin: { useAsTitle } } : {}),
+          ...(localized === undefined ? {} : { localized }),
+        }),
       };
     })
   );
@@ -81,6 +99,7 @@ function projection(url: string): Record<string, boolean> {
 
 beforeEach(() => {
   requested = [];
+  recoverable = undefined;
 });
 
 afterEach(() => {
@@ -234,5 +253,162 @@ describe("what the picker says about a page that is not live", () => {
     await userEvent.click(await screen.findByLabelText("Redirect page"));
     const option = await screen.findByRole("option", { name: /Launch day/ });
     expect(option).not.toHaveTextContent("Draft");
+  });
+});
+
+describe("a target collection that publishes per locale", () => {
+  // A page published before and showing `status: "draft"` now. On a plain
+  // collection that means unpublished; on a localized one a translation may be
+  // public, and the main row says nothing about it.
+  const previouslyPublished = {
+    id: "p1",
+    headline: "Launch day",
+    status: "draft",
+    firstPublishedAt: "2026-08-25T00:00:00.000Z",
+  };
+
+  it("does not mark it a draft when the collection is localized", async () => {
+    // Marking it would tell an author a page visitors can reach in Spanish is
+    // not live, and the save rule would refuse a form pointing at it.
+    serve([previouslyPublished], "headline", true);
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={undefined}
+        onChange={vi.fn()}
+      />
+    );
+
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    const option = await screen.findByRole("option", { name: /Launch day/ });
+    expect(option).not.toHaveTextContent("Draft");
+  });
+
+  it("marks it a draft when the collection is not localized", async () => {
+    // The separating case. Without this, the test above passes just as well
+    // against a picker that stopped marking drafts entirely.
+    serve([previouslyPublished], "headline", false);
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={undefined}
+        onChange={vi.fn()}
+      />
+    );
+
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    const option = await screen.findByRole("option", { name: /Launch day/ });
+    expect(option).toHaveTextContent("Draft");
+  });
+
+  it("marks a never-published page whatever the collection says", async () => {
+    // No `firstPublishedAt`: never public in any language, so localization
+    // cannot rescue it and both settings must mark it.
+    for (const localized of [true, false]) {
+      serve(
+        [
+          {
+            id: "p1",
+            headline: "Launch day",
+            status: "draft",
+            firstPublishedAt: null,
+          },
+        ],
+        "headline",
+        localized
+      );
+      const view = render(
+        <RedirectPagePicker
+          collections={["pages"]}
+          value={undefined}
+          onChange={vi.fn()}
+        />
+      );
+      await userEvent.click(await screen.findByLabelText("Redirect page"));
+      expect(
+        await screen.findByRole("option", { name: /Launch day/ })
+      ).toHaveTextContent("Draft");
+      view.unmount();
+    }
+  });
+});
+
+describe("a stored selection the listing never reached", () => {
+  // `useSelectedChoice` fetches it by id and adds it to the list. It must
+  // decide the marker the same way the listing does — a document shown under
+  // one rule when the listing reaches it and another when it does not is the
+  // same page telling an author two different things.
+  const storedValue = { relationTo: "pages", value: "p9" };
+
+  it("marks a recovered never-published page as a draft", async () => {
+    serve([], "headline", false);
+    recoverable = {
+      id: "p9",
+      headline: "Launch day",
+      status: "draft",
+      firstPublishedAt: null,
+    };
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={storedValue}
+        onChange={vi.fn()}
+      />
+    );
+
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    expect(
+      await screen.findByRole("option", { name: /Launch day/ })
+    ).toHaveTextContent("Draft");
+  });
+
+  it("marks a recovered page that its plain collection unpublished", async () => {
+    // The case that separates the flag being PASSED from it being dropped:
+    // `localized: false` and `undefined` disagree only here. Reading the flag
+    // as undefined answers "unknown" and the marker silently disappears, which
+    // both other recovery tests would still pass through.
+    serve([], "headline", false);
+    recoverable = {
+      id: "p9",
+      headline: "Launch day",
+      status: "draft",
+      firstPublishedAt: "2026-08-25T00:00:00.000Z",
+    };
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={storedValue}
+        onChange={vi.fn()}
+      />
+    );
+
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    expect(
+      await screen.findByRole("option", { name: /Launch day/ })
+    ).toHaveTextContent("Draft");
+  });
+
+  it("does not mark a recovered page on a localized collection", async () => {
+    // The separating case: identical document, localized collection, so the
+    // main row's draft status does not answer for it.
+    serve([], "headline", true);
+    recoverable = {
+      id: "p9",
+      headline: "Launch day",
+      status: "draft",
+      firstPublishedAt: "2026-08-25T00:00:00.000Z",
+    };
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={storedValue}
+        onChange={vi.fn()}
+      />
+    );
+
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    expect(
+      await screen.findByRole("option", { name: /Launch day/ })
+    ).not.toHaveTextContent("Draft");
   });
 });

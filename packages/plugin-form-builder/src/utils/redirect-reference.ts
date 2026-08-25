@@ -108,22 +108,52 @@ export function hasPublishLifecycle(document: RedirectTargetDocument): boolean {
 }
 
 /**
+ * How reachable a document is, as one of three answers.
+ *
+ * Three rather than a boolean because one of the cases is genuinely
+ * undecidable from a redirect target's row, and collapsing it into either
+ * answer is wrong in a different direction.
+ */
+export type Reachability = "reachable" | "unreachable" | "unknown";
+
+/**
  * Whether a visitor can reach this document.
  *
- * Unmanaged documents are always reachable: there is no unpublished state for
- * them to be in. Managed ones are reachable only when published — every other
- * lifecycle state is one the public route does not serve.
+ * `collectionIsLocalized` is the caller's knowledge of the target collection's
+ * `localized` setting, or `undefined` where the caller has no way to know.
  *
- * Lives here, beside the reference parser, because the save rule and the admin
- * picker have to agree about which pages are reachable. Two readers that agree
- * today would drift, and a picker marking the wrong rows as drafts still looks
- * like a working picker.
+ * A localized collection publishes PER LOCALE, on a companion row that no read
+ * available here returns. Measured on 2026-08-25 against a collection with
+ * `localized: true` whose Spanish translation was published while the default
+ * locale stayed a draft: `findByID` answers `status: "draft"` at the default
+ * locale AND at `es`, and a `find` filtered to `status: "published"` returns
+ * the document at no locale at all — no locale, `en` or `es`. So the main
+ * row's `status` does not answer for a localized document, and reading it as
+ * an answer marks a page visitors can reach as a draft, refuses a correct save
+ * and drops a working redirect.
+ *
+ * `firstPublishedAt` is the one fact that survives that: it records whether the
+ * document has ever been public in ANY language, so its absence is decisive
+ * whether or not the collection is localized.
  */
-export function documentIsReachable(document: RedirectTargetDocument): boolean {
-  if (!hasPublishLifecycle(document)) return true;
-  return document.status === "published";
-}
+export function documentReachability(
+  document: RedirectTargetDocument,
+  collectionIsLocalized: boolean | undefined
+): Reachability {
+  // No lifecycle at all: there is no unpublished state to be in.
+  if (!hasPublishLifecycle(document)) return "reachable";
+  if (document.status === "published") return "reachable";
 
+  // Never public in any language. The only judgement that holds for a
+  // localized collection and a plain one alike.
+  if (!document.firstPublishedAt) return "unreachable";
+
+  // Published before and not published now. Decisive only where the caller
+  // knows no translation can be carrying it.
+  if (collectionIsLocalized === false) return "unreachable";
+
+  return "unknown";
+}
 /** The settings keys that can carry the document a form redirects to. */
 export type PickedDocumentField = "redirectPage" | "redirectRelation";
 

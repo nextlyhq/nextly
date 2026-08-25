@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyRedirectPattern,
-  documentIsReachable,
+  documentReachability,
   hasPublishLifecycle,
   pickedDocumentField,
   DEFAULT_REDIRECT_PATTERN,
@@ -236,55 +236,83 @@ describe("hasPublishLifecycle", () => {
   });
 });
 
-describe("documentIsReachable", () => {
+describe("documentReachability", () => {
+  const managed = (over = {}) => ({ id: "1", firstPublishedAt: null, ...over });
+
   it("treats a collection with no publish lifecycle as reachable", () => {
-    // The ordinary case for a site that never turned drafts on. Reading this
-    // as "not published" would refuse every redirect on every such site.
-    expect(documentIsReachable({ id: "1", slug: "thanks" })).toBe(true);
+    // No `status` FIELD at all. Reading this as unpublished would refuse every
+    // redirect on every site that never turned drafts on.
+    expect(documentReachability({ id: "1", slug: "thanks" }, false)).toBe(
+      "reachable"
+    );
   });
 
   it("treats a document with its own status field as reachable", () => {
-    // The case that matters most: `status: "active"` on an unmanaged
-    // collection is not a draft, and marking it one both labels a live page
-    // "Draft" in the picker and refuses a perfectly good save.
-    expect(documentIsReachable({ id: "1", status: "active" })).toBe(true);
-    expect(documentIsReachable({ id: "1", status: "draft" })).toBe(true);
+    // `status: "active"` on an unmanaged collection is not a draft.
+    expect(documentReachability({ id: "1", status: "active" }, false)).toBe(
+      "reachable"
+    );
   });
 
   it("reads a published document as reachable", () => {
-    expect(
-      documentIsReachable({
-        id: "1",
-        status: "published",
-        firstPublishedAt: "2026-08-25T00:00:00.000Z",
-      })
-    ).toBe(true);
+    expect(documentReachability(managed({ status: "published" }), false)).toBe(
+      "reachable"
+    );
   });
 
-  it("reads a managed draft as unreachable", () => {
-    expect(
-      documentIsReachable({ id: "1", status: "draft", firstPublishedAt: null })
-    ).toBe(false);
-  });
-
-  it("reads any other managed state as unreachable", () => {
-    // Only "published" is a promise that the public route serves the page.
-    // Anything else is a state this rule has never seen and must not assume
-    // is live — and on a managed collection, guessing wrong sends visitors to
-    // a 404 rather than merely inconveniencing an author.
-    for (const status of ["archived", "scheduled", "", "review"]) {
+  it("reads a never-published document as unreachable, localized or not", () => {
+    // The one judgement that holds whatever the collection's `localized`
+    // setting is: nothing has ever been public in any language.
+    for (const localized of [true, false, undefined]) {
       expect(
-        documentIsReachable({ id: "1", status, firstPublishedAt: null })
-      ).toBe(false);
+        documentReachability(managed({ status: "draft" }), localized)
+      ).toBe("unreachable");
+    }
+  });
+
+  it("reads a previously-published draft as unreachable only when the collection is not localized", () => {
+    const unpublished = managed({
+      status: "draft",
+      firstPublishedAt: "2026-08-25T00:00:00.000Z",
+    });
+    expect(documentReachability(unpublished, false)).toBe("unreachable");
+  });
+
+  it("cannot decide for a previously-published draft on a localized collection", () => {
+    // A localized collection publishes per locale, on a companion row no read
+    // available here returns. Measured: a document whose Spanish translation
+    // is public answers `status: "draft"` at every locale, and a
+    // published-only `find` returns it at none. Calling that unreachable marks
+    // a page visitors can reach as a draft and refuses a correct save.
+    const unpublished = managed({
+      status: "draft",
+      firstPublishedAt: "2026-08-25T00:00:00.000Z",
+    });
+    expect(documentReachability(unpublished, true)).toBe("unknown");
+  });
+
+  it("cannot decide when the caller does not know the localization setting", () => {
+    // A collection hook cannot read it: `req` carries headers, query and the
+    // Direct API and nothing else. Undefined must not collapse to false.
+    const unpublished = managed({
+      status: "draft",
+      firstPublishedAt: "2026-08-25T00:00:00.000Z",
+    });
+    expect(documentReachability(unpublished, undefined)).toBe("unknown");
+  });
+
+  it("reads any other managed state the same way it reads draft", () => {
+    for (const status of ["archived", "scheduled", "", "review"]) {
+      expect(documentReachability(managed({ status }), false)).toBe(
+        "unreachable"
+      );
     }
   });
 
   it("reads a managed document with a non-string status as unreachable", () => {
-    // The lifecycle is present, so the absence of "published" is meaningful
-    // here in a way it is not on an unmanaged collection.
-    expect(
-      documentIsReachable({ id: "1", status: null, firstPublishedAt: null })
-    ).toBe(false);
+    expect(documentReachability(managed({ status: null }), false)).toBe(
+      "unreachable"
+    );
   });
 });
 

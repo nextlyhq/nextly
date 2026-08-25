@@ -24,7 +24,8 @@ import {
 import { useEffect, useState } from "react";
 
 import {
-  documentIsReachable,
+  documentReachability,
+  type Reachability,
   parseRedirectReference,
 } from "../../../utils/redirect-reference";
 
@@ -110,8 +111,12 @@ interface Choice {
    * offered on purpose — a form is usually configured beside the page it
    * points at — but an author choosing one should be able to see that it is
    * not live yet.
+   *
+   * Kept as the three-way answer rather than a boolean: a localized page whose
+   * translation may be public is not the same as one that is definitely a
+   * draft, and only the definite case earns a marker.
    */
-  reachable: boolean;
+  reachability: Reachability;
 }
 
 interface RedirectPagePickerProps {
@@ -164,7 +169,7 @@ async function fetchChoices(
   collection: string,
   query: string,
   page: number,
-  titleField: string | undefined
+  meta: CollectionMeta
 ): Promise<{ rows: Choice[]; hasMore: boolean } | null> {
   const search = query ? `&search=${encodeURIComponent(query)}` : "";
   try {
@@ -175,7 +180,7 @@ async function fetchChoices(
     const response = await fetch(
       `/admin/api/collections/${collection}/entries` +
         `?limit=${PAGE_SIZE}&page=${page}&status=all&depth=0` +
-        `&select=${selectParam(selectFieldsFor(titleField))}${search}`,
+        `&select=${selectParam(selectFieldsFor(meta.titleField))}${search}`,
       { credentials: "include" }
     );
     if (!response.ok) return null;
@@ -189,8 +194,11 @@ async function fetchChoices(
         .map(row => ({
           collection,
           id: row.id as string,
-          label: documentLabel(row, labelFieldsFor(titleField)),
-          reachable: documentIsReachable(row as { id: string }),
+          label: documentLabel(row, labelFieldsFor(meta.titleField)),
+          reachability: documentReachability(
+            row as { id: string },
+            meta.localized
+          ),
         })),
       // Reported rather than assumed, so the control can offer the rest
       // instead of truncating where the author cannot see it.
@@ -234,7 +242,7 @@ function renderChoice(choice: Choice) {
             keeps "offered" from reading as "live". A published form saved
             against one is refused, and an author who cannot see which pages
             are drafts has no way to predict that. */}
-        {!choice.reachable && (
+        {choice.reachability === "unreachable" && (
           <span className="shrink-0 rounded-sm border px-1 py-px text-[10px] uppercase tracking-wide text-muted-foreground">
             Draft
           </span>
@@ -254,25 +262,42 @@ function renderChoice(choice: Choice) {
  * on telling them apart, and the listing itself still reports its own
  * failures.
  */
-async function fetchTitleField(
+interface CollectionMeta {
+  /** The field the collection says names its documents. */
+  titleField: string | undefined;
+  /**
+   * The collection's `localized` setting, or undefined when it could not be
+   * read. Undefined is NOT false: a localized collection read as plain marks
+   * reachable translations as drafts.
+   */
+  localized: boolean | undefined;
+}
+
+async function fetchCollectionMeta(
   collection: string
-): Promise<string | undefined> {
+): Promise<CollectionMeta> {
   try {
     // The bare document, not a `{ message, item }` envelope — that shape is
     // for mutations, and this is a read.
     const response = await fetch(`/admin/api/collections/${collection}`, {
       credentials: "include",
     });
-    if (!response.ok) return undefined;
+    if (!response.ok) return { titleField: undefined, localized: undefined };
     const body = (await response.json()) as {
       admin?: { useAsTitle?: unknown };
+      localized?: unknown;
     };
     const configured = body.admin?.useAsTitle;
-    return typeof configured === "string" && configured.trim()
-      ? configured.trim()
-      : undefined;
+    return {
+      titleField:
+        typeof configured === "string" && configured.trim()
+          ? configured.trim()
+          : undefined,
+      localized:
+        typeof body.localized === "boolean" ? body.localized : undefined,
+    };
   } catch {
-    return undefined;
+    return { titleField: undefined, localized: undefined };
   }
 }
 
@@ -289,10 +314,9 @@ async function fetchTitleField(
  * left labelled differently from every page after it.
  */
 function useTitleFields(key: string) {
-  const [fields, setFields] = useState<Record<
-    string,
-    string | undefined
-  > | null>(null);
+  const [fields, setFields] = useState<Record<string, CollectionMeta> | null>(
+    null
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -301,7 +325,7 @@ function useTitleFields(key: string) {
 
     void Promise.all(
       wanted.map(async collection => {
-        return [collection, await fetchTitleField(collection)] as const;
+        return [collection, await fetchCollectionMeta(collection)] as const;
       })
     ).then(pairs => {
       if (!cancelled) setFields(Object.fromEntries(pairs));
@@ -322,7 +346,7 @@ function useTitleFields(key: string) {
 function useChoices(
   key: string,
   applied: string,
-  titleFields: Record<string, string | undefined> | null
+  titleFields: Record<string, CollectionMeta> | null
 ) {
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [failed, setFailed] = useState<readonly string[]>([]);
@@ -362,7 +386,10 @@ function useChoices(
           collection,
           applied,
           pages[collection] ?? 1,
-          titleFields[collection]
+          titleFields[collection] ?? {
+            titleField: undefined,
+            localized: undefined,
+          }
         )
       )
     ).then(results => {
@@ -444,7 +471,7 @@ function useSelectedChoice(
   selected: string | undefined,
   choices: Choice[] | null,
   setChoices: (update: (current: Choice[] | null) => Choice[]) => void,
-  titleFields: Record<string, string | undefined> | null
+  titleFields: Record<string, CollectionMeta> | null
 ) {
   // Whether the stored selection could not be read. A controlled `Select`
   // holding a value with no matching option renders BLANK, which looks
@@ -501,9 +528,12 @@ function useSelectedChoice(
             // depending on whether the listing happened to reach it.
             label: documentLabel(
               row,
-              labelFieldsFor(titleFields?.[collection])
+              labelFieldsFor(titleFields?.[collection]?.titleField)
             ),
-            reachable: documentIsReachable(row as { id: string }),
+            reachability: documentReachability(
+              row as { id: string },
+              titleFields?.[collection]?.localized
+            ),
           },
           ...(current ?? []),
         ]);

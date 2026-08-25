@@ -22,7 +22,7 @@ import {
 
 import type { ResolvedFormBuilderConfig } from "../types";
 import {
-  documentIsReachable,
+  documentReachability,
   parseRedirectReference,
   pickedDocumentField,
   type PickedDocumentField,
@@ -339,7 +339,12 @@ export function wouldStrandVisitors(
   target: RedirectTargetDocument
 ): boolean {
   return (
-    formAcceptsSubmissions(data, originalData) && !documentIsReachable(target)
+    formAcceptsSubmissions(data, originalData) &&
+    // `undefined`: a hook cannot read a collection's `localized` setting.
+    // `req` carries headers, query and the Direct API and nothing else, and no
+    // read reaches a locale companion's status — so the one case this refuses
+    // is the one that is certain whatever the setting is.
+    documentReachability(target, undefined) === "unreachable"
   );
 }
 

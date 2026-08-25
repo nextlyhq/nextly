@@ -793,12 +793,18 @@ describe("a target collection with the publish lifecycle", () => {
     expect(switched).toMatchObject({ item: { id: created.item.id } });
   });
 
-  it("sends nobody to a page that was unpublished after the form was saved", async () => {
-    // Nothing runs a forms hook when the TARGET changes, so the save-time rule
-    // never sees this. Without a submit-time check the visitor receives a
-    // redirect to a page the public route 404s — the exact outcome the save
-    // rule exists to prevent, reached by a path it cannot watch. The
-    // submission itself must still succeed: the destination is what degrades.
+  it("keeps redirecting to a target that is still reachable", async () => {
+    // The submit path re-decides reachability rather than trusting the save,
+    // because nothing runs a forms hook when the TARGET changes. What it must
+    // not do is drop a destination that still works, which is what this pins.
+    //
+    // Its refusing branch is deliberately not exercised here: the only input
+    // that reaches it is a target which has never been published, and a form
+    // cannot be published against one — the save rule refuses that first. A
+    // page unpublished AFTER the form went live is `"unknown"` rather than
+    // `"unreachable"`, because a localized collection can be serving a
+    // translation this read cannot see. The branch itself is covered by
+    // `documentReachability`'s unit tests in `utils/redirect-target.test.ts`.
     const { plugin, config } = formBuilder({
       redirectRelationships: { pages: "/{slug}" },
     });
@@ -828,6 +834,10 @@ describe("a target collection with the publish lifecycle", () => {
     );
     expect(before.redirect).toBe("/live-page");
 
+    // Unpublishing the target does NOT drop the redirect, and that is the
+    // decision rather than an oversight: the main row reads `draft` for a
+    // localized page whose translation is public, so dropping here would
+    // strand working destinations on every multilingual site.
     await current.nextly.update({
       collection: "pages",
       id: target,
@@ -839,8 +849,7 @@ describe("a target collection with the publish lifecycle", () => {
       { pluginContext, pluginConfig: config }
     );
     expect(after.success).toBe(true);
-    expect(after.submission).toBeDefined();
-    expect(after.redirect).toBeUndefined();
+    expect(after.redirect).toBe("/live-page");
   });
 
   it("lets one save both publish the form and turn its page redirect off", async () => {
@@ -880,24 +889,21 @@ describe("a target collection with the publish lifecycle", () => {
     // The control for the test above: identical write except that `settings`
     // still names the draft page. Without this, skipping the stored target
     // could be skipping the check entirely and nothing would say so.
+    //
+    // The page here has NEVER been published, which is the case the rule can
+    // decide without knowing whether the collection is localized.
     await bootWithDraftingPages();
-    const live = await page("published", "live-page");
+    const target = await page("draft", "draft-page");
     const created = (await current!.nextly.create({
       collection: "forms",
-      data: formData("draft", live),
+      data: formData("draft", target),
     })) as { item: { id: string } };
-
-    await current!.nextly.update({
-      collection: "pages",
-      id: live,
-      data: { status: "draft" },
-    });
 
     await expectRedirectRefusal(
       current!.nextly.update({
         collection: "forms",
         id: created.item.id,
-        data: { status: "published", ...formData("published", live) },
+        data: { status: "published", ...formData("published", target) },
       })
     );
   });

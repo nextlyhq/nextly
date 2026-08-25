@@ -25,7 +25,7 @@ import {
 } from "../utils/generate-schema";
 import {
   applyRedirectPattern,
-  documentIsReachable,
+  documentReachability,
   parseRedirectReference,
   pickedDocumentField,
   type RedirectTargetDocument,
@@ -494,8 +494,11 @@ async function urlForPickedDocument(
   // rule never sees it. Sending a visitor there produces exactly the "page not
   // found" that rule exists to prevent, so this degrades to no redirect — the
   // submission is still stored and still succeeds.
-  if (!documentIsReachable(target)) {
-    logger.warn?.("Form redirects to a page that is no longer published", {
+  // Only where the answer is certain. A document that has been public before
+  // may still be public in a translation this read cannot see, and dropping
+  // the redirect there would strand a working destination.
+  if (documentReachability(target, undefined) === "unreachable") {
+    logger.warn?.("Form redirects to a page that has never been published", {
       form: form.slug,
       collection: reference.collection,
       target: reference.id,
