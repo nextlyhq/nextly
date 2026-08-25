@@ -102,7 +102,17 @@ export function sharedValueAt(
 /** What a batch edit would do, before anything is applied. */
 export interface BatchStyleWrite {
   /**
-   * The ops to apply as ONE group, in selection order.
+   * The ops to apply as ONE group, ordered by what each costs the document —
+   * the blocks that get smaller first.
+   *
+   * NOT selection order, and a caller must not pair `ops[i]` with `nodes[i]`.
+   * Each op names the node it targets, which is the correlation that survives.
+   *
+   * The order is what keeps the gesture'"'"'s outcome independent of the order the
+   * author selected in: the editor folds a group and judges every step against
+   * the document'"'"'s byte cap, so taking the reductions first makes the peak
+   * along the way the lowest any order can reach. Blocks that cost the same
+   * keep selection order, so the ops still read in a recognisable sequence.
    *
    * Empty when every selected block already holds the value. That is not a
    * failure and must not be reported as one — it is the ordinary result of

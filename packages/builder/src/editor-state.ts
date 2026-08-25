@@ -195,16 +195,19 @@ export function useEditorState({
 
       let group;
       try {
-        // ONE call rather than a fold here, so the group's caps are judged
-        // where the group is understood. Folding `applyOp` in this file
-        // measured every intermediate document against the cap, which made a
-        // batch's outcome depend on the order its ops happened to arrive in:
-        // a selection at the byte cap where one block grows and another shrinks
-        // by more was refused when the growing one came first and accepted when
-        // it came second, for the same resulting document.
+        // ONE call rather than a fold here, so the group's atomicity and its
+        // inverse ordering live in one place: `applyOps` returns the inverses
+        // in undo order and answers with none at all when the group left the
+        // document as it found it.
         //
-        // The inverses come back in undo order already — see `applyOps`, which
-        // owns that ordering rule along with the cap one.
+        // It does NOT make the caps a group-level decision. Every op is still
+        // judged against the document as it stands when that op runs, which is
+        // what keeps an accepted edit undoable — a group allowed to exceed the
+        // cap in passing can hand back an inverse the cap then refuses, and
+        // `undo` pops its entry before replaying it. So an arbitrary group's
+        // outcome can still depend on the order its ops arrive in; the batch
+        // style layer avoids that for its own ops by ordering them, which it
+        // can do safely because they target distinct nodes.
         group = applyOps(latestDocument.current, ops, limits);
       } catch {
         // A refused group is an ordinary outcome, not a crash: an insert past a

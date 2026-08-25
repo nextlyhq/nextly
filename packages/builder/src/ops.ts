@@ -3243,6 +3243,19 @@ export function applyOps(
 ): AppliedOps {
   assertUsableLimits(limits);
   if (ops.length === 0) return { document, inverses: [] };
+  // A group of one IS the single call. `applyOp` has already refused an op that
+  // changes nothing, so the endpoint comparison below would walk two documents
+  // to re-answer a question it just answered — on the commonest edit in the
+  // builder, since the editor routes every single-block edit through here.
+
+  // A group of one IS the single call. `applyOp` has already refused an op that
+  // changes nothing, so the endpoint comparison below would walk two documents
+  // to re-answer a question it just answered — on the commonest edit in the
+  // builder, since the editor routes every single-block edit through here.
+  if (ops.length === 1) {
+    const only = applyOp(document, ops[0], limits);
+    return { document: only.document, inverses: [only.inverse] };
+  }
 
   let working = document;
   const inverses: BuilderOp[] = [];
