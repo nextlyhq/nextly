@@ -85,31 +85,54 @@ function getTypeDefault(type: string, subField: FieldConfig): unknown {
 }
 
 /**
- * Computes the default value for an individual field configuration.
+ * Resolves static or functional defaultValue declarations.
  */
-function getFieldDefault(subField: FieldConfig): unknown {
-  let declared = (subField as { defaultValue?: unknown }).defaultValue;
-  if (typeof declared === "function") {
-    declared = declared({});
+function resolveDeclaredValue(declared: unknown): unknown {
+  return typeof declared === "function" ? declared({}) : declared;
+}
+
+/**
+ * Normalizes explicit default values for types requiring shape coercion.
+ */
+function resolveDeclaredFieldDefault(
+  subField: FieldConfig,
+  declared: unknown
+): unknown {
+  if (subField.type === "select" || subField.type === "radio") {
+    return getSelectDefault(subField, declared);
   }
-  if (declared !== undefined) {
-    if (subField.type === "select" || subField.type === "radio") {
-      return getSelectDefault(subField, declared);
-    }
-    if (subField.type === "text") {
-      return getTextDefault(subField, declared);
-    }
-    return declared;
+  if (subField.type === "text") {
+    return getTextDefault(subField, declared);
   }
+  return declared;
+}
+
+/**
+ * Resolves fallback default values when no explicit defaultValue is declared.
+ */
+function getFallbackFieldDefault(subField: FieldConfig): unknown {
   if (subField.type === "text") {
     return getTextDefault(subField, undefined);
   }
-  if (STRING_SEED_TYPES.has(subField.type)) return "";
-  if ((subField.type as string) === "chips") return [];
   if (subField.type === "select" || subField.type === "radio") {
     return getSelectDefault(subField, undefined);
   }
+  if (STRING_SEED_TYPES.has(subField.type)) return "";
+  if ((subField.type as string) === "chips") return [];
   return getTypeDefault(subField.type, subField);
+}
+
+/**
+ * Computes the default value for an individual field configuration.
+ */
+function getFieldDefault(subField: FieldConfig): unknown {
+  const declared = resolveDeclaredValue(
+    (subField as { defaultValue?: unknown }).defaultValue
+  );
+  if (declared !== undefined) {
+    return resolveDeclaredFieldDefault(subField, declared);
+  }
+  return getFallbackFieldDefault(subField);
 }
 
 /**

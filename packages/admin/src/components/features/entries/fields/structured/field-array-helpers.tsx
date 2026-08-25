@@ -27,8 +27,75 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { Button, cn } from "@nextlyhq/ui";
+import { GripVertical, Trash2 } from "lucide-react";
 import type React from "react";
 import { useCallback, useState } from "react";
+
+export interface RowDragHandleProps {
+  isSortable: boolean;
+  isInteractive: boolean;
+  attributes: ReturnType<typeof useSortable>["attributes"];
+  listeners: ReturnType<typeof useSortable>["listeners"];
+  ariaLabel: string;
+}
+
+export function RowDragHandle({
+  isSortable,
+  isInteractive,
+  attributes,
+  listeners,
+  ariaLabel,
+}: RowDragHandleProps) {
+  if (!isSortable || !isInteractive) {
+    return <div className="w-6" />;
+  }
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        "cursor-grab active:cursor-grabbing p-2 rounded-md",
+        "focus:outline-none",
+        "touch-none"
+      )}
+      aria-label={ariaLabel}
+      {...attributes}
+      {...listeners}
+    >
+      <GripVertical className="h-4 w-4 text-muted-foreground" />
+    </button>
+  );
+}
+
+export interface RowRemoveButtonProps {
+  canRemove: boolean;
+  isInteractive: boolean;
+  onRemove?: () => void;
+  ariaLabel: string;
+}
+
+export function RowRemoveButton({
+  canRemove,
+  isInteractive,
+  onRemove,
+  ariaLabel,
+}: RowRemoveButtonProps) {
+  if (!canRemove || !isInteractive) return null;
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={onRemove}
+      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
+      aria-label={ariaLabel}
+    >
+      <Trash2 className="h-4 w-4" />
+    </Button>
+  );
+}
 
 export interface UseSortableRowParams {
   id: string;

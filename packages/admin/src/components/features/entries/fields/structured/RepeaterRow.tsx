@@ -11,7 +11,6 @@
  */
 
 import {
-  Button,
   Card,
   CardContent,
   CardHeader,
@@ -23,12 +22,7 @@ import type { RepeaterFieldConfig, FieldConfig } from "nextly/config";
 import type { ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
-import {
-  GripVertical,
-  ChevronDown,
-  ChevronRight,
-  Trash2,
-} from "@admin/components/icons";
+import { ChevronDown, ChevronRight } from "@admin/components/icons";
 import {
   packFieldsIntoRows,
   fieldWeight,
@@ -36,7 +30,11 @@ import {
 } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
 
-import { useSortableRow } from "./field-array-helpers";
+import {
+  useSortableRow,
+  RowDragHandle,
+  RowRemoveButton,
+} from "./field-array-helpers";
 import { RepeaterRowLabel } from "./RepeaterRowLabel";
 
 // ============================================================
@@ -160,23 +158,13 @@ function RepeaterRowHeader({
       noBorder
     >
       <div className="flex items-center gap-2">
-        {isSortable && isInteractive ? (
-          <button
-            type="button"
-            className={cn(
-              "cursor-grab active:cursor-grabbing p-2 rounded-md",
-              "focus:outline-none",
-              "touch-none"
-            )}
-            aria-label={`Drag to reorder ${singular} ${index + 1}`}
-            {...attributes}
-            {...listeners}
-          >
-            <GripVertical className="h-4 w-4 text-muted-foreground" />
-          </button>
-        ) : (
-          <div className="w-6" />
-        )}
+        <RowDragHandle
+          isSortable={isSortable}
+          isInteractive={isInteractive}
+          attributes={attributes}
+          listeners={listeners}
+          ariaLabel={`Drag to reorder ${singular} ${index + 1}`}
+        />
 
         <CollapsibleTrigger asChild>
           <button
@@ -197,18 +185,12 @@ function RepeaterRowHeader({
           </button>
         </CollapsibleTrigger>
 
-        {canRemove && isInteractive && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onRemove}
-            className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
-            aria-label={`Remove ${singular} ${index + 1}`}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        )}
+        <RowRemoveButton
+          canRemove={canRemove}
+          isInteractive={isInteractive}
+          onRemove={onRemove}
+          ariaLabel={`Remove ${singular} ${index + 1}`}
+        />
       </div>
     </CardHeader>
   );
