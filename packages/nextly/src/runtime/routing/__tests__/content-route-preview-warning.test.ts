@@ -50,7 +50,7 @@ async function cookieFor(collection: string): Promise<void> {
   const { token } = await signPreviewToken(
     { collection, entryId: "entry-1" },
     SECRET,
-    { generation: 1 }
+    { generation: 1, minter: "minter-1" }
   );
   cookieValue = encodeURIComponent(token);
 }

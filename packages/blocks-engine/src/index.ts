@@ -28,6 +28,11 @@ export {
   // write must refuse what the compiler will not read, and a copy of this
   // number in another package is a second statement that goes stale silently.
   MAX_NAMED_CLASSES,
+  // The per-node cap, public for the same reason and with a sharper use: it is
+  // how many of a node's classes the compiler APPLIES, so a reader asking which
+  // classes a document actually references has to stop where the compiler does.
+  // Reading further reports a reference the page does not render.
+  MAX_CLASSES_PER_NODE,
   isTokenRef,
   isBindingSource,
   isBlockType,
@@ -87,6 +92,18 @@ export {
   updateNode,
 } from "./tree";
 export type { NodeLocation, TreePosition } from "./tree";
+
+// The node selection every reader of a stored document shares. Public because
+// the page-builder plugin's class-usage record has to stop exactly where the
+// style compiler stops: a class applied to a node the compiler styled but the
+// counter never reached is absent from the record a safe-delete check reads,
+// and absence there is indistinguishable from "not used".
+export { selectNodes } from "./select-nodes";
+export type {
+  NodeSelection,
+  SelectedNode,
+  SelectionStop,
+} from "./select-nodes";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
 // The nesting rule and the types it answers in. Exported together: a caller

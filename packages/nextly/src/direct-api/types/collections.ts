@@ -57,6 +57,23 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   where?: WhereFilter;
 
   /**
+   * This `where` was built by the framework from a route it was asked to
+   * render, rather than received from a request.
+   *
+   * Exempts it from the guard that refuses a filter naming a field the caller
+   * may not read. That guard's subject is a caller CHOOSING probe values to
+   * bisect a hidden value; framework lookups do not choose, they address.
+   *
+   * Declared HERE, on the per-operation arguments, and deliberately not on
+   * `DirectAPIConfig`: `mergeConfig` fills anything a nested Direct API call
+   * omits from the instance defaults, so a config-level exemption would let a
+   * caller-supplied `where` reaching a nested read acquire the framework's
+   * trust. Absent means untrusted, and nothing can supply it on a caller's
+   * behalf.
+   */
+  frameworkFilter?: true;
+
+  /**
    * Draft/Published lifecycle scope for the read (only effective when the
    * collection has the built-in `status` lifecycle). Unlike a `where` clause on
    * the `status` column, this drives the query service's lifecycle-aware filter,
@@ -370,6 +387,14 @@ export interface CountArgs<TSlug extends CollectionSlug = CollectionSlug>
 
   /** Query conditions for filtering */
   where?: WhereFilter;
+
+  /**
+   * As {@link FindArgs.frameworkFilter}. A count is a CLEANER oracle than a
+   * listing -- it answers 1 or 0 for a guessed value and returns no row to
+   * redact -- so the same exemption has to be expressible here and nowhere
+   * looser.
+   */
+  frameworkFilter?: true;
 }
 
 /**

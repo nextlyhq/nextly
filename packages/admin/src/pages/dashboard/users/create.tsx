@@ -223,10 +223,23 @@ export default function CreateUserPage(): ReactElement {
 
   const roles = rolesData?.items || [];
 
+  /**
+   * The page's measure, repeated on every branch on purpose.
+   *
+   * `form` because this page is a labelled form: an unbounded panel stretches a
+   * short text input across the whole of it, which is the reason the measure
+   * exists at all.
+   *
+   * Every branch carries it — loading, each error state, and the loaded page —
+   * because they are the SAME page at different moments. Measuring only the
+   * loaded one would leave the skeleton full-width and reflow the page the
+   * instant data arrived, which reads as the layout breaking rather than as
+   * content appearing.
+   */
   // Loading state: Fetching roles
   if (isLoadingRoles) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         {/* Accessibility: Announce loading state to screen readers */}
         <div className="sr-only" role="status" aria-live="polite">
           Loading roles...
@@ -252,7 +265,7 @@ export default function CreateUserPage(): ReactElement {
   // Error state: Failed to fetch roles
   if (rolesError) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription className="flex items-center justify-between">
             <span>
@@ -283,7 +296,7 @@ export default function CreateUserPage(): ReactElement {
   if (invite) {
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <PageContainer>
+        <PageContainer width="form">
           <div className="mb-6">
             <UserBreadcrumbs currentPage="create" />
           </div>
@@ -305,7 +318,7 @@ export default function CreateUserPage(): ReactElement {
   // Main render: Form loaded successfully
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <div className="mb-6">
           <UserBreadcrumbs currentPage="create" />
         </div>

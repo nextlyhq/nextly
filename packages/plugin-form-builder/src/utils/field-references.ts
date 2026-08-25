@@ -6,6 +6,24 @@
 
 import type { AnyFormField, FormNotification } from "../types";
 
+/**
+ * The one spelling of a field reference this plugin recognises: `{{fieldName}}`
+ * with no spaces, and `\w` names.
+ *
+ * Exact, because the SEND path is exact — a value the admin accepts as a
+ * reference and the send path does not is delivered with its braces intact,
+ * straight to the mail provider. Both sides read this constant so the question
+ * has one answer.
+ */
+export const FIELD_REF_PATTERN = /^\{\{(\w+)\}\}$/;
+
+/** The field named by a reference, or `null` when the value is not one. */
+export function parseFieldRef(value: string | undefined): string | null {
+  if (!value) return null;
+  const match = value.match(FIELD_REF_PATTERN);
+  return match ? match[1] : null;
+}
+
 export interface FieldReference {
   /** What kind of thing holds the reference. */
   kind: "condition" | "notification";

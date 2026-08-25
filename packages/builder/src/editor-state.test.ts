@@ -78,6 +78,87 @@ describe("applying edits", () => {
   });
 });
 
+describe("a group of ONE", () => {
+  /*
+   * The property the style panel now depends on. Every style edit in the
+   * builder goes through the batch layer, including the ordinary single-block
+   * one, so that there is a single implementation of "what ops set this
+   * address" rather than two that drift. That collapse is only safe if a group
+   * of one is indistinguishable from the single-op call it replaced.
+   *
+   * Asserted rather than reasoned from the source. `apply` and `applyAll` do
+   * read as the same `run(ops, "new")` today, and a claim about what another
+   * function does is exactly the sentence no gate checks — so it is pinned
+   * here, where a future divergence between the two fails instead of quietly
+   * giving multi-selection different behaviour from a single click.
+   */
+  const insertB = {
+    kind: "insert",
+    node: node("b"),
+    at: { index: 1 },
+  } as const;
+
+  it("moves the document exactly as the single-op call does", () => {
+    const one = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    const grouped = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      one.result.current.apply(insertB);
+    });
+    act(() => {
+      grouped.result.current.applyAll([insertB]);
+    });
+
+    // The DOCUMENT is the oracle, not the op that was handed over: two ways of
+    // asking the store to do one thing have to leave the same tree behind.
+    expect(ids(grouped.result.current.document)).toEqual(
+      ids(one.result.current.document)
+    );
+    expect(ids(grouped.result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("costs exactly one undo step, and undoes in one press", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.applyAll([insertB]);
+    });
+
+    // One entry, not one per op — which is what would make a batch of six take
+    // six presses to take back, and is the whole reason the group exists.
+    expect(result.current.undoDepth).toBe(1);
+
+    act(() => result.current.undo());
+
+    expect(ids(result.current.document)).toEqual(["a"]);
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("refuses the whole group when its single op is refused", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    let returned: BlockDocument | null = null;
+    act(() => {
+      returned = result.current.applyAll([{ kind: "remove", id: "nobody" }]);
+    });
+
+    // Null rather than a document, and nothing recorded — the same answer
+    // `apply` gives, so a caller cannot tell the two apart on the failure path
+    // either.
+    expect(returned).toBeNull();
+    expect(ids(result.current.document)).toEqual(["a"]);
+    expect(result.current.undoDepth).toBe(0);
+  });
+});
+
 describe("undo and redo", () => {
   it("takes an edit back and puts it forward again", () => {
     const { result } = renderHook(() =>
@@ -357,5 +438,91 @@ describe("applying several ops as one action", () => {
 
     expect(result.current.undoDepth).toBe(1);
     expect(ids(result.current.document)).toEqual(["a", "c"]);
+  });
+});
+
+describe("an op applied from a closure the document has moved past", () => {
+  /*
+   * A panel that commits from an unmount cleanup calls the `apply` it captured
+   * on its LAST render — the removed component never renders again, so its
+   * closure predates the edit that removed it. Folding onto that render's
+   * document made the op SUCCEED against a tree the node was still in, and the
+   * commit wrote the whole stale document back: the deleted node returned and
+   * every change since was lost.
+   */
+  it("refuses an update to a node a later edit removed", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a"), node("b")]) })
+    );
+
+    // Captured BEFORE the removal, exactly as an unmount cleanup holds it.
+    const stale = result.current.apply;
+
+    act(() => {
+      result.current.apply({ kind: "remove", id: "a" });
+    });
+    expect(result.current.document.nodes.map(each => each.id)).toEqual(["b"]);
+
+    let answered: unknown = "not called";
+    act(() => {
+      answered = stale({
+        kind: "update",
+        id: "a",
+        patch: { cssId: "hero" },
+      });
+    });
+
+    // Refused, because the node is gone from the document as it stands now.
+    expect(answered).toBeNull();
+    // And the removal still holds — the stale write did not resurrect it.
+    expect(result.current.document.nodes.map(each => each.id)).toEqual(["b"]);
+  });
+
+  it("still applies a stale op to a node that is STILL there", () => {
+    // The control: refusing every stale call would break the commit-on-unmount
+    // path this exists to protect, which is the ordinary case.
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a"), node("b")]) })
+    );
+    const stale = result.current.apply;
+
+    act(() => {
+      result.current.apply({ kind: "remove", id: "b" });
+    });
+    act(() => {
+      stale({ kind: "update", id: "a", patch: { cssId: "hero" } });
+    });
+
+    const nodes = result.current.document.nodes;
+    expect(nodes.map(each => each.id)).toEqual(["a"]);
+    expect((nodes[0] as BlockNode).cssId).toBe("hero");
+  });
+});
+
+describe("two ops applied in one tick", () => {
+  it("keeps both, rather than folding the second onto the first's input", () => {
+    /*
+     * `setDocument` does not take effect until the next render, so a second op
+     * applied before that render must not read the document the first one
+     * replaced — it would be folded onto a tree without the first edit and
+     * write it back, silently discarding it.
+     *
+     * `applyAll` exists for a deliberate group; this is the accidental pair,
+     * two handlers on one gesture, and it must not lose an edit either.
+     */
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a"), node("b")]) })
+    );
+
+    act(() => {
+      result.current.apply({ kind: "update", id: "a", patch: { cssId: "x" } });
+      result.current.apply({ kind: "update", id: "b", patch: { cssId: "y" } });
+    });
+
+    const byId = new Map(
+      result.current.document.nodes.map(each => [each.id, each])
+    );
+    expect(byId.get("a")?.cssId).toBe("x");
+    expect(byId.get("b")?.cssId).toBe("y");
   });
 });

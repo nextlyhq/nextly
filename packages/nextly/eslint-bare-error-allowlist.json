@@ -15,7 +15,7 @@
   "src/database/seeders/permissions.ts": 1,
   "src/database/seeders/super-admin.ts": 1,
   "src/di/container.ts": 2,
-  "src/di/register.ts": 8,
+  "src/di/register.ts": 7,
   "src/dispatcher/dispatcher.ts": 4,
   "src/dispatcher/handlers/auth-dispatcher.ts": 18,
   "src/dispatcher/handlers/collection-dispatcher.ts": 28,

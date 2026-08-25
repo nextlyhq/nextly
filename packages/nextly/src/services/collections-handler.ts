@@ -39,6 +39,7 @@ import {
   type WhereFilter,
   type UserContext,
 } from "./collections/index";
+import type { TrustBound } from "./collections/trust-grant";
 import type { FieldGroupDataService } from "./field-groups/field-group-data-service";
 import type { FieldGroupRegistryService } from "./field-groups/field-group-registry-service";
 import { consoleLogger } from "./shared";
@@ -318,7 +319,7 @@ export class CollectionsHandler {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       routeAuthorized?: boolean;
     },
   >(params: T): Omit<T, "userName" | "userEmail" | "userRoles"> {
@@ -573,11 +574,17 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * This `where` was built by the framework from a route, not received from
+     * a request. Forwarded to the filterable-fields guard; per-operation only,
+     * so a nested call cannot inherit it.
+     */
+    frameworkFilter?: boolean;
+    /**
      * Which collections a trusted read may reach as relationships are expanded.
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * The route already ran the coarse RBAC gate, so skip only that redundant
      * re-check while the stored read rules (owner-only scoping, role-based,
@@ -636,7 +643,7 @@ export class CollectionsHandler {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
       /**
@@ -700,7 +707,7 @@ export class CollectionsHandler {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can
@@ -767,11 +774,17 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * This `where` was built by the framework from a route, not received from
+     * a request. Forwarded to the filterable-fields guard; per-operation only,
+     * so a nested call cannot inherit it.
+     */
+    frameworkFilter?: boolean;
+    /**
      * Which collections a trusted read may reach as relationships are expanded.
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * The route already ran the coarse RBAC gate, so skip only that redundant
      * re-check while the stored read rules (owner-only scoping, role-based,
@@ -825,7 +838,7 @@ export class CollectionsHandler {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /** Who performed the write, recorded on the outbox event. */
       actor?: RequestActor;
       /** Write locale (i18n M5) — translatable values updated for this language. */
@@ -894,7 +907,7 @@ export class CollectionsHandler {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Set by the REST dispatcher to attest the route middleware already ran the
      * RBAC/code-access gate, so the entry service skips only that redundant
@@ -932,7 +945,7 @@ export class CollectionsHandler {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Set by the REST dispatcher to attest the route middleware already ran
      * the RBAC/code-access gate, so the entry service skips only that redundant
@@ -984,7 +997,7 @@ export class CollectionsHandler {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Set by the REST dispatcher to attest the route middleware already ran
      * the RBAC/code-access gate, so the entry service skips only that redundant
@@ -1035,7 +1048,7 @@ export class CollectionsHandler {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Set by the REST dispatcher to attest the route middleware already ran
      * the RBAC/code-access gate, so the entry service skips only that redundant
@@ -1090,7 +1103,7 @@ export class CollectionsHandler {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /** Route auth already ran; response is still redacted for this user */
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
@@ -1149,7 +1162,7 @@ export class CollectionsHandler {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows, and never admits a target's drafts.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /**
        * Set by the REST dispatcher to attest the route middleware already ran
        * the RBAC/code-access gate, so the entry service skips only that
@@ -1193,7 +1206,7 @@ export class CollectionsHandler {
      * Absent means every populated target inherits the caller's trust. Only ever
      * narrows, and never admits a target's drafts.
      */
-    trusted?: (collection: string) => boolean;
+    trusted?: TrustBound;
     /**
      * Set by the REST dispatcher to attest the route middleware already ran
      * the RBAC/code-access gate, so the entry service skips only that redundant

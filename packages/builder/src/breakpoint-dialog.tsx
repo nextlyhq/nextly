@@ -53,8 +53,33 @@ export interface BreakpointDialogProps {
    *
    * Only ever called with a set that produces no issues, so a host does not
    * have to re-validate before storing it.
+   *
+   * **A promise is awaited, and the dialog stays open until it settles.** A host
+   * that persists over the network resolves with a message when the write was
+   * refused, and the draft is still on screen to retry or copy from. Closing on
+   * the click instead — which this did — threw away a set the author had just
+   * built by hand the moment a save failed, with nothing left to recover it
+   * from: the dialog was gone, the draft with it, and the site's breakpoints
+   * unchanged.
+   *
+   * Resolving with `undefined`, or returning nothing at all, means saved. A
+   * synchronous host needs no change.
    */
-  onSave: (next: BreakpointSet) => void;
+  onSave: (next: BreakpointSet) => void | Promise<string | undefined>;
+}
+
+/**
+ * Whether a value can be awaited, without asking which realm made it.
+ *
+ * `instanceof Promise` is a check about one global constructor, and the values
+ * this has to recognise may not come from it.
+ */
+function isThenable(value: unknown): value is PromiseLike<string | undefined> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
 }
 
 /** A draft row. Width is held as TEXT while editing. */
@@ -178,6 +203,17 @@ export function BreakpointDialog({
   // the module has been rendered.
   const addedRows = React.useRef(0);
   const wasOpen = React.useRef(open);
+  /*
+   * Whether a save is in flight, and why the last one was refused.
+   *
+   * Derived here rather than taken as props. A `saving` prop can disagree with
+   * the promise this component is actually awaiting — a host that forgets to
+   * clear it leaves the dialog permanently disabled with no way to close the
+   * loop — and the only thing that knows when THIS save settled is the promise
+   * returned to THIS click.
+   */
+  const [saving, setSaving] = React.useState(false);
+  const [refusal, setRefusal] = React.useState<string | undefined>(undefined);
 
   // Re-seeded on the CLOSED-to-OPEN transition only. Depending on `value`
   // itself would reseed on any parent render that rebuilt it — a background
@@ -188,6 +224,10 @@ export function BreakpointDialog({
     wasOpen.current = open;
     if (!opening) return;
     addedRows.current = 0;
+    // Cleared with the draft it belonged to. A refusal left standing would
+    // describe a set the author is no longer looking at, and reopening after a
+    // failed save would show a stale reason for a draft that has been reseeded.
+    setRefusal(undefined);
     setDraft({
       viewport: toDraft("viewport", value.viewport),
       container: toDraft("container", value.container),
@@ -199,11 +239,22 @@ export function BreakpointDialog({
     [draft]
   );
 
+  /*
+   * Every edit is refused while a save is in flight, and the fields say so.
+   *
+   * The request carries the draft as it was at the click. Left editable, a
+   * change made in the window before the promise settles is not in that
+   * request AND is discarded by the close that follows it — the author watches
+   * their own edit vanish into a save that reported success. Freezing the form
+   * is what makes "the set that was submitted" and "the set on screen" the same
+   * thing at every moment the dialog is open.
+   */
   const updateRow = (
     axis: BreakpointAxis,
     key: string,
     patch: Partial<DraftRow>
   ): void => {
+    if (saving) return;
     setDraft(current => ({
       ...current,
       [axis]: current[axis].map(row =>
@@ -213,6 +264,7 @@ export function BreakpointDialog({
   };
 
   const addRow = (axis: BreakpointAxis): void => {
+    if (saving) return;
     setDraft(current => ({
       ...current,
       [axis]: [
@@ -229,6 +281,7 @@ export function BreakpointDialog({
   };
 
   const removeRow = (axis: BreakpointAxis, key: string): void => {
+    if (saving) return;
     setDraft(current => ({
       ...current,
       [axis]: current[axis].filter(row => row.key !== key),
@@ -236,13 +289,70 @@ export function BreakpointDialog({
   };
 
   const save = (): void => {
-    if (issues.length > 0) return;
-    onSave(toSet(draft));
-    onOpenChange(false);
+    if (issues.length > 0 || saving) return;
+    setRefusal(undefined);
+    const outcome = onSave(toSet(draft));
+    /*
+     * A THENABLE, not an `instanceof Promise`.
+     *
+     * The contract accepts a promise, and `instanceof` answers about one realm:
+     * a promise from another window or iframe, or a conforming implementation
+     * that is not the global constructor, fails the test. The dialog would then
+     * close as though the write were synchronous, and a refusal or rejection
+     * arriving afterwards would be neither shown nor handled — the exact loss
+     * the await exists to prevent, restored by the check meant to detect it.
+     *
+     * A synchronous host is still finished here, and awaiting its `undefined`
+     * would cost a microtask — long enough to paint a disabled button with
+     * nothing to wait for.
+     */
+    if (!isThenable(outcome)) {
+      onOpenChange(false);
+      return;
+    }
+    setSaving(true);
+    void Promise.resolve(outcome)
+      .then(message => {
+        if (message === undefined) {
+          onOpenChange(false);
+          return;
+        }
+        setRefusal(message);
+      })
+      .catch((reason: unknown) => {
+        /*
+         * A rejection is a refusal too, and the dialog must not close on one.
+         * A host that throws rather than resolving is not following the
+         * contract, but the author's draft is not the place to make that point.
+         */
+        setRefusal(
+          reason instanceof Error
+            ? reason.message
+            : "These breakpoints could not be saved."
+        );
+      })
+      .finally(() => {
+        setSaving(false);
+      });
+  };
+
+  /*
+   * Dismissal is refused while a save is in flight, for the reason the frozen
+   * fields are.
+   *
+   * Freezing the inputs left three ways out untouched — Cancel, the shared
+   * content's X, and Escape, all of which arrive here. Taken during a pending
+   * write, the dialog unmounts with the draft: a refusal that lands afterwards
+   * has nowhere to be shown, and reopening seeds from a read that has not
+   * caught up, so submitting that draft overwrites the write still in flight.
+   */
+  const requestOpenChange = (next: boolean): void => {
+    if (saving && !next) return;
+    onOpenChange(next);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Breakpoints</DialogTitle>
@@ -291,6 +401,7 @@ export function BreakpointDialog({
                       >
                         <Field
                           id={`${fieldId}-${row.key}-label`}
+                          readOnly={saving}
                           label="Name"
                           hideLabel={index > 0}
                           value={row.label}
@@ -314,7 +425,7 @@ export function BreakpointDialog({
                           // every style on every page that uses it, silently.
                           // Removing the breakpoint and adding a new one is
                           // the same operation with the loss made visible.
-                          readOnly={!row.isNew}
+                          readOnly={!row.isNew || saving}
                           hint={
                             row.isNew
                               ? undefined
@@ -324,6 +435,7 @@ export function BreakpointDialog({
                         />
                         <Field
                           id={`${fieldId}-${row.key}-width`}
+                          readOnly={saving}
                           label="Up to"
                           hideLabel={index > 0}
                           value={row.width}
@@ -344,6 +456,7 @@ export function BreakpointDialog({
                             index === 0 && "sm:mt-6"
                           )}
                           aria-label={`Remove ${row.label.trim() || "breakpoint"}`}
+                          disabled={saving}
                           onClick={() => removeRow(axis, row.key)}
                         >
                           <Trash2 className="size-4" />
@@ -358,7 +471,7 @@ export function BreakpointDialog({
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={atLimit}
+                    disabled={atLimit || saving}
                     onClick={() => addRow(axis)}
                   >
                     <Plus className="size-4" />
@@ -381,26 +494,42 @@ export function BreakpointDialog({
           <p
             className={cn(
               "text-xs",
-              issues.length > 0 ? "text-destructive" : "text-muted-foreground"
+              issues.length > 0 || refusal !== undefined
+                ? "text-destructive"
+                : "text-muted-foreground"
             )}
             // Announced rather than only coloured, so the reason Save is
             // unavailable reaches a screen reader too.
             role="status"
           >
-            {issues.length === 0
-              ? "Every breakpoint is usable."
-              : `${issues.length} ${issues.length === 1 ? "problem" : "problems"} to fix before saving.`}
+            {/*
+             * A REFUSAL outranks the issue count, because they answer different
+             * questions and only one of them is news. The count says what the
+             * author must fix before saving; a refusal says the save they just
+             * made did not happen. Showing "Every breakpoint is usable." beside
+             * a failed write — which is what the count says at that moment,
+             * truthfully — would read as confirmation.
+             */}
+            {refusal ??
+              (issues.length === 0
+                ? "Every breakpoint is usable."
+                : `${issues.length} ${issues.length === 1 ? "problem" : "problems"} to fix before saving.`)}
           </p>
           <div className="flex gap-2">
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              disabled={saving}
+              onClick={() => requestOpenChange(false)}
             >
               Cancel
             </Button>
-            <Button type="button" disabled={issues.length > 0} onClick={save}>
-              Save breakpoints
+            <Button
+              type="button"
+              disabled={issues.length > 0 || saving}
+              onClick={save}
+            >
+              {saving ? "Saving…" : "Save breakpoints"}
             </Button>
           </div>
         </DialogFooter>

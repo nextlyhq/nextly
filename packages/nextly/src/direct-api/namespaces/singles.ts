@@ -43,6 +43,11 @@ export async function findSingle<TSlug extends SingleSlug>(
     // field falls back to the default language, and a rule keyed on it sees
     // `undefined` when it is dropped here.
     fallbackLocale: config.fallbackLocale,
+    // Forwarded to the same service option `findByID` uses for its own `draft`
+    // flag, so one idea keeps one spelling across the two read paths. The
+    // service applies the trust gate; nothing is decided here.
+    includeWorkingDraft: args.draft,
+    ...(args.status === undefined ? {} : { status: args.status }),
     ...accessOptions(config),
     context: config.context,
   });

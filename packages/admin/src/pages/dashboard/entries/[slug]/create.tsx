@@ -19,6 +19,7 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -79,15 +80,21 @@ function CreateEntryBreadcrumbs({
  */
 function CreateEntryPageSkeleton() {
   return (
-    <PageContainer>
+    <PageContainer width="form">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading collection...
       </div>
 
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
+      {/* Cancels the page's vertical inset only.
+          The horizontal half would pull this skeleton past the measured
+          column, and the editor that replaces it would then jump 64px
+          narrower. */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
         {/* Main Content */}
-        <div className="flex-1 space-y-6 lg:p-8 pt-6">
+        {/* `min-w-0` as the editor that replaces this carries it: without it
+            this pane will not shrink and pushes the rail past the column. */}
+        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />
@@ -177,10 +184,25 @@ export default function CreateEntryPage({
   );
   usePluginAutoRegistration(collectionsForRegistration);
 
+  /**
+   * The page's measure, on every branch.
+   *
+   * `form` because an entry is a labelled form: an unbounded panel stretches a
+   * short text input across the whole of it. These early-return branches never
+   * reach `MeasuredPageFrame`, which carries the same reasoning for the branch
+   * that does, so they state it here rather than inheriting it.
+   *
+   * Every branch carries it — loading, each error state, and the editor —
+   * because they are the SAME page at different moments. Measuring only the
+   * editor would leave the skeleton full-width and reflow the page the instant
+   * data arrived, which reads as the layout breaking rather than as content
+   * appearing.
+   */
+
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             No collection was specified in the URL.
@@ -203,7 +225,7 @@ export default function CreateEntryPage({
   // Error state
   if (error) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load collection:{" "}
@@ -222,7 +244,7 @@ export default function CreateEntryPage({
   // Collection not found
   if (!collection) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Collection &quot;{slug}&quot; not found.
@@ -271,15 +293,25 @@ export default function CreateEntryPage({
 
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <PageContainer>
-          <div className="mb-6">
+        <MeasuredPageFrame
+          breadcrumbs={
             <CreateEntryBreadcrumbs
               collectionSlug={slug}
               collectionLabel={collectionLabel}
             />
+          }
+        >
+          {/* Boxed for the same reason the injection slots are: under the
+              measured frame this is a direct child of a CSS grid, and the rule
+              that puts a child in the content column can only place a
+              generated element box. A view rooted in bare text, or in an
+              element with `display: contents`, produces none and is
+              auto-placed into a gutter. The registry imposes no root-element
+              contract, so the page provides the box. */}
+          <div>
+            <CustomEditView {...customViewProps} />
           </div>
-          <CustomEditView {...customViewProps} />
-        </PageContainer>
+        </MeasuredPageFrame>
       </QueryErrorBoundary>
     );
   }
@@ -288,14 +320,14 @@ export default function CreateEntryPage({
   // form, not the header chrome.
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <MeasuredPageFrame>
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           mode="create"
           onSuccess={handleSuccess}
           onCancel={handleCancel}
         />
-      </PageContainer>
+      </MeasuredPageFrame>
     </QueryErrorBoundary>
   );
 }

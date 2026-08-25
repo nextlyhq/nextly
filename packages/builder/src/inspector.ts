@@ -80,12 +80,46 @@ export interface BlockIdentity {
   readonly locked: boolean;
 }
 
+/**
+ * The block's HTML surface: what it renders AS, rather than what it holds.
+ *
+ * Read here with everything else the inspector shows, so one function reads the
+ * document and the panels read the function. A panel reaching back for the node
+ * itself would be a second reader of the same selection, free to disagree with
+ * this one about which node is selected.
+ */
+export interface BlockHtml {
+  /**
+   * The element's `id`. `undefined` when the node does not carry the field at
+   * all, which is NOT the same as carrying an empty one.
+   *
+   * The renderer treats the field as present whenever it is a string — it
+   * writes `extra.id = cssId` on `cssId !== undefined` — so a stored `""`
+   * renders `id=""` and shadows any `id` in the attribute bag. Collapsing the
+   * two into `""` here left the panel unable to tell them apart, so every
+   * attempt to clear an empty-but-present field read as no change and the
+   * field could never be removed. The distinction the document draws has to
+   * survive the reading of it.
+   */
+  readonly cssId: string | undefined;
+  /**
+   * The author's own attributes, absent when there are none.
+   *
+   * Absent rather than empty, because the node itself distinguishes them: a
+   * block that never had attributes and one whose last was removed both store
+   * nothing, and an empty record here would invite writing one back.
+   */
+  readonly attributes: Readonly<Record<string, string>> | undefined;
+}
+
 /** The selected block, as something to edit. */
 export interface BlockInspection {
   readonly nodeId: string;
   readonly blockName: string;
   /** What the block IS, beside what it holds. */
   readonly identity: BlockIdentity;
+  /** What the block renders as, beside what it holds. */
+  readonly html: BlockHtml;
   /** What to title the panel: the block's label, or its name. */
   readonly label: string;
   /**
@@ -244,6 +278,16 @@ export function inspectSelection(
     nodeId: node.id,
     blockName: node.type,
     identity: { name: node.name ?? "", locked: node.locked === true },
+    /*
+     * Narrowed HERE rather than trusted. A stored document can hold anything
+     * the database returned — the engine's validator reports these but does not
+     * rewrite them — so a `cssId` that is not a string, or an `attributes`
+     * that is an array or null, must not reach a control typed for neither.
+     */
+    html: {
+      cssId: typeof node.cssId === "string" ? node.cssId : undefined,
+      attributes: editableAttributes(node.attributes),
+    },
     // The same name the palette offered and the layers panel shows. Reading
     // `editor.label ?? node.type` here instead was a second rule that agreed
     // only for blocks which declare a label: an unlabelled third-party block
@@ -252,6 +296,61 @@ export function inspectSelection(
     props,
   };
 }
+
+/**
+ * The entries of a stored attribute bag the editor can actually put in a row.
+ *
+ * Narrowed ENTRY BY ENTRY, not bag by bag. The renderer skips a single
+ * non-string value and emits every other attribute beside it, so an
+ * all-or-nothing check disagreed with the page: a bag holding
+ * `{ "data-keep": "yes", "data-bad": 5 }` rendered `data-keep` while the panel
+ * showed no rows at all — and the first attribute the author added was written
+ * from that empty view, deleting `data-keep` without saying so.
+ *
+ * The unrepresentable entries cannot be carried through an edit: `update`
+ * refuses an `attributes` bag holding a non-string, so an op preserving one
+ * would never apply. They therefore survive exactly as long as the author
+ * leaves the attributes alone — `htmlUpdate` names only the field that changed,
+ * so editing the CSS id does not rewrite the bag — and are dropped by the first
+ * edit to the attributes themselves, which is the only form that edit can take.
+ */
+function editableAttributes(
+  value: unknown
+): Readonly<Record<string, string>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const cached = editableBags.get(value);
+  if (cached !== undefined) return cached;
+  const kept: Record<string, string> = {};
+  let dropped = false;
+  for (const [name, each] of Object.entries(value)) {
+    if (typeof each === "string") kept[name] = each;
+    else dropped = true;
+  }
+  // `undefined` rather than `{}` for a bag with nothing readable in it, so it
+  // compares equal to no bag at all wherever the two are asked apart.
+  if (Object.keys(kept).length === 0) return undefined;
+  // Nothing was dropped, so the stored object IS the readable one — handed back
+  // as itself rather than as a copy, which is both the common case and the one
+  // that needs no help staying identical between renders.
+  if (!dropped) return value as Readonly<Record<string, string>>;
+  editableBags.set(value, kept);
+  return kept;
+}
+
+/**
+ * Filtered bags, keyed by the stored object they were read from.
+ *
+ * An inspection is rebuilt on EVERY render, and the attributes panel resets its
+ * draft whenever the stored bag it is given changes. A copy made fresh each
+ * time is a new object each time, so the panel would see the document change on
+ * every render — resetting the draft under the author's cursor, and re-running
+ * the effect that reset it. A node's `attributes` object is itself replaced
+ * only by an op, so keying on it hands back one reference for as long as the
+ * document holds one bag.
+ */
+const editableBags = new WeakMap<object, Readonly<Record<string, string>>>();
 
 /**
  * The patch that sets one prop.

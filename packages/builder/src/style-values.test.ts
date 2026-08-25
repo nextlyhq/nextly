@@ -49,6 +49,149 @@ function documentWith(styles: NodeStyles | undefined): BlockDocument {
   };
 }
 
+describe("what reading an address will and will not run", () => {
+  /*
+   * `readStyleValue` is reached from `sharedValueAt`, which a panel calls while
+   * it inspects a selection. So reading is not a neutral act: an own accessor
+   * anywhere along the address — the state tier, the breakpoint, the property,
+   * or a path segment inside it — would run from rendering alone, and a
+   * throwing one would abort the read and take the panel with it.
+   */
+  it("does not invoke an accessor at the PROPERTY", () => {
+    let calls = 0;
+    const base: Record<string, unknown> = {};
+    Object.defineProperty(base, "padding", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        calls += 1;
+        return { blockStart: "1px" };
+      },
+    });
+
+    // Population: the accessor really is an own enumerable key at the address
+    // being read, so a zero below is about the descriptor read rather than
+    // about the walk stopping somewhere earlier.
+    expect(Object.keys(base)).toEqual(["padding"]);
+
+    const read = readStyleValue({ base: { base } } as never, {
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: [],
+    });
+
+    expect(calls).toBe(0);
+    // Absent rather than a value, which is the honest answer for something
+    // that cannot be read without running code.
+    expect(read).toBeUndefined();
+  });
+
+  it("does not invoke an accessor at a PATH SEGMENT inside the value", () => {
+    // The sibling site, asserted beside the first: this reader walks the path
+    // through the same helper, and fixing one tier while leaving the walk is
+    // the shape that keeps recurring on this work.
+    let calls = 0;
+    const padding: Record<string, unknown> = {};
+    Object.defineProperty(padding, "blockStart", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        calls += 1;
+        return "1px";
+      },
+    });
+
+    const read = readStyleValue({ base: { base: { padding } } } as never, {
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: ["blockStart"],
+    });
+
+    expect(calls).toBe(0);
+    expect(read).toBeUndefined();
+  });
+
+  it("does not invoke an accessor at the STATE tier", () => {
+    /*
+     * The outermost tier, and one this suite claimed to cover before it did.
+     * The docblock above listed four tiers while the fixtures placed getters at
+     * two — a description of coverage rather than coverage, which is the
+     * sentence no gate reads.
+     *
+     * It matters most here: the state is read FIRST, so a getter on it decides
+     * the outcome before any inner guard is consulted.
+     */
+    let calls = 0;
+    const styles: Record<string, unknown> = {};
+    Object.defineProperty(styles, "base", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        calls += 1;
+        return { base: { padding: { blockStart: "1px" } } };
+      },
+    });
+
+    expect(Object.keys(styles)).toEqual(["base"]);
+
+    const read = readStyleValue(styles as never, {
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: [],
+    });
+
+    expect(calls).toBe(0);
+    expect(read).toBeUndefined();
+  });
+
+  it("does not invoke an accessor at the BREAKPOINT tier", () => {
+    // The second tier, asserted separately: a guard on the state alone would
+    // pass the test above and still run this getter.
+    let calls = 0;
+    const breakpoints: Record<string, unknown> = {};
+    Object.defineProperty(breakpoints, "base", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        calls += 1;
+        return { padding: { blockStart: "1px" } };
+      },
+    });
+
+    const read = readStyleValue({ base: breakpoints } as never, {
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: [],
+    });
+
+    expect(calls).toBe(0);
+    expect(read).toBeUndefined();
+  });
+
+  it("still reads an ordinary stored value through all four tiers", () => {
+    /*
+     * The control on all four assertions above. A reader that returned
+     * `undefined` for everything would satisfy every one of them and make each
+     * control look unset.
+     */
+    expect(
+      readStyleValue(
+        { base: { base: { padding: { blockStart: "1px" } } } } as never,
+        {
+          state: "base",
+          breakpoint: "base",
+          property: "padding",
+          path: ["blockStart"],
+        }
+      )
+    ).toBe("1px");
+  });
+});
+
 describe("reading a control's value", () => {
   it("reads through the path the descriptor gave it", () => {
     expect(readStyleValue(WITH_MARGIN, BOTTOM)).toBe("24px");

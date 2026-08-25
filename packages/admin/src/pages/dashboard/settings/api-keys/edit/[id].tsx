@@ -117,7 +117,7 @@ export default function EditApiKeyPage() {
 
   if (!id) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...API_KEYS_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -136,7 +136,7 @@ export default function EditApiKeyPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout {...API_KEYS_PAGE}>
           <EditApiKeyContent id={id} />
         </SettingsLayout>

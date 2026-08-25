@@ -3,6 +3,7 @@
  * lets tooling surface "approaching the limit" before authors hit a wall.
  */
 import type { BlockDocument, BlockNode } from "./document";
+import { walkForest } from "./forest-walk";
 
 /** Maximum nesting depth of nodes (top-level nodes are depth 1). */
 export const MAX_DEPTH = 12;
@@ -40,59 +41,23 @@ export const DEFAULT_LIMITS: DocumentLimits = {
 /** Total node count across the forest, slots included. */
 export function countNodes(nodes: BlockNode[]): number {
   let count = 0;
-  // Index-based walk so every array element is counted, including malformed
-  // ones (null, a primitive): the node cap must reflect the real element count
-  // so an array padded with junk cannot slip past it. Only well-formed objects
-  // are descended into.
-  const queue: BlockNode[] = [...nodes];
-  for (let i = 0; i < queue.length; i++) {
-    const node = queue[i];
-    count++;
-    if (typeof node === "object" && node !== null && node.slots) {
-      // Guard against malformed slots (a non-array value): these helpers run
-      // over untrusted documents during validation and must not throw.
-      for (const children of Object.values(node.slots)) {
-        if (!Array.isArray(children)) continue;
-        // Enqueued one at a time. `push(...children)` passes each child as a
-        // call ARGUMENT, and V8 caps those near 100k — so a slot wider than
-        // that throws a native RangeError from inside the counter, before any
-        // caller can refuse the document for being too large. The count exists
-        // to reject exactly that document.
-        for (const child of children) queue.push(child);
-      }
-    }
-  }
+  // EVERY entry counts, malformed ones included: the cap exists to reject a
+  // document by its real element count, so an array padded with junk must not
+  // slip past it.
+  walkForest(nodes, () => {
+    count += 1;
+    return "descend";
+  });
   return count;
 }
 
 /** Deepest nesting level in the forest; an empty forest is depth 0. */
 export function treeDepth(nodes: BlockNode[]): number {
   let deepest = 0;
-  const stack: Array<{ node: BlockNode; depth: number }> = nodes.map(node => ({
-    node,
-    depth: 1,
-  }));
-  while (stack.length > 0) {
-    const entry = stack.pop();
-    if (!entry) continue;
+  walkForest(nodes, entry => {
     if (entry.depth > deepest) deepest = entry.depth;
-    // A malformed array element (null, or a non-object) has no slots and must
-    // not be dereferenced: validation runs this over untrusted documents.
-    if (
-      typeof entry.node === "object" &&
-      entry.node !== null &&
-      entry.node.slots
-    ) {
-      // Skip malformed (non-array) slot values so untrusted documents passed in
-      // during validation cannot make this throw.
-      for (const children of Object.values(entry.node.slots)) {
-        if (!Array.isArray(children)) continue;
-        for (const child of children) {
-          stack.push({ node: child, depth: entry.depth + 1 });
-        }
-      }
-    }
-  }
+    return "descend";
+  });
   return deepest;
 }
 

@@ -13,6 +13,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
+import type { TrustBound } from "../../services/collections/trust-grant";
 import type { RequestContext } from "../../shared/types/index";
 import type {
   DirectAPIConfig,
@@ -79,7 +80,9 @@ export function directApiActor(
 export interface AccessOptions {
   user?: UserContext;
   overrideAccess?: boolean;
-  trusted?: (collection: string) => boolean;
+  enforceFieldAccess?: boolean;
+  fieldAccessUser?: UserContext;
+  trusted?: TrustBound;
   authenticatedScope?: AuthenticatedScope;
 }
 
@@ -92,12 +95,16 @@ export interface AccessOptions {
  * together because a service that receives one without the other judges a
  * scoped key by its owner — the exact leak this exists to close.
  *
- * `overrideAccess` grants the bypass and `trusted` bounds it, per RELATED
- * collection, as relationships are expanded. They belong in one object for the
- * same reason as the pair above: a flag separated from the bound that narrows
+ * `overrideAccess` grants the bypass, `trusted` bounds it per RELATED
+ * collection as relationships are expanded, and `enforceFieldAccess` takes back
+ * the half of it that governs field rules. They belong in one object for the
+ * same reason as the pair above: a flag separated from the bounds that narrow
  * it is how an option ends up honoured by some operations and not others, and
  * an expansion that receives the grant without the bound reads every populated
  * target trusted — including drafts, into a page that may be pre-rendered.
+ * `enforceFieldAccess` travels here for the sharper version of that: an
+ * operation that forwarded the override and dropped it would hand back exactly
+ * the field bypass the caller asked to keep enforced.
  *
  * Spread this rather than listing the fields inline: an operation that forwards
  * `user` but not `authenticatedScope` compiles, runs, and silently authorizes
@@ -108,6 +115,8 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
   return {
     user: config.user,
     overrideAccess: config.overrideAccess,
+    enforceFieldAccess: config.enforceFieldAccess,
+    fieldAccessUser: config.fieldAccessUser,
     trusted: config.trusted,
     authenticatedScope: config.actor,
   };
@@ -129,10 +138,24 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
  */
 export function callerAccess(
   config: DirectAPIConfig
-): Pick<DirectAPIConfig, "user" | "overrideAccess" | "trusted" | "actor"> {
+): Pick<
+  DirectAPIConfig,
+  | "user"
+  | "overrideAccess"
+  | "enforceFieldAccess"
+  | "fieldAccessUser"
+  | "trusted"
+  | "actor"
+> {
   return {
     user: config.user,
     overrideAccess: config.overrideAccess,
+    // Carried for the same reason as `trusted` below: a nested call that omits
+    // it re-enters `mergeConfig` and takes the instance default, which is
+    // absent — so the caller's request to keep field rules enforced would be
+    // silently traded back for the full bypass.
+    enforceFieldAccess: config.enforceFieldAccess,
+    fieldAccessUser: config.fieldAccessUser,
     // The bound travels with the grant here for the same reason it does in
     // `accessOptions`, and the stakes are higher: a nested call that omits it
     // re-enters `mergeConfig` and takes the INSTANCE default, so the caller's

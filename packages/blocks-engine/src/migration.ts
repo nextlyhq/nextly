@@ -15,6 +15,7 @@
  */
 import type { BlockDocument, BlockNode } from "./document";
 import { isPlainRecord } from "./plain-record";
+import { defineEntry } from "./safe-record";
 
 /** Upgrade a node's props from one schema version to the next. Must be pure. */
 export type MigrateFn = (
@@ -366,14 +367,18 @@ export function migrateDocument(
     const slots: Record<string, BlockNode[]> = {};
     for (const [slot, children] of Object.entries(next.slots)) {
       if (!Array.isArray(children)) {
-        slots[slot] = children;
+        // Defined rather than assigned throughout: slot names come from stored
+        // data, and a `__proto__` slot is dropped by assignment. See
+        // `safe-record`. A migration silently deleting a slot would be
+        // especially hard to trace, because the document it rewrote is gone.
+        defineEntry(slots, slot, children);
         continue;
       }
       const slotPath = pointer(pointer(path, "slots"), slot);
       const migratedChildren = children.map((child, index) =>
         migrateNode(child, pointer(slotPath, index))
       );
-      slots[slot] = migratedChildren;
+      defineEntry(slots, slot, migratedChildren);
       if (migratedChildren.some((c, i) => c !== children[i]))
         slotsChanged = true;
     }

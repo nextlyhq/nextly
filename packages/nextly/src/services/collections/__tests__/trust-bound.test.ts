@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import type { RelatedRowReadContext } from "../related-row-read-context";
 import { applyMediaTrustBound, boundRefuses } from "../trust-bound";
+import { TRUSTS_EVERY_COLLECTION } from "../trust-grant";
 
 /** A media row as the fetch returns it, camelCased. */
 function mediaRow(): Record<string, unknown> {
@@ -98,7 +99,7 @@ describe("the trust bound applies to upload expansion", () => {
     // every admin read returns.
     const [row] = await applyMediaTrustBound([mediaRow()], {
       overrideAccess: true,
-      trusted: undefined,
+      trusted: TRUSTS_EVERY_COLLECTION,
     });
 
     for (const column of INTERNAL) expect(row).toHaveProperty(column);
@@ -175,7 +176,10 @@ describe("boundRefuses separates refusal from absence of trust", () => {
 
   it("is false for a bypass with no bound at all", () => {
     expect(
-      boundRefuses({ overrideAccess: true, trusted: undefined }, "media")
+      boundRefuses(
+        { overrideAccess: true, trusted: TRUSTS_EVERY_COLLECTION },
+        "media"
+      )
     ).toBe(false);
   });
 });

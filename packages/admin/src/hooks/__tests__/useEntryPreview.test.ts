@@ -3,18 +3,16 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import { useEntryPreview } from "../useEntryPreview";
 
-const resolve = vi.hoisted(() => vi.fn());
+const mint = vi.hoisted(() => vi.fn());
 
-vi.mock("@admin/services/previewUrlApi", () => ({
-  previewUrlApi: { resolve },
+vi.mock("@admin/services/previewLinkApi", () => ({
+  previewLinkApi: { mint },
 }));
 
-vi.mock("@admin/lib/preview/preview-data", () => ({
-  storePreviewData: vi.fn(() => "preview-key"),
-  generatePreviewUrlWithData: vi.fn(
-    (url: string, key: string) => `${url}?__preview=${key}`
-  ),
-}));
+/** The shape `protectedApi` throws: a status the caller can discriminate on. */
+function apiError(status: number): Error & { status: number } {
+  return Object.assign(new Error(`HTTP ${status}`), { status });
+}
 
 /** A stand-in for the tab `window.open` hands back. */
 function fakeTab() {
@@ -29,7 +27,14 @@ const collection = {
 let openSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  resolve.mockReset();
+  mint.mockReset();
+  // The default for every case that gets as far as minting. A test asserting
+  // WHICH url is navigated to overrides it.
+  mint.mockResolvedValue({
+    token: "tok",
+    url: "https://site.example/api/preview?token=tok",
+    expiresAt: "2026-01-01T00:00:00.000Z",
+  });
   openSpy = vi.spyOn(window, "open");
 });
 
@@ -45,8 +50,9 @@ describe("isPreviewAvailable", () => {
 
     expect(result.current.isPreviewAvailable).toBe(true);
     // Availability is a render-time question; a round trip here would make the
-    // button appear late on every entry that has one.
-    expect(resolve).not.toHaveBeenCalled();
+    // button appear late on every entry that has one — and would mint a
+    // credential for a preview nobody asked to open.
+    expect(mint).not.toHaveBeenCalled();
   });
 
   it("is false when the collection stores no preview", () => {
@@ -106,6 +112,8 @@ describe("isPreviewAvailable", () => {
 });
 
 describe("openPreview", () => {
+  const MINTED = "https://site.example/api/preview?token=tok";
+
   it("claims the tab BEFORE awaiting, so the popup blocker does not eat it", async () => {
     const tab = fakeTab();
     const order: string[] = [];
@@ -113,9 +121,9 @@ describe("openPreview", () => {
       order.push("open");
       return tab as unknown as Window;
     });
-    resolve.mockImplementation(() => {
-      order.push("resolve");
-      return Promise.resolve({ status: "resolved", url: "https://s.dev/p/1" });
+    mint.mockImplementation(() => {
+      order.push("mint");
+      return Promise.resolve({ token: "tok", url: MINTED, expiresAt: "x" });
     });
 
     const { result } = renderHook(() =>
@@ -125,17 +133,16 @@ describe("openPreview", () => {
       await result.current.openPreview();
     });
 
-    // The whole point: a window opened after an await has lost the user-gesture
-    // context and Safari and Firefox block it. Asserting only that open() was
-    // called would pass on the broken ordering too.
-    expect(order).toEqual(["open", "resolve"]);
-    expect(tab.location.href).toBe("https://s.dev/p/1");
+    // A window opened after an await has lost the user-gesture context and
+    // Safari and Firefox block it. Asserting only that open() was called would
+    // pass on the broken ordering too.
+    expect(order).toEqual(["open", "mint"]);
+    expect(tab.location.href).toBe(MINTED);
   });
 
   it("opens the tab without noopener, then severs the reference by hand", async () => {
     const tab = fakeTab();
     openSpy.mockReturnValue(tab as unknown as Window);
-    resolve.mockResolvedValue({ status: "resolved", url: "https://s.dev/p/1" });
 
     const { result } = renderHook(() =>
       useEntryPreview({ collection, entry: { id: "1" } })
@@ -144,17 +151,103 @@ describe("openPreview", () => {
       await result.current.openPreview();
     });
 
-    // Passing "noopener" would make window.open return null and leave nothing to
-    // navigate, so the reference has to be cut manually instead.
+    // Passing "noopener" would make window.open return null and leave nothing
+    // to navigate, so the reference is cut manually instead.
     const features = openSpy.mock.calls[0]?.[2];
     expect(features ?? "").not.toContain("noopener");
     expect(tab.opener).toBeNull();
   });
 
-  it("closes the claimed tab and reports why when no host is configured", async () => {
+  it("navigates to the CREDENTIALLED url the mint returned", async () => {
     const tab = fakeTab();
     openSpy.mockReturnValue(tab as unknown as Window);
-    resolve.mockResolvedValue({ status: "noSiteUrl", path: "/p/1" });
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1", slug: "saved" } })
+    );
+    await act(async () => {
+      await result.current.openPreview();
+    });
+
+    // The point of the whole path. The site renders on its own origin, where
+    // the admin's session does not reach, so a bare address arrives
+    // unauthenticated and the draft gate answers with the PUBLISHED page — or a
+    // 404 where nothing is published. The destination has to be the minted url.
+    expect(tab.location.href).toBe(MINTED);
+
+    // Scoped to the one document, and short-lived because it is spent by the
+    // tab opening as it is issued rather than sent to anybody.
+    expect(mint).toHaveBeenCalledWith({
+      collection: "posts",
+      entryId: "1",
+      ttlSeconds: 15 * 60,
+    });
+  });
+
+  it("scopes the token to the language being edited", async () => {
+    const tab = fakeTab();
+    openSpy.mockReturnValue(tab as unknown as Window);
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1" }, locale: "fr" })
+    );
+    await act(async () => {
+      await result.current.openPreview();
+    });
+
+    // The route redirects from the TOKEN's scope, so an unscoped token opens
+    // the default language whichever one was being edited — the reader is sent
+    // to the wrong translation while holding a broader credential than needed.
+    expect(mint).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "fr" })
+    );
+  });
+
+  it("omits the locale entirely when the caller names none", async () => {
+    // The positive control for the case above: a non-localized collection has
+    // one document and no language to name, and scoping to an invented one
+    // would refuse a preview that should work. Without this, a hook that always
+    // sent a locale would satisfy the previous test perfectly.
+    const tab = fakeTab();
+    openSpy.mockReturnValue(tab as unknown as Window);
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1" } })
+    );
+    await act(async () => {
+      await result.current.openPreview();
+    });
+
+    expect(mint).toHaveBeenCalledWith(
+      expect.not.objectContaining({ locale: expect.anything() })
+    );
+  });
+
+  it("asks the server ONCE — it resolves the destination itself", async () => {
+    // The mint already resolves the redirect through the same function the
+    // preview route will call, and refuses before signing when a document has
+    // no address. Asking a second endpoint first was a second implementation of
+    // that question, and it ran an author's `preview.url` function twice.
+    const tab = fakeTab();
+    openSpy.mockReturnValue(tab as unknown as Window);
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1" } })
+    );
+    await act(async () => {
+      await result.current.openPreview();
+    });
+
+    expect(mint).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports noSiteUrl when the server could not assemble the link", async () => {
+    // The site's address lives in settings the previewing roles cannot read, so
+    // the server is the only place the link can be built — a null url is that
+    // setting missing, which an administrator can fix.
+    const tab = fakeTab();
+    openSpy.mockReturnValue(tab as unknown as Window);
+    mint.mockResolvedValue({ token: "tok", url: null, expiresAt: "x" });
     const onUnavailable = vi.fn();
 
     const { result } = renderHook(() =>
@@ -164,18 +257,18 @@ describe("openPreview", () => {
       await result.current.openPreview();
     });
 
-    // Leaving a blank tab open would look like a preview that failed to load.
+    expect(onUnavailable).toHaveBeenCalledWith("noSiteUrl");
     expect(tab.close).toHaveBeenCalled();
     expect(tab.location.href).toBe("");
-    // Distinct from "unavailable": this one is fixed by an admin setting a site
-    // URL, not by the editor filling in a field.
-    expect(onUnavailable).toHaveBeenCalledWith("noSiteUrl");
   });
 
-  it("reports an entry that is not previewable yet", async () => {
+  it("reads a 409 as an entry with no preview address yet", async () => {
+    // The one refusal the editor can act on themselves — usually an empty slug.
+    // Collapsed into the generic failure it would send them looking at
+    // configuration that was never the problem.
     const tab = fakeTab();
     openSpy.mockReturnValue(tab as unknown as Window);
-    resolve.mockResolvedValue({ status: "unavailable" });
+    mint.mockRejectedValue(apiError(409));
     const onUnavailable = vi.fn();
 
     const { result } = renderHook(() =>
@@ -186,12 +279,15 @@ describe("openPreview", () => {
     });
 
     expect(onUnavailable).toHaveBeenCalledWith("unavailable");
+    expect(tab.close).toHaveBeenCalled();
   });
 
-  it("stays silent when the collection has no preview at all", async () => {
+  it("reads any other refusal as a failure rather than guessing", async () => {
+    // The negative control for the 409 mapping. A hook that answered
+    // "unavailable" for everything would pass the test above.
     const tab = fakeTab();
     openSpy.mockReturnValue(tab as unknown as Window);
-    resolve.mockResolvedValue({ status: "notConfigured" });
+    mint.mockRejectedValue(apiError(403));
     const onUnavailable = vi.fn();
 
     const { result } = renderHook(() =>
@@ -201,99 +297,13 @@ describe("openPreview", () => {
       await result.current.openPreview();
     });
 
-    // The button should not have been offered, so an error here would describe a
-    // state the editor cannot act on.
-    expect(onUnavailable).not.toHaveBeenCalled();
-    expect(tab.close).toHaveBeenCalled();
-  });
-
-  it("closes the tab and reports when the request itself fails", async () => {
-    const tab = fakeTab();
-    openSpy.mockReturnValue(tab as unknown as Window);
-    resolve.mockRejectedValue(new Error("network"));
-    const onUnavailable = vi.fn();
-
-    const { result } = renderHook(() =>
-      useEntryPreview({ collection, entry: { id: "1" }, onUnavailable })
-    );
-    await act(async () => {
-      await result.current.openPreview();
-    });
-
-    expect(tab.close).toHaveBeenCalled();
     expect(onUnavailable).toHaveBeenCalledWith("failed");
-  });
-
-  it("sends unsaved form values, not the saved row", async () => {
-    const tab = fakeTab();
-    openSpy.mockReturnValue(tab as unknown as Window);
-    // Same-origin on purpose: this test is about WHICH VALUES reach the
-    // resolver, and a cross-origin URL would additionally drop the session-key
-    // handoff, mixing a second behaviour into the assertion.
-    resolve.mockResolvedValue({
-      status: "resolved",
-      url: `${window.location.origin}/p/new`,
-    });
-
-    const { result } = renderHook(() =>
-      useEntryPreview({
-        collection,
-        entry: { id: "1", slug: "saved" },
-        getFormValues: () => ({ slug: "edited" }),
-      })
-    );
-    await act(async () => {
-      await result.current.openPreview();
-    });
-
-    // Resolving against the saved row would open the previous URL and show the
-    // wrong page, which is worse than not offering the button.
-    expect(resolve).toHaveBeenCalledWith({
-      collection: "posts",
-      entry: { id: "1", slug: "edited" },
-    });
-    expect(tab.location.href).toBe(
-      `${window.location.origin}/p/new?__preview=preview-key`
-    );
-  });
-
-  it("stores unsaved data BEFORE opening the tab, not after", async () => {
-    const tab = fakeTab();
-    const order: string[] = [];
-    const { storePreviewData } = await import(
-      "@admin/lib/preview/preview-data"
-    );
-    vi.mocked(storePreviewData).mockImplementation(() => {
-      order.push("store");
-      return "preview-key";
-    });
-    openSpy.mockImplementation(() => {
-      order.push("open");
-      return tab as unknown as Window;
-    });
-    resolve.mockResolvedValue({ status: "resolved", url: "https://s.dev/p/1" });
-
-    const { result } = renderHook(() =>
-      useEntryPreview({
-        collection,
-        entry: { id: "1" },
-        getFormValues: () => ({ slug: "edited" }),
-      })
-    );
-    await act(async () => {
-      await result.current.openPreview();
-    });
-
-    // A new browsing context gets a COPY of session storage taken at creation.
-    // Written afterwards, the key stays in this window and the preview silently
-    // shows the last saved values instead of the edits on screen.
-    expect(order).toEqual(["store", "open"]);
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.href).toBe("");
   });
 
   it("reports a blocked popup instead of navigating the admin away", async () => {
-    // window.open returns null when the browser blocks it.
     openSpy.mockReturnValue(null);
-    resolve.mockResolvedValue({ status: "resolved", url: "https://s.dev/p/1" });
     const onUnavailable = vi.fn();
     const before = window.location.href;
 
@@ -308,73 +318,33 @@ describe("openPreview", () => {
     // discard every unsaved change — the opposite of what preview is for.
     expect(window.location.href).toBe(before);
     expect(onUnavailable).toHaveBeenCalledWith("popupBlocked");
-    // And it must not even ask: the click cannot succeed either way.
-    expect(resolve).not.toHaveBeenCalled();
+    // And it must not even ask: the click cannot succeed either way, so no
+    // credential is minted for a preview that has nowhere to open.
+    expect(mint).not.toHaveBeenCalled();
   });
 
-  it("drops the unsaved-data key cross-origin and says so, rather than sending a dead one", async () => {
-    const tab = fakeTab();
-    openSpy.mockReturnValue(tab as unknown as Window);
-    // jsdom serves the admin from localhost; the site is elsewhere, which is
-    // what a configured site URL now routinely means.
-    resolve.mockResolvedValue({
-      status: "resolved",
-      url: "https://site.example.com/p/1",
-    });
-    const onUnsavedChangesNotSent = vi.fn();
+  it("mints NOTHING for an entry that has never been saved", async () => {
+    // A draft is authorized by naming ONE document, and an unsaved entry has no
+    // name to give. Every case above is the positive control: a saved entry
+    // does reach the mint.
+    const onUnavailable = vi.fn();
 
     const { result } = renderHook(() =>
       useEntryPreview({
         collection,
-        entry: { id: "1" },
-        getFormValues: () => ({ slug: "edited" }),
-        onUnsavedChangesNotSent,
+        entry: { title: "unsaved" },
+        onUnavailable,
       })
     );
     await act(async () => {
       await result.current.openPreview();
     });
 
-    // Session storage is partitioned per origin, so the key would name a
-    // payload the preview page cannot reach. Appending it would look like it
-    // worked while quietly rendering stale content.
-    expect(tab.location.href).toBe("https://site.example.com/p/1");
-    expect(tab.location.href).not.toContain("__preview");
-    // Reported, because silently previewing saved data is the failure mode this
-    // whole path exists to prevent.
-    expect(onUnsavedChangesNotSent).toHaveBeenCalled();
-  });
-
-  it("still sends the key when the site is same-origin", async () => {
-    // The positive control for the drop above: without it, a hook that never
-    // appended the key would satisfy that test perfectly.
-    const tab = fakeTab();
-    openSpy.mockReturnValue(tab as unknown as Window);
-    resolve.mockResolvedValue({
-      status: "resolved",
-      url: `${window.location.origin}/p/1`,
-    });
-    const onUnsavedChangesNotSent = vi.fn();
-
-    const { result } = renderHook(() =>
-      useEntryPreview({
-        collection,
-        entry: { id: "1" },
-        getFormValues: () => ({ slug: "edited" }),
-        onUnsavedChangesNotSent,
-      })
-    );
-    await act(async () => {
-      await result.current.openPreview();
-    });
-
-    expect(tab.location.href).toContain("__preview=preview-key");
-    expect(onUnsavedChangesNotSent).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+    expect(onUnavailable).toHaveBeenCalledWith("unavailable");
   });
 
   it("navigates the current window when the collection opts out of a new tab", async () => {
-    resolve.mockResolvedValue({ status: "resolved", url: "https://s.dev/p/1" });
-
     const { result } = renderHook(() =>
       useEntryPreview({
         collection: {
@@ -388,6 +358,11 @@ describe("openPreview", () => {
       await result.current.openPreview();
     });
 
+    // jsdom refuses to navigate, so the destination cannot be observed here —
+    // `settle` handles both branches and the new-tab cases above pin the url.
+    // What IS observable, and what this case is about, is that no second window
+    // was claimed.
     expect(openSpy).not.toHaveBeenCalled();
+    expect(mint).toHaveBeenCalledTimes(1);
   });
 });

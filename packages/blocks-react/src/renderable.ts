@@ -279,6 +279,28 @@ function reactTag(value: unknown, depth = 0): symbol | null {
 }
 
 /**
+ * Whether an element TYPE creates no host element of its own.
+ *
+ * True for React's own constructs that exist to wrap children — a fragment, a
+ * suspense boundary, a context provider or consumer. There is nowhere in any of
+ * them for a block's generated class to go, which is what a caller asking this
+ * wants to know.
+ *
+ * `memo`, `forwardRef` and `lazy` are deliberately FALSE: each wraps a
+ * component that may well render a host element and forward the class to it,
+ * and the two cannot be told apart without calling it. This is the same
+ * distinction {@link ELEMENT_TYPE_TAGS} already draws between a provider, whose
+ * children React renders itself, and a component wrapper whose children are an
+ * ordinary prop — asked here rather than restated, so a tag added to one set
+ * cannot come to mean two different things.
+ */
+export function createsNoHostElement(type: unknown): boolean {
+  if (isReactBuiltinSymbol(type)) return true;
+  const tag = reactTag(type);
+  return tag !== null && (PROVIDER_TAGS.has(tag) || tag === CONSUMER_TAG);
+}
+
+/**
  * A tag name React's serializer will accept.
  *
  * React creates a perfectly valid element for `"bad tag"`, `"1div"` or `"a/b"`

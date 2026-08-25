@@ -292,7 +292,7 @@ export default function WebhookDeliveryDetailPage() {
 
   if (!id || !deliveryId) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <SettingsLayout {...DELIVERIES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -311,7 +311,7 @@ export default function WebhookDeliveryDetailPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="wide">
         <SettingsLayout {...DELIVERIES_PAGE}>
           <DeliveryDetailContent webhookId={id} deliveryId={deliveryId} />
         </SettingsLayout>

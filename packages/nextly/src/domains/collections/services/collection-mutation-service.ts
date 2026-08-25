@@ -60,6 +60,8 @@ import type {
   CollectionRelationshipService,
   RelationshipDbExecutor,
 } from "../../../services/collections/collection-relationship-service";
+import type { TrustBound } from "../../../services/collections/trust-grant";
+import { narrows } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -2745,7 +2747,7 @@ export class CollectionMutationService extends BaseService {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows. See {@link RelatedRowReadContext.trusted}.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /** Write locale (i18n M5): translatable values are stored for this language. */
       locale?: string;
       // Set by the REST dispatcher: route-level authorization already ran, so
@@ -3611,7 +3613,7 @@ export class CollectionMutationService extends BaseService {
               // lifecycle; an untrusted one gets the published default, the
               // same answer its own GET would give.
               status:
-                params.overrideAccess === true && params.trusted === undefined
+                params.overrideAccess === true && !narrows(params.trusted)
                   ? "all"
                   : undefined,
             }
@@ -5020,7 +5022,7 @@ export class CollectionMutationService extends BaseService {
        * Absent means every populated target inherits the caller's trust. Only ever
        * narrows. See {@link RelatedRowReadContext.trusted}.
        */
-      trusted?: (collection: string) => boolean;
+      trusted?: TrustBound;
       /** Write locale (i18n M5): translatable values are updated for this language only. */
       locale?: string;
       // Set by the REST dispatcher: route-level authorization already ran, so
@@ -7051,7 +7053,7 @@ export class CollectionMutationService extends BaseService {
               // lifecycle; an untrusted one gets the published default, the
               // same answer its own GET would give.
               status:
-                params.overrideAccess === true && params.trusted === undefined
+                params.overrideAccess === true && !narrows(params.trusted)
                   ? "all"
                   : undefined,
             }

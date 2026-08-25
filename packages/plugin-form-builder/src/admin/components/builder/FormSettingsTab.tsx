@@ -135,7 +135,7 @@ export function FormSettingsTab({ spamDefaults }: FormSettingsTabProps) {
   const { settings, updateSettings } = useFormBuilder();
 
   return (
-    // The measure belongs to `FormLayout` now, not to this tab.
+    // The measure belongs to the page's shell, not to this tab.
     <div className="flex flex-col gap-10">
       {/* Submission */}
       <section>

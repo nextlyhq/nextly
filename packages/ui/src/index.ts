@@ -563,16 +563,13 @@ export { FormSection } from "./components/form-section";
 export type { FormSectionProps } from "./components/form-section";
 
 /**
- * @experimental The form-layout kit's page measure and its single action bar.
- * No first-party plugin has exercised either in production yet.
+ * @experimental A form's single action bar. The page measure it used to sit
+ * beside is `PageShell`'s, reached through the page rather than the form. No
+ * first-party plugin has exercised it in production yet.
  */
-export { FormActions, FormLayout } from "./components/form-layout";
+export { FormActions } from "./components/form-actions";
 /** @experimental */
-export type {
-  FormActionsProps,
-  FormLayoutProps,
-  FormMeasure,
-} from "./types/form-layout";
+export type { FormActionsProps } from "./types/form-layout";
 
 /**
  * @experimental The page shell: the gutter, the measure and the sanctioned

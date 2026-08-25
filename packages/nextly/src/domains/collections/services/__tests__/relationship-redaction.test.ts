@@ -21,6 +21,7 @@ import {
   registerFieldFunctions,
 } from "../../../../shared/lib/field-level-registry";
 import { CollectionRelationshipService } from "../collection-relationship-service";
+import { TRUSTS_EVERY_COLLECTION } from "../../../../services/collections/trust-grant";
 
 // getSystemEntityTable() resolves the users table via env.DB_DIALECT (not the
 // adapter); sqlite needs no DATABASE_URL, so it validates cleanly in a unit
@@ -354,7 +355,7 @@ describe("relationship expansion secret redaction", () => {
         "members",
         "m1",
         {
-          trusted: undefined,
+          trusted: TRUSTS_EVERY_COLLECTION,
           enforceFieldAccess: true,
           user: { id: "u1", roles: ["editor"] },
         }
@@ -369,7 +370,7 @@ describe("relationship expansion secret redaction", () => {
         "members",
         "m1",
         {
-          trusted: undefined,
+          trusted: TRUSTS_EVERY_COLLECTION,
           enforceFieldAccess: true,
           user: { id: "u2", roles: ["finance"] },
         }
@@ -384,7 +385,7 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { trusted: undefined, enforceFieldAccess: true }
+        { trusted: TRUSTS_EVERY_COLLECTION, enforceFieldAccess: true }
       );
 
       expect(related).not.toHaveProperty("salary");
@@ -394,7 +395,11 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { trusted: undefined, enforceFieldAccess: true, overrideAccess: true }
+        {
+          trusted: TRUSTS_EVERY_COLLECTION,
+          enforceFieldAccess: true,
+          overrideAccess: true,
+        }
       );
 
       expect(related).toMatchObject({ salary: 120000 });
@@ -453,7 +458,7 @@ describe("relationship expansion secret redaction", () => {
       );
 
       const related = await service.fetchRelatedEntry("members", "m1", {
-        trusted: undefined,
+        trusted: TRUSTS_EVERY_COLLECTION,
         enforceFieldAccess: true,
         overrideAccess: true,
       });
@@ -505,7 +510,7 @@ describe("relationship expansion secret redaction", () => {
       );
 
       const related = await service.fetchRelatedEntry("members", "m1", {
-        trusted: undefined,
+        trusted: TRUSTS_EVERY_COLLECTION,
         enforceFieldAccess: true,
         user: { id: "u1" },
       });
@@ -557,7 +562,11 @@ describe("relationship expansion secret redaction", () => {
           type: "relationship",
           options: { targetLabelField: "codename" },
         } as never,
-        { trusted: undefined, enforceFieldAccess: true, user: { id: "u1" } }
+        {
+          trusted: TRUSTS_EVERY_COLLECTION,
+          enforceFieldAccess: true,
+          user: { id: "u1" },
+        }
       );
 
       const related = map.get("m1");
@@ -575,7 +584,7 @@ describe("relationship expansion secret redaction", () => {
         "members",
         "m1",
         {
-          trusted: undefined,
+          trusted: TRUSTS_EVERY_COLLECTION,
           enforceFieldAccess: true,
           user: { id: "u1", roles: ["editor"] },
         }
@@ -685,7 +694,7 @@ describe("related-row re-derivation keeps per-field presentation", () => {
     const access = {
       enforceFieldAccess: true,
       user: { id: "u1" },
-      trusted: undefined,
+      trusted: TRUSTS_EVERY_COLLECTION,
     };
     const state = service.createNestedHookState();
 

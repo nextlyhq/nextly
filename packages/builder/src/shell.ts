@@ -25,6 +25,23 @@ export { BuilderShell } from "./builder-shell";
 export type { BuilderShellProps } from "./builder-shell";
 
 /**
+ * The compiled cascade behind the page, for chrome that names where a value
+ * came from.
+ *
+ * On the CLIENT entry rather than the root one. It reaches
+ * `@nextlyhq/blocks-react` to compile, so publishing it from the server-safe
+ * barrel would pull a React dependency into an artifact whose whole contract is
+ * that a Server Component can call everything in it.
+ *
+ * Exported at all because the HOST is the only surface holding both halves the
+ * compile needs — the document and the site's breakpoints — while the panel that
+ * reads the answer sits several layers below. Compiling once at the top is what
+ * keeps the cascade from being walked per control; `style-trace.ts` says why it
+ * is compiled a second time.
+ */
+export { pageStyleTrace } from "./style-trace";
+
+/**
  * Whether the surrounding shell is interactive.
  *
  * Exported for slot content that PORTALS out of the shell, which the shell cannot reach with
@@ -98,6 +115,19 @@ export type { StyleInspectorPanelProps } from "./style-inspector-panel";
 
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
+
+/**
+ * The site's breakpoints, as a trigger and the dialog behind it.
+ *
+ * The MANAGER is published and the dialog is not. A host needs the pair —
+ * something to click and something to edit in — and publishing the dialog alone
+ * would leave every host inventing the same open state, while publishing both
+ * would offer two ways to mount one feature that must agree about when the
+ * saved set has actually been read.
+ */
+export { authoredBreakpoints, sameBreakpoints } from "./breakpoints";
+export { BreakpointManager } from "./breakpoint-manager";
+export type { BreakpointManagerProps } from "./breakpoint-manager";
 
 /**
  * The editor's keyboard actions — moving, deleting, undoing — behind the same

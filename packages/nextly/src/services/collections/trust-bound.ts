@@ -15,6 +15,8 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { canReadSystemResource } from "../../auth/resource-readable";
 
 import type { RelatedRowReadContext } from "./related-row-read-context";
+import type { TrustBound } from "./trust-grant";
+import { assumedBound, boundReaches } from "./trust-grant";
 
 /** The system resource an upload field's rows are read from. */
 export const MEDIA_TARGET = "media";
@@ -56,8 +58,7 @@ export function boundRefuses(
 ): boolean {
   return (
     access.overrideAccess === true &&
-    access.trusted !== undefined &&
-    !access.trusted(targetCollection)
+    !boundReaches(access.trusted, targetCollection)
   );
 }
 
@@ -117,7 +118,18 @@ export async function applyMediaTrustBound(
 export interface CallerOptions {
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
-  trusted?: (collection: string) => boolean;
+  /**
+   * Whether the caller asked for field-level read rules to be enforced despite
+   * being otherwise trusted, and whose rules to judge by.
+   *
+   * The pair travels together because neither means anything alone: an identity
+   * with nothing asking for enforcement is ignored, and enforcement naming
+   * nobody judges the anonymous caller. See
+   * {@link RelatedRowReadContext.fieldAccessUser}.
+   */
+  enforceFieldAccess?: boolean;
+  fieldAccessUser?: Record<string, unknown>;
+  trusted?: TrustBound;
   authenticatedScope?: AuthenticatedScope;
 }
 
@@ -135,7 +147,13 @@ export function expansionAccess(options: CallerOptions): RelatedRowReadContext {
   return {
     user: options.user,
     overrideAccess: options.overrideAccess,
-    trusted: options.trusted,
+    // Carried for the reason this function exists at all: an expansion that
+    // rebuilt its own context and dropped these would be a VALID context
+    // describing a different caller — one whose related rows are judged by
+    // nobody. That is silent, and it is the direction that leaks.
+    enforceFieldAccess: options.enforceFieldAccess,
+    fieldAccessUser: options.fieldAccessUser,
+    trusted: assumedBound(options.trusted),
     authenticatedScope: options.authenticatedScope,
   };
 }

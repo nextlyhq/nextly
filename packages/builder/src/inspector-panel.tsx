@@ -26,9 +26,11 @@
 import {
   findNode,
   type BreakpointId,
+  type BreakpointSet,
   type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
+import type { BlockResolver, PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   Checkbox,
   Input,
@@ -46,6 +48,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { AdvancedPanel } from "./advanced-panel";
 import type { EditorState } from "./editor-state";
 import {
   fieldLabel,
@@ -84,6 +87,28 @@ export interface InspectorPanelProps {
   /** The breakpoint the Style tab edits. The unconditional one by default. */
   breakpoint?: BreakpointId;
   /**
+   * The definitions the CANVAS renders against, forwarded to the Advanced tab.
+   *
+   * A host that gives `Canvas` a `render.blocks` resolver must give the same one
+   * here, or the id-collision check answers about a different page than the one
+   * on screen. Omitted, both sides fall back to the global registry, which is
+   * what `PageRenderer` itself defaults to.
+   */
+  blocks?: BlockResolver;
+  /**
+   * The declarations the compiler wrote and the tree they describe, so the Style
+   * tab can say where a control's value came from.
+   *
+   * Forwarded rather than compiled here for the reason the panel states: the
+   * cascade is walked ONCE per document, by the host that already holds the
+   * breakpoints it must be compiled against. The tree is carried with it so the
+   * panel resolves the selected node in the same tree the declarations belong
+   * to; see {@link StyleInspectorPanelProps.cascade}.
+   */
+  cascade?: PageStyleCascade;
+  /** The site's breakpoints, which decide which of those declarations are live. */
+  breakpoints?: BreakpointSet;
+  /**
    * The site's design tokens, forwarded to the Style tab's colour controls.
    *
    * Carried rather than defaulted, as `policy` is: omitting it means the
@@ -104,6 +129,14 @@ export interface InspectorPanelProps {
 const INSPECTOR_TABS = [
   { value: "content", label: "Content" },
   { value: "style", label: "Style" },
+  /*
+   * Last, and named for what it is rather than for what it holds. An author
+   * reaching for a `data-` attribute or an anchor id is leaving the modelled
+   * surface behind, and putting that beside Content would invite it as an
+   * ordinary next step. Every editor with this surface separates it the same
+   * way, and the one this replaces did too.
+   */
+  { value: "advanced", label: "Advanced" },
 ] as const;
 
 export function InspectorPanel({
@@ -111,12 +144,19 @@ export function InspectorPanel({
   policy,
   styleState,
   breakpoint,
+  cascade,
+  breakpoints,
   tokens,
+  blocks,
 }: InspectorPanelProps): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
   // the document and the values shown.
   const inspection = inspectSelection(editor.document, editor.selectedId);
+
+  // Declared before the early returns below, because a hook has to run on every
+  // render of this component and "no selection" is one of them.
+  const [tab, setTab] = React.useState<string>("content");
 
   const commit = React.useCallback(
     (name: string, value: unknown) => {
@@ -198,12 +238,16 @@ export function InspectorPanel({
       />
 
       {/*
-        Uncontrolled, so the chosen tab survives a change of selection — an
-        author styling one block after another means to stay on Style. React
-        keeps that state because this element's position does not change; a
-        `key` on the node id here would reset it on every click.
+        Held HERE, so the chosen tab survives a change of selection — an author
+        styling one block after another means to stay on Style. This element's
+        position does not change, so the state lives across every selection; a
+        `key` on the node id would reset it on every click.
+
+        Controlled rather than left to Radix because the Advanced tab has to be
+        told when it stops being the one on screen: it is force-mounted, so its
+        own removal no longer tells it.
       */}
-      <Tabs defaultValue="content" className="nx-inspector__tabs">
+      <Tabs value={tab} onValueChange={setTab} className="nx-inspector__tabs">
         <TabsList>
           {INSPECTOR_TABS.map(tab => (
             <TabsTrigger key={tab.value} value={tab.value}>
@@ -240,7 +284,39 @@ export function InspectorPanel({
             policy={policy}
             state={styleState}
             breakpoint={breakpoint}
+            cascade={cascade}
+            breakpoints={breakpoints}
             tokens={tokens}
+          />
+        </TabsContent>
+
+        {/*
+          FORCE-MOUNTED, alone among the three. The other two hold controls that
+          write on the spot; this one holds a draft, and unmounting it threw
+          away both what the author had typed and the reason a refused row was
+          not saved.
+
+          HIDDEN here rather than left to Radix, which ties the two together:
+          `TabsContent` renders `hidden={!present}` where `present` is
+          `forceMount || isSelected`, so asking it to stay mounted also tells it
+          it is on screen — and the Advanced fields appeared under Content and
+          Style as well. Keeping the mount and stating the visibility separately
+          is what was actually wanted, and `hidden` takes it out of the
+          accessibility tree exactly as an unmounted panel was.
+        */}
+        <TabsContent value="advanced" forceMount hidden={tab !== "advanced"}>
+          <AdvancedPanel
+            // Keyed by node, so a half-typed attribute does not travel to the
+            // next block the way an uncommitted name would. The panel holds
+            // rows locally; without this an author would select another block
+            // and find this one's unsaved row waiting there.
+            key={`${inspection.nodeId}:advanced`}
+            nodeId={inspection.nodeId}
+            cssId={inspection.html.cssId}
+            attributes={inspection.html.attributes}
+            editor={editor}
+            active={tab === "advanced"}
+            blocks={blocks}
           />
         </TabsContent>
       </Tabs>

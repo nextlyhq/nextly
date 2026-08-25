@@ -1,23 +1,51 @@
 /**
  * Preview links — minting one for an entry, and revoking all of them.
  *
- * Distinct from the Preview button beside it, and the difference is who the
- * link is for. Preview opens the entry in the site using the editor's own
- * session, including unsaved changes handed over through session storage; a
- * preview LINK is given to someone with no session at all, so it carries its
- * own signed authorization and can only ever show what was saved.
+ * Both the Preview button and the shareable link mint one, and the difference
+ * is who it is for rather than how it works. The site renders on its own
+ * origin, where the admin's session does not reach and where the admin cannot
+ * set a cookie, so a signed token is the only way either of them can turn draft
+ * mode on. Preview mints one for the editor themself and spends it immediately;
+ * a LINK is handed to someone with no session at all.
+ *
+ * Both can only ever show what was SAVED. The token authorizes a document, not
+ * a set of values.
  *
  * @module services/previewLinkApi
  */
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
-export interface PreviewLinkRequest {
-  collection: string;
-  entryId: string;
-  /** Restricts the link to one locale. Absent means every locale. */
-  locale?: string;
-}
+/**
+ * What a mint request names: ONE collection entry, or ONE Single.
+ *
+ * A union rather than three optional fields, mirroring the endpoint's own
+ * schema — so a caller cannot express "both", which names two different
+ * documents, or "neither".
+ */
+export type PreviewLinkRequest =
+  | {
+      collection: string;
+      entryId: string;
+      single?: never;
+      /** Restricts the link to one locale. Absent means every locale. */
+      locale?: string;
+      /**
+       * How long the link stays valid. Absent takes the server's sharing
+       * default, which is the right length for a link that travels; a caller
+       * spending the token immediately should ask for less.
+       */
+      ttlSeconds?: number;
+    }
+  | {
+      single: string;
+      collection?: never;
+      entryId?: never;
+      /** Restricts the link to one locale. Absent means every locale. */
+      locale?: string;
+      /** As above. */
+      ttlSeconds?: number;
+    };
 
 export interface PreviewLink {
   /** The signed token. */

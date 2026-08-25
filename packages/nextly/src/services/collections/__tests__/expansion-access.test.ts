@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyMediaTrustBound, expansionAccess } from "../trust-bound";
+import { TRUSTS_EVERY_COLLECTION } from "../trust-grant";
 
 const CALLER = {
   user: { id: "u1" },
@@ -63,7 +64,10 @@ describe("the access an expansion runs under", () => {
 
     return applyMediaTrustBound(
       rows,
-      expansionAccess({ overrideAccess: true, trusted: undefined })
+      expansionAccess({
+        overrideAccess: true,
+        trusted: TRUSTS_EVERY_COLLECTION,
+      })
     ).then(([row]) => {
       expect(row).toHaveProperty("uploadedBy");
     });

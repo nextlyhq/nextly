@@ -14,19 +14,49 @@ vi.mock("./route-auth", () => ({
   requireRoutePermission: vi.fn(),
 }));
 
-const { getEntry, canUpdateEntry, getSettings, previewDeclaration } =
-  vi.hoisted(() => ({
-    getEntry: vi.fn(),
-    canUpdateEntry: vi.fn(),
-    getSettings: vi.fn(),
-    previewDeclaration: vi.fn(),
-  }));
+const {
+  getEntry,
+  canUpdateEntry,
+  getSettings,
+  previewDeclaration,
+  singleDeclaration,
+  findSingle,
+  singleReadable,
+  singleEditable,
+} = vi.hoisted(() => ({
+  getEntry: vi.fn(),
+  canUpdateEntry: vi.fn(),
+  getSettings: vi.fn(),
+  previewDeclaration: vi.fn(),
+  singleDeclaration: vi.fn(),
+  findSingle: vi.fn(),
+  singleReadable: vi.fn(),
+  singleEditable: vi.fn(),
+}));
 
 /** The application's `preview` config for the test in hand. */
 let previewConfig: { route?: string } | undefined;
 
+/**
+ * Which singles the config reports as localized, for the test in hand.
+ *
+ * A set rather than a flag because the endpoint asks per slug, and a single
+ * boolean would answer for a single it was never asked about.
+ */
+const localizedSingles = new Set<string>();
+
+/**
+ * Which singles carry a Draft / Published lifecycle, for the test in hand.
+ *
+ * A single without one has no pending version to preview, so minting is refused
+ * — which every other Single test would otherwise trip over.
+ */
+const statusSingles = new Set<string>();
+
 vi.mock("../init", () => ({
-  getCachedNextly: vi.fn().mockResolvedValue({}),
+  // Carries findSingle, because the Single mint path reads the document through
+  // the Direct API rather than the collections handler.
+  getCachedNextly: () => Promise.resolve({ findSingle }),
 }));
 
 vi.mock("../services/lib/permissions", () => ({
@@ -35,11 +65,38 @@ vi.mock("../services/lib/permissions", () => ({
 
 vi.mock("./preview-url", () => ({
   previewDeclarationFor: (...args: unknown[]) => previewDeclaration(...args),
+  singlePreviewDeclarationFor: (...args: unknown[]) =>
+    singleDeclaration(...args),
+  // Delegates to the same `findSingle` double the mint used to reach directly,
+  // so what these tests drive is unchanged: the read moved behind a shared
+  // loader, and the loader is the one the preview ROUTE reads through too.
+  loadSingleForPreview: async (slug: string, locale: string | undefined) =>
+    (await findSingle({
+      slug,
+      ...(locale === undefined ? {} : { locale }),
+    })) ?? null,
+}));
+
+// The gate itself is exercised where it lives; what these cover is that the
+// mint ASKS it, and that a refusal stops short of signing anything.
+vi.mock("../domains/singles/services/single-document-access", () => ({
+  singleDocumentReadable: (...args: unknown[]) => singleReadable(...args),
+  singleDocumentEditable: (...args: unknown[]) => singleEditable(...args),
 }));
 
 vi.mock("../di", () => ({
   container: { get: vi.fn(), has: vi.fn().mockReturnValue(false) },
-  getService: vi.fn(() => ({ getEntry, canUpdateEntry })),
+  getService: vi.fn(() => ({
+    getEntry,
+    canUpdateEntry,
+    // The registry fallback the localized probe reaches when the authored
+    // config has nothing to say about this slug.
+    getSingleBySlug: (slug: string) =>
+      Promise.resolve({
+        localized: localizedSingles.has(slug),
+        status: statusSingles.has(slug),
+      }),
+  })),
 }));
 
 vi.mock("../lib/env", () => ({
@@ -79,6 +136,10 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Nothing is localized unless a test says so, which keeps the unscoped grant
+  // correct for the singles that genuinely have one document.
+  localizedSingles.clear();
+  statusSingles.clear();
   // The default: the caller can see the entry they named AND may edit it, so
   // the draft the token hands out is one they could already open. Tests about
   // the entry gate override whichever half they are about.
@@ -135,6 +196,275 @@ async function mintedData(): Promise<Record<string, unknown>> {
     )
   );
 }
+
+describe("mintPreviewLink for a Single", () => {
+  beforeEach(() => {
+    singleDeclaration.mockResolvedValue({ url: () => "/" });
+    findSingle.mockResolvedValue({ id: "homepage" });
+    singleReadable.mockResolvedValue(true);
+    singleEditable.mockResolvedValue(true);
+    statusSingles.add("homepage");
+  });
+
+  /**
+   * The route gate answers a COARSE question — may this caller update this slug
+   * — while a Single's stored rules are evaluated against the loaded document
+   * and can deny a caller who holds that permission. A link minted on the
+   * permission alone is a bearer credential for a draft the real update path
+   * refuses to show them.
+   */
+  describe("the Single's own stored rules", () => {
+    it("refuses when the caller cannot see the document", async () => {
+      singleReadable.mockResolvedValue(false);
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(403);
+    });
+
+    // Reading proves nothing about this. Where a Single allows broad reads and
+    // restricts updates, a caller reads the published document and would
+    // otherwise be handed the author's unpublished edits.
+    it("refuses when the caller cannot edit the document", async () => {
+      singleEditable.mockResolvedValue(false);
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(403);
+    });
+
+    // The property that matters: a refusal must stop short of SIGNING. A token
+    // that exists is a working credential whatever the response says.
+    it("signs nothing when it refuses", async () => {
+      singleEditable.mockResolvedValue(false);
+
+      const body = await json(
+        await mintPreviewLink(post({ single: "homepage" }))
+      );
+
+      expect(JSON.stringify(body)).not.toContain("eyJ");
+    });
+
+    // Asked BEFORE the trusted read that builds the redirect, so a refused
+    // caller never reaches a document they may not see.
+    it("asks before loading the document", async () => {
+      singleReadable.mockResolvedValue(false);
+
+      await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(findSingle).not.toHaveBeenCalled();
+    });
+
+    /**
+     * `routeAuthorized` tells the checker that the coarse RBAC gate for THIS
+     * operation already ran, so it is skipped as redundant. The mint route gated
+     * `update` and nothing else — so claiming it for the READ probe would skip a
+     * permission check that never happened, and a caller holding `update` with
+     * no read grant would be handed a bearer token for the draft.
+     */
+    it("does not claim a read gate the mint route never ran", async () => {
+      await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(singleReadable).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ routeAuthorized: false })
+      );
+    });
+
+    // The other half, and the reason this is a per-call-site decision rather
+    // than one polarity for both: the update gate DID run, so re-running it
+    // would reject a scoped API key by resolving its creator's roles instead.
+    it("does claim the update gate it did run", async () => {
+      await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(singleEditable).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ routeAuthorized: true })
+      );
+    });
+
+    // The token names one translation; the probe must judge that one. A custom
+    // read rule can allow the default document and deny the requested locale,
+    // and authorizing the default while signing the other authorizes nothing
+    // about what the bearer receives.
+    it("authorizes the translation the token will name", async () => {
+      await mintPreviewLink(post({ single: "homepage", locale: "fr" }));
+
+      expect(singleReadable).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ locale: "fr" })
+      );
+      expect(singleEditable).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ locale: "fr" })
+      );
+    });
+  });
+
+  /**
+   * A Single with no Draft / Published lifecycle has no pending version, so a
+   * link would hand its recipient the CURRENT private document through a route
+   * that reads it trusted. The admin already withholds the control; this is the
+   * same rule for a caller reaching the endpoint directly.
+   */
+  describe("a single with no draft lifecycle", () => {
+    it("refuses to mint at all", async () => {
+      statusSingles.delete("homepage");
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(409);
+    });
+
+    it("signs nothing when it refuses", async () => {
+      statusSingles.delete("homepage");
+
+      const body = await json(
+        await mintPreviewLink(post({ single: "homepage" }))
+      );
+
+      expect(JSON.stringify(body)).not.toContain("eyJ");
+    });
+
+    // Refused before the trusted read that builds the redirect, so nothing
+    // loads a document the caller is not going to be given.
+    it("refuses before loading the document", async () => {
+      statusSingles.delete("homepage");
+
+      await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(findSingle).not.toHaveBeenCalled();
+    });
+  });
+
+  // The registry and the authored config can disagree — a metadata sync that
+  // fails deliberately keeps the previous registry row — and the read path
+  // consumes the registry. Believing the config alone reports a localized
+  // Single as unlocalized and signs an all-locales token.
+  describe("when the authored config and the registry disagree", () => {
+    it("treats a Single the registry calls localized as localized", async () => {
+      localizedSingles.add("homepage");
+      previewConfig = undefined;
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(400);
+    });
+  });
+
+  /**
+   * An absent locale claim covers EVERY translation. On a localized Single that
+   * is a grant over drafts nobody authorized, so the endpoint refuses rather
+   * than widening the probe to match — honouring the request would hand out the
+   * very grant the refusal exists to withhold.
+   */
+  describe("a localized single with no locale named", () => {
+    it("refuses rather than minting a token covering every translation", async () => {
+      localizedSingles.add("homepage");
+
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(400);
+    });
+
+    it("signs nothing when it refuses", async () => {
+      localizedSingles.add("homepage");
+
+      const body = await json(
+        await mintPreviewLink(post({ single: "homepage" }))
+      );
+
+      expect(JSON.stringify(body)).not.toContain("eyJ");
+    });
+
+    it("mints once a translation is named", async () => {
+      localizedSingles.add("homepage");
+
+      const response = await mintPreviewLink(
+        post({ single: "homepage", locale: "fr" })
+      );
+
+      expect(response.status).toBe(200);
+    });
+
+    // The negative control. An unlocalized Single has exactly one document, so
+    // an absent claim is the CORRECT grant there — a rule that always demanded
+    // a locale would refuse every link for every non-localized Single.
+    it("still mints unscoped for a single that is not localized", async () => {
+      const response = await mintPreviewLink(post({ single: "homepage" }));
+
+      expect(response.status).toBe(200);
+    });
+  });
+
+  it("mints a link scoped to the Single", async () => {
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(response.status).toBe(200);
+  });
+
+  it("signs a token that names the Single rather than a collection entry", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ single: "homepage" }))
+    );
+    const verified = await verifyPreviewToken(
+      String(item(body).token),
+      SECRET,
+      { generation: 0 }
+    );
+
+    expect(verified.valid && verified.scope).toEqual({
+      kind: "single",
+      single: "homepage",
+    });
+  });
+
+  // The same gate a Single's document update asks for, keyed on its slug — so a
+  // caller who cannot edit the Single cannot mint a credential to read its
+  // draft.
+  it("authorizes update on the Single, not on some collection", async () => {
+    await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(requireRouteCollectionAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      "update",
+      "homepage"
+    );
+  });
+
+  it("refuses a Single that declares no preview url", async () => {
+    singleDeclaration.mockResolvedValue(undefined);
+
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(response.status).toBe(409);
+  });
+
+  it("refuses a Single whose declaration cannot address it yet", async () => {
+    singleDeclaration.mockResolvedValue({ url: () => null });
+
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(response.status).toBe(409);
+  });
+
+  // Naming both is not a narrower request, it is two different documents — and
+  // silently honouring one would mint a credential for a document the caller
+  // may not have meant.
+  it("refuses a request that names both a Single and a collection entry", async () => {
+    const response = await mintPreviewLink(
+      post({ single: "homepage", collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it("refuses a request that names neither", async () => {
+    const response = await mintPreviewLink(post({}));
+
+    expect(response.status).toBe(400);
+  });
+});
 
 describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => {
   // The button that mints this is shown whether or not a collection declares a
@@ -477,18 +807,22 @@ describe("mintPreviewLink", () => {
     );
   });
 
-  it("judges an API key on the key's own grants, not its owner's", async () => {
-    // The leak direction, which is the one a naive test gets backwards. Asserting
-    // that a key is DENIED something it should not have passes against the broken
-    // code too, because the OWNER's grants happen to allow it. What is wrong is
-    // that the key is still GRANTED something only the owner had — so both gates
-    // have to carry the key's own scope for the services to judge it on.
+  it("refuses to mint from an API key at all", async () => {
+    // A preview link records WHOSE permissions the draft is rendered through,
+    // and a key names no person. It is authorized on the grants stamped on the
+    // key — deliberately, so a narrow key cannot mint on the strength of its
+    // owner's account — but the only identity it could record is that owner,
+    // whose access is exactly what the key was scoped away from. The link would
+    // render under permissions the request never had.
+    //
+    // This REPLACES a case asserting that both gates carried the key's own
+    // scope. That property is now unreachable rather than untested: the request
+    // is refused before either gate runs, which is strictly stronger than
+    // judging it correctly.
     (
       requireRouteCollectionAccess as ReturnType<typeof vi.fn>
     ).mockResolvedValue({
       userId: "owner-who-can-read",
-      // Update but NOT read. The owner is a super-admin who can read everything;
-      // without the scope below the gates resolve the OWNER's RBAC and mint.
       permissions: ["update-pages"],
       roles: [],
       authMethod: "api-key",
@@ -496,17 +830,19 @@ describe("mintPreviewLink", () => {
       claims: {},
     });
 
-    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
 
-    const scope = { actorType: "apiKey", permissions: ["update-pages"] };
-    expect(getEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ authenticatedScope: scope })
-    );
-    // Both gates, not just the read. A scope carried into one and dropped from
-    // the other judges a single request as two different callers.
-    expect(canUpdateEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ authenticatedScope: scope })
-    );
+    // 403 exactly, not merely >= 400: an unrecognised failure renders as 500,
+    // and a range assertion cannot tell a refusal from a crash.
+    expect(response.status).toBe(403);
+    // Refused BEFORE the authorization probe, so a rejected request performs no
+    // reads on the caller's behalf — and before any token exists, since a token
+    // that was signed and then discarded is still a token.
+    expect(getEntry).not.toHaveBeenCalled();
+    expect(canUpdateEntry).not.toHaveBeenCalled();
+    expect(getGeneration).not.toHaveBeenCalled();
   });
 
   it("sends no scope for a session caller, so it resolves grants the normal way", async () => {

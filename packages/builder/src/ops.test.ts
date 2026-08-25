@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
+import {
+  applyOp,
+  OpError,
+  sameStoredValue,
+  sameStyleValue,
+  type BuilderOp,
+  type NodePatch,
+} from "./ops";
 
 import {
   countNodes,
@@ -2820,5 +2827,174 @@ describe("an inherited field is refused only when it would change the edit", () 
     } finally {
       delete (Object.prototype as Record<string, unknown>).slot;
     }
+  });
+});
+
+describe("what the two value comparisons each treat as the same value", () => {
+  /** A chain `{ next: { next: ... } }` ending in a leaf, `depth` links long. */
+  function chain(depth: number, leaf: unknown): unknown {
+    let value = leaf;
+    for (let level = 0; level < depth; level += 1) value = { next: value };
+    return value;
+  }
+
+  it("separates key ORDER by which domain is asking", () => {
+    /*
+     * The one difference between them, and it is a property of the readers
+     * rather than a preference. A stored value's identity is its serialized
+     * form — a block rendering `Object.entries(props)` really does produce
+     * different output from a reordered record — while a STYLE value is emitted
+     * by a compiler that sorts a composite's keys first, so a reorder compiles
+     * to the same bytes and changes nothing anyone can see.
+     */
+    const left = { first: 1, second: 2 };
+    const right = { second: 2, first: 1 };
+
+    expect(sameStoredValue(left, right)).toBe(false);
+    expect(sameStyleValue(left, right)).toBe(true);
+  });
+
+  it("agrees everywhere else, so only order separates them", () => {
+    /*
+     * The control on the assertion above. Two predicates that disagreed about
+     * more than order would be two implementations rather than one walk asked
+     * two ways, and the test above would pass just as well while hiding it.
+     */
+    const same = { a: [1, "2", { b: null }], c: true };
+    const copy = { a: [1, "2", { b: null }], c: true };
+    const other = { a: [1, "2", { b: null }], c: false };
+
+    expect(sameStoredValue(same, copy)).toBe(true);
+    expect(sameStyleValue(same, copy)).toBe(true);
+    expect(sameStoredValue(same, other)).toBe(false);
+    expect(sameStyleValue(same, other)).toBe(false);
+  });
+
+  it("answers `different` past the depth bound instead of walking on", () => {
+    /*
+     * The bound that stops a CYCLE costing the whole parts budget: a
+     * self-referential pair descends forever, and the budget is a machine-size
+     * number, so the walk spent millions of entries before answering.
+     *
+     * Asserted through legal nesting rather than through a cycle, because this
+     * pins WHERE the bound is. Equal values either side of it: below, they
+     * compare equal; above, the walk stops and says different — the same safe
+     * direction the budget takes, and unreachable from a document, which
+     * refuses anything nested that deep before it can be stored.
+     */
+    expect(sameStoredValue(chain(400, "leaf"), chain(400, "leaf"))).toBe(true);
+    expect(sameStoredValue(chain(700, "leaf"), chain(700, "leaf"))).toBe(false);
+  });
+
+  it("does not invoke an accessor at an ARRAY index either", () => {
+    /*
+     * The same guarantee as the record case, and the site it was first left
+     * out of: fixing one branch and leaving its sibling is the recurring
+     * defect on this work, so the pair is asserted together.
+     *
+     * A HOLE in a sparse array has no descriptor at all and answers different
+     * for the same reason — there is nothing to read without consulting the
+     * prototype.
+     */
+    let calls = 0;
+    const withGetter = (): unknown[] => {
+      const list: unknown[] = [];
+      Object.defineProperty(list, 0, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          calls += 1;
+          return 1;
+        },
+      });
+      list.length = 1;
+      return list;
+    };
+    const left = withGetter();
+    const right = withGetter();
+
+    // Population: both really are one-element arrays carrying the accessor at
+    // index 0, so the answer is about the accessor rather than about length.
+    expect(left).toHaveLength(1);
+    expect(right).toHaveLength(1);
+
+    expect(sameStoredValue(left, right)).toBe(false);
+    expect(sameStyleValue(left, right)).toBe(false);
+    expect(calls).toBe(0);
+
+    // The control: ordinary arrays of equal content still compare equal, so the
+    // guard cannot be satisfied by calling every array different.
+    expect(sameStoredValue([1, "2", null], [1, "2", null])).toBe(true);
+  });
+
+  it("does not invoke an own accessor while comparing", () => {
+    /*
+     * The comparison runs while a panel inspects a selection, so a getter with
+     * a side effect would fire from rendering and a throwing one would abort
+     * the read. An accessor-bearing value is reported DIFFERENT instead —
+     * without being called — which is the direction that cannot hide a
+     * disagreement behind it.
+     */
+    let calls = 0;
+    const withGetter = (): Record<string, unknown> => {
+      const record = {};
+      Object.defineProperty(record, "a", {
+        enumerable: true,
+        get() {
+          calls += 1;
+          return 1;
+        },
+      });
+      return record as Record<string, unknown>;
+    };
+    const left = withGetter();
+    const right = withGetter();
+
+    // Population: both really do carry the accessor as an own enumerable key,
+    // so the answer below is about the accessor rather than about key sets.
+    expect(Object.keys(left)).toEqual(["a"]);
+    expect(Object.keys(right)).toEqual(["a"]);
+
+    expect(sameStoredValue(left, right)).toBe(false);
+    expect(sameStyleValue(left, right)).toBe(false);
+    // The property under test.
+    expect(calls).toBe(0);
+  });
+
+  it("refuses a record wider than the budget without building its key list", () => {
+    /*
+     * `Object.keys` materialises the whole list before anything can refuse it,
+     * and sorting it costs more again. A value carrying far more keys than the
+     * comparison may spend is refused during enumeration instead.
+     *
+     * Asserted as the ANSWER rather than as a duration: a timing assertion
+     * measures the machine. Distinct objects, so identity cannot settle it.
+     */
+    const wide = (): Record<string, number> => {
+      const record: Record<string, number> = {};
+      for (let index = 0; index < 5_000; index += 1)
+        record[`k${index}`] = index;
+      return record;
+    };
+    const left = wide();
+    const right = wide();
+
+    // Population: equal content, so a "different" answer is about the width.
+    expect(Object.keys(left)).toEqual(Object.keys(right));
+    // Under the budget, width alone is not a difference.
+    expect(sameStoredValue(left, right)).toBe(true);
+  });
+
+  it("answers on two distinct cyclic values without spending the budget", () => {
+    /*
+     * Distinct objects on purpose: two references to one value are settled by
+     * identity before any bound is reached, so a shared fixture proves nothing.
+     */
+    const left: Record<string, unknown> = { a: 1 };
+    left.self = left;
+    const right: Record<string, unknown> = { a: 1 };
+    right.self = right;
+
+    expect(sameStoredValue(left, right)).toBe(false);
   });
 });
