@@ -38,6 +38,7 @@ import crypto from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, isNull, sql } from "drizzle-orm";
 
+import { revalidateMedia } from "../domains/media/revalidate-media";
 import type { ServiceErrorCode } from "../errors/error-codes";
 
 import { BaseService } from "./base-service";
@@ -601,6 +602,7 @@ export class MediaFolderService extends BaseService {
       let deletedMediaCount = 0;
       let deletedFoldersCount = 0;
 
+      let deletedMediaIds: string[] = [];
       if (deleteContents) {
         const subfolderIds = await this.collectAllSubfolderIds(folderId);
         const allFolderIds = [folderId, ...subfolderIds];
@@ -648,6 +650,11 @@ export class MediaFolderService extends BaseService {
 
         if (allMediaRecords.length > 0) {
           const mediaIds = allMediaRecords.map(r => r.id);
+          // Deleting a folder with its contents removes media rows WITHOUT
+          // going through the media service, so nothing else on this path
+          // invalidates them. A page holding one of these files would go on
+          // serving a file that no longer exists.
+          deletedMediaIds = mediaIds;
           const chunkSize = 100;
           for (let i = 0; i < mediaIds.length; i += chunkSize) {
             const chunk = mediaIds.slice(i, i + chunkSize);
@@ -663,6 +670,10 @@ export class MediaFolderService extends BaseService {
 
       // Delete folder (CASCADE handles subfolder records)
       await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));
+
+      // After the rows are gone, so a reader that races this cannot repopulate
+      // a cache entry from a row that is about to disappear.
+      await revalidateMedia(deletedMediaIds);
 
       return {
         success: true,
@@ -713,6 +724,10 @@ export class MediaFolderService extends BaseService {
         .update(media)
         .set({ folderId, updatedAt: new Date() })
         .where(eq(media.id, mediaId));
+
+      // A direct media-row write that never reaches the media service, so it
+      // carries its own invalidation for the same reason the cascade above does.
+      await revalidateMedia([mediaId]);
 
       return {
         success: true,

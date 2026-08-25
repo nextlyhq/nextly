@@ -23,7 +23,6 @@ import type { SecurityBlockLike } from "../../services/upload-validation";
 import type { IStorageAdapter } from "../../storage/types";
 import { container } from "../container";
 
-import { cacheRevalidatorDep } from "./cache-revalidator-dep";
 import type { RegistrationContext } from "./types";
 
 export function registerMediaServices(ctx: RegistrationContext): void {
@@ -71,12 +70,7 @@ export function registerMediaServices(ctx: RegistrationContext): void {
       // services). Absent only when webhooks were never registered.
       container.has("webhookFastDrainScheduler")
         ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
-        : undefined,
-      // A RESOLVER, not the instance. A Next cache adapter registers at request
-      // time, well after this factory runs, so capturing eagerly would pin the
-      // no-op default and every media write would invalidate nothing — silently,
-      // and only in the deployments that actually cache.
-      cacheRevalidatorDep(container)
+        : undefined
     );
   });
 }

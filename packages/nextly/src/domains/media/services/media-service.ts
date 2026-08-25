@@ -57,9 +57,6 @@ import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope"
 import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
 import { toAbsoluteMediaUrl } from "../../../lib/media-variant";
-import { computeEntryRevalidation } from "../../../revalidation/compute-tags";
-import type { CacheRevalidator } from "../../../revalidation/types";
-import { MEDIA_TARGET } from "../../../services/collections/trust-bound";
 import type { MediaService as LegacyMediaService } from "../../../services/media";
 import type {
   MediaFolderService as LegacyFolderService,
@@ -237,20 +234,7 @@ export class MediaService {
      * drain so subscribers are notified without waiting for the periodic
      * scheduled drain. Absent only when webhooks were never registered.
      */
-    private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
-    /**
-     * The cache revalidator, resolved at flush time rather than captured.
-     *
-     * A resolver and not the instance, for the reason the collection write path
-     * documents: this service is constructed during boot, before a Next cache
-     * adapter registers, so an eager capture would memoize the no-op default and
-     * every media write would silently invalidate nothing. Returns undefined
-     * when no adapter is present, which is the correct answer for a deployment
-     * that does not cache.
-     */
-    private readonly resolveCacheRevalidator?: () =>
-      | CacheRevalidator
-      | undefined
+    private readonly fastDrainScheduler?: WebhookFastDrainScheduler
   ) {}
 
   // A short prune pass on the write path: enough to keep the outbox from
@@ -266,7 +250,7 @@ export class MediaService {
    * throws, `offer` only registers the callback), so this never turns a
    * committed media write into an error. Mirrors the collection write path.
    */
-  private async afterWrite(mediaId: string): Promise<void> {
+  private async afterWrite(): Promise<void> {
     // Only offer the fast drain when a media write would have recorded an event
     // (an endpoint exists, or audit is on). Media has no per-entity opt-out, so
     // this sync check equals the recorder's result; without it an install with
@@ -274,36 +258,6 @@ export class MediaService {
     // Retention still runs — it prunes prior rows regardless.
     if (isUnscopedRecordingActive()) this.fastDrainScheduler?.offer();
     await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
-    await this.revalidate(mediaId);
-  }
-
-  /**
-   * Bust the caches that could be serving this media file.
-   *
-   * Media is tagged under the same `nextly:` scheme as content, with the
-   * reserved slug `media` — the one `MEDIA_TARGET` already uses — so a page
-   * that renders an upload tags its read with `nextlyTags("media", id)` and a
-   * write here invalidates it. Reusing the scheme rather than inventing a media
-   * one is what lets a single read carry both its collection's tags and its
-   * media's.
-   *
-   * Best-effort and never rethrown: the write is already committed, and turning
-   * a successful upload into an error because a cache could not be reached
-   * would lose the file from the caller's point of view while keeping it in
-   * storage.
-   */
-  private async revalidate(mediaId: string): Promise<void> {
-    const revalidator = this.resolveCacheRevalidator?.();
-    if (!revalidator) return;
-    try {
-      await revalidator.flush([
-        computeEntryRevalidation({ collection: MEDIA_TARGET, id: mediaId }),
-      ]);
-    } catch (error) {
-      this.logger.error("Cache revalidation failed after a media write", {
-        error,
-      });
-    }
   }
 
   /**
@@ -480,7 +434,7 @@ export class MediaService {
     });
 
     // The upload committed a media.uploaded outbox row; drain and prune it.
-    await this.afterWrite(result.data.id);
+    await this.afterWrite();
 
     return this.mapToMediaFile(result.data);
   }
@@ -627,7 +581,7 @@ export class MediaService {
     this.logger.info("Media file updated", { mediaId });
 
     // The update committed a media.updated outbox row; drain and prune it.
-    await this.afterWrite(mediaId);
+    await this.afterWrite();
 
     return this.mapToMediaFile(result.data);
   }
@@ -670,7 +624,7 @@ export class MediaService {
     emitMediaEvent("deleted", { mediaId });
 
     // The delete committed a media.deleted outbox row; drain and prune it.
-    await this.afterWrite(mediaId);
+    await this.afterWrite();
   }
 
   /**
@@ -920,7 +874,7 @@ export class MediaService {
     this.logger.info("Media moved to folder", { mediaId, folderId });
 
     // The update committed a media.updated outbox row; drain and prune it.
-    await this.afterWrite(mediaId);
+    await this.afterWrite();
   }
 
   /**

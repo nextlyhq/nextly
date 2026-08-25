@@ -41,6 +41,7 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import { revalidateMedia } from "../domains/media/revalidate-media";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -105,7 +106,13 @@ export class MediaService extends BaseService {
    * Both absorb their own failures, so this never turns a committed write into
    * an error.
    */
-  private async afterWrite(recorded: boolean): Promise<void> {
+  private async afterWrite(recorded: boolean, mediaId: string): Promise<void> {
+    // Ahead of the guard below, deliberately. That guard is about the webhook
+    // drain and retention, neither of which a cache cares about — an install
+    // with no endpoint and no retention still serves cached pages, and skipping
+    // invalidation for it would leave them stale forever.
+    await revalidateMedia([mediaId], this.logger);
+
     if (!this.fastDrainScheduler && !this.retentionRunner) {
       return;
     }
@@ -469,7 +476,7 @@ export class MediaService extends BaseService {
 
       // The upload committed a media.uploaded outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite(recorded);
+      await this.afterWrite(recorded, mediaId);
 
       return {
         success: true,
@@ -823,7 +830,7 @@ export class MediaService extends BaseService {
 
       // The update committed a media.updated outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite(recorded);
+      await this.afterWrite(recorded, mediaId);
 
       return {
         success: true,
@@ -961,7 +968,7 @@ export class MediaService extends BaseService {
 
       // The delete committed a media.deleted outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite(recorded);
+      await this.afterWrite(recorded, mediaId);
 
       return {
         success: true,

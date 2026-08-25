@@ -21,10 +21,10 @@ import { SingleEntryService } from "../../domains/singles/services/single-entry-
 import { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
+import type { CacheRevalidator } from "../../revalidation/types";
 import type { FieldGroupDataService } from "../../services/field-groups";
 import { container } from "../container";
 
-import { cacheRevalidatorDep } from "./cache-revalidator-dep";
 import { createNoOpHookRegistry } from "./no-op-hook-registry";
 import type { RegistrationContext } from "./types";
 
@@ -105,7 +105,10 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       // Resolved lazily at flush time (not captured here) because this service
       // is constructed during boot, before a Next cache adapter registers — an
       // eager capture would memoize the no-op and ignore the real adapter.
-      cacheRevalidatorDep(container)
+      () =>
+        container.has("cacheRevalidator")
+          ? container.get<CacheRevalidator>("cacheRevalidator")
+          : undefined
     );
   });
 }

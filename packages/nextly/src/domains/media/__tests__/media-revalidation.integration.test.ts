@@ -13,7 +13,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { container } from "../../../di/container";
 import type { CacheRevalidator } from "../../../revalidation/types";
+import { MediaFolderService } from "../../../services/media-folder";
+import { MediaService as LegacyMediaService } from "../../../services/media";
+import { MediaService as UnifiedMediaService } from "./../services/media-service";
 import {
   createTestNextly,
   type TestNextly,
@@ -28,7 +32,9 @@ afterEach(async () => {
 });
 
 /** The tags a write actually asked to invalidate. */
-function flushedTags(spy: ReturnType<typeof vi.spyOn>): string[] {
+type FlushSpy = { mock: { calls: unknown[][] } };
+
+function flushedTags(spy: FlushSpy): string[] {
   return spy.mock.calls.flatMap(call => {
     const intents = call[0] as { tags: string[] }[];
     return intents.flatMap(intent => intent.tags);
@@ -37,10 +43,14 @@ function flushedTags(spy: ReturnType<typeof vi.spyOn>): string[] {
 
 async function bootWithSpy(): Promise<{
   handle: TestNextly;
-  flush: ReturnType<typeof vi.spyOn>;
+  flush: ReturnType<typeof vi.spyOn> & FlushSpy;
 }> {
   current = await createTestNextly({});
-  const revalidator = current.getService<CacheRevalidator>("cacheRevalidator");
+  // Resolved from the CONTAINER, not the typed service map: `cacheRevalidator`
+  // is registered dynamically and is not a declared service key. This is the
+  // same instance `revalidateMedia` resolves at flush time, so the spy sits on
+  // the object actually used rather than on a copy of it.
+  const revalidator = container.get<CacheRevalidator>("cacheRevalidator");
   return {
     handle: current,
     flush: vi.spyOn(revalidator, "flush"),
@@ -115,5 +125,111 @@ describe("media writes bust their cache tags (integration)", () => {
     // The control: the throwing path was actually reached, so this is not
     // passing because the revalidator was never called.
     expect(flush).toHaveBeenCalled();
+  });
+});
+
+describe("the write surfaces that do NOT go through the unified service", () => {
+  it("invalidates when the LEGACY service is reached directly", async () => {
+    // This is the published `nextly/actions` path. `uploadMediaAction` and its
+    // siblings construct their own `ServiceContainer` and call the legacy
+    // service — no DI, no unified wrapper. Invalidation placed on the wrapper
+    // covers the admin and silently misses every action-driven write, so this
+    // constructs the service the same way an action does.
+    const { handle, flush } = await bootWithSpy();
+    const legacy = new LegacyMediaService(handle.adapter, console as never);
+
+    const result = await legacy.uploadMedia({
+      file: Buffer.from("x"),
+      filename: "via-action.pdf",
+      mimeType: "application/pdf",
+      size: 1,
+      uploadedBy: null,
+    });
+
+    // The control: the upload actually happened. A failed write flushes nothing
+    // for reasons that have nothing to do with caching.
+    expect(result.success).toBe(true);
+    const id = (result.data as { id: string }).id;
+
+    expect(flushedTags(flush)).toContain(`nextly:media:id:${id}`);
+  });
+
+  it("invalidates every file removed by a cascading folder delete", async () => {
+    // `deleteFolder(deleteContents: true)` removes media rows directly in the
+    // folder service — it never reaches the media service, and the wrapper
+    // discards the ids. Without this the deleted files keep being served from
+    // cache after the row is gone.
+    const { handle, flush } = await bootWithSpy();
+    // A real user row: `createFolder` stores `context.user?.id` as `createdBy`,
+    // which is a foreign key — an anonymous context fails the constraint rather
+    // than exercising anything about caching.
+    await handle.adapter.insert("users", {
+      id: "curator-1",
+      email: "curator-1@test.local",
+    });
+    const unified = handle.getService("mediaService") as UnifiedMediaService;
+    const ctx = { user: { id: "curator-1" } } as Parameters<
+      typeof unified.createFolder
+    >[1];
+
+    const folder = await unified.createFolder({ name: "doomed" }, ctx);
+    const uploaded = await handle.nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "inside.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      folder: folder.id,
+    });
+
+    // The fixture control, and it is not decoration: the Direct API takes
+    // `folder`, not `folderId`, and an ignored key puts the file in the ROOT.
+    // Nothing then cascades, the flush is empty, and the test reports a broken
+    // implementation when the fixture was wrong. Asserted against the stored
+    // row rather than the argument that was passed.
+    expect(uploaded.id).toBeTruthy();
+    expect(uploaded.folderId).toBe(folder.id);
+
+    flush.mockClear();
+    await unified.deleteFolder(folder.id, true, ctx);
+
+    // Cleared first, so this cannot be satisfied by the upload's own flush.
+    expect(flushedTags(flush)).toContain(`nextly:media:id:${uploaded.id}`);
+  });
+
+  it("invalidates a file moved between folders through the folder service", async () => {
+    // Reachable through `ServiceContainer.mediaFolders`, the same public
+    // surface the published actions use — and it writes the media row directly
+    // rather than going through either media service, so it carries its own
+    // invalidation.
+    const { handle, flush } = await bootWithSpy();
+    await handle.adapter.insert("users", {
+      id: "mover-1",
+      email: "mover-1@test.local",
+    });
+    const unified = handle.getService("mediaService") as UnifiedMediaService;
+    const ctx = { user: { id: "mover-1" } } as Parameters<
+      typeof unified.createFolder
+    >[1];
+    const folder = await unified.createFolder({ name: "target" }, ctx);
+
+    const uploaded = await handle.nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "wanderer.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+    });
+    // The control: it starts OUTSIDE the folder, so the move is a real change.
+    expect(uploaded.folderId ?? null).toBeNull();
+
+    flush.mockClear();
+    const folders = new MediaFolderService(handle.adapter, console as never);
+    const moved = await folders.moveMediaToFolder(uploaded.id, folder.id);
+
+    expect(moved.success).toBe(true);
+    expect(flushedTags(flush)).toContain(`nextly:media:id:${uploaded.id}`);
   });
 });
