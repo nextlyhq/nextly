@@ -183,10 +183,29 @@ export interface PluginSinglesService {
    * List the declared Singles, with their field definitions.
    *
    * Returns what {@link PluginSingleRecord} declares — identity, label,
-   * description, field definitions and origin — for the Singles the app
-   * currently declares. It does NOT return any Single's content, it creates
-   * nothing, and it omits a code-first Single whose registry row outlived its
-   * removal from config; see the module note.
+   * description, field definitions and origin. It does NOT return any Single's
+   * content, and it creates nothing; see the module note.
+   *
+   * ## A row can outlive its declaration
+   *
+   * Removing a code-first Single from config leaves its registry row readable
+   * until someone runs the destructive cleanup — `reload-config.ts` says so
+   * where it prunes the defaults, describing "a removed single's registry row
+   * (which stays readable)". Such a row is returned here, carrying
+   * `source: "code"`.
+   *
+   * It is NOT filtered out at this layer, and that is deliberate rather than an
+   * omission. Filtering after `listSingles` returns would happen after the
+   * registry has already applied `limit` and `offset`, so a page holding an
+   * orphan would come back short while live Singles waited on later pages, and
+   * a total computed from what survived would describe one page rather than the
+   * result. Filtering correctly means excluding the row before pagination,
+   * which only the registry can do — it holds both the rows and the live
+   * code-first snapshot that says which slugs are still declared.
+   *
+   * A caller that must exclude them can: `source` is on every record, and a
+   * plugin holds `ctx.config.singles`. Doing it here would also make this
+   * surface answer differently from every other reader of the same registry.
    *
    * A returned entry says a Single is DECLARED, never that it has been written
    * to. `fields` is the declaration, so a consumer looking for a particular
@@ -256,34 +275,12 @@ function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
 }
 
 export function wrapSinglesForPlugin(
-  registry: SingleRegistryService,
-  /**
-   * The slugs the running config declares, for filtering orphans.
-   *
-   * A code-first Single removed from config keeps a readable registry row until
-   * someone runs the destructive cleanup — `reload-config.ts` says so where it
-   * prunes the defaults: "a removed single's registry row (which stays
-   * readable)". Listing it would report a Single the app no longer declares,
-   * and a consumer sweeping declarations to build an index would key rows to
-   * something nothing renders.
-   *
-   * Only `source: "code"` rows are checked against it. A Single built in the UI
-   * is declared BY its registry row, so there is nothing else to be absent
-   * from.
-   */
-  declaredCodeFirstSlugs: ReadonlySet<string>
+  registry: SingleRegistryService
 ): PluginSinglesService {
   return {
     list: async options => {
       const result = await registry.listSingles(options);
-      const live = result.data.filter(
-        record =>
-          record.source !== "code" || declaredCodeFirstSlugs.has(record.slug)
-      );
-      // `total` is recomputed rather than forwarded. The registry counts what it
-      // holds; this reports what it returns, and a caller paging on a total that
-      // exceeds the rows it can receive asks for a page that never arrives.
-      return { data: live.map(toPluginRecord), total: live.length };
+      return { data: result.data.map(toPluginRecord), total: result.total };
     },
   };
 }

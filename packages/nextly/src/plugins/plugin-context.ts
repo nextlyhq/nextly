@@ -958,13 +958,7 @@ export function createPluginContext(
       // exported, so a context built by a caller that never asks about Singles
       // must not require the registry to have been resolved first.
       get singles() {
-        return wrapSinglesForPlugin(
-          getServiceFn("singleRegistryService"),
-          // The slugs the running config declares. A code-first Single removed
-          // from config keeps a readable registry row until someone runs the
-          // destructive cleanup, and the listing describes what is DECLARED.
-          new Set((config.singles ?? []).map(single => single.slug))
-        );
+        return wrapSinglesForPlugin(getServiceFn("singleRegistryService"));
       },
       plugins: buildPluginServicesNamespace(),
     },
