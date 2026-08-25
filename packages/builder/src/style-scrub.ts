@@ -47,6 +47,7 @@ import {
   escapeIdentifier,
   nodeClassName,
   PAGE_ROOT_SELECTOR,
+  previewContainerName,
   STYLE_STATES,
   type BlockDocument,
   type BreakpointSet,
@@ -239,10 +240,26 @@ function breakpointAtRule(
   preview: string | undefined,
   id: string
 ): string | null {
+  /*
+   * NORMALISED before it reaches the cache identity, not merely before the
+   * compile.
+   *
+   * The compiler refuses an empty, reserved, malformed or oversized name and
+   * emits published rules instead, so the raw string is not what decides the
+   * at-rule — the normalised one is, and serialising the raw form keys the
+   * cache on a distinction the output does not have.
+   *
+   * The cost is paid on a hot path rather than once. `scrubPreviewCss`
+   * recomputes this identity on every pointer update during a drag, so a
+   * refused name that is megabytes long is stringified per frame even though
+   * the at-rule it maps to was cached on the first move — the editor stalls
+   * while dragging, with nothing about the drag to explain it.
+   */
+  const effective = previewContainerName(preview);
   // The preview name joins the cache identity, because it changes the derived
   // at-rule for the same breakpoint set — cached without it, the first caller's
   // mode would be served to the other.
-  const content = JSON.stringify([breakpoints, preview]);
+  const content = JSON.stringify([breakpoints, effective]);
   let entry = AT_RULES.get(breakpoints);
   if (entry === undefined || entry.content !== content) {
     entry = { content, perId: new Map() };
@@ -269,7 +286,7 @@ function breakpointAtRule(
     // wrapped in `@media` while the rule it must outrank sits in a container
     // query matches nothing in a narrow canvas, so the drag looks frozen and
     // then jumps on commit.
-    ...(preview === undefined ? {} : { previewContainer: preview }),
+    ...(effective === undefined ? {} : { previewContainer: effective }),
   }).css.trim();
   const wrapper = /^@[a-z-]+[^{]*/.exec(css);
   const derived = css === "" ? null : wrapper === null ? "" : wrapper[0].trim();

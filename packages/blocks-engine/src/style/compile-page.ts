@@ -412,10 +412,13 @@ export function previewContainerName(value: unknown): string | undefined {
    * caller-controlled and is normalised again while deriving artifact
    * identities — so the scan recurs on render paths rather than once.
    *
-   * Whitespace cannot make an over-cap string legal: trimming only shortens,
-   * and a value longer than the cap by more than its own surrounding
-   * whitespace is refused either way. Comparing raw is therefore the same
-   * answer, sooner.
+   * The cap is therefore on the RAW input, and that is a deliberate rule rather
+   * than an optimisation that happens to agree. It does not agree: a name of
+   * exactly the cap's length wrapped in spaces would be legal after trimming
+   * and is refused here. That is the intended reading — the bound this package
+   * publishes is on the string a caller hands over, so a caller digesting these
+   * inputs can check the value it holds rather than a trimmed form it would
+   * have to derive first.
    */
   if (value.length > MAX_PREVIEW_CONTAINER_LENGTH) return undefined;
   const name = value.trim();
@@ -465,6 +468,30 @@ function queryPrefix(
 export const PREVIEW_VIEWPORT_CONTAINER = "nx-preview-viewport";
 
 /**
+ * A stable 64-bit digest of a seed, as two base-36 halves.
+ *
+ * FNV-1a, computed in two independently seeded 32-bit passes rather than one,
+ * because a single 32-bit digest collides at roughly one pair in 65k surfaces
+ * by the birthday bound — near enough to be reachable on a large site, and a
+ * collision here silently gives two boxes one container name.
+ *
+ * Written out rather than taken from a hashing library because it has to agree
+ * across the server render and the client hydration, and pure integer maths on
+ * a string is the same in both. `Math.imul` and `>>> 0` keep every step inside
+ * 32 bits, which plain `*` would not.
+ */
+function digest(seed: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let index = 0; index < seed.length; index += 1) {
+    const code = seed.charCodeAt(index);
+    a = Math.imul(a ^ code, 0x01000193) >>> 0;
+    b = Math.imul(b ^ code, 0x85ebca6b) >>> 0;
+  }
+  return `${a.toString(36)}${b.toString(36)}`;
+}
+
+/**
  * A preview container name unlikely to collide with an authored one.
  *
  * Derived from a seed the CALLER owns — a React `useId`, a surface id, anything
@@ -476,11 +503,31 @@ export const PREVIEW_VIEWPORT_CONTAINER = "nx-preview-viewport";
  * The seed is reduced to identifier-safe characters rather than rejected, so a
  * caller passing an opaque id from elsewhere does not have to know this
  * function's rules to use it.
+ *
+ * **A seed too long to carry literally is DIGESTED, never dropped.** Prefixed,
+ * a seed over about fifty characters exceeds the emitted-name bound, and
+ * returning the shared default there would hand exactly the surfaces most
+ * likely to use long ids — document paths, composite keys, opaque route ids —
+ * the one globally predictable name this function exists to avoid. The digest
+ * keeps the name per-surface and inside the bound.
+ *
+ * Two distinct seeds can still digest alike; the guarantee is a low collision
+ * probability, not uniqueness. That is the right trade here because the cost of
+ * a collision is two boxes sharing a container name, while the cost of the
+ * fallback was every long-seeded surface sharing one with THIRD-PARTY markup.
  */
 export function previewContainerFor(seed: string): string {
   const safe = seed.replace(/[^A-Za-z0-9_-]/g, "-");
+  const literal = previewContainerName(`nx-preview-${safe}`);
+  if (literal !== undefined) return literal;
+  /*
+   * Digested from the ORIGINAL seed rather than the reduced form, so two seeds
+   * differing only in characters the reduction collapses — `a/b` and `a:b` both
+   * become `a-b` — still produce different names.
+   */
   return (
-    previewContainerName(`nx-preview-${safe}`) ?? PREVIEW_VIEWPORT_CONTAINER
+    previewContainerName(`nx-preview-${digest(seed)}`) ??
+    PREVIEW_VIEWPORT_CONTAINER
   );
 }
 

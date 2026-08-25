@@ -693,6 +693,37 @@ describe("a scrub override under a preview compile", () => {
     expect(previewed).not.toContain("@media");
   });
 
+  it("treats a name the compiler REFUSES exactly as no name at all", () => {
+    /*
+     * A refused name — empty, reserved, malformed or over the emitted-string
+     * bound — makes the compile published, so the override must be wrapped in
+     * the same `@media` an unpreviewed scrub gets. Wrapped in a container query
+     * naming a box nothing declares, it would match nothing and the drag would
+     * appear frozen.
+     *
+     * Driven through the distinct refusal branches rather than one
+     * representative: a reserved CSS-wide keyword, a character the identifier
+     * grammar excludes, and a value over the raw-length cap.
+     *
+     * WHAT THIS TEST DOES NOT COVER, stated rather than implied. The reason the
+     * normalisation moved AHEAD of the cache identity is that `scrubPreviewCss`
+     * recomputes that identity on every pointer update, so a refused name of
+     * any size was serialised per frame. That is a property of the module's
+     * private cache and produces identical output either way, so it is not
+     * observable from here and this test would pass against the version without
+     * it. The equivalence below is a regression guard; the placement is
+     * reasoned, not asserted.
+     */
+    const published = wrapperFor();
+
+    for (const refused of ["none", "has space", "x".repeat(5_000)]) {
+      expect(wrapperFor(refused)).toBe(published);
+    }
+    // The population, so the equivalence is not satisfied by every wrapper
+    // being empty: the published form really does carry the query.
+    expect(published).toContain("@media (max-width: 991px)");
+  });
+
   it("does not serve one mode's wrapper from the other's cache", () => {
     /*
      * The derived at-rule is cached per breakpoint set, and the preview name

@@ -1638,6 +1638,82 @@ describe("where a control's value came from", () => {
     }
   });
 
+  it("IGNORES a host's live set when the compiler refused the container name", () => {
+    /*
+     * The two halves of one question, which were briefly two answers.
+     *
+     * A refused name makes the compile PUBLISHED — viewport tiers emit ordinary
+     * `@media`, which the window decides. A host that forwards both canvas
+     * props unconditionally then supplies a box-derived set for a sheet the box
+     * is not deciding, and provenance gets judged against a tier the browser is
+     * not displaying.
+     *
+     * `liveBreakpoints` is deliberately a set that would change the verdict if
+     * it were consulted: the entry writes at `mobile`, so believing the host
+     * would report the control as set, while the window here matches nothing
+     * beyond the base context and the honest answer is that it is not.
+     */
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          } as never
+        }
+        previewContainer="none"
+        liveBreakpoints={["base", "mobile"]}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [entry({ breakpoint: "mobile" })],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")).toBeNull();
+  });
+
+  it("USES the host's live set when the name was accepted, which is the control", () => {
+    /*
+     * Without this, a panel that ignored `liveBreakpoints` under every
+     * circumstance would satisfy the case above — the assertion there is
+     * satisfied by absence, so its meaning depends on this one.
+     *
+     * Same entry, same host set; only the container name differs, and it is the
+     * difference between a compile the window decides and one the box does.
+     */
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={["base", "mobile"]}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [entry({ breakpoint: "mobile" })],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")).not.toBeNull();
+  });
+
   it("draws NOTHING for a property no tier set", () => {
     // Eight empty dots per section is the shape that trains an author to stop
     // reading the panel.

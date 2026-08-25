@@ -19,7 +19,7 @@
  *
  * @module breakpoint-preview.test
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument, BreakpointSet } from "../document";
 import {
@@ -420,20 +420,53 @@ describe("refusing an oversized name", () => {
      * name is caller-controlled and is normalised again while deriving artifact
      * identities, so the scan would recur on render paths rather than once.
      *
-     * Asserted on the ANSWER as well as on the size, since a correct refusal is
-     * the property and the early exit is how it is reached: a megabyte of
-     * whitespace still refuses, and refuses for the length rather than for
-     * being blank after trimming.
+     * Asserted by OBSERVING the linear pass, not by the answer.
+     *
+     * The answer cannot separate the two implementations: check-then-trim and
+     * trim-then-check both return `undefined` for an over-cap string, so a test
+     * reading only the result stays green against the version this exists to
+     * forbid. What distinguishes them is whether `trim` runs at all, so the spy
+     * is the assertion rather than an aid to it.
      */
-    const huge = " ".repeat(1_000_000) + "nx-box";
+    const trim = vi.spyOn(String.prototype, "trim");
+    try {
+      const huge = " ".repeat(1_000_000) + "nx-box";
 
-    expect(previewContainerName(huge)).toBeUndefined();
-    // And a value that only fits AFTER trimming is refused too, because
-    // trimming cannot make an over-cap string legal.
+      expect(previewContainerName(huge)).toBeUndefined();
+      expect(trim).not.toHaveBeenCalled();
+
+      /*
+       * The control, and it is what makes the silence above mean anything: a
+       * `previewContainerName` that had stopped trimming entirely — or one the
+       * spy simply never reached — would satisfy the assertion above perfectly.
+       * An accepted name must still take the trimming path.
+       */
+      const accepted = `  nx-box  `;
+      expect(previewContainerName(accepted)).toBe("nx-box");
+      expect(trim).toHaveBeenCalled();
+    } finally {
+      // Restored in `finally` so a failed expectation above does not leave
+      // every later test in this file running against a spied prototype.
+      trim.mockRestore();
+    }
+  });
+
+  it("refuses a name that would only FIT after trimming", () => {
+    /*
+     * A consequence of the bound being on the raw input, and a deliberate one
+     * rather than an accident of ordering: a name of exactly the cap's length
+     * wrapped in spaces is legal once trimmed and is refused anyway.
+     *
+     * That is the intended reading of the published bound — it describes the
+     * string a caller hands over, so a consumer digesting these inputs can
+     * check the value it holds rather than a trimmed form it would have to
+     * derive first.
+     */
     expect(
       previewContainerName(` ${"a".repeat(MAX_PREVIEW_CONTAINER_LENGTH)} `)
     ).toBeUndefined();
-    // The control: at the cap with no padding, still accepted.
+    // At the cap with no padding, still accepted — so the refusal above is
+    // about the padding rather than about the length being unusable.
     expect(previewContainerName("a".repeat(MAX_PREVIEW_CONTAINER_LENGTH))).toBe(
       "a".repeat(MAX_PREVIEW_CONTAINER_LENGTH)
     );
@@ -515,11 +548,59 @@ describe("a per-surface preview container", () => {
 
   it("reduces an opaque seed rather than refusing it", () => {
     // A caller passing an id from elsewhere should not have to know this
-    // function's rules; a seed that cannot be made safe falls back rather than
-    // yielding a name the compiler would refuse.
+    // function's rules; whatever it hands over yields a name the compiler
+    // accepts.
     expect(previewContainerName(previewContainerFor(":r1:"))).toBeDefined();
-    expect(previewContainerName(previewContainerFor("x".repeat(500)))).toBe(
-      PREVIEW_VIEWPORT_CONTAINER
-    );
+  });
+
+  it("DIGESTS a seed too long to carry, rather than sharing the default", () => {
+    /*
+     * The case the fallback got wrong, and it failed toward the hazard.
+     *
+     * Prefixed, a seed over about fifty characters exceeds the emitted-name
+     * bound. Returning `PREVIEW_VIEWPORT_CONTAINER` there handed exactly the
+     * surfaces most likely to carry long ids — document paths, composite keys,
+     * opaque route ids — the one globally predictable name this function exists
+     * to avoid, so third-party markup declaring that name could capture their
+     * viewport queries again.
+     *
+     * Asserted as "accepted AND not the default", because either alone passes on
+     * a broken implementation: the old fallback returned an accepted name, and
+     * a function returning some other refused string is not the default either.
+     */
+    const long = previewContainerFor("x".repeat(500));
+
+    expect(previewContainerName(long)).toBe(long);
+    expect(long).not.toBe(PREVIEW_VIEWPORT_CONTAINER);
+  });
+
+  it("gives two long seeds DIFFERENT names, which is the whole point", () => {
+    /*
+     * The control. A digest that ignored its input, or a function returning one
+     * constant, satisfies "accepted and not the default" above perfectly — the
+     * assertion there is about one name's shape, and this is about the property
+     * the name is for.
+     *
+     * The two seeds differ only in a character the identifier reduction
+     * collapses, which is why the digest reads the ORIGINAL seed: reduced first,
+     * `a/b` and `a:b` are one string and the names would legitimately collide.
+     */
+    const a = previewContainerFor(`${"x".repeat(500)}a/b`);
+    const b = previewContainerFor(`${"x".repeat(500)}a:b`);
+
+    expect(a).not.toBe(b);
+  });
+
+  it("gives one seed the SAME name every time, so a render can hydrate", () => {
+    /*
+     * Stability across the server/client boundary is why the seed is the
+     * caller's rather than generated here. A name that differed between the two
+     * renders would leave the preview matching nothing on exactly the first
+     * paint — and React would not complain, because the container name lives in
+     * a style the sheet queries rather than in the markup it compares.
+     */
+    const seed = "y".repeat(500);
+
+    expect(previewContainerFor(seed)).toBe(previewContainerFor(seed));
   });
 });

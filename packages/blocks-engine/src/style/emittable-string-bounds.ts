@@ -70,6 +70,13 @@ export const EMITTABLE_STRING_BOUNDS: readonly EmittableStringBound[] =
       max: MAX_NAMED_CLASS_NAME_LENGTH,
     }),
     Object.freeze({ what: "a breakpoint id", max: MAX_BREAKPOINT_ID_LENGTH }),
+    /*
+     * Emitted into the at-rule of every preview query, so it is a compiled
+     * string like any other here — and it is the only one in this list that is
+     * caller-supplied per render rather than read from a stored document, which
+     * is why a consumer truncating or digesting these inputs has to keep this
+     * bound rather than assume storage already applied one.
+     */
     Object.freeze({
       what: "a preview container name",
       max: MAX_PREVIEW_CONTAINER_LENGTH,
