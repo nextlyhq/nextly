@@ -177,7 +177,7 @@ export function RowLimitNotice({
 
   return (
     <>
-      {minRows !== undefined && count < minRows && count > 0 && (
+      {minRows !== undefined && count < minRows && (
         <p className="text-sm text-warning-600 dark:text-warning-500">
           Minimum {minRows} {pluralLabel} required. Currently have {count}.
         </p>

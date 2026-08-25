@@ -21,6 +21,7 @@ function RepeaterHarness({
         field={field}
         control={methods.control}
       />
+      <pre data-testid="form-values">{JSON.stringify(methods.watch())}</pre>
     </FormProvider>
   );
 }
@@ -87,6 +88,15 @@ describe("RepeaterInput", () => {
     // Empty state is removed
     expect(screen.queryByText("No testimonials yet.")).not.toBeInTheDocument();
     expect(screen.getByText("(1)")).toBeInTheDocument();
+    // The new row is seeded with the declared default values
+    const values = JSON.parse(
+      screen.getByTestId("form-values").textContent || "{}"
+    );
+    expect(values.testimonials[0]).toMatchObject({
+      author: "Anonymous",
+      rating: null,
+      verified: false,
+    });
   });
 
   it("displays min-rows warning when row count is less than minRows", () => {

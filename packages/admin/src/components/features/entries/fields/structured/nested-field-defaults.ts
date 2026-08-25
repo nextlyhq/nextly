@@ -19,42 +19,60 @@ export interface CreateDefaultFieldValuesOptions {
 }
 
 /**
+ * Text-like field types whose unset form input expects an empty string rather
+ * than null. Mirrors the `DECLARED_DEFAULT` table in `lib/form/default-values`
+ * so that newly-appended component/repeater rows seed the same values that the
+ * entry editor uses on the initial create form.
+ */
+const STRING_SEED_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "textarea",
+  "email",
+  "password",
+  "code",
+]);
+
+const SCALAR_DEFAULTS: Record<string, unknown> = {
+  checkbox: false,
+  number: null,
+  repeater: [],
+};
+
+/**
  * Returns the type-specific fallback default for a field that has no explicit defaultValue.
  *
  * Keeping this separate from {@link getFieldDefault} keeps each function's cyclomatic
  * complexity below the project threshold.
  */
 function getTypeDefault(type: string, subField: FieldConfig): unknown {
-  switch (type) {
-    case "checkbox":
-      return false;
-    case "number":
-      return null;
-    case "repeater":
-      return [];
-    case "group":
-      return "fields" in subField
-        ? createDefaultFieldValues(subField.fields as FieldConfig[])
-        : {};
-    case "component":
-      return "repeatable" in subField && subField.repeatable ? [] : null;
-    default:
-      return (subField as { defaultValue?: unknown }).defaultValue ?? null;
+  if (type in SCALAR_DEFAULTS) return SCALAR_DEFAULTS[type];
+  if (type === "group") {
+    const fields = (subField as { fields?: FieldConfig[] }).fields;
+    return fields ? createDefaultFieldValues(fields) : {};
   }
+  if (type === "component") {
+    return (subField as { repeatable?: boolean }).repeatable ? [] : null;
+  }
+  return (subField as { defaultValue?: unknown }).defaultValue ?? null;
 }
 
 /**
  * Computes the default value for an individual field configuration.
  *
  * If the field declares an explicit `defaultValue`, that takes priority (calling it
- * when it is a function). Otherwise delegates to {@link getTypeDefault}.
+ * when it is a function). Otherwise delegates to {@link getTypeDefault}, with two
+ * overrides that align with {@link getDefaultValues} in `lib/form/default-values`:
+ * - String-like fields (`text`, `textarea`, etc.) seed `""` rather than `null`.
+ * - `chips` seeds `[]` rather than `null`.
  */
 function getFieldDefault(subField: FieldConfig): unknown {
-  if ("defaultValue" in subField && subField.defaultValue !== undefined) {
-    return typeof subField.defaultValue === "function"
-      ? subField.defaultValue({})
-      : subField.defaultValue;
+  const declared = (subField as { defaultValue?: unknown }).defaultValue;
+  if ("defaultValue" in subField && declared !== undefined) {
+    return typeof declared === "function" ? declared({}) : declared;
   }
+  // Align with getDefaultValues: string-like fields seed "" and chips seed [].
+  if (STRING_SEED_TYPES.has(subField.type)) return "";
+  if ((subField.type as string) === "chips") return [];
   return getTypeDefault(subField.type, subField);
 }
 

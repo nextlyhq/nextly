@@ -268,6 +268,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
                   disabled={disabled}
                   readOnly={readOnly}
                   renderField={renderField}
+                  isSortable={isSortable}
                 />
               ))}
             </SortableFieldArrayContainer>

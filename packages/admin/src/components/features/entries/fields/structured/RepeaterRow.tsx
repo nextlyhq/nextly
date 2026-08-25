@@ -117,6 +117,11 @@ export interface RepeaterRowProps<
    * When not provided, renders a placeholder for sub-field content.
    */
   renderField?: RenderFieldFunction<TFieldValues>;
+
+  /**
+   * Whether reordering is enabled for this row.
+   */
+  isSortable?: boolean;
 }
 
 // ============================================================
@@ -159,12 +164,10 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   renderField,
+  isSortable = field.admin?.isSortable !== false,
 }: RepeaterRowProps<TFieldValues>) {
   // Collapsible state - respect initCollapsed from field config
   const [isOpen, setIsOpen] = useState(!field.admin?.initCollapsed);
-
-  // Check if sorting is enabled (defaults to true)
-  const isSortable = field.admin?.isSortable !== false;
 
   // @dnd-kit sortable hook
   const {

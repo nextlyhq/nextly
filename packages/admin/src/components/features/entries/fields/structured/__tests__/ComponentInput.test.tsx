@@ -24,6 +24,7 @@ function SingleHarness({
         field={field}
         control={methods.control}
       />
+      <pre data-testid="form-values">{JSON.stringify(methods.watch())}</pre>
     </FormProvider>
   );
 }
@@ -114,8 +115,16 @@ describe("ComponentInput", () => {
       const addButton = screen.getByRole("button", { name: /Add Slide/i });
       fireEvent.click(addButton);
 
-      // Empty state disappears and item count increases
+      // Empty state disappears
       expect(screen.queryByText("No slides yet.")).not.toBeInTheDocument();
+      // The new row is seeded with the declared default values
+      const values = JSON.parse(
+        screen.getByTestId("form-values").textContent || "{}"
+      );
+      expect(values.slides[0]).toMatchObject({
+        caption: "Default Slide",
+        visible: false,
+      });
     });
 
     it("displays min-rows warning and max-rows information", () => {

@@ -190,6 +190,11 @@ interface ComponentSubFieldListProps {
   emptyMessage?: string;
 }
 
+/**
+ * Centralizes named-field rendering and empty-state display across all component
+ * rendering modes (single non-repeatable, single repeatable, multi non-repeatable).
+ * Ensures consistent filtering of nameless layout fields and uniform empty state messages.
+ */
 function ComponentSubFieldList({
   fields,
   basePath,
@@ -491,22 +496,22 @@ function resolveRepeatableRowData(
   itemComponentType: string | undefined;
 } {
   const itemComponentType = readFieldGroupType(itemData);
-  if (isMultiMode && itemComponentType && componentSchemas) {
-    const schema = componentSchemas[itemComponentType];
+  if (isMultiMode) {
+    const schema =
+      itemComponentType && componentSchemas
+        ? componentSchemas[itemComponentType]
+        : undefined;
     return {
-      rowFields: schema?.fields || [],
-      rowLabel: schema?.label || itemComponentType,
+      rowFields: schema ? schema.fields : [],
+      rowLabel: schema?.label ?? itemComponentType ?? "Unknown",
       itemComponentType,
     };
   }
-  if (!isMultiMode && singleComponentFields) {
-    return {
-      rowFields: singleComponentFields,
-      rowLabel: singularLabel,
-      itemComponentType,
-    };
-  }
-  return { rowFields: [], rowLabel: "Unknown", itemComponentType };
+  return {
+    rowFields: singleComponentFields ?? [],
+    rowLabel: singularLabel,
+    itemComponentType,
+  };
 }
 
 interface RepeatableComponentProps<

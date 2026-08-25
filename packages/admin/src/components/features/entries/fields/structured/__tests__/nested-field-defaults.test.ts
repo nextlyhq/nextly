@@ -71,7 +71,7 @@ describe("createDefaultFieldValues", () => {
         settings: {
           notifications: false,
           limit: null,
-          theme: null,
+          theme: "",
         },
       });
     });
@@ -84,7 +84,7 @@ describe("createDefaultFieldValues", () => {
       expect(result).toEqual({ emptyGroup: {} });
     });
 
-    it("assigns null to standard scalar and custom plugin fields", () => {
+    it("assigns empty string to text-like fields and null to other scalar/custom plugin fields", () => {
       const fields: FieldConfig[] = [
         { type: "text", name: "title" } as never,
         { type: "textarea", name: "bio" } as never,
@@ -93,8 +93,8 @@ describe("createDefaultFieldValues", () => {
       ];
       const result = createDefaultFieldValues(fields);
       expect(result).toEqual({
-        title: null,
-        bio: null,
+        title: "",
+        bio: "",
         role: null,
         colorPicker: null,
       });
@@ -168,7 +168,7 @@ describe("createDefaultFieldValues", () => {
         { type: "text", name: "validField" } as never,
       ];
       const result = createDefaultFieldValues(fields);
-      expect(result).toEqual({ validField: null });
+      expect(result).toEqual({ validField: "" });
     });
 
     it("writes field group discriminator when componentType option is provided", () => {
@@ -204,21 +204,16 @@ describe("createDefaultFieldValues", () => {
         } as never,
       ];
 
-      // Reached through ComponentInput context (no componentType)
-      const componentInputDefaults = createDefaultFieldValues(sharedSubFields);
-
-      // Reached through RepeaterInput context
-      const repeaterInputDefaults = createDefaultFieldValues(sharedSubFields);
-
-      // Equivalence contract
-      expect(componentInputDefaults).toEqual(repeaterInputDefaults);
-      expect(repeaterInputDefaults).toEqual({
-        label: null,
+      // Both ComponentInput and RepeaterInput call createDefaultFieldValues with
+      // the same arguments; verifying the concrete output implicitly verifies
+      // that both callers receive identical values.
+      expect(createDefaultFieldValues(sharedSubFields)).toEqual({
+        label: "",
         enabled: false,
         order: 1,
         subItems: [],
         nestedGroup: {
-          subName: null,
+          subName: "",
           repeatableChild: [],
         },
       });
