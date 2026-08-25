@@ -192,29 +192,29 @@ describe("withMediaRevalidationBatch", () => {
 
 describe("the bulk surface stays inside a batch scope", () => {
   /**
-   * Every method on the service whose name marks it a fan-out.
+   * Every PROTOTYPE method whose name marks it a fan-out — and prototype is the
+   * operative word.
    *
-   * DERIVED from the prototype rather than listed here, which is the whole
-   * point: a hand-kept list agrees with the class on the day it is written and
-   * silently stops covering the method added afterwards.
+   * This finds `async bulkDelete(...)` and finds NOTHING for the same method
+   * declared as a class field: `bulkArchive = async (...) => ...` is an own
+   * property of each instance, initialised in the constructor, never on the
+   * prototype. Measured, not reasoned about — adding one leaves every assertion
+   * below passing.
+   *
+   * So the NAME-SET claim is not made here. It lives in
+   * `../services/media-bulk-surface.test-d.ts`, where `keyof` sees both
+   * declaration forms because they are the same member of the type. What
+   * remains here is the source check, which needs a callable and therefore only
+   * reaches the prototype form.
    */
-  function bulkMethodNames(): string[] {
+  function bulkPrototypeMethods(): string[] {
     return Object.getOwnPropertyNames(UnifiedMediaService.prototype)
       .filter(name => name.startsWith("bulk"))
       .sort();
   }
 
-  it("names every bulk method, so adding one has to be a deliberate act", () => {
-    // This assertion exists to FAIL when the bulk surface grows. A new
-    // `bulk*` method that fans out over the single-item path without opening a
-    // scope is not merely slower — it looks correct at every call site, and
-    // nothing observes the difference except a count of flushes nobody takes.
-    // Failing here forces the author to the test below.
-    expect(bulkMethodNames()).toEqual(["bulkDelete", "bulkUpload"]);
-  });
-
-  it("wraps each of them in withMediaRevalidationBatch", () => {
-    const names = bulkMethodNames();
+  it("wraps each prototype bulk method in withMediaRevalidationBatch", () => {
+    const names = bulkPrototypeMethods();
 
     // The control. Without it an empty list satisfies the loop perfectly, and
     // a rename that took every method out of the filter would report as full
