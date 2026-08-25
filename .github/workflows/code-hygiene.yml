@@ -98,12 +98,14 @@ jobs:
         if: always() && steps.audit.conclusion != 'skipped'
         run: |
           pnpm exec fallow audit \
+            --changed-since "origin/${{ github.base_ref || 'main' }}" \
             --gate new-only \
             --workspace "!playground" \
             --config .fallowrc.jsonc \
             --format review-github > /tmp/audit-review.json 2>/dev/null || true
 
       - name: Post PR review comments for changed files
+        id: post-review
         if: always() && steps.audit.conclusion != 'skipped' && github.event.pull_request.number != null
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
@@ -141,6 +143,7 @@ jobs:
             }
 
             if (!lookupSucceeded) {
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'dedup-lookup-failed=true\n');
               console.log('Skipping PR review creation because existing review comments could not be verified.');
               return;
             }
@@ -190,7 +193,7 @@ jobs:
         env:
           UNSCOPED: ${{ steps.audit.outputs.changed-files-unavailable }}
           POST_SKIPPED: ${{ steps.audit.outputs.post-skipped-reason }}
-          DEDUP_FAILED: ${{ steps.audit.outputs.dedup-lookup-failed }}
+          DEDUP_FAILED: ${{ steps.audit.outputs.dedup-lookup-failed || steps.post-review.outputs.dedup-lookup-failed }}
           VERDICT: ${{ steps.audit.outputs.verdict }}
           GATE: ${{ steps.audit.outputs.gate }}
         run: |
@@ -301,32 +304,36 @@ jobs:
 
             const commentBody = `${commentMarker}\n${summaryContent}`;
 
-            const comments = await github.paginate(
-              github.rest.issues.listComments,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                per_page: 100,
+            try {
+              const comments = await github.paginate(
+                github.rest.issues.listComments,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  per_page: 100,
+                }
+              );
+
+              const existingComment = comments.find(c => c.body && c.body.includes(commentMarker));
+
+              if (existingComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                  body: commentBody,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody,
+                });
               }
-            );
-
-            const existingComment = comments.find(c => c.body && c.body.includes(commentMarker));
-
-            if (existingComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existingComment.id,
-                body: commentBody,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body: commentBody,
-              });
+            } catch (err) {
+              console.log('Could not post/update whole-repo sticky comment (e.g. read-only token on fork PR):', err.message);
             }
 
       # Fails only if fallow encountered a tooling failure/crash.

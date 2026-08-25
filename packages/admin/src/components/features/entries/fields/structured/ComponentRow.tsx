@@ -204,6 +204,14 @@ interface ComponentRowHeaderProps {
   listeners: ReturnType<typeof useSortableRow>["listeners"];
 }
 
+/**
+ * Centralized header for draggable, collapsible component rows.
+ *
+ * Encapsulates the drag handle, expand/collapse chevron trigger, component icon,
+ * dynamic-zone component type badge, dynamic row label, and remove button.
+ * Centralizing these controls in a single subcomponent maintains consistent layout,
+ * accessible ARIA attributes, touch behavior, and hover transitions across component instances.
+ */
 function ComponentRowHeader({
   index,
   label,
@@ -265,7 +273,7 @@ function ComponentRowHeader({
             {/* Component type badge (for dynamic zones) */}
             {componentType && (
               <Badge variant="outline" className="shrink-0 text-xs">
-                {label}
+                {componentType}
               </Badge>
             )}
 
