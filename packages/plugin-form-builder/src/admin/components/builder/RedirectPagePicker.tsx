@@ -75,7 +75,8 @@ export function labelFieldsFor(useAsTitle?: string): readonly string[] {
  * appearing to project it.
  */
 /**
- * The fields to REQUEST, which is the label fields plus `status`.
+ * The fields to REQUEST, which is the label fields plus what decides
+ * reachability.
  *
  * Kept apart from `labelFieldsFor` on purpose. `status` decides whether a page
  * is marked as a draft; it must never become a document's name, and
@@ -86,7 +87,11 @@ export function labelFieldsFor(useAsTitle?: string): readonly string[] {
  * for labelling is still requested.
  */
 export function selectFieldsFor(useAsTitle?: string): readonly string[] {
-  return [...labelFieldsFor(useAsTitle), "status"];
+  // `firstPublishedAt` as well as `status`: it is what says the collection has
+  // a publish lifecycle at all, and without it a page whose collection merely
+  // has a field called `status` would be marked as a draft. See
+  // `hasPublishLifecycle`.
+  return [...labelFieldsFor(useAsTitle), "status", "firstPublishedAt"];
 }
 
 export function selectParam(fields: readonly string[]): string {

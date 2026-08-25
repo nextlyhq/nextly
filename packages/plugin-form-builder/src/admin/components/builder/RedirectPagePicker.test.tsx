@@ -159,7 +159,17 @@ describe("what the picker says about a page that is not live", () => {
     // Unpublished pages are offered on purpose. The marker is what stops
     // "offered" reading as "live" — and a published form saved against one is
     // refused, so an author who cannot see this has no way to predict that.
-    serve([{ id: "p1", headline: "Launch day", status: "draft" }], "headline");
+    serve(
+      [
+        {
+          id: "p1",
+          headline: "Launch day",
+          status: "draft",
+          firstPublishedAt: null,
+        },
+      ],
+      "headline"
+    );
     render(
       <RedirectPagePicker
         collections={["pages"]}
@@ -178,6 +188,24 @@ describe("what the picker says about a page that is not live", () => {
       [{ id: "p1", headline: "Launch day", status: "published" }],
       "headline"
     );
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={undefined}
+        onChange={vi.fn()}
+      />
+    );
+
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    const option = await screen.findByRole("option", { name: /Launch day/ });
+    expect(option).not.toHaveTextContent("Draft");
+  });
+
+  it("does not mark a page whose collection merely has a status field", async () => {
+    // `status: "draft"` on a collection with no publish lifecycle is an
+    // ordinary field value, not a publish state. Marking it would put "Draft"
+    // beside a page that is live, and the save rule would then refuse it.
+    serve([{ id: "p1", headline: "Launch day", status: "draft" }], "headline");
     render(
       <RedirectPagePicker
         collections={["pages"]}

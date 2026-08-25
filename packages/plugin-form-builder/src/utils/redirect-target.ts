@@ -26,6 +26,7 @@ import type { RedirectTargetDocument } from "./redirect-reference";
 export type { RedirectTargetDocument } from "./redirect-reference";
 export {
   documentIsReachable,
+  hasPublishLifecycle,
   parseRedirectReference,
   type RedirectReference,
 } from "./redirect-reference";

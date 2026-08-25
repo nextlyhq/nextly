@@ -278,6 +278,13 @@ describe("selectFieldsFor", () => {
     expect(selectFieldsFor("headline")).toContain("status");
   });
 
+  it("requests what says the collection has a lifecycle at all", () => {
+    // Without `firstPublishedAt` every row comes back looking unmanaged, and
+    // an unmanaged row is always reachable — so the projection alone would
+    // silently disable every Draft marker.
+    expect(selectFieldsFor("headline")).toContain("firstPublishedAt");
+  });
+
   it("requests everything the label needs", () => {
     // Derived from the label list rather than written out again: a field added
     // for labelling that is never requested comes back absent, and the label

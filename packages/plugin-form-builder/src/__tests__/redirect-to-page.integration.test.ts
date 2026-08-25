@@ -605,8 +605,6 @@ describe("a target collection with the publish lifecycle", () => {
    * points at an unpublished page, which is the one pairing that sends a
    * visitor to a "page not found". A draft form pointing at a draft page is
    * allowed, because the two go live together.
-   *
-   * Founder ruling, 2026-08-25 (decision:form-redirect-draft-targets).
    */
   const draftingPages = defineCollection({
     slug: "pages",
@@ -738,6 +736,165 @@ describe("a target collection with the publish lifecycle", () => {
             redirectPage: { relationTo: "pages", value: draftTarget },
           },
         },
+      })
+    );
+  });
+
+  it("lets an unrelated edit through on a published form with a draft target", async () => {
+    // A published form can acquire a draft target without being touched: the
+    // page is unpublished later. Refusing every rename after that holds the
+    // form hostage to a state the write neither created nor mentions — and the
+    // submission path already declines to send anyone there.
+    await bootWithDraftingPages();
+    const live = await page("published", "live-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("published", live),
+    })) as { item: { id: string } };
+
+    await current!.nextly.update({
+      collection: "pages",
+      id: live,
+      data: { status: "draft" },
+    });
+
+    const renamed = await current!.nextly.update({
+      collection: "forms",
+      id: created.item.id,
+      data: { name: "Renamed" },
+    });
+    expect(renamed).toMatchObject({ item: { id: created.item.id } });
+  });
+
+  it("lets a published form turn its page redirect OFF while the target is a draft", async () => {
+    // The edit an author in that state actually needs to make. Inheriting the
+    // old target here refuses the only write that removes the bad redirect.
+    await bootWithDraftingPages();
+    const live = await page("published", "live-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("published", live),
+    })) as { item: { id: string } };
+
+    await current!.nextly.update({
+      collection: "pages",
+      id: live,
+      data: { status: "draft" },
+    });
+
+    const switched = await current!.nextly.update({
+      collection: "forms",
+      id: created.item.id,
+      data: { settings: { confirmationType: "message" } },
+    });
+    expect(switched).toMatchObject({ item: { id: created.item.id } });
+  });
+
+  it("sends nobody to a page that was unpublished after the form was saved", async () => {
+    // Nothing runs a forms hook when the TARGET changes, so the save-time rule
+    // never sees this. Without a submit-time check the visitor receives a
+    // redirect to a page the public route 404s — the exact outcome the save
+    // rule exists to prevent, reached by a path it cannot watch. The
+    // submission itself must still succeed: the destination is what degrades.
+    const { plugin, config } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [draftingPages],
+    });
+
+    const target = await page("published", "live-page");
+    await current.nextly.create({
+      collection: "forms",
+      data: formData("published", target),
+    });
+
+    const getService = ((name: string) =>
+      name === "db" ? {} : current?.getService(name as never)) as never;
+    const pluginContext = createPluginContext(
+      getService,
+      current.hooks as never
+    );
+
+    // The control: while the page is published the redirect resolves, so a
+    // missing redirect below is the unpublishing and not a broken fixture.
+    const before = await submitForm(
+      { formSlug: "contact", data: { message: "hello" } },
+      { pluginContext, pluginConfig: config }
+    );
+    expect(before.redirect).toBe("/live-page");
+
+    await current.nextly.update({
+      collection: "pages",
+      id: target,
+      data: { status: "draft" },
+    });
+
+    const after = await submitForm(
+      { formSlug: "contact", data: { message: "hello" } },
+      { pluginContext, pluginConfig: config }
+    );
+    expect(after.success).toBe(true);
+    expect(after.submission).toBeDefined();
+    expect(after.redirect).toBeUndefined();
+  });
+
+  it("lets one save both publish the form and turn its page redirect off", async () => {
+    // The sharpest form of the same case, and the one that needs the stored
+    // target skipped rather than merely unjudged: this write DOES publish, so
+    // the inherited-target check applies — and the target it would inherit is
+    // one this very write is removing. Refusing it leaves the author unable to
+    // publish and unable to fix the redirect in the same breath.
+    //
+    // Separated from the rename above deliberately: that one passes whether or
+    // not the stored target is skipped, because a rename is not judged at all.
+    await bootWithDraftingPages();
+    const live = await page("published", "live-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("draft", live),
+    })) as { item: { id: string } };
+
+    await current!.nextly.update({
+      collection: "pages",
+      id: live,
+      data: { status: "draft" },
+    });
+
+    const saved = await current!.nextly.update({
+      collection: "forms",
+      id: created.item.id,
+      data: {
+        status: "published",
+        settings: { confirmationType: "message" },
+      },
+    });
+    expect(saved).toMatchObject({ item: { id: created.item.id } });
+  });
+
+  it("still refuses when that same save keeps the page redirect", async () => {
+    // The control for the test above: identical write except that `settings`
+    // still names the draft page. Without this, skipping the stored target
+    // could be skipping the check entirely and nothing would say so.
+    await bootWithDraftingPages();
+    const live = await page("published", "live-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("draft", live),
+    })) as { item: { id: string } };
+
+    await current!.nextly.update({
+      collection: "pages",
+      id: live,
+      data: { status: "draft" },
+    });
+
+    await expectRedirectRefusal(
+      current!.nextly.update({
+        collection: "forms",
+        id: created.item.id,
+        data: { status: "published", ...formData("published", live) },
       })
     );
   });

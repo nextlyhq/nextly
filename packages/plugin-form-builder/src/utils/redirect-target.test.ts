@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyRedirectPattern,
   documentIsReachable,
+  hasPublishLifecycle,
   DEFAULT_REDIRECT_PATTERN,
   normalizeRedirectRelationships,
   parseRedirectReference,
@@ -219,34 +220,69 @@ describe("applyRedirectPattern", () => {
   });
 });
 
+describe("hasPublishLifecycle", () => {
+  it("recognises a document the lifecycle manages", () => {
+    // `firstPublishedAt` is written by the framework and is present even on a
+    // never-published draft, so it marks the lifecycle rather than the act of
+    // publishing.
+    expect(hasPublishLifecycle({ id: "1", firstPublishedAt: null })).toBe(true);
+  });
+
+  it("does not mistake an ordinary field named status for a lifecycle", () => {
+    // A collection without the lifecycle may legally define its own `status`
+    // field. Reading the NAME as a lifecycle marks live documents as drafts.
+    expect(hasPublishLifecycle({ id: "1", status: "active" })).toBe(false);
+  });
+});
+
 describe("documentIsReachable", () => {
   it("treats a collection with no publish lifecycle as reachable", () => {
-    // No `status` FIELD at all — the ordinary case for a site that never
-    // turned drafts on. Reading this as "not published" would refuse every
-    // redirect on every such site.
+    // The ordinary case for a site that never turned drafts on. Reading this
+    // as "not published" would refuse every redirect on every such site.
     expect(documentIsReachable({ id: "1", slug: "thanks" })).toBe(true);
   });
 
+  it("treats a document with its own status field as reachable", () => {
+    // The case that matters most: `status: "active"` on an unmanaged
+    // collection is not a draft, and marking it one both labels a live page
+    // "Draft" in the picker and refuses a perfectly good save.
+    expect(documentIsReachable({ id: "1", status: "active" })).toBe(true);
+    expect(documentIsReachable({ id: "1", status: "draft" })).toBe(true);
+  });
+
   it("reads a published document as reachable", () => {
-    expect(documentIsReachable({ id: "1", status: "published" })).toBe(true);
+    expect(
+      documentIsReachable({
+        id: "1",
+        status: "published",
+        firstPublishedAt: "2026-08-25T00:00:00.000Z",
+      })
+    ).toBe(true);
   });
 
-  it("reads a draft as unreachable", () => {
-    expect(documentIsReachable({ id: "1", status: "draft" })).toBe(false);
+  it("reads a managed draft as unreachable", () => {
+    expect(
+      documentIsReachable({ id: "1", status: "draft", firstPublishedAt: null })
+    ).toBe(false);
   });
 
-  it("reads any other lifecycle state as unreachable", () => {
-    // Whatever a collection adds to its lifecycle, only "published" is a
-    // promise that the public route serves the page. Anything else is a state
-    // this rule has never seen and must not assume is live.
+  it("reads any other managed state as unreachable", () => {
+    // Only "published" is a promise that the public route serves the page.
+    // Anything else is a state this rule has never seen and must not assume
+    // is live — and on a managed collection, guessing wrong sends visitors to
+    // a 404 rather than merely inconveniencing an author.
     for (const status of ["archived", "scheduled", "", "review"]) {
-      expect(documentIsReachable({ id: "1", status })).toBe(false);
+      expect(
+        documentIsReachable({ id: "1", status, firstPublishedAt: null })
+      ).toBe(false);
     }
   });
 
-  it("does not mistake a non-string status for a lifecycle answer", () => {
-    // A field that is present but not a string is not a lifecycle this
-    // function understands; the absence check is on the TYPE for that reason.
-    expect(documentIsReachable({ id: "1", status: null })).toBe(true);
+  it("reads a managed document with a non-string status as unreachable", () => {
+    // The lifecycle is present, so the absence of "published" is meaningful
+    // here in a way it is not on an unmanaged collection.
+    expect(
+      documentIsReachable({ id: "1", status: null, firstPublishedAt: null })
+    ).toBe(false);
   });
 });

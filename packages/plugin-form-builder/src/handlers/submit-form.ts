@@ -25,6 +25,7 @@ import {
 } from "../utils/generate-schema";
 import {
   applyRedirectPattern,
+  documentIsReachable,
   parseRedirectReference,
   type RedirectTargetDocument,
   type RedirectUrlPattern,
@@ -484,6 +485,21 @@ async function urlForPickedDocument(
 
   const target = await readTarget(reference, form, pluginContext);
   if (!target) return undefined;
+
+  // Reachability is re-decided HERE, not inherited from the save. Nothing runs
+  // a forms hook when the target itself changes, so a page that was published
+  // when the form was saved can be unpublished afterwards and the save-time
+  // rule never sees it. Sending a visitor there produces exactly the "page not
+  // found" that rule exists to prevent, so this degrades to no redirect — the
+  // submission is still stored and still succeeds.
+  if (!documentIsReachable(target)) {
+    logger.warn?.("Form redirects to a page that is no longer published", {
+      form: form.slug,
+      collection: reference.collection,
+      target: reference.id,
+    });
+    return undefined;
+  }
 
   return buildUrl(pattern, target, reference.collection, form, pluginContext);
 }

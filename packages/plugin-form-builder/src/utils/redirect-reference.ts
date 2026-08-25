@@ -79,23 +79,47 @@ function referenceId(value: unknown): string | null {
 }
 
 /**
+ * The field the publish lifecycle puts on every row it manages.
+ *
+ * A collection without the lifecycle may legally define an ordinary field
+ * named `status` — "active", "archived", anything — so the NAME `status` does
+ * not identify a lifecycle and reading it as one marks live documents as
+ * drafts. This field does identify it: it is written by the framework, not by
+ * a schema author.
+ *
+ * Measured on 2026-08-25, creating one document in each kind of collection:
+ * a `status: true` collection returns
+ * `[createdAt, firstPublishedAt, id, slug, status, title, updatedAt]`, and a
+ * plain collection carrying its own `status` text field returns the same list
+ * WITHOUT `firstPublishedAt`. It is present on a never-published draft too, so
+ * presence marks the lifecycle rather than the act of publishing.
+ */
+const PUBLISH_LIFECYCLE_FIELD = "firstPublishedAt";
+
+/**
+ * Whether this document comes from a collection with the publish lifecycle.
+ *
+ * Callers that project their reads must request
+ * {@link PUBLISH_LIFECYCLE_FIELD}; a projection that omits it makes every
+ * document look unmanaged, which reads as "always reachable".
+ */
+export function hasPublishLifecycle(document: RedirectTargetDocument): boolean {
+  return PUBLISH_LIFECYCLE_FIELD in document;
+}
+
+/**
  * Whether a visitor can reach this document.
  *
- * A collection with no publish lifecycle carries no `status` field at all and
- * its documents are always reachable; a collection that HAS the lifecycle
- * carries the field on every row. Read for truthiness the two are the same
- * absence of `"published"`, and they mean opposite things — so this asks
- * whether the field is THERE, not whether it says yes. Treating the first as
- * unpublished would refuse every redirect on every site that never turned
- * drafts on.
+ * Unmanaged documents are always reachable: there is no unpublished state for
+ * them to be in. Managed ones are reachable only when published — every other
+ * lifecycle state is one the public route does not serve.
  *
- * Lives here, beside the reference parser, because the save rule and the
- * admin picker have to agree about which pages are reachable. Two readers
- * that agree today would drift, and a picker marking the wrong rows as drafts
- * still looks like a working picker.
+ * Lives here, beside the reference parser, because the save rule and the admin
+ * picker have to agree about which pages are reachable. Two readers that agree
+ * today would drift, and a picker marking the wrong rows as drafts still looks
+ * like a working picker.
  */
 export function documentIsReachable(document: RedirectTargetDocument): boolean {
-  const status = document.status;
-  if (typeof status !== "string") return true;
-  return status === "published";
+  if (!hasPublishLifecycle(document)) return true;
+  return document.status === "published";
 }

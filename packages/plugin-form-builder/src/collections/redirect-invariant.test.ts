@@ -44,9 +44,15 @@ describe("formAcceptsSubmissions", () => {
 });
 
 describe("wouldStrandVisitors", () => {
-  const live = { id: "p1", status: "published" };
-  const draft = { id: "p1", status: "draft" };
+  const live = {
+    id: "p1",
+    status: "published",
+    firstPublishedAt: "2026-08-25T00:00:00.000Z",
+  };
+  const draft = { id: "p1", status: "draft", firstPublishedAt: null };
   const noLifecycle = { id: "p1" };
+  // An unmanaged collection carrying its OWN field named `status`.
+  const ownStatusField = { id: "p1", status: "draft" };
 
   it("is true only for a published form pointing at an unpublished page", () => {
     expect(wouldStrandVisitors({ status: "published" }, undefined, draft)).toBe(
@@ -76,6 +82,14 @@ describe("wouldStrandVisitors", () => {
     // turned drafts on.
     expect(
       wouldStrandVisitors({ status: "published" }, undefined, noLifecycle)
+    ).toBe(false);
+  });
+
+  it("allows a target whose collection merely has a status field", () => {
+    // Not a lifecycle, so not a draft. Refusing here would block a save for a
+    // page that is perfectly reachable, on nothing but a field name.
+    expect(
+      wouldStrandVisitors({ status: "published" }, undefined, ownStatusField)
     ).toBe(false);
   });
 
@@ -215,7 +229,12 @@ describe("assertRedirectTargetUsable", () => {
               settings: JSON.stringify(picks("p1").settings),
             },
           },
-          () => ({ id: "p1", slug: "thanks", status: "draft" })
+          () => ({
+            id: "p1",
+            slug: "thanks",
+            status: "draft",
+            firstPublishedAt: null,
+          })
         ),
         patterns
       )
@@ -239,7 +258,11 @@ describe("assertRedirectTargetUsable", () => {
               settings: JSON.stringify(picks("p1").settings),
             },
           },
-          () => ({ id: "p1", status: "published" })
+          () => ({
+            id: "p1",
+            status: "published",
+            firstPublishedAt: "2026-08-25T00:00:00.000Z",
+          })
         ),
         { pages: () => undefined }
       )

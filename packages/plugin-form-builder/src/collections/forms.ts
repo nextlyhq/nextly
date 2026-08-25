@@ -327,6 +327,18 @@ export function wouldStrandVisitors(
 }
 
 /**
+ * Whether this write is the one that makes the form able to receive
+ * submissions.
+ *
+ * Distinct from {@link formAcceptsSubmissions}, which answers what the form
+ * WILL be: this asks what the write itself does, which is what decides whether
+ * an inherited target is any of its business.
+ */
+function publishesForm(data: Record<string, unknown> | undefined): boolean {
+  return data?.status === "published";
+}
+
+/**
  * The page this write leaves the form pointing at, and whether the write
  * CHOSE it.
  *
@@ -344,6 +356,14 @@ function redirectReferenceForWrite(
     patterns
   );
   if (chosen) return { reference: chosen, chosen: true };
+
+  // A write that REPLACES `settings` has answered the question: this form no
+  // longer redirects to a page. Inheriting the old target there would refuse
+  // the very edit that removes an invalid redirect, which is the one edit an
+  // author in that state needs to make. Only a write that omits `settings`
+  // inherits.
+  const data = context.data as Record<string, unknown> | undefined;
+  if (data?.settings !== undefined) return null;
 
   const stored = storedRedirectReference(
     context.originalData as Record<string, unknown> | undefined,
@@ -422,7 +442,18 @@ export async function assertRedirectTargetUsable(
     );
   }
 
+  // An inherited target is only judged by the write that PUBLISHES the form.
+  // A published form can acquire a draft target without being touched — the
+  // page is unpublished later, or the pairing predates this rule — and
+  // refusing every subsequent rename would hold the form hostage to a state
+  // the write neither created nor mentions. A write that CHOOSES a target
+  // answers for it whatever else it does.
+  const judged =
+    chosen ||
+    publishesForm(context.data as Record<string, unknown> | undefined);
+
   if (
+    judged &&
     wouldStrandVisitors(
       context.data as Record<string, unknown> | undefined,
       context.originalData as Record<string, unknown> | undefined,
