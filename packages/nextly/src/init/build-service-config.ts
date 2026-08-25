@@ -163,6 +163,14 @@ export function buildServiceConfig(
       serviceConfig.apiKeys = nextlyConfig.apiKeys;
     }
 
+    // Same for rate limiting. Carried for `store` above all: it is the only
+    // route by which a deployment can give the AUTH limiter a shared window,
+    // and dropping it here would leave the credential paths per-process no
+    // matter what the config said.
+    if (!serviceConfig.rateLimit && nextlyConfig?.rateLimit) {
+      serviceConfig.rateLimit = nextlyConfig.rateLimit;
+    }
+
     // If security config not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.security && nextlyConfig?.security) {
       serviceConfig.security = nextlyConfig.security;

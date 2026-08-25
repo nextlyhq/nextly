@@ -18,7 +18,7 @@ import {
 // to the new jose-based session/get-session.ts module internally.
 import { getSession } from "../session";
 
-import { rateLimiter } from "./rate-limiter";
+import { authRateLimiter } from "./rate-limiter";
 
 /** Fallback maximum requests per sliding window (1 000 req/hour). */
 const DEFAULT_RATE_LIMIT = 1_000;
@@ -172,6 +172,45 @@ export interface AuthContext {
 }
 
 /**
+ * The 429 an API key has earned, or `null` when it is still within budget.
+ *
+ * Extracted so the decision — read config, ask the limiter, shape the refusal —
+ * is one thing in one place rather than a third of `requireApiKeyAuth`.
+ *
+ * The limiter is resolved per call rather than captured at import: config is
+ * registered after this module loads, so one bound at module scope would be the
+ * in-memory limiter forever — silently, and only in production, where boot
+ * order differs from a test's.
+ */
+async function apiKeyRateLimitRefusal(
+  keyId: string
+): Promise<ErrorResponse | null> {
+  const cfg = getConfig();
+  const limit = cfg?.apiKeys?.rateLimit.requestsPerHour ?? DEFAULT_RATE_LIMIT;
+  const windowMs = cfg?.apiKeys?.rateLimit.windowMs ?? DEFAULT_RATE_WINDOW_MS;
+
+  const rl = await authRateLimiter(cfg?.rateLimit?.store).check(
+    keyId,
+    limit,
+    windowMs
+  );
+  if (rl.allowed) return null;
+
+  return createErrorResponse(
+    429,
+    "Too Many Requests",
+    "Rate limit exceeded for this API key",
+    {
+      "Retry-After": String(
+        Math.ceil((rl.resetAt.getTime() - Date.now()) / 1000)
+      ),
+      "X-RateLimit-Limit": String(limit),
+      "X-RateLimit-Remaining": "0",
+    }
+  );
+}
+
+/**
  * API key authentication middleware.
  *
  * Validates an `Authorization: Bearer nx_live_...` header and resolves the
@@ -246,28 +285,8 @@ export async function requireApiKeyAuth(
   // 4. Rate limit check — enforced after auth, before permission resolution.
   //    Limits come from defineConfig().apiKeys.rateLimit when available;
   //    module-level constants are the fallback for unconfigured deployments.
-  const cfg = getConfig();
-  const resolvedLimit =
-    cfg?.apiKeys?.rateLimit.requestsPerHour ?? DEFAULT_RATE_LIMIT;
-  const resolvedWindowMs =
-    cfg?.apiKeys?.rateLimit.windowMs ?? DEFAULT_RATE_WINDOW_MS;
-
-  const rl = rateLimiter.check(keyAuth.id, resolvedLimit, resolvedWindowMs);
-  if (!rl.allowed) {
-    const retryAfterSecs = Math.ceil(
-      (rl.resetAt.getTime() - Date.now()) / 1000
-    );
-    return createErrorResponse(
-      429,
-      "Too Many Requests",
-      "Rate limit exceeded for this API key",
-      {
-        "Retry-After": String(retryAfterSecs),
-        "X-RateLimit-Limit": String(resolvedLimit),
-        "X-RateLimit-Remaining": "0",
-      }
-    );
-  }
+  const overLimit = await apiKeyRateLimitRefusal(keyAuth.id);
+  if (overLimit) return overLimit;
 
   // 5. Resolve effective permissions and roles for this token type
   const [permissions, roles] = await Promise.all([

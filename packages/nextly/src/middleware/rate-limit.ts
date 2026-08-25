@@ -96,6 +96,30 @@ export interface RateLimitStore {
    * @param key - Unique identifier to reset
    */
   reset(key: string): Promise<void>;
+
+  /**
+   * Record an attempt ONLY if it stays within `limit`, atomically.
+   *
+   * One operation, because two are not safe. A caller that increments and then
+   * takes the increment back on refusal has an await between the two, and in
+   * that gap another request can start a NEW window — the old rollback then
+   * erases the new window's count and admits attempts nobody budgeted for. The
+   * damage is worst at a window boundary, which is exactly where a limiter is
+   * most load-bearing.
+   *
+   * Optional because not every store can be atomic. A caller that needs the
+   * guarantee checks for it and degrades deliberately when it is absent; see
+   * `RateLimiter.check`, which then counts refused attempts rather than
+   * risking the erasure — stricter, never looser.
+   *
+   * `allowed` is the store's decision, not a hint: only the store knows whether
+   * the entry was recorded.
+   */
+  consume?(
+    key: string,
+    limit: number,
+    windowMs: number
+  ): Promise<RateLimitRecord & { allowed: boolean }>;
 }
 
 /**

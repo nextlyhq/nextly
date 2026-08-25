@@ -16,6 +16,7 @@ import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
+import type { RateLimitStore } from "../../middleware/rate-limit";
 import { createPluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { parseTrustedProxyIpsEnv } from "../../utils/get-trusted-client-ip";
@@ -576,38 +577,63 @@ function readTrustProxy(getService: (name: string) => unknown): boolean {
  * DI container. Falls back to the default 30 req/IP/hour, 1-hour window
  * when unset or the container is not yet initialised.
  */
+/**
+ * A nested object off the DI config, or `undefined` when it is not there.
+ *
+ * The config service is `unknown` at this boundary — the bridge deliberately
+ * does not import its type — so every read is a shape check. Doing that once
+ * here rather than inline at each level is what keeps the reader below flat:
+ * the same three checks repeated per level is where this function's complexity
+ * came from, not the number of values it reads.
+ */
+function configBlock(
+  source: unknown,
+  key: string
+): Record<string, unknown> | undefined {
+  if (source === null || typeof source !== "object" || !(key in source)) {
+    return undefined;
+  }
+  const value = (source as Record<string, unknown>)[key];
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** A configured number, or the fallback when it is absent or the wrong type. */
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === "number" ? value : fallback;
+}
+
 function readAuthRateLimit(getService: (name: string) => unknown): {
   requestsPerHour: number;
   windowMs: number;
+  store?: RateLimitStore;
 } {
   const fallback = { requestsPerHour: 30, windowMs: 3_600_000 };
   try {
     const config = getService("config");
-    if (config && typeof config === "object" && "security" in config) {
-      const security = (config as { security?: unknown }).security;
-      if (
-        security &&
-        typeof security === "object" &&
-        "authRateLimit" in security
-      ) {
-        const arl = (
-          security as {
-            authRateLimit?: { requestsPerHour?: unknown; windowMs?: unknown };
-          }
-        ).authRateLimit;
-        return {
-          requestsPerHour:
-            typeof arl?.requestsPerHour === "number"
-              ? arl.requestsPerHour
-              : fallback.requestsPerHour,
-          windowMs:
-            typeof arl?.windowMs === "number"
-              ? arl.windowMs
-              : fallback.windowMs,
-        };
-      }
-    }
-    return fallback;
+
+    // The limits and the store come from DIFFERENT blocks: the numbers are
+    // security config, the window's home is rate-limit config, and one app has
+    // one store. Read independently so a deployment that configures a store but
+    // leaves the auth limits at their defaults still gets a shared window — the
+    // case that would otherwise look configured and behave per-process.
+    const store = configBlock(config, "rateLimit")?.["store"] as
+      | RateLimitStore
+      | undefined;
+    const limits = configBlock(
+      configBlock(config, "security"),
+      "authRateLimit"
+    );
+
+    return {
+      requestsPerHour: numberOr(
+        limits?.["requestsPerHour"],
+        fallback.requestsPerHour
+      ),
+      windowMs: numberOr(limits?.["windowMs"], fallback.windowMs),
+      ...(store === undefined ? {} : { store }),
+    };
   } catch {
     return fallback;
   }
