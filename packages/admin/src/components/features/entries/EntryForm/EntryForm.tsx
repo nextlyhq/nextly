@@ -54,6 +54,7 @@ import { collectionSourceFetcher } from "../entry-locale-source";
 import { EntryLocaleProvider } from "../EntryLocaleContext";
 import { LanguagePanel } from "../LanguagePanel";
 import { PreviewPanes } from "../PreviewMode/PreviewPanes";
+import { previewRevisionOf } from "../PreviewMode/previewRevision";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
@@ -262,7 +263,6 @@ export function EntryForm({
    * have to be threaded back down through props that exist for nothing else.
    */
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [savedAt, setSavedAt] = useState(0);
 
   const {
     form,
@@ -279,15 +279,6 @@ export function EntryForm({
     locale,
     readDraft,
     onSuccess: data => {
-      /*
-       * The save token the preview pane watches. Bumped HERE rather than in the
-       * pane, because this is the only place that knows a write completed — the
-       * pane cannot observe the form's mutation, and autosave is a different
-       * row entirely: it records a private recovery point, not the working
-       * draft the site renders, so it moves without changing anything a preview
-       * could show.
-       */
-      setSavedAt(Date.now());
       onSuccess?.(data);
     },
     onError,
@@ -639,6 +630,8 @@ export function EntryForm({
    * grant over every translation, while a preview opened without one silently
    * shows the wrong one.
    */
+  const previewRevision = previewRevisionOf(entry);
+
   const canPreview =
     entryPreview.isPreviewAvailable &&
     savedEntryId !== "" &&
@@ -749,7 +742,7 @@ export function EntryForm({
                 ? { locale: linkLocale.locale }
                 : {})}
               label={entryPreview.label}
-              savedAt={savedAt}
+              revision={previewRevision}
             >
               <TranslationPanes
                 source={translationMode.source}

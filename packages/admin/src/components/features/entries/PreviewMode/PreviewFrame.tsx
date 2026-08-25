@@ -68,7 +68,15 @@ export function PreviewFrame({
             variant="ghost"
             size="sm"
             onClick={refresh}
-            disabled={url === null}
+            /*
+             * Disabled only while a mint is IN FLIGHT, never because there is
+             * nothing to show. A failed mint leaves `url` null and sets a
+             * reason, and the message beside it asks the editor to try again —
+             * so keying the control on `url` disabled the one affordance that
+             * message points at, and the only way to retry was to close the
+             * pane and reopen it.
+             */
+            disabled={isLoading}
             title="Refresh the preview"
           >
             <RefreshCw className="h-4 w-4" aria-hidden="true" />

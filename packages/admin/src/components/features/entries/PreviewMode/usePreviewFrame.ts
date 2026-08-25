@@ -152,6 +152,42 @@ export function usePreviewFrame({
     void mint();
   }, [active, mint]);
 
+  /*
+   * Renewal on a TIMER, not only when someone asks.
+   *
+   * A pane left open through a long edit is the case a refresh-time check
+   * cannot cover: nothing calls `refresh` while an author reads, so the token
+   * lapses in place and the next navigation INSIDE the frame — a link, a form,
+   * anything the site itself does — arrives without a preview session and is
+   * answered with the published page. Nothing announces that; the frame simply
+   * stops being a preview.
+   *
+   * Scheduled against the margin rather than the expiry so the replacement is
+   * in hand before the old one dies, and cleared on unmount so a closed pane
+   * mints nothing.
+   */
+  useEffect(() => {
+    if (!active || state.url === null) return;
+
+    const renewIn = expiresAt.current - REMINT_MARGIN_MS - Date.now();
+    /*
+     * Nothing is scheduled for a token that arrives ALREADY inside the margin,
+     * and that guard is not defensive — it is the difference between renewing
+     * and spinning. Such a token means the configured TTL is shorter than the
+     * margin, so a renewal fires at once, returns another token inside the
+     * margin, and schedules the next one immediately: an unbounded mint loop,
+     * each iteration issuing a credential and an audit row. A refresh still
+     * re-mints on demand, which is the correct behaviour for a TTL that short.
+     */
+    if (renewIn <= 0) return;
+
+    const timer = setTimeout(() => void mint(), renewIn);
+    return () => clearTimeout(timer);
+    // `state.url` rather than the whole state: a reload changes `reloadKey` and
+    // must not restart the renewal clock, because the credential it reloads is
+    // the same one and its expiry has not moved.
+  }, [active, state.url, mint]);
+
   const refresh = useCallback(() => {
     if (!active) return;
     if (Date.now() >= expiresAt.current - REMINT_MARGIN_MS) {

@@ -11,6 +11,11 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const suppress = vi.hoisted(() => vi.fn());
+/*
+ * Typed WIDER than its initial value on purpose: two cases below drive the
+ * frame's failure and loading states, and an inferred `url: string` /
+ * `reason: null` would reject exactly the states worth testing.
+ */
 const frameState = vi.hoisted(() => ({
   current: {
     url: "https://site.example/api/preview?token=t",
@@ -18,6 +23,12 @@ const frameState = vi.hoisted(() => ({
     isLoading: false,
     reason: null,
     refresh: vi.fn(),
+  } as {
+    url: string | null;
+    reloadKey: number;
+    isLoading: boolean;
+    reason: string | null;
+    refresh: ReturnType<typeof vi.fn>;
   },
 }));
 
@@ -36,12 +47,21 @@ const props = {
   collection: "pages",
   entryId: "7",
   label: "Preview",
-  savedAt: 0,
+  revision: "r1",
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  frameState.current.refresh = vi.fn();
+  // Rebuilt each time: two cases below replace the whole object to drive the
+  // frame's failure and loading states, and leaving that in place would carry
+  // into the next test.
+  frameState.current = {
+    url: "https://site.example/api/preview?token=t",
+    reloadKey: 0,
+    isLoading: false,
+    reason: null,
+    refresh: vi.fn(),
+  };
 });
 
 describe("PreviewPanes when the pane is closed", () => {
@@ -100,12 +120,58 @@ describe("PreviewPanes when the pane is open", () => {
   });
 });
 
-describe("the save that refreshes the frame", () => {
+describe("retrying after a mint that failed", () => {
+  it("leaves the refresh control usable", async () => {
+    // The message beside it asks the editor to try again, and `refresh` mints
+    // again — so a control disabled here points at an affordance that is not
+    // there, and the only retry was to close the pane and reopen it.
+    frameState.current = {
+      ...frameState.current,
+      url: null,
+      reason: "failed",
+      isLoading: false,
+    };
+
+    render(
+      <PreviewPanes {...props} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Refresh the preview" })
+    ).toBeEnabled();
+  });
+
+  it("disables it only while a mint is in flight", () => {
+    // The control for the case above: there IS a state that disables it, so
+    // the assertion above is about the failure case rather than about a
+    // control that can never be disabled at all.
+    frameState.current = {
+      ...frameState.current,
+      url: null,
+      reason: null,
+      isLoading: true,
+    };
+
+    render(
+      <PreviewPanes {...props} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Refresh the preview" })
+    ).toBeDisabled();
+  });
+});
+
+describe("the document change that refreshes the frame", () => {
   it("does not reload on the first render", () => {
     // The frame has just minted and loaded. Treating the token's initial value
     // as a save would render the site twice on every open.
     render(
-      <PreviewPanes {...props} open savedAt={0}>
+      <PreviewPanes {...props} open revision="r1">
         <p>editor</p>
       </PreviewPanes>
     );
@@ -113,9 +179,9 @@ describe("the save that refreshes the frame", () => {
     expect(frameState.current.refresh).not.toHaveBeenCalled();
   });
 
-  it("reloads when the document is saved", () => {
+  it("reloads when the document revision changes", () => {
     const { rerender } = render(
-      <PreviewPanes {...props} open savedAt={0}>
+      <PreviewPanes {...props} open revision="r1">
         <p>editor</p>
       </PreviewPanes>
     );
@@ -125,7 +191,7 @@ describe("the save that refreshes the frame", () => {
     expect(frameState.current.refresh).not.toHaveBeenCalled();
 
     rerender(
-      <PreviewPanes {...props} open savedAt={1730000000000}>
+      <PreviewPanes {...props} open revision="r2">
         <p>editor</p>
       </PreviewPanes>
     );
@@ -135,19 +201,19 @@ describe("the save that refreshes the frame", () => {
 
   it("does not reload again when something else rerenders it", () => {
     const { rerender } = render(
-      <PreviewPanes {...props} open savedAt={5}>
+      <PreviewPanes {...props} open revision="r1">
         <p>editor</p>
       </PreviewPanes>
     );
     rerender(
-      <PreviewPanes {...props} open savedAt={9}>
+      <PreviewPanes {...props} open revision="r2">
         <p>editor</p>
       </PreviewPanes>
     );
     expect(frameState.current.refresh).toHaveBeenCalledTimes(1);
 
     rerender(
-      <PreviewPanes {...props} open savedAt={9} label="Preview">
+      <PreviewPanes {...props} open revision="r2" label="Preview">
         <p>editor</p>
       </PreviewPanes>
     );

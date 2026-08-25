@@ -56,14 +56,17 @@ export interface PreviewPanesProps {
   /** The collection's own word for its preview. */
   label: string;
   /**
-   * Changes whenever the document is saved.
+   * What the preview would render, as a value that changes when it does.
    *
-   * A TOKEN rather than a callback the form invokes, because the pane may not
-   * be open when a save happens and a callback would need the form to know
-   * whether anyone is listening. A value that changes is a fact about the
-   * document; whether it causes a reload is this component's business.
+   * DERIVED from the document rather than notified by whoever wrote it, because
+   * a form submission is not the only write: discarding a working draft and
+   * restoring a version both persist through their own mutations, and a token
+   * bumped by the submit handler leaves the frame showing content that was just
+   * discarded. Deriving means a write nobody remembered to announce still moves
+   * it — which is the difference between covering the writes we listed and
+   * covering the writes there are.
    */
-  savedAt: number;
+  revision: string;
   children: ReactNode;
 }
 
@@ -84,7 +87,7 @@ function ActivePreviewPanes({
   entryId,
   locale,
   label,
-  savedAt,
+  revision,
   children,
 }: Omit<PreviewPanesProps, "open">) {
   /*
@@ -129,7 +132,7 @@ function ActivePreviewPanes({
       <ResizablePanel id="entry-preview" minSize="25%">
         <PreviewFrameOnSave
           frame={frame}
-          savedAt={savedAt}
+          revision={revision}
           onClose={onClose}
           label={label}
         />
@@ -139,9 +142,9 @@ function ActivePreviewPanes({
 }
 
 /**
- * Turns "the document was saved" into "show it again".
+ * Turns "what the preview would render has changed" into "show it again".
  *
- * Its own component so the effect that watches `savedAt` sits beside the frame
+ * Its own component so the effect that watches the revision sits beside the frame
  * it refreshes rather than in the layout above.
  *
  * The first value is REMEMBERED rather than acted on. The frame has just minted
@@ -151,23 +154,23 @@ function ActivePreviewPanes({
  */
 function PreviewFrameOnSave({
   frame,
-  savedAt,
+  revision,
   onClose,
   label,
 }: {
   frame: UsePreviewFrameResult;
-  savedAt: number;
+  revision: string;
   onClose: () => void;
   label: string;
 }) {
   const { refresh } = frame;
-  const lastSeen = useRef(savedAt);
+  const lastSeen = useRef(revision);
 
   useEffect(() => {
-    if (lastSeen.current === savedAt) return;
-    lastSeen.current = savedAt;
+    if (lastSeen.current === revision) return;
+    lastSeen.current = revision;
     refresh();
-  }, [savedAt, refresh]);
+  }, [revision, refresh]);
 
   return <PreviewFrame {...frame} onClose={onClose} label={label} />;
 }
