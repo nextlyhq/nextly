@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyRedirectPattern,
+  documentIsReachable,
+  hasPublishLifecycle,
+  pickedDocumentField,
   DEFAULT_REDIRECT_PATTERN,
   normalizeRedirectRelationships,
   parseRedirectReference,
@@ -215,5 +218,125 @@ describe("applyRedirectPattern", () => {
   it("returns nothing when the function declines", () => {
     expect(applyRedirectPattern(() => undefined, page)).toBeUndefined();
     expect(applyRedirectPattern(() => "", page)).toBeUndefined();
+  });
+});
+
+describe("hasPublishLifecycle", () => {
+  it("recognises a document the lifecycle manages", () => {
+    // `firstPublishedAt` is written by the framework and is present even on a
+    // never-published draft, so it marks the lifecycle rather than the act of
+    // publishing.
+    expect(hasPublishLifecycle({ id: "1", firstPublishedAt: null })).toBe(true);
+  });
+
+  it("does not mistake an ordinary field named status for a lifecycle", () => {
+    // A collection without the lifecycle may legally define its own `status`
+    // field. Reading the NAME as a lifecycle marks live documents as drafts.
+    expect(hasPublishLifecycle({ id: "1", status: "active" })).toBe(false);
+  });
+});
+
+describe("documentIsReachable", () => {
+  it("treats a collection with no publish lifecycle as reachable", () => {
+    // The ordinary case for a site that never turned drafts on. Reading this
+    // as "not published" would refuse every redirect on every such site.
+    expect(documentIsReachable({ id: "1", slug: "thanks" })).toBe(true);
+  });
+
+  it("treats a document with its own status field as reachable", () => {
+    // The case that matters most: `status: "active"` on an unmanaged
+    // collection is not a draft, and marking it one both labels a live page
+    // "Draft" in the picker and refuses a perfectly good save.
+    expect(documentIsReachable({ id: "1", status: "active" })).toBe(true);
+    expect(documentIsReachable({ id: "1", status: "draft" })).toBe(true);
+  });
+
+  it("reads a published document as reachable", () => {
+    expect(
+      documentIsReachable({
+        id: "1",
+        status: "published",
+        firstPublishedAt: "2026-08-25T00:00:00.000Z",
+      })
+    ).toBe(true);
+  });
+
+  it("reads a managed draft as unreachable", () => {
+    expect(
+      documentIsReachable({ id: "1", status: "draft", firstPublishedAt: null })
+    ).toBe(false);
+  });
+
+  it("reads any other managed state as unreachable", () => {
+    // Only "published" is a promise that the public route serves the page.
+    // Anything else is a state this rule has never seen and must not assume
+    // is live — and on a managed collection, guessing wrong sends visitors to
+    // a 404 rather than merely inconveniencing an author.
+    for (const status of ["archived", "scheduled", "", "review"]) {
+      expect(
+        documentIsReachable({ id: "1", status, firstPublishedAt: null })
+      ).toBe(false);
+    }
+  });
+
+  it("reads a managed document with a non-string status as unreachable", () => {
+    // The lifecycle is present, so the absence of "published" is meaningful
+    // here in a way it is not on an unmanaged collection.
+    expect(
+      documentIsReachable({ id: "1", status: null, firstPublishedAt: null })
+    ).toBe(false);
+  });
+});
+
+describe("pickedDocumentField", () => {
+  it("names the field the page picker writes", () => {
+    expect(pickedDocumentField({ confirmationType: "relationship" })).toBe(
+      "redirectPage"
+    );
+  });
+
+  it("names the relation the URL option falls back to", () => {
+    // The shape code-first and legacy forms use. The submission path has
+    // always resolved it; before this it was the one picked document the save
+    // rule never inspected.
+    expect(
+      pickedDocumentField({
+        confirmationType: "redirect",
+        redirectRelation: { relationTo: "pages", value: "p1" },
+      })
+    ).toBe("redirectRelation");
+  });
+
+  it("prefers a typed URL over a relation left beside it", () => {
+    // A stored relation from an earlier edit does not make the form redirect
+    // to a document; the URL does, and the resolver returns it verbatim.
+    expect(
+      pickedDocumentField({
+        confirmationType: "redirect",
+        redirectUrl: "https://example.test/thanks",
+        redirectRelation: { relationTo: "pages", value: "p1" },
+      })
+    ).toBeNull();
+  });
+
+  it("names nothing when the URL option carries no relation", () => {
+    // Not an error here: an absent relation means no destination is
+    // configured yet, which `validateFormConfig` governs. Reporting it would
+    // refuse saves this rule never governed.
+    expect(pickedDocumentField({ confirmationType: "redirect" })).toBeNull();
+  });
+
+  it("names nothing for a form that shows a message", () => {
+    expect(pickedDocumentField({ confirmationType: "message" })).toBeNull();
+    expect(pickedDocumentField({})).toBeNull();
+  });
+
+  it("still names the page field when the picker stored nothing", () => {
+    // "Redirect to a page" naming no page contradicts the option itself, so
+    // the field is returned and the caller reports it — unlike the URL option,
+    // where an absent relation is merely unfinished.
+    expect(pickedDocumentField({ confirmationType: "relationship" })).toBe(
+      "redirectPage"
+    );
   });
 });
