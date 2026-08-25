@@ -161,51 +161,68 @@ describe("the store seam", () => {
     expect((await limiter.check("k", 2, WINDOW)).allowed).toBe(false);
   });
 
-  it("issues no rollback call when it refuses a request", async () => {
-    // The property that closes the cross-window erasure: a rollback issued in
-    // one window can land in the NEXT and delete an attempt that window had
-    // legitimately budgeted, admitting logins nobody allowed for.
-    //
-    // Asserted by driving `check()` against a store that OFFERS a rollback and
-    // recording every call it receives. Inspecting the store's method surface
-    // instead would prove nothing about the limiter: a rollback reintroduced by
-    // any other route would leave that surface untouched, and no break to the
-    // limiter could ever turn such a test red.
+  /**
+   * A store that offers a rollback and records every call it receives.
+   *
+   * `consume` is included or omitted by the caller, because that is what
+   * selects the branch under test — and the two branches must be covered
+   * separately: the historical rollback lived in the FALLBACK branch, so a test
+   * that only drives the atomic one cannot see it come back.
+   */
+  function recordingStore(opts: { atomic: boolean }): {
+    store: RateLimitStore & { decrement(key: string): Promise<void> };
+    calls: string[];
+  } {
     const calls: string[] = [];
-    const offersRollback: RateLimitStore & {
-      decrement(key: string): Promise<void>;
-    } = {
+    const over = { count: 9, resetTime: Date.now() + WINDOW };
+    const store: RateLimitStore & { decrement(key: string): Promise<void> } = {
       increment(): Promise<RateLimitRecord> {
         calls.push("increment");
-        return Promise.resolve({ count: 9, resetTime: Date.now() + WINDOW });
+        return Promise.resolve(over);
       },
       reset(): Promise<void> {
         calls.push("reset");
         return Promise.resolve();
       },
-      consume(): Promise<RateLimitRecord & { allowed: boolean }> {
-        calls.push("consume");
-        return Promise.resolve({
-          allowed: false,
-          count: 9,
-          resetTime: Date.now() + WINDOW,
-        });
-      },
       decrement(): Promise<void> {
         calls.push("decrement");
         return Promise.resolve();
       },
+      ...(opts.atomic
+        ? {
+            consume: (): Promise<RateLimitRecord & { allowed: boolean }> => {
+              calls.push("consume");
+              return Promise.resolve({ ...over, allowed: false });
+            },
+          }
+        : {}),
     };
+    return { store, calls };
+  }
 
-    const result = await new RateLimiter(offersRollback).check("k", 1, WINDOW);
+  it("issues no rollback on the ATOMIC path when it refuses", async () => {
+    const { store, calls } = recordingStore({ atomic: true });
 
-    // The control. Without it, "no rollback happened" is satisfied by a request
-    // that was never refused — and a limiter has no reason to roll back an
-    // attempt it allowed.
+    const result = await new RateLimiter(store).check("k", 1, WINDOW);
+
+    // The control. Without it, "no rollback" is satisfied by a request that was
+    // never refused — and a limiter has no reason to roll back an allowed one.
     expect(result.allowed).toBe(false);
-
-    // Exactly one call, and not the rollback the store was willing to accept.
     expect(calls).toEqual(["consume"]);
+  });
+
+  it("issues no rollback on the FALLBACK path when it refuses", async () => {
+    // The branch the unsafe rollback actually lived in. A store WITHOUT
+    // `consume` is what reaches it; one with `consume` returns from the atomic
+    // branch first and never executes a line of this path, so the test above
+    // stays green when the historical rollback is put back here. Verified: it
+    // does.
+    const { store, calls } = recordingStore({ atomic: false });
+
+    const result = await new RateLimiter(store).check("k", 1, WINDOW);
+
+    expect(result.allowed).toBe(false);
+    expect(calls).toEqual(["increment"]);
   });
 
   it("keeps sliding while every attempt is being refused", async () => {
