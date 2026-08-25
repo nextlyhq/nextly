@@ -23,10 +23,79 @@ import {
 import {
   SortableContext,
   sortableKeyboardCoordinates,
+  useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type React from "react";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
+
+export interface UseSortableRowParams {
+  id: string;
+  initCollapsed?: boolean;
+  disabled?: boolean;
+  readOnly?: boolean;
+  isSortable?: boolean;
+}
+
+export interface UseSortableRowResult {
+  isOpen: boolean;
+  setIsOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  attributes: ReturnType<typeof useSortable>["attributes"];
+  listeners: ReturnType<typeof useSortable>["listeners"];
+  setNodeRef: ReturnType<typeof useSortable>["setNodeRef"];
+  transform: ReturnType<typeof useSortable>["transform"];
+  transition: ReturnType<typeof useSortable>["transition"];
+  isDragging: boolean;
+  style: React.CSSProperties;
+  isInteractive: boolean;
+}
+
+/**
+ * Encapsulates sortable row state (collapsible expansion, dnd-kit sortable hook,
+ * transform style generation, and interactivity check) for repeatable field rows.
+ */
+export function useSortableRow({
+  id,
+  initCollapsed = false,
+  disabled = false,
+  readOnly = false,
+  isSortable = true,
+}: UseSortableRowParams): UseSortableRowResult {
+  const [isOpen, setIsOpen] = useState(!initCollapsed);
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id,
+    disabled: disabled || readOnly || !isSortable,
+  });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  const isInteractive = !disabled && !readOnly;
+
+  return {
+    isOpen,
+    setIsOpen,
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    style,
+    isInteractive,
+  };
+}
 
 export interface UseSortableFieldArrayResult {
   /** Configured dnd-kit sensors (pointer + keyboard) */

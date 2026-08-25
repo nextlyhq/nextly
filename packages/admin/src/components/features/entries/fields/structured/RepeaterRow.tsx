@@ -10,8 +10,6 @@
  * @since 1.0.0
  */
 
-import { useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import {
   Button,
   Card,
@@ -22,7 +20,6 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import type { RepeaterFieldConfig, FieldConfig } from "nextly/config";
-import { useState } from "react";
 import type { ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
@@ -39,6 +36,7 @@ import {
 } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
 
+import { useSortableRow } from "./field-array-helpers";
 import { RepeaterRowLabel } from "./RepeaterRowLabel";
 
 // ============================================================
@@ -359,26 +357,22 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
   renderField,
   isSortable = field.admin?.isSortable !== false,
 }: RepeaterRowProps<TFieldValues>) {
-  const [isOpen, setIsOpen] = useState(!field.admin?.initCollapsed);
-
   const {
+    isOpen,
+    setIsOpen,
     attributes,
     listeners,
     setNodeRef,
-    transform,
-    transition,
+    style,
     isDragging,
-  } = useSortable({
+    isInteractive,
+  } = useSortableRow({
     id,
-    disabled: disabled || readOnly || !isSortable,
+    initCollapsed: field.admin?.initCollapsed,
+    disabled,
+    readOnly,
+    isSortable,
   });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
-  const isInteractive = !disabled && !readOnly;
 
   return (
     <Card

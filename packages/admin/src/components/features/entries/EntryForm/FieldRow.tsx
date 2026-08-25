@@ -1,6 +1,7 @@
 import type { FieldConfig } from "nextly/config";
 import type React from "react";
 
+// fallow-ignore-next-line circular-dependency
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import {
   fieldWeight,

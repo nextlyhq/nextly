@@ -13,8 +13,6 @@
  * @since 1.0.0
  */
 
-import { useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import {
   Badge,
   Button,
@@ -26,7 +24,6 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import type { FieldConfig } from "nextly/config";
-import { useState } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import { FieldRow } from "@admin/components/features/entries/EntryForm/FieldRow";
@@ -39,6 +36,8 @@ import {
 } from "@admin/components/icons";
 import { packFieldsIntoRows } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
+
+import { useSortableRow } from "./field-array-helpers";
 
 // ============================================================
 // Types
@@ -190,6 +189,130 @@ function generateRowLabel(
  * />
  * ```
  */
+
+interface ComponentRowHeaderProps {
+  index: number;
+  label: string;
+  componentType?: string;
+  rowLabel: string;
+  isOpen: boolean;
+  isSortable: boolean;
+  isInteractive: boolean;
+  canRemove: boolean;
+  onRemove?: () => void;
+  attributes: ReturnType<typeof useSortableRow>["attributes"];
+  listeners: ReturnType<typeof useSortableRow>["listeners"];
+}
+
+function ComponentRowHeader({
+  index,
+  label,
+  componentType,
+  rowLabel,
+  isOpen,
+  isSortable,
+  isInteractive,
+  canRemove,
+  onRemove,
+  attributes,
+  listeners,
+}: ComponentRowHeaderProps) {
+  return (
+    <CardHeader
+      className="p-0 pl-2 pr-1 border-b border-border dark:border-border bg-primary/5 hover:bg-primary/5 dark:hover:bg-accent/80 transition-colors"
+      noBorder
+    >
+      <div className="flex items-center gap-2">
+        {/* Drag Handle */}
+        {isSortable && isInteractive ? (
+          <button
+            type="button"
+            className={cn(
+              "cursor-grab active:cursor-grabbing p-2 rounded-md",
+              "focus:outline-none",
+              "touch-none" // Prevent touch scrolling interference
+            )}
+            aria-label={`Drag to reorder ${label} ${index + 1}`}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="h-4 w-4 text-muted-foreground" />
+          </button>
+        ) : (
+          <div className="w-6" />
+        )}
+
+        {/* Collapse Toggle + Label */}
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
+              "rounded-md px-2 py-3",
+              "focus:outline-none"
+            )}
+            aria-expanded={isOpen}
+          >
+            {isOpen ? (
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            )}
+
+            {/* Component icon */}
+            <Puzzle className="h-4 w-4 shrink-0 text-muted-foreground" />
+
+            {/* Component type badge (for dynamic zones) */}
+            {componentType && (
+              <Badge variant="outline" className="shrink-0 text-xs">
+                {label}
+              </Badge>
+            )}
+
+            {/* Row label */}
+            <span className="truncate text-sm font-medium">{rowLabel}</span>
+          </button>
+        </CollapsibleTrigger>
+
+        {/* Remove Button */}
+        {canRemove && isInteractive && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onRemove}
+            className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
+            aria-label={`Remove ${label} ${index + 1}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+    </CardHeader>
+  );
+}
+
+/**
+ * ComponentRow Component
+ *
+ * Renders a single draggable, collapsible row within a repeatable component field.
+ *
+ * @example
+ * ```tsx
+ * <ComponentRow
+ *   id="comp-1"
+ *   index={0}
+ *   label="Hero"
+ *   componentType="hero"
+ *   fields={heroFields}
+ *   basePath="layout.0"
+ *   data={item}
+ *   control={control}
+ *   onRemove={() => remove(0)}
+ *   canRemove={true}
+ * />
+ * ```
+ */
 export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
   id,
   index,
@@ -208,30 +331,22 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
 }: ComponentRowProps<TFieldValues>) {
   // Note: _control is reserved for future use - FieldRenderer gets control from FormContext
   void _control;
-  // Collapsible state
-  const [isOpen, setIsOpen] = useState(!initCollapsed);
-
-  // @dnd-kit sortable hook
   const {
+    isOpen,
+    setIsOpen,
     attributes,
     listeners,
     setNodeRef,
-    transform,
-    transition,
+    style,
     isDragging,
-  } = useSortable({
+    isInteractive,
+  } = useSortableRow({
     id,
-    disabled: disabled || readOnly || !isSortable,
+    initCollapsed,
+    disabled,
+    readOnly,
+    isSortable,
   });
-
-  // Apply transform styles for drag animation
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
-  // Determine if row can be interacted with
-  const isInteractive = !disabled && !readOnly;
 
   // Generate dynamic label
   const rowLabel = generateRowLabel(index, label, data);
@@ -249,97 +364,33 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        <CardHeader
-          className="p-0 pl-2 pr-1 border-b border-border dark:border-border bg-primary/5 hover:bg-primary/5 dark:hover:bg-accent/80 transition-colors"
-          noBorder
-        >
-          <div className="flex items-center gap-2">
-            {/* Drag Handle */}
-            {isSortable && isInteractive && (
-              <button
-                type="button"
-                className={cn(
-                  "cursor-grab active:cursor-grabbing p-2 rounded-md",
-                  "focus:outline-none",
-                  "touch-none" // Prevent touch scrolling interference
-                )}
-                aria-label={`Drag to reorder ${label} ${index + 1}`}
-                {...attributes}
-                {...listeners}
-              >
-                <GripVertical className="h-4 w-4 text-muted-foreground" />
-              </button>
-            )}
-
-            {/* Spacer when drag handle is hidden */}
-            {(!isSortable || !isInteractive) && <div className="w-6" />}
-
-            {/* Collapse Toggle + Label */}
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className={cn(
-                  "flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer",
-                  "rounded-md px-2 py-3",
-                  "focus:outline-none"
-                )}
-                aria-expanded={isOpen}
-              >
-                {isOpen ? (
-                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                )}
-
-                {/* Component icon */}
-                <Puzzle className="h-4 w-4 shrink-0 text-muted-foreground" />
-
-                {/* Component type badge (for dynamic zones) */}
-                {componentType && (
-                  <Badge variant="outline" className="shrink-0 text-xs">
-                    {label}
-                  </Badge>
-                )}
-
-                {/* Row label */}
-                <span className="truncate text-sm font-medium">
-                  {componentType ? rowLabel : rowLabel}
-                </span>
-              </button>
-            </CollapsibleTrigger>
-
-            {/* Remove Button */}
-            {canRemove && isInteractive && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={onRemove}
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
-                aria-label={`Remove ${label} ${index + 1}`}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-        </CardHeader>
+        <ComponentRowHeader
+          index={index}
+          label={label}
+          componentType={componentType}
+          rowLabel={rowLabel}
+          isOpen={isOpen}
+          isSortable={isSortable}
+          isInteractive={isInteractive}
+          canRemove={canRemove}
+          onRemove={onRemove}
+          attributes={attributes}
+          listeners={listeners}
+        />
 
         <CollapsibleContent>
           <CardContent className="p-4 pt-0 space-y-4">
             {/* Render component fields */}
             {fields && fields.length > 0 ? (
-              (() => {
-                const rows = packFieldsIntoRows(fields);
-                return rows.map((row, i) => (
-                  <FieldRow
-                    key={i}
-                    fields={row}
-                    basePath={basePath}
-                    disabled={disabled}
-                    readOnly={readOnly}
-                  />
-                ));
-              })()
+              packFieldsIntoRows(fields).map((row, i) => (
+                <FieldRow
+                  key={i}
+                  fields={row}
+                  basePath={basePath}
+                  disabled={disabled}
+                  readOnly={readOnly}
+                />
+              ))
             ) : (
               <div className="text-sm text-muted-foreground text-center py-4">
                 No fields configured for this field group.
