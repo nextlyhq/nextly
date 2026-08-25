@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { redirectOptionState } from "./FormSettingsTab";
+import { hasStoredRedirectPage, redirectOptionState } from "./FormSettingsTab";
 
 /**
  * Which of four things the "Redirect to a page" option shows.
@@ -12,10 +12,10 @@ import { redirectOptionState } from "./FormSettingsTab";
  */
 describe("redirectOptionState", () => {
   const state = (
-    stored: boolean,
+    hasStoredPage: boolean,
     collections: string[] | null,
     configFailed = false
-  ) => redirectOptionState({ stored, collections, configFailed });
+  ) => redirectOptionState({ hasStoredPage, collections, configFailed });
 
   it("offers the option with choices when collections are configured", () => {
     expect(state(false, ["pages"])).toBe("ready");
@@ -48,5 +48,47 @@ describe("redirectOptionState", () => {
 
   it("prefers real choices over both", () => {
     expect(state(true, ["pages"], true)).toBe("ready");
+  });
+
+  it("asks whether a page is STORED, not whether the option is selected", () => {
+    // Conflating the two let an author choose this option while the
+    // configuration was unknown: the state flipped to `stored-only` with
+    // nothing stored, so the picker had no collections to offer and the save
+    // could only be refused. Selecting the option is not a stored page.
+    expect(state(false, [], true)).toBe("unknown");
+    expect(state(false, null, true)).toBe("unknown");
+  });
+});
+
+describe("hasStoredRedirectPage", () => {
+  /**
+   * The call-site half of the same decision, and the half a break-verification
+   * on `redirectOptionState` cannot reach: the pure function stayed correct
+   * while the value handed to it was wrong.
+   */
+  it("is false when the option is selected but no page is named", () => {
+    expect(hasStoredRedirectPage({})).toBe(false);
+    expect(hasStoredRedirectPage({ redirectPage: undefined })).toBe(false);
+    expect(hasStoredRedirectPage({ redirectPage: {} })).toBe(false);
+    expect(
+      hasStoredRedirectPage({ redirectPage: { relationTo: "pages" } })
+    ).toBe(false);
+  });
+
+  it("is true only when a page is actually named", () => {
+    expect(
+      hasStoredRedirectPage({
+        redirectPage: { relationTo: "pages", value: "p1" },
+      })
+    ).toBe(true);
+  });
+
+  it("reads a reference without needing the configuration", () => {
+    // Configuration is exactly what may be missing when this is asked.
+    expect(
+      hasStoredRedirectPage({
+        redirectPage: { relationTo: "retired", value: "r1" },
+      })
+    ).toBe(true);
   });
 });

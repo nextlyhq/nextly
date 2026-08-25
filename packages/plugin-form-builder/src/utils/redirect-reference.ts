@@ -50,7 +50,11 @@ export function parseRedirectReference(
   const relationTo = record.relationTo;
   const inner = record.value;
 
-  if (typeof relationTo === "string") {
+  if (typeof relationTo === "string" && relationTo.trim()) {
+    // Trimmed, because a blank or whitespace collection name is not a
+    // collection: it passes a truthiness test, reads as a valid reference to
+    // the public validator, and then fails the membership check on save while
+    // resolving to no URL at submit time.
     const id = referenceId(inner);
     return id ? { collection: relationTo, id } : null;
   }

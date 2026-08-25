@@ -104,6 +104,18 @@ describe("parseRedirectReference", () => {
     ).toEqual({ collection: "pages", id: "pg1" });
   });
 
+  it("refuses a blank collection name", () => {
+    // Truthy, and not a collection. The public validator would call the form
+    // valid while the collection save refuses it and submit-time resolution
+    // produces no URL.
+    expect(
+      parseRedirectReference({ relationTo: "", value: "p1" }, many)
+    ).toBeNull();
+    expect(
+      parseRedirectReference({ relationTo: "   ", value: "p1" }, many)
+    ).toBeNull();
+  });
+
   it("has nothing to read from an unset or empty value", () => {
     for (const empty of [null, undefined, "", [], { relationTo: "pages" }]) {
       expect(parseRedirectReference(empty, many)).toBeNull();

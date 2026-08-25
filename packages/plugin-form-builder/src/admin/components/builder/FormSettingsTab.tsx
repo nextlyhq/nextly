@@ -27,6 +27,7 @@ import {
 } from "@nextlyhq/ui";
 import type React from "react";
 
+import { parseRedirectReference } from "../../../utils/redirect-reference";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
 import { RedirectPagePicker } from "./RedirectPagePicker";
@@ -166,24 +167,46 @@ interface FormSettingsTabProps {
  * ANSWER, a failed configuration read is not, and stating the first when the
  * second happened tells an author something false about their site.
  */
+/**
+ * Whether these settings actually NAME a page — not whether the page-redirect
+ * option happens to be selected.
+ *
+ * Conflating the two let an author choose the option while the configuration
+ * was unknown, which classified the state as "a page is stored" with nothing
+ * stored: a picker with no collections to offer, and a save that could only be
+ * refused. Selecting a confirmation is not a destination.
+ *
+ * An empty collection list is passed deliberately — a reference carrying its
+ * own `relationTo` is readable without configuration, and configuration is
+ * exactly what may be missing here.
+ */
+export function hasStoredRedirectPage(settings: {
+  redirectPage?: unknown;
+}): boolean {
+  return parseRedirectReference(settings.redirectPage, []) !== null;
+}
+
 export type RedirectOptionState =
   /** Not offered: nothing stored, nothing configured, nothing unknown. */
   | "hidden"
-  /** Offered, but the choices could not be loaded. */
+  /** Offered but not selectable: the choices could not be loaded. */
   | "unknown"
-  /** Offered because a page is stored, though none can be chosen now. */
+  /** Offered because a page IS stored, though none can be chosen now. */
   | "stored-only"
   /** Offered with choices. */
   | "ready";
 
 export function redirectOptionState(input: {
-  stored: boolean;
+  /** A page is actually stored — not merely that this option is selected. */
+  hasStoredPage: boolean;
   collections: string[] | null;
   configFailed: boolean;
 }): RedirectOptionState {
   const configured = input.collections !== null && input.collections.length > 0;
   if (configured) return "ready";
-  if (input.stored) return "stored-only";
+  // A STORED page outranks a failed request: it is a fact about this form,
+  // and the author needs to see it to change it.
+  if (input.hasStoredPage) return "stored-only";
   return input.configFailed ? "unknown" : "hidden";
 }
 
@@ -199,7 +222,7 @@ function PageRedirectOption({
   updateSettings: (patch: { redirectPage?: unknown }) => void;
 }) {
   const state = redirectOptionState({
-    stored: settings.confirmationType === "relationship",
+    hasStoredPage: hasStoredRedirectPage(settings),
     collections: redirectCollections,
     configFailed,
   });
@@ -207,10 +230,14 @@ function PageRedirectOption({
 
   return (
     <div className="flex items-start gap-3">
+      {/* Not selectable while the configuration is unknown. Choosing it there
+          leads only to a save that must be refused, since there is nothing to
+          pick and the rule requires a page. */}
       <RadioGroupItem
         value="relationship"
         id="settings-confirm-page"
         className="mt-0.5"
+        disabled={state === "unknown"}
       />
       <div className="w-full space-y-2">
         <Label htmlFor="settings-confirm-page">Redirect to a page</Label>
@@ -227,14 +254,15 @@ function PageRedirectOption({
             collections: the picker is what recovers the stored target by id
             and labels it, so leaving it out there tells an author a page is
             saved without telling them which. */}
-        {state !== "unknown" &&
-          settings.confirmationType === "relationship" && (
-            <RedirectPagePicker
-              collections={redirectCollections ?? []}
-              value={settings.redirectPage}
-              onChange={next => updateSettings({ redirectPage: next })}
-            />
-          )}
+        {state === "stored-only" || state === "ready"
+          ? settings.confirmationType === "relationship" && (
+              <RedirectPagePicker
+                collections={redirectCollections ?? []}
+                value={settings.redirectPage}
+                onChange={next => updateSettings({ redirectPage: next })}
+              />
+            )
+          : null}
       </div>
     </div>
   );
