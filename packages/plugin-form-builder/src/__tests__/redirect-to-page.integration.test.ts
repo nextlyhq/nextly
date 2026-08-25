@@ -296,6 +296,39 @@ describe("saving a form that redirects to a page", () => {
     );
   });
 
+  it("refuses a page that has been deleted", async () => {
+    // `findByID` throws NOT_FOUND rather than returning null, so this refusal
+    // is only reachable if a not-found error is told apart from an unreadable
+    // one. Catching everything loses it, and the form saves pointing at a
+    // page that is gone.
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+
+    const pageId = await seedPage(current);
+    await current.nextly.delete({ collection: "pages", id: pageId });
+
+    await expectRedirectRefusal(
+      current.nextly.create({
+        collection: "forms",
+        data: {
+          name: "Contact",
+          slug: "contact",
+          status: "published",
+          fields: [{ type: "text", name: "message", label: "Message" }],
+          settings: {
+            confirmationType: "relationship",
+            redirectPage: { relationTo: "pages", value: pageId },
+          },
+        },
+      })
+    );
+  });
+
   it("refuses a page that cannot fill the URL pattern", async () => {
     // Shape and membership are not enough: `/{slug}` over a page whose slug is
     // blank produces no URL, so the form would save cleanly and redirect

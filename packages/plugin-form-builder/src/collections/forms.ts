@@ -223,26 +223,15 @@ async function assertRedirectTargetUsable(
   // already was.
   if (context.executor) return;
 
-  // "The page is not there" and "I could not ask" are different answers and
-  // only the first is the author's to fix. Collapsing them blocks a save on a
-  // transient adapter failure while telling the author to pick another page —
-  // a confident, wrong remedy. A failed read skips the check, as the
-  // submit-time resolver does.
-  let target: RedirectTargetDocument | null;
-  try {
-    target = (await nextly.findByID({
-      collection: reference.collection,
-      id: reference.id,
-    })) as RedirectTargetDocument | null;
-  } catch {
-    return;
-  }
-
-  if (!target) {
+  const found = await readRedirectTarget(nextly, reference);
+  if (found.status === "unreadable") return;
+  if (found.status === "missing") {
     throw redirectRefusal(
       `That page no longer exists in "${reference.collection}". Pick another.`
     );
   }
+  const target = found.document;
+
   // A pattern may be a FUNCTION, which is host code and can throw. Authoring
   // must not be blocked by that: the submission path contains the same throw
   // and degrades to no redirect with a log line, so a broken pattern costs a
@@ -259,6 +248,55 @@ async function assertRedirectTargetUsable(
       "That page has no URL yet — give it a slug, or pick another page."
     );
   }
+}
+
+/**
+ * The target document, as one of three outcomes.
+ *
+ * Three rather than a nullable document, because "the page is not there" and
+ * "I could not ask" are different answers and only the first is the author's
+ * to fix. Collapsing them has been wrong in both directions on this rule:
+ * refusing on any failure blocks a save a retry would complete, and skipping
+ * on any failure loses the deleted-page refusal entirely.
+ */
+async function readRedirectTarget(
+  nextly: NonNullable<NonNullable<HookContext["req"]>["nextly"]>,
+  reference: { collection: string; id: string }
+): Promise<
+  | { status: "ok"; document: RedirectTargetDocument }
+  | { status: "missing" }
+  | { status: "unreadable" }
+> {
+  try {
+    const row = (await nextly.findByID({
+      collection: reference.collection,
+      id: reference.id,
+    })) as RedirectTargetDocument | null;
+    return row ? { status: "ok", document: row } : { status: "missing" };
+  } catch (error) {
+    return isMissingTarget(error)
+      ? { status: "missing" }
+      : { status: "unreadable" };
+  }
+}
+
+/**
+ * Whether a failed read means the document is GONE, or that it could not be
+ * asked for.
+ *
+ * Both arrive as exceptions — `findByID` throws `NOT_FOUND` for a missing
+ * entry rather than returning null, despite a signature that says `| null` —
+ * so the two are separated by the error's own code. Not by its message, which
+ * is prose, and not by catching everything, which has now been wrong in both
+ * directions: refusing on any failure blocks a save a retry would complete,
+ * and skipping on any failure loses the deleted-page refusal.
+ */
+export function isMissingTarget(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "NOT_FOUND"
+  );
 }
 
 /** One shape for every refusal this rule makes, so callers see one field. */
