@@ -99,6 +99,16 @@ vi.mock("../di", () => ({
   })),
 }));
 
+/*
+ * The audit writer is mocked so the RECORD is observable. Left real it would
+ * reach the adapter double, fail inside its own never-throws contract, and log
+ * — so every assertion below would pass against a route that recorded nothing.
+ */
+const auditWrite = vi.hoisted(() => vi.fn());
+vi.mock("../domains/audit/audit-log-writer", () => ({
+  buildAuditLogWriter: () => ({ write: auditWrite }),
+}));
+
 vi.mock("../lib/env", () => ({
   env: { NEXTLY_SECRET: "a-test-secret-value" },
 }));
@@ -162,6 +172,12 @@ beforeEach(() => {
     // nothing about, so the probe has to carry them or it answers a different
     // question than the caller's own read would.
     claims: { tenant: "acme", tier: "restricted" },
+  });
+  (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+    userId: "admin-1",
+    permissions: [],
+    roles: [],
+    authMethod: "session",
   });
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
@@ -1006,5 +1022,185 @@ describe("revokePreviewLinks", () => {
     );
 
     expect((body.item as { generation?: unknown }).generation).toBe(9);
+  });
+});
+
+/*
+ * Minting hands out a bearer credential that reads a draft as the minter, and
+ * until now it left no record at all. These cover WHAT is recorded rather than
+ * that something is: a row naming the wrong document, or carrying the token
+ * itself, is worse than no row — the first misdirects an investigation and the
+ * second hands its reader the access the trail exists to describe.
+ */
+describe("the audit trail a preview link leaves", () => {
+  // The Single path needs its own document doubles, exactly as the Single mint
+  // suite above sets them up. The entry path's defaults come from the top-level
+  // `beforeEach` and need nothing here.
+  beforeEach(() => {
+    singleDeclaration.mockResolvedValue({ url: () => "/" });
+    findSingle.mockResolvedValue({ id: "homepage" });
+    singleReadable.mockResolvedValue(true);
+    singleEditable.mockResolvedValue(true);
+    statusSingles.add("homepage");
+  });
+
+  /** The single event the run recorded, narrowed once. */
+  function recorded(): Record<string, unknown> {
+    expect(auditWrite, "nothing was recorded").toHaveBeenCalledTimes(1);
+    return auditWrite.mock.calls[0]?.[0] as Record<string, unknown>;
+  }
+
+  function meta(): Record<string, unknown> {
+    return recorded().metadata as Record<string, unknown>;
+  }
+
+  it("records the entry mint against the person who minted it", async () => {
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(recorded()).toMatchObject({
+      kind: "preview-link-minted",
+      // The minter, not merely "someone": the token renders the draft through
+      // THEIR field-level permissions, so the actor is what makes the row
+      // answer "whose access was handed out".
+      actorUserId: "u1",
+    });
+    expect(meta()).toMatchObject({
+      scope: "collection",
+      collection: "pages",
+      entryId: "7",
+    });
+  });
+
+  // The same recording, reached by the OTHER mint path. Both funnel through one
+  // helper, and this is what would go red if a later change gave either path its
+  // own response and left the record behind.
+  it("records a Single mint through the same choke point", async () => {
+    await mintPreviewLink(post({ single: "homepage" }));
+
+    expect(recorded()).toMatchObject({ kind: "preview-link-minted" });
+    expect(meta()).toMatchObject({ scope: "single", single: "homepage" });
+  });
+
+  it("records the language a scoped link was minted for", async () => {
+    localizedSingles.add("homepage");
+
+    await mintPreviewLink(post({ single: "homepage", locale: "fr" }));
+
+    expect(meta()).toMatchObject({ locale: "fr" });
+  });
+
+  /*
+   * The security property, asserted as an ABSENCE with a control beside it.
+   * `toMatchObject` above would pass on a row that also carried the token, so
+   * this is the assertion that separates them — and the metadata is checked to
+   * be non-empty first, because an empty object contains no token either and
+   * would satisfy the absence perfectly.
+   */
+  it("never writes the credential itself into the trail", async () => {
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    const serialised = JSON.stringify(recorded());
+    // The control: the row genuinely describes this mint, so the absence below
+    // is a true absence rather than an empty row.
+    expect(serialised).toContain("pages");
+    expect(serialised).not.toContain("eyJ");
+    expect(Object.keys(meta())).not.toContain("token");
+  });
+
+  it("records who revoked, and the generation the revocation moved to", async () => {
+    await revokePreviewLinks(
+      post({}, "http://x/api/nextly/preview-links/revoke")
+    );
+
+    expect(recorded()).toMatchObject({
+      kind: "preview-links-revoked",
+      actorUserId: "admin-1",
+    });
+    // What relates the two kinds of row: every mint below this generation is
+    // one this revocation killed.
+    expect(meta()).toMatchObject({ generation: 1 });
+  });
+
+  /*
+   * A refused mint produces no credential, so it must produce no row. Recorded
+   * before the refusal, the trail would claim access was handed out that never
+   * was — and an investigator reading it would be chasing a link nobody holds.
+   */
+  /*
+   * `userId` on an api-key request is the key's OWNER. A row carrying only that
+   * would state that a person personally revoked every link on the site when a
+   * delegated key did — backwards in exactly the case this trail exists for,
+   * where the key is what is under suspicion.
+   */
+  it("names the KEY when an api key revokes, not just its owner", async () => {
+    (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: "owner-1",
+      permissions: [],
+      roles: [],
+      authMethod: "api-key",
+      apiKeyId: "key-9",
+    });
+
+    await revokePreviewLinks(
+      post({}, "http://x/api/nextly/preview-links/revoke")
+    );
+
+    expect(meta()).toMatchObject({ authMethod: "api-key", apiKeyId: "key-9" });
+  });
+
+  // The control for the case above: a session revocation must NOT invent a key
+  // id, so a reader can tell "no key was involved" from "a key id was lost".
+  it("carries no key id when a session revokes", async () => {
+    await revokePreviewLinks(
+      post({}, "http://x/api/nextly/preview-links/revoke")
+    );
+
+    expect(meta()).toMatchObject({ authMethod: "session" });
+    expect(Object.keys(meta())).not.toContain("apiKeyId");
+  });
+
+  /*
+   * Signing is not the moment a credential exists for anyone: the settings read
+   * and the link assembly come after it, and a failure in either returns an
+   * error while the token never leaves the process. A row written before them
+   * would durably assert that access was handed out on a request that handed
+   * out nothing.
+   */
+  it("records nothing when the response cannot be assembled after signing", async () => {
+    /*
+     * The application config is the ONLY read that happens strictly after the
+     * token is signed — the settings read cannot serve here, because the
+     * redirect resolver reads settings too, so failing it aborts the request
+     * before anything is signed and the assertion passes without ever reaching
+     * the ordering it claims to test.
+     */
+    (container.get as ReturnType<typeof vi.fn>).mockImplementation(
+      (key: string) => {
+        if (key === "config") throw new Error("config unavailable");
+        return {
+          getPreviewTokenGeneration: getGeneration,
+          revokeAllPreviewTokens: revokeAll,
+          getSettings,
+        };
+      }
+    );
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).not.toBe(200);
+    expect(auditWrite).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when the mint is refused", async () => {
+    previewDeclaration.mockResolvedValue(undefined);
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).not.toBe(200);
+    expect(auditWrite).not.toHaveBeenCalled();
   });
 });
