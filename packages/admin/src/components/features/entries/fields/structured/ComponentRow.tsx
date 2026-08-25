@@ -256,10 +256,13 @@ function ComponentRowHeader({
             {/* Component icon */}
             <Puzzle className="h-4 w-4 shrink-0 text-muted-foreground" />
 
-            {/* Component type badge (for dynamic zones) */}
+            {/* Component type badge (for dynamic zones). `componentType` decides
+                WHETHER a badge belongs here — only a dynamic zone carries one —
+                while the badge reads the schema's display label, which is what a
+                content editor recognizes. */}
             {componentType && (
               <Badge variant="outline" className="shrink-0 text-xs">
-                {componentType}
+                {label}
               </Badge>
             )}
 

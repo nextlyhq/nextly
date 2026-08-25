@@ -179,4 +179,38 @@ describe("ComponentInput", () => {
       ).toBeInTheDocument();
     });
   });
+
+  describe("Dynamic zone row badges", () => {
+    const dynamicZoneField: EnrichedComponentFieldConfig = {
+      type: "component",
+      name: "blocks",
+      label: "Block",
+      components: ["seo", "promo"],
+      repeatable: true,
+      componentSchemas: {
+        seo: {
+          label: "SEO Metadata",
+          fields: [{ type: "text", name: "metaTitle" } as never],
+        },
+        promo: {
+          label: "Promo Card",
+          fields: [{ type: "text", name: "discountCode" } as never],
+        },
+      },
+    };
+
+    it("labels a row with the schema label rather than its slug", () => {
+      render(
+        <SingleHarness
+          field={dynamicZoneField}
+          defaultValues={{ blocks: [{ _componentType: "seo", metaTitle: "" }] }}
+        />
+      );
+
+      // The badge names the component for a content editor, so it carries the
+      // schema's display label; the slug is the discriminator, not a caption.
+      expect(screen.getAllByText("SEO Metadata").length).toBeGreaterThan(0);
+      expect(screen.queryByText("seo")).not.toBeInTheDocument();
+    });
+  });
 });

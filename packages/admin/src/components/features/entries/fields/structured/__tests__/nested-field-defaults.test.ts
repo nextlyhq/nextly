@@ -2,6 +2,8 @@ import type { FieldConfig } from "nextly/config";
 import { readFieldGroupType } from "nextly/field-group-type";
 import { describe, expect, it } from "vitest";
 
+import { getDefaultValues } from "@admin/lib/form/default-values";
+
 import { createDefaultFieldValues } from "../nested-field-defaults";
 
 describe("createDefaultFieldValues", () => {
@@ -260,6 +262,42 @@ describe("createDefaultFieldValues", () => {
       );
       expect(result.slides).toEqual([]);
       expect(result.header).toBeNull();
+    });
+
+    it("seeds empty array for relationship and upload fields with hasMany: true", () => {
+      const fields: FieldConfig[] = [
+        { type: "relationship", name: "authors", hasMany: true } as never,
+        { type: "relationship", name: "category", hasMany: false } as never,
+        { type: "upload", name: "gallery", hasMany: true } as never,
+        { type: "upload", name: "cover", hasMany: false } as never,
+      ];
+
+      const result = createDefaultFieldValues(fields);
+      expect(result).toEqual({
+        authors: [],
+        category: null,
+        gallery: [],
+        cover: null,
+      });
+    });
+
+    it("seeds the same values the surrounding create form seeds for identical fields", () => {
+      const fields: FieldConfig[] = [
+        { type: "text", name: "title" } as never,
+        { type: "text", name: "tags", hasMany: true } as never,
+        { type: "relationship", name: "authors", hasMany: true } as never,
+        { type: "upload", name: "gallery", hasMany: true } as never,
+        { type: "select", name: "topics", hasMany: true } as never,
+        { type: "chips", name: "keywords" } as never,
+        { type: "checkbox", name: "featured" } as never,
+        { type: "number", name: "order" } as never,
+      ];
+
+      // The nested helper must not answer this question a second time: an
+      // appended row and a top-level field of the same schema start identical.
+      expect(createDefaultFieldValues(fields)).toEqual(
+        getDefaultValues(fields)
+      );
     });
   });
 });

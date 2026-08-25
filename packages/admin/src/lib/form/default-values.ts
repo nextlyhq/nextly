@@ -92,16 +92,13 @@ function fromStoredValue(field: FieldConfig, existingValue: unknown): unknown {
 }
 
 /** A select or radio's seed, which depends on whether it holds one value or many. */
-function fromSelectDefault(field: FieldConfig): unknown {
+function fromSelectDefault(field: FieldConfig, declared: unknown): unknown {
   // The declared default may be a single value or, for hasMany, an array
   // (`defaultValue: ["technology", "design"]`). Treating an array default as a
   // scalar would wrap it again and hand the field [["technology", "design"]],
   // which renders as one nonsense badge and fails array validation.
-  const selectField = field as {
-    defaultValue?: string | string[];
-    hasMany?: boolean;
-  };
-  const { defaultValue } = selectField;
+  const selectField = field as { hasMany?: boolean };
+  const defaultValue = declared as string | string[] | undefined;
 
   if (selectField.hasMany) {
     if (Array.isArray(defaultValue)) return defaultValue;
@@ -112,6 +109,21 @@ function fromSelectDefault(field: FieldConfig): unknown {
   return Array.isArray(defaultValue)
     ? (defaultValue[0] ?? null)
     : (defaultValue ?? null);
+}
+
+/**
+ * A text field's seed, which depends on whether it holds one value or many.
+ *
+ * `convertTextFieldToZod` builds an ARRAY schema for `hasMany`, so seeding the
+ * empty string there hands the validator a value of the wrong shape and the row
+ * is rejected before anyone edits it.
+ */
+function fromTextDefault(field: FieldConfig, declared: unknown): unknown {
+  if (!(field as { hasMany?: boolean }).hasMany) return declared ?? "";
+  if (Array.isArray(declared)) return declared;
+  return declared === undefined || declared === null || declared === ""
+    ? []
+    : [declared];
 }
 
 /** A component's seed: a list when repeatable, its nested defaults when not. */
@@ -143,19 +155,22 @@ const DECLARED_DEFAULT: Record<
   string,
   (field: FieldConfig, declared: unknown) => unknown
 > = {
-  text: (_f, d) => d ?? "",
+  text: (f, d) => fromTextDefault(f, d),
   textarea: (_f, d) => d ?? "",
   email: (_f, d) => d ?? "",
   password: (_f, d) => d ?? "",
   code: (_f, d) => d ?? "",
   checkbox: (_f, d) => d ?? false,
-  select: f => fromSelectDefault(f),
-  radio: f => fromSelectDefault(f),
+  select: (f, d) => fromSelectDefault(f, d),
+  radio: (f, d) => fromSelectDefault(f, d),
   relationship: f => ((f as { hasMany?: boolean }).hasMany ? [] : null),
   upload: f => ((f as { hasMany?: boolean }).hasMany ? [] : null),
   repeater: () => [],
   chips: (_f, d) => d ?? [],
-  group: f => getDefaultValues((f as { fields: FieldConfig[] }).fields),
+  group: f => {
+    const { fields } = f as { fields?: FieldConfig[] };
+    return fields ? getDefaultValues(fields) : {};
+  },
   component: f => fromComponentDefault(f),
 };
 
@@ -170,7 +185,12 @@ const DECLARED_DEFAULT: Record<
  * chose.
  */
 function fromDeclaredDefault(field: FieldConfig): unknown {
-  const declared = (field as { defaultValue?: unknown }).defaultValue;
+  // A schema author may declare the default as a function to compute it per
+  // document. It is resolved here, before the table dispatches, so every type
+  // sees a value rather than each entry having to unwrap it — and so the form
+  // never holds the function object itself.
+  const raw = (field as { defaultValue?: unknown }).defaultValue;
+  const declared = typeof raw === "function" ? raw({}) : raw;
   const seed = DECLARED_DEFAULT[field.type as string];
   return seed ? seed(field, declared) : (declared ?? null);
 }
