@@ -232,6 +232,7 @@ export type {
   RemotePatternInput,
   SlotLock,
   SlotSpec,
+  BreakpointContextOptions,
   StyleCompileContext,
   StyleOrigin,
   StyleState,

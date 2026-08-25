@@ -21,11 +21,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BreakpointSet } from "../document";
+import type { BlockDocument, BreakpointSet } from "../document";
 import {
   PREVIEW_VIEWPORT_CONTAINER,
   UNPREVIEWABLE_CONTAINER,
   breakpointContexts,
+  compilePageCss,
 } from "./compile-page";
 
 /** Both axes populated, so neither can pass by being empty. */
@@ -161,5 +162,84 @@ describe("a preview compile", () => {
         })
       )
     ).not.toBe(JSON.stringify(breakpointContexts(set())));
+  });
+});
+
+/** One node styled at a breakpoint, and hidden at one while shown at another. */
+function page(): BlockDocument {
+  return {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "a",
+        type: "acme/text",
+        version: 1,
+        props: {},
+        styles: { base: { tablet: { color: "magenta" } } },
+        visibility: { devices: { tablet: false, mobile: true } },
+      },
+    ],
+  } as unknown as BlockDocument;
+}
+
+describe("the compiler entry point", () => {
+  it("emits a preview sheet, not only preview CONTEXTS", () => {
+    /*
+     * The option is worth nothing if it stops at the normalisation helper. An
+     * editor compiles through `compilePageCss`, so a sheet that still carried
+     * `@media` would leave the whole feature unreachable from the only entry
+     * point a caller has — the shape where a change is complete, tested, and
+     * never runs.
+     *
+     * Asserted on the EMITTED CSS rather than on the contexts, because that is
+     * the artifact the browser reads.
+     */
+    const previewed = compilePageCss(page(), {
+      breakpoints: set(),
+      previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+    });
+
+    // The population first: an empty sheet contains no `@media` either.
+    expect(previewed.css).toContain("magenta");
+    expect(previewed.css).toContain(
+      `@container ${PREVIEW_VIEWPORT_CONTAINER} (max-width: 991px)`
+    );
+    expect(previewed.css).not.toContain("@media");
+  });
+
+  it("leaves a published compile emitting @media, which is the control", () => {
+    // Without this, a compiler that emitted container queries unconditionally
+    // would satisfy the case above while breaking every published page.
+    const published = compilePageCss(page(), { breakpoints: set() });
+
+    expect(published.css).toContain("@media (max-width: 991px)");
+    expect(published.css).not.toContain(PREVIEW_VIEWPORT_CONTAINER);
+  });
+
+  it("keeps a VISIBILITY band under the same query as the styles", () => {
+    /*
+     * A band is emitted through a different path — `boundedAtRule` builds a
+     * lower-bounded query rather than reusing the context's own at-rule — and
+     * while that path derived its keyword from the axis alone, a previewed page
+     * kept `@media` for visibility while its styles had moved to a container
+     * query. A node could then be styled for a width it was simultaneously
+     * hidden at, and the two would disagree only under preview.
+     *
+     * The fixture hides at `tablet` and shows again at `mobile`, which is what
+     * makes the band bounded rather than a plain `max-width` rule.
+     */
+    const previewed = compilePageCss(page(), {
+      breakpoints: set(),
+      previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+    });
+
+    expect(previewed.css).toContain("width >");
+    // Every bounded band is asked of the preview box, none of the window.
+    for (const rule of previewed.css.split("}")) {
+      if (rule.includes("width >")) {
+        expect(rule).toContain(`@container ${PREVIEW_VIEWPORT_CONTAINER}`);
+      }
+    }
   });
 });

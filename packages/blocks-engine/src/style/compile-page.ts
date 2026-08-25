@@ -78,6 +78,17 @@ import type { WarningAllowance } from "./warning-allowance";
 export interface StyleCompileContext {
   breakpoints: BreakpointSet;
   /**
+   * Emit VIEWPORT breakpoints as container queries against this container name,
+   * for a surface that shows the page inside a resizable box rather than at the
+   * browser's own width.
+   *
+   * Absent for every published render, and absent is the default: the contexts a
+   * caller derives an artifact identity from are then byte-identical to what
+   * they were before this existed, so no stored sheet invalidates for CSS that
+   * did not change. See {@link BreakpointContextOptions.previewContainer}.
+   */
+  previewContainer?: string;
+  /**
    * Which hosts this site will fetch from.
    *
    * A stylesheet is a fetching surface: `background-image: url(...)` makes the
@@ -336,6 +347,28 @@ function emittableBound(maxWidth: unknown): boolean {
 }
 
 /**
+ * The at-rule keyword a context's queries are asked under, and the container
+ * they name when they are not asked of the window.
+ *
+ * ONE derivation, because two places need it and they answered differently: the
+ * contexts built below, and the bounded query a visibility band emits. While
+ * the band rebuilt the keyword from the axis alone, a previewed page kept
+ * `@media` for its visibility while its styles had moved to a container query —
+ * so a node could be styled for a width it was simultaneously hidden at.
+ */
+function queryPrefix(
+  axis: BreakpointAxis,
+  preview: string | undefined
+): string {
+  if (preview === undefined) {
+    return axis === "container" ? "@container" : "@media";
+  }
+  return axis === "container"
+    ? `@container ${UNPREVIEWABLE_CONTAINER}`
+    : `@container ${preview}`;
+}
+
+/**
  * The container name a preview sheet aims its VIEWPORT breakpoints at.
  *
  * Reserved and never emitted by an author's own styles, so a query naming it
@@ -538,10 +571,7 @@ export function breakpointContexts(
               ...(def.maxWidth === undefined
                 ? {}
                 : {
-                    atRule:
-                      preview === undefined
-                        ? `@media (max-width: ${def.maxWidth}px)`
-                        : `@container ${preview} (max-width: ${def.maxWidth}px)`,
+                    atRule: `${queryPrefix("viewport", preview)} (max-width: ${def.maxWidth}px)`,
                   }),
             }
           : {
@@ -564,13 +594,9 @@ export function breakpointContexts(
               // container breakpoint stays a known breakpoint rather than
               // becoming an unknown one.
               atRule:
-                preview === undefined
-                  ? def.maxWidth === undefined
-                    ? `@container (min-width: 0)`
-                    : `@container (max-width: ${def.maxWidth}px)`
-                  : def.maxWidth === undefined
-                    ? `@container ${UNPREVIEWABLE_CONTAINER} (min-width: 0)`
-                    : `@container ${UNPREVIEWABLE_CONTAINER} (max-width: ${def.maxWidth}px)`,
+                def.maxWidth === undefined
+                  ? `${queryPrefix("container", preview)} (min-width: 0)`
+                  : `${queryPrefix("container", preview)} (max-width: ${def.maxWidth}px)`,
             }
       );
     }
@@ -909,7 +935,8 @@ function visibilityRules(
   contexts: readonly BreakpointContext[],
   basePath: string,
   warnings: ValidationIssue[],
-  warningAllowance: WarningAllowance
+  warningAllowance: WarningAllowance,
+  preview: string | undefined
 ): CssRule[] {
   // The containing structures get the same account as the values inside them.
   // A `visibility` or `devices` that is an array, a string or null applies none
@@ -960,7 +987,7 @@ function visibilityRules(
     let hidingFrom: BreakpointContext | undefined;
     const flush = (lowerBound: number | undefined): void => {
       if (hidingFrom === undefined) return;
-      const atRule = boundedAtRule(hidingFrom, lowerBound);
+      const atRule = boundedAtRule(hidingFrom, lowerBound, preview);
       rules.push({
         ...(atRule === undefined ? {} : { atRule }),
         // Hiding has to beat the node's own `display`, including one stored on
@@ -1022,10 +1049,11 @@ function visibilityRules(
  */
 function boundedAtRule(
   context: BreakpointContext,
-  lowerBound: number | undefined
+  lowerBound: number | undefined,
+  preview: string | undefined
 ): string | undefined {
   if (lowerBound === undefined) return context.atRule;
-  const feature = context.axis === "container" ? "@container" : "@media";
+  const feature = queryPrefix(context.axis ?? "viewport", preview);
   const upper =
     context.maxWidth === undefined
       ? ""
@@ -1176,7 +1204,11 @@ export function compilePageCss(
   // stale ids — or a document full of malformed token names — costs its own
   // diagnostics and not the page's stylesheet.
   const warningAllowance = newWarningAllowance();
-  const contexts = breakpointContexts(ctx.breakpoints);
+  const contexts = breakpointContexts(ctx.breakpoints, {
+    ...(ctx.previewContainer === undefined
+      ? {}
+      : { previewContainer: ctx.previewContainer }),
+  });
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   const mayFetchUrl = ctx.mayFetchUrl;
   const scope = scopeSelector(ctx.scope, warnings);
@@ -1479,7 +1511,8 @@ export function compilePageCss(
         contexts,
         path,
         warnings,
-        warningAllowance
+        warningAllowance,
+        ctx.previewContainer
       ),
     ];
     // Held out of the sheet when the node can be pruned at read time. Serialized on its own, so

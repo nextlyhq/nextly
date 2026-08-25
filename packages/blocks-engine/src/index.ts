@@ -506,9 +506,6 @@ export {
 
 /**
  * Emitting a page's breakpoints for a surface that is not the published page.
- *
- * Appended rather than folded into the `compile-page` export above, so that
- * three lanes editing this file at once collide on nothing.
  */
 export {
   PREVIEW_VIEWPORT_CONTAINER,
