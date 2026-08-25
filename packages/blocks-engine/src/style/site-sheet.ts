@@ -59,6 +59,14 @@ export interface SiteSheetInput {
    * and cannot be mistaken for the old sheet.
    */
   mayFetchUrl?: MayFetchUrl;
+  /**
+   * Emit viewport breakpoints as container queries against this container, for
+   * a surface previewing the page in a resizable box.
+   *
+   * Carried so this tier answers the breakpoint question the same way the page
+   * tier does. See {@link BreakpointContextOptions.previewContainer}.
+   */
+  previewContainer?: string;
 }
 
 /** The shared sheet and the name it is addressed by. */
@@ -160,6 +168,15 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     ...(input.mayFetchUrl === undefined
       ? {}
       : { mayFetchUrl: input.mayFetchUrl }),
+    // The SAME breakpoint emission the page tier uses. Compiled without it, the
+    // shared classes and block defaults answer the published question while the
+    // node-local declarations beside them answer the preview one — so a
+    // container-axis rule from this sheet can match a real authored container
+    // while the node's own rule at that breakpoint is aimed at a name nothing
+    // carries. One document, two answers to one breakpoint.
+    ...(input.previewContainer === undefined
+      ? {}
+      : { previewContainer: input.previewContainer }),
   });
   warnings.push(...tiers.warnings);
   if (tiers.css !== "") blocks.push(tiers.css);

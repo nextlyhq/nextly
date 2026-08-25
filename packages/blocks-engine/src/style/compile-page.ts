@@ -78,6 +78,17 @@ import type { WarningAllowance } from "./warning-allowance";
 export interface StyleCompileContext {
   breakpoints: BreakpointSet;
   /**
+   * Emit VIEWPORT breakpoints as container queries against this container name,
+   * for a surface that shows the page inside a resizable box rather than at the
+   * browser's own width.
+   *
+   * Absent for every published render, and absent is the default: the contexts a
+   * caller derives an artifact identity from are then byte-identical to what
+   * they were before this existed, so no stored sheet invalidates for CSS that
+   * did not change. See {@link BreakpointContextOptions.previewContainer}.
+   */
+  previewContainer?: string;
+  /**
    * Which hosts this site will fetch from.
    *
    * A stylesheet is a fetching surface: `background-image: url(...)` makes the
@@ -218,6 +229,24 @@ export interface CompiledPageCss {
    */
   scope?: string;
   /**
+   * The container these breakpoints were aimed at, when the compile was a
+   * PREVIEW one, and absent when it was published.
+   *
+   * Returned rather than assumed to equal the requested name, for the reason
+   * {@link CompiledPageCss.scope} gives about scopes: `previewContainerName`
+   * refuses an empty, reserved, malformed or oversized value and the compile
+   * falls back to published `@media`, so a caller recording what it ASKED for
+   * would stamp a published sheet as a preview one — and, worse, the reverse
+   * never happens, so the mistake is silent in exactly one direction.
+   *
+   * It is on the output because a preview sheet is not publishable: its
+   * viewport tiers are `@container` rules naming a box only the previewing
+   * surface declares, so served on a published page they match nothing and the
+   * page silently loses every breakpoint above the base one. A reader handed a
+   * stored artifact has no other way to tell the two apart.
+   */
+  previewContainer?: string;
+  /**
    * What was not written, and why. Every entry names a value that is in the
    * document and absent from the stylesheet, so "my style did nothing" always
    * has an answer.
@@ -336,6 +365,287 @@ function emittableBound(maxWidth: unknown): boolean {
 }
 
 /**
+ * The at-rule keyword a context's queries are asked under, and the container
+ * they name when they are not asked of the window.
+ *
+ * ONE derivation, because two places need it and they answered differently: the
+ * contexts built below, and the bounded query a visibility band emits. While
+ * the band rebuilt the keyword from the axis alone, a previewed page kept
+ * `@media` for its visibility while its styles had moved to a container query —
+ * so a node could be styled for a width it was simultaneously hidden at.
+ */
+/** The longest preview container name this compiler will emit. */
+export const MAX_PREVIEW_CONTAINER_LENGTH = 64;
+
+/**
+ * Names a `<custom-ident>` may not take, whatever its shape.
+ *
+ * `none` is excluded from `container-name` by its own grammar, and the CSS-wide
+ * keywords are excluded from every custom identifier. Matching the identifier
+ * pattern is therefore necessary and not sufficient.
+ */
+const RESERVED_CONTAINER_NAMES: ReadonlySet<string> = new Set([
+  "none",
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+  /*
+   * The container-query QUERY keywords, which the grammar excludes from a
+   * container name for a different reason than the CSS-wide keywords above.
+   *
+   * `@container <name>? <condition>` puts the name and the condition adjacent
+   * with nothing between them, so a name spelled `and` or `or` produces
+   * `@container and (max-width: 991px)` — not a container named `and`, but a
+   * malformed condition, which a browser drops entirely. `not` is worse than
+   * malformed: it PARSES, as the negation of the following condition, so the
+   * rule silently applies at every width the author meant to exclude.
+   *
+   * The consequence is the one this whole helper exists to prevent: the box
+   * establishes a perfectly valid named container while its responsive rules
+   * are dropped or evaluated inverted, with nothing on screen to say why.
+   */
+  "and",
+  "or",
+  "not",
+]);
+
+/**
+ * A preview container name this compiler is willing to write into an at-rule,
+ * or `undefined` for anything it is not.
+ *
+ * Refusing rather than escaping, because a name that needs escaping is not a
+ * name a caller meant: the value is a CSS custom identifier the previewing
+ * surface also has to put in its own `container-name`, so anything that would
+ * have to be transformed on the way out would no longer match what the caller
+ * declared. Refusing degrades to a published compile, which is a sheet that is
+ * merely not previewable — writing an unescaped one degrades to a stylesheet
+ * that does not parse.
+ *
+ * Four rejections, and each is a different failure:
+ *
+ * - EMPTY or blank produces `@container (max-width: N)` with no name at all,
+ *   which binds to the nearest ancestor query container — including an author's
+ *   own. That is the exact capture the container axis is named to avoid.
+ * - The RESERVED unpreviewable name aims the viewport axis at the same
+ *   container as the container axis, so the rules kept deliberately inert
+ *   become live against the preview box.
+ * - Anything outside a CSS identifier can close the at-rule and open something
+ *   else. `emittable-string-bounds.ts` requires every string this compiler
+ *   emits to be bounded, and an identifier's shape is the other half of that.
+ * - Over the bound, because the name is copied into every preview at-rule and a
+ *   caller digesting these inputs truncates at what this package promises.
+ */
+export function previewContainerName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  /*
+   * The RAW length first, before `trim` or any other linear pass.
+   *
+   * Trimming a megabyte of whitespace to reach a refusal that was certain from
+   * the length alone is work done on every compile, and this name is
+   * caller-controlled and is normalised again while deriving artifact
+   * identities — so the scan recurs on render paths rather than once.
+   *
+   * The cap is therefore on the RAW input, and that is a deliberate rule rather
+   * than an optimisation that happens to agree. It does not agree: a name of
+   * exactly the cap's length wrapped in spaces would be legal after trimming
+   * and is refused here. That is the intended reading — the bound this package
+   * publishes is on the string a caller hands over, so a caller digesting these
+   * inputs can check the value it holds rather than a trimmed form it would
+   * have to derive first.
+   */
+  if (value.length > MAX_PREVIEW_CONTAINER_LENGTH) return undefined;
+  const name = value.trim();
+  if (name.length === 0) return undefined;
+  if (name === UNPREVIEWABLE_CONTAINER) return undefined;
+  // The CSS-wide keywords and `none`, which the grammar excludes from a
+  // `<custom-ident>` however well they match its shape. Emitted, they make an
+  // at-rule the browser drops AND a `container-name` the surface cannot declare,
+  // so the preview loses its rules rather than degrading to the published
+  // compile the way every other refusal here does.
+  if (RESERVED_CONTAINER_NAMES.has(name.toLowerCase())) return undefined;
+  // A CSS custom identifier, conservatively: letters, digits, hyphen and
+  // underscore, not starting with a digit. Narrower than the grammar allows,
+  // because the escapes the full grammar permits are exactly what this refuses
+  // to emit.
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(name) ? name : undefined;
+}
+
+function queryPrefix(
+  axis: BreakpointAxis,
+  preview: string | undefined
+): string {
+  if (preview === undefined) {
+    return axis === "container" ? "@container" : "@media";
+  }
+  return axis === "container"
+    ? `@container ${UNPREVIEWABLE_CONTAINER}`
+    : `@container ${preview}`;
+}
+
+/**
+ * The default container name a preview sheet aims its VIEWPORT breakpoints at.
+ *
+ * A DEFAULT, not a guarantee. A CSS identifier cannot be reserved globally and
+ * blocks render host-defined markup and stylesheets, so a nearer ancestor
+ * declaring `container: nx-preview-viewport / inline-size` would satisfy the
+ * named query first — and viewport tiers would then follow that inner element
+ * instead of the preview box, so resizing the canvas shows the wrong
+ * breakpoint. The container axis is protected by an impossible condition
+ * instead; the viewport axis cannot be, because it has to match something.
+ *
+ * A surface that renders untrusted or third-party blocks should mint its own
+ * name with {@link previewContainerFor} and pass the SAME value to the compile
+ * and to its box. This constant remains for the ordinary case, where the
+ * previewing surface controls the markup inside it.
+ */
+export const PREVIEW_VIEWPORT_CONTAINER = "nx-preview-viewport";
+
+/**
+ * A stable 64-bit digest of a seed, as two base-36 halves.
+ *
+ * FNV-1a, computed in two independently seeded 32-bit passes rather than one,
+ * because a single 32-bit digest collides at roughly one pair in 65k surfaces
+ * by the birthday bound — near enough to be reachable on a large site, and a
+ * collision here silently gives two boxes one container name.
+ *
+ * Written out rather than taken from a hashing library because it has to agree
+ * across the server render and the client hydration, and pure integer maths on
+ * a string is the same in both. `Math.imul` and `>>> 0` keep every step inside
+ * 32 bits, which plain `*` would not.
+ */
+/**
+ * What every minted preview name starts with.
+ *
+ * Named because the length check above and the two constructions below must
+ * agree on it: a prefix counted as one length and written as another either
+ * sanitises a seed it did not need to, or lets an over-bound name reach
+ * `previewContainerName` and take the digest path for the wrong reason.
+ */
+const PREVIEW_SEED_PREFIX = "nx-preview-";
+
+function digest(seed: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let index = 0; index < seed.length; index += 1) {
+    const code = seed.charCodeAt(index);
+    a = Math.imul(a ^ code, 0x01000193) >>> 0;
+    b = Math.imul(b ^ code, 0x85ebca6b) >>> 0;
+  }
+  return `${a.toString(36)}${b.toString(36)}`;
+}
+
+/**
+ * A preview container name unlikely to collide with an authored one.
+ *
+ * Derived from a seed the CALLER owns — a React `useId`, a surface id, anything
+ * stable for the lifetime of that box — rather than generated randomly here, so
+ * the name a server renders and the name a client hydrates are the same string.
+ * A random one would differ across that boundary and the preview would match
+ * nothing on exactly the first paint.
+ *
+ * The seed is reduced to identifier-safe characters rather than rejected, so a
+ * caller passing an opaque id from elsewhere does not have to know this
+ * function's rules to use it.
+ *
+ * **A seed too long to carry literally is DIGESTED, never dropped.** Prefixed,
+ * a seed over about fifty characters exceeds the emitted-name bound, and
+ * returning the shared default there would hand exactly the surfaces most
+ * likely to use long ids — document paths, composite keys, opaque route ids —
+ * the one globally predictable name this function exists to avoid. The digest
+ * keeps the name per-surface and inside the bound.
+ *
+ * Two distinct seeds can still digest alike; the guarantee is a low collision
+ * probability, not uniqueness. That is the right trade here because the cost of
+ * a collision is two boxes sharing a container name, while the cost of the
+ * fallback was every long-seeded surface sharing one with THIRD-PARTY markup.
+ */
+export function previewContainerFor(seed: string): string {
+  /*
+   * The length is decided BEFORE any linear pass, the same way
+   * `previewContainerName` decides it before trimming.
+   *
+   * A seed that cannot fit under the bound once prefixed is going to be
+   * digested whatever it contains, so sanitising it first walks the whole
+   * string, allocates a full copy, builds a second oversized string in the
+   * template, and has it refused — then the digest walks the original anyway.
+   * Three passes and two allocations to reach a conclusion the length alone
+   * settles. Surfaces call this during render and again on hydration, so the
+   * work recurs rather than happening once.
+   */
+  const literal =
+    PREVIEW_SEED_PREFIX.length + seed.length > MAX_PREVIEW_CONTAINER_LENGTH
+      ? undefined
+      : previewContainerName(
+          `${PREVIEW_SEED_PREFIX}${seed.replace(/[^A-Za-z0-9_-]/g, "-")}`
+        );
+  if (literal !== undefined) return literal;
+  /*
+   * Digested from the ORIGINAL seed rather than the reduced form, so two seeds
+   * differing only in characters the reduction collapses — `a/b` and `a:b` both
+   * become `a-b` — still produce different names.
+   */
+  return (
+    previewContainerName(`${PREVIEW_SEED_PREFIX}${digest(seed)}`) ??
+    PREVIEW_VIEWPORT_CONTAINER
+  );
+}
+
+/**
+ * The container name a preview sheet aims its CONTAINER breakpoints at, which
+ * is deliberately one nothing carries.
+ *
+ * A container breakpoint responds to the width of the element's OWN container,
+ * so it cannot be previewed by resizing a canvas — the answer depends on where
+ * the block sits, not on the surface around it. Left unnamed, those queries
+ * would resolve against the preview container instead, and the editor would
+ * show container styles the published page does not.
+ *
+ * Named to something no element declares rather than omitted, so the contexts
+ * keep their ids: a style stored at a container breakpoint stays a KNOWN
+ * breakpoint that simply does not apply here, instead of becoming an unknown
+ * one and collecting a warning on every render.
+ */
+export const UNPREVIEWABLE_CONTAINER = "nx-not-previewable";
+
+/**
+ * A container condition no container can satisfy.
+ *
+ * The NAME is a label and this is the guarantee. A CSS identifier cannot be
+ * reserved globally — blocks render host-defined markup and stylesheets, so
+ * anything may declare `container-name: nx-not-previewable`, and a rule kept
+ * inert only by nobody using that name becomes live the moment somebody does.
+ *
+ * A width is never negative, so `(width < 0px)` is false against every
+ * container, in every browser, whatever names are in scope. Valid syntax that
+ * evaluates false is a boundary; an unused name is a convention.
+ */
+const UNSATISFIABLE_CONDITION = "(width < 0px)";
+
+/**
+ * How to emit the contexts, when the caller is not the published page.
+ */
+export interface BreakpointContextOptions {
+  /**
+   * Emit VIEWPORT breakpoints as container queries against this container name.
+   *
+   * For a surface that shows the page inside a resizable box rather than at the
+   * browser's own width. `@media` asks the WINDOW, so a box narrowed to a
+   * breakpoint's width changes nothing about which rules apply — the block gets
+   * narrower and keeps its widest styling, which is a preview that lies. A
+   * container query asked of the box answers about the box.
+   *
+   * Absent for every published render, and absent is the default so that the
+   * artifact identity a caller derives from these contexts is byte-identical to
+   * what it was before this option existed. A stamp that moved would invalidate
+   * every artifact on the site for CSS that did not change.
+   */
+  readonly previewContainer?: string;
+}
+
+/**
  * The breakpoints to emit, in cascade order.
  *
  * The base breakpoint first and unconditional, then viewport widths descending,
@@ -359,8 +669,10 @@ export function breakpointContexts(
   // readers hold the stored settings record rather than a validated context.
   // The body already treats the argument as untrusted, so an absent set answers
   // with the base context alone rather than being a case to guard at each call.
-  set: BreakpointSet | undefined
+  set: BreakpointSet | undefined,
+  options?: BreakpointContextOptions
 ): BreakpointContext[] {
+  const preview = previewContainerName(options?.previewContainer);
   // The base context carries no upper bound and no at-rule, but it still needs
   // to be bounded from below when a narrower breakpoint shows a node again:
   // without that, hiding at base emits an unconditional rule that a later
@@ -489,7 +801,9 @@ export function breakpointContexts(
               maxWidth: def.maxWidth,
               ...(def.maxWidth === undefined
                 ? {}
-                : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
+                : {
+                    atRule: `${queryPrefix("viewport", preview)} (max-width: ${def.maxWidth}px)`,
+                  }),
             }
           : {
               id: def.id,
@@ -500,10 +814,22 @@ export function breakpointContexts(
               // apply to a node with no query-container ancestor at all, and would
               // outrank every viewport rule while doing it. `min-width: 0` matches
               // inside any container and nowhere else, which is exactly the scope.
+              //
+              // NAMED under preview, to a name nothing carries. An unnamed
+              // container query resolves against the nearest ancestor that has
+              // `container-type` set — named or not — so a preview surface that
+              // makes its canvas a query container would capture these for every
+              // node with no authored container ancestor, and show container
+              // styles the published page does not. Naming them rather than
+              // omitting them keeps their ids present, so a style stored at a
+              // container breakpoint stays a known breakpoint rather than
+              // becoming an unknown one.
               atRule:
-                def.maxWidth === undefined
-                  ? `@container (min-width: 0)`
-                  : `@container (max-width: ${def.maxWidth}px)`,
+                preview !== undefined
+                  ? `@container ${UNPREVIEWABLE_CONTAINER} ${UNSATISFIABLE_CONDITION}`
+                  : def.maxWidth === undefined
+                    ? `@container (min-width: 0)`
+                    : `@container (max-width: ${def.maxWidth}px)`,
             }
       );
     }
@@ -842,7 +1168,8 @@ function visibilityRules(
   contexts: readonly BreakpointContext[],
   basePath: string,
   warnings: ValidationIssue[],
-  warningAllowance: WarningAllowance
+  warningAllowance: WarningAllowance,
+  preview: string | undefined
 ): CssRule[] {
   // The containing structures get the same account as the values inside them.
   // A `visibility` or `devices` that is an array, a string or null applies none
@@ -893,7 +1220,7 @@ function visibilityRules(
     let hidingFrom: BreakpointContext | undefined;
     const flush = (lowerBound: number | undefined): void => {
       if (hidingFrom === undefined) return;
-      const atRule = boundedAtRule(hidingFrom, lowerBound);
+      const atRule = boundedAtRule(hidingFrom, lowerBound, preview);
       rules.push({
         ...(atRule === undefined ? {} : { atRule }),
         // Hiding has to beat the node's own `display`, including one stored on
@@ -955,10 +1282,26 @@ function visibilityRules(
  */
 function boundedAtRule(
   context: BreakpointContext,
-  lowerBound: number | undefined
+  lowerBound: number | undefined,
+  preview: string | undefined
 ): string | undefined {
   if (lowerBound === undefined) return context.atRule;
-  const feature = context.axis === "container" ? "@container" : "@media";
+  /*
+   * A band on a context that can never match cannot match either.
+   *
+   * The container axis under preview carries an impossible condition rather
+   * than a bound, and rebuilding the wrapper from the prefix alone dropped it —
+   * leaving a merely NAMED query that an authored ancestor could satisfy. The
+   * node's styles would stay impossible while its visibility band went live, so
+   * preview visibility disagreed with preview styling.
+   *
+   * Returned whole rather than reconstructed, because the context already
+   * states the condition and a second construction of it is what diverged.
+   */
+  if (context.atRule?.includes(UNSATISFIABLE_CONDITION) === true) {
+    return context.atRule;
+  }
+  const feature = queryPrefix(context.axis ?? "viewport", preview);
   const upper =
     context.maxWidth === undefined
       ? ""
@@ -1109,7 +1452,16 @@ export function compilePageCss(
   // stale ids — or a document full of malformed token names — costs its own
   // diagnostics and not the page's stylesheet.
   const warningAllowance = newWarningAllowance();
-  const contexts = breakpointContexts(ctx.breakpoints);
+  /*
+   * Normalised ONCE for the whole compile, so the contexts and the visibility
+   * bands cannot disagree about it. Two readers of one raw field is how a
+   * refused name would have reached one path and not the other, and the sheet
+   * would then mix previewed styles with published bands.
+   */
+  const preview = previewContainerName(ctx.previewContainer);
+  const contexts = breakpointContexts(ctx.breakpoints, {
+    ...(preview === undefined ? {} : { previewContainer: preview }),
+  });
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   const mayFetchUrl = ctx.mayFetchUrl;
   const scope = scopeSelector(ctx.scope, warnings);
@@ -1412,7 +1764,8 @@ export function compilePageCss(
         contexts,
         path,
         warnings,
-        warningAllowance
+        warningAllowance,
+        preview
       ),
     ];
     // Held out of the sheet when the node can be pruned at read time. Serialized on its own, so
@@ -1582,6 +1935,9 @@ export function compilePageCss(
 
   return {
     ...(effectiveScope === undefined ? {} : { scope: effectiveScope }),
+    // The NORMALISED name, so a refused one leaves this absent and the artifact
+    // reads as the published sheet it actually is.
+    ...(preview === undefined ? {} : { previewContainer: preview }),
     css: serializeRules(rules),
     warnings,
     classes: attributeClasses,

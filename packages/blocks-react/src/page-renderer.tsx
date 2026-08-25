@@ -199,6 +199,7 @@ interface SiteInputRoles {
   classes: "reconciled-here";
   blockBases: "reconciled-here";
   tokenPrefix: "reconciled-here";
+  previewContainer: "reconciled-here";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
@@ -282,6 +283,17 @@ export function sharedStyleInputs(
       stored.tokenPrefix,
       stored.tokens?.prefix,
       route.tokenPrefix
+    ),
+    // Reconciled from BOTH tiers, like every other shared field. Read from the
+    // route alone, a caller stating it on `siteStyles` would have it reach the
+    // site sheet through `...siteInput` while the page context compiled node
+    // rules published — one render carrying two answers to one breakpoint.
+    //
+    // The route wins where both state it: which surface is doing the previewing
+    // is a fact about this render, while the stored tier describes the site.
+    previewContainer: firstStated(
+      route.previewContainer,
+      stored.previewContainer
     ),
   });
 }
@@ -665,6 +677,13 @@ export function PageRenderer({
           ...(mayFetchUrl === undefined || siteInput?.mayFetchUrl !== undefined
             ? {}
             : { mayFetchUrl }),
+          // The RESOLVED preview option, from the same reconciliation the page
+          // context above was given. A shared tier compiled for the published
+          // page beneath node styles compiled for a preview surface puts two
+          // answers to one breakpoint in one document.
+          ...(shared.previewContainer === undefined
+            ? {}
+            : { previewContainer: shared.previewContainer }),
         });
 
   return (

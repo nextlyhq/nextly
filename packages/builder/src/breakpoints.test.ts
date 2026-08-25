@@ -9,7 +9,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { MAX_BREAKPOINT_ID_LENGTH } from "@nextlyhq/blocks-engine";
+import {
+  MAX_BREAKPOINT_ID_LENGTH,
+  PREVIEW_VIEWPORT_CONTAINER,
+} from "@nextlyhq/blocks-engine";
 
 import {
   authoredBreakpoints,
@@ -42,6 +45,60 @@ function rows(prefix: string, count: number) {
     maxWidth: 1000 - i * 50,
   }));
 }
+
+describe("which breakpoints a window can answer for", () => {
+  it("answers only the BASE context under a container preview", () => {
+    /*
+     * Asked without the preview option, this compares the window against
+     * `@media` rules a preview compile never wrote — and the answer is not
+     * merely stale, it is confidently wrong in a direction that looks
+     * plausible. Measured: with every media query matching, the unaware call
+     * reports tablet and mobile live, which is exactly what a NARROW admin
+     * window reports while a WIDE canvas box is showing desktop.
+     *
+     * Under the option the viewport contexts are container queries, which a
+     * `matchMedia` caller cannot answer, so the honest result is the base
+     * context alone — silence rather than a wrong claim.
+     *
+     * `() => true` is deliberate: it makes the unaware call report everything,
+     * so this cannot pass by the window happening to match nothing.
+     */
+    const always = () => true;
+
+    expect(matchedBreakpoints(BREAKPOINTS_FOR_PREVIEW, always)).toEqual([
+      "base",
+      "tablet",
+      "mobile",
+    ]);
+    expect(
+      matchedBreakpoints(BREAKPOINTS_FOR_PREVIEW, always, {
+        previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+      })
+    ).toEqual(["base"]);
+  });
+
+  it("emits no answerable query under a preview, so nothing is subscribed", () => {
+    // `breakpointQueries` feeds the subscription. Left unaware, the panel would
+    // subscribe to media queries the sheet does not use and re-measure on every
+    // window resize for answers it must not report.
+    expect(breakpointQueries(BREAKPOINTS_FOR_PREVIEW).length).toBeGreaterThan(
+      0
+    );
+    expect(
+      breakpointQueries(BREAKPOINTS_FOR_PREVIEW, {
+        previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+      })
+    ).toEqual([]);
+  });
+});
+
+const BREAKPOINTS_FOR_PREVIEW = {
+  viewport: [
+    { id: "tablet", label: "Tablet", maxWidth: 991 },
+    { id: "mobile", label: "Mobile", maxWidth: 575 },
+  ],
+  container: [],
+} as unknown as BreakpointSet;
 
 describe("the authored set", () => {
   it("strips a stored base row from both axes", () => {

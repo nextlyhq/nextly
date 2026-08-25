@@ -28,6 +28,7 @@ import * as richTextModule from "./rich-text";
 import * as pageRendererModule from "./page-renderer";
 import * as pageStyleTraceModule from "./page-style-trace";
 import * as placeholderModule from "./placeholder";
+import * as previewContainerModule from "./preview-container";
 import * as prepareModule from "./prepare-document";
 import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
@@ -221,6 +222,11 @@ const SOURCE_MODULES: ReadonlyArray<{
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   {
+    name: "preview-container",
+    module: previewContainerModule,
+    internal: [],
+  },
+  {
     name: "page-renderer",
     module: pageRendererModule,
     // Crosses a module boundary inside this package and is not a consumer
@@ -303,9 +309,19 @@ describe("the root entry", () => {
       // renderer would drop rather than keeping a list beside it.
       "EDITOR_NAMESPACE",
       "NODE_ID_ATTRIBUTE",
+      // The container names a preview compile aims its breakpoints at. Public
+      // because the surface doing the previewing must put the same identifier
+      // in its own `container-name`, and a name spelled twice can be spelled
+      // differently.
+      // The style a previewing surface puts on its own box: the container name
+      // AND the `container-type` that makes it a size-query container, in one
+      // value so neither can be applied without the other.
+      "PREVIEW_CONTAINER_STYLE",
+      "PREVIEW_VIEWPORT_CONTAINER",
       "PROP_ATTRIBUTE",
       "PageRenderer",
       "RichText",
+      "UNPREVIEWABLE_CONTAINER",
       "createBlockResolver",
       "createStandaloneContext",
       "defineBlock",
@@ -318,6 +334,8 @@ describe("the root entry", () => {
       "pageStyleTrace",
       "prepareDocumentForRead",
       "preparePageForRead",
+      "previewContainerFor",
+      "previewContainerStyle",
       "pruneHiddenNodes",
       "registeredBlocks",
       "rendersOwnMarkup",

@@ -47,6 +47,7 @@ import {
   type StyleState,
   type StyleTraceEntry,
   type StyleValue,
+  previewContainerName,
 } from "@nextlyhq/blocks-engine";
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
@@ -196,6 +197,31 @@ export interface StyleInspectorPanelProps {
    * which of them counts as authored here.
    */
   breakpoints?: BreakpointSet;
+  /**
+   * The container the page's breakpoints were compiled against, when the canvas
+   * is previewing rather than rendering at the browser's own width.
+   *
+   * Carried because this panel decides which declarations are LIVE, and that is
+   * a question about the queries the sheet was EMITTED under. Given only the
+   * breakpoint set, it compares the window against `@media` rules a preview
+   * compile never wrote — a confident wrong answer rather than a stale one,
+   * since a narrow admin window then reports the small breakpoints live while a
+   * wide canvas box is showing the large ones.
+   */
+  previewContainer?: string;
+  /**
+   * Which breakpoints the canvas is ACTUALLY applying, when the host can say.
+   *
+   * Needed in preview and unnecessary otherwise. Rendering at the browser's own
+   * width, this panel asks `matchMedia` and answers for itself; previewing
+   * inside a box, the queries are about that box and only whoever owns it can
+   * observe them.
+   *
+   * Absent while previewing, no indicator is drawn at all. Reporting the
+   * window's answer there would name the wrong tier as the visible winner,
+   * which is worse than naming none.
+   */
+  liveBreakpoints?: readonly BreakpointId[];
 }
 
 export function StyleInspectorPanel({
@@ -206,6 +232,8 @@ export function StyleInspectorPanel({
   breakpoint,
   cascade,
   breakpoints,
+  previewContainer,
+  liveBreakpoints,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -220,7 +248,22 @@ export function StyleInspectorPanel({
     {}
   );
   const prefersDark = usePrefersDark();
-  const matched = useMatchedBreakpoints(breakpoints);
+  /*
+   * What the browser is applying, or `undefined` when nobody can say.
+   *
+   * ONE call, because the component must not hold the two inputs separately.
+   * It did, and they disagreed: the decision to draw an indicator asked whether
+   * a preview name was STATED while the set being judged asked whether the host
+   * had supplied one, so a refused name arriving beside a live set had the
+   * box-derived tiers used against a published compile. Fixing either half
+   * alone left the other standing, which is the tell that the two questions
+   * were one question with two answers.
+   */
+  const live = useLiveBreakpoints(
+    breakpoints,
+    previewContainer,
+    liveBreakpoints
+  );
 
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
@@ -351,6 +394,20 @@ export function StyleInspectorPanel({
     // gets no indicators, which is the honest answer for a surface that cannot
     // compile — and not the same as "nothing is inherited".
     if (cascade === undefined || subject === undefined) return undefined;
+    /*
+     * The same answer while the canvas is previewing and nobody has said which
+     * tier the preview BOX is showing.
+     *
+     * Under a preview compile the viewport tiers are container queries, and a
+     * `matchMedia` caller cannot evaluate them — so the window-derived set is
+     * the base context alone. Passed on, that is not silence: `["base"]` is the
+     * CLAIM that base is what the browser is applying, and a narrow box showing
+     * the mobile tier would have every mobile declaration excluded and the base
+     * value reported as the visible winner.
+     *
+     * No dot says "not asked", which is true until a caller observes the box.
+     */
+    if (live === undefined) return undefined;
     return styleProvenance({
       trace: cascade.entries,
       subject,
@@ -375,7 +432,7 @@ export function StyleInspectorPanel({
        * match reports its controls as unset. That is the honest answer, because
        * the dot describes what is DISPLAYED rather than what is stored.
        */
-      liveBreakpoints: matched,
+      liveBreakpoints: live,
     });
   };
 
@@ -475,12 +532,35 @@ function usePrefersDark(): boolean {
  * one frame reporting fewer origins than apply; the alternative is a hydration
  * mismatch.
  */
-function useMatchedBreakpoints(
-  breakpoints: BreakpointSet | undefined
-): readonly BreakpointId[] {
+function useLiveBreakpoints(
+  breakpoints: BreakpointSet | undefined,
+  previewContainer: string | undefined,
+  stated: readonly BreakpointId[] | undefined
+): readonly BreakpointId[] | undefined {
+  /*
+   * NORMALISED here, so no caller decides for itself whether a name counts.
+   *
+   * A stated name is not an active preview: `previewContainerName` refuses an
+   * empty, reserved, malformed or oversized string, and a refused name makes
+   * the compile published — viewport tiers emit ordinary `@media`, which the
+   * window can answer for. Read raw, every indicator was withheld from surfaces
+   * that were not previewing at all.
+   */
+  const preview = previewContainerName(previewContainer);
+  /*
+   * The emission the sheet was compiled under, carried so this asks the SAME
+   * queries. Without it the window is compared against `@media` rules a preview
+   * compile never wrote, which is not a stale answer but a confident wrong one:
+   * a narrow admin window reports the small breakpoints live while a wide canvas
+   * box is showing the large ones.
+   */
+  const options = React.useMemo(
+    () => (preview === undefined ? undefined : { previewContainer: preview }),
+    [preview]
+  );
   const never = React.useCallback(() => false, []);
   const [matches, setMatches] = React.useState<readonly BreakpointId[]>(() =>
-    matchedBreakpoints(breakpoints, never)
+    matchedBreakpoints(breakpoints, never, options)
   );
   React.useEffect(() => {
     // Detected by CALLABILITY rather than presence, the lesson `usePrefersDark`
@@ -493,22 +573,36 @@ function useMatchedBreakpoints(
       return;
     }
     const ask = (query: string): boolean => window.matchMedia(query).matches;
-    const read = (): void => setMatches(matchedBreakpoints(breakpoints, ask));
+    const read = (): void =>
+      setMatches(matchedBreakpoints(breakpoints, ask, options));
     read();
     /*
      * Subscribed to every emitted query, not to a resize. A resize fires
      * continuously and would re-measure on each frame of a drag, while a media
      * query change event fires exactly when an answer here would differ.
      */
-    const lists = breakpointQueries(breakpoints).map(query =>
+    const lists = breakpointQueries(breakpoints, options).map(query =>
       window.matchMedia(query)
     );
     for (const list of lists) list.addEventListener("change", read);
     return () => {
       for (const list of lists) list.removeEventListener("change", read);
     };
-  }, [breakpoints]);
-  return matches;
+  }, [breakpoints, options]);
+  /*
+   * Previewing, the window is not the authority and the host is.
+   *
+   * A `matchMedia` caller cannot evaluate a container query, so under a preview
+   * compile `matches` reduces to the base context alone — which is not silence
+   * but the claim that base is what the browser applies. Whoever owns the box
+   * is the only one that can observe it, so `undefined` there means nobody has
+   * looked yet and the caller must say nothing rather than guess.
+   *
+   * Published, the window IS the authority, and a set the host offers describes
+   * a box that is not deciding anything — so it is ignored rather than
+   * preferred.
+   */
+  return preview === undefined ? matches : stated;
 }
 
 /** One catalog group, as a section that opens onto its properties. */

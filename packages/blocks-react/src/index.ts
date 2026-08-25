@@ -232,6 +232,7 @@ export type {
   RemotePatternInput,
   SlotLock,
   SlotSpec,
+  BreakpointContextOptions,
   StyleCompileContext,
   StyleOrigin,
   StyleState,
@@ -241,3 +242,34 @@ export type {
   TokenRef,
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
+
+/**
+ * The container names a preview compile emits its breakpoints against.
+ *
+ * Re-exported beside {@link BreakpointContextOptions} because a consumer of this
+ * package does not depend on the engine directly: without them, the previewing
+ * surface would have to hard-code the same reserved identifiers in its own
+ * `container-name`, and a name spelled twice is a name that can be spelled
+ * differently.
+ */
+export {
+  PREVIEW_VIEWPORT_CONTAINER,
+  UNPREVIEWABLE_CONTAINER,
+  /*
+   * The FACTORY as well as the constants, because it is the only supplied way
+   * off the predictable default.
+   *
+   * `PREVIEW_VIEWPORT_CONTAINER` is a default rather than a reservation — an
+   * ancestor declaring the same name captures the viewport queries — so a
+   * surface rendering third-party blocks is meant to mint its own. Under pnpm
+   * an application declaring only this package cannot reliably import a
+   * transitive dependency, so omitting this left the collision-safe path
+   * reachable only by adding `@nextlyhq/blocks-engine` to its manifest or by
+   * reimplementing the name validation, and the second is the one people do.
+   */
+  previewContainerFor,
+} from "@nextlyhq/blocks-engine";
+export {
+  PREVIEW_CONTAINER_STYLE,
+  previewContainerStyle,
+} from "./preview-container";
