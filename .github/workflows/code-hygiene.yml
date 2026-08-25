@@ -36,10 +36,6 @@ on:
 
 permissions:
   contents: read
-  # The sticky comment and inline annotations the workflow posts.
-  pull-requests: write
-  issues: write
-  checks: write
 
 concurrency:
   group: code-hygiene-${{ github.ref }}
@@ -50,6 +46,10 @@ jobs:
     name: Changed files
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
 
     steps:
       - name: Checkout
@@ -125,13 +125,15 @@ jobs:
             // Fetch existing review comments on this PR to prevent duplicate threads
             let existingComments = [];
             try {
-              const res = await github.rest.pulls.listReviewComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber,
-                per_page: 100,
-              });
-              existingComments = res.data || [];
+              existingComments = await github.paginate(
+                github.rest.pulls.listReviewComments,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  per_page: 100,
+                }
+              );
             } catch (err) {
               console.log('Warning: could not fetch existing review comments:', err.message);
             }
@@ -204,6 +206,9 @@ jobs:
     name: Whole repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
 
     steps:
       - name: Checkout
@@ -289,11 +294,15 @@ jobs:
 
             const commentBody = `${commentMarker}\n${summaryContent}`;
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-            });
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                per_page: 100,
+              }
+            );
 
             const existingComment = comments.find(c => c.body && c.body.includes(commentMarker));
 
