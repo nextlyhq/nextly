@@ -169,13 +169,27 @@ function cloneDeclared(value: unknown): unknown {
  * arrives at from the other direction: `applyFieldDefaults` writes the declared
  * value first, then fills each child only where the value is absent.
  */
-function overlayDeclared(
-  seeded: Record<string, unknown>,
-  declared: unknown
+function seedContainer(
+  declared: unknown,
+  fields: FieldConfig[] | undefined
 ): Record<string, unknown> {
-  return isPlainObject(declared)
-    ? { ...seeded, ...(cloneDeclared(declared) as Record<string, unknown>) }
-    : seeded;
+  const copy = isPlainObject(declared)
+    ? (cloneDeclared(declared) as Record<string, unknown>)
+    : undefined;
+
+  // The container is its OWN evaluation context, which is why it is passed
+  // down rather than the defaults being computed once and reused: a child's
+  // functional default may read a sibling the container supplies
+  // (`data => data.isUrgent ? "express" : "standard"` beside
+  // `isUrgent: true`), and a seed computed before seeing the container reads
+  // that sibling as absent. `fillRepeaterRows` copies each row and fills
+  // against the copy for the same reason.
+  const seeded = fields ? getDefaultValues(fields, copy) : {};
+
+  // Declared keys win, and keys the schema does not name survive — a
+  // dynamic-zone row carries its `_componentType` discriminator, and seeding
+  // from the field list alone would drop it.
+  return copy ? { ...seeded, ...copy } : seeded;
 }
 
 /** Each declared row, with any sub-field it leaves unset seeded from the schema. */
@@ -187,8 +201,9 @@ function fromRowsDefault(
   // author's declaration, and `minRows` is a validation rule rather than an
   // instruction to fabricate content — the same rule `fillRepeaterRows` states.
   if (!Array.isArray(declared)) return [];
-  const seeded = fields ? getDefaultValues(fields) : {};
-  return declared.map(row => overlayDeclared(seeded, row));
+  return declared.map(row =>
+    isPlainObject(row) ? seedContainer(row, fields) : row
+  );
 }
 
 /** A component's seed: a list when repeatable, its nested defaults when not. */
@@ -198,9 +213,7 @@ function fromComponentDefault(field: FieldConfig, declared: unknown): unknown {
     repeatable?: boolean;
   };
   if (repeatable) return fromRowsDefault(declared, componentFields);
-  if (componentFields) {
-    return overlayDeclared(getDefaultValues(componentFields), declared);
-  }
+  if (componentFields) return seedContainer(declared, componentFields);
   // With no nested schema there is nothing to seed, so a declared value is the
   // only thing that can fill it.
   return isPlainObject(declared) ? cloneDeclared(declared) : null;
@@ -235,10 +248,7 @@ const DECLARED_DEFAULT: Record<
   repeater: (f, d) =>
     fromRowsDefault(d, (f as { fields?: FieldConfig[] }).fields),
   chips: (_f, d) => d ?? [],
-  group: (f, d) => {
-    const { fields } = f as { fields?: FieldConfig[] };
-    return overlayDeclared(fields ? getDefaultValues(fields) : {}, d);
-  },
+  group: (f, d) => seedContainer(d, (f as { fields?: FieldConfig[] }).fields),
   component: fromComponentDefault,
 };
 

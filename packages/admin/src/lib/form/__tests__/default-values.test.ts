@@ -344,6 +344,51 @@ describe("getDefaultValues — multiplicity and declared values", () => {
     ).toEqual({ shipping: "standard", isUrgent: true });
   });
 
+  it("resolves a row's functional default against that row's own values", () => {
+    // The seed was computed once, before any row was seen, and reused for all
+    // of them — so a child reading a sibling the row supplies read it as
+    // absent. `fillRepeaterRows` copies each row and fills against the copy.
+    expect(
+      getDefaultValues([
+        f({
+          name: "orders",
+          type: "repeater",
+          fields: [
+            { name: "isUrgent", type: "checkbox" },
+            {
+              name: "shipping",
+              type: "text",
+              defaultValue: (data: Record<string, unknown>) =>
+                data.isUrgent ? "express" : "standard",
+            },
+          ],
+          defaultValue: [{ isUrgent: true }, { isUrgent: false }],
+        }),
+      ])
+    ).toEqual({
+      orders: [
+        { isUrgent: true, shipping: "express" },
+        { isUrgent: false, shipping: "standard" },
+      ],
+    });
+  });
+
+  it("keeps a row key the schema does not name, such as the dynamic-zone discriminator", () => {
+    // Seeding from the field list alone would drop `_componentType`, and the
+    // row would no longer say which component it is.
+    expect(
+      getDefaultValues([
+        f({
+          name: "blocks",
+          type: "component",
+          repeatable: true,
+          componentFields: [{ name: "heading", type: "text" }],
+          defaultValue: [{ _componentType: "hero" }],
+        }),
+      ])
+    ).toEqual({ blocks: [{ _componentType: "hero", heading: "" }] });
+  });
+
   it("resolves a function default against the stored document when editing", () => {
     // The field was added to the schema after this entry was written, so it has
     // no stored value and takes its default — computed against the entry, which
