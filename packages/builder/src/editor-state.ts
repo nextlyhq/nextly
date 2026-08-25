@@ -30,7 +30,7 @@
 import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { applyOp, type BuilderOp } from "./ops";
+import { applyOps, type BuilderOp } from "./ops";
 import {
   EMPTY_SELECTION,
   applySelection,
@@ -140,8 +140,12 @@ export function useEditorState({
   const latestDocument = useRef(document);
   latestDocument.current = document;
 
-  const undoStack = useRef<BuilderOp[][]>([]);
-  const redoStack = useRef<BuilderOp[][]>([]);
+  // READONLY groups. A recorded inverse describes the document as it stood when
+  // its op ran, so nothing may append to or reorder one after the fact — the
+  // history would then describe an edit that never happened. `applyOps` returns
+  // them already in undo order and already frozen to the type.
+  const undoStack = useRef<(readonly BuilderOp[])[]>([]);
+  const redoStack = useRef<(readonly BuilderOp[])[]>([]);
   // Mirrors the stack lengths so the flags below are STATE and re-render when
   // they change. Reading `undoStack.current.length` directly would leave an
   // undo button disabled after the first edit, because a ref mutation does not
@@ -184,32 +188,45 @@ export function useEditorState({
       ops: readonly BuilderOp[],
       into: "undo" | "redo" | "new"
     ): BlockDocument | null => {
-      // Nothing to do, and nothing to record. An empty group must NOT push an
-      // entry: that would be an undo that appears to do nothing, which reads as
-      // the history being broken.
-      if (ops.length === 0) return latestDocument.current;
-
-      let working = latestDocument.current;
-      const inverses: BuilderOp[] = [];
-      for (const op of ops) {
-        let applied;
-        try {
-          applied = applyOp(working, op, limits);
-        } catch {
-          // A refused op is an ordinary outcome, not a crash: an insert past a
-          // cap, a move onto a node that no longer exists, an update to a node
-          // a concurrent edit removed. The caller decides what to say about it.
-          // Nothing is committed — see the atomicity note above.
-          return null;
-        }
-        working = applied.document;
-        // Front, so undoing the group runs the LAST op's inverse first. Applied
-        // in the order they were collected, each inverse would meet a document
-        // the later ops had already changed.
-        inverses.unshift(applied.inverse);
+      let group;
+      try {
+        // ONE call rather than a fold here, so the group's atomicity and its
+        // inverse ordering live in one place: `applyOps` returns the inverses
+        // in undo order and answers with none at all when the group left the
+        // document as it found it.
+        //
+        // It does NOT make the caps a group-level decision. Every op is still
+        // judged against the document as it stands when that op runs, which is
+        // what keeps an accepted edit undoable — a group allowed to exceed the
+        // cap in passing can hand back an inverse the cap then refuses, and
+        // `undo` pops its entry before replaying it.
+        //
+        // So a group's outcome can depend on the order its ops arrive in, and
+        // nothing below this line changes that. A caller whose ops are known to
+        // be independent could order them; none does today.
+        group = applyOps(latestDocument.current, ops, limits);
+      } catch {
+        // A refused group is an ordinary outcome, not a crash: an insert past a
+        // cap, a move onto a node that no longer exists, an update to a node
+        // a concurrent edit removed. The caller decides what to say about it.
+        // Nothing is committed — see the atomicity note above.
+        return null;
       }
 
-      const applied = { document: working, inverse: inverses };
+      // NO inverses is the ONE answer to "is there anything to record", and it
+      // covers both ways of arriving at nothing: a group with no ops, and a
+      // group whose ops left the document as they found it. Either would be a
+      // history entry whose undo has no visible effect, which reads as the
+      // history being broken.
+      //
+      // Asked of `applyOps` rather than answered here from `ops.length`, so
+      // one place decides what an empty group means. Answering here would
+      // answer before the op layer has seen the group at all, while a direct
+      // `applyOps` caller would still get the op layer's answer — one group
+      // with two verdicts.
+      if (group.inverses.length === 0) return latestDocument.current;
+
+      const applied = { document: group.document, inverse: group.inverses };
 
       if (into === "new") {
         undoStack.current.push(applied.inverse);
