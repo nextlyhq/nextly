@@ -19,17 +19,13 @@ export interface CreateDefaultFieldValuesOptions {
 }
 
 /**
- * Computes the default value for an individual field configuration.
+ * Returns the type-specific fallback default for a field that has no explicit defaultValue.
+ *
+ * Keeping this separate from {@link getFieldDefault} keeps each function's cyclomatic
+ * complexity below the project threshold.
  */
-function getFieldDefault(subField: FieldConfig): unknown {
-  if ("defaultValue" in subField && subField.defaultValue !== undefined) {
-    return typeof subField.defaultValue === "function"
-      ? subField.defaultValue({})
-      : subField.defaultValue;
-  }
-
-  const subFieldType = subField.type as string;
-  switch (subFieldType) {
+function getTypeDefault(type: string, subField: FieldConfig): unknown {
+  switch (type) {
     case "checkbox":
       return false;
     case "number":
@@ -45,6 +41,21 @@ function getFieldDefault(subField: FieldConfig): unknown {
     default:
       return (subField as { defaultValue?: unknown }).defaultValue ?? null;
   }
+}
+
+/**
+ * Computes the default value for an individual field configuration.
+ *
+ * If the field declares an explicit `defaultValue`, that takes priority (calling it
+ * when it is a function). Otherwise delegates to {@link getTypeDefault}.
+ */
+function getFieldDefault(subField: FieldConfig): unknown {
+  if ("defaultValue" in subField && subField.defaultValue !== undefined) {
+    return typeof subField.defaultValue === "function"
+      ? subField.defaultValue({})
+      : subField.defaultValue;
+  }
+  return getTypeDefault(subField.type, subField);
 }
 
 /**

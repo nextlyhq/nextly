@@ -473,6 +473,42 @@ function MultiComponentNonRepeatable({
 // Repeatable Component (Single or Multi) - Like RepeaterInput
 // ============================================================
 
+/**
+ * Resolves the field list and display label for a single repeatable-component row.
+ *
+ * Extracted from the items.map() callback so that each function stays within the
+ * project's cyclomatic-complexity threshold.
+ */
+function resolveRepeatableRowData(
+  itemData: Record<string, unknown>,
+  isMultiMode: boolean,
+  componentSchemas: Record<string, ComponentSchema> | undefined,
+  singleComponentFields: FieldConfig[] | undefined,
+  singularLabel: string
+): {
+  rowFields: FieldConfig[];
+  rowLabel: string;
+  itemComponentType: string | undefined;
+} {
+  const itemComponentType = readFieldGroupType(itemData);
+  if (isMultiMode && itemComponentType && componentSchemas) {
+    const schema = componentSchemas[itemComponentType];
+    return {
+      rowFields: schema?.fields || [],
+      rowLabel: schema?.label || itemComponentType,
+      itemComponentType,
+    };
+  }
+  if (!isMultiMode && singleComponentFields) {
+    return {
+      rowFields: singleComponentFields,
+      rowLabel: singularLabel,
+      itemComponentType,
+    };
+  }
+  return { rowFields: [], rowLabel: "Unknown", itemComponentType };
+}
+
 interface RepeatableComponentProps<
   TFieldValues extends FieldValues = FieldValues,
 > {
@@ -565,23 +601,14 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
       >
         {items.map((item, index) => {
           const itemData = item as Record<string, unknown>;
-          const itemComponentType = readFieldGroupType(itemData);
-
-          // Get fields for this row
-          let rowFields: FieldConfig[];
-          let rowLabel: string;
-
-          if (isMultiMode && itemComponentType && componentSchemas) {
-            const schema = componentSchemas[itemComponentType];
-            rowFields = schema?.fields || [];
-            rowLabel = schema?.label || itemComponentType;
-          } else if (!isMultiMode && singleComponentFields) {
-            rowFields = singleComponentFields;
-            rowLabel = singularLabel;
-          } else {
-            rowFields = [];
-            rowLabel = "Unknown";
-          }
+          const { rowFields, rowLabel, itemComponentType } =
+            resolveRepeatableRowData(
+              itemData,
+              isMultiMode,
+              componentSchemas,
+              singleComponentFields,
+              singularLabel
+            );
 
           return (
             <ComponentRow
