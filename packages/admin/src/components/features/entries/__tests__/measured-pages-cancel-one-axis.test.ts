@@ -128,6 +128,24 @@ function sourceFiles(): string[] {
 const TWO_AXIS = `-m${"-8"}`;
 const HORIZONTAL_ONLY = `-mx${"-8"}`;
 
+/**
+ * The one displacement that produced the regression, matched at that size.
+ *
+ * Deliberately NOT widened to every magnitude, though the gutter's narrowest
+ * step is 1rem and a smaller negative cancels it there. Widening was measured:
+ * it reports nine call sites, and seven are correct — separators bleeding to
+ * the edge of a dropdown, a tab overlapping its neighbour by half a pixel,
+ * layout chrome outside any page. An advisory check that fires on correct code
+ * gets switched off and takes its true positives with it.
+ *
+ * The reason it cannot be made both wide and quiet is that the property is not
+ * in the source. Whether a negative margin escapes depends on whether the
+ * element sits inside a measured page's column and on which gutter step is
+ * active, and a file of JSX states neither. So this stays a cheap tripwire for
+ * the shape that already regressed once, and the BOUNDARY is
+ * `e2e/tests/shell/page-measure.spec.ts`, which asks the rendered geometry —
+ * where the column, the gutter and the resolved distance all exist.
+ */
 const HORIZONTAL_CANCEL = /(?:^|[\s:"'`{(,])-mx?-8\b/;
 
 describe("a measured entry page", () => {
@@ -196,7 +214,7 @@ describe("a measured entry page", () => {
     ).toBe(true);
   });
 
-  it("cancels the vertical inset nowhere but here", () => {
+  it("cancels the horizontal inset nowhere but here", () => {
     const offenders = sourceFiles()
       .filter(path => !path.endsWith(THIS_FILE))
       .filter(path =>

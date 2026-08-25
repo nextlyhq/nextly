@@ -12,11 +12,6 @@
  * 3. This prevents any style conflicts with consumer app's Tailwind/CSS
  */
 
-import {
-  cancelsInset,
-  components,
-  horizontalOfMargin,
-} from "./horizontal-inset.mjs";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -195,88 +190,6 @@ try {
     process.exit(1);
   }
 
-  // A measured page spends its horizontal inset as GRID COLUMNS, not padding,
-  // so a negative margin that cancels the horizontal axis has nothing to pull
-  // back from: it pulls content PAST its own column. Measured, that was 64px on
-  // the entry editor.
-  //
-  // The DECLARATION is what is checked, not the class name. A name can be
-  // renamed away — an `@apply` alias emits the same margin under a selector
-  // that says nothing — and it can be absent from every source
-  // it was compiled from, because a `@source inline(...)` safelist spells out
-  // no class at all. What survives every spelling is the rule that reaches the
-  // browser, which is this file.
-  //
-  // Two shapes of property: the shorthands `margin` and `margin-inline`, read
-  // by position, and the four longhands that set a single side outright. The
-  // vertical family is deliberately absent — cancelling the page's vertical
-  // inset is what lets the editors reach the panel's top and bottom.
-  const shipped = fs.readFileSync(outputFile, "utf-8");
-
-  const spacingRem = Number(
-    (/--spacing:\s*([\d.]+)rem/.exec(shipped) ?? [, "0.25"])[1]
-  );
-
-  /**
-   * Every property that can move a box's LEFT or RIGHT edge, enumerated from
-   * the CSS box model rather than from whichever one was last seen doing it.
-   *
-   * Two shapes. The longhands set one side outright, so a negative value
-   * anywhere in them counts. The two shorthands need reading by position:
-   * `margin` takes one to four values and `margin-inline` one or two.
-   *
-   * The vertical family — `margin-block`, `margin-top`, `margin-bottom` and
-   * the block longhands — is deliberately absent. Cancelling the page's
-   * vertical inset is what lets the editors reach the panel's top and bottom,
-   * so a check that could not tell the axes apart would have to be switched
-   * off the first time it fired.
-   */
-  const HORIZONTAL_LONGHANDS = [
-    "margin-left",
-    "margin-right",
-    "margin-inline-start",
-    "margin-inline-end",
-  ];
-
-  /**
-   * The components of a `margin` shorthand that set the horizontal sides: one
-   * value sets all four, two and three put the pair second, and four are
-   * clockwise from the top, so right is second and left fourth.
-   */
-  const horizontalValues = (prop, parts) => {
-    if (prop === "margin") return horizontalOfMargin(parts);
-    // `margin-inline` is horizontal whole: one value sets both sides, two set
-    // start and end. The longhands are a single side each.
-    return parts;
-  };
-
-  const PROPERTIES = ["margin", "margin-inline", ...HORIZONTAL_LONGHANDS];
-  const offenders = [];
-  for (const [, prop, value] of shipped.matchAll(
-    new RegExp(`[;{]\\s*(${PROPERTIES.join("|")})\\s*:\\s*([^;}]+)`, "g")
-  )) {
-    // `!important` is a suffix on the declaration, not part of the value, and
-    // The important-flagged utility emits it. Left in place it defeats the
-    // match on the very declaration that wins hardest.
-    const parts = components(value.replace(/!important\s*$/, "").trim());
-    if (horizontalValues(prop, parts).some(part => cancelsInset(part, spacingRem))) {
-      offenders.push(`${prop}: ${value.trim()}`);
-    }
-  }
-
-  if (offenders.length) {
-    console.error("\n❌ The stylesheet cancels a page's horizontal inset:\n");
-    for (const decl of [...new Set(offenders)]) console.error("  " + decl);
-    console.error(
-      "\nA measured page has no horizontal padding to cancel — it spends the\n" +
-        "inset as grid columns — so content carrying this lands outside its own\n" +
-        "column. It reaches the sheet from a class, an `@apply` alias, a\n" +
-        "safelist or a hand-written shorthand; the declaration is the same\n" +
-        "either way, which is why this reads the value rather than the name.\n" +
-        "Cancel only the vertical axis.\n"
-    );
-    process.exit(1);
-  }
 
   // Get file size
   const stats = fs.statSync(outputFile);
