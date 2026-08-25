@@ -1589,6 +1589,55 @@ describe("where a control's value came from", () => {
     expect(dotIn("color")).not.toBeNull();
   });
 
+  it("still draws one when the compiler REFUSED the stated container name", () => {
+    /*
+     * A stated name is not an active preview, and the two must not be conflated
+     * because the compile does not conflate them either.
+     *
+     * `previewContainerName` refuses an empty, reserved, malformed or oversized
+     * string, and a refused name makes the compile PUBLISHED — viewport tiers
+     * emit ordinary `@media`, which `matchMedia` can evaluate. So the window's
+     * answer is authoritative here, and withholding the indicator would remove
+     * a correct affordance from every surface that passed a name the compiler
+     * threw away.
+     *
+     * Driven through the refusals the compiler actually enumerates rather than
+     * one representative, because each reaches a different branch of it: a
+     * length bound read before trimming, a reserved CSS-wide keyword, and a
+     * character the identifier grammar excludes.
+     */
+    // Registered ONCE: the block registry outlives `cleanup`, which unmounts
+    // the tree and leaves registrations in place, so a second call inside the
+    // loop is a redefinition and the registry refuses it.
+    register({ color: true });
+
+    for (const refused of ["", "   ", "none", "has space"]) {
+      cleanup();
+      const editor = editorFor(documentOf());
+
+      render(
+        <StyleInspectorPanel
+          editor={editor}
+          breakpoints={
+            {
+              viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+              container: [],
+            } as never
+          }
+          previewContainer={refused}
+          cascade={
+            {
+              nodes: editor.document.nodes,
+              entries: [entry()],
+            } as never
+          }
+        />
+      );
+
+      expect(dotIn("color")).not.toBeNull();
+    }
+  });
+
   it("draws NOTHING for a property no tier set", () => {
     // Eight empty dots per section is the shape that trains an author to stop
     // reading the panel.

@@ -47,6 +47,7 @@ import {
   type StyleState,
   type StyleTraceEntry,
   type StyleValue,
+  previewContainerName,
 } from "@nextlyhq/blocks-engine";
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
@@ -247,7 +248,19 @@ export function StyleInspectorPanel({
     {}
   );
   const prefersDark = usePrefersDark();
-  const matched = useMatchedBreakpoints(breakpoints, previewContainer);
+  /*
+   * NORMALISED once here, and every question below asks this value rather than
+   * the raw prop — the compiler does exactly the same at its own entry.
+   *
+   * A stated name is not the same as an ACTIVE preview. `previewContainerName`
+   * refuses an empty, reserved, malformed or oversized string, and a refused
+   * name makes the compile published: viewport tiers emit ordinary `@media`,
+   * which `matchMedia` can evaluate. Reading the raw prop as "previewing"
+   * suppressed every indicator for a surface whose sheet the window can answer
+   * for perfectly well.
+   */
+  const preview = previewContainerName(previewContainer);
+  const matched = useMatchedBreakpoints(breakpoints, preview);
 
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
@@ -391,7 +404,7 @@ export function StyleInspectorPanel({
      *
      * No dot says "not asked", which is true until a caller observes the box.
      */
-    if (previewContainer !== undefined && liveBreakpoints === undefined) {
+    if (preview !== undefined && liveBreakpoints === undefined) {
       return undefined;
     }
     return styleProvenance({
