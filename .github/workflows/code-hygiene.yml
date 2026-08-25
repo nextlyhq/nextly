@@ -288,6 +288,12 @@ jobs:
               });
               console.log(`Successfully posted ${newComments.length} new audit review comment(s).`);
             } catch (err) {
+              // A stale diff position, a transient API failure or a read-only
+              // fork token all land here, and each leaves the promised threads
+              // absent. Logged alone that is invisible: the job stays green and
+              // reads exactly like a run that found nothing to say, which is
+              // the state this workflow's degraded check exists to refuse.
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'post-failed=true\n');
               console.log('Could not post PR review threads:', err.message);
             }
 
@@ -305,6 +311,7 @@ jobs:
           POST_SKIPPED: ${{ steps.audit.outputs.post-skipped-reason }}
           DEDUP_FAILED: ${{ steps.audit.outputs.dedup-lookup-failed || steps.post-review.outputs.dedup-lookup-failed }}
           ENVELOPE_FAILED: ${{ steps.envelope.outputs.envelope-failed }}
+          POST_FAILED: ${{ steps.post-review.outputs.post-failed }}
           VERDICT: ${{ steps.audit.outputs.verdict }}
           GATE: ${{ steps.audit.outputs.gate }}
         run: |
@@ -321,6 +328,13 @@ jobs:
           # the gate — but it must say so rather than reading as nothing to say.
           if [ "$ENVELOPE_FAILED" = "true" ]; then
             echo "::warning::fallow could not produce a review envelope, so no inline threads were derived from this run. The verdict above still stands."
+          fi
+          # Posting can fail after a clean analysis — a stale diff position, a
+          # transient API error, a read-only fork token. The findings are real
+          # and simply did not arrive, so this says so rather than letting the
+          # job read as a run with nothing to report.
+          if [ "$POST_FAILED" = "true" ]; then
+            echo "::warning::the audit's review threads could not be posted, so the findings it selected are absent from this pull request. The verdict above still stands and the job log lists them."
           fi
           # An empty verdict is the gate never having produced one, which is not
           # a pass. Absence of a failure is not a verdict.
