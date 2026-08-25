@@ -10,16 +10,40 @@
  * boolean the registry can store, and asks the server WHERE only when it is
  * clicked.
  *
+ * What opens is the site's own draft route, so it shows the last SAVED draft.
+ * The editor's unsaved edits do not travel with it and no parameter claims they
+ * do: the page renders on the server, and the only way browser-held values
+ * could reach it is for the site to render what the browser sent — which is
+ * content that never passed the field-level read rules the draft route applies.
+ *
+ * Reaching that draft needs a CREDENTIAL, not just an address. The site renders
+ * on its own origin, where the admin's session cookie does not travel and where
+ * the admin cannot set a cookie, so a bare URL arrives unauthenticated: the
+ * draft gate refuses it and the reader gets the published page, or a 404 where
+ * nothing is published yet. A signed preview token is the handoff, and it is
+ * the same one a shareable link uses — minted here for the editor themself,
+ * scoped to the one document, and short-lived because it is spent immediately
+ * rather than sent to anyone.
+ *
  * @module hooks/useEntryPreview
  */
 
 import { useCallback, useMemo } from "react";
 
-import {
-  storePreviewData,
-  generatePreviewUrlWithData,
-} from "@admin/lib/preview/preview-data";
-import { previewUrlApi } from "@admin/services/previewUrlApi";
+import type { ApiError } from "@admin/lib/api/parseApiError";
+import { previewLinkApi } from "@admin/services/previewLinkApi";
+
+/**
+ * How long a token minted for the editor's own preview stays valid.
+ *
+ * A quarter of the server's sharing default, because the two are spent
+ * differently: a shared link has to survive sitting in somebody's inbox, while
+ * this one is redeemed by the tab that is opening as it is issued. Long enough
+ * to read the page and follow a link or two; short enough that a token left in
+ * browser history stops being a key well before the day is out. Clicking
+ * Preview again mints a fresh one.
+ */
+const SELF_PREVIEW_TTL_SECONDS = 15 * 60;
 
 // ============================================================================
 // Types
@@ -65,23 +89,30 @@ export interface PreviewCollection {
 
 export interface UseEntryPreviewOptions {
   collection: PreviewCollection;
-  /** The saved entry, when editing an existing one. */
+  /**
+   * The SAVED entry, which is also what the preview will render.
+   *
+   * Deliberately not the on-screen form values. The preview opens the site's
+   * own draft route, so what it renders is the last saved draft — and resolving
+   * the URL from an unsaved slug would name a page that does not exist yet,
+   * turning a working preview into a 404 the editor cannot explain. Resolving
+   * from the saved row means the address and the content agree.
+   */
   entry?: Record<string, unknown> | null;
-  /** Current form values, so the preview reflects unsaved edits. */
-  getFormValues?: () => Record<string, unknown>;
+  /**
+   * The language to open, on a localized collection.
+   *
+   * Absent means UNSCOPED, which is right for a collection that has no
+   * translations and wrong for one that does: the preview route derives its
+   * redirect from the token's scope, so an unscoped token on a localized
+   * collection sends the reader to the default language whichever one they were
+   * editing. The caller resolves which case it is — `previewLinkLocale` answers
+   * exactly this — and withholds the action entirely while the answer is
+   * unknown.
+   */
+  locale?: string;
   /** Told why a click could not open anything. */
   onUnavailable?: (reason: PreviewUnavailableReason) => void;
-  /**
-   * Told when the preview OPENED but could not carry the editor's unsaved
-   * edits, so it is showing the last saved version instead.
-   *
-   * Deliberately not folded into `onUnavailable`. That reports a click which
-   * produced nothing; this reports one that produced something less than was
-   * asked for. Merging them would either suppress a real warning or label a
-   * working preview as a failure — and the editor's response differs: here
-   * they can save and click again.
-   */
-  onUnsavedChangesNotSent?: () => void;
 }
 
 /**
@@ -108,6 +139,167 @@ export type PreviewUnavailableReason =
   /** The request itself failed. */
   | "failed";
 
+/**
+ * What to tell the editor for each reason a preview click produced nothing.
+ *
+ * Lives beside the reason type rather than at a call site so the set stays
+ * exhaustive: `Record` over the union means adding a reason without a message
+ * fails to compile, which is the only way a caller learns a new case exists.
+ * Each names what the reader can do about it, because a reason they cannot act
+ * on reads as the admin being broken.
+ */
+export const PREVIEW_MESSAGES: Record<PreviewUnavailableReason, string> = {
+  unavailable:
+    "This entry cannot be previewed yet. Check that it has a slug and a status the site publishes.",
+  noSiteUrl:
+    "No site URL is configured, so there is nowhere to open. An administrator can set it in Settings.",
+  popupBlocked:
+    "Your browser blocked the preview tab. Allow pop-ups for this site and try again.",
+  failed: "Could not work out where this entry previews. Please try again.",
+};
+
+/**
+ * What the server's answer means for the tab that has already been claimed.
+ *
+ * Separated from the sequence around it because it is the only part that is a
+ * DECISION rather than choreography: opening the tab early, severing its
+ * opener and closing it again are all forced by how browsers treat a click,
+ * while this is a mapping that can be read on its own.
+ */
+type PreviewOutcome =
+  | { kind: "open"; url: string }
+  | { kind: "report"; reason: PreviewUnavailableReason };
+
+/**
+ * The document a preview could be authorized for, or `null` when there is none.
+ *
+ * The id is required as well as the row, and they are answered together because
+ * neither is usable alone: a draft is authorized by naming ONE document, so an
+ * entry that has never been saved has no name to give — and the caller needs
+ * both halves narrowed before it can ask for either.
+ */
+function previewTarget(
+  entry: Record<string, unknown> | null | undefined
+): { entry: Record<string, unknown>; entryId: string } | null {
+  if (!entry) return null;
+  const id = entry.id;
+  if (typeof id !== "string" || id === "") return null;
+  return { entry, entryId: id };
+}
+
+/**
+ * Claims the browsing context the preview will land in.
+ *
+ * Its own function because everything here is forced by how browsers treat a
+ * click rather than by anything this feature decides, and all of it must
+ * happen before the first `await`:
+ *
+ * - A window opened after an `await` has lost the user-gesture context, and
+ *   Safari and Firefox block it. So the tab is claimed first and navigated
+ *   once the URL arrives.
+ * - `noopener` cannot be passed: with it `window.open` returns null and there
+ *   is no handle left to navigate. The reference is severed by hand instead,
+ *   while the tab is still `about:blank` and same-origin — after which it
+ *   cannot reach back through `window.opener`.
+ *
+ * `"blocked"` is distinct from a null target, which is what opening in PLACE
+ * looks like. Falling back to navigating this window would take the editor off
+ * the form they are editing and discard everything unsaved, so the two cannot
+ * share a representation.
+ */
+function claimTab(
+  openInNewTab: boolean
+): { target: Window | null } | "blocked" {
+  if (!openInNewTab) return { target: null };
+  const target = window.open("", "_blank");
+  if (!target) return "blocked";
+  target.opener = null;
+  return { target };
+}
+
+/**
+ * Why a refused mint refused, as something the editor can act on.
+ *
+ * Read from the HTTP status rather than the message: 409 is the server saying
+ * this document has no preview address yet — usually an empty slug — which is
+ * the one refusal the editor can fix themselves, and the one the generic
+ * failure message would bury. Anything else is reported as a failure rather
+ * than guessed at, because a wrong diagnosis sends someone editing fields that
+ * were never the problem.
+ */
+function reasonForRefusal(error: unknown): PreviewUnavailableReason {
+  const status = (error as ApiError | undefined)?.status;
+  return status === 409 ? "unavailable" : "failed";
+}
+
+/**
+ * Mints the credential this preview opens with.
+ *
+ * The mint is the ONLY question asked, and that is deliberate. It already
+ * resolves the destination through the same function the preview route will
+ * call, and refuses before signing when a document has no address yet — so
+ * asking `/preview-url` first was a second implementation of a question the
+ * server already answers, one that ran an author's `preview.url` function twice
+ * and could disagree with itself between the two calls.
+ *
+ * The token's own scope is what the route redirects from, which is why the
+ * locale travels with it: on a localized collection an unscoped token opens the
+ * default language whichever one was being edited.
+ */
+async function authorizedOutcome(
+  collection: string,
+  entryId: string,
+  locale: string | undefined
+): Promise<PreviewOutcome> {
+  try {
+    const link = await previewLinkApi.mint({
+      collection,
+      entryId,
+      ...(locale === undefined ? {} : { locale }),
+      ttlSeconds: SELF_PREVIEW_TTL_SECONDS,
+    });
+
+    // Assembled on the server or not at all: the site's address lives in
+    // settings the previewing roles cannot read. A null URL is that setting
+    // missing, which is a thing an administrator can fix, so it is reported as
+    // itself rather than as an opaque failure.
+    if (link.url === null) return { kind: "report", reason: "noSiteUrl" };
+    return { kind: "open", url: link.url };
+  } catch (error) {
+    return { kind: "report", reason: reasonForRefusal(error) };
+  }
+}
+
+/**
+ * Applies an outcome to the context claimed for it.
+ *
+ * The counterpart to {@link claimTab}: every path that does not navigate has
+ * to close what was claimed, because a blank tab left open reads as a preview
+ * that failed to load rather than as one that was never going to open.
+ *
+ * The URL is navigated to UNCHANGED. Nothing is appended to carry the editor's
+ * unsaved edits: the preview renders the site's own draft route on the server,
+ * so the only content it can show is what has been saved. A parameter
+ * promising otherwise would have to be read by the site, and reading
+ * browser-supplied field values there would render content that never passed
+ * the field-level read rules the draft route applies.
+ */
+function settle(
+  target: Window | null,
+  outcome: PreviewOutcome,
+  onUnavailable?: (reason: PreviewUnavailableReason) => void
+): void {
+  if (outcome.kind === "open") {
+    // A null target is opening in PLACE, which `claimTab` has already
+    // distinguished from a blocked popup.
+    if (target) target.location.href = outcome.url;
+    else window.location.href = outcome.url;
+    return;
+  }
+  target?.close();
+  if (outcome.kind === "report") onUnavailable?.(outcome.reason);
+}
+
 export interface UseEntryPreviewResult {
   /** Whether to offer the button at all. Known without a round trip. */
   isPreviewAvailable: boolean;
@@ -115,26 +307,6 @@ export interface UseEntryPreviewResult {
   openPreview: () => Promise<void>;
   /** Label for the preview button. */
   label: string;
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/**
- * Whether `url` is served from the origin this admin is running on.
- *
- * Decides only whether the session-storage handoff can work: that storage is
- * partitioned per origin, so a payload written here is unreachable from a
- * preview page served anywhere else. Compared by parsed origin rather than by
- * string prefix, which `https://site.example.com.evil.test` would satisfy.
- */
-function isSameOrigin(url: string): boolean {
-  try {
-    return new URL(url).origin === window.location.origin;
-  } catch {
-    return false;
-  }
 }
 
 // ============================================================================
@@ -149,7 +321,6 @@ function isSameOrigin(url: string): boolean {
  * const { isPreviewAvailable, openPreview, label } = useEntryPreview({
  *   collection,
  *   entry,
- *   getFormValues: () => form.getValues(),
  *   onUnavailable: reason => toast.error(PREVIEW_MESSAGES[reason]),
  * });
  * ```
@@ -157,9 +328,8 @@ function isSameOrigin(url: string): boolean {
 export function useEntryPreview({
   collection,
   entry,
-  getFormValues,
+  locale,
   onUnavailable,
-  onUnsavedChangesNotSent,
 }: UseEntryPreviewOptions): UseEntryPreviewResult {
   const previewConfig = collection.admin?.preview;
 
@@ -178,103 +348,30 @@ export function useEntryPreview({
     [previewConfig]
   );
 
+  /*
+   * Three steps, each its own question: may this open at all, what context
+   * does it open in, and what did the server say to do with it.
+   */
   const openPreview = useCallback(async () => {
-    const unsavedData = getFormValues?.();
-    const dataToPreview = unsavedData ? { ...entry, ...unsavedData } : entry;
-    if (!dataToPreview) {
+    const target = previewTarget(entry);
+    if (target === null) {
       onUnavailable?.("unavailable");
       return;
     }
 
-    const openInNewTab = previewConfig?.openInNewTab !== false;
-
-    // BEFORE the tab is opened, because a new browsing context receives a COPY
-    // of session storage taken when it is created. A write afterwards stays in
-    // this window, the new tab never sees the key, and the preview silently
-    // renders the last saved values instead of what is on screen — the exact
-    // failure the unsaved-data path exists to prevent.
-    const previewKey = unsavedData
-      ? storePreviewData(
-          collection.name,
-          entry?.id as string | undefined,
-          dataToPreview
-        )
-      : undefined;
-
-    // Opened NOW, synchronously, while the click is still on the stack. A window
-    // opened after an `await` has lost the user-gesture context and Safari and
-    // Firefox block it, so the tab is claimed first and navigated once the URL
-    // arrives.
-    //
-    // `noopener` cannot be passed here: with it, `window.open` returns null and
-    // there is no handle left to navigate. The reference is severed by hand
-    // instead, while the tab is still `about:blank` and same-origin — after
-    // which it cannot reach back through `window.opener`.
-    const target = openInNewTab ? window.open("", "_blank") : null;
-    if (target) target.opener = null;
-
-    // A blocked popup is NOT the same as a collection that asked to open in
-    // place. Falling back to navigating this window would take the editor off
-    // the form they are editing and discard everything unsaved, so it is
-    // reported instead — the browser's own blocked-popup affordance is what lets
-    // them retry.
-    if (openInNewTab && !target) {
+    // Claimed before anything is awaited; see `claimTab`.
+    const claimed = claimTab(previewConfig?.openInNewTab !== false);
+    if (claimed === "blocked") {
       onUnavailable?.("popupBlocked");
       return;
     }
 
-    const abandon = (reason: PreviewUnavailableReason) => {
-      target?.close();
-      onUnavailable?.(reason);
-    };
-
-    try {
-      const resolution = await previewUrlApi.resolve({
-        collection: collection.name,
-        entry: dataToPreview,
-      });
-
-      if (resolution.status !== "resolved") {
-        // `notConfigured` is not reported: the button should not have been
-        // offered, so telling the editor a preview is unavailable would describe
-        // a state they cannot act on. The other two are theirs to fix — fill in
-        // the slug, or ask an admin to set the site URL.
-        if (resolution.status !== "notConfigured") abandon(resolution.status);
-        else target?.close();
-        return;
-      }
-
-      // Unsaved values travel through session storage rather than the URL, so
-      // the preview renders what is on screen instead of what was last saved.
-      // The payload was written above; only the key is appended here.
-      //
-      // Session storage is partitioned by ORIGIN, and a resolved preview URL is
-      // now routinely on a different one — that is what a configured site URL
-      // means. The key would then name a payload the preview page cannot reach,
-      // so it is omitted and the caller is told the preview shows saved content.
-      // Appending it anyway would look like it worked and quietly show stale
-      // data, which is the failure this whole path exists to prevent.
-      const sameOrigin = isSameOrigin(resolution.url);
-      const url =
-        previewKey === undefined || !sameOrigin
-          ? resolution.url
-          : generatePreviewUrlWithData(resolution.url, previewKey);
-
-      if (previewKey !== undefined && !sameOrigin) onUnsavedChangesNotSent?.();
-
-      if (target) target.location.href = url;
-      else window.location.href = url;
-    } catch {
-      abandon("failed");
-    }
-  }, [
-    collection.name,
-    entry,
-    getFormValues,
-    onUnavailable,
-    onUnsavedChangesNotSent,
-    previewConfig,
-  ]);
+    settle(
+      claimed.target,
+      await authorizedOutcome(collection.name, target.entryId, locale),
+      onUnavailable
+    );
+  }, [collection.name, entry, locale, onUnavailable, previewConfig]);
 
   return {
     isPreviewAvailable,
