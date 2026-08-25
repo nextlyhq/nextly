@@ -3109,6 +3109,49 @@ describe("a group of ops applied as one edit", () => {
     expect(() => applyOps(start, [insert, remove], limits)).toThrow(OpError);
   });
 
+  it("records the entry when the endpoints are too deep to compare", () => {
+    /*
+     * The boundary of the check above, pinned so it is a known limit rather
+     * than a surprise. The comparison is depth-bounded from wherever it starts,
+     * and rooting it at the DOCUMENT adds the envelope, forest and node levels
+     * that `applyOp` does not pay when it asks the same question of a field.
+     *
+     * A value stored near the limit therefore compares equal field-rooted and
+     * different document-rooted, so the group records an entry whose undo has
+     * no visible effect. That is what happened to every such group before this
+     * check existed, so the check misses the deepest values rather than judging
+     * them wrongly.
+     */
+    const chain = (depth: number): unknown => {
+      let value: unknown = "leaf";
+      for (let level = 0; level < depth; level += 1) value = { next: value };
+      return value;
+    };
+
+    // Population first: the two values ARE equal by the predicate `applyOp`
+    // uses on a field, which is what makes the document-rooted answer a limit
+    // of the walk rather than a real difference.
+    expect(sameStoredValue(chain(510), chain(510))).toBe(true);
+
+    // DISTINCT objects holding equal content: two references to one value are
+    // settled by identity before the walk starts, so a shared fixture would
+    // report equal and prove nothing.
+    const deep = (): BlockDocument =>
+      doc([
+        { id: "a", type: "core/box", version: 1, props: { v: chain(510) } },
+      ] as unknown as BlockNode[]);
+    const shallow = (): BlockDocument =>
+      doc([
+        { id: "a", type: "core/box", version: 1, props: { v: chain(2) } },
+      ] as unknown as BlockNode[]);
+
+    // Document-rooted, an equal pair reads as different.
+    expect(sameStoredValue(deep(), deep())).toBe(false);
+    // The control: an ordinary pair still compares equal, so the assertion
+    // above is about depth and not about documents in general.
+    expect(sameStoredValue(shallow(), shallow())).toBe(true);
+  });
+
   it("records nothing when the group leaves the document as it found it", () => {
     /*
      * Every op changed something and the net effect is still nothing. An entry

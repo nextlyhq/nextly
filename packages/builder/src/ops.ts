@@ -3206,19 +3206,21 @@ export function applyOp(
  *
  * The caps are the caller's throughout: every step is judged as `applyOp` judges
  * it, because a document that transiently breaks its own invariant is a document
- * whose UNDO may not be applicable. That is not a theoretical worry — `undo`
- * pops its entry before replaying it and does not put it back, so an inverse
- * group refused on the way out loses the edit it was meant to take back.
+ * whose UNDO may not be applicable. `undo` pops its entry before replaying it
+ * and does not put it back, so an inverse group the caps refuse on the way out
+ * loses the edit it was meant to take back.
  *
- * A deferral was tried here and withdrawn. Letting a group exceed the cap
- * transiently needs the retained inverses bounded, or a single batch keeps
- * hundreds of megabytes alive in one history entry; bounding them makes an
- * accepted group's own undo refusable; and guaranteeing the undo is applicable
- * needs the redo of that undo checked too, which does not terminate. Both
- * directions of that dilemma are worse than the ordering problem it solved, and
- * the ordering problem has a smaller home — `batch-style` knows its ops target
- * distinct nodes and knows exactly what each one costs, so it can order them
- * without any invariant being suspended.
+ * Suspending the cap for the span of a group cannot be made safe. The inverses
+ * it would then hold have to be bounded, or one group keeps hundreds of
+ * megabytes alive in a single history entry; bounding them makes an accepted
+ * group's own undo refusable; and establishing that the undo is applicable
+ * requires the same question of the undo's redo, which does not terminate.
+ *
+ * The cost is that a group's outcome can depend on the ORDER its ops arrive in.
+ * A group at the byte cap whose first op grows the document is refused, while
+ * the same ops with a reduction first are not, for the same resulting document.
+ * A caller that knows its ops are independent may order them; this function
+ * cannot know that of an arbitrary group.
  *
  * Inverses come back in UNDO order — the last op's inverse first — because each
  * one describes the document as it stood when that op ran, and replaying them
@@ -3273,6 +3275,18 @@ export function applyOps(
   // something: grow a value, then restore it. Compared with the predicate
   // `applyOp` uses for its own no-op check, rather than a second opinion about
   // what changing nothing means.
+  //
+  // Rooted at the DOCUMENT, where `applyOp` roots the same question at the
+  // field, and the difference has a boundary worth naming: the comparison is
+  // depth-bounded from wherever it starts, so the envelope and forest levels
+  // this walk adds bring a value stored near the depth limit past it. Measured
+  // — a value 510 levels deep compares equal field-rooted and different
+  // document-rooted.
+  //
+  // Answering "different" there records the entry, which is what happened for
+  // every such group before this check existed. So the check is an improvement
+  // that does not reach the deepest values rather than a judgement that gets
+  // them wrong, and the direction it fails in is the older behaviour.
   if (sameStoredValue(document, working)) return { document, inverses: [] };
   return { document: working, inverses };
 }

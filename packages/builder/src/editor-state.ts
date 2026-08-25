@@ -204,10 +204,11 @@ export function useEditorState({
         // judged against the document as it stands when that op runs, which is
         // what keeps an accepted edit undoable — a group allowed to exceed the
         // cap in passing can hand back an inverse the cap then refuses, and
-        // `undo` pops its entry before replaying it. So an arbitrary group's
-        // outcome can still depend on the order its ops arrive in; the batch
-        // style layer avoids that for its own ops by ordering them, which it
-        // can do safely because they target distinct nodes.
+        // `undo` pops its entry before replaying it.
+        //
+        // So a group's outcome can depend on the order its ops arrive in, and
+        // nothing below this line changes that. A caller whose ops are known to
+        // be independent could order them; none does today.
         group = applyOps(latestDocument.current, ops, limits);
       } catch {
         // A refused group is an ordinary outcome, not a crash: an insert past a
