@@ -402,7 +402,9 @@ function Empty({
     <p className="text-[12px] text-muted-foreground">
       {applied
         ? `No documents match “${applied}”.`
-        : `No documents to redirect to yet. Create one in ${collections.join(" or ")} first.`}
+        : collections.length === 0
+          ? "No collection is configured as a redirect target."
+          : `No documents to redirect to yet. Create one in ${collections.join(" or ")} first.`}
     </p>
   );
 }
@@ -444,12 +446,16 @@ export function RedirectPagePicker({
       {/* Search rather than paging: a dropdown cannot usefully list a large
           collection, and a ceiling on how many pages to walk would leave the
           documents past it unreachable however high it were set. */}
-      <Input
-        aria-label="Search pages"
-        value={query}
-        onChange={event => setQuery(event.target.value)}
-        placeholder="Search…"
-      />
+      {/* Nothing to search when no collection is listed — the only entry in
+          the control then is the stored target, recovered by id. */}
+      {collections.length > 0 && (
+        <Input
+          aria-label="Search pages"
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          placeholder="Search…"
+        />
+      )}
 
       {/* Reported BESIDE the choices rather than instead of them: a collection
           the author cannot read is a different problem from one that is empty,

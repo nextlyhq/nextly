@@ -87,6 +87,18 @@ describe("groupChoices", () => {
     expect(groups[1].label).toContain("no longer configured");
   });
 
+  it("keeps the stored target when NO collection is configured", () => {
+    // The zero-config case specifically. The previous test kept another
+    // configured collection, so it exercised the grouping but never this — and
+    // this is the state where the picker is the only thing that can tell an
+    // author which page is still saved.
+    const groups = groupChoices([choice("retired", "r1")], []);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].collection).toBe("retired");
+    expect(groups[0].removed).toBe(true);
+    expect(groups[0].choices).toHaveLength(1);
+  });
+
   it("does not invent a group for a configured collection with no choices", () => {
     expect(
       groupChoices([choice("pages", "g1")], ["pages", "posts"]).map(

@@ -175,19 +175,26 @@ function PageRedirectOption({
       />
       <div className="w-full space-y-2">
         <Label htmlFor="settings-confirm-page">Redirect to a page</Label>
-        {stored && !configured && (
-          <p className="text-[12px] text-muted-foreground">
-            This form redirects to a page, but no collection is configured as a
-            redirect target right now. The stored page is kept until you choose
-            a different confirmation.
-          </p>
-        )}
-        {stored && configured && (
-          <RedirectPagePicker
-            collections={redirectCollections}
-            value={settings.redirectPage}
-            onChange={next => updateSettings({ redirectPage: next })}
-          />
+        {stored && (
+          <>
+            {!configured && (
+              <p className="text-[12px] text-muted-foreground">
+                No collection is configured as a redirect target right now. The
+                page below is still saved, and stays until you choose a
+                different confirmation.
+              </p>
+            )}
+            {/* Mounted whenever a page is stored, including with NO configured
+                collections. The picker is what recovers the stored target by
+                id and labels it, so leaving it out in exactly that case tells
+                an author a page is saved without telling them which — and the
+                only way out of the state is to see it. */}
+            <RedirectPagePicker
+              collections={redirectCollections ?? []}
+              value={settings.redirectPage}
+              onChange={next => updateSettings({ redirectPage: next })}
+            />
+          </>
         )}
       </div>
     </div>
