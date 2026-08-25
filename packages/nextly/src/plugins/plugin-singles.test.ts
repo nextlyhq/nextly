@@ -6,6 +6,9 @@ import type { Logger } from "../shared/types";
 import { createPluginContext, PLUGIN_SERVICE_NAMES } from "./plugin-context";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 
+/** The slugs every fixture in this file declares. */
+const DECLARED = new Set(["homepage"]);
+
 /**
  * A registry that records every method reached through it.
  *
@@ -47,7 +50,7 @@ describe("wrapSinglesForPlugin", () => {
     const listSingles = vi.fn().mockResolvedValue({ data: [], total: 0 });
     const registry = { listSingles } as unknown as SingleRegistryService;
 
-    await wrapSinglesForPlugin(registry).list({ source: "code" });
+    await wrapSinglesForPlugin(registry, DECLARED).list({ source: "code" });
 
     // The ARGUMENT is asserted, not just the call: a wrapper that dropped its
     // options would still be "called once" while silently listing everything.
@@ -61,7 +64,7 @@ describe("wrapSinglesForPlugin", () => {
     // the mistake would be invisible at the call site.
     const { registry, touched } = recordingRegistry();
 
-    await wrapSinglesForPlugin(registry).list();
+    await wrapSinglesForPlugin(registry, DECLARED).list();
 
     expect(touched).toEqual(["listSingles"]);
   });
@@ -72,7 +75,7 @@ describe("wrapSinglesForPlugin", () => {
     // nowhere would satisfy the other test and still widen the surface.
     const { registry } = recordingRegistry();
 
-    const surface = wrapSinglesForPlugin(registry);
+    const surface = wrapSinglesForPlugin(registry, DECLARED);
 
     expect(Object.keys(surface)).toEqual(["list"]);
   });
@@ -128,7 +131,7 @@ describe("listing Singles creates nothing", () => {
     const { adapter, ops } = recordingAdapter();
     const registry = new SingleRegistryService(adapter, silentLogger);
 
-    await wrapSinglesForPlugin(registry).list();
+    await wrapSinglesForPlugin(registry, DECLARED).list();
 
     // Asserted against the whole class of write-shaped names rather than a list
     // of the ones that exist today, so an operation added later is caught by
@@ -150,7 +153,7 @@ describe("listing Singles creates nothing", () => {
     const { adapter, ops } = recordingAdapter();
     const registry = new SingleRegistryService(adapter, silentLogger);
 
-    await wrapSinglesForPlugin(registry).list();
+    await wrapSinglesForPlugin(registry, DECLARED).list();
 
     expect(ops).toContain("select");
   });
@@ -229,7 +232,7 @@ describe("the published record says what the registry can actually return", () =
     const registry = {
       listSingles: async () => ({ data: [rowAsStored()], total: 1 }),
     } as unknown as SingleRegistryService;
-    const result = await wrapSinglesForPlugin(registry).list();
+    const result = await wrapSinglesForPlugin(registry, DECLARED).list();
     return result.data[0]!;
   }
 
@@ -299,7 +302,8 @@ describe("a Single with no description", () => {
       }),
     } as unknown as SingleRegistryService;
 
-    const [record] = (await wrapSinglesForPlugin(registry).list()).data;
+    const [record] = (await wrapSinglesForPlugin(registry, DECLARED).list())
+      .data;
 
     expect(record!.description).toBeUndefined();
     // Asserted separately: `toBeUndefined` passes for a missing key AND for a
@@ -324,7 +328,8 @@ describe("a contributed field carrying its own `fields` option", () => {
         total: 1,
       }),
     } as unknown as SingleRegistryService;
-    return (await wrapSinglesForPlugin(registry).list()).data[0]!.fields;
+    return (await wrapSinglesForPlugin(registry, DECLARED).list()).data[0]!
+      .fields;
   }
 
   it("drops a non-array `fields` rather than publishing it as a list", async () => {
@@ -404,7 +409,8 @@ describe("what a listed field publishes", () => {
         total: 1,
       }),
     } as unknown as SingleRegistryService;
-    return (await wrapSinglesForPlugin(registry).list()).data[0]!.fields[0]!;
+    return (await wrapSinglesForPlugin(registry, DECLARED).list()).data[0]!
+      .fields[0]!;
   }
 
   it("carries only the declared members, not everything the registry stored", async () => {
@@ -445,5 +451,50 @@ describe("what a listed field publishes", () => {
 
     expect(Object.keys(published).sort()).toEqual(["fields", "name", "type"]);
     expect(Object.keys(published.fields![0]!).sort()).toEqual(["name", "type"]);
+  });
+});
+
+describe("a code-first Single whose registry row outlived its config", () => {
+  function rows() {
+    return [
+      { id: "1", slug: "homepage", label: "Home", fields: [], source: "code" },
+      { id: "2", slug: "removed", label: "Gone", fields: [], source: "code" },
+      { id: "3", slug: "built-here", label: "UI", fields: [], source: "ui" },
+    ];
+  }
+
+  async function listWith(declared: ReadonlySet<string>) {
+    const registry = {
+      listSingles: async () => ({ data: rows(), total: rows().length }),
+    } as unknown as SingleRegistryService;
+    return wrapSinglesForPlugin(registry, declared).list();
+  }
+
+  it("omits the orphan, because the listing describes what is declared", async () => {
+    // `reload-config.ts` states it where it prunes the defaults: "a removed
+    // single's registry row (which stays readable)". Removing a code-first
+    // Single from config leaves that row until someone runs the destructive
+    // cleanup, so the registry keeps answering for a Single the app no longer
+    // has.
+    const result = await listWith(new Set(["homepage"]));
+
+    expect(result.data.map(r => r.slug)).toEqual(["homepage", "built-here"]);
+  });
+
+  it("keeps a UI-built Single, which its registry row IS the declaration of", async () => {
+    // The negative control. Filtering everything absent from the config would
+    // satisfy the assertion above and delete every Single built in the UI from
+    // the listing, since none of them appears in config at all.
+    const result = await listWith(new Set([]));
+
+    expect(result.data.map(r => r.slug)).toEqual(["built-here"]);
+  });
+
+  it("reports a total matching the rows it returned", async () => {
+    // The registry counts what it holds. A caller paging on that total asks for
+    // a page of rows this surface will never hand back.
+    const result = await listWith(new Set(["homepage"]));
+
+    expect(result.total).toBe(result.data.length);
   });
 });

@@ -754,17 +754,13 @@ export function definePlugin(definition: PluginDefinition): PluginDefinition {
  * }
  * ```
  *
- * @internal Core wiring, not an entry point for plugin authors. It is exported
- * because the DI container and the auth deps bridge both build a context, and
- * it is deliberately absent from `@nextlyhq/plugin-sdk` and from that package's
- * STABILITY.md — a plugin receives a context, it does not construct one.
+ * @internal Core wiring, not an entry point for plugin authors. The DI
+ * container and the auth deps bridge build a context; a plugin receives one.
+ * It is absent from `@nextlyhq/plugin-sdk` and from that package's
+ * STABILITY.md for that reason.
  *
- * The consequence worth stating: `getServiceFn` is typed from
- * {@link PLUGIN_SERVICE_NAMES}, so a name added there widens what a resolver
- * must answer. That is a source-level change for anyone who wrote a resolver
- * against the previous set, and it is accepted rather than absorbed behind an
- * overload — the alternative is a second signature carried permanently on an
- * internal seam so that a caller outside the supported surface keeps compiling.
+ * `getServiceFn` is typed from {@link PLUGIN_SERVICE_NAMES}, so a resolver must
+ * answer every name in that list.
  */
 /**
  * Every service name `createPluginContext` may ask its resolver for.
@@ -962,7 +958,13 @@ export function createPluginContext(
       // exported, so a context built by a caller that never asks about Singles
       // must not require the registry to have been resolved first.
       get singles() {
-        return wrapSinglesForPlugin(getServiceFn("singleRegistryService"));
+        return wrapSinglesForPlugin(
+          getServiceFn("singleRegistryService"),
+          // The slugs the running config declares. A code-first Single removed
+          // from config keeps a readable registry row until someone runs the
+          // destructive cleanup, and the listing describes what is DECLARED.
+          new Set((config.singles ?? []).map(single => single.slug))
+        );
       },
       plugins: buildPluginServicesNamespace(),
     },
