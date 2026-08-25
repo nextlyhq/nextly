@@ -124,7 +124,22 @@ function isComposite(value: StyleValue | undefined): value is CompositeValue {
  * stores it; an inherited accessor would also RUN during the read.
  */
 function ownValue(value: CompositeValue, name: string): StyleValue | undefined {
-  return Object.hasOwn(value, name) ? value[name] : undefined;
+  // A DESCRIPTOR, never `value[name]`. The bracket read runs an own accessor,
+  // and this reader is reached from `sharedValueAt` while a panel inspects a
+  // selection — so a getter with a side effect fires from rendering and a
+  // throwing one aborts the read. The descriptor also subsumes the ownership
+  // check: an inherited property has none here.
+  //
+  // An accessor reads as ABSENT rather than as a value, and the residue is
+  // worth naming: two nodes that both hold one at the same address then look
+  // equally unset, so a control shows nothing and typing sets them both. That
+  // is benign — nothing real is overwritten, because such a value cannot be
+  // stored at all. `applyOp` refuses it: "styles" holds a value JSON cannot
+  // carry unchanged. So it is only ever met on nodes a caller built in memory.
+  const part = Object.getOwnPropertyDescriptor(value, name);
+  return part !== undefined && "value" in part
+    ? (part.value as StyleValue)
+    : undefined;
 }
 
 /** The value at a path inside one property's stored value. */
