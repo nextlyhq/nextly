@@ -122,7 +122,10 @@ function withHostHooks<T>(
   hostHooks: T | undefined,
   trailing: Partial<Record<string, unknown[]>> = {}
 ): T {
-  const host = hostHooks ?? {};
+  // Annotated rather than asserted. `hostHooks ?? {}` widens to `T | {}`
+  // under the generic and cannot be indexed by phase name; a cast says the
+  // same thing but reads as removable, and `--fix` removes it.
+  const host: Record<string, unknown> = { ...hostHooks };
 
   const asList = (value: unknown) =>
     Array.isArray(value) ? value : value === undefined ? [] : [value];
