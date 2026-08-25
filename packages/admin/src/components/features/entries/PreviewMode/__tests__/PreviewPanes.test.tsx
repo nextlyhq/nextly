@@ -52,8 +52,7 @@ import { PreviewPanes } from "../PreviewPanes";
 
 const props = {
   onClose: vi.fn(),
-  collection: "pages",
-  entryId: "7",
+  scope: { collection: "pages", entryId: "7" },
   label: "Preview",
   revision: "r1",
 };

@@ -246,13 +246,45 @@ function reasonForRefusal(error: unknown): PreviewUnavailableReason {
 }
 
 /**
+ * Which document a self-preview is being minted for.
+ *
+ * A union, mirroring the mint API's own request type: an entry and a Single are
+ * different documents, so naming both is not a narrower request and naming
+ * neither is not a request at all. `?: never` on the absent half is what makes
+ * the compiler say so, rather than a runtime check discovering it later.
+ *
+ * Spread straight into the request, so a field added on one side of the API's
+ * union cannot be silently dropped on the way through.
+ */
+export type SelfPreviewScope =
+  | {
+      collection: string;
+      entryId: string;
+      single?: never;
+      /** Scopes the credential to one language, where there is one. */
+      locale?: string | undefined;
+    }
+  | {
+      single: string;
+      collection?: never;
+      entryId?: never;
+      locale?: string | undefined;
+    };
+
+/**
  * Mints the credential a preview surface opens with.
  *
  * Exported because there is more than one surface — a tab and an in-admin
- * pane — and "a self-preview credential for this document" is ONE question. A
- * pane that minted its own would be a second implementation of the TTL, the
- * refusal mapping and the null-url case, and the two would agree until one of
- * them was edited.
+ * pane, over two kinds of document — and "a self-preview credential for this
+ * document" is ONE question. A pane that minted its own would be a second
+ * implementation of the TTL, the refusal mapping and the null-url case, and the
+ * two would agree until one of them was edited.
+ *
+ * A SCOPE rather than positional arguments, for the reason the API's own
+ * request type is a union: a collection entry and a Single are different
+ * documents, and three optional strings would make "both" and "neither"
+ * representable and then have to validate them away. Taking the union means a
+ * caller cannot express a request the server would refuse.
  *
  * The mint is the ONLY question asked, and that is deliberate. It already
  * resolves the destination through the same function the preview route will
@@ -266,15 +298,11 @@ function reasonForRefusal(error: unknown): PreviewUnavailableReason {
  * default language whichever one was being edited.
  */
 export async function mintSelfPreview(
-  collection: string,
-  entryId: string,
-  locale: string | undefined
+  scope: SelfPreviewScope
 ): Promise<PreviewOutcome> {
   try {
     const link = await previewLinkApi.mint({
-      collection,
-      entryId,
-      ...(locale === undefined ? {} : { locale }),
+      ...scope,
       ttlSeconds: SELF_PREVIEW_TTL_SECONDS,
     });
 
@@ -387,7 +415,11 @@ export function useEntryPreview({
 
     settle(
       claimed.target,
-      await mintSelfPreview(collection.name, target.entryId, locale),
+      await mintSelfPreview({
+        collection: collection.name,
+        entryId: target.entryId,
+        ...(locale === undefined ? {} : { locale }),
+      }),
       onUnavailable
     );
   }, [collection.name, entry, locale, onUnavailable, previewConfig]);

@@ -755,11 +755,13 @@ export function EntryForm({
                */
               open={previewOpen && translationMode.source === undefined}
               onClose={() => setPreviewOpen(false)}
-              collection={collection.name}
-              entryId={savedEntryId}
-              {...(linkLocale.kind === "scoped"
-                ? { locale: linkLocale.locale }
-                : {})}
+              scope={{
+                collection: collection.name,
+                entryId: savedEntryId,
+                ...(linkLocale.kind === "scoped"
+                  ? { locale: linkLocale.locale }
+                  : {}),
+              }}
               label={entryPreview.label}
               revision={previewRevision}
             >

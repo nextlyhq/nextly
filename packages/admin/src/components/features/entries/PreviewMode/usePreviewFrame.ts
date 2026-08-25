@@ -38,6 +38,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   mintSelfPreview,
   type PreviewUnavailableReason,
+  type SelfPreviewScope,
 } from "@admin/hooks/useEntryPreview";
 
 import {
@@ -101,20 +102,14 @@ export interface UsePreviewFrameResult extends PreviewFrameState {
 }
 
 /**
- * @param collection - the collection slug the entry belongs to
- * @param entryId - the SAVED entry id; the frame shows nothing without one
- * @param locale - the language to scope the token to, on a localized collection
+ * @param scope - the document to preview: a collection entry, or a Single
  * @param active - whether the pane is open; nothing is minted while it is not
  */
 export function usePreviewFrame({
-  collection,
-  entryId,
-  locale,
+  scope,
   active,
 }: {
-  collection: string;
-  entryId: string;
-  locale?: string | undefined;
+  scope: SelfPreviewScope;
   active: boolean;
 }): UsePreviewFrameResult {
   const [state, setState] = useState<PreviewFrameState>({
@@ -139,7 +134,24 @@ export function usePreviewFrame({
    */
   const generation = useRef(0);
 
-  const scopeKey = previewScopeKey(collection, entryId, locale);
+  /*
+   * The scope as a comparable VALUE, and the only dependency the mint takes.
+   *
+   * Callers build the scope inline, so its object identity changes on every
+   * render — depending on it would re-mint a credential, and write an audit
+   * row, for every keystroke in the editor beside the pane. The key changes
+   * exactly when the document being previewed does.
+   */
+  const scopeKey = previewScopeKey(scope);
+
+  /*
+   * Kept current so the mint reads today's scope rather than the one captured
+   * when the callback was last rebuilt. Without this the key and the value
+   * could disagree for a render — which is the stale closure the key exists to
+   * avoid, reintroduced by the fix for it.
+   */
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
 
   /*
    * The lock this pane announces through. A ref because `mint` claims through
@@ -152,7 +164,7 @@ export function usePreviewFrame({
     const mine = ++generation.current;
     setState(prev => ({ ...prev, isLoading: true, reason: null, block: null }));
 
-    const outcome = await mintSelfPreview(collection, entryId, locale);
+    const outcome = await mintSelfPreview(scopeRef.current);
 
     // A newer mint started, or the pane closed, while this one was in flight.
     if (mine !== generation.current) return;
@@ -199,7 +211,11 @@ export function usePreviewFrame({
       reason: null,
       block: framable ? null : "crossOrigin",
     }));
-  }, [collection, entryId, locale]);
+    // No dependencies: the scope is read through the ref, so this callback is
+    // correct for every scope and never needs rebuilding. What must react to a
+    // changed scope is the effect that OPENS the pane, and that is where the
+    // key belongs — a dependency here would only be a proxy for it.
+  }, []);
 
   /*
    * Subscribed for the whole time the pane is open, not per mint: the message
@@ -243,7 +259,12 @@ export function usePreviewFrame({
       return;
     }
     void mint();
-  }, [active, mint]);
+    // `scopeKey` and not `scope`: the caller builds the scope inline, so its
+    // identity changes every render and depending on it would re-mint — and
+    // write an audit row — for every keystroke in the editor beside the pane.
+    // The key changes exactly when the document or its language does, which is
+    // exactly when a fresh credential is owed.
+  }, [active, scopeKey, mint]);
 
   /*
    * Renewal on a TIMER, not only when someone asks.

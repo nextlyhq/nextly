@@ -15,6 +15,8 @@
  * each is asserted here on the state the pane renders from.
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
+
+import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mint = vi.hoisted(() => vi.fn());
@@ -23,6 +25,7 @@ vi.mock("@admin/hooks/useEntryPreview", () => ({
   PREVIEW_MESSAGES: {},
 }));
 
+import { previewScopeKey } from "../previewSessionLock";
 import { usePreviewFrame } from "../usePreviewFrame";
 
 /*
@@ -42,15 +45,24 @@ function expiringIn(ms: number, url = `${ORIGIN}/blog/post?preview=1`) {
   };
 }
 
-const args = { collection: "pages", entryId: "7", active: true };
+const args = { scope: { collection: "pages", entryId: "7" }, active: true };
 
 /** The channel the panes announce on. Must match `previewSessionLock`. */
 const CHANNEL = "nextly.preview.session";
 
-/** Another pane, on another entry, taking the browser's one preview session. */
-function anotherPaneClaims(scopeKey = "pages 9 ") {
+/**
+ * Another pane taking the browser's one preview session.
+ *
+ * The key is DERIVED rather than spelled out, because a hand-written one pins
+ * the format: when the key gained a kind prefix, a literal `"pages 7 "` stopped
+ * meaning "the same scope" and silently started meaning "a different one" —
+ * turning the control below into another instance of the case it controls for.
+ */
+function anotherPaneClaims(
+  scope: SelfPreviewScope = { collection: "pages", entryId: "9" }
+) {
   const other = new BroadcastChannel(CHANNEL);
-  other.postMessage({ scopeKey });
+  other.postMessage({ scopeKey: previewScopeKey(scope) });
   other.close();
 }
 
@@ -154,6 +166,62 @@ describe("usePreviewFrame", () => {
     expect(mint).toHaveBeenCalledTimes(1);
   });
 
+  it("mints again when the language being previewed changes", async () => {
+    /*
+     * A token is scoped per locale, so switching language inside the editor
+     * makes the held credential the wrong one — it opens the language the
+     * author just left. Nothing navigates on a locale switch, so this is the
+     * only thing that can notice.
+     */
+    mint.mockResolvedValue(expiringIn(15 * 60_000));
+
+    const { rerender } = renderHook(
+      ({ scope }: { scope: SelfPreviewScope }) =>
+        usePreviewFrame({ scope, active: true }),
+      {
+        initialProps: {
+          scope: { collection: "pages", entryId: "7", locale: "en" },
+        },
+      }
+    );
+    await waitFor(() => expect(mint).toHaveBeenCalledTimes(1));
+
+    rerender({ scope: { collection: "pages", entryId: "7", locale: "fr" } });
+
+    await waitFor(() => expect(mint).toHaveBeenCalledTimes(2));
+  });
+
+  it("mints NOTHING for a scope that is merely a new object", async () => {
+    /*
+     * The control for the case above, and the reason the dependency is a KEY
+     * rather than the scope itself. Callers build the scope inline, so its
+     * identity changes on every render — depending on it would issue a
+     * credential and an audit row for every keystroke in the editor beside the
+     * pane, which is the failure that would hide behind the test above passing.
+     */
+    mint.mockResolvedValue(expiringIn(15 * 60_000));
+
+    const { rerender } = renderHook(
+      ({ scope }: { scope: SelfPreviewScope }) =>
+        usePreviewFrame({ scope, active: true }),
+      {
+        initialProps: {
+          scope: { collection: "pages", entryId: "7", locale: "en" },
+        },
+      }
+    );
+    await waitFor(() => expect(mint).toHaveBeenCalledTimes(1));
+
+    // Equal by value, different by identity — three times over, so a single
+    // render slipping through would not be mistaken for stability.
+    rerender({ scope: { collection: "pages", entryId: "7", locale: "en" } });
+    rerender({ scope: { collection: "pages", entryId: "7", locale: "en" } });
+    rerender({ scope: { collection: "pages", entryId: "7", locale: "en" } });
+    await act(async () => {});
+
+    expect(mint).toHaveBeenCalledTimes(1);
+  });
+
   it("reports the reason a mint refused, and shows no frame", async () => {
     mint.mockResolvedValue({ kind: "report", reason: "noSiteUrl" });
 
@@ -240,7 +308,7 @@ describe("another pane taking the browser's one preview session", () => {
     const { result } = renderHook(() => usePreviewFrame(args));
     await waitFor(() => expect(result.current.url).not.toBeNull());
 
-    act(() => anotherPaneClaims("pages 7 "));
+    act(() => anotherPaneClaims({ collection: "pages", entryId: "7" }));
     await act(async () => {});
 
     expect(result.current.block).toBeNull();
