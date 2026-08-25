@@ -84,6 +84,52 @@ interface ExtendedCollectionConfig extends Omit<CollectionConfig, "admin"> {
  * // Returns a collection with slug "forms" (or custom slug from config)
  * ```
  */
+/**
+ * Whether a stored value names a page this plugin is configured to reach.
+ *
+ * `parseRedirectReference` answers which document a value names; it trusts an
+ * explicit `relationTo` on purpose, because a form validated without plugin
+ * config cannot judge one. Here the configuration IS known, so membership is
+ * checked too: a reference into a collection with no URL pattern is a value
+ * the resolver cannot use, and accepting it saves a form whose every
+ * submission ends nowhere.
+ */
+function namesAConfiguredPage(
+  value: unknown,
+  collections: readonly string[]
+): boolean {
+  const reference = parseRedirectReference(value, collections);
+  return reference !== null && collections.includes(reference.collection);
+}
+
+/**
+ * The plugin's hooks, with a host's own appended per phase.
+ *
+ * A host may pass `formOverrides.hooks`, and the trailing `...overrides` spread
+ * would otherwise replace this object outright — taking with it the slug
+ * generation, the at-least-one-field rule and the redirect check, none of
+ * which are the host's to remove. Those are invariants of the collection this
+ * plugin ships; an override extends it rather than disarming it.
+ *
+ * The plugin's handlers run FIRST, so a rejection happens before host logic
+ * has mutated anything on the way past.
+ */
+function withHostHooks<T>(pluginHooks: T, hostHooks: T | undefined): T {
+  if (!hostHooks) return pluginHooks;
+  const host = hostHooks as Record<string, unknown>;
+
+  const asList = (value: unknown) =>
+    Array.isArray(value) ? value : value === undefined ? [] : [value];
+
+  const merged: Record<string, unknown> = { ...host };
+  for (const [phase, handlers] of Object.entries(
+    pluginHooks as Record<string, unknown>
+  )) {
+    merged[phase] = [...asList(handlers), ...asList(host[phase])];
+  }
+  return merged as T;
+}
+
 export function formsCollection(
   pluginConfig: ResolvedFormBuilderConfig
 ): ExtendedCollectionConfig {
@@ -92,6 +138,8 @@ export function formsCollection(
     labels,
     fields: additionalFields,
     access: accessOverrides,
+    hooks: hookOverrides,
+    admin: adminOverrides,
     ...overrides
   } = pluginConfig.formOverrides;
 
@@ -354,7 +402,7 @@ export function formsCollection(
         },
       },
 
-      ...overrides.admin,
+      ...adminOverrides,
     },
 
     // Access control with sensible defaults
@@ -371,87 +419,87 @@ export function formsCollection(
           roles.includes("admin") || roles.includes("super-admin")),
     },
 
-    hooks: {
-      // Auto-generate slug from name if not provided
-      beforeValidate: [
-        (context: HookContext) => {
-          const { data, operation } = context;
+    hooks: withHostHooks(
+      {
+        // Auto-generate slug from name if not provided
+        beforeValidate: [
+          (context: HookContext) => {
+            const { data, operation } = context;
 
-          // Auto-generate slug from name if not provided (only on create)
-          if (operation === "create" && data && !data.slug && data.name) {
-            data.slug = String(data.name)
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, "-")
-              .replace(/^-+|-+$/g, "");
-          }
+            // Auto-generate slug from name if not provided (only on create)
+            if (operation === "create" && data && !data.slug && data.name) {
+              data.slug = String(data.name)
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-+|-+$/g, "");
+            }
 
-          // A form must have at least one field, checked against what the
-          // write actually sets. An update carries the patch rather than the
-          // merged document, so treating an absent `fields` as empty rejects
-          // every partial update -- renaming a form, or changing a setting --
-          // even though its fields are untouched and still there.
-          const setsFields =
-            operation === "create" || data?.fields !== undefined;
-          if (
-            data &&
-            setsFields &&
-            (data.fields === undefined ||
-              (Array.isArray(data.fields) && data.fields.length === 0))
-          ) {
-            // Typed, so the rejection survives as a validation failure with
-            // its field issue rather than being read as a crash and replaced
-            // with a generic server-fault message.
-            throw NextlyError.validation({
-              errors: [
-                {
-                  path: "fields",
-                  code: "REQUIRED",
-                  message: "Form must have at least one field.",
-                },
-              ],
-            });
-          }
+            // A form must have at least one field, checked against what the
+            // write actually sets. An update carries the patch rather than the
+            // merged document, so treating an absent `fields` as empty rejects
+            // every partial update -- renaming a form, or changing a setting --
+            // even though its fields are untouched and still there.
+            const setsFields =
+              operation === "create" || data?.fields !== undefined;
+            if (
+              data &&
+              setsFields &&
+              (data.fields === undefined ||
+                (Array.isArray(data.fields) && data.fields.length === 0))
+            ) {
+              // Typed, so the rejection survives as a validation failure with
+              // its field issue rather than being read as a crash and replaced
+              // with a generic server-fault message.
+              throw NextlyError.validation({
+                errors: [
+                  {
+                    path: "fields",
+                    code: "REQUIRED",
+                    message: "Form must have at least one field.",
+                  },
+                ],
+              });
+            }
 
-          // A form set to redirect to a page must name a page the resolver can
-          // read. Enforced HERE rather than only in `validateFormConfig`,
-          // which is a library entry point that no write goes through: the
-          // browser posts `settings` straight to this collection, so a rule
-          // that lives only there protects nobody.
-          //
-          // The shape is checked, not merely presence. `{}` and
-          // `{ relationTo: "pages" }` are truthy and name no document, so a
-          // presence test admits exactly the values that resolve to no
-          // destination at submit time — which is the failure being prevented.
-          const setsSettings =
-            operation === "create" || data?.settings !== undefined;
-          const settings = data?.settings as
-            | Record<string, unknown>
-            | undefined;
-          if (
-            data &&
-            setsSettings &&
-            settings?.confirmationType === "relationship" &&
-            parseRedirectReference(
-              settings.redirectPage,
-              redirectCollections
-            ) === null
-          ) {
-            throw NextlyError.validation({
-              errors: [
-                {
-                  path: "settings.redirectPage",
-                  code: "REQUIRED",
-                  message:
-                    "Choose a page to redirect to, or pick a different confirmation.",
-                },
-              ],
-            });
-          }
+            // A form set to redirect to a page must name a page the resolver can
+            // read. Enforced HERE rather than only in `validateFormConfig`,
+            // which is a library entry point that no write goes through: the
+            // browser posts `settings` straight to this collection, so a rule
+            // that lives only there protects nobody.
+            //
+            // The shape is checked, not merely presence. `{}` and
+            // `{ relationTo: "pages" }` are truthy and name no document, so a
+            // presence test admits exactly the values that resolve to no
+            // destination at submit time — which is the failure being prevented.
+            const setsSettings =
+              operation === "create" || data?.settings !== undefined;
+            const settings = data?.settings as
+              | Record<string, unknown>
+              | undefined;
+            if (
+              data &&
+              setsSettings &&
+              settings?.confirmationType === "relationship" &&
+              !namesAConfiguredPage(settings.redirectPage, redirectCollections)
+            ) {
+              throw NextlyError.validation({
+                errors: [
+                  {
+                    path: "settings.redirectPage",
+                    code: "REQUIRED",
+                    message:
+                      "Choose a page to redirect to, or pick a different confirmation.",
+                  },
+                ],
+              });
+            }
 
-          return data;
-        },
-      ],
-    },
+            return data;
+          },
+        ],
+      },
+      hookOverrides
+    ),
 
     // Spread any additional overrides (excluding already used properties)
     ...overrides,

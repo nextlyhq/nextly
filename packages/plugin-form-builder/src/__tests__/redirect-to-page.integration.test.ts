@@ -147,14 +147,15 @@ describe("a form that redirects to a picked page", () => {
     expect(result.redirect).toBeUndefined();
   });
 
-  it("has no destination when the collection carries no pattern", async () => {
-    const result = await submitPointingAt(
-      (id: string) => ({ relationTo: "pages", value: id }),
-      { redirectRelationships: { posts: "/blog/{slug}" } }
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.redirect).toBeUndefined();
+  it("refuses to save a target in a collection with no pattern", async () => {
+    // Previously this saved and then produced no destination on every
+    // submission. The write path now refuses it, because a reference into a
+    // collection the plugin cannot build a URL for is not a destination.
+    await expect(
+      submitPointingAt((id: string) => ({ relationTo: "pages", value: id }), {
+        redirectRelationships: { posts: "/blog/{slug}" },
+      })
+    ).rejects.toThrow();
   });
 });
 
@@ -216,5 +217,57 @@ describe("saving a form that redirects to a page", () => {
     // The rule is about one option; a message form has no page to name.
     const saved = await create({ confirmationType: "message" });
     expect(saved).toMatchObject({ item: { id: expect.any(String) } });
+  });
+});
+
+describe("a host that overrides the forms collection's hooks", () => {
+  it("keeps the plugin's validation and runs its own hook too", async () => {
+    // `formOverrides.hooks` is a supported option, and a trailing spread would
+    // replace this collection's hooks outright — removing the slug
+    // generation, the at-least-one-field rule and the redirect check, none of
+    // which are the host's to remove. An override extends the collection; it
+    // does not disarm it.
+    const hostRan: string[] = [];
+
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+      formOverrides: {
+        hooks: {
+          beforeValidate: [
+            (context: { data?: Record<string, unknown> }) => {
+              hostRan.push("beforeValidate");
+              return context.data;
+            },
+          ],
+        },
+      },
+    } as Parameters<typeof formBuilder>[0]);
+
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+
+    const save = (settings: Record<string, unknown>) =>
+      current!.nextly.create({
+        collection: "forms",
+        data: {
+          name: "Contact",
+          slug: "contact",
+          status: "published",
+          fields: [{ type: "text", name: "message", label: "Message" }],
+          settings,
+        },
+      });
+
+    // The plugin's rule still refuses...
+    await expect(save({ confirmationType: "relationship" })).rejects.toThrow();
+
+    // ...and the host's hook is genuinely wired, not merely tolerated.
+    await save({
+      confirmationType: "relationship",
+      redirectPage: { relationTo: "pages", value: "pg1" },
+    });
+    expect(hostRan).toContain("beforeValidate");
   });
 });

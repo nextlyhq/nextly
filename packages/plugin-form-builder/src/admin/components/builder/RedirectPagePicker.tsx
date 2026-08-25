@@ -12,6 +12,7 @@
  */
 
 import {
+  Input,
   Select,
   SelectContent,
   SelectGroup,
@@ -24,9 +25,8 @@ import { useEffect, useState } from "react";
 
 import { parseRedirectReference } from "../../../utils/redirect-reference";
 
-/** Rows per request, and the ceiling on how many requests one collection costs. */
-const PAGE_SIZE = 100;
-const MAX_PAGES = 10;
+/** Rows per request. Search, not paging, is how the rest are reached. */
+const PAGE_SIZE = 50;
 
 /** One selectable document, reduced to what the control shows and stores. */
 interface Choice {
@@ -59,7 +59,7 @@ export function selectionKey(
   return reference ? `${reference.collection}:${reference.id}` : undefined;
 }
 
-/** What to call a document in the list, preferring what an author would recognise. */
+/** What to call a document, preferring the field an author would recognise. */
 export function documentLabel(row: Record<string, unknown>): string {
   for (const field of ["title", "name", "label", "slug"]) {
     const candidate = row[field];
@@ -68,104 +68,110 @@ export function documentLabel(row: Record<string, unknown>): string {
   return typeof row.id === "string" ? row.id : "Untitled";
 }
 
-export function RedirectPagePicker({
-  collections,
-  value,
-  onChange,
-}: RedirectPagePickerProps) {
+/**
+ * One collection's matching documents, or null when it could not be read.
+ *
+ * `limit`, not `pageSize` — the other name is accepted and ignored, leaving
+ * the default of 10. `status=all` because a form is usually configured
+ * alongside the page it points at, and filtering to published shows "create
+ * one first" while the page sits in the next tab. `depth=0` because this reads
+ * five fields and would otherwise inherit the collection API's expansion,
+ * pulling every nested relation of every row to fill a dropdown.
+ */
+async function fetchChoices(
+  collection: string,
+  query: string
+): Promise<Choice[] | null> {
+  const search = query ? `&search=${encodeURIComponent(query)}` : "";
+  try {
+    const response = await fetch(
+      `/admin/api/collections/${collection}/entries` +
+        `?limit=${PAGE_SIZE}&status=all&depth=0${search}`,
+      { credentials: "include" }
+    );
+    if (!response.ok) return null;
+    const body = (await response.json()) as {
+      items?: Record<string, unknown>[];
+    };
+    return (body.items ?? [])
+      .filter(row => typeof row.id === "string")
+      .map(row => ({
+        collection,
+        id: row.id as string,
+        label: documentLabel(row),
+      }));
+  } catch {
+    return null;
+  }
+}
+
+/** One option, keyed and valued by the pair the caller stores. */
+function renderChoice(choice: Choice) {
+  return (
+    <SelectItem
+      key={`${choice.collection}:${choice.id}`}
+      value={`${choice.collection}:${choice.id}`}
+    >
+      {choice.label}
+    </SelectItem>
+  );
+}
+
+/**
+ * The matching documents for every configured collection, and which of them
+ * could not be read.
+ */
+function useChoices(key: string, applied: string) {
   const [choices, setChoices] = useState<Choice[] | null>(null);
-
-  // `collections` is an array prop, so a new identity every render would
-  // refetch forever; the join is the value that actually decides the request.
-  const key = collections.join(",");
-
-  const [unreadable, setUnreadable] = useState(false);
+  const [failed, setFailed] = useState<readonly string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     const wanted = key ? key.split(",") : [];
 
-    /** One collection's documents, or null when it could not be read. */
-    const load = async (collection: string): Promise<Choice[] | null> => {
-      const page = async (offset: number) => {
-        // `limit`, not `pageSize` — the other name is accepted and ignored,
-        // leaving the default of 10. `status=all` because a form is usually
-        // configured alongside the page it points at, and filtering to
-        // published shows "publish one first" while the page sits in the next
-        // tab. `depth=0` because this reads five fields and would otherwise
-        // inherit the collection API's default expansion, pulling every
-        // nested relation of every row to fill a dropdown.
-        const response = await fetch(
-          `/admin/api/collections/${collection}/entries` +
-            `?limit=${PAGE_SIZE}&page=${offset}&status=all&depth=0`,
-          { credentials: "include" }
-        );
-        if (!response.ok) throw new Error(String(response.status));
-        return (await response.json()) as {
-          items?: Record<string, unknown>[];
-          meta?: { totalPages?: number };
-        };
-      };
-
-      try {
-        const first = await page(1);
-        const rows = [...(first.items ?? [])];
-        // Follow the pagination rather than stopping at one page: an author
-        // whose document is number 101 could otherwise never select it, and a
-        // form already pointing there would show blank. Bounded so a large
-        // collection cannot hang the tab — what it cannot show, it says.
-        const totalPages = Math.min(first.meta?.totalPages ?? 1, MAX_PAGES);
-        for (let next = 2; next <= totalPages; next++) {
-          rows.push(...((await page(next)).items ?? []));
-        }
-        return rows
-          .filter(row => typeof row.id === "string")
-          .map(row => ({
-            collection,
-            id: row.id as string,
-            label: documentLabel(row),
-          }));
-      } catch {
-        return null;
-      }
-    };
-
-    void Promise.all(wanted.map(load)).then(perCollection => {
+    void Promise.all(
+      wanted.map(collection => fetchChoices(collection, applied))
+    ).then(results => {
       if (cancelled) return;
-      const readable = perCollection.filter(
-        (rows): rows is Choice[] => rows !== null
+      // WHICH collections failed, not merely whether any did: one unreadable
+      // collection beside a readable-but-empty one otherwise reports "nothing
+      // here" about a collection nobody could see.
+      setFailed(wanted.filter((_, index) => results[index] === null));
+      setChoices(
+        results.filter((rows): rows is Choice[] => rows !== null).flat()
       );
-      // "Nothing to choose" and "could not read anything" are different
-      // answers, and only one of them is the author's to fix. Reported apart,
-      // because an editor without read permission was otherwise told the
-      // collection was empty.
-      setUnreadable(readable.length === 0 && wanted.length > 0);
-      setChoices(readable.flat());
     });
 
     return () => {
       cancelled = true;
     };
-  }, [key]);
+  }, [key, applied]);
 
-  const selected = selectionKey(value, collections);
+  return { choices, setChoices, failed };
+}
 
-  /**
-   * The selected document, when the listing did not reach it.
-   *
-   * Its own effect, keyed on the selection rather than on the collection list,
-   * because the stored value arrives with the form and often AFTER this mounts
-   * — an effect that only watched the collections would capture the moment
-   * when nothing was selected yet and never look again.
-   *
-   * A control that silently drops its own value is worse than one that cannot
-   * list everything: the author sees blank, re-picks, and saves a different
-   * destination than the one that was stored.
-   */
+/**
+ * Adds the selected document when the listing did not reach it.
+ *
+ * Keyed on the selection rather than on the collection list, because the
+ * stored value arrives with the form and often AFTER this mounts — a hook
+ * watching only the collections would capture the moment when nothing was
+ * selected and never look again.
+ *
+ * A control that silently drops its own value is worse than one that cannot
+ * list everything: the author sees blank, re-picks, and saves a different
+ * destination than the one that was stored.
+ */
+function useSelectedChoice(
+  selected: string | undefined,
+  choices: Choice[] | null,
+  setChoices: (update: (current: Choice[] | null) => Choice[]) => void
+) {
   useEffect(() => {
     if (!selected || choices === null) return;
-    const [collection, ...rest] = selected.split(":");
-    const id = rest.join(":");
+    const separator = selected.indexOf(":");
+    const collection = selected.slice(0, separator);
+    const id = selected.slice(separator + 1);
     if (!id || choices.some(choice => choice.id === id)) return;
 
     let cancelled = false;
@@ -193,77 +199,126 @@ export function RedirectPagePicker({
     return () => {
       cancelled = true;
     };
-  }, [selected, choices]);
+  }, [selected, choices, setChoices]);
+}
 
-  const grouped = collections.length > 1;
+/** The options, grouped by collection only when there is more than one. */
+function Options({
+  choices,
+  collections,
+}: {
+  choices: Choice[];
+  collections: readonly string[];
+}) {
+  if (collections.length <= 1) return <>{choices.map(renderChoice)}</>;
+  return (
+    <>
+      {collections.map(collection => {
+        const inCollection = choices.filter(
+          choice => choice.collection === collection
+        );
+        if (inCollection.length === 0) return null;
+        return (
+          <SelectGroup key={collection}>
+            <SelectLabel>{collection}</SelectLabel>
+            {inCollection.map(renderChoice)}
+          </SelectGroup>
+        );
+      })}
+    </>
+  );
+}
+
+/** What to say when there is nothing to choose, and why. */
+function Empty({
+  applied,
+  collections,
+}: {
+  applied: string;
+  collections: readonly string[];
+}) {
+  return (
+    <p className="text-[12px] text-muted-foreground">
+      {applied
+        ? `No documents match “${applied}”.`
+        : `No documents to redirect to yet. Create one in ${collections.join(" or ")} first.`}
+    </p>
+  );
+}
+
+export function RedirectPagePicker({
+  collections,
+  value,
+  onChange,
+}: RedirectPagePickerProps) {
+  const [query, setQuery] = useState("");
+  const [applied, setApplied] = useState("");
+
+  // Typing should not issue a request per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setApplied(query), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // `collections` is an array prop, so a new identity every render would
+  // refetch forever; the join is the value that actually decides the request.
+  const { choices, setChoices, failed } = useChoices(
+    collections.join(","),
+    applied
+  );
+  const selected = selectionKey(value, collections);
+  useSelectedChoice(selected, choices, setChoices);
 
   if (choices === null) {
     return <p className="text-[12px] text-muted-foreground">Loading pages…</p>;
   }
 
-  if (unreadable) {
-    return (
-      <p className="text-[12px] text-destructive">
-        Could not read {collections.join(" or ")}. You may not have permission
-        to list them, or the request failed.
-      </p>
-    );
-  }
-
-  if (choices.length === 0) {
-    return (
-      <p className="text-[12px] text-muted-foreground">
-        No documents to redirect to yet. Create one in{" "}
-        {collections.join(" or ")} first.
-      </p>
-    );
-  }
-
   return (
-    <Select
-      value={selected ?? ""}
-      onValueChange={next => {
-        const separator = next.indexOf(":");
-        if (separator < 0) return onChange(undefined);
-        onChange({
-          relationTo: next.slice(0, separator),
-          value: next.slice(separator + 1),
-        });
-      }}
-    >
-      <SelectTrigger aria-label="Redirect page" className="w-full">
-        <SelectValue placeholder="Choose a page" />
-      </SelectTrigger>
-      <SelectContent>
-        {grouped
-          ? collections.map(collection => {
-              const inCollection = choices.filter(
-                choice => choice.collection === collection
-              );
-              if (inCollection.length === 0) return null;
-              return (
-                <SelectGroup key={collection}>
-                  <SelectLabel>{collection}</SelectLabel>
-                  {inCollection.map(choice => (
-                    <SelectItem
-                      key={`${choice.collection}:${choice.id}`}
-                      value={`${choice.collection}:${choice.id}`}
-                    >
-                      {choice.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              );
-            })
-          : choices.map(choice => (
-              <SelectItem
-                key={`${choice.collection}:${choice.id}`}
-                value={`${choice.collection}:${choice.id}`}
-              >
-                {choice.label}
-              </SelectItem>
-            ))}
-      </SelectContent>
-    </Select>
+    <div className="space-y-2">
+      {/* Search rather than paging: a dropdown cannot usefully list a large
+          collection, and a ceiling on how many pages to walk would leave the
+          documents past it unreachable however high it were set. */}
+      <Input
+        aria-label="Search pages"
+        value={query}
+        onChange={event => setQuery(event.target.value)}
+        placeholder="Search…"
+      />
+
+      {/* Reported BESIDE the choices rather than instead of them: a collection
+          the author cannot read is a different problem from one that is empty,
+          and the collections that did load are still choosable. */}
+      {failed.length > 0 && (
+        <p className="text-[12px] text-destructive">
+          Could not read {failed.join(" or ")}. You may not have permission to
+          list {failed.length > 1 ? "them" : "it"}, or the request failed.
+        </p>
+      )}
+
+      {choices.length === 0 ? (
+        failed.length < collections.length && (
+          <Empty applied={applied} collections={collections} />
+        )
+      ) : (
+        <Select
+          value={selected ?? ""}
+          onValueChange={next => {
+            const separator = next.indexOf(":");
+            if (separator < 0) return onChange(undefined);
+            onChange({
+              relationTo: next.slice(0, separator),
+              value: next.slice(separator + 1),
+            });
+          }}
+        >
+          <SelectTrigger aria-label="Redirect page" className="w-full">
+            <SelectValue placeholder="Choose a page" />
+          </SelectTrigger>
+          <SelectContent>
+            <Options choices={choices} collections={collections} />
+          </SelectContent>
+        </Select>
+      )}
+    </div>
   );
 }
