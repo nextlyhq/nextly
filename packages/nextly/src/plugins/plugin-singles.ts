@@ -1,16 +1,14 @@
 /**
  * The Singles a plugin is allowed to see.
  *
- * `ctx.services.collections` has answered "what collections exist and what is
- * in them" since plugins existed. There was no counterpart for Singles, so a
- * plugin asking the same question about them had no way to ask it.
+ * The counterpart to `ctx.services.collections` for the other kind of content:
+ * what Singles are declared, and what fields they have.
  *
- * The gap is structural rather than an omission of naming. Singles are reached
- * through a different service with a different shape, so a capability that
- * cuts across content has to handle them SEPARATELY — and a capability written
- * against collections alone covers half the app while reporting success.
- * Preview had the same shape; so does enumerating documents to find
- * references.
+ * Both are needed because Singles are reached through a different service with
+ * a different shape, so a capability that cuts across content has to handle
+ * them SEPARATELY. One written against collections alone covers half the app
+ * and reports success — a document sweep finds no reference in a Single, and
+ * cannot tell that from there being none.
  *
  * ## Deliberately read-only, and deliberately narrow
  *
@@ -85,11 +83,10 @@ import type {
  */
 export interface SerializedFieldConfig {
   /**
-   * Optional, because a NESTED field's name is. Presentational field types
-   * carry no name — the compiler reported `string | undefined` here when this
-   * was declared required, which is the data disagreeing with the type rather
-   * than an inconvenience to assert past. A consumer keying anything on the
-   * name has to handle its absence, and now has to.
+   * Optional, because a nested field's name is.
+   *
+   * Presentational field types carry no name, so a consumer keying anything on
+   * it — a lookup, a path, a dedup — has to handle its absence.
    */
   name?: string;
   type: string;
