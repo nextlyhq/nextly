@@ -26,6 +26,9 @@ const page: ClassUsageSubject = {
   entity: "pages",
   entityKey: "page-1",
   field: "content",
+  // Empty because this field is not localized. A localized blocks field stores
+  // a document per locale, and each is its own subject.
+  locale: "",
 };
 
 const documentUsing = (...classes: string[]) => ({
@@ -39,7 +42,11 @@ function recordingStore(rows: { id: string; classId: string }[] = []) {
   const calls: string[] = [];
   const store: ClassUsageIndexStore = {
     find: async args => {
-      calls.push(`find:sort=${args.sort}`);
+      // The predicates are recorded, not just the fact of a call. Without them
+      // a dropped `where` clause is invisible to every assertion here.
+      calls.push(
+        `find:sort=${args.sort}:where=${Object.keys(args.where).sort().join(",")}`
+      );
       return {
         items: rows.map(r => ({ ...page, ...r })),
         meta: { hasNext: false },
@@ -94,6 +101,44 @@ describe("recognising a field that could hold a block document", () => {
     expect(blockDocumentFields({ content: undefined })).toEqual(["content"]);
   });
 
+  it("finds a blocks field nested inside a group or a repeater", () => {
+    // A `blocks()` field inside a `group` or `repeater` is a supported schema,
+    // not a malformed one. The value at the top level is then the CONTAINER, so
+    // a filter reading only the outer keys never maintains that field — and a
+    // class only it renders reads as unused.
+    expect(
+      blockDocumentFields({
+        seo: { title: "Home" },
+        layout: { hero: documentUsing("hero") },
+        sections: [{ body: documentUsing("card") }, { body: null }],
+      })
+    ).toEqual(["layout.hero", "sections[0].body", "sections[1].body"]);
+  });
+
+  it("does not walk INTO a block document and report its internals", () => {
+    // A document is itself a record, so a walk that descended into everything
+    // would report its internals as fields of their own.
+    //
+    // The node carries a null prop deliberately: without one, descending finds
+    // nothing to report and the assertion passes whether or not the walk
+    // stopped — which is what the first version of this test did.
+    const withNullProp = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: { alt: null },
+          classes: ["hero"],
+        },
+      ],
+    };
+
+    expect(blockDocumentFields({ content: withNullProp })).toEqual(["content"]);
+  });
+
   it("says nothing about a field this write did not mention", () => {
     // An ABSENT key is not a clear. The write said nothing about that field, so
     // the stored document stands and its rows are still correct — naming it
@@ -113,7 +158,11 @@ describe("maintaining one subject's rows", () => {
     });
 
     expect(report).toEqual({ inserted: 2, removed: 0, undetermined: false });
-    expect(calls).toEqual(["find:sort=id", "create:card", "create:hero"]);
+    expect(calls).toEqual([
+      "find:sort=id:where=entity,entityKey,field,locale,scope",
+      "create:card",
+      "create:hero",
+    ]);
   });
 
   it("issues NO writes when the document's references are unchanged", async () => {
@@ -132,7 +181,9 @@ describe("maintaining one subject's rows", () => {
     });
 
     expect(report).toEqual({ inserted: 0, removed: 0, undetermined: false });
-    expect(calls).toEqual(["find:sort=id"]);
+    expect(calls).toEqual([
+      "find:sort=id:where=entity,entityKey,field,locale,scope",
+    ]);
   });
 
   it("inserts before it removes", async () => {
@@ -149,7 +200,11 @@ describe("maintaining one subject's rows", () => {
       document: documentUsing("new"),
     });
 
-    expect(calls).toEqual(["find:sort=id", "create:new", "delete:r1"]);
+    expect(calls).toEqual([
+      "find:sort=id:where=entity,entityKey,field,locale,scope",
+      "create:new",
+      "delete:r1",
+    ]);
     expect(calls.indexOf("create:new")).toBeLessThan(
       calls.indexOf("delete:r1")
     );
@@ -177,7 +232,10 @@ describe("maintaining one subject's rows", () => {
 
     expect(report).toEqual({ inserted: 1, removed: 0, undetermined: true });
     // One create, and it carries the marker rather than any id it did read.
-    expect(calls).toEqual(["find:sort=id", `create:${UNDETERMINED_CLASS_ID}`]);
+    expect(calls).toEqual([
+      "find:sort=id:where=entity,entityKey,field,locale,scope",
+      `create:${UNDETERMINED_CLASS_ID}`,
+    ]);
   });
 
   it("refuses a row set the store could not finish reporting", async () => {
@@ -237,6 +295,10 @@ describe("forgetting a document that no longer exists", () => {
     const report = await forgetClassUsage({ store, subject: page });
 
     expect(report).toEqual({ removed: 2 });
-    expect(calls).toEqual(["find:sort=id", "delete:r1", "delete:r2"]);
+    expect(calls).toEqual([
+      "find:sort=id:where=entity,entityKey,field,locale,scope",
+      "delete:r1",
+      "delete:r2",
+    ]);
   });
 });

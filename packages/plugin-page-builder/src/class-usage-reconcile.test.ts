@@ -27,6 +27,7 @@ const page: ClassUsageSubject = {
   entity: "pages",
   entityKey: "page-1",
   field: "content",
+  locale: "",
 };
 
 /** A document whose single node applies the given classes. */
@@ -65,6 +66,7 @@ describe("deriving a document's index rows", () => {
       entity: "homepage",
       entityKey: "",
       field: "content",
+      locale: "",
     };
 
     const derivation = deriveClassUsageRows(single, documentUsing("hero"));

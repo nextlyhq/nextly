@@ -109,24 +109,22 @@ export interface ClassUsageIndexStore {
 const PAGE_SIZE = 200;
 
 /**
- * The most rows one subject can legitimately have, derived from the bounds the
- * document was read under.
+ * A runaway guard on the paging loop, deliberately NOT a claim about the data.
  *
- * A fixed page ceiling was wrong here, and wrong in the direction that breaks a
- * valid site: a document may hold `maxNodes` nodes and each node contributes up
- * to `MAX_CLASSES_PER_NODE` references, so a legitimate subject can produce far
- * more rows than any round number chosen by eye. Once its first pass wrote more
- * than that ceiling, every later maintenance and every deletion would reach the
- * guard and throw, leaving the subject permanently stale.
+ * Two earlier shapes were wrong in opposite directions. A round number chosen
+ * by eye was low enough to reject a valid document, and every later maintenance
+ * then threw forever. Deriving it from the limits the document is read under
+ * NOW was worse in a subtler way: a host that LOWERS `maxNodes` does not
+ * shorten the rows already written under the old bound, so the guard would
+ * start rejecting rows that were legitimate when they were made — and
+ * `forgetClassUsage` cannot even know what the historical bound was.
  *
- * Derived from the SAME limits the document was read under, so it cannot
- * disagree with what the reader was allowed to produce — a host that raises
- * `maxNodes` raises this with it. The `+ 1` is the marker row, which is not a
- * node's reference and is written when no node's reference could be read.
+ * So the bound is fixed, derived from the engine's own maxima rather than from
+ * anything a host can change, and generous enough that reaching it means the
+ * store's paging is broken rather than that the document is large. Its job is
+ * to stop an endless loop, not to police row counts.
  */
-function maxRowsForSubject(limits: DocumentLimits | undefined): number {
-  return (limits?.maxNodes ?? MAX_NODES) * MAX_CLASSES_PER_NODE + 1;
-}
+const MAX_PAGES = Math.ceil((MAX_NODES * MAX_CLASSES_PER_NODE) / PAGE_SIZE) + 1;
 
 /** Whether a stored value could be a block document at all. */
 export function looksLikeBlockDocument(value: unknown): boolean {
@@ -161,11 +159,64 @@ export function looksLikeBlockDocument(value: unknown): boolean {
  */
 export function blockDocumentFields(data: unknown): string[] {
   if (!isPlainRecord(data)) return [];
-  return Object.keys(data).filter(key => {
-    const value = data[key];
-    if (value === null || value === undefined) return true;
-    return looksLikeBlockDocument(value);
-  });
+  const found: string[] = [];
+  collectBlockDocumentFields(data, "", found);
+  return found;
+}
+
+/**
+ * Walk one record, descending into the containers a blocks field can sit in.
+ *
+ * A `blocks()` field declared inside a `group` or a `repeater` is a supported
+ * schema, not a malformed one — core accepts contributed field types in both.
+ * The value seen at the top level is then the container, so a filter reading
+ * only the outer keys finds no candidate and the nested field is never
+ * maintained: classes added, removed or cleared inside it leave the index
+ * stale, and a class only that field renders reads as unused.
+ *
+ * Paths are dotted, and a repeater's entries carry their index, so two nested
+ * documents under one container are distinct subjects rather than one that
+ * overwrites the other.
+ */
+function collectBlockDocumentFields(
+  value: unknown,
+  prefix: string,
+  found: string[]
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) =>
+      collectBlockDocumentFields(entry, `${prefix}[${index}]`, found)
+    );
+    return;
+  }
+  if (!isPlainRecord(value)) return;
+  for (const key of Object.keys(value)) {
+    const path = prefix === "" ? key : `${prefix}.${key}`;
+    const child = value[key];
+    const verdict = classifyChild(child);
+    if (verdict === "candidate") found.push(path);
+    if (verdict === "container") collectBlockDocumentFields(child, path, found);
+  }
+}
+
+/** What one value under a key is, to a walk looking for blocks fields. */
+type ChildVerdict = "candidate" | "container" | "ignore";
+
+/**
+ * Whether a value is a field to maintain, a container to descend into, or
+ * neither.
+ *
+ * A block document is a CANDIDATE and never a container, even though it is
+ * itself a record: descending into one would report its own internals — a
+ * node's null prop, say — as fields of the document.
+ */
+function classifyChild(child: unknown): ChildVerdict {
+  // A key present with no value is a CLEAR, and a clear is exactly what has to
+  // be maintained: its rows must go. An absent key never reaches here.
+  if (child === null || child === undefined) return "candidate";
+  if (looksLikeBlockDocument(child)) return "candidate";
+  if (Array.isArray(child) || isPlainRecord(child)) return "container";
+  return "ignore";
 }
 
 /** Whether a stored value is one of the two scopes a row may carry. */
@@ -189,13 +240,14 @@ function readStoredRow(item: unknown): StoredClassUsageRow | null {
   if (!isPlainRecord(item)) return null;
   const scope = readScope(item.scope);
   if (scope === null) return null;
-  const { id, entity, entityKey, field, classId } = item;
+  const { id, entity, entityKey, field, locale, classId } = item;
   if (typeof id !== "string") return null;
   if (typeof entity !== "string") return null;
   if (typeof entityKey !== "string") return null;
   if (typeof field !== "string") return null;
+  if (typeof locale !== "string") return null;
   if (typeof classId !== "string") return null;
-  return { id, scope, entity, entityKey, field, classId };
+  return { id, scope, entity, entityKey, field, locale, classId };
 }
 
 /**
@@ -210,18 +262,14 @@ function readStoredRow(item: unknown): StoredClassUsageRow | null {
  */
 async function storedRowsFor(
   store: ClassUsageIndexStore,
-  subject: ClassUsageSubject,
-  limits: DocumentLimits | undefined
+  subject: ClassUsageSubject
 ): Promise<StoredClassUsageRow[]> {
   const rows: StoredClassUsageRow[] = [];
-  const ceiling = maxRowsForSubject(limits);
-  // Bounded by PAGES REQUESTED rather than by rows collected, and the
-  // difference is the whole termination argument: a store answering `hasNext`
-  // forever with an empty page never grows `rows`, so a row-count bound would
-  // spin without end. The page count is derived from the row ceiling, so it is
-  // still large enough for anything a document under these limits can produce.
-  const maxPages = Math.ceil(ceiling / PAGE_SIZE) + 1;
-  for (let page = 1; page <= maxPages; page++) {
+  // Bounded by PAGES REQUESTED rather than by rows collected: a store answering
+  // `hasNext` forever with an empty page never grows `rows`, so a row-count
+  // bound would spin without end. Termination has to depend on a counter the
+  // store cannot hold still.
+  for (let page = 1; page <= MAX_PAGES; page++) {
     const result = await store.find({
       collection: CLASS_USAGE_INDEX_SLUG,
       where: {
@@ -229,6 +277,7 @@ async function storedRowsFor(
         entity: { equals: subject.entity },
         entityKey: { equals: subject.entityKey },
         field: { equals: subject.field },
+        locale: { equals: subject.locale },
       },
       limit: PAGE_SIZE,
       page,
@@ -247,10 +296,10 @@ async function storedRowsFor(
   // read with. Reported rather than absorbed: a partial row set reconciled
   // against reads every unread row as a reference the document has dropped.
   throw new Error(
-    `Class-usage index still reported more rows after ${maxPages} pages of ` +
+    `Class-usage index still reported more rows after ${MAX_PAGES} pages of ` +
       `${PAGE_SIZE} for ` +
       `${subject.scope}:${subject.entity}:${subject.entityKey}:${subject.field}, ` +
-      `which exceeds the ${ceiling} a document under these limits can reference.`
+      `which is more than any document can reference — the store's paging is wrong.`
   );
 }
 
@@ -285,7 +334,7 @@ export async function maintainClassUsage(args: {
     ? derivation.rows
     : [derivation.undetermined];
 
-  const stored = await storedRowsFor(store, subject, args.limits);
+  const stored = await storedRowsFor(store, subject);
   const { insert, remove } = reconcileClassUsage(subject, derived, stored);
 
   // Inserts before removals. Between the two statements the index reports the
@@ -319,10 +368,8 @@ export async function maintainClassUsage(args: {
 export async function forgetClassUsage(args: {
   store: ClassUsageIndexStore;
   subject: ClassUsageSubject;
-  /** The same bounds the document was indexed under, which bound its row count. */
-  limits?: DocumentLimits;
 }): Promise<{ removed: number }> {
-  const stored = await storedRowsFor(args.store, args.subject, args.limits);
+  const stored = await storedRowsFor(args.store, args.subject);
   for (const row of stored) {
     await args.store.delete({
       collection: CLASS_USAGE_INDEX_SLUG,
