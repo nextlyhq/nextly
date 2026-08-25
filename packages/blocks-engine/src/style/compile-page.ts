@@ -356,6 +356,49 @@ function emittableBound(maxWidth: unknown): boolean {
  * `@media` for its visibility while its styles had moved to a container query —
  * so a node could be styled for a width it was simultaneously hidden at.
  */
+/** The longest preview container name this compiler will emit. */
+export const MAX_PREVIEW_CONTAINER_LENGTH = 64;
+
+/**
+ * A preview container name this compiler is willing to write into an at-rule,
+ * or `undefined` for anything it is not.
+ *
+ * Refusing rather than escaping, because a name that needs escaping is not a
+ * name a caller meant: the value is a CSS custom identifier the previewing
+ * surface also has to put in its own `container-name`, so anything that would
+ * have to be transformed on the way out would no longer match what the caller
+ * declared. Refusing degrades to a published compile, which is a sheet that is
+ * merely not previewable — writing an unescaped one degrades to a stylesheet
+ * that does not parse.
+ *
+ * Four rejections, and each is a different failure:
+ *
+ * - EMPTY or blank produces `@container (max-width: N)` with no name at all,
+ *   which binds to the nearest ancestor query container — including an author's
+ *   own. That is the exact capture the container axis is named to avoid.
+ * - The RESERVED unpreviewable name aims the viewport axis at the same
+ *   container as the container axis, so the rules kept deliberately inert
+ *   become live against the preview box.
+ * - Anything outside a CSS identifier can close the at-rule and open something
+ *   else. `emittable-string-bounds.ts` requires every string this compiler
+ *   emits to be bounded, and an identifier's shape is the other half of that.
+ * - Over the bound, because the name is copied into every preview at-rule and a
+ *   caller digesting these inputs truncates at what this package promises.
+ */
+export function previewContainerName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const name = value.trim();
+  if (name.length === 0 || name.length > MAX_PREVIEW_CONTAINER_LENGTH) {
+    return undefined;
+  }
+  if (name === UNPREVIEWABLE_CONTAINER) return undefined;
+  // A CSS custom identifier, conservatively: letters, digits, hyphen and
+  // underscore, not starting with a digit. Narrower than the grammar allows,
+  // because the escapes the full grammar permits are exactly what this refuses
+  // to emit.
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(name) ? name : undefined;
+}
+
 function queryPrefix(
   axis: BreakpointAxis,
   preview: string | undefined
@@ -441,7 +484,7 @@ export function breakpointContexts(
   set: BreakpointSet | undefined,
   options?: BreakpointContextOptions
 ): BreakpointContext[] {
-  const preview = options?.previewContainer;
+  const preview = previewContainerName(options?.previewContainer);
   // The base context carries no upper bound and no at-rule, but it still needs
   // to be bounded from below when a narrower breakpoint shows a node again:
   // without that, hiding at base emits an unconditional rule that a later
@@ -1204,10 +1247,15 @@ export function compilePageCss(
   // stale ids — or a document full of malformed token names — costs its own
   // diagnostics and not the page's stylesheet.
   const warningAllowance = newWarningAllowance();
+  /*
+   * Normalised ONCE for the whole compile, so the contexts and the visibility
+   * bands cannot disagree about it. Two readers of one raw field is how a
+   * refused name would have reached one path and not the other, and the sheet
+   * would then mix previewed styles with published bands.
+   */
+  const preview = previewContainerName(ctx.previewContainer);
   const contexts = breakpointContexts(ctx.breakpoints, {
-    ...(ctx.previewContainer === undefined
-      ? {}
-      : { previewContainer: ctx.previewContainer }),
+    ...(preview === undefined ? {} : { previewContainer: preview }),
   });
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   const mayFetchUrl = ctx.mayFetchUrl;
@@ -1512,7 +1560,7 @@ export function compilePageCss(
         path,
         warnings,
         warningAllowance,
-        ctx.previewContainer
+        preview
       ),
     ];
     // Held out of the sheet when the node can be pruned at read time. Serialized on its own, so

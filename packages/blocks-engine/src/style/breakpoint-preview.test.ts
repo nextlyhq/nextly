@@ -23,11 +23,14 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BreakpointSet } from "../document";
 import {
+  MAX_PREVIEW_CONTAINER_LENGTH,
   PREVIEW_VIEWPORT_CONTAINER,
   UNPREVIEWABLE_CONTAINER,
   breakpointContexts,
   compilePageCss,
+  previewContainerName,
 } from "./compile-page";
+import { compileSiteSheet } from "./site-sheet";
 
 /** Both axes populated, so neither can pass by being empty. */
 const set = (): BreakpointSet =>
@@ -241,5 +244,123 @@ describe("the compiler entry point", () => {
         expect(rule).toContain(`@container ${PREVIEW_VIEWPORT_CONTAINER}`);
       }
     }
+  });
+});
+
+describe("the preview container name", () => {
+  it("refuses every name it could not emit safely", () => {
+    /*
+     * Refused rather than escaped, because a name needing transformation would
+     * no longer match the `container-name` the previewing surface declared —
+     * so escaping produces a sheet that parses and matches nothing, which is
+     * strictly worse than a sheet that is merely not previewable.
+     *
+     * Each rejection is a different failure, so each is named:
+     *
+     * - empty or blank emits `@container (max-width: N)` with NO name, which
+     *   binds to the nearest ancestor query container — an author's own
+     *   included. That is the capture the container axis is named to avoid.
+     * - the reserved unpreviewable name aims the viewport axis at the same
+     *   container as the container axis, making the deliberately inert rules
+     *   live against the preview box.
+     * - punctuation can close the at-rule and open something else.
+     * - over the bound, because the name is copied into every preview at-rule
+     *   and a caller digesting these inputs truncates at what this package
+     *   promises.
+     */
+    for (const refused of [
+      "",
+      "   ",
+      UNPREVIEWABLE_CONTAINER,
+      "has space",
+      "1leading-digit",
+      "){color:red}",
+      "a".repeat(MAX_PREVIEW_CONTAINER_LENGTH + 1),
+      undefined,
+      42,
+    ]) {
+      expect(previewContainerName(refused)).toBeUndefined();
+    }
+  });
+
+  it("accepts an ordinary identifier, which is the control", () => {
+    // Without this, a validator refusing everything would satisfy the case
+    // above and no preview could ever be compiled.
+    expect(previewContainerName(PREVIEW_VIEWPORT_CONTAINER)).toBe(
+      PREVIEW_VIEWPORT_CONTAINER
+    );
+    expect(previewContainerName("  nx-box  ")).toBe("nx-box");
+    expect(previewContainerName("a".repeat(MAX_PREVIEW_CONTAINER_LENGTH))).toBe(
+      "a".repeat(MAX_PREVIEW_CONTAINER_LENGTH)
+    );
+  });
+
+  it("degrades a refused name to a PUBLISHED compile, not a broken one", () => {
+    /*
+     * The consequence of refusing, asserted at the compiler rather than at the
+     * validator. A refused name must leave the sheet exactly as a published one
+     * — not emit an unnamed container query, which is the capture being
+     * prevented.
+     */
+    const refused = compilePageCss(page(), {
+      breakpoints: set(),
+      previewContainer: UNPREVIEWABLE_CONTAINER,
+    });
+
+    expect(refused.css).toContain("@media (max-width: 991px)");
+    expect(refused.css).not.toContain(
+      `@container ${UNPREVIEWABLE_CONTAINER} (max-width: 991px)`
+    );
+    expect(refused.css).toBe(
+      compilePageCss(page(), { breakpoints: set() }).css
+    );
+  });
+});
+
+describe("the shared site tier", () => {
+  /** A named class carrying a value at a viewport breakpoint. */
+  const classes = () =>
+    [
+      {
+        id: "cls-1",
+        slug: "card",
+        orderIndex: 0,
+        styles: { base: { tablet: { color: "teal" } } },
+      },
+    ] as never;
+
+  it("answers the breakpoint question the same way the page tier does", () => {
+    /*
+     * A separate compile, and it was answering separately. The shared classes
+     * and block defaults are emitted into the same document as the node-local
+     * declarations, so a site sheet compiled for the published page beneath
+     * node styles compiled for a preview surface puts two answers to one
+     * breakpoint in one stylesheet — and a container-axis rule from this tier
+     * could still match a real authored container while the node's own rule at
+     * that breakpoint is aimed at a name nothing carries.
+     */
+    const previewed = compileSiteSheet({
+      breakpoints: set(),
+      classes: classes(),
+      previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+    } as never);
+
+    // The population first: a sheet that emitted no class rule at all would
+    // contain no `@media` either and satisfy the negative half by vacuity.
+    expect(previewed.css).toContain("teal");
+    expect(previewed.css).toContain(
+      `@container ${PREVIEW_VIEWPORT_CONTAINER} (max-width: 991px)`
+    );
+    expect(previewed.css).not.toContain("@media");
+  });
+
+  it("still emits @media without the option, which is the control", () => {
+    const published = compileSiteSheet({
+      breakpoints: set(),
+      classes: classes(),
+    } as never);
+
+    expect(published.css).toContain("@media (max-width: 991px)");
+    expect(published.css).not.toContain(PREVIEW_VIEWPORT_CONTAINER);
   });
 });

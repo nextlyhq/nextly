@@ -303,9 +303,15 @@ describe("the root entry", () => {
       // renderer would drop rather than keeping a list beside it.
       "EDITOR_NAMESPACE",
       "NODE_ID_ATTRIBUTE",
+      // The container names a preview compile aims its breakpoints at. Public
+      // because the surface doing the previewing must put the same identifier
+      // in its own `container-name`, and a name spelled twice can be spelled
+      // differently.
+      "PREVIEW_VIEWPORT_CONTAINER",
       "PROP_ATTRIBUTE",
       "PageRenderer",
       "RichText",
+      "UNPREVIEWABLE_CONTAINER",
       "createBlockResolver",
       "createStandaloneContext",
       "defineBlock",

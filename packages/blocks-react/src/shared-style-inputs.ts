@@ -78,7 +78,11 @@ import type { StyleCompileContext } from "@nextlyhq/blocks-engine";
  */
 export type SharedStyleInputs = Pick<
   StyleCompileContext,
-  "breakpoints" | "namedClasses" | "tokenPrefix" | "blockBases"
+  | "breakpoints"
+  | "namedClasses"
+  | "tokenPrefix"
+  | "blockBases"
+  | "previewContainer"
 >;
 
 /**
@@ -536,7 +540,24 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // `breakpointContexts` slices the stored axis before it sorts, so this call
     // costs what compilation costs. Reading it and calling that bounded would
     // otherwise be a claim about a function this file does not own.
-    breakpointContexts(inputs.breakpoints),
+    // Emitted UNDER THE PREVIEW OPTION, so a preview compile and a published one
+    // can never carry the same identity.
+    //
+    // Folded into this element rather than appended as another, which is what
+    // keeps a published stamp byte-identical: the option is absent there, the
+    // contexts are what they always were, and nothing about this array's shape
+    // moved. Appending a slot would have invalidated every artifact on the site
+    // to record a field that is unset on all of them.
+    //
+    // Without it, `resolvePageStyles` — which is exported, and returns a
+    // storable `PageStyles` — hands back preview CSS stamped as published. Reuse
+    // then serves `@container` rules to a live page that has no such container,
+    // and every responsive rule stops matching.
+    breakpointContexts(inputs.breakpoints, {
+      ...(inputs.previewContainer === undefined
+        ? {}
+        : { previewContainer: inputs.previewContainer }),
+    }),
     // The prefix tokens are actually WRITTEN under, not the one that was stored.
     // `safeTokenPrefix` maps unset, malformed and reserved prefixes alike to the
     // engine's default, so all of them emit identical `var(--site-*)` references

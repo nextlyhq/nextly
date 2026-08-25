@@ -18,6 +18,7 @@ import {
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
   MAX_VALUE_LENGTH,
+  PREVIEW_VIEWPORT_CONTAINER,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -78,6 +79,33 @@ describe("the stamp", () => {
     // Nothing else here means anything if this does not hold: a stamp that
     // varied run to run would recompile every page on every render.
     expect(sharedStyleInputsId(inputs())).toBe(sharedStyleInputsId(inputs()));
+  });
+
+  it("separates a PREVIEW compile from a published one", () => {
+    /*
+     * The artifact identity is what decides whether a stored sheet is reused
+     * instead of recompiled, and `resolvePageStyles` is exported and returns a
+     * storable `PageStyles`. So a preview compile stamped as published can be
+     * persisted and then served to a live page — which has no preview
+     * container, so every one of its responsive rules stops matching and the
+     * page silently loses its breakpoints.
+     *
+     * Both halves are asserted. Equal stamps would be the defect; a published
+     * stamp that MOVED would be a different one, invalidating every artifact on
+     * the site for CSS that did not change by a byte.
+     */
+    const published = sharedStyleInputsId(inputs());
+    const previewed = sharedStyleInputsId({
+      ...inputs(),
+      previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+    });
+
+    // The population first: two `undefined`s compare equal and prove nothing.
+    expect(published).toBeDefined();
+    expect(previewed).toBeDefined();
+    expect(previewed).not.toBe(published);
+    // And the published side is untouched by the option existing.
+    expect(published).toBe(sharedStyleInputsId({ ...inputs() }));
   });
 
   it("is absent when the caller states no shared inputs", () => {

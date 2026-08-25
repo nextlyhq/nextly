@@ -199,6 +199,7 @@ interface SiteInputRoles {
   classes: "reconciled-here";
   blockBases: "reconciled-here";
   tokenPrefix: "reconciled-here";
+  previewContainer: "reconciled-here";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
@@ -283,6 +284,10 @@ export function sharedStyleInputs(
       stored.tokens?.prefix,
       route.tokenPrefix
     ),
+    // Carried so the SITE sheet and the artifact identity see it too. A page
+    // compiled for a preview surface whose shared tier was compiled for the
+    // published one puts two answers to the same breakpoint in one document.
+    previewContainer: route.previewContainer,
   });
 }
 
@@ -665,6 +670,13 @@ export function PageRenderer({
           ...(mayFetchUrl === undefined || siteInput?.mayFetchUrl !== undefined
             ? {}
             : { mayFetchUrl }),
+          // The RESOLVED preview option, from the same reconciliation the page
+          // context above was given. A shared tier compiled for the published
+          // page beneath node styles compiled for a preview surface puts two
+          // answers to one breakpoint in one document.
+          ...(shared.previewContainer === undefined
+            ? {}
+            : { previewContainer: shared.previewContainer }),
         });
 
   return (

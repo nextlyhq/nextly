@@ -242,3 +242,17 @@ export type {
   TokenRef,
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
+
+/**
+ * The container names a preview compile emits its breakpoints against.
+ *
+ * Re-exported beside {@link BreakpointContextOptions} because a consumer of this
+ * package does not depend on the engine directly: without them, the previewing
+ * surface would have to hard-code the same reserved identifiers in its own
+ * `container-name`, and a name spelled twice is a name that can be spelled
+ * differently.
+ */
+export {
+  PREVIEW_VIEWPORT_CONTAINER,
+  UNPREVIEWABLE_CONTAINER,
+} from "@nextlyhq/blocks-engine";
