@@ -27,6 +27,7 @@ import {
   applyRedirectPattern,
   documentIsReachable,
   parseRedirectReference,
+  pickedDocumentField,
   type RedirectTargetDocument,
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
@@ -428,21 +429,22 @@ async function resolveRedirectUrl(
   const settings = form.settings;
   if (!settings) return undefined;
 
-  const { confirmationType } = settings;
-  if (confirmationType !== "redirect" && confirmationType !== "relationship") {
-    return undefined;
-  }
-
   // A typed URL is returned verbatim: it is the whole point of that option,
   // and it may legitimately point off-site.
-  if (confirmationType === "redirect" && settings.redirectUrl) {
+  if (settings.confirmationType === "redirect" && settings.redirectUrl) {
     return settings.redirectUrl;
   }
 
+  // Otherwise whichever key names a document, read through the SAME function
+  // the save-time rule uses. Two readers here would let this path redirect to
+  // a document the rule never inspected — which it did: the rule matched only
+  // `relationship`, so a `redirect`-with-relation form was resolved here and
+  // guarded nowhere.
+  const field = pickedDocumentField(settings as Record<string, unknown>);
+  if (!field) return undefined;
+
   return urlForPickedDocument(
-    confirmationType === "relationship"
-      ? settings.redirectPage
-      : settings.redirectRelation,
+    (settings as Record<string, unknown>)[field],
     form,
     pluginConfig,
     pluginContext

@@ -4,6 +4,7 @@ import {
   applyRedirectPattern,
   documentIsReachable,
   hasPublishLifecycle,
+  pickedDocumentField,
   DEFAULT_REDIRECT_PATTERN,
   normalizeRedirectRelationships,
   parseRedirectReference,
@@ -284,5 +285,58 @@ describe("documentIsReachable", () => {
     expect(
       documentIsReachable({ id: "1", status: null, firstPublishedAt: null })
     ).toBe(false);
+  });
+});
+
+describe("pickedDocumentField", () => {
+  it("names the field the page picker writes", () => {
+    expect(pickedDocumentField({ confirmationType: "relationship" })).toBe(
+      "redirectPage"
+    );
+  });
+
+  it("names the relation the URL option falls back to", () => {
+    // The shape code-first and legacy forms use. The submission path has
+    // always resolved it; before this it was the one picked document the save
+    // rule never inspected.
+    expect(
+      pickedDocumentField({
+        confirmationType: "redirect",
+        redirectRelation: { relationTo: "pages", value: "p1" },
+      })
+    ).toBe("redirectRelation");
+  });
+
+  it("prefers a typed URL over a relation left beside it", () => {
+    // A stored relation from an earlier edit does not make the form redirect
+    // to a document; the URL does, and the resolver returns it verbatim.
+    expect(
+      pickedDocumentField({
+        confirmationType: "redirect",
+        redirectUrl: "https://example.test/thanks",
+        redirectRelation: { relationTo: "pages", value: "p1" },
+      })
+    ).toBeNull();
+  });
+
+  it("names nothing when the URL option carries no relation", () => {
+    // Not an error here: an absent relation means no destination is
+    // configured yet, which `validateFormConfig` governs. Reporting it would
+    // refuse saves this rule never governed.
+    expect(pickedDocumentField({ confirmationType: "redirect" })).toBeNull();
+  });
+
+  it("names nothing for a form that shows a message", () => {
+    expect(pickedDocumentField({ confirmationType: "message" })).toBeNull();
+    expect(pickedDocumentField({})).toBeNull();
+  });
+
+  it("still names the page field when the picker stored nothing", () => {
+    // "Redirect to a page" naming no page contradicts the option itself, so
+    // the field is returned and the caller reports it — unlike the URL option,
+    // where an absent relation is merely unfinished.
+    expect(pickedDocumentField({ confirmationType: "relationship" })).toBe(
+      "redirectPage"
+    );
   });
 });

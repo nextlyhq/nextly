@@ -28,6 +28,8 @@ export {
   documentIsReachable,
   hasPublishLifecycle,
   parseRedirectReference,
+  pickedDocumentField,
+  type PickedDocumentField,
   type RedirectReference,
 } from "./redirect-reference";
 

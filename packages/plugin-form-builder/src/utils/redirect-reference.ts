@@ -123,3 +123,36 @@ export function documentIsReachable(document: RedirectTargetDocument): boolean {
   if (!hasPublishLifecycle(document)) return true;
   return document.status === "published";
 }
+
+/** The settings keys that can carry the document a form redirects to. */
+export type PickedDocumentField = "redirectPage" | "redirectRelation";
+
+/**
+ * Which settings key names the document this form redirects to, if any.
+ *
+ * TWO options carry one. "Redirect to a page" stores `redirectPage`, and the
+ * URL option falls back to `redirectRelation` when no URL is typed — the shape
+ * code-first and legacy forms use, and one the submission path has always
+ * resolved. One definition of the question, so the rule that guards a target
+ * cannot recognise fewer shapes than the resolver that acts on it: a form the
+ * rule skips is a form the resolver still redirects.
+ *
+ * The two are not equally strict about being EMPTY, deliberately. Naming
+ * nothing under "Redirect to a page" contradicts the option itself, so it is
+ * reported. Under the URL option an absent relation only means no destination
+ * is configured yet — `validateFormConfig` already governs that, and refusing
+ * it here would reject saves this rule never governed.
+ */
+export function pickedDocumentField(
+  settings: Record<string, unknown>
+): PickedDocumentField | null {
+  if (settings.confirmationType === "relationship") return "redirectPage";
+  if (
+    settings.confirmationType === "redirect" &&
+    !settings.redirectUrl &&
+    settings.redirectRelation != null
+  ) {
+    return "redirectRelation";
+  }
+  return null;
+}

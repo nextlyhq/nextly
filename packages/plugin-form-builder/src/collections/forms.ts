@@ -24,6 +24,8 @@ import type { ResolvedFormBuilderConfig } from "../types";
 import {
   documentIsReachable,
   parseRedirectReference,
+  pickedDocumentField,
+  type PickedDocumentField,
 } from "../utils/redirect-reference";
 import {
   applyRedirectPattern,
@@ -156,21 +158,22 @@ function withHostHooks<T>(
  * rather than the merged document, so treating an absent `settings` as empty
  * would refuse a rename for a setting it never touched.
  */
-function relationshipSettings(
+function documentRedirectSettings(
   settings: unknown
-): Record<string, unknown> | null {
+): { settings: Record<string, unknown>; field: PickedDocumentField } | null {
   if (typeof settings !== "object" || settings === null) return null;
   const record = settings as Record<string, unknown>;
-  return record.confirmationType === "relationship" ? record : null;
+  const field = pickedDocumentField(record);
+  return field ? { settings: record, field } : null;
 }
 
 function pageRedirectSettings(
   data: Record<string, unknown> | undefined,
   operation: string
-): Record<string, unknown> | null {
+): { settings: Record<string, unknown>; field: PickedDocumentField } | null {
   if (!data) return null;
   if (operation !== "create" && data.settings === undefined) return null;
-  return relationshipSettings(data.settings);
+  return documentRedirectSettings(data.settings);
 }
 
 /**
@@ -204,15 +207,17 @@ export function formAcceptsSubmissions(
  * every form that has one — silently, and indistinguishably from a form that
  * genuinely has none.
  */
-function storedSettings(value: unknown): Record<string, unknown> | null {
+function storedSettings(
+  value: unknown
+): { settings: Record<string, unknown>; field: PickedDocumentField } | null {
   if (typeof value === "string") {
     try {
-      return relationshipSettings(JSON.parse(value));
+      return documentRedirectSettings(JSON.parse(value));
     } catch {
       return null;
     }
   }
-  return relationshipSettings(value);
+  return documentRedirectSettings(value);
 }
 
 /**
@@ -231,14 +236,20 @@ function storedSettings(value: unknown): Record<string, unknown> | null {
 function storedRedirectReference(
   originalData: Record<string, unknown> | undefined,
   patterns: RedirectRelationships
-): { collection: string; id: string } | null {
-  const settings = storedSettings(originalData?.settings);
-  if (!settings) return null;
+): {
+  reference: { collection: string; id: string };
+  field: PickedDocumentField;
+} | null {
+  const picked = storedSettings(originalData?.settings);
+  if (!picked) return null;
 
   const collections = Object.keys(patterns);
-  const reference = parseRedirectReference(settings.redirectPage, collections);
+  const reference = parseRedirectReference(
+    picked.settings[picked.field],
+    collections
+  );
   return reference && collections.includes(reference.collection)
-    ? reference
+    ? { reference, field: picked.field }
     : null;
 }
 
@@ -252,12 +263,13 @@ function storedRedirectReference(
  */
 function normalizeStoredReference(
   settings: Record<string, unknown>,
+  field: PickedDocumentField,
   reference: { collection: string; id: string }
 ) {
-  const stored = settings.redirectPage;
+  const stored = settings[field];
 
   if (typeof stored === "string") {
-    if (stored !== reference.id) settings.redirectPage = reference.id;
+    if (stored !== reference.id) settings[field] = reference.id;
     return;
   }
   if (typeof stored !== "object" || stored === null || Array.isArray(stored)) {
@@ -266,7 +278,7 @@ function normalizeStoredReference(
 
   const record = stored as Record<string, unknown>;
   if (record.relationTo !== reference.collection) {
-    settings.redirectPage = { ...record, relationTo: reference.collection };
+    settings[field] = { ...record, relationTo: reference.collection };
   }
 }
 
@@ -274,21 +286,26 @@ function assertRedirectTargetNamed(
   data: Record<string, unknown> | undefined,
   operation: string,
   patterns: RedirectRelationships
-): { collection: string; id: string } | null {
-  const settings = pageRedirectSettings(data, operation);
-  if (!settings) return null;
+): {
+  reference: { collection: string; id: string };
+  field: PickedDocumentField;
+} | null {
+  const picked = pageRedirectSettings(data, operation);
+  if (!picked) return null;
+  const { settings, field } = picked;
 
   const collections = Object.keys(patterns);
-  const reference = parseRedirectReference(settings.redirectPage, collections);
+  const reference = parseRedirectReference(settings[field], collections);
   if (!reference || !collections.includes(reference.collection)) {
     throw redirectRefusal(
-      "Choose a page to redirect to, or pick a different confirmation."
+      "Choose a page to redirect to, or pick a different confirmation.",
+      field
     );
   }
 
-  normalizeStoredReference(settings, reference);
+  normalizeStoredReference(settings, field, reference);
 
-  return reference;
+  return { reference, field };
 }
 
 /**
@@ -349,13 +366,17 @@ function publishesForm(data: Record<string, unknown> | undefined): boolean {
 function redirectReferenceForWrite(
   context: HookContext,
   patterns: RedirectRelationships
-): { reference: { collection: string; id: string }; chosen: boolean } | null {
+): {
+  reference: { collection: string; id: string };
+  field: PickedDocumentField;
+  chosen: boolean;
+} | null {
   const chosen = assertRedirectTargetNamed(
     context.data,
     context.operation,
     patterns
   );
-  if (chosen) return { reference: chosen, chosen: true };
+  if (chosen) return { ...chosen, chosen: true };
 
   // A write that REPLACES `settings` has answered the question: this form no
   // longer redirects to a page. Inheriting the old target there would refuse
@@ -369,7 +390,7 @@ function redirectReferenceForWrite(
     context.originalData as Record<string, unknown> | undefined,
     patterns
   );
-  return stored ? { reference: stored, chosen: false } : null;
+  return stored ? { ...stored, chosen: false } : null;
 }
 
 /**
@@ -384,6 +405,7 @@ function redirectReferenceForWrite(
 function assertPatternBuildsUrl(
   patterns: RedirectRelationships,
   reference: { collection: string; id: string },
+  field: PickedDocumentField,
   target: RedirectTargetDocument
 ) {
   let url: string | undefined;
@@ -401,7 +423,8 @@ function assertPatternBuildsUrl(
   throw redirectRefusal(
     `No URL could be built for that page from the pattern configured for ` +
       `"${reference.collection}". Choose another page, or ask a developer ` +
-      `to check that collection's redirect pattern.`
+      `to check that collection's redirect pattern.`,
+    field
   );
 }
 
@@ -411,7 +434,7 @@ export async function assertRedirectTargetUsable(
 ) {
   const write = redirectReferenceForWrite(context, patterns);
   if (!write) return;
-  const { reference, chosen } = write;
+  const { reference, field, chosen } = write;
 
   const nextly = context.req?.nextly;
   if (!nextly) return;
@@ -438,7 +461,8 @@ export async function assertRedirectTargetUsable(
     // edit for a setting it never touched.
     if (!chosen) return;
     throw redirectRefusal(
-      `That page no longer exists in "${reference.collection}". Pick another.`
+      `That page no longer exists in "${reference.collection}". Pick another.`,
+      field
     );
   }
 
@@ -463,13 +487,15 @@ export async function assertRedirectTargetUsable(
     throw redirectRefusal(
       `That page is not published yet, and this form is. A visitor sent ` +
         `there would reach a "page not found". Publish the page, or save ` +
-        `this form as a draft until you do.`
+        `this form as a draft until you do.`,
+      field
     );
   }
 
   // The pattern belongs to the write that CHOOSES a page. A form being
   // published does not get refused for a pattern its author never edited.
-  if (chosen) assertPatternBuildsUrl(patterns, reference, found.document);
+  if (chosen)
+    assertPatternBuildsUrl(patterns, reference, field, found.document);
 }
 
 /**
@@ -522,9 +548,12 @@ export function isMissingTarget(error: unknown): boolean {
 }
 
 /** One shape for every refusal this rule makes, so callers see one field. */
-function redirectRefusal(message: string) {
+function redirectRefusal(message: string, field: PickedDocumentField) {
+  // The path names the field the author actually filled in. Reporting every
+  // refusal against `redirectPage` points a form configured through the URL
+  // option at a control it does not show.
   return NextlyError.validation({
-    errors: [{ path: "settings.redirectPage", code: "REQUIRED", message }],
+    errors: [{ path: `settings.${field}`, code: "REQUIRED", message }],
   });
 }
 

@@ -32,7 +32,10 @@ import { formBuilder } from "../plugin";
  *
  * The field path is the thing that identifies WHICH rule fired.
  */
-async function expectRedirectRefusal(write: Promise<unknown>) {
+async function expectRedirectRefusal(
+  write: Promise<unknown>,
+  field = "settings.redirectPage"
+) {
   let refusal: unknown;
   try {
     await write;
@@ -44,7 +47,7 @@ async function expectRedirectRefusal(write: Promise<unknown>) {
   const errors =
     (refusal as { publicData?: { errors?: { path?: string }[] } })?.publicData
       ?.errors ?? [];
-  expect(errors.map(entry => entry.path)).toContain("settings.redirectPage");
+  expect(errors.map(entry => entry.path)).toContain(field);
 }
 
 let current: TestNextly | undefined;
@@ -897,6 +900,80 @@ describe("a target collection with the publish lifecycle", () => {
         data: { status: "published", ...formData("published", live) },
       })
     );
+  });
+
+  it("guards the relation the URL option falls back to", async () => {
+    // `confirmationType: "redirect"` with no URL resolves `redirectRelation`
+    // exactly like the picker's own field, and the save rule used to match
+    // only "relationship" — so this pairing was resolved at submit time and
+    // inspected by nothing. The author heard about it only by the redirect
+    // silently not happening.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+
+    await expectRedirectRefusal(
+      current!.nextly.create({
+        collection: "forms",
+        data: {
+          name: "Contact",
+          slug: "contact",
+          status: "published",
+          fields: [{ type: "text", name: "message", label: "Message" }],
+          settings: {
+            confirmationType: "redirect",
+            redirectRelation: { relationTo: "pages", value: target },
+          },
+        },
+      }),
+      // The refusal names the field the author filled in, not the one the
+      // picker would have written.
+      "settings.redirectRelation"
+    );
+  });
+
+  it("accepts that same relation when its page is published", async () => {
+    // The control: without it the refusal above passes just as well against a
+    // rule that refuses every `redirect`-with-relation form.
+    await bootWithDraftingPages();
+    const target = await page("published", "live-page");
+
+    const saved = await current!.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "redirect",
+          redirectRelation: { relationTo: "pages", value: target },
+        },
+      },
+    });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
+  });
+
+  it("leaves a typed URL alone even with a relation stored beside it", async () => {
+    // The URL wins, so nothing here names a document and the draft page is
+    // not this write's business.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+
+    const saved = await current!.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "redirect",
+          redirectUrl: "https://example.test/thanks",
+          redirectRelation: { relationTo: "pages", value: target },
+        },
+      },
+    });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
   });
 
   it("lets a rename through after the stored target is deleted", async () => {
