@@ -177,8 +177,11 @@ function useSelectedChoice(
     let cancelled = false;
     void (async () => {
       try {
+        // `status=all` for the same reason the listing carries it: a stored
+        // target may be a draft, and a published-only read answers 404 — so
+        // the control would drop a selection the listing would have shown.
         const response = await fetch(
-          `/admin/api/collections/${collection}/entries/${id}?depth=0`,
+          `/admin/api/collections/${collection}/entries/${id}?depth=0&status=all`,
           { credentials: "include" }
         );
         if (!response.ok) return;

@@ -326,6 +326,10 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
 
           {confirmed ? (
             <div className="space-y-4">
+              {/* Every confirmation the settings offer, because the fall-through
+                  belongs to the MESSAGE branch: a redirect that this did not
+                  recognise was previewed as a thank-you note while the saved
+                  form would navigate away. */}
               {settings.confirmationType === "redirect" ? (
                 <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
                   The visitor would now be redirected to{" "}
@@ -333,6 +337,12 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
                     {settings.redirectUrl || "(no redirect URL set)"}
                   </span>
                   .
+                </p>
+              ) : settings.confirmationType === "relationship" ? (
+                <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
+                  The visitor would now be redirected to the linked page. Its
+                  URL is built when the form is submitted, from the pattern the
+                  site configured for that collection.
                 </p>
               ) : (
                 <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">

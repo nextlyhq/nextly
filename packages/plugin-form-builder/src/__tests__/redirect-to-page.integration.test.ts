@@ -271,3 +271,74 @@ describe("a host that overrides the forms collection's hooks", () => {
     expect(hostRan).toContain("beforeValidate");
   });
 });
+
+describe("a host hook that rewrites the payload after validation", () => {
+  /** A host `beforeValidate` that turns a valid form into an invalid one. */
+  async function saveThrough(
+    hostHook: (data: Record<string, unknown>) => void
+  ) {
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+      formOverrides: {
+        hooks: {
+          beforeValidate: [
+            (context: { data?: Record<string, unknown> }) => {
+              if (context.data) hostHook(context.data);
+              return context.data;
+            },
+          ],
+        },
+      },
+    } as Parameters<typeof formBuilder>[0]);
+
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+
+    return current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: { confirmationType: "message" },
+      },
+    });
+  }
+
+  it("still refuses a target the host cleared after the first check", async () => {
+    // The plugin's `beforeValidate` runs FIRST so a rejection precedes host
+    // mutation — which means a host that mutates AFTERWARDS was judged on a
+    // payload it then replaced. The trailing `beforeChange` call is what makes
+    // this an invariant rather than a check.
+    await expect(
+      saveThrough(data => {
+        data.settings = { confirmationType: "relationship" };
+      })
+    ).rejects.toThrow();
+  });
+
+  it("still refuses a reference the host rewrote into an unusable one", async () => {
+    await expect(
+      saveThrough(data => {
+        data.settings = {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "unconfigured", value: "x1" },
+        };
+      })
+    ).rejects.toThrow();
+  });
+
+  it("accepts what the host rewrites into something usable", async () => {
+    // The guarantee must not become "reject anything a host touched".
+    const saved = await saveThrough(data => {
+      data.settings = {
+        confirmationType: "relationship",
+        redirectPage: { relationTo: "pages", value: "pg1" },
+      };
+    });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
+  });
+});

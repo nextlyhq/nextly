@@ -111,12 +111,18 @@ function namesAConfiguredPage(
  * which are the host's to remove. Those are invariants of the collection this
  * plugin ships; an override extends it rather than disarming it.
  *
- * The plugin's handlers run FIRST, so a rejection happens before host logic
- * has mutated anything on the way past.
+ * Handlers in `pluginHooks` run FIRST — they are transformations a host may
+ * want to build on, like the generated slug. Handlers in `trailing` run LAST,
+ * after every host handler in that phase, which is where an INVARIANT has to
+ * sit: one placed first is checked against a payload the host can still
+ * rewrite afterwards.
  */
-function withHostHooks<T>(pluginHooks: T, hostHooks: T | undefined): T {
-  if (!hostHooks) return pluginHooks;
-  const host = hostHooks as Record<string, unknown>;
+function withHostHooks<T>(
+  pluginHooks: T,
+  hostHooks: T | undefined,
+  trailing: Partial<Record<string, unknown[]>> = {}
+): T {
+  const host = hostHooks ?? {};
 
   const asList = (value: unknown) =>
     Array.isArray(value) ? value : value === undefined ? [] : [value];
@@ -127,7 +133,52 @@ function withHostHooks<T>(pluginHooks: T, hostHooks: T | undefined): T {
   )) {
     merged[phase] = [...asList(handlers), ...asList(host[phase])];
   }
+  for (const [phase, handlers] of Object.entries(trailing)) {
+    merged[phase] = [...asList(merged[phase]), ...asList(handlers)];
+  }
   return merged as T;
+}
+
+/**
+ * Refuses a write whose redirect target the resolver could not use.
+ *
+ * One function, called from two phases. `beforeValidate` so an author gets the
+ * error where the rest of the form's errors appear, and LAST in `beforeChange`
+ * so the guarantee survives a host hook: a check placed before host handlers
+ * judges a payload they can still rewrite, and one that can be rewritten past
+ * is not an invariant.
+ *
+ * `setsSettings` mirrors the fields rule above. An update carries the patch
+ * rather than the merged document, so treating an absent `settings` as empty
+ * would reject every partial update — renaming a form — for a setting it never
+ * touched.
+ */
+function assertRedirectTargetUsable(
+  data: Record<string, unknown> | undefined,
+  operation: string,
+  redirectCollections: readonly string[]
+) {
+  const setsSettings = operation === "create" || data?.settings !== undefined;
+  const settings = data?.settings as Record<string, unknown> | undefined;
+  if (
+    !data ||
+    !setsSettings ||
+    settings?.confirmationType !== "relationship" ||
+    namesAConfiguredPage(settings.redirectPage, redirectCollections)
+  ) {
+    return;
+  }
+
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "settings.redirectPage",
+        code: "REQUIRED",
+        message:
+          "Choose a page to redirect to, or pick a different confirmation.",
+      },
+    ],
+  });
 }
 
 export function formsCollection(
@@ -461,44 +512,27 @@ export function formsCollection(
               });
             }
 
-            // A form set to redirect to a page must name a page the resolver can
-            // read. Enforced HERE rather than only in `validateFormConfig`,
-            // which is a library entry point that no write goes through: the
-            // browser posts `settings` straight to this collection, so a rule
-            // that lives only there protects nobody.
-            //
-            // The shape is checked, not merely presence. `{}` and
-            // `{ relationTo: "pages" }` are truthy and name no document, so a
-            // presence test admits exactly the values that resolve to no
-            // destination at submit time — which is the failure being prevented.
-            const setsSettings =
-              operation === "create" || data?.settings !== undefined;
-            const settings = data?.settings as
-              | Record<string, unknown>
-              | undefined;
-            if (
-              data &&
-              setsSettings &&
-              settings?.confirmationType === "relationship" &&
-              !namesAConfiguredPage(settings.redirectPage, redirectCollections)
-            ) {
-              throw NextlyError.validation({
-                errors: [
-                  {
-                    path: "settings.redirectPage",
-                    code: "REQUIRED",
-                    message:
-                      "Choose a page to redirect to, or pick a different confirmation.",
-                  },
-                ],
-              });
-            }
+            // Reported here so an author sees it beside the form's other
+            // errors. The GUARANTEE is the trailing `beforeChange` call below,
+            // which a host hook cannot run after.
+            assertRedirectTargetUsable(data, operation, redirectCollections);
 
             return data;
           },
         ],
       },
-      hookOverrides
+      hookOverrides,
+      {
+        // The authoritative call. A host `beforeValidate` may rewrite the
+        // payload after the check above passed, and `beforeChange` is the last
+        // phase before the write — so this is where the guarantee lives.
+        beforeChange: [
+          ({ data, operation }: HookContext) => {
+            assertRedirectTargetUsable(data, operation, redirectCollections);
+            return data;
+          },
+        ],
+      }
     ),
 
     // Spread any additional overrides (excluding already used properties)
