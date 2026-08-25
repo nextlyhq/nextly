@@ -219,10 +219,11 @@ export function useEditorState({
       // history entry whose undo has no visible effect, which reads as the
       // history being broken.
       //
-      // Asked of `applyOps` rather than decided here. An empty group short-cut
-      // in this file answered before the limits were checked, so the same call
-      // threw from `applyOps` and succeeded through `applyAll` — one question
-      // with two answers, waiting to drift further.
+      // Asked of `applyOps` rather than answered here from `ops.length`, so
+      // one place decides what an empty group means. Answering here would
+      // answer before the op layer has seen the group at all, while a direct
+      // `applyOps` caller would still get the op layer's answer — one group
+      // with two verdicts.
       if (group.inverses.length === 0) return latestDocument.current;
 
       const applied = { document: group.document, inverse: group.inverses };

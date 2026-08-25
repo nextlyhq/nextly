@@ -3025,10 +3025,10 @@ describe("a group of ops applied as one edit", () => {
 
   it("still refuses a group whose RESULT crosses the cap", () => {
     /*
-     * The control on the test above. Deferring the caps to the end must not
-     * become skipping them: a group that LEAVES the document over the cap is
-     * refused exactly as one op would be, because the same `assertFitsCaps`
-     * question is asked with the group's own endpoints.
+     * A group is refused exactly where one op is: each op in the fold is
+     * judged against the document as it stands when that op runs, so the op
+     * that crosses the cap is the one that throws — the group has no allowance
+     * of its own that a single call does not have.
      */
     const start = doc([sized("a", 200), sized("b", 200)]);
     const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
@@ -3040,10 +3040,15 @@ describe("a group of ops applied as one edit", () => {
 
   it("is exactly `applyOp` for a group of one", () => {
     /*
-     * With one op the group's endpoints ARE that op's endpoints, so the relaxed
-     * fold and the single assertion see the same pair. Pinned rather than
-     * reasoned, because the editor now routes every single-block edit through
-     * this path.
+     * A group of one answers exactly as the single call does, in BOTH
+     * directions: a document `applyOp` accepts comes back identical, and one it
+     * refuses is refused identically. Pinned rather than reasoned, because the
+     * editor routes every single-block edit through this path.
+     *
+     * Behavioural only. The shortcut `applyOps` takes for one op is not
+     * observable from here — it saves an endpoint comparison whose reader
+     * invokes no accessor — so this fixes the ANSWER and leaves the route to
+     * the comment on `applyOps`.
      */
     const start = doc([sized("a", 200)]);
     const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
@@ -3118,9 +3123,9 @@ describe("a group of ops applied as one edit", () => {
      *
      * A value stored near the limit therefore compares equal field-rooted and
      * different document-rooted, so the group records an entry whose undo has
-     * no visible effect. That is what happened to every such group before this
-     * check existed, so the check misses the deepest values rather than judging
-     * them wrongly.
+     * no visible effect. The miss runs in the safe direction: an unnecessary
+     * entry costs an author one wasted press, where dropping one the comparison
+     * could not read costs them an edit they cannot take back.
      */
     const chain = (depth: number): unknown => {
       let value: unknown = "leaf";
@@ -3154,11 +3159,10 @@ describe("a group of ops applied as one edit", () => {
 
   it("records nothing when the group leaves the document as it found it", () => {
     /*
-     * Every op changed something and the net effect is still nothing. An entry
-     * recording it would undo to no visible change, which is the failure the
-     * empty-group rule already refuses one level up — and which deferring the
-     * byte cap made newly reachable, since the growing op used to be refused
-     * outright.
+     * Every op changed something and the net effect is still nothing, so the
+     * per-op no-op check cannot see it: each op is a real change when it runs.
+     * An entry recording the group would undo to no visible change, which is
+     * the failure the endpoint comparison exists to refuse.
      */
     const limits = { ...DEFAULT_LIMITS, maxBytes: 6_000 };
     const start = doc([sized("a", 100)]);
@@ -3175,37 +3179,13 @@ describe("a group of ops applied as one edit", () => {
     expect(applied.inverses).toEqual([]);
   });
 
-  it("leaves a single-op group on the plain path", () => {
-    /*
-     * A group of one has no intermediate to order, so it must be the single
-     * call and nothing else — no second cap pass and no endpoint comparison.
-     * The editor routes every single-block edit through here, so anything extra
-     * is paid on the commonest edit in the builder.
-     *
-     * Asserted through behaviour rather than by counting calls: a document that
-     * `applyOp` REFUSES on its own must be refused identically, and one it
-     * accepts must come back identical.
-     */
-    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
-    const start = doc([sized("a", 100)]);
-
-    const one = applyOp(start, resize("a", 400), limits);
-    const grouped = applyOps(start, [resize("a", 400)], limits);
-    expect(grouped.document).toEqual(one.document);
-    expect(grouped.inverses).toEqual([one.inverse]);
-
-    expect(() => applyOps(start, [resize("a", 9_000)], limits)).toThrow(
-      OpError
-    );
-  });
-
   it("does not read the document before `applyOp` has checked it", () => {
     /*
-     * The starting size used to be measured up front, which read the document's
-     * own fields before `applyOp` reached the guards that decide whether they
-     * are fields at all. A `toJSON` accessor was therefore invoked by the
-     * measurement — running document-supplied code on input that was about to
-     * be rejected.
+     * A group reads NOTHING of the document before `applyOp` has checked it.
+     * Measuring the starting size here would read the document's own fields
+     * ahead of the guards that decide whether they are fields at all, invoking
+     * a `toJSON` accessor — document-supplied code run on input that is about
+     * to be rejected.
      *
      * `applyOp` rejects a computed field without invoking it, and a group must
      * not be the path that does otherwise.
