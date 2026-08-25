@@ -229,10 +229,17 @@ const REFUSALS: Record<
       `This ${subject === "single" ? "single" : "entry"} could not be read, so ` +
       "a shared link would have nowhere to open. It may have been deleted.",
     reason: "has-no-readable-document",
+    /*
+     * The REQUEST, never "the token" — nothing has been signed at this point.
+     * This refusal is thrown before `respondWithPreviewLink`, so a log line
+     * saying a token names something would record a credential that was never
+     * issued, and an incident reader would go looking for it.
+     */
     remedy:
-      "The token names a document the resolver could not load. For an entry " +
-      "that usually means it was deleted; for a Single, that it was removed " +
-      "from the configuration.",
+      "The mint request named a document the resolver could not load. For an " +
+      "entry that usually means it was deleted between the authorization read " +
+      "and the resolver's own; for a Single, that it was removed from the " +
+      "configuration.",
   },
   notConfigured: {
     message: (_subject, noun) =>

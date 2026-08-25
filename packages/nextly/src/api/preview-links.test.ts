@@ -587,6 +587,111 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
 
     expect(response.status).toBe(200);
   });
+
+  /*
+   * The three refusals an editor cannot act on, asserted THROUGH the endpoint.
+   *
+   * The resolver's own suite stops at the cause value, which says nothing about
+   * what anyone reads: the mapping from cause to message could be swapped back
+   * to the slug advice and every resolver test would stay green, while the
+   * user-facing behaviour this change exists for would be gone. So each case
+   * asserts the remedy it names AND that it does not name the slug.
+   */
+  const slugAdvice = /slug/i;
+
+  /** The message an endpoint refusal put in front of the editor. */
+  const messageOf = (b: { error?: unknown }): string =>
+    String((b.error as { message?: string } | undefined)?.message ?? "");
+
+  async function refusalMessage(): Promise<string> {
+    return messageOf(
+      await json(
+        await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+      )
+    );
+  }
+
+  it("says the document could not be read, rather than blaming the slug", async () => {
+    // The entry vanished between the authorization read and the resolver's own.
+    getEntry.mockResolvedValue({ success: true, statusCode: 200, data: null });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/could not be read|deleted/i);
+    expect(message).not.toMatch(slugAdvice);
+  });
+
+  it("says the preview URL names another site, rather than blaming the slug", async () => {
+    // No field on this entry can move the declaration to another origin, so
+    // sending the editor to fill one in is advice they cannot act on.
+    previewDeclaration.mockResolvedValue({
+      url: () => "https://elsewhere.test/about",
+    });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/different site/i);
+    expect(message).not.toMatch(slugAdvice);
+  });
+
+  it("says the preview URL does not resolve, rather than blaming the slug", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "not a url" });
+    previewDeclaration.mockResolvedValue({
+      url: () => "https://site.example/about",
+    });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/could not be turned into an address/i);
+    expect(message).not.toMatch(slugAdvice);
+  });
+
+  it("gives all five refusals five different messages", async () => {
+    /*
+     * Stronger than each matching its own pattern: two causes could both match
+     * their phrases while sharing a message, and the whole point is that an
+     * editor can tell which of the five happened. The set having five members
+     * is the property; five individual assertions do not state it.
+     */
+    previewDeclaration.mockResolvedValue(undefined);
+    const notConfigured = await refusalMessage();
+
+    previewDeclaration.mockResolvedValue({ url: () => null });
+    const unavailable = await refusalMessage();
+
+    previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
+    getEntry.mockResolvedValue({ success: true, statusCode: 200, data: null });
+    const documentGone = await refusalMessage();
+
+    getEntry.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { id: "7", slug: "seven" },
+    });
+    previewDeclaration.mockResolvedValue({
+      url: () => "https://elsewhere.test/about",
+    });
+    const foreignOrigin = await refusalMessage();
+
+    getSettings.mockResolvedValue({ siteUrl: "not a url" });
+    previewDeclaration.mockResolvedValue({
+      url: () => "https://site.example/about",
+    });
+    const unresolvable = await refusalMessage();
+
+    const all = [
+      notConfigured,
+      unavailable,
+      documentGone,
+      foreignOrigin,
+      unresolvable,
+    ];
+    // Non-empty first, so five identical empty strings cannot satisfy the size
+    // check by collapsing to one — and so a refusal that stopped carrying a
+    // message at all fails here rather than passing quietly.
+    expect(all.every(m => m.length > 0)).toBe(true);
+    expect(new Set(all).size).toBe(5);
+  });
 });
 
 describe("mintPreviewLink: the link it hands back", () => {

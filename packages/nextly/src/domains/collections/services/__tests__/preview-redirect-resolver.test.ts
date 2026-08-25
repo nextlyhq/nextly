@@ -328,6 +328,24 @@ const CAUSES: ReadonlyArray<{
   },
   {
     cause: "unresolvable",
+    why: "the configured site URL does not parse",
+    /*
+     * The `catch` branch, which the other two `unresolvable` cases do not
+     * reach: one is rejected by `siteRelativePath` and the other returns before
+     * any parsing happens. An absolute declaration URL skips the `noSiteUrl`
+     * path entirely, so the first thing to throw is `new URL(comparisonOrigin)`
+     * on the unparseable setting.
+     */
+    deps: () =>
+      deps({
+        loadSiteUrl: vi.fn().mockResolvedValue("not a url"),
+        loadDeclaration: vi
+          .fn()
+          .mockResolvedValue({ url: () => "https://site.example/about" }),
+      }),
+  },
+  {
+    cause: "unresolvable",
     why: "an absolute url arrives with no origin to compare it against",
     /*
      * The branch reached only when BOTH origins are missing: no site URL is
