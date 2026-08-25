@@ -32,6 +32,7 @@ export const box = defineBlock<ContainerProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Box",
+    icon: "container",
     category: LAYOUT,
     keywords: ["container", "div", "group", "wrapper"],
   },

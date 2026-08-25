@@ -200,6 +200,7 @@ export type {
   BlockDocument,
   BlockEditorMeta,
   BlockExample,
+  BlockIcon,
   BlockMigrationInfo,
   BlockNode,
   BlockRenderResult,

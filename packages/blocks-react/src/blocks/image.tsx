@@ -145,6 +145,7 @@ export const image = defineBlock<ImageProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Image",
+    icon: "image",
     category: MEDIA,
     keywords: ["picture", "photo", "img", "media"],
   },

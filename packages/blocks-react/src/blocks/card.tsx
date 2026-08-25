@@ -110,6 +110,7 @@ export const card = defineBlock<ContainerProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Card",
+    icon: "card",
     category: LAYOUT,
     keywords: ["panel", "tile", "surface"],
   },

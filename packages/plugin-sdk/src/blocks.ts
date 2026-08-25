@@ -349,6 +349,7 @@ export type BlockRenderResult = ReactNode | Promise<ReactNode>;
 export type {
   BlockEditorMeta,
   BlockExample,
+  BlockIcon,
   BlockSeoContribution,
   BlockSeoImage,
   BlockVariation,

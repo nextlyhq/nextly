@@ -73,11 +73,15 @@ function register() {
   if (hasBlock("core/heading")) return;
   registerBlocks(
     [
-      { ...base, name: "core/heading", editor: { label: "Heading" } },
+      {
+        ...base,
+        name: "core/heading",
+        editor: { label: "Heading", icon: "heading" },
+      },
       {
         ...base,
         name: "core/box",
-        editor: { label: "Box" },
+        editor: { label: "Box", icon: "container" },
         slots: { children: {} },
       },
     ] as never,
@@ -138,6 +142,43 @@ describe("LayersPanel", () => {
     expect(rows().some(text => text.includes("Hero"))).toBe(true);
     expect(rows().some(text => text.includes("Footnote"))).toBe(true);
     expect(rows().some(text => text.includes("Title"))).toBe(false);
+  });
+
+  it("draws each row the mark ITS OWN block declares", () => {
+    /*
+     * A layer node carries the block's type and nothing about its definition,
+     * so the panel resolves the mark through the registry. The property that
+     * separates a working resolution from a broken one is that two rows of
+     * DIFFERENT types draw DIFFERENT marks — every row drawing the fallback
+     * satisfies any count of marks, and a count is what a first draft of this
+     * test asserted.
+     *
+     * Population first: both rows are on screen before either mark is judged.
+     */
+    renderPanel();
+    const hero = screen
+      .queryAllByRole("treeitem")
+      .find(row => (row.textContent ?? "").includes("Hero"));
+    const footnote = screen
+      .queryAllByRole("treeitem")
+      .find(row => (row.textContent ?? "").includes("Footnote"));
+    expect(hero).toBeDefined();
+    expect(footnote).toBeDefined();
+
+    const markOf = (row: Element | undefined): string =>
+      row?.querySelector(".nx-block-icon svg")?.getAttribute("class") ?? "";
+
+    // `core/box` names "container" and `core/heading` names "heading", so the
+    // two rows cannot be drawing the same glyph unless the lookup failed.
+    expect(markOf(hero)).not.toBe("");
+    expect(markOf(footnote)).not.toBe("");
+    expect(markOf(hero)).not.toBe(markOf(footnote));
+
+    // And neither is the fallback, which is what a lookup that found nothing
+    // would draw for BOTH — indistinguishable from the above if the two blocks
+    // had happened to name one concept.
+    expect(markOf(hero)).not.toContain("lucide-blocks");
+    expect(markOf(footnote)).not.toContain("lucide-blocks");
   });
 
   it("opens a selection's ancestors so a canvas click is visible here", () => {

@@ -163,11 +163,12 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { defineBlock } from "./block";
+export { BLOCK_ICONS, defineBlock } from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
   BlockEditorMeta,
+  BlockIcon,
   BlockExample,
   BlockSeoContribution,
   BlockSeoImage,

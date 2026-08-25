@@ -87,6 +87,7 @@ export const list = defineBlock<ListProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "List",
+    icon: "list",
     category: CONTENT,
     keywords: ["bullets", "ordered", "unordered", "items"],
   },

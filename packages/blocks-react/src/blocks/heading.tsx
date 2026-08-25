@@ -86,6 +86,7 @@ export const heading = defineBlock<HeadingProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Heading",
+    icon: "heading",
     category: CONTENT,
     keywords: ["title", "headline", "h1", "h2"],
   },

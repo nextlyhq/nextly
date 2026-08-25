@@ -94,6 +94,7 @@ export const quote = defineBlock<QuoteProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Quote",
+    icon: "quote",
     category: CONTENT,
     keywords: ["blockquote", "pull quote", "citation"],
   },
