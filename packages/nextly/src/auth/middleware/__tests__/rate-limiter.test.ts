@@ -161,18 +161,51 @@ describe("the store seam", () => {
     expect((await limiter.check("k", 2, WINDOW)).allowed).toBe(false);
   });
 
-  it("never asks a store to take an increment back", async () => {
+  it("issues no rollback call when it refuses a request", async () => {
     // The property that closes the cross-window erasure: a rollback issued in
-    // one window can land in the next and delete an attempt that WAS budgeted,
-    // admitting excess logins right at a reset boundary. There is no rollback
-    // to mistime, and this fails if one is reintroduced.
-    const store = new SlidingWindowMemoryStore();
-    expect("decrement" in store).toBe(false);
+    // one window can land in the NEXT and delete an attempt that window had
+    // legitimately budgeted, admitting logins nobody allowed for.
+    //
+    // Asserted by driving `check()` against a store that OFFERS a rollback and
+    // recording every call it receives. Inspecting the store's method surface
+    // instead would prove nothing about the limiter: a rollback reintroduced by
+    // any other route would leave that surface untouched, and no break to the
+    // limiter could ever turn such a test red.
+    const calls: string[] = [];
+    const offersRollback: RateLimitStore & {
+      decrement(key: string): Promise<void>;
+    } = {
+      increment(): Promise<RateLimitRecord> {
+        calls.push("increment");
+        return Promise.resolve({ count: 9, resetTime: Date.now() + WINDOW });
+      },
+      reset(): Promise<void> {
+        calls.push("reset");
+        return Promise.resolve();
+      },
+      consume(): Promise<RateLimitRecord & { allowed: boolean }> {
+        calls.push("consume");
+        return Promise.resolve({
+          allowed: false,
+          count: 9,
+          resetTime: Date.now() + WINDOW,
+        });
+      },
+      decrement(): Promise<void> {
+        calls.push("decrement");
+        return Promise.resolve();
+      },
+    };
 
-    // The control: the object is not simply empty — the methods it should have
-    // are present, so the absence above is meaningful.
-    expect(typeof store.consume).toBe("function");
-    expect(typeof store.increment).toBe("function");
+    const result = await new RateLimiter(offersRollback).check("k", 1, WINDOW);
+
+    // The control. Without it, "no rollback happened" is satisfied by a request
+    // that was never refused — and a limiter has no reason to roll back an
+    // attempt it allowed.
+    expect(result.allowed).toBe(false);
+
+    // Exactly one call, and not the rollback the store was willing to accept.
+    expect(calls).toEqual(["consume"]);
   });
 
   it("keeps sliding while every attempt is being refused", async () => {
