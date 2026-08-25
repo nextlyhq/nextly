@@ -538,6 +538,27 @@ function digest(seed: string): string {
 }
 
 /**
+ * The seed carried LITERALLY, or `undefined` when carrying it would lose
+ * information.
+ *
+ * The reduction to identifier-safe characters is many-to-one: `a/b` and `a:b`
+ * both become `a-b`. Carrying the reduced form is therefore only sound when the
+ * reduction changed NOTHING — otherwise two distinct surfaces receive one name,
+ * which is precisely the collision the factory exists to prevent, and an
+ * authored container spelled `nx-preview-a-b` would capture the responsive
+ * queries of every surface that collides there.
+ *
+ * Compared against the original rather than tested for "contains an unsafe
+ * character", because those are the same question and only one of them has a
+ * character class to keep up to date.
+ */
+function losslessName(seed: string): string | undefined {
+  const safe = seed.replace(/[^A-Za-z0-9_-]/g, "-");
+  if (safe !== seed) return undefined;
+  return previewContainerName(`${PREVIEW_SEED_PREFIX}${safe}`);
+}
+
+/**
  * A preview container name unlikely to collide with an authored one.
  *
  * Derived from a seed the CALLER owns — a React `useId`, a surface id, anything
@@ -550,12 +571,15 @@ function digest(seed: string): string {
  * caller passing an opaque id from elsewhere does not have to know this
  * function's rules to use it.
  *
- * **A seed too long to carry literally is DIGESTED, never dropped.** Prefixed,
- * a seed over about fifty characters exceeds the emitted-name bound, and
- * returning the shared default there would hand exactly the surfaces most
- * likely to use long ids — document paths, composite keys, opaque route ids —
- * the one globally predictable name this function exists to avoid. The digest
- * keeps the name per-surface and inside the bound.
+ * **A seed that cannot be carried LITERALLY is DIGESTED, never dropped**, and
+ * that is two cases rather than one. A seed over about fifty characters exceeds
+ * the emitted-name bound once prefixed; a seed containing anything outside
+ * `[A-Za-z0-9_-]` cannot be carried either, because the reduction is
+ * many-to-one and two distinct seeds would receive one name. Returning the
+ * shared default in either case would hand exactly the surfaces most likely to
+ * hit them — document paths, composite keys, opaque route ids — the one
+ * globally predictable name this function exists to avoid. The digest keeps the
+ * name per-surface and inside the bound.
  *
  * Two distinct seeds can still digest alike; the guarantee is a low collision
  * probability, not uniqueness. That is the right trade here because the cost of
@@ -578,9 +602,7 @@ export function previewContainerFor(seed: string): string {
   const literal =
     PREVIEW_SEED_PREFIX.length + seed.length > MAX_PREVIEW_CONTAINER_LENGTH
       ? undefined
-      : previewContainerName(
-          `${PREVIEW_SEED_PREFIX}${seed.replace(/[^A-Za-z0-9_-]/g, "-")}`
-        );
+      : losslessName(seed);
   if (literal !== undefined) return literal;
   /*
    * Digested from the ORIGINAL seed rather than the reduced form, so two seeds
