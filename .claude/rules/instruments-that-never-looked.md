@@ -12,10 +12,16 @@ whose worktree was unbuilt, so a setup guard threw before a single test ran.
 That is worse rather than better, because a failure is read as a verdict about
 the change. Either way there is nothing in the output to read more carefully.
 
-**Twelve instances were measured in a single day, across three lanes working
-independently.** They are listed below with what each one actually did, because
-the shape is only convincing at that density — any one of them reads as an
-ordinary mistake.
+**Every instance below was measured in a single day, across three lanes working
+independently.** They are listed with what each one actually did, because the
+shape is only convincing at that density — any one of them reads as an ordinary
+mistake.
+
+No total is quoted, deliberately. A headline count has to be kept in step with
+the list by hand, some bullets carry more than one event, and the first two
+revisions of this file each stated a number the list had already outgrown — a
+derived view drifting from the thing it summarises, in a file about derived
+views drifting. The list is the record; count it if you need a number.
 
 ### The measured instances
 
@@ -87,6 +93,16 @@ s.count(old) == 1` failed, and the failure named the ambiguity. Note the
   the state. Saying and doing are different facts, and only one of them is
   observable — so the report is not evidence about the system, it is evidence
   about the reporter's belief.
+- A lane asked the founder a decision, was told to leave it, and then attached
+  every subsequent measurement of the same fact to every status report. Each
+  mention was accurate and each felt like keeping a record; in aggregate it was
+  re-asking a settled question with extra steps, and it costs the decider a
+  second refusal on something already considered. The reporter's model said
+  OPEN while the record said DECIDED, and nothing in any individual report
+  looked wrong — which is why it took a peer to see it. The remedy is the same
+  as the entry above: check the claim against the record rather than against
+  what you remember of it, and note that "I am only recording this" is what the
+  re-ask sounds like from inside.
 
 **A proxy was read as the property.**
 
@@ -178,12 +194,22 @@ fetching both objects and probing the merge commit rather than `origin/main`,
 and that requirement is exactly this failure seen from the other side.
 
 **Assert what the instrument CONSUMED, not the verdict it emitted** — the
-substitutions made, the files read, the rows fetched. Assert them by MEMBERSHIP
-rather than by cardinality: a count is the same substitution one level up, and a
-selector that drops an expected row while adding an unrelated one matches any
-total you compare against. `derived-checks.md` makes this case at length; it is
-repeated here only because the instruments in this file fail at the point where
-the count is the easiest thing to reach for. A verdict cannot tell you
+substitutions made, the files read, the rows fetched.
+
+**How to assert it depends on whether the population has identifiable members**,
+and the two answers are opposite. Where members are distinguishable — rows,
+files, findings — assert MEMBERSHIP: a count is the same substitution one level
+up, since a selector that drops an expected row while adding an unrelated one
+matches any total you compare against. `derived-checks.md` makes that case at
+length.
+
+Where they are NOT — the occurrences of a string in a file are identical to each
+other and have nothing to name — cardinality is the whole check, and `assert
+s.count(old) == 1` is precisely what catches an ambiguous replacement. Asserting
+that `old` is merely PRESENT is already true of the broken input. So the mandate
+above must not be read as a reason to drop an exact-count guard; membership and
+cardinality answer for different kinds of population, and reaching for the wrong
+one discards the check that would have fired. A verdict cannot tell you
 whether it had anything to judge. This is the population rule from
 `derived-checks.md`, and the instances above are what it looks like when the
 population is not merely small but absent.
