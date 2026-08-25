@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mint = vi.hoisted(() => vi.fn());
 vi.mock("@admin/hooks/useEntryPreview", () => ({
   mintSelfPreview: mint,
-  PREVIEW_MESSAGES: {},
+  previewMessage: (r: string) => r,
 }));
 
 import { previewScopeKey } from "../previewSessionLock";

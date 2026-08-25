@@ -146,12 +146,23 @@ export function usePreviewFrame({
 
   /*
    * Kept current so the mint reads today's scope rather than the one captured
-   * when the callback was last rebuilt. Without this the key and the value
-   * could disagree for a render — which is the stale closure the key exists to
-   * avoid, reintroduced by the fix for it.
+   * when the callback was last rebuilt.
+   *
+   * Written in a COMMIT effect, never during render. A render can be abandoned
+   * — interrupted, or thrown away by a concurrent update — and a ref written
+   * there would publish a scope no commit ever accepted, while `scopeKey` and
+   * the session lock still describe the committed one. The mint would then
+   * issue a credential for one document and announce the session key of
+   * another, which is precisely the key/value disagreement this ref exists to
+   * prevent, arrived at from the opposite direction.
+   *
+   * Declared BEFORE the effects that mint, so within one commit React runs it
+   * first and they read the scope that commit actually carried.
    */
   const scopeRef = useRef(scope);
-  scopeRef.current = scope;
+  useEffect(() => {
+    scopeRef.current = scope;
+  }, [scope]);
 
   /*
    * The lock this pane announces through. A ref because `mint` claims through

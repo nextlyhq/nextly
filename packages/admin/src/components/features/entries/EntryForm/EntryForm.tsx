@@ -35,10 +35,7 @@ import {
   autosaveScopeFor,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
-import {
-  PREVIEW_MESSAGES,
-  useEntryPreview,
-} from "@admin/hooks/useEntryPreview";
+import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
@@ -628,7 +625,7 @@ export function EntryForm({
     // translations, which is what this answers.
     ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
     onUnavailable: reason => {
-      toast.error(PREVIEW_MESSAGES[reason]);
+      toast.error(previewMessage(reason));
     },
   });
 

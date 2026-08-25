@@ -45,7 +45,10 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@admin/components/ui";
-import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
+import type {
+  PreviewDocumentNoun,
+  SelfPreviewScope,
+} from "@admin/hooks/useEntryPreview";
 
 import { PreviewFrame } from "./PreviewFrame";
 import { usePreviewFrame, type UsePreviewFrameResult } from "./usePreviewFrame";
@@ -149,6 +152,9 @@ function ActivePreviewPanes({
           revision={revision}
           onClose={onClose}
           label={label}
+          // Derived from the scope rather than passed in beside it: two answers
+          // to "which kind of document is this" would be one answer too many.
+          noun={scope.single === undefined ? "entry" : "single"}
         />
       </ResizablePanel>
     </ResizablePanelGroup>
@@ -171,11 +177,13 @@ function PreviewFrameOnSave({
   revision,
   onClose,
   label,
+  noun,
 }: {
   frame: UsePreviewFrameResult;
   revision: string;
   onClose: () => void;
   label: string;
+  noun: PreviewDocumentNoun;
 }) {
   const { refresh } = frame;
   const lastSeen = useRef(revision);
@@ -186,7 +194,9 @@ function PreviewFrameOnSave({
     refresh();
   }, [revision, refresh]);
 
-  return <PreviewFrame {...frame} onClose={onClose} label={label} />;
+  return (
+    <PreviewFrame {...frame} onClose={onClose} label={label} noun={noun} />
+  );
 }
 
 export { PreviewFrame };

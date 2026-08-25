@@ -58,10 +58,7 @@ vi.mock("@admin/components/features/entries/PreviewMode/PreviewPanes", () => ({
   },
 }));
 
-/*
- * Recorded, not replaced in spirit: the real builder still runs, so a revision
- * asserted below is the one the pane would really receive.
- */
+/* Recorded, not replaced: the real builder still runs beneath the spy. */
 vi.mock(
   "@admin/components/features/entries/PreviewMode/previewRevision",
   async importOriginal => {
@@ -109,7 +106,11 @@ const schema = {
   fields: [{ name: "title", type: "text", label: "Title" }],
 } as never;
 
-const document = { id: "s1", title: "Hello" } as never;
+const document = {
+  id: "s1",
+  title: "Hello",
+  status: "published",
+} as never;
 
 function renderForm(props: Record<string, unknown> = {}) {
   return render(
@@ -184,21 +185,19 @@ describe("SingleForm offers the preview pane", () => {
     expect(screen.getByTestId("pane").dataset.open).toBe("false");
   });
 
-  it("builds the revision from the document AND this form's save count", () => {
+  it("threads this form's save count into the revision", () => {
     /*
-     * The seam that carries the defect. A status-less save of a PUBLISHED
-     * Single writes the working-draft sidecar and leaves the live row alone, so
-     * `updatedAt` and the working-draft flag both stand still while the content
-     * changes underneath them — and a revision built from the document alone
-     * stops moving from the second such save onward, leaving the pane showing
-     * the previous draft with nothing to say so.
+     * Half of the property; the other half lives in
+     * `useSinglePreviewPane.test.ts`, which asserts the count MOVES the answer.
+     * Split because driving a real save is not possible from here: the header
+     * is replaced, and although `onSaveChanges` — the callback the form wires
+     * to its own `handleSubmit` — can be invoked, the submit never reaches
+     * `onSubmit`, because the form's fields do not render under this harness
+     * and the validated callback therefore never runs. Measured, not assumed.
      *
-     * Asserted on the ARGUMENTS rather than by driving a save: the save button
-     * lives inside a `toolbarSlot` on the header this file replaces, so a
-     * submit here would exercise the harness rather than the form. What this
-     * catches is the count being dropped from the call or never threaded to it,
-     * which is the realistic regression. That the count CHANGES the answer is
-     * proven where the function lives, in `previewRevision.test.ts`.
+     * What this catches is the count being dropped from the call or never
+     * threaded to it. What it cannot catch alone is a count frozen at zero —
+     * which is exactly what the hook test covers.
      */
     renderForm();
 

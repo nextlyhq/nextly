@@ -28,7 +28,10 @@
 import { Button } from "@nextlyhq/ui";
 
 import { ExternalLink, Loader2, RefreshCw, X } from "@admin/components/icons";
-import { PREVIEW_MESSAGES } from "@admin/hooks/useEntryPreview";
+import {
+  previewMessage,
+  type PreviewDocumentNoun,
+} from "@admin/hooks/useEntryPreview";
 
 import {
   PREVIEW_PANE_BLOCK_MESSAGES,
@@ -40,6 +43,13 @@ export interface PreviewFrameProps extends UsePreviewFrameResult {
   onClose: () => void;
   /** The label the collection chose for its preview, for the frame's title. */
   label: string;
+  /**
+   * Which kind of document this frame is showing.
+   *
+   * Carried so a refusal is worded for the document in hand: the entry advice
+   * names a slug, which a Single always has and cannot be the problem with.
+   */
+  noun: PreviewDocumentNoun;
 }
 
 export function PreviewFrame({
@@ -51,6 +61,7 @@ export function PreviewFrame({
   refresh,
   onClose,
   label,
+  noun,
 }: PreviewFrameProps) {
   return (
     <div className="flex h-full min-h-0 flex-col border-l border-border bg-muted/40">
@@ -126,7 +137,7 @@ export function PreviewFrame({
              the reader can act on, and the pane is the only place they will
              see it — unlike the Preview button, which can raise a toast. */
           <p className="p-6 text-sm text-muted-foreground">
-            {PREVIEW_MESSAGES[reason]}
+            {previewMessage(reason, noun)}
           </p>
         ) : block !== null ? (
           /* Ahead of the `url === null` branch on purpose: a blocked pane HAS a
