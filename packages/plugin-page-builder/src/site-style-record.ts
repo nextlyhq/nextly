@@ -107,6 +107,20 @@ const optionalString = (value: unknown): value is string | undefined =>
   value === undefined || typeof value === "string";
 
 /**
+ * A record or nothing, for the two fields whose CONTENTS this layer never reads.
+ *
+ * Refused rather than narrowed away. Both carry data that exists to survive a
+ * round trip — another tool's, and a newer build of this one's — so dropping a
+ * malformed one quietly would report a successful save that discarded exactly
+ * what the author was trying to keep. The shape is all that can be judged here;
+ * what is inside came from a design-token file.
+ */
+const optionalRecord = (
+  value: unknown
+): value is Readonly<Record<string, unknown>> | undefined =>
+  value === undefined || isPlainRecord(value);
+
+/**
  * The stored token set, checked with the engine's own rules.
  *
  * Shape first, because `emitTokenBlocks` walks entries it assumes are
@@ -147,10 +161,12 @@ export function checkStoredTokens(
       // this identity is what a document's `$token` resolves through, so
       // letting an unusable one fall out of the object would lose it on a save
       // the author is told succeeded.
-      !optionalString(entry.id)
+      !optionalString(entry.id) ||
+      !optionalRecord(entry.extensions) ||
+      !optionalRecord(entry.unreadExtension)
     ) {
       issues.push(
-        `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string.`
+        `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, and extensions must be an object.`
       );
       return;
     }
@@ -168,18 +184,17 @@ export function checkStoredTokens(
       ...(entry.description === undefined
         ? {}
         : { description: entry.description }),
-      ...(isPlainRecord(entry.extensions)
-        ? { extensions: entry.extensions }
-        : {}),
-      // Shape only, like the extensions above: what is inside came from a
-      // design-token file and this layer has no more opinion on it than the
-      // build that stored it had. Named here because this object is a
-      // WHITELIST — a token field the list omits is dropped by the save that
-      // reports success, which for this field would mean the data survives an
-      // import and is lost the moment the site is written.
-      ...(isPlainRecord(entry.unreadExtension)
-        ? { unreadExtension: entry.unreadExtension }
-        : {}),
+      // Both named here because this object is a WHITELIST: a token field the
+      // list omits is dropped by a save that reports success, which for either
+      // of these would mean data survives an import and is lost the moment the
+      // site is written. The guard above has already refused anything that is
+      // neither a record nor absent, so a present value here is a record.
+      ...(entry.extensions === undefined
+        ? {}
+        : { extensions: entry.extensions }),
+      ...(entry.unreadExtension === undefined
+        ? {}
+        : { unreadExtension: entry.unreadExtension }),
     });
   });
 

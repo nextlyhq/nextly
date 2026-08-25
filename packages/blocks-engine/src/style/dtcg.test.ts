@@ -1209,6 +1209,35 @@ describe("this system's own extension, on the way in", () => {
     expect(Object.getPrototypeOf(kept)).toBe(Object.prototype);
   });
 
+  it("names a per-mode value it has no mode for, rather than keeping it", () => {
+    /*
+     * The boundary of what preserving reaches, stated so it is a known limit
+     * rather than a surprise. A member added INSIDE `css` by a newer build is
+     * not preserved, because `css` is the token's value and a member written
+     * back beside a value the author has since edited would state a mode for a
+     * colour that no longer exists.
+     *
+     * Population first: the top-level field beside it IS preserved, so this
+     * asserts a difference between the two levels and not a failure to preserve
+     * anything at all.
+     */
+    const read = dtcgToTokens({
+      one: {
+        $type: "color",
+        $value: "#111111",
+        $extensions: {
+          [NEXTLY_EXTENSION]: {
+            kind: "color",
+            css: { light: "#111111", highContrast: "#000000" },
+            future: "keep-me",
+          },
+        },
+      },
+    });
+    expect(read.tokens[0]?.unreadExtension).toEqual({ future: "keep-me" });
+    expect(read.issues.map(i => i.message).join(" ")).toContain("highContrast");
+  });
+
   it("writesNoFieldItDoesNotDeclare: a round trip preserves nothing", () => {
     /*
      * What holds the named field set to the emitter, asserted by BUILDING a

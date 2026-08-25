@@ -73,6 +73,28 @@ describe("checkStoredTokens", () => {
     });
   });
 
+  it("REFUSES a malformed extension record rather than narrowing it away", () => {
+    /*
+     * Both fields hold data that exists to survive a round trip, and storage
+     * accepts a write whenever this reports no issues. Dropping a malformed one
+     * quietly would answer the author with a successful save that discarded
+     * exactly what they were trying to keep — the loudest possible failure
+     * reported as the quietest.
+     *
+     * Both fields, because the branch is the same one: a fix naming only the
+     * field a report happened to arrive about leaves the other saying nothing.
+     */
+    for (const field of ["extensions", "unreadExtension"]) {
+      const result = checkStoredTokens({
+        tokens: [
+          { ...token("color.primary", "#111111"), [field]: "not-a-record" },
+        ],
+      });
+      expect(result.issues, field).toHaveLength(1);
+      expect(result.value?.tokens ?? [], field).toEqual([]);
+    }
+  });
+
   it("reports a shape-broken entry AND excludes it from the narrowed value", () => {
     const result = checkStoredTokens({
       tokens: [token("color.primary", "#111111"), { name: "color.broken" }],

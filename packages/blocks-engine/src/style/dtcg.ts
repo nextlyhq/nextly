@@ -693,6 +693,7 @@ function readToken(
   // model, and whatever else it holds is kept beside them so the export can
   // write it back.
   const unread = unreadIn(own);
+  reportUnreadMembers(own, name, issues);
 
   const description =
     typeof node.$description === "string" ? node.$description : undefined;
@@ -849,6 +850,53 @@ function unreadIn(own: unknown): Readonly<Record<string, unknown>> | undefined {
   if (!isPlainObject(own)) return undefined;
   const kept = Object.entries(own).filter(([key]) => !NEXTLY_FIELDS.has(key));
   return kept.length === 0 ? undefined : Object.fromEntries(kept);
+}
+
+/**
+ * The members of `css` this system reads.
+ *
+ * `css` is the one field above with a structure. `id` and `kind` are strings, so
+ * a member cannot be added beside what they hold — a newer build widening either
+ * into an object fails `isKind` or the id grammar, and the token falls to the
+ * `$value` path or is refused, rather than losing something quietly.
+ */
+const CSS_MEMBERS = new Set(["light", "dark"]);
+
+/**
+ * Say which members of a READ field were not kept.
+ *
+ * The boundary of what preserving reaches, and it is deliberate. `unreadIn`
+ * partitions this key at the TOP level only: a member a newer build added inside
+ * `css` — a mode this one has no name for — is neither read nor kept, and this
+ * is the only thing said about it.
+ *
+ * Reported rather than preserved, which is the opposite of the choice made one
+ * level up, because `css` is not metadata about the token: it IS the token's
+ * value, per mode. Writing a preserved member back beside a value the author has
+ * since edited would state a mode derived from a value that no longer exists — a
+ * colour that renders, looks plausible and is wrong. Losing it is recoverable
+ * instead: a build that understands that mode sees it absent and can compute it
+ * again, where it cannot see that a value it CAN read is stale.
+ *
+ * So the round trip is exact for a field this system does not read and lossy for
+ * a member inside one it does. Said out loud, because the alternative is a
+ * silent difference between the two.
+ */
+function reportUnreadMembers(
+  own: unknown,
+  name: string,
+  issues: ValidationIssue[]
+): void {
+  if (!isPlainObject(own)) return;
+  const css = own.css;
+  if (!isPlainObject(css)) return;
+  const dropped = Object.keys(css).filter(key => !CSS_MEMBERS.has(key));
+  if (dropped.length === 0) return;
+  issues.push(
+    issue(
+      `"${name}" states ${dropped.map(key => `"${key}"`).join(", ")} among its per-mode values, which this version has no mode for, so it was not kept. That names a value rather than a note about one, and writing it back would state a mode for a colour this version may since have changed.`
+    )
+  );
 }
 
 /**
