@@ -17,8 +17,14 @@
  * That decides the failure policy. Throwing here cannot roll the document back;
  * it would report a failed save for a save that succeeded, which is the most
  * confusing direction a failure can take — an author would retry a write that
- * already landed. So a failure is REPORTED and swallowed, and the rebuild is
- * what repairs the record.
+ * already landed. So a failure is REPORTED and swallowed.
+ *
+ * A swallowed failure needs something that repairs the record, and there is no
+ * such thing for this table yet: `rebuildClassUsage` walks pages and rewrites
+ * the legacy per-page `usedClasses` column, and never reads or writes
+ * `nx_pb_class_usage`. Until an index rebuild exists, a failed write here
+ * leaves the subject stale until its document is next saved. The write path
+ * must not be wired on the strength of a repair that has not been built.
  *
  * That is not the same as the event bus, which was rejected for this job: an
  * event handler's failure is never surfaced to anybody, while this one reaches
@@ -26,23 +32,32 @@
  *
  * ## Why the document is RE-READ rather than taken from the hook
  *
- * The hook is handed the row this operation wrote. Two writes to one document
- * can interleave, and the one that wrote second is the one the site now serves —
- * so a hook deriving from its own operation's data can write rows describing a
- * document that is no longer live, and reconciliation would then remove the rows
- * the live document justifies. Reading the row back makes whichever hook runs
- * last derive from whatever actually won, so the two converge instead of
- * fighting.
+ * The hook is handed the row its own operation wrote. Two writes to one
+ * document can interleave, and the one that wrote second is the one the site
+ * now serves — so a hook deriving from its own operation's data can write rows
+ * describing a document that is no longer live. Reading the row back at least
+ * derives from whatever is stored at that moment.
  *
- * It does not make the pair atomic, and nothing available here can: the write
- * has committed and this is a second statement against a different table. What
- * it removes is the stale-derivation class of that race, leaving only the
- * narrow window where a hook's read precedes a commit its own write then
- * follows — and the rebuild covers that.
+ * It does NOT make concurrent writes converge, and this module must not be read
+ * as claiming so. Starting from rows {a,b}: hook A can read live revision {a}
+ * before hook B commits {b}; both then read the same index and independently
+ * plan to remove the other's class; if both removals land after B commits, the
+ * live document uses `b` and neither row remains. That is an under-count, which
+ * is the direction safe-delete reads as permission.
+ *
+ * Nothing available here closes that. Reconciliation is sound only when its
+ * CALLER serialises it per subject, or re-checks the document revision before
+ * applying removals — a property of the write path, recorded here because this
+ * is where the diff is computed and where the assumption would otherwise be
+ * made silently.
  *
  * @module class-usage-maintenance
  */
-import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import {
+  MAX_CLASSES_PER_NODE,
+  MAX_NODES,
+  isPlainRecord,
+} from "@nextlyhq/blocks-engine";
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import {
@@ -54,6 +69,7 @@ import {
 import {
   CLASS_USAGE_INDEX_SLUG,
   type ClassUsageRow,
+  type ClassUsageScope,
 } from "./collections/class-usage-index";
 import { readStoredJson } from "./stored-json";
 
@@ -71,6 +87,16 @@ export interface ClassUsageIndexStore {
     where: Record<string, { equals: string }>;
     limit: number;
     page: number;
+    /**
+     * Required, and it must be a column the writes here cannot move.
+     *
+     * These are OFFSET queries, and the query service emits `ORDER BY` only
+     * when a sort is supplied — so without one, successive pages have no
+     * guaranteed order and a row can be skipped or returned twice. A skipped
+     * row reads as a reference the document has dropped and is deleted; a
+     * repeated one reads as a duplicate and is also deleted.
+     */
+    sort: string;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
   create(args: {
     collection: string;
@@ -83,14 +109,24 @@ export interface ClassUsageIndexStore {
 const PAGE_SIZE = 200;
 
 /**
- * A guard against a store whose paging never reports an end.
+ * The most rows one subject can legitimately have, derived from the bounds the
+ * document was read under.
  *
- * Sized so that reaching it means the response is wrong rather than that one
- * document references an implausible number of classes: the engine caps a
- * node's class list and the document's node count, so a real subject's row
- * count is bounded far below this.
+ * A fixed page ceiling was wrong here, and wrong in the direction that breaks a
+ * valid site: a document may hold `maxNodes` nodes and each node contributes up
+ * to `MAX_CLASSES_PER_NODE` references, so a legitimate subject can produce far
+ * more rows than any round number chosen by eye. Once its first pass wrote more
+ * than that ceiling, every later maintenance and every deletion would reach the
+ * guard and throw, leaving the subject permanently stale.
+ *
+ * Derived from the SAME limits the document was read under, so it cannot
+ * disagree with what the reader was allowed to produce — a host that raises
+ * `maxNodes` raises this with it. The `+ 1` is the marker row, which is not a
+ * node's reference and is written when no node's reference could be read.
  */
-const MAX_PAGES = 100;
+function maxRowsForSubject(limits: DocumentLimits | undefined): number {
+  return (limits?.maxNodes ?? MAX_NODES) * MAX_CLASSES_PER_NODE + 1;
+}
 
 /** Whether a stored value could be a block document at all. */
 export function looksLikeBlockDocument(value: unknown): boolean {
@@ -99,32 +135,93 @@ export function looksLikeBlockDocument(value: unknown): boolean {
 }
 
 /**
- * The fields of a written row that hold something shaped like a block document.
+ * The fields of a written row that this write could have changed the classes of.
  *
  * A cheap, deliberately NON-authoritative filter. A global hook sees every write
  * in the application — logins, uploads, audit rows — and almost none of them can
  * hold a block tree; this rejects those in memory, without consulting the
  * configuration, so the common path costs one walk over the row's own keys.
  *
+ * It names two things, and the second is not an afterthought. A field holding
+ * something document-shaped is the obvious case. A field whose KEY is present
+ * with no value is a field this write CLEARED — `null` and `undefined` are both
+ * accepted values for a blocks field — and it has to be named for exactly the
+ * reason the first case does: its old rows must go. A filter that recognised
+ * only documents would leave a cleared field's references in place, so the
+ * document would go on appearing to use every class it had before being
+ * emptied, and none of them could ever be deleted.
+ *
+ * A key that is ABSENT is not a clear. It means this write said nothing about
+ * that field, so the stored document stands and its rows are still correct.
+ *
  * It is allowed to say yes about a field that is not a blocks field, because
  * the caller confirms against the declared field types before deriving. It must
- * not say no about one that is: a false negative here silently stops indexing a
- * real document, which is the under-count direction. That is why the test is
- * the same one `classUsageOf` applies to decide it can read a document at all,
- * rather than a narrower guess about what a block tree looks like.
+ * not say no about one that is: a false negative silently stops maintaining a
+ * real document, which is the under-count direction.
  */
 export function blockDocumentFields(data: unknown): string[] {
   if (!isPlainRecord(data)) return [];
-  return Object.keys(data).filter(key => looksLikeBlockDocument(data[key]));
+  return Object.keys(data).filter(key => {
+    const value = data[key];
+    if (value === null || value === undefined) return true;
+    return looksLikeBlockDocument(value);
+  });
 }
 
-/** The rows the index currently holds for one subject. */
+/** Whether a stored value is one of the two scopes a row may carry. */
+function readScope(value: unknown): ClassUsageScope | null {
+  return value === "collection" || value === "single" ? value : null;
+}
+
+/**
+ * One stored row, or null when it cannot be read as one.
+ *
+ * Every column comes from the ROW. Stamping the expected subject onto whatever
+ * came back would make `reconcileClassUsage`'s mismatch guard unfalsifiable —
+ * that guard exists to catch a query which misbound one of the four predicates,
+ * and overwriting the evidence is exactly the operation that hides it.
+ *
+ * A row missing a column is SKIPPED rather than counted or deleted. Persisted
+ * data arrives unvalidated, one unreadable row must not stop the subject being
+ * reconciled, and nothing here knows enough about it to remove it.
+ */
+function readStoredRow(item: unknown): StoredClassUsageRow | null {
+  if (!isPlainRecord(item)) return null;
+  const scope = readScope(item.scope);
+  if (scope === null) return null;
+  const { id, entity, entityKey, field, classId } = item;
+  if (typeof id !== "string") return null;
+  if (typeof entity !== "string") return null;
+  if (typeof entityKey !== "string") return null;
+  if (typeof field !== "string") return null;
+  if (typeof classId !== "string") return null;
+  return { id, scope, entity, entityKey, field, classId };
+}
+
+/**
+ * The rows the index currently holds for one subject.
+ *
+ * Every column is read from the ROW rather than stamped from the subject, and
+ * that is the whole point. Spreading the expected subject onto each row would
+ * make `reconcileClassUsage`'s mismatch guard unfalsifiable — the guard exists
+ * to catch a query that misbound one of the four predicates, and stamping the
+ * expected values onto whatever came back is precisely the operation that hides
+ * that. Its removals would then delete another document's rows.
+ */
 async function storedRowsFor(
   store: ClassUsageIndexStore,
-  subject: ClassUsageSubject
+  subject: ClassUsageSubject,
+  limits: DocumentLimits | undefined
 ): Promise<StoredClassUsageRow[]> {
   const rows: StoredClassUsageRow[] = [];
-  for (let page = 1; page <= MAX_PAGES; page++) {
+  const ceiling = maxRowsForSubject(limits);
+  // Bounded by PAGES REQUESTED rather than by rows collected, and the
+  // difference is the whole termination argument: a store answering `hasNext`
+  // forever with an empty page never grows `rows`, so a row-count bound would
+  // spin without end. The page count is derived from the row ceiling, so it is
+  // still large enough for anything a document under these limits can produce.
+  const maxPages = Math.ceil(ceiling / PAGE_SIZE) + 1;
+  for (let page = 1; page <= maxPages; page++) {
     const result = await store.find({
       collection: CLASS_USAGE_INDEX_SLUG,
       where: {
@@ -135,25 +232,25 @@ async function storedRowsFor(
       },
       limit: PAGE_SIZE,
       page,
+      // Ordered by a column these writes cannot move. Offset paging reads
+      // position N of an ordered set, so ordering by anything this maintenance
+      // rewrites would reshuffle rows between queries and skip some.
+      sort: "id",
     });
     for (const item of result.items) {
-      // A row this cannot read an id out of is skipped rather than counted.
-      // Persisted data arrives unvalidated, and one unreadable row must not
-      // stop the subject being reconciled — but it is also not something to
-      // silently delete, since nothing here knows what it is.
-      if (!isPlainRecord(item)) continue;
-      if (typeof item.id !== "string") continue;
-      if (typeof item.classId !== "string") continue;
-      rows.push({ ...subject, id: item.id, classId: item.classId });
+      const row = readStoredRow(item);
+      if (row !== null) rows.push(row);
     }
     if (!result.meta.hasNext) return rows;
   }
-  // The store said there was more after the guard ran out. Reported rather than
-  // absorbed: a partial row set reconciled against would read every unread row
-  // as a reference the document has dropped, and delete it.
+  // More rows than the document could have produced under the bounds it was
+  // read with. Reported rather than absorbed: a partial row set reconciled
+  // against reads every unread row as a reference the document has dropped.
   throw new Error(
-    `Class-usage index returned more than ${MAX_PAGES} pages of ${PAGE_SIZE} for ` +
-      `${subject.scope}:${subject.entity}:${subject.entityKey}:${subject.field}.`
+    `Class-usage index still reported more rows after ${maxPages} pages of ` +
+      `${PAGE_SIZE} for ` +
+      `${subject.scope}:${subject.entity}:${subject.entityKey}:${subject.field}, ` +
+      `which exceeds the ${ceiling} a document under these limits can reference.`
   );
 }
 
@@ -188,7 +285,7 @@ export async function maintainClassUsage(args: {
     ? derivation.rows
     : [derivation.undetermined];
 
-  const stored = await storedRowsFor(store, subject);
+  const stored = await storedRowsFor(store, subject, args.limits);
   const { insert, remove } = reconcileClassUsage(subject, derived, stored);
 
   // Inserts before removals. Between the two statements the index reports the
@@ -222,8 +319,10 @@ export async function maintainClassUsage(args: {
 export async function forgetClassUsage(args: {
   store: ClassUsageIndexStore;
   subject: ClassUsageSubject;
+  /** The same bounds the document was indexed under, which bound its row count. */
+  limits?: DocumentLimits;
 }): Promise<{ removed: number }> {
-  const stored = await storedRowsFor(args.store, args.subject);
+  const stored = await storedRowsFor(args.store, args.subject, args.limits);
   for (const row of stored) {
     await args.store.delete({
       collection: CLASS_USAGE_INDEX_SLUG,

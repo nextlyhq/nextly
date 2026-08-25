@@ -38,8 +38,8 @@ const documentUsing = (...classes: string[]) => ({
 function recordingStore(rows: { id: string; classId: string }[] = []) {
   const calls: string[] = [];
   const store: ClassUsageIndexStore = {
-    find: async () => {
-      calls.push("find");
+    find: async args => {
+      calls.push(`find:sort=${args.sort}`);
       return {
         items: rows.map(r => ({ ...page, ...r })),
         meta: { hasNext: false },
@@ -81,6 +81,25 @@ describe("recognising a field that could hold a block document", () => {
       blockDocumentFields({ content: JSON.stringify(documentUsing("hero")) })
     ).toEqual(["content"]);
   });
+
+  it("names a field this write CLEARED, which holds no document to recognise", () => {
+    // `null` and `undefined` are both accepted values for a blocks field, so
+    // emptying one is an ordinary edit. A filter that recognised only documents
+    // would never maintain that field again, and the document would go on
+    // appearing to use every class it had before being emptied — so none of
+    // them could ever be deleted.
+    expect(blockDocumentFields({ content: null, title: "Home" })).toEqual([
+      "content",
+    ]);
+    expect(blockDocumentFields({ content: undefined })).toEqual(["content"]);
+  });
+
+  it("says nothing about a field this write did not mention", () => {
+    // An ABSENT key is not a clear. The write said nothing about that field, so
+    // the stored document stands and its rows are still correct — naming it
+    // would make every unrelated write re-maintain every blocks field there is.
+    expect(blockDocumentFields({ title: "Home" })).toEqual([]);
+  });
 });
 
 describe("maintaining one subject's rows", () => {
@@ -94,7 +113,7 @@ describe("maintaining one subject's rows", () => {
     });
 
     expect(report).toEqual({ inserted: 2, removed: 0, undetermined: false });
-    expect(calls).toEqual(["find", "create:card", "create:hero"]);
+    expect(calls).toEqual(["find:sort=id", "create:card", "create:hero"]);
   });
 
   it("issues NO writes when the document's references are unchanged", async () => {
@@ -113,7 +132,7 @@ describe("maintaining one subject's rows", () => {
     });
 
     expect(report).toEqual({ inserted: 0, removed: 0, undetermined: false });
-    expect(calls).toEqual(["find"]);
+    expect(calls).toEqual(["find:sort=id"]);
   });
 
   it("inserts before it removes", async () => {
@@ -130,7 +149,7 @@ describe("maintaining one subject's rows", () => {
       document: documentUsing("new"),
     });
 
-    expect(calls).toEqual(["find", "create:new", "delete:r1"]);
+    expect(calls).toEqual(["find:sort=id", "create:new", "delete:r1"]);
     expect(calls.indexOf("create:new")).toBeLessThan(
       calls.indexOf("delete:r1")
     );
@@ -158,7 +177,7 @@ describe("maintaining one subject's rows", () => {
 
     expect(report).toEqual({ inserted: 1, removed: 0, undetermined: true });
     // One create, and it carries the marker rather than any id it did read.
-    expect(calls).toEqual(["find", `create:${UNDETERMINED_CLASS_ID}`]);
+    expect(calls).toEqual(["find:sort=id", `create:${UNDETERMINED_CLASS_ID}`]);
   });
 
   it("refuses a row set the store could not finish reporting", async () => {
@@ -178,7 +197,30 @@ describe("maintaining one subject's rows", () => {
         subject: page,
         document: documentUsing("hero"),
       })
-    ).rejects.toThrow(/more than \d+ pages/);
+    ).rejects.toThrow(/still reported more rows after \d+ pages/);
+  });
+
+  it("passes a stored row's OWN subject through, so a foreign row is refused", async () => {
+    // The reconciler's mismatch guard exists to catch a query that misbound one
+    // of the four subject predicates. Stamping the expected subject onto
+    // whatever came back would make that guard unfalsifiable, and its removals
+    // would delete another document's rows.
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [{ ...page, entityKey: "page-2", id: "r9", classId: "hero" }],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async () => ({}),
+    };
+
+    await expect(
+      maintainClassUsage({
+        store,
+        subject: page,
+        document: documentUsing("hero"),
+      })
+    ).rejects.toThrow(/belongs to collection:pages:page-2:content/);
   });
 });
 
@@ -195,6 +237,6 @@ describe("forgetting a document that no longer exists", () => {
     const report = await forgetClassUsage({ store, subject: page });
 
     expect(report).toEqual({ removed: 2 });
-    expect(calls).toEqual(["find", "delete:r1", "delete:r2"]);
+    expect(calls).toEqual(["find:sort=id", "delete:r1", "delete:r2"]);
   });
 });
