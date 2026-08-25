@@ -68,7 +68,15 @@ export async function readOrReport(
       ? { kind: "absent" }
       : { kind: "document", document };
   } catch (error) {
-    return error instanceof NextlyError && error.statusCode === 404
+    /*
+     * The STRUCTURAL guard, not `instanceof`. The cached instance lives on
+     * `globalThis` precisely because Next.js and Turbopack duplicate ESM
+     * modules, so an error thrown by one copy of this package fails an
+     * `instanceof` check performed in another — and a removed Single would then
+     * be reported as a transient read failure, telling an author to retry
+     * something that will never succeed.
+     */
+    return NextlyError.isNotFound(error)
       ? { kind: "absent" }
       : { kind: "unreadable" };
   }
@@ -195,20 +203,50 @@ const AUTHORIZED_PREVIEW_CALLER = Symbol("nextly.preview.authorizedCaller");
 
 /** Proof that the caller was authorized before a refusal reason was handed over. */
 export interface AuthorizedPreviewCaller {
-  readonly [AUTHORIZED_PREVIEW_CALLER]: true;
+  readonly [AUTHORIZED_PREVIEW_CALLER]: string;
 }
 
 /**
- * Mint that proof. Call ONLY after the caller's own grant has been checked.
+ * Mint that proof, from an AUTHENTICATED context and nothing less.
  *
- * Takes the principal rather than nothing at all, so the witness cannot be
- * conjured by a handler that never authorized anybody.
+ * The parameter is the whole shape `requireRoutePermission` and
+ * `requireRouteCollectionAccess` return, not just an id. That matters because
+ * the anonymous preview route DOES hold a plausible id — a verified token
+ * carries its minter — so a witness asking only for `{ userId }` could be built
+ * there from a real value and would look entirely reasonable in review. Nothing
+ * on that path has permissions, roles or an auth method, so demanding them
+ * turns a natural-looking call into an obvious fabrication.
+ *
+ * The identity is CARRIED rather than discarded, and an empty one is refused:
+ * a witness that reads nothing from its argument is a witness that would accept
+ * anything shaped vaguely right.
+ *
+ * Within one package no value is unforgeable against code that means to forge
+ * it. What this buys is that the honest path is the easy one and the dishonest
+ * path cannot be reached by accident — which, with the export manifest beside
+ * it, is the enforcement this boundary can actually have.
  */
 export function previewCallerAuthorized(auth: {
   userId: string;
+  permissions: string[];
+  roles: string[];
+  authMethod: "session" | "api-key";
 }): AuthorizedPreviewCaller {
-  void auth;
-  return { [AUTHORIZED_PREVIEW_CALLER]: true };
+  if (auth.userId === "") {
+    /*
+     * The public message stays generic and the detail goes to the log: reaching
+     * this is a programming mistake in a handler, not something the person
+     * making the request can act on, and naming the boundary in a response
+     * would describe an internal control to whoever tripped it.
+     */
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "An unexpected error occurred.",
+      logMessage:
+        "previewCallerAuthorized requires the authenticated caller's id",
+    });
+  }
+  return { [AUTHORIZED_PREVIEW_CALLER]: auth.userId };
 }
 
 /**

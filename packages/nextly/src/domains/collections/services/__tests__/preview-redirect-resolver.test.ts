@@ -6,6 +6,8 @@
  * entry that was deleted, for a collection that declares no preview, and — the
  * one with teeth — for a host that is not the site's.
  */
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -18,6 +20,7 @@ import {
   readOrReport,
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
+  type AuthorizedPreviewCaller,
   type PreviewRedirectDeps,
   type SinglePreviewRedirectDeps,
 } from "../preview-redirect-resolver";
@@ -43,7 +46,26 @@ const unreadable = () => vi.fn().mockResolvedValue({ kind: "unreadable" });
  * symbol behind the type is not exported, so no anonymous handler can conjure
  * one and reach a refusal cause.
  */
-const CALLER = previewCallerAuthorized({ userId: "u1" });
+const CALLER = previewCallerAuthorized({
+  userId: "u1",
+  permissions: [],
+  roles: [],
+  authMethod: "session",
+});
+
+/**
+ * Are these two types EXACTLY the same, in both directions?
+ *
+ * Assignability alone is one-directional: `CALLER` assigns happily to
+ * `unknown` and to `AuthorizedPreviewCaller | undefined`, so an assignment test
+ * stays green through precisely the widening it exists to catch. The
+ * conditional-on-a-generic-signature trick is the standard way to ask for
+ * identity rather than compatibility.
+ */
+type Exactly<X, Y> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
+    ? true
+    : false;
 
 function deps(
   overrides: Partial<PreviewRedirectDeps> = {}
@@ -457,6 +479,37 @@ describe("what this module lets anyone reach", () => {
   });
 });
 
+describe("what the ANONYMOUS preview path is wired to", () => {
+  it("never reaches an explaining façade", () => {
+    /*
+     * The witness makes the wrong call awkward; this makes it visible. Within
+     * one package no value is unforgeable against code that means to forge one,
+     * so the boundary needs a second control that reads the anonymous side
+     * directly rather than trusting it to ask nicely.
+     *
+     * These modules serve requests carrying no session — the preview route and
+     * the loaders it is built from — and a refusal cause reaching any of them
+     * is the draft-existence oracle the flattening wrapper exists to prevent.
+     */
+    const anonymous = [
+      "../../../../runtime/preview/preview-route-defaults.ts",
+      "../../../../runtime/preview/preview-route.ts",
+      "../../../../runtime/preview/preview-draft-gate.ts",
+      "../../../../runtime/preview/preview-single-draft-gate.ts",
+    ];
+
+    for (const relative of anonymous) {
+      const source = readFileSync(new URL(relative, import.meta.url), "utf8");
+      // A control first: reading the wrong path returns "" and would let every
+      // assertion below pass by having examined nothing.
+      expect(source.length).toBeGreaterThan(0);
+      expect(source).not.toMatch(/\bexplainPreviewRedirect\b/);
+      expect(source).not.toMatch(/\bexplainSinglePreviewRedirect\b/);
+      expect(source).not.toMatch(/\bpreviewCallerAuthorized\b/);
+    }
+  });
+});
+
 describe("readOrReport, for loaders that throw instead of returning", () => {
   /*
    * The Direct API has no failure envelope: `findSingle` throws for every
@@ -498,6 +551,28 @@ describe("readOrReport, for loaders that throw instead of returning", () => {
     expect(
       await readOrReport(() => Promise.reject(new Error("socket hang up")))
     ).toEqual({ kind: "unreadable" });
+  });
+
+  it("recognises a not-found thrown by ANOTHER copy of this package", async () => {
+    /*
+     * Next.js and Turbopack duplicate ESM modules — `getCachedNextly` keeps the
+     * instance on `globalThis` for exactly that reason — so an error raised by
+     * one copy is not `instanceof` the class as this copy sees it. Under
+     * `instanceof` a removed Single would be reported as a transient read
+     * failure, telling an author to retry something that can never succeed.
+     *
+     * This object carries the registry-shared brand and the code, which is what
+     * the structural guard reads, and is deliberately NOT a NextlyError.
+     */
+    const fromAnotherCopy = Object.assign(new Error("No such single"), {
+      [Symbol.for("nextly/NextlyError")]: true,
+      code: "NOT_FOUND",
+    });
+    expect(fromAnotherCopy).not.toBeInstanceOf(NextlyError);
+
+    expect(await readOrReport(() => Promise.reject(fromAnotherCopy))).toEqual({
+      kind: "absent",
+    });
   });
 
   it("still reads a returned null as absence", async () => {
@@ -549,6 +624,75 @@ describe("the authenticated boundary on the explaining form", () => {
 
     expect(witness).toBe(CALLER);
     expect(singleWitness).toBe(CALLER);
+  });
+
+  it("types that parameter as EXACTLY the branded proof, not merely something it fits", () => {
+    /*
+     * Bidirectional, because assignability is not the property. Widen that
+     * parameter to `unknown` or to `AuthorizedPreviewCaller | undefined` and
+     * `CALLER` still assigns, the runtime identity still holds and the arity is
+     * unchanged — so the one-way assignment above returns green from both the
+     * correct implementation and the widening it was written to catch. It stays
+     * as a readable statement of intent; THIS is the assertion with teeth.
+     *
+     * Both constants are typed `true`, so any widening resolves `Exactly<…>` to
+     * `false` and `check-types` fails on this line.
+     */
+    const entryWitnessIsExact: Exactly<
+      Parameters<typeof explainPreviewRedirect>[2],
+      AuthorizedPreviewCaller
+    > = true;
+    const singleWitnessIsExact: Exactly<
+      Parameters<typeof explainSinglePreviewRedirect>[2],
+      AuthorizedPreviewCaller
+    > = true;
+
+    expect(entryWitnessIsExact).toBe(true);
+    expect(singleWitnessIsExact).toBe(true);
+  });
+
+  it("mints proof only from a full authenticated context, not a bare id", () => {
+    /*
+     * The anonymous preview route holds a plausible user id — a verified token
+     * records its minter — so a constructor asking only for `{ userId }` could
+     * be called there with a REAL value and would read as reasonable. Pinning
+     * the whole authenticated shape is what makes that call an obvious
+     * fabrication instead, and pinning it EXACTLY is what stops the requirement
+     * being quietly narrowed back to an id.
+     */
+    const demandsAuthenticatedContext: Exactly<
+      Parameters<typeof previewCallerAuthorized>[0],
+      {
+        userId: string;
+        permissions: string[];
+        roles: string[];
+        authMethod: "session" | "api-key";
+      }
+    > = true;
+
+    expect(demandsAuthenticatedContext).toBe(true);
+  });
+
+  it("refuses to mint proof without an authenticated identity", () => {
+    // The witness CARRIES the id rather than discarding it, so a handler with
+    // no principal cannot satisfy it with a placeholder.
+    let thrown: unknown;
+    try {
+      previewCallerAuthorized({
+        userId: "",
+        permissions: [],
+        roles: [],
+        authMethod: "session",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    // Asserted on the LOG message and the code rather than on what a caller
+    // would see: the public text is deliberately generic, because tripping this
+    // is a handler's mistake and not something the requester can act on.
+    expect(NextlyError.isCode(thrown, "INTERNAL_ERROR")).toBe(true);
+    expect((thrown as NextlyError).logMessage).toMatch(/authenticated caller/i);
   });
 
   it("answers normally once the witness is supplied", async () => {
