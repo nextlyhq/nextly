@@ -451,6 +451,39 @@ describe("refusing an oversized name", () => {
     }
   });
 
+  it("refuses the container-query QUERY keywords, which the grammar excludes", () => {
+    /*
+     * `@container <name>? <condition>` puts the name and the condition adjacent
+     * with nothing between them, so these are not merely unusual names — they
+     * change what the at-rule MEANS.
+     *
+     * `and` and `or` produce `@container and (max-width: 991px)`, which is a
+     * malformed condition rather than a container named `and`, and a browser
+     * drops the rule. `not` is the worse one because it PARSES: it reads as the
+     * negation of the condition that follows, so the rule applies at exactly
+     * the widths the author meant to exclude.
+     *
+     * Case-insensitively, because CSS keywords are, and a caller passing `AND`
+     * would otherwise establish a container whose rules are dropped just the
+     * same.
+     */
+    for (const keyword of ["and", "or", "not", "AND", "Not", "OR"]) {
+      expect(previewContainerName(keyword)).toBeUndefined();
+    }
+  });
+
+  it("still ACCEPTS a name merely CONTAINING one, which is the control", () => {
+    /*
+     * Without this, refusing every name with those letters anywhere in it would
+     * satisfy the case above while rejecting ordinary identifiers — `nx-android`
+     * and `nx-notes` are legal container names and a surface seeded from a
+     * document slug will produce them.
+     */
+    expect(previewContainerName("nx-android")).toBe("nx-android");
+    expect(previewContainerName("nx-notes")).toBe("nx-notes");
+    expect(previewContainerName("brand-or-theme")).toBe("brand-or-theme");
+  });
+
   it("refuses a name that would only FIT after trimming", () => {
     /*
      * A consequence of the bound being on the raw input, and a deliberate one

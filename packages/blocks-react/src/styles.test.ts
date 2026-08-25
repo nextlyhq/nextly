@@ -15,8 +15,10 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import { compilePageCss } from "@nextlyhq/blocks-engine";
+import type { StyleCompileContext } from "@nextlyhq/blocks-engine";
 
 import { createBlockResolver } from "./resolver";
+import { sharedStyleInputsId } from "./shared-style-inputs";
 import {
   resolvePageStyles,
   resolvePageStylesWithTrace,
@@ -478,5 +480,85 @@ describe("a stored artifact that was compiled for a PREVIEW", () => {
     );
 
     expect(styles.css).not.toBe("");
+  });
+});
+
+describe("a preview artifact read back UNDER a context", () => {
+  /*
+   * The context-free refusal above must not become a blanket one. A preview
+   * render supplies the same context it compiled under, and the stamp already
+   * proves the inputs match — so recompiling there buys nothing and costs a
+   * full compile of the document on every render of the editor's canvas.
+   */
+  const breakpoints = {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  } as never;
+
+  const styled: BlockNode = {
+    id: "a",
+    type: "test/text",
+    version: 1,
+    props: {},
+    styles: { base: { base: { color: "teal" }, tablet: { color: "salmon" } } },
+  } as never;
+
+  const context = (previewContainer?: string): StyleCompileContext =>
+    ({
+      breakpoints,
+      ...(previewContainer === undefined ? {} : { previewContainer }),
+    }) as never;
+
+  /*
+   * A stored artifact whose CSS is recognisable, which is what separates the
+   * two outcomes.
+   *
+   * Reuse and recompilation both return a sheet, and for an unmodified artifact
+   * they return equal ones — so asserting on the CSS alone cannot tell them
+   * apart. Marking the stored copy makes reuse observable: the marker survives
+   * only if the stored bytes were served rather than regenerated.
+   */
+  const marked = (previewContainer?: string): PageStyles => {
+    const compiled = toPageStyles(
+      compilePageCss(doc(styled), context(previewContainer) as never),
+      undefined,
+      undefined,
+      sharedStyleInputsId(context(previewContainer))
+    );
+    return { ...compiled, css: `${compiled.css}\n/* stored-copy */` };
+  };
+
+  it("is REUSED when the context it is read under matches", () => {
+    const styles = resolvePageStyles(
+      doc(styled),
+      marked("nx-preview-viewport"),
+      context("nx-preview-viewport"),
+      blocks
+    );
+
+    expect(styles.css).toContain("stored-copy");
+  });
+
+  it("is REFUSED when read under a published context, which is the control", () => {
+    /*
+     * Without this the reuse above is satisfied by a resolver that trusts every
+     * artifact it is handed — which is the defect the context-free refusal
+     * exists to stop, reintroduced one layer up.
+     *
+     * The stamp is what discriminates: `sharedStyleInputsId` folds the preview
+     * container into its breakpoint contexts, so the preview artifact's stamp
+     * cannot match a published context's.
+     */
+    const styles = resolvePageStyles(
+      doc(styled),
+      marked("nx-preview-viewport"),
+      context(),
+      blocks
+    );
+
+    expect(styles.css).not.toContain("stored-copy");
+    // Recompiled rather than withheld: a context was available, so the right
+    // answer is a correct sheet rather than an empty one.
+    expect(styles.css).toContain("@media (max-width: 991px)");
   });
 });

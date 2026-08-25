@@ -9,9 +9,12 @@
  * admin window reports the small breakpoints live while a wide canvas box is
  * showing the large ones.
  *
- * Asserted through the panel rather than the helper, because the helper already
- * accepted the option while the panel could not supply it — a fix that reached
- * the lower level and stopped there.
+ * Asserted through the PANEL rather than through `matchedBreakpoints` directly,
+ * because the contract under test is the forwarding: the helper takes the
+ * preview option as a parameter and cannot know whether its caller supplies
+ * one, so a helper-level test passes on a panel that never passes it along.
+ * Only a test that renders the panel and reads the queries it actually
+ * subscribes to can tell those apart.
  *
  * @module preview-live-breakpoints.test
  */

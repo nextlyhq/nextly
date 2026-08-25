@@ -1040,14 +1040,27 @@ export function resolvePageStylesWithTrace(
     (styles.sharedInputsId !== sharedInputsId ||
       styles.sharedInputsId === UNIDENTIFIED_SHARED_INPUTS);
   /*
-   * A PREVIEW artifact, refused WITHOUT a context — the one staleness rule here
-   * that must not be gated on having one.
+   * A PREVIEW artifact on a CONTEXT-FREE read, which is the only place this
+   * question is still open.
    *
-   * Every other check above compares the artifact against an input the context
-   * supplies, so with no context there is nothing to compare and asking would
-   * be meaningless. This one is a property of the artifact ALONE: its viewport
-   * tiers are `@container` rules naming a box that only the previewing surface
-   * declares, so on a published page they match nothing.
+   * Gated the opposite way to every other rule here, and for the same reason
+   * they are gated at all. They compare the artifact against an input the
+   * context supplies, so they can only be asked WITH one. This one is a
+   * property of the artifact alone and can only be asked WITHOUT one — because
+   * when a context exists, `compiledAgainstOtherInputs` has already settled it:
+   * `sharedStyleInputsId` folds the preview container into its breakpoint
+   * contexts, so a preview artifact read under a published context has a
+   * different stamp and is refused there, and one read under the SAME preview
+   * context has a matching stamp and is correctly reused.
+   *
+   * Asking it unconditionally therefore did not add safety, it removed reuse:
+   * every preview render recompiled the whole document even when the stamp
+   * proved the inputs identical, which on a large editor document is the
+   * editor's own hot path.
+   *
+   * What remains is the case no stamp can reach. Its viewport tiers are
+   * `@container` rules naming a box that only the previewing surface declares,
+   * so on a published page they match nothing.
    *
    * That is why the reasoning above — that withholding a sheet is worse than
    * serving a stale one — inverts here. A stale sheet is a page styled with
@@ -1062,7 +1075,9 @@ export function resolvePageStylesWithTrace(
    * back later with `styles` and no `styleContext`.
    */
   const compiledForPreview =
-    styles !== undefined && styles.previewContainer !== undefined;
+    styles !== undefined &&
+    compileContext === undefined &&
+    styles.previewContainer !== undefined;
 
   /*
    * ONE answer to "may this stored sheet be served as it stands", used by both

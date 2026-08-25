@@ -392,6 +392,24 @@ const RESERVED_CONTAINER_NAMES: ReadonlySet<string> = new Set([
   "revert",
   "revert-layer",
   "default",
+  /*
+   * The container-query QUERY keywords, which the grammar excludes from a
+   * container name for a different reason than the CSS-wide keywords above.
+   *
+   * `@container <name>? <condition>` puts the name and the condition adjacent
+   * with nothing between them, so a name spelled `and` or `or` produces
+   * `@container and (max-width: 991px)` — not a container named `and`, but a
+   * malformed condition, which a browser drops entirely. `not` is worse than
+   * malformed: it PARSES, as the negation of the following condition, so the
+   * rule silently applies at every width the author meant to exclude.
+   *
+   * The consequence is the one this whole helper exists to prevent: the box
+   * establishes a perfectly valid named container while its responsive rules
+   * are dropped or evaluated inverted, with nothing on screen to say why.
+   */
+  "and",
+  "or",
+  "not",
 ]);
 
 /**
@@ -498,6 +516,16 @@ export const PREVIEW_VIEWPORT_CONTAINER = "nx-preview-viewport";
  * a string is the same in both. `Math.imul` and `>>> 0` keep every step inside
  * 32 bits, which plain `*` would not.
  */
+/**
+ * What every minted preview name starts with.
+ *
+ * Named because the length check above and the two constructions below must
+ * agree on it: a prefix counted as one length and written as another either
+ * sanitises a seed it did not need to, or lets an over-bound name reach
+ * `previewContainerName` and take the digest path for the wrong reason.
+ */
+const PREVIEW_SEED_PREFIX = "nx-preview-";
+
 function digest(seed: string): string {
   let a = 0x811c9dc5;
   let b = 0x01000193;
@@ -535,8 +563,24 @@ function digest(seed: string): string {
  * fallback was every long-seeded surface sharing one with THIRD-PARTY markup.
  */
 export function previewContainerFor(seed: string): string {
-  const safe = seed.replace(/[^A-Za-z0-9_-]/g, "-");
-  const literal = previewContainerName(`nx-preview-${safe}`);
+  /*
+   * The length is decided BEFORE any linear pass, the same way
+   * `previewContainerName` decides it before trimming.
+   *
+   * A seed that cannot fit under the bound once prefixed is going to be
+   * digested whatever it contains, so sanitising it first walks the whole
+   * string, allocates a full copy, builds a second oversized string in the
+   * template, and has it refused — then the digest walks the original anyway.
+   * Three passes and two allocations to reach a conclusion the length alone
+   * settles. Surfaces call this during render and again on hydration, so the
+   * work recurs rather than happening once.
+   */
+  const literal =
+    PREVIEW_SEED_PREFIX.length + seed.length > MAX_PREVIEW_CONTAINER_LENGTH
+      ? undefined
+      : previewContainerName(
+          `${PREVIEW_SEED_PREFIX}${seed.replace(/[^A-Za-z0-9_-]/g, "-")}`
+        );
   if (literal !== undefined) return literal;
   /*
    * Digested from the ORIGINAL seed rather than the reduced form, so two seeds
@@ -544,7 +588,7 @@ export function previewContainerFor(seed: string): string {
    * become `a-b` — still produce different names.
    */
   return (
-    previewContainerName(`nx-preview-${digest(seed)}`) ??
+    previewContainerName(`${PREVIEW_SEED_PREFIX}${digest(seed)}`) ??
     PREVIEW_VIEWPORT_CONTAINER
   );
 }
