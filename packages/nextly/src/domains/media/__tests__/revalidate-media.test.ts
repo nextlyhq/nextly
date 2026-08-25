@@ -4,9 +4,9 @@
  *
  * `MediaService.bulkDelete` fans out under `Promise.allSettled` and catches
  * every per-id failure, so it settles normally however badly it goes — driving
- * it can never exercise what the scope does when the work it wraps THROWS.
- * That branch decides whether a fan-out that dies part-way leaves already-
- * deleted rows serving from cache, so it is tested directly here.
+ * it can never exercise what the scope does when the work it wraps THROWS, nor
+ * what it does for a write arriving after it has already flushed. Both branches
+ * decide whether an invalidation is lost, so they are tested directly here.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -31,6 +31,11 @@ function captureFlushes(): { intents: { tags: string[] }[] } {
   return { intents: captured };
 }
 
+/** Every tag handed to the sink, across all intents, in order. */
+function allTags(intents: { tags: string[] }[]): string[] {
+  return intents.flatMap(intent => intent.tags);
+}
+
 afterEach(() => {
   // The container is global and survives this file — `clear()` would wipe what
   // a sibling file registered in the same worker. Restoring the production
@@ -40,7 +45,82 @@ afterEach(() => {
 });
 
 describe("withMediaRevalidationBatch", () => {
-  it("flushes ids collected before the wrapped work threw", async () => {
+  it("busts a row's own tag immediately, without waiting for the scope", async () => {
+    const { intents } = captureFlushes();
+
+    await withMediaRevalidationBatch(async () => {
+      await revalidateMedia(["a"]);
+
+      // Asserted INSIDE the scope, which is the whole claim. The row is gone
+      // the moment its transaction commits, and the delete path then runs a
+      // storage cleanup with retry backoffs; holding this until the fan-out
+      // settles leaves a deleted file rendering from cache for that whole
+      // window, and permanently if the storage call hangs.
+      expect(allTags(intents)).toContain("nextly:media:id:a");
+    });
+  });
+
+  it("defers the shared collection tag to exactly one flush", async () => {
+    const { intents } = captureFlushes();
+
+    await withMediaRevalidationBatch(async () => {
+      await revalidateMedia(["a"]);
+      await revalidateMedia(["b"]);
+      await revalidateMedia(["c"]);
+    });
+
+    const tags = allTags(intents);
+    // Each row's own tag is present...
+    for (const id of ["a", "b", "c"]) {
+      expect(tags).toContain(`nextly:media:id:${id}`);
+    }
+    // ...and the string every row shares was paid for once, not once per row.
+    // Unbatched this is three synchronous `revalidateTag("nextly:media")`
+    // calls for one operation.
+    expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
+  });
+
+  it("busts the shared tag only after every write in the scope has landed", async () => {
+    const { intents } = captureFlushes();
+
+    await withMediaRevalidationBatch(async () => {
+      await revalidateMedia(["first"]);
+      // Not yet: a list read cached between this point and the LAST write
+      // would still be stale, so an early bust would not cover it.
+      expect(allTags(intents)).not.toContain("nextly:media");
+      await revalidateMedia(["second"]);
+      expect(allTags(intents)).not.toContain("nextly:media");
+    });
+
+    expect(allTags(intents)).toContain("nextly:media");
+  });
+
+  it("flushes a write that arrives after the scope already closed", async () => {
+    const { intents } = captureFlushes();
+    let escaped: Promise<void> | undefined;
+
+    await withMediaRevalidationBatch(async () => {
+      // A handler that outlives the scope. `events/event-bus.ts` invokes an
+      // async handler fire-and-forget, and AsyncLocalStorage propagates this
+      // store into it regardless — so a write from there lands on a collector
+      // nobody will drain again unless the closed scope refuses to defer.
+      escaped = (async () => {
+        await new Promise(resolve => setTimeout(resolve, 5));
+        await revalidateMedia(["late"]);
+      })();
+      await revalidateMedia(["during"]);
+    });
+
+    await escaped;
+
+    const tags = allTags(intents);
+    expect(tags).toContain("nextly:media:id:late");
+    // The whole intent, not just the row tag: a closed scope defers nothing,
+    // so the late write pays its own shared tag rather than losing it.
+    expect(tags.filter(t => t === "nextly:media")).toHaveLength(2);
+  });
+
+  it("pays the shared tag for rows that committed before the work threw", async () => {
     const { intents } = captureFlushes();
 
     await expect(
@@ -50,13 +130,12 @@ describe("withMediaRevalidationBatch", () => {
       })
     ).rejects.toThrow("fan-out died");
 
-    // The row was already deleted when the throw happened. Losing its bust
-    // because a LATER item failed leaves a gone file rendering from cache.
-    expect(intents).toHaveLength(1);
-    expect(intents[0]?.tags).toContain("nextly:media:id:committed-1");
+    const tags = allTags(intents);
+    expect(tags).toContain("nextly:media:id:committed-1");
+    expect(tags).toContain("nextly:media");
   });
 
-  it("does not flush at all when nothing was collected", async () => {
+  it("does not flush at all when the scope wrote nothing", async () => {
     const { intents } = captureFlushes();
 
     await withMediaRevalidationBatch(async () => "nothing written");
@@ -66,53 +145,16 @@ describe("withMediaRevalidationBatch", () => {
     expect(intents).toHaveLength(0);
   });
 
-  it("collapses N calls inside one scope into a single intent", async () => {
-    const { intents } = captureFlushes();
-
-    await withMediaRevalidationBatch(async () => {
-      await revalidateMedia(["a"]);
-      await revalidateMedia(["b"]);
-      await revalidateMedia(["a"]);
-    });
-
-    expect(intents).toHaveLength(1);
-    const tags = intents[0]?.tags ?? [];
-    expect(tags).toContain("nextly:media:id:a");
-    expect(tags).toContain("nextly:media:id:b");
-    // The repeated id contributed nothing the second time, and the shared
-    // collection tag appears once however many files the batch held.
-    expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
-  });
-
-  it("lets an inner scope flush its own ids without the outer repeating them", async () => {
-    const { intents } = captureFlushes();
-
-    await withMediaRevalidationBatch(async () => {
-      await revalidateMedia(["outer"]);
-      await withMediaRevalidationBatch(async () => {
-        await revalidateMedia(["inner"]);
-      });
-    });
-
-    // Two flushes, inner first — and `inner` must not appear in the outer's,
-    // which is what distinguishes shadowing from a record-into-every-scope
-    // stack. Repeating it there is exactly the duplicate bust the scope exists
-    // to remove.
-    expect(intents).toHaveLength(2);
-    expect(intents[0]?.tags).toContain("nextly:media:id:inner");
-    expect(intents[1]?.tags).toContain("nextly:media:id:outer");
-    expect(intents[1]?.tags).not.toContain("nextly:media:id:inner");
-  });
-
-  it("flushes immediately when no scope is open", async () => {
+  it("flushes the whole intent when no scope is open", async () => {
     const { intents } = captureFlushes();
 
     await revalidateMedia(["loose-1"]);
     await revalidateMedia(["loose-2"]);
 
-    // The control on the batching tests above: without this, "one intent" could
-    // be reporting a sink that only ever receives one call.
+    // The control on the batching tests above: without this, "one shared tag"
+    // could be reporting a sink that never receives one at all.
     expect(intents).toHaveLength(2);
+    expect(allTags(intents).filter(t => t === "nextly:media")).toHaveLength(2);
   });
 
   it("does not fail the caller when the sink throws", async () => {
@@ -126,13 +168,24 @@ describe("withMediaRevalidationBatch", () => {
 
     await expect(
       withMediaRevalidationBatch(async () => {
-        await revalidateMedia(["written"]);
+        // The logger goes to the per-write call as well as the scope. Without
+        // it here the row's own flush swallows its failure unlogged, and the
+        // control below is satisfied entirely by the scope's shared-tag flush
+        // — so the per-write error path reads as covered while nothing
+        // exercises it. Both flushes are separate `try`/`catch` sites.
+        await revalidateMedia(["written"], logger);
         return "ok";
       }, logger)
     ).resolves.toBe("ok");
 
     // The control: the throwing sink was actually reached, so this is not
     // passing because nothing was flushed.
+    //
+    // Deliberately not a call COUNT. The row's own flush and the scope's
+    // shared-tag flush go through the same `flush()`, so there is one
+    // error-handling site and a count would only pin down how the tags happen
+    // to be partitioned — making this fire for changes that have nothing to do
+    // with whether a cache failure reaches the caller.
     expect(logger.error).toHaveBeenCalled();
   });
 });

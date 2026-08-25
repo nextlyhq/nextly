@@ -293,7 +293,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
   });
 });
 
-describe("a bulk fan-out flushes once, not once per file", () => {
+describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
   /** Upload `count` files and return their ids. */
   async function uploadFiles(
     handle: TestNextly,
@@ -335,13 +335,11 @@ describe("a bulk fan-out flushes once, not once per file", () => {
       expect(tags).toContain(`nextly:media:id:${id}`);
     }
 
-    // The claim. `bulkDelete` fans out over the single-item delete, which
-    // invalidates against its own commit — so unbatched this is 3 intents and
-    // 3 `revalidateTag("nextly:media")` calls for one operation.
-    const intents = flush.mock.calls.flatMap(
-      (call: unknown[]) => call[0] as unknown[]
-    );
-    expect(intents).toHaveLength(1);
+    // The claim, and it is about the SHARED tag rather than the flush count.
+    // Three rows need three distinct id tags busted however this is arranged;
+    // what a fan-out wastes is `nextly:media`, the one string every row emits,
+    // which unbatched becomes 3 synchronous `revalidateTag` calls for one
+    // operation. The id tags above stay prompt precisely so this one can wait.
     expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
   });
 
@@ -370,6 +368,36 @@ describe("a bulk fan-out flushes once, not once per file", () => {
       expect(tags).toContain(`nextly:media:id:${id}`);
     }
     expect(tags).not.toContain("nextly:media:id:media-does-not-exist");
+  });
+
+  it("busts a deleted row's tag BEFORE the physical cleanup, in bulk too", async () => {
+    // Ordering, under fan-out. The single-delete path already guards this, and
+    // batching is what could quietly take it away: holding every bust until
+    // `Promise.allSettled` settles puts it behind each item's storage cleanup,
+    // which is wrapped in `withRetry(maxAttempts: 3, baseDelayMs: 500)` twice.
+    // A slow adapter would then serve deleted files from cache for the length
+    // of the slowest item, and a hung one would do it permanently.
+    const { handle, flush } = await bootWithSpy();
+    const ids = await uploadFiles(handle, 2);
+
+    const storageDelete = vi.spyOn(getMediaStorage(), "delete");
+    flush.mockClear();
+    const result = await handle.nextly.media.bulkDelete({ ids });
+
+    // Three controls, because the comparison is vacuous without all of them:
+    // the deletes must have committed, the cache must have been told, and the
+    // cleanup must have actually run.
+    expect(result.successCount).toBe(2);
+    expect(flush).toHaveBeenCalled();
+    expect(storageDelete).toHaveBeenCalled();
+
+    const order = storageDelete.mock.invocationCallOrder;
+    const firstFlush = flush.mock.invocationCallOrder[0] as number;
+    const lastCleanup = order[order.length - 1] as number;
+
+    // Deferring every bust to the end of the fan-out inverts this: one flush
+    // after both cleanups rather than a row's own tag against its own commit.
+    expect(firstFlush).toBeLessThan(lastCleanup);
   });
 
   it("keeps flushing per write when no batch is open", async () => {
