@@ -153,6 +153,44 @@ describe("createDefaultFieldValues", () => {
       });
     });
 
+    it("seeds the absent value when a function defaultValue resolves to undefined", () => {
+      // `({ user }) => user?.id` is a documented relationship default, and it
+      // yields undefined whenever the context has no user. The declaration is
+      // resolved once and the RESULT is what every branch reads, so an
+      // unresolved default can never reach form state as the function itself.
+      const fields: FieldConfig[] = [
+        {
+          type: "relationship",
+          name: "author",
+          defaultValue: () => undefined,
+        } as never,
+        { type: "text", name: "slug", defaultValue: () => undefined } as never,
+        {
+          type: "number",
+          name: "score",
+          defaultValue: () => undefined,
+        } as never,
+        {
+          type: "geo-point",
+          name: "plugin",
+          defaultValue: () => undefined,
+        } as never,
+      ];
+
+      const result = createDefaultFieldValues(fields);
+      for (const [name, value] of Object.entries(result)) {
+        expect(typeof value, `${name} must not hold a function`).not.toBe(
+          "function"
+        );
+      }
+      expect(result).toEqual({
+        author: null,
+        slug: "",
+        score: null,
+        plugin: null,
+      });
+    });
+
     it("preserves declared defaultValue on custom plugin fields", () => {
       const fields: FieldConfig[] = [
         {
