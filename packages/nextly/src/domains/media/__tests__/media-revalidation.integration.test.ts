@@ -292,3 +292,100 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     );
   });
 });
+
+describe("a bulk fan-out flushes once, not once per file", () => {
+  /** Upload `count` files and return their ids. */
+  async function uploadFiles(
+    handle: TestNextly,
+    count: number
+  ): Promise<string[]> {
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const file = await handle.nextly.media.upload({
+        file: {
+          data: Buffer.from(`bulk-${i}`),
+          name: `bulk-${i}.pdf`,
+          mimetype: "application/pdf",
+          size: 1,
+        },
+      });
+      ids.push(file.id);
+    }
+    return ids;
+  }
+
+  it("busts every id in ONE intent through nextly.media.bulkDelete", async () => {
+    const { handle, flush } = await bootWithSpy();
+    const ids = await uploadFiles(handle, 3);
+
+    flush.mockClear();
+    const result = await handle.nextly.media.bulkDelete({ ids });
+
+    // The fixture control, and it carries weight here: `bulkDelete` reports
+    // per-id failures instead of throwing, so a run where every delete failed
+    // returns normally and flushes nothing. Without this the "one intent"
+    // assertion below is satisfied by a fan-out that deleted nothing at all.
+    expect(result.successCount).toBe(3);
+    expect(result.failedCount).toBe(0);
+
+    // Presence first: each file's own tag must still be busted. Batching that
+    // dropped ids would satisfy the count assertion perfectly.
+    const tags = flushedTags(flush);
+    for (const id of ids) {
+      expect(tags).toContain(`nextly:media:id:${id}`);
+    }
+
+    // The claim. `bulkDelete` fans out over the single-item delete, which
+    // invalidates against its own commit — so unbatched this is 3 intents and
+    // 3 `revalidateTag("nextly:media")` calls for one operation.
+    const intents = flush.mock.calls.flatMap(
+      (call: unknown[]) => call[0] as unknown[]
+    );
+    expect(intents).toHaveLength(1);
+    expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
+  });
+
+  it("still busts the ids that committed when one id in the batch fails", async () => {
+    const { handle, flush } = await bootWithSpy();
+    const ids = await uploadFiles(handle, 2);
+    // A third id that was never uploaded: its delete fails while the other two
+    // commit. Batching must not make a partial fan-out all-or-nothing — the two
+    // committed rows are gone from the database whatever the third one did.
+    //
+    // This does NOT reach the scope's `finally`: the fan-out catches per-id
+    // failures and returns them, so it settles normally. The throwing case is
+    // covered directly in `revalidate-media.test.ts`.
+    const withMissing = [...ids, "media-does-not-exist"];
+
+    flush.mockClear();
+    const result = await handle.nextly.media.bulkDelete({ ids: withMissing });
+
+    // Both controls: the batch really was partial. Equal counts would mean
+    // either nothing failed or nothing succeeded, and neither exercises this.
+    expect(result.successCount).toBe(2);
+    expect(result.failedCount).toBe(1);
+
+    const tags = flushedTags(flush);
+    for (const id of ids) {
+      expect(tags).toContain(`nextly:media:id:${id}`);
+    }
+    expect(tags).not.toContain("nextly:media:id:media-does-not-exist");
+  });
+
+  it("keeps flushing per write when no batch is open", async () => {
+    // The scope must not leak past the operation that opened it. Two separate
+    // single deletes are two separate events for the caller, and collapsing
+    // them would defer the first file's bust behind an unrelated later write.
+    const { handle, flush } = await bootWithSpy();
+    const ids = await uploadFiles(handle, 2);
+
+    flush.mockClear();
+    await handle.nextly.media.delete({ id: ids[0] as string });
+    await handle.nextly.media.delete({ id: ids[1] as string });
+
+    const intents = flush.mock.calls.flatMap(
+      (call: unknown[]) => call[0] as unknown[]
+    );
+    expect(intents).toHaveLength(2);
+  });
+});

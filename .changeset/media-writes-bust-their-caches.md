@@ -33,3 +33,6 @@ been rendered kept its copy until something unrelated happened to rebuild it.
 A media write now invalidates that file, using the same tagging a content change
 already uses. A page that renders an upload tags its read with
 \`nextlyTags("media", id)\` and is rebuilt when the file changes.
+
+Deleting or uploading many files at once announces them together, so clearing a
+folder of images tells the cache once rather than once per file.
