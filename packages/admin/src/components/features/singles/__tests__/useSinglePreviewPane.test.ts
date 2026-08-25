@@ -14,7 +14,7 @@
  * frozen satisfies the first, and a revision that moves for a count nothing
  * supplies satisfies the second.
  */
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { useSinglePreviewPane } from "../useSinglePreviewPane";
@@ -86,5 +86,73 @@ describe("the revision a Single's pane refreshes on", () => {
     );
 
     expect(result.current.revision).not.toBe(revisionAt(3));
+  });
+});
+
+describe("availability disappearing under an OPEN pane", () => {
+  function paneWith(isAvailable: boolean, inTranslationMode = false) {
+    return renderHook(
+      ({
+        available,
+        translating,
+      }: {
+        available: boolean;
+        translating: boolean;
+      }) =>
+        useSinglePreviewPane({
+          link: { ...link, isAvailable: available },
+          document,
+          savedCount: 0,
+          inTranslationMode: translating,
+        }),
+      {
+        initialProps: {
+          available: isAvailable,
+          translating: inTranslationMode,
+        },
+      }
+    );
+  }
+
+  it("does not spring back open when availability returns", () => {
+    /*
+     * Masking is not closing. `open && canOffer` hides the pane while leaving
+     * the state true, so ending translation mode — or the locale resolving —
+     * reopens it and mints a credential nobody asked for. Observing only the
+     * unavailable render cannot tell the two apart, which is why this rerenders
+     * BACK to an available state: that is the only moment they differ.
+     */
+    const { result, rerender } = paneWith(true);
+
+    act(() => {
+      (
+        result.current.toggle as { onTogglePreviewPane: () => void }
+      ).onTogglePreviewPane();
+    });
+    expect(result.current.open).toBe(true);
+
+    rerender({ available: false, translating: false });
+    expect(result.current.open).toBe(false);
+
+    // The moment that separates closed from masked.
+    rerender({ available: true, translating: false });
+    expect(result.current.open).toBe(false);
+  });
+
+  it("reopens on a deliberate toggle, so the state is not stuck shut", () => {
+    // The control: closing it was availability doing its job, not the pane
+    // losing the ability to open.
+    const { result, rerender } = paneWith(true);
+
+    rerender({ available: false, translating: false });
+    rerender({ available: true, translating: false });
+
+    act(() => {
+      (
+        result.current.toggle as { onTogglePreviewPane: () => void }
+      ).onTogglePreviewPane();
+    });
+
+    expect(result.current.open).toBe(true);
   });
 });

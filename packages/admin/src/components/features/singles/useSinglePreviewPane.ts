@@ -21,7 +21,7 @@
  * @module components/features/singles/useSinglePreviewPane
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { previewRevisionOf } from "@admin/components/features/entries/PreviewMode/previewRevision";
 import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
@@ -80,6 +80,19 @@ export function useSinglePreviewPane({
    * second answer to that question would drift from the first.
    */
   const canOffer = link.isAvailable && !inTranslationMode;
+
+  /*
+   * Availability disappearing CLOSES the pane rather than masking it.
+   *
+   * `open && canOffer` alone only hides it: the state stays true, so when
+   * translation mode ends or the locale resolves again the pane springs back
+   * open and mints a credential nobody asked for. An author who entered
+   * translation mode with the preview open did not ask to reopen it on the way
+   * out, and a credential is an audit row.
+   */
+  useEffect(() => {
+    if (!canOffer) setOpen(false);
+  }, [canOffer]);
 
   const onClose = useCallback(() => setOpen(false), []);
   const onToggle = useCallback(() => setOpen(o => !o), []);
