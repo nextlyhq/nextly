@@ -342,7 +342,11 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
           <Eye className="h-4 w-4" aria-hidden="true" />
           Preview — a simulation of this form. Nothing here submits anywhere.
         </div>
-        <div className="flex items-center gap-2">
+        {/* Wraps rather than holding one row. The card around this clips, and
+            at a ~360px panel the inset leaves less width than the device
+            toggle and Reset need side by side — so an unwrapped row loses its
+            right edge instead of overflowing visibly. */}
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <Tabs
             value={device}
             onValueChange={value => setDevice(value as "desktop" | "mobile")}

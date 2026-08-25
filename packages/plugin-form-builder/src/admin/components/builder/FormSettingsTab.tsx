@@ -413,7 +413,10 @@ export function FormSettingsTab({
             <Input
               id="settings-captcha-key"
               type="text"
-              className="w-72 font-mono"
+              // Full width below the breakpoint: 288px does not fit inside the
+              // section's 24px insets on a ~360px panel, and the card clips
+              // rather than scrolling.
+              className="w-full font-mono sm:w-72"
               value={settings.captchaSiteKey ?? ""}
               onChange={e =>
                 updateSettings({
