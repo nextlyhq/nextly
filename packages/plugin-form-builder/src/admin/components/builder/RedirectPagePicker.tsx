@@ -112,6 +112,25 @@ async function fetchChoices(
   }
 }
 
+/**
+ * Existing choices plus new ones, de-duplicated on the pair that identifies a
+ * document. Order is preserved so a list does not reshuffle under the author.
+ */
+function mergeChoices(
+  existing: readonly Choice[],
+  incoming: readonly Choice[]
+): Choice[] {
+  const seen = new Set(existing.map(c => `${c.collection}:${c.id}`));
+  const merged = [...existing];
+  for (const choice of incoming) {
+    const key = `${choice.collection}:${choice.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(choice);
+  }
+  return merged;
+}
+
 /** One option, keyed and valued by the pair the caller stores. */
 function renderChoice(choice: Choice) {
   return (
@@ -168,7 +187,11 @@ function useChoices(key: string, applied: string) {
 
       const rows = loaded.flatMap(result => result.rows);
       const first = wanted.every(collection => (pages[collection] ?? 1) === 1);
-      setChoices(current => (first ? rows : [...(current ?? []), ...rows]));
+      // Merged by identity rather than appended. A retry re-requests a page
+      // that already succeeded for its siblings, and appending would list
+      // those documents twice — duplicate options, and duplicate React keys.
+      // Keyed, a repeated page is a no-op whatever caused the repeat.
+      setChoices(current => mergeChoices(first ? [] : (current ?? []), rows));
     });
 
     return () => {

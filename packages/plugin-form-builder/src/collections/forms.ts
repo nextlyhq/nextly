@@ -223,9 +223,20 @@ async function assertRedirectTargetUsable(
   // already was.
   if (context.executor) return;
 
-  const target = (await nextly
-    .findByID({ collection: reference.collection, id: reference.id })
-    .catch(() => null)) as RedirectTargetDocument | null;
+  // "The page is not there" and "I could not ask" are different answers and
+  // only the first is the author's to fix. Collapsing them blocks a save on a
+  // transient adapter failure while telling the author to pick another page —
+  // a confident, wrong remedy. A failed read skips the check, as the
+  // submit-time resolver does.
+  let target: RedirectTargetDocument | null;
+  try {
+    target = (await nextly.findByID({
+      collection: reference.collection,
+      id: reference.id,
+    })) as RedirectTargetDocument | null;
+  } catch {
+    return;
+  }
 
   if (!target) {
     throw redirectRefusal(

@@ -139,6 +139,61 @@ interface FormSettingsTabProps {
   redirectCollections: string[] | null;
 }
 
+/**
+ * The "Redirect to a page" choice and its picker.
+ *
+ * Shown when the site configures a redirect collection, AND whenever this form
+ * ALREADY redirects to a page. Hiding a stored confirmation leaves the radio
+ * group holding a value none of its items carry, so nothing appears selected —
+ * while that stored value is still posted on the next save. The author would
+ * be looking at a form that says one thing and saves another.
+ *
+ * Configuration can be removed after a form was saved, and the builder-config
+ * request can fail; both arrive here as an empty list, which is why the stored
+ * value rather than the configuration decides whether this renders.
+ */
+function PageRedirectOption({
+  redirectCollections,
+  settings,
+  updateSettings,
+}: {
+  redirectCollections: string[] | null;
+  settings: { confirmationType?: string; redirectPage?: unknown };
+  updateSettings: (patch: { redirectPage?: unknown }) => void;
+}) {
+  const stored = settings.confirmationType === "relationship";
+  const configured =
+    redirectCollections !== null && redirectCollections.length > 0;
+  if (!stored && !configured) return null;
+
+  return (
+    <div className="flex items-start gap-3">
+      <RadioGroupItem
+        value="relationship"
+        id="settings-confirm-page"
+        className="mt-0.5"
+      />
+      <div className="w-full space-y-2">
+        <Label htmlFor="settings-confirm-page">Redirect to a page</Label>
+        {stored && !configured && (
+          <p className="text-[12px] text-muted-foreground">
+            This form redirects to a page, but no collection is configured as a
+            redirect target right now. The stored page is kept until you choose
+            a different confirmation.
+          </p>
+        )}
+        {stored && configured && (
+          <RedirectPagePicker
+            collections={redirectCollections}
+            value={settings.redirectPage}
+            onChange={next => updateSettings({ redirectPage: next })}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function FormSettingsTab({
   spamDefaults,
   redirectCollections,
@@ -246,27 +301,11 @@ export function FormSettingsTab({
                 )}
               </div>
             </div>
-            {redirectCollections !== null && redirectCollections.length > 0 && (
-              <div className="flex items-start gap-3">
-                <RadioGroupItem
-                  value="relationship"
-                  id="settings-confirm-page"
-                  className="mt-0.5"
-                />
-                <div className="w-full space-y-2">
-                  <Label htmlFor="settings-confirm-page">
-                    Redirect to a page
-                  </Label>
-                  {settings.confirmationType === "relationship" && (
-                    <RedirectPagePicker
-                      collections={redirectCollections}
-                      value={settings.redirectPage}
-                      onChange={next => updateSettings({ redirectPage: next })}
-                    />
-                  )}
-                </div>
-              </div>
-            )}
+            <PageRedirectOption
+              redirectCollections={redirectCollections}
+              settings={settings}
+              updateSettings={updateSettings}
+            />
           </RadioGroup>
         </div>
       </section>
