@@ -15,6 +15,7 @@
 
 import {
   Badge,
+  Card,
   Button,
   DropdownMenu,
   DropdownMenuContent,
@@ -256,7 +257,13 @@ function NotificationCard({
   }
 
   return (
-    <div className="border border-border bg-background">
+    // `Card` rather than its classes written out again: the primitive owns the
+    // surface colour, the radius, the foreground and the transition, and a
+    // second spelling of them drifts the moment the shared surface changes.
+    //
+    // `overflow-hidden` because an expanded editor paints a full-width tinted
+    // child; without clipping it squares off the corners the card just rounded.
+    <Card className="overflow-hidden p-0">
       {/* The dimming is the SUMMARY's, not the card's. A disabled rule reads as
           inactive at a glance, but an expanded editor inside a faded card fades
           every label, input and validation message the author is reading while
@@ -378,7 +385,7 @@ function NotificationCard({
           closed one mounted would keep a stale draft alive behind a summary
           that has moved on. */}
       {expanded && children}
-    </div>
+    </Card>
   );
 }
 

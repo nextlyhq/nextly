@@ -18,6 +18,7 @@ import {
   Button,
   Checkbox,
   Input,
+  Card,
   Label,
   RadioGroup,
   RadioGroupItem,
@@ -330,14 +331,22 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
   };
 
   return (
-    <div className="space-y-4">
+    // One surface for the whole tab. The chrome and the stage are the same
+    // panel seen twice, and leaving the chrome unbacked put it on the page's
+    // grey while the stage below it had a frame — reading as a control strip
+    // that had lost its box.
+    <Card className="overflow-hidden p-0">
       {/* Preview chrome: honest framing + device toggle + reset */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 border-b border-border px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Eye className="h-4 w-4" aria-hidden="true" />
           Preview — a simulation of this form. Nothing here submits anywhere.
         </div>
-        <div className="flex items-center gap-2">
+        {/* Wraps rather than holding one row. The card around this clips, and
+            at a ~360px panel the inset leaves less width than the device
+            toggle and Reset need side by side — so an unwrapped row loses its
+            right edge instead of overflowing visibly. */}
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <Tabs
             value={device}
             onValueChange={value => setDevice(value as "desktop" | "mobile")}
@@ -362,8 +371,10 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
         </div>
       </div>
 
-      {/* The simulated form */}
-      <div className="flex justify-center border border-border bg-muted/30 p-6">
+      {/* The simulated form, on a tinted stage so the sheet inside reads as a
+          page rather than as more of this panel. The stage draws no border of
+          its own — the card around it already does. */}
+      <div className="flex justify-center bg-muted/30 p-6">
         <div
           className={`w-full space-y-5 border border-border bg-background p-6 ${
             device === "mobile" ? "max-w-95" : "max-w-2xl"
@@ -473,7 +484,7 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
           )}
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
 

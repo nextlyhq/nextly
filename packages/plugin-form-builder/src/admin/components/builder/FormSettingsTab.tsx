@@ -13,6 +13,7 @@
  */
 
 import {
+  FormSection,
   Input,
   Label,
   RadioGroup,
@@ -48,7 +49,7 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 py-2">
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
       <div className="space-y-1">
         <Label
           htmlFor={htmlFor}
@@ -65,16 +66,6 @@ function SettingRow({
       <div className="shrink-0 flex items-center justify-end min-w-25">
         {children}
       </div>
-    </div>
-  );
-}
-
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="border-b border-border pb-3">
-      <h3 className="text-[16px] font-bold text-foreground tracking-tight">
-        {children}
-      </h3>
     </div>
   );
 }
@@ -286,164 +277,156 @@ export function FormSettingsTab({
     // The measure belongs to the page's shell, not to this tab.
     <div className="flex flex-col gap-10">
       {/* Submission */}
-      <section>
-        <SectionHeading>Submission</SectionHeading>
-        <div className="flex flex-col gap-1 pt-2">
-          <SettingRow
-            label="Submit button text"
-            description="Label on the form's primary action button"
-            htmlFor="settings-submit-text"
-          >
-            <Input
-              id="settings-submit-text"
-              type="text"
-              className="w-56"
-              value={settings.submitButtonText ?? ""}
-              onChange={e =>
-                updateSettings({ submitButtonText: e.target.value })
-              }
-            />
-          </SettingRow>
+      <FormSection label="Submission">
+        <SettingRow
+          label="Submit button text"
+          description="Label on the form's primary action button"
+          htmlFor="settings-submit-text"
+        >
+          <Input
+            id="settings-submit-text"
+            type="text"
+            className="w-56"
+            value={settings.submitButtonText ?? ""}
+            onChange={e => updateSettings({ submitButtonText: e.target.value })}
+          />
+        </SettingRow>
 
-          <SettingRow
-            label="Allow multiple submissions"
-            description="When off, the same visitor (by IP) can submit this form only once. Best-effort: IP-based, so shared networks count as one visitor."
-            htmlFor="settings-multiple"
-          >
-            <Switch
-              id="settings-multiple"
-              checked={settings.allowMultipleSubmissions ?? true}
-              onCheckedChange={checked =>
-                updateSettings({ allowMultipleSubmissions: checked })
-              }
-            />
-          </SettingRow>
-        </div>
-      </section>
+        <SettingRow
+          label="Allow multiple submissions"
+          description="When off, the same visitor (by IP) can submit this form only once. Best-effort: IP-based, so shared networks count as one visitor."
+          htmlFor="settings-multiple"
+        >
+          <Switch
+            id="settings-multiple"
+            checked={settings.allowMultipleSubmissions ?? true}
+            onCheckedChange={checked =>
+              updateSettings({ allowMultipleSubmissions: checked })
+            }
+          />
+        </SettingRow>
+      </FormSection>
 
       {/* After submission */}
-      <section>
-        <SectionHeading>After submission</SectionHeading>
-        <div className="flex flex-col gap-4 pt-4">
-          <RadioGroup
-            value={settings.confirmationType ?? "message"}
-            onValueChange={value =>
-              updateSettings({
-                confirmationType: value as
-                  | "message"
-                  | "redirect"
-                  | "relationship",
-              })
-            }
-            className="flex flex-col gap-3"
-          >
-            <div className="flex items-start gap-3">
-              <RadioGroupItem
-                value="message"
-                id="settings-confirm-message"
-                className="mt-0.5"
-              />
-              <div className="w-full space-y-2">
-                <Label htmlFor="settings-confirm-message">Show a message</Label>
-                {(settings.confirmationType ?? "message") === "message" && (
-                  <Textarea
-                    aria-label="Success message"
-                    value={settings.successMessage ?? ""}
-                    onChange={e =>
-                      updateSettings({ successMessage: e.target.value })
-                    }
-                    rows={3}
-                    placeholder="Thank you for your submission!"
-                  />
-                )}
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <RadioGroupItem
-                value="redirect"
-                id="settings-confirm-redirect"
-                className="mt-0.5"
-              />
-              <div className="w-full space-y-2">
-                <Label htmlFor="settings-confirm-redirect">
-                  Redirect to a URL
-                </Label>
-                {settings.confirmationType === "redirect" && (
-                  <Input
-                    aria-label="Redirect URL"
-                    type="url"
-                    value={settings.redirectUrl ?? ""}
-                    onChange={e =>
-                      updateSettings({
-                        redirectUrl: e.target.value || undefined,
-                      })
-                    }
-                    placeholder="https://example.com/thanks"
-                  />
-                )}
-              </div>
-            </div>
-            <PageRedirectOption
-              redirectCollections={redirectCollections}
-              configFailed={redirectConfigFailed}
-              settings={settings}
-              updateSettings={updateSettings}
+      <FormSection label="After submission">
+        <RadioGroup
+          value={settings.confirmationType ?? "message"}
+          onValueChange={value =>
+            updateSettings({
+              confirmationType: value as
+                | "message"
+                | "redirect"
+                | "relationship",
+            })
+          }
+          className="flex flex-col gap-3"
+        >
+          <div className="flex items-start gap-3">
+            <RadioGroupItem
+              value="message"
+              id="settings-confirm-message"
+              className="mt-0.5"
             />
-          </RadioGroup>
-        </div>
-      </section>
+            <div className="w-full space-y-2">
+              <Label htmlFor="settings-confirm-message">Show a message</Label>
+              {(settings.confirmationType ?? "message") === "message" && (
+                <Textarea
+                  aria-label="Success message"
+                  value={settings.successMessage ?? ""}
+                  onChange={e =>
+                    updateSettings({ successMessage: e.target.value })
+                  }
+                  rows={3}
+                  placeholder="Thank you for your submission!"
+                />
+              )}
+            </div>
+          </div>
+          <div className="flex items-start gap-3">
+            <RadioGroupItem
+              value="redirect"
+              id="settings-confirm-redirect"
+              className="mt-0.5"
+            />
+            <div className="w-full space-y-2">
+              <Label htmlFor="settings-confirm-redirect">
+                Redirect to a URL
+              </Label>
+              {settings.confirmationType === "redirect" && (
+                <Input
+                  aria-label="Redirect URL"
+                  type="url"
+                  value={settings.redirectUrl ?? ""}
+                  onChange={e =>
+                    updateSettings({
+                      redirectUrl: e.target.value || undefined,
+                    })
+                  }
+                  placeholder="https://example.com/thanks"
+                />
+              )}
+            </div>
+          </div>
+          <PageRedirectOption
+            redirectCollections={redirectCollections}
+            configFailed={redirectConfigFailed}
+            settings={settings}
+            updateSettings={updateSettings}
+          />
+        </RadioGroup>
+      </FormSection>
 
       {/* Spam protection */}
-      <section>
-        <SectionHeading>Spam protection</SectionHeading>
-        <div className="flex flex-col gap-1 pt-2">
+      <FormSection label="Spam protection">
+        <SettingRow
+          label="Honeypot"
+          description="Invisible trap field for bots. Inherits the plugin default unless overridden here."
+          htmlFor="settings-honeypot"
+        >
+          <InheritToggle
+            id="settings-honeypot"
+            value={settings.honeypotEnabled}
+            inherited={spamDefaults?.honeypot}
+            onChange={honeypotEnabled => updateSettings({ honeypotEnabled })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="reCAPTCHA"
+          description="Challenge-based bot check. Inherits the plugin default unless overridden here."
+          htmlFor="settings-captcha"
+        >
+          <InheritToggle
+            id="settings-captcha"
+            value={settings.captchaEnabled}
+            inherited={spamDefaults?.recaptchaEnabled}
+            onChange={captchaEnabled => updateSettings({ captchaEnabled })}
+          />
+        </SettingRow>
+
+        {settings.captchaEnabled === true && (
           <SettingRow
-            label="Honeypot"
-            description="Invisible trap field for bots. Inherits the plugin default unless overridden here."
-            htmlFor="settings-honeypot"
+            label="reCAPTCHA site key"
+            description="The client-facing site key for this form"
+            htmlFor="settings-captcha-key"
           >
-            <InheritToggle
-              id="settings-honeypot"
-              value={settings.honeypotEnabled}
-              inherited={spamDefaults?.honeypot}
-              onChange={honeypotEnabled => updateSettings({ honeypotEnabled })}
+            <Input
+              id="settings-captcha-key"
+              type="text"
+              // Full width below the breakpoint: 288px does not fit inside the
+              // section's 24px insets on a ~360px panel, and the card clips
+              // rather than scrolling.
+              className="w-full font-mono sm:w-72"
+              value={settings.captchaSiteKey ?? ""}
+              onChange={e =>
+                updateSettings({
+                  captchaSiteKey: e.target.value || undefined,
+                })
+              }
             />
           </SettingRow>
-
-          <SettingRow
-            label="reCAPTCHA"
-            description="Challenge-based bot check. Inherits the plugin default unless overridden here."
-            htmlFor="settings-captcha"
-          >
-            <InheritToggle
-              id="settings-captcha"
-              value={settings.captchaEnabled}
-              inherited={spamDefaults?.recaptchaEnabled}
-              onChange={captchaEnabled => updateSettings({ captchaEnabled })}
-            />
-          </SettingRow>
-
-          {settings.captchaEnabled === true && (
-            <SettingRow
-              label="reCAPTCHA site key"
-              description="The client-facing site key for this form"
-              htmlFor="settings-captcha-key"
-            >
-              <Input
-                id="settings-captcha-key"
-                type="text"
-                className="w-72 font-mono"
-                value={settings.captchaSiteKey ?? ""}
-                onChange={e =>
-                  updateSettings({
-                    captchaSiteKey: e.target.value || undefined,
-                  })
-                }
-              />
-            </SettingRow>
-          )}
-        </div>
-      </section>
+        )}
+      </FormSection>
     </div>
   );
 }
