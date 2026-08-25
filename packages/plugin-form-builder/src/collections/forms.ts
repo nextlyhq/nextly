@@ -459,10 +459,22 @@ export async function assertRedirectTargetUsable(
   const found = await readRedirectTarget(nextly, reference);
   if (found.status === "unreadable") return;
   if (found.status === "missing") {
-    // Only the write that NAMES a page answers for that page still existing.
-    // A rename inherits whatever is stored, and refusing it would block an
-    // edit for a setting it never touched.
-    if (!chosen) return;
+    // A write that neither NAMES the page nor makes the form able to send
+    // anyone there does not answer for it: a rename inherits whatever is
+    // stored, and refusing it would block an edit for a setting it never
+    // touched.
+    //
+    // Publishing is not that write. It is the moment the pairing starts
+    // reaching visitors, and a deleted target is a stricter case than the
+    // unpublished one refused below — every submission resolves it to no
+    // redirect at all. Returning here on `!chosen` alone let the worse case
+    // through while the milder one was refused.
+    if (
+      !chosen &&
+      !publishesForm(context.data as Record<string, unknown> | undefined)
+    ) {
+      return;
+    }
     throw redirectRefusal(
       `That page no longer exists in "${reference.collection}". Pick another.`,
       field

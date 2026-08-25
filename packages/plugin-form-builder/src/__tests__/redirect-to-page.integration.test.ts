@@ -977,6 +977,29 @@ describe("a target collection with the publish lifecycle", () => {
     expect(saved).toMatchObject({ item: { id: expect.any(String) } });
   });
 
+  it("refuses publishing a form whose stored target was deleted", async () => {
+    // Stricter than the unpublished case refused above: every submission
+    // resolves a deleted target to no redirect at all. Publishing is the
+    // moment that pairing starts reaching visitors, so it is the write that
+    // answers for it even though it names no page.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("draft", target),
+    })) as { item: { id: string } };
+
+    await current!.nextly.delete({ collection: "pages", id: target });
+
+    await expectRedirectRefusal(
+      current!.nextly.update({
+        collection: "forms",
+        id: created.item.id,
+        data: { status: "published" },
+      })
+    );
+  });
+
   it("lets a rename through after the stored target is deleted", async () => {
     // A write that does not name a page does not answer for that page still
     // existing. Refusing here would make a deleted target block every future
