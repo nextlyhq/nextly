@@ -205,26 +205,67 @@ try {
   // `margin` and `margin-inline` only. `margin-block` is the vertical half,
   // which the editors legitimately use to reach the panel's top and bottom.
   const shipped = fs.readFileSync(outputFile, "utf-8");
-  const NEGATIVE_8 = String.raw`calc\(var\(--spacing\)\s*\*\s*-8\)`;
-  const offenders = [
-    ["margin", new RegExp(String.raw`[;{]\s*margin:\s*${NEGATIVE_8}`)],
-    ["margin-inline", new RegExp(String.raw`[;{]\s*margin-inline:\s*${NEGATIVE_8}`)],
-  ].filter(([, re]) => re.test(shipped));
+
+  /**
+   * One declaration's value split into top-level components, so a `calc(...)`
+   * counts as one term however many spaces are inside it.
+   */
+  const components = value => {
+    const parts = [];
+    let depth = 0;
+    let current = "";
+    for (const ch of value) {
+      if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+      if (depth === 0 && /\s/.test(ch)) {
+        if (current) parts.push(current);
+        current = "";
+      } else current += ch;
+    }
+    if (current) parts.push(current);
+    return parts;
+  };
+
+  const NEGATIVE_8 = /^calc\(var\(--spacing\)\s*\*\s*-8\)$/;
+
+  /**
+   * The components of a `margin` shorthand that set the HORIZONTAL sides.
+   *
+   * One value sets all four; two and three put the horizontal pair second;
+   * four are clockwise from the top, so right is second and left fourth. A
+   * check that only read the first component sees `margin: 0 <negative>` as
+   * harmless while both sides move.
+   */
+  const horizontalOfMargin = parts => {
+    if (parts.length === 1) return parts;
+    if (parts.length === 4) return [parts[1], parts[3]];
+    return [parts[1]];
+  };
+
+  const offenders = [];
+  for (const [, prop, value] of shipped.matchAll(
+    /[;{]\s*(margin|margin-inline)\s*:\s*([^;}]+)/g
+  )) {
+    const parts = components(value.trim());
+    // `margin-inline` is horizontal by definition: one value sets both sides,
+    // two set start and end.
+    const horizontal =
+      prop === "margin-inline" ? parts : horizontalOfMargin(parts);
+    if (horizontal.some(part => NEGATIVE_8.test(part))) {
+      offenders.push(`${prop}: ${value.trim()}`);
+    }
+  }
 
   if (offenders.length) {
-    console.error(
-      "\n❌ The stylesheet cancels a page's horizontal inset:\n"
-    );
-    for (const [prop] of offenders) {
-      console.error(`  ${prop}: calc(var(--spacing) * -8)`);
-    }
+    console.error("\n❌ The stylesheet cancels a page's horizontal inset:\n");
+    for (const decl of [...new Set(offenders)]) console.error("  " + decl);
     console.error(
       "\nA measured page has no horizontal padding to cancel — it spends the\n" +
         "inset as grid columns — so content carrying this lands outside its own\n" +
-        "column. It reaches the sheet from a class, an `@apply` alias, or a\n" +
-        "safelist; the declaration is the same either way. Cancel only the\n" +
-        "vertical axis, and remove any sentence that spells the class out —\n" +
-        "Tailwind emits the rule from a comment exactly as it does from code.\n"
+        "column. It reaches the sheet from a class, an `@apply` alias, a\n" +
+        "safelist or a hand-written shorthand; the declaration is the same\n" +
+        "either way, which is why this reads the value rather than the name.\n" +
+        "Cancel only the vertical axis.\n"
     );
     process.exit(1);
   }
