@@ -519,12 +519,29 @@ export const PREVIEW_VIEWPORT_CONTAINER = "nx-preview-viewport";
 /**
  * What every minted preview name starts with.
  *
- * Named because the length check above and the two constructions below must
- * agree on it: a prefix counted as one length and written as another either
- * sanitises a seed it did not need to, or lets an over-bound name reach
+ * Named because the length check and the two constructions below must agree on
+ * it: a prefix counted as one length and written as another either sanitises a
+ * seed it did not need to, or lets an over-bound name reach
  * `previewContainerName` and take the digest path for the wrong reason.
  */
 const PREVIEW_SEED_PREFIX = "nx-preview-";
+
+/**
+ * Which of the two constructions produced the rest of the name.
+ *
+ * The mark is what makes the literal and digested namespaces DISJOINT, and
+ * without it they share one space and collide across paths: a surface seeded
+ * `"a/b"` digests to some base-36 string, and a second surface seeded with that
+ * very string is identifier-safe, carries literally, and lands on the same
+ * name. Marking only one side does not close it either — a literal seed can
+ * begin with whatever single mark the digest uses, so the ambiguity just moves.
+ *
+ * Marking BOTH at a FIXED position does close it, by construction rather than
+ * by argument: the character at that offset is `s` for one path and `d` for the
+ * other, whatever the seed contains, so no pair of inputs can meet.
+ */
+const LITERAL_MARK = "s-";
+const DIGEST_MARK = "d-";
 
 function digest(seed: string): string {
   let a = 0x811c9dc5;
@@ -555,7 +572,7 @@ function digest(seed: string): string {
 function losslessName(seed: string): string | undefined {
   const safe = seed.replace(/[^A-Za-z0-9_-]/g, "-");
   if (safe !== seed) return undefined;
-  return previewContainerName(`${PREVIEW_SEED_PREFIX}${safe}`);
+  return previewContainerName(`${PREVIEW_SEED_PREFIX}${LITERAL_MARK}${safe}`);
 }
 
 /**
@@ -600,7 +617,8 @@ export function previewContainerFor(seed: string): string {
    * work recurs rather than happening once.
    */
   const literal =
-    PREVIEW_SEED_PREFIX.length + seed.length > MAX_PREVIEW_CONTAINER_LENGTH
+    PREVIEW_SEED_PREFIX.length + LITERAL_MARK.length + seed.length >
+    MAX_PREVIEW_CONTAINER_LENGTH
       ? undefined
       : losslessName(seed);
   if (literal !== undefined) return literal;
@@ -610,8 +628,9 @@ export function previewContainerFor(seed: string): string {
    * become `a-b` — still produce different names.
    */
   return (
-    previewContainerName(`${PREVIEW_SEED_PREFIX}${digest(seed)}`) ??
-    PREVIEW_VIEWPORT_CONTAINER
+    previewContainerName(
+      `${PREVIEW_SEED_PREFIX}${DIGEST_MARK}${digest(seed)}`
+    ) ?? PREVIEW_VIEWPORT_CONTAINER
   );
 }
 
