@@ -3243,11 +3243,18 @@ export function applyOps(
   ops: readonly BuilderOp[],
   limits: DocumentLimits = DEFAULT_LIMITS
 ): AppliedOps {
-  assertUsableLimits(limits);
-  // No branch for an EMPTY group: the fold runs no times, so the endpoints are
-  // the same object and the comparison below already answers with the document
-  // unchanged and nothing to record. A branch saying that again would be a
-  // second statement of it, waiting to disagree.
+  // The LIMITS are `applyOp`'s to judge, and it judges them on every op it
+  // applies. Reading them here as well would observe a caller's accessor or
+  // proxy twice for a single edit, and make the one-op path behave unlike the
+  // single call it is supposed to be.
+  //
+  // A group with no ops therefore judges no limits, because it judges no edit:
+  // nothing is measured against a cap that nothing is applied to.
+  //
+  // No branch for that empty group either. The fold runs no times, so the
+  // endpoints are the same object and the comparison below already answers with
+  // the document unchanged and nothing to record. A branch saying that again
+  // would be a second statement of it, waiting to disagree.
   //
   // A group of one IS the single call. `applyOp` has already refused an op that
   // changes nothing, so the endpoint comparison below would walk two documents
@@ -3287,10 +3294,10 @@ export function applyOps(
   // — a value 510 levels deep compares equal field-rooted and different
   // document-rooted.
   //
-  // Answering "different" there records the entry, which is what happened for
-  // every such group before this check existed. So the check is an improvement
-  // that does not reach the deepest values rather than a judgement that gets
-  // them wrong, and the direction it fails in is the older behaviour.
+  // Past that bound the comparison answers "different" and the group is
+  // recorded. That is the safe direction: recording an entry that undoes to
+  // nothing visible costs an author one wasted press, while dropping one the
+  // comparison could not read costs them an edit they cannot take back.
   if (sameStoredValue(document, working)) return { document, inverses: [] };
   return { document: working, inverses };
 }

@@ -101,30 +101,36 @@ describe("an empty group", () => {
     expect(result.current.undoDepth).toBe(0);
   });
 
-  it("still answers through the op layer, so limits are judged the same", () => {
+  it("judges no limit, because it judges no edit", () => {
     /*
-     * A short-cut here would answer before the limits were checked, and the
-     * same call would then throw through `applyOps` and succeed through
-     * `applyAll` — one question with two answers. The empty case goes through
-     * the same path as any other, so an unusable limit is refused either way.
+     * The limits belong to the op that is applied, and an empty group applies
+     * none — so nothing is measured against a cap that nothing is judged by.
+     * `maxBytes: 0` is unusable rather than merely small (every cap is a `>`
+     * comparison, so a limit below 1 decides nothing), and it still does not
+     * turn "no edit" into a refusal.
      *
-     * `maxBytes: 0` is unusable rather than merely small: every cap is a `>`
-     * comparison, so a limit below 1 cannot decide anything.
+     * The same limits DO refuse a real edit, which is the control: without it
+     * this would pass just as well on limits that were never consulted at all.
      */
+    const limits = { maxDepth: 10, maxNodes: 10, maxBytes: 0 };
     const { result } = renderHook(() =>
-      useEditorState({
-        initialDocument: doc([node("a")]),
-        limits: { maxDepth: 10, maxNodes: 10, maxBytes: 0 },
-      })
+      useEditorState({ initialDocument: doc([node("a")]), limits })
     );
 
-    let returned: BlockDocument | null = null;
+    let empty: BlockDocument | null = null;
     act(() => {
-      returned = result.current.applyAll([]);
+      empty = result.current.applyAll([]);
     });
+    expect(empty).not.toBeNull();
+    expect(result.current.undoDepth).toBe(0);
 
-    expect(returned).toBeNull();
-    // And nothing was recorded on the way to refusing.
+    let real: BlockDocument | null = null;
+    act(() => {
+      real = result.current.applyAll([
+        { kind: "insert", node: node("b"), at: { index: 1 } },
+      ]);
+    });
+    expect(real).toBeNull();
     expect(result.current.undoDepth).toBe(0);
   });
 });
