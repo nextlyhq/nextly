@@ -55,25 +55,25 @@ describe("wouldStrandVisitors", () => {
   const ownStatusField = { id: "p1", status: "draft" };
 
   it("is true only for a published form pointing at an unpublished page", () => {
-    expect(wouldStrandVisitors({ status: "published" }, undefined, draft)).toBe(
-      true
-    );
+    expect(
+      wouldStrandVisitors({ status: "published" }, undefined, draft, false)
+    ).toBe(true);
   });
 
   it("allows a draft form to point at a draft page", () => {
     // They go live together, which is why the rule is conditional rather than
     // an outright ban on draft targets.
-    expect(wouldStrandVisitors({ status: "draft" }, undefined, draft)).toBe(
-      false
-    );
+    expect(
+      wouldStrandVisitors({ status: "draft" }, undefined, draft, false)
+    ).toBe(false);
   });
 
   it("allows a published form to point at a published page", () => {
     // The control: without it, everything above passes just as well against a
     // rule that refuses every published form.
-    expect(wouldStrandVisitors({ status: "published" }, undefined, live)).toBe(
-      false
-    );
+    expect(
+      wouldStrandVisitors({ status: "published" }, undefined, live, false)
+    ).toBe(false);
   });
 
   it("allows a collection with no publish lifecycle", () => {
@@ -81,7 +81,12 @@ describe("wouldStrandVisitors", () => {
     // absence as "draft" would refuse every redirect on every site that never
     // turned drafts on.
     expect(
-      wouldStrandVisitors({ status: "published" }, undefined, noLifecycle)
+      wouldStrandVisitors(
+        { status: "published" },
+        undefined,
+        noLifecycle,
+        false
+      )
     ).toBe(false);
   });
 
@@ -89,7 +94,12 @@ describe("wouldStrandVisitors", () => {
     // Not a lifecycle, so not a draft. Refusing here would block a save for a
     // page that is perfectly reachable, on nothing but a field name.
     expect(
-      wouldStrandVisitors({ status: "published" }, undefined, ownStatusField)
+      wouldStrandVisitors(
+        { status: "published" },
+        undefined,
+        ownStatusField,
+        false
+      )
     ).toBe(false);
   });
 
@@ -97,7 +107,12 @@ describe("wouldStrandVisitors", () => {
     // The write carries `status` and nothing else; the target comes from the
     // stored row.
     expect(
-      wouldStrandVisitors({ status: "published" }, { status: "draft" }, draft)
+      wouldStrandVisitors(
+        { status: "published" },
+        { status: "draft" },
+        draft,
+        false
+      )
     ).toBe(true);
   });
 
@@ -105,7 +120,7 @@ describe("wouldStrandVisitors", () => {
     // The mirror case: the write carries settings and no status, so the
     // published state can only come from the stored row.
     expect(
-      wouldStrandVisitors({ name: "x" }, { status: "published" }, draft)
+      wouldStrandVisitors({ name: "x" }, { status: "published" }, draft, false)
     ).toBe(true);
   });
 });
@@ -143,7 +158,8 @@ describe("assertRedirectTargetUsable", () => {
           context: {},
           data: picks("p1"),
         } as never,
-        patterns
+        patterns,
+        { pages: false }
       )
     ).resolves.toBeUndefined();
   });
@@ -164,7 +180,8 @@ describe("assertRedirectTargetUsable", () => {
             throw new Error("read attempted inside a transaction");
           }
         ),
-        patterns
+        patterns,
+        { pages: false }
       )
     ).resolves.toBeUndefined();
   });
@@ -177,7 +194,8 @@ describe("assertRedirectTargetUsable", () => {
         context({ data: picks("p1") }, () => {
           throw Object.assign(new Error("db down"), { code: "ECONNRESET" });
         }),
-        patterns
+        patterns,
+        { pages: false }
       )
     ).resolves.toBeUndefined();
   });
@@ -188,7 +206,8 @@ describe("assertRedirectTargetUsable", () => {
         context({ data: picks("p1") }, () => {
           throw Object.assign(new Error("nope"), { code: "NOT_FOUND" });
         }),
-        patterns
+        patterns,
+        { pages: false }
       )
     ).rejects.toMatchObject({
       publicData: { errors: [{ path: "settings.redirectPage" }] },
@@ -212,7 +231,8 @@ describe("assertRedirectTargetUsable", () => {
             throw Object.assign(new Error("nope"), { code: "NOT_FOUND" });
           }
         ),
-        patterns
+        patterns,
+        { pages: false }
       )
     ).resolves.toBeUndefined();
   });
@@ -236,7 +256,8 @@ describe("assertRedirectTargetUsable", () => {
             firstPublishedAt: null,
           })
         ),
-        patterns
+        patterns,
+        { pages: false }
       )
     ).rejects.toMatchObject({
       publicData: { errors: [{ path: "settings.redirectPage" }] },
@@ -264,7 +285,8 @@ describe("assertRedirectTargetUsable", () => {
             firstPublishedAt: "2026-08-25T00:00:00.000Z",
           })
         ),
-        { pages: () => undefined }
+        { pages: () => undefined },
+        { pages: false }
       )
     ).resolves.toBeUndefined();
   });
@@ -276,7 +298,8 @@ describe("assertRedirectTargetUsable", () => {
           id: "p1",
           status: "published",
         })),
-        { pages: () => undefined }
+        { pages: () => undefined },
+        { pages: false }
       )
     ).rejects.toMatchObject({
       publicData: { errors: [{ path: "settings.redirectPage" }] },

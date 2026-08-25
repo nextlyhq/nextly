@@ -260,17 +260,26 @@ describe("documentReachability", () => {
     );
   });
 
-  it("reads a never-published document as unreachable, localized or not", () => {
-    // The one judgement that holds whatever the collection's `localized`
-    // setting is: nothing has ever been public in any language.
-    for (const localized of [true, false, undefined]) {
-      expect(
-        documentReachability(managed({ status: "draft" }), localized)
-      ).toBe("unreachable");
-    }
+  it("reads a never-published document as unreachable on a plain collection", () => {
+    expect(documentReachability(managed({ status: "draft" }), false)).toBe(
+      "unreachable"
+    );
   });
 
-  it("reads a previously-published draft as unreachable only when the collection is not localized", () => {
+  it("cannot decide a never-published-LOOKING document on a localized collection", () => {
+    // An absent `firstPublishedAt` is not proof of never having been public: a
+    // row published before that column existed carries none either, and on a
+    // localized collection its main row also reads `draft` while a translation
+    // is live. Two different documents, one appearance.
+    expect(documentReachability(managed({ status: "draft" }), true)).toBe(
+      "unknown"
+    );
+    expect(documentReachability(managed({ status: "draft" }), undefined)).toBe(
+      "unknown"
+    );
+  });
+
+  it("reads an unpublished document as unreachable when the collection is not localized", () => {
     const unpublished = managed({
       status: "draft",
       firstPublishedAt: "2026-08-25T00:00:00.000Z",

@@ -336,15 +336,12 @@ function assertRedirectTargetNamed(
 export function wouldStrandVisitors(
   data: Record<string, unknown> | undefined,
   originalData: Record<string, unknown> | undefined,
-  target: RedirectTargetDocument
+  target: RedirectTargetDocument,
+  targetCollectionIsLocalized: boolean | undefined
 ): boolean {
   return (
     formAcceptsSubmissions(data, originalData) &&
-    // `undefined`: a hook cannot read a collection's `localized` setting.
-    // `req` carries headers, query and the Direct API and nothing else, and no
-    // read reaches a locale companion's status — so the one case this refuses
-    // is the one that is certain whatever the setting is.
-    documentReachability(target, undefined) === "unreachable"
+    documentReachability(target, targetCollectionIsLocalized) === "unreachable"
   );
 }
 
@@ -435,7 +432,8 @@ function assertPatternBuildsUrl(
 
 export async function assertRedirectTargetUsable(
   context: HookContext,
-  patterns: RedirectRelationships
+  patterns: RedirectRelationships,
+  localization: Record<string, boolean>
 ) {
   const write = redirectReferenceForWrite(context, patterns);
   if (!write) return;
@@ -486,7 +484,8 @@ export async function assertRedirectTargetUsable(
     wouldStrandVisitors(
       context.data as Record<string, unknown> | undefined,
       context.originalData as Record<string, unknown> | undefined,
-      found.document
+      found.document,
+      localization[reference.collection]
     )
   ) {
     throw redirectRefusal(
@@ -914,7 +913,8 @@ export function formsCollection(
           async (context: HookContext) => {
             await assertRedirectTargetUsable(
               context,
-              pluginConfig.redirectRelationships
+              pluginConfig.redirectRelationships,
+              pluginConfig.redirectTargetLocalization
             );
             return context.data;
           },

@@ -793,18 +793,16 @@ describe("a target collection with the publish lifecycle", () => {
     expect(switched).toMatchObject({ item: { id: created.item.id } });
   });
 
-  it("keeps redirecting to a target that is still reachable", async () => {
-    // The submit path re-decides reachability rather than trusting the save,
-    // because nothing runs a forms hook when the TARGET changes. What it must
-    // not do is drop a destination that still works, which is what this pins.
+  it("sends nobody to a page that was unpublished after the form was saved", async () => {
+    // Nothing runs a forms hook when the TARGET changes, so the save-time rule
+    // never sees this. Without a submit-time check the visitor is redirected to
+    // a page the public route 404s — the outcome that rule exists to prevent,
+    // reached by a path it cannot watch. The submission itself still succeeds:
+    // the destination is what degrades.
     //
-    // Its refusing branch is deliberately not exercised here: the only input
-    // that reaches it is a target which has never been published, and a form
-    // cannot be published against one — the save rule refuses that first. A
-    // page unpublished AFTER the form went live is `"unknown"` rather than
-    // `"unreachable"`, because a localized collection can be serving a
-    // translation this read cannot see. The branch itself is covered by
-    // `documentReachability`'s unit tests in `utils/redirect-target.test.ts`.
+    // The collection here is not localized, which the plugin resolves at init,
+    // so the main row's status does answer for the document. On a localized
+    // one this would read `"unknown"` and the redirect would stand.
     const { plugin, config } = formBuilder({
       redirectRelationships: { pages: "/{slug}" },
     });
@@ -834,10 +832,6 @@ describe("a target collection with the publish lifecycle", () => {
     );
     expect(before.redirect).toBe("/live-page");
 
-    // Unpublishing the target does NOT drop the redirect, and that is the
-    // decision rather than an oversight: the main row reads `draft` for a
-    // localized page whose translation is public, so dropping here would
-    // strand working destinations on every multilingual site.
     await current.nextly.update({
       collection: "pages",
       id: target,
@@ -849,7 +843,8 @@ describe("a target collection with the publish lifecycle", () => {
       { pluginContext, pluginConfig: config }
     );
     expect(after.success).toBe(true);
-    expect(after.redirect).toBe("/live-page");
+    expect(after.submission).toBeDefined();
+    expect(after.redirect).toBeUndefined();
   });
 
   it("lets one save both publish the form and turn its page redirect off", async () => {
@@ -1021,6 +1016,68 @@ describe("a target collection with the publish lifecycle", () => {
       data: { name: "Renamed" },
     });
     expect(renamed).toMatchObject({ item: { id: created.item.id } });
+  });
+});
+
+describe("a target collection that publishes per locale", () => {
+  it("accepts a published form pointing at a translation-only publication", async () => {
+    // The main row stays `draft` when only a non-default locale goes public,
+    // and no read available here can see the companion's status. Judging the
+    // row would refuse a form pointing at a page visitors can reach in
+    // Spanish, so the plugin resolves the collection's `localized` setting at
+    // init and declines to decide instead.
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          status: true,
+          localized: true,
+          fields: [
+            text({ name: "title", localized: true }),
+            text({ name: "slug" }),
+          ],
+        } as never),
+      ],
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+    } as never);
+
+    const made = (await current.nextly.create({
+      collection: "pages",
+      data: { title: "wip", slug: "gracias", status: "draft" },
+      locale: "en",
+    } as never)) as { item: { id: string } };
+    await current.nextly.update({
+      collection: "pages",
+      id: made.item.id,
+      data: { title: "hola", status: "published" },
+      locale: "es",
+    } as never);
+
+    // The fixture only means anything if the main row really does read draft.
+    const row = (await current.nextly.findByID({
+      collection: "pages",
+      id: made.item.id,
+    })) as { status?: string };
+    expect(row.status).toBe("draft");
+
+    const saved = await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "pages", value: made.item.id },
+        },
+      },
+    });
+    expect(saved).toMatchObject({ item: { id: expect.any(String) } });
   });
 });
 

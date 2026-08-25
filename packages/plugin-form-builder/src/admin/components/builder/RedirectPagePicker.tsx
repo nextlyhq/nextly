@@ -149,8 +149,22 @@ export function documentLabel(
   fields: readonly string[] = labelFieldsFor()
 ): string {
   for (const field of fields.filter(name => name !== "id")) {
+    // A collection only has to point `useAsTitle` at a field that EXISTS, so
+    // the configured title can be a number or a boolean. Skipping those falls
+    // through to a conventional field or to the id, which is the opaque label
+    // reading the configuration was meant to replace. `0` and `false` are
+    // titles like any other, so emptiness is decided after stringifying, not
+    // by truthiness.
     const candidate = row[field];
-    if (typeof candidate === "string" && candidate.trim()) return candidate;
+    const text =
+      typeof candidate === "string"
+        ? candidate
+        : typeof candidate === "number" && Number.isFinite(candidate)
+          ? String(candidate)
+          : typeof candidate === "boolean"
+            ? String(candidate)
+            : undefined;
+    if (text !== undefined && text.trim()) return text;
   }
   return typeof row.id === "string" ? row.id : "Untitled";
 }
@@ -250,6 +264,29 @@ function renderChoice(choice: Choice) {
       </span>
     </SelectItem>
   );
+}
+
+/**
+ * Which collections the picker needs metadata for, as the key the lookup is
+ * cached on.
+ *
+ * The configured ones, plus the collection the STORED target names when that
+ * is no longer among them. A polymorphic value can point at a collection since
+ * removed from `redirectRelationships`, and the picker recovers and displays
+ * that target on purpose — looking up only the configured ones would label it
+ * by the conventional names while the listing uses each collection's own title
+ * field, showing one document under two rules.
+ */
+export function metadataCollections(
+  collections: readonly string[],
+  value: unknown
+): string {
+  const stored = selectionKey(value, collections)?.split(":")[0];
+  const wanted =
+    stored && !collections.includes(stored)
+      ? [...collections, stored]
+      : collections;
+  return wanted.join(",");
 }
 
 /**
@@ -727,7 +764,7 @@ export function RedirectPagePicker({
 
   // `collections` is an array prop, so a new identity every render would
   // refetch forever; the join is the value that actually decides the request.
-  const titleFields = useTitleFields(collections.join(","));
+  const titleFields = useTitleFields(metadataCollections(collections, value));
   const {
     choices,
     setChoices,

@@ -144,12 +144,23 @@ export function documentReachability(
   if (!hasPublishLifecycle(document)) return "reachable";
   if (document.status === "published") return "reachable";
 
-  // Never public in any language. The only judgement that holds for a
-  // localized collection and a plain one alike.
-  if (!document.firstPublishedAt) return "unreachable";
-
-  // Published before and not published now. Decisive only where the caller
-  // knows no translation can be carrying it.
+  // Only a caller that knows the collection is NOT localized can read the main
+  // row's status as the document's own. There is no fact on the row that
+  // substitutes for that knowledge, and each candidate is wrong in a real
+  // configuration:
+  //
+  //   `status`            — a collection without the lifecycle may define its
+  //                         own field of that name, so the NAME answers
+  //                         nothing (`hasPublishLifecycle` above).
+  //   the row's status    — a localized document publishes on a locale
+  //                         companion, and the main row reads `draft` while a
+  //                         translation is public.
+  //   `firstPublishedAt`  — absent on a row published before that column
+  //                         existed, so it records "never public" and "public,
+  //                         never recorded" identically on an upgraded
+  //                         database.
+  //
+  // So the undecided case is reported rather than guessed at.
   if (collectionIsLocalized === false) return "unreachable";
 
   return "unknown";

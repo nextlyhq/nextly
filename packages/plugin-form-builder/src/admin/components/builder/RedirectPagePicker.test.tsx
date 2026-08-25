@@ -187,7 +187,10 @@ describe("what the picker says about a page that is not live", () => {
           firstPublishedAt: null,
         },
       ],
-      "headline"
+      "headline",
+      // Not localized: on a localized collection the main row cannot say
+      // whether a translation is live, so nothing would be marked.
+      false
     );
     render(
       <RedirectPagePicker
@@ -301,35 +304,43 @@ describe("a target collection that publishes per locale", () => {
     expect(option).toHaveTextContent("Draft");
   });
 
-  it("marks a never-published page whatever the collection says", async () => {
-    // No `firstPublishedAt`: never public in any language, so localization
-    // cannot rescue it and both settings must mark it.
-    for (const localized of [true, false]) {
-      serve(
-        [
-          {
-            id: "p1",
-            headline: "Launch day",
-            status: "draft",
-            firstPublishedAt: null,
-          },
-        ],
-        "headline",
-        localized
-      );
-      const view = render(
-        <RedirectPagePicker
-          collections={["pages"]}
-          value={undefined}
-          onChange={vi.fn()}
-        />
-      );
-      await userEvent.click(await screen.findByLabelText("Redirect page"));
-      expect(
-        await screen.findByRole("option", { name: /Launch day/ })
-      ).toHaveTextContent("Draft");
-      view.unmount();
-    }
+  it("marks a page with no publication history only on a plain collection", async () => {
+    // An absent `firstPublishedAt` looks identical on a row that was never
+    // public and on one published before that column existed. Only where the
+    // collection is not localized does the main row settle which it is.
+    const row = {
+      id: "p1",
+      headline: "Launch day",
+      status: "draft",
+      firstPublishedAt: null,
+    };
+
+    serve([row], "headline", false);
+    const plain = render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={undefined}
+        onChange={vi.fn()}
+      />
+    );
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    expect(
+      await screen.findByRole("option", { name: /Launch day/ })
+    ).toHaveTextContent("Draft");
+    plain.unmount();
+
+    serve([row], "headline", true);
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={undefined}
+        onChange={vi.fn()}
+      />
+    );
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    expect(
+      await screen.findByRole("option", { name: /Launch day/ })
+    ).not.toHaveTextContent("Draft");
   });
 });
 
@@ -410,5 +421,54 @@ describe("a stored selection the listing never reached", () => {
     expect(
       await screen.findByRole("option", { name: /Launch day/ })
     ).not.toHaveTextContent("Draft");
+  });
+});
+
+describe("a stored target whose collection is no longer configured", () => {
+  it("labels it by that collection's own title field", async () => {
+    // The picker recovers and displays such a target on purpose. Looking up
+    // metadata for the CONFIGURED collections only would label it by the
+    // conventional names while the listing uses the configured one — the same
+    // document under two rules.
+    serve([], "headline", false);
+    recoverable = {
+      id: "p9",
+      headline: "Retired section",
+      status: "published",
+      firstPublishedAt: "2026-08-25T00:00:00.000Z",
+    };
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={{ relationTo: "archive", value: "p9" }}
+        onChange={vi.fn()}
+      />
+    );
+
+    await userEvent.click(await screen.findByLabelText("Redirect page"));
+    // The name appears twice by design — once in the trigger for the stored
+    // selection and once in the list — so this asserts on the OPTION.
+    expect(
+      await screen.findByRole("option", { name: /Retired section/ })
+    ).toBeInTheDocument();
+    expect(screen.queryByText("p9")).not.toBeInTheDocument();
+  });
+
+  it("asks the metadata endpoint about that collection", async () => {
+    serve([], "headline", false);
+    recoverable = { id: "p9", headline: "Retired section" };
+    render(
+      <RedirectPagePicker
+        collections={["pages"]}
+        value={{ relationTo: "archive", value: "p9" }}
+        onChange={vi.fn()}
+      />
+    );
+
+    await waitFor(() =>
+      expect(
+        requested.some(u => u.endsWith("/admin/api/collections/archive"))
+      ).toBe(true)
+    );
   });
 });

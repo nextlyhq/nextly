@@ -494,10 +494,16 @@ async function urlForPickedDocument(
   // rule never sees it. Sending a visitor there produces exactly the "page not
   // found" that rule exists to prevent, so this degrades to no redirect — the
   // submission is still stored and still succeeds.
-  // Only where the answer is certain. A document that has been public before
-  // may still be public in a translation this read cannot see, and dropping
-  // the redirect there would strand a working destination.
-  if (documentReachability(target, undefined) === "unreachable") {
+  // The target collection's own `localized` setting, resolved at plugin init.
+  // Absent means it could not be read, which reports as undecided rather than
+  // as "not localized" — dropping a redirect on that guess would strand a
+  // destination a translation is still serving.
+  if (
+    documentReachability(
+      target,
+      pluginConfig.redirectTargetLocalization[reference.collection]
+    ) === "unreachable"
+  ) {
     logger.warn?.("Form redirects to a page that has never been published", {
       form: form.slug,
       collection: reference.collection,

@@ -1193,6 +1193,22 @@ export interface ResolvedFormBuilderConfig {
    */
   redirectRelationships: RedirectRelationships;
 
+  /**
+   * Whether each redirect target collection is localized, keyed by slug.
+   *
+   * Resolved at `init` from the collection's own registered metadata rather
+   * than asked for in options, because the collection already declares it and
+   * a second declaration drifts.
+   *
+   * It decides whether a target's main-row `status` answers for the document:
+   * a localized collection publishes on a locale companion, so the row reads
+   * `draft` while a translation is public. A slug missing here is a collection
+   * whose metadata could not be read — undefined, not false, because reading
+   * an unknown as "not localized" is what marks a reachable translation as a
+   * draft.
+   */
+  redirectTargetLocalization: Record<string, boolean>;
+
   beforeEmail?: FormBuilderPluginOptions["beforeEmail"];
 
   notifications: {

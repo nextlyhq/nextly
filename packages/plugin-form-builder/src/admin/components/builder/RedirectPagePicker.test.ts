@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   documentLabel,
   labelFieldsFor,
+  metadataCollections,
   selectFieldsFor,
   selectParam,
   selectionKey,
@@ -303,5 +304,72 @@ describe("selectFieldsFor", () => {
     expect(documentLabel({ id: "1", status: "draft" }, labelFieldsFor())).toBe(
       "1"
     );
+  });
+});
+
+describe("documentLabel with a non-string configured title", () => {
+  it("shows a numeric title rather than falling through to the id", () => {
+    // `useAsTitle` only has to name a field that exists. Skipping a number
+    // reaches the id, which is the opaque label reading the configuration was
+    // meant to replace.
+    expect(
+      documentLabel({ id: "p1", issue: 42 }, labelFieldsFor("issue"))
+    ).toBe("42");
+  });
+
+  it("treats zero and false as titles, not as emptiness", () => {
+    // Decided after stringifying rather than by truthiness: `0` is a title an
+    // author chose.
+    expect(documentLabel({ id: "p1", issue: 0 }, labelFieldsFor("issue"))).toBe(
+      "0"
+    );
+    expect(
+      documentLabel({ id: "p1", featured: false }, labelFieldsFor("featured"))
+    ).toBe("false");
+  });
+
+  it("still falls through for a value that cannot be a title", () => {
+    // An object or a null is not a label; those keep the conventional
+    // fallbacks rather than rendering "[object Object]".
+    expect(
+      documentLabel(
+        { id: "p1", meta: { a: 1 }, title: "About" },
+        labelFieldsFor("meta")
+      )
+    ).toBe("About");
+    expect(
+      documentLabel({ id: "p1", meta: null }, labelFieldsFor("meta"))
+    ).toBe("p1");
+  });
+});
+
+describe("metadataCollections", () => {
+  it("asks about the configured collections", () => {
+    expect(metadataCollections(["pages", "posts"], undefined)).toBe(
+      "pages,posts"
+    );
+  });
+
+  it("adds the stored target's collection when it is no longer configured", () => {
+    // The picker recovers such a target on purpose; without its metadata it
+    // would be labelled by a different rule than the listing uses.
+    expect(
+      metadataCollections(["pages"], { relationTo: "archive", value: "p9" })
+    ).toBe("pages,archive");
+  });
+
+  it("does not repeat a stored collection that is still configured", () => {
+    // The key is what the lookup caches on, so a duplicate would refetch the
+    // same collection under a second key.
+    expect(
+      metadataCollections(["pages"], { relationTo: "pages", value: "p1" })
+    ).toBe("pages");
+  });
+
+  it("ignores a stored value that names no readable document", () => {
+    expect(metadataCollections(["pages"], { relationTo: "pages" })).toBe(
+      "pages"
+    );
+    expect(metadataCollections(["pages"], null)).toBe("pages");
   });
 });
