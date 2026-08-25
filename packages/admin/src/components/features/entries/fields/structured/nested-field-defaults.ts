@@ -32,20 +32,33 @@ const STRING_SEED_TYPES: ReadonlySet<string> = new Set([
   "code",
 ]);
 
-const SCALAR_DEFAULTS: Record<string, unknown> = {
+const SCALAR_DEFAULTS: Readonly<Record<string, unknown>> = Object.freeze({
   checkbox: false,
   number: null,
   repeater: [],
-};
+});
+
+/**
+ * Normalizes defaults for select and radio fields based on their hasMany configuration,
+ * preventing shape mismatches during schema validation.
+ */
+function getSelectDefault(field: FieldConfig, declared: unknown): unknown {
+  const hasMany = (field as { hasMany?: boolean }).hasMany;
+  if (hasMany) {
+    if (Array.isArray(declared)) return declared;
+    return declared !== undefined && declared !== null ? [declared] : [];
+  }
+  return Array.isArray(declared) ? (declared[0] ?? null) : (declared ?? null);
+}
 
 /**
  * Returns the type-specific fallback default for a field that has no explicit defaultValue.
- *
- * Keeping this separate from {@link getFieldDefault} keeps each function's cyclomatic
- * complexity below the project threshold.
+ * Uses Object.hasOwn to prevent Object.prototype key collision.
  */
 function getTypeDefault(type: string, subField: FieldConfig): unknown {
-  if (type in SCALAR_DEFAULTS) return SCALAR_DEFAULTS[type];
+  if (Object.hasOwn(SCALAR_DEFAULTS, type)) {
+    return SCALAR_DEFAULTS[type];
+  }
   if (type === "group") {
     const fields = (subField as { fields?: FieldConfig[] }).fields;
     return fields ? createDefaultFieldValues(fields) : {};
@@ -58,39 +71,28 @@ function getTypeDefault(type: string, subField: FieldConfig): unknown {
 
 /**
  * Computes the default value for an individual field configuration.
- *
- * If the field declares an explicit `defaultValue`, that takes priority (calling it
- * when it is a function). Otherwise delegates to {@link getTypeDefault}, with two
- * overrides that align with {@link getDefaultValues} in `lib/form/default-values`:
- * - String-like fields (`text`, `textarea`, etc.) seed `""` rather than `null`.
- * - `chips` seeds `[]` rather than `null`.
  */
 function getFieldDefault(subField: FieldConfig): unknown {
-  const declared = (subField as { defaultValue?: unknown }).defaultValue;
-  if ("defaultValue" in subField && declared !== undefined) {
-    return typeof declared === "function" ? declared({}) : declared;
+  let declared = (subField as { defaultValue?: unknown }).defaultValue;
+  if (typeof declared === "function") {
+    declared = declared({});
   }
-  // Align with getDefaultValues: string-like fields seed "" and chips seed [].
+  if (declared !== undefined) {
+    if (subField.type === "select" || subField.type === "radio") {
+      return getSelectDefault(subField, declared);
+    }
+    return declared;
+  }
   if (STRING_SEED_TYPES.has(subField.type)) return "";
   if ((subField.type as string) === "chips") return [];
+  if (subField.type === "select" || subField.type === "radio") {
+    return getSelectDefault(subField, undefined);
+  }
   return getTypeDefault(subField.type, subField);
 }
 
 /**
  * Computes default values for an array of nested sub-fields based on schema configuration.
- *
- * Evaluation rules per sub-field:
- * 1. Fields without a `name` are skipped (layout-only elements).
- * 2. If `defaultValue` is explicitly defined:
- *    - Function defaultValue is invoked with `{}`.
- *    - Literal defaultValue is used as-is.
- * 3. Otherwise, sensible fallbacks are applied by field type:
- *    - `checkbox` -> `false`
- *    - `number` -> `null`
- *    - `repeater` -> `[]`
- *    - `group` -> recursively creates default values for `subField.fields` (or `{}` if empty)
- *    - `component` -> `[]` if repeatable, else `null`
- *    - fallback (text, textarea, select, custom plugin fields, etc.) -> `subField.defaultValue ?? null`
  *
  * @param fields - Array of sub-field configurations from the schema
  * @param options - Optional configuration options including componentType discriminator

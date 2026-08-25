@@ -4,6 +4,7 @@
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
 "@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
 "@nextlyhq/ui": patch
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-postgres": patch
@@ -17,9 +18,12 @@
 "@nextlyhq/plugin-seo": patch
 "@nextlyhq/plugin-sdk": patch
 "@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 Unify default-value computation for nested sub-fields across `ComponentInput` and `RepeaterInput`.

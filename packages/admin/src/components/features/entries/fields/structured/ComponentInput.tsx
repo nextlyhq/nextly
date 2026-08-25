@@ -616,6 +616,13 @@ function RepeatableEmptyState({
   );
 }
 
+/**
+ * Repeatable Add Button Component
+ *
+ * Encapsulates and owns the component-selector popover state, providing a unified
+ * add affordance for both single-component (direct append) and multi-component
+ * (type selector popover) repeatable flows without duplicating append handlers.
+ */
 function RepeatableAddButton({
   isMultiMode,
   singularLabel,
