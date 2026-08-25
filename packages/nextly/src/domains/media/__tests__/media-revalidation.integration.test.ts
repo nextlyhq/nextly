@@ -14,6 +14,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../../../di/container";
+import { getMediaStorage } from "../../../storage/storage";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import { MediaFolderService } from "../../../services/media-folder";
 import { MediaService as LegacyMediaService } from "../../../services/media";
@@ -191,11 +192,36 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     expect(uploaded.id).toBeTruthy();
     expect(uploaded.folderId).toBe(folder.id);
 
+    // A second file, so "one intent for N files" is a real claim rather than a
+    // statement about a single-element list.
+    const second = await handle.nextly.media.upload({
+      file: {
+        data: Buffer.from("y"),
+        name: "also-inside.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+      folder: folder.id,
+    });
+    expect(second.folderId).toBe(folder.id);
+
     flush.mockClear();
     await unified.deleteFolder(folder.id, true, ctx);
 
-    // Cleared first, so this cannot be satisfied by the upload's own flush.
-    expect(flushedTags(flush)).toContain(`nextly:media:id:${uploaded.id}`);
+    // Cleared first, so this cannot be satisfied by the uploads' own flushes.
+    const tags = flushedTags(flush);
+    expect(tags).toContain(`nextly:media:id:${uploaded.id}`);
+    expect(tags).toContain(`nextly:media:id:${second.id}`);
+
+    // ONE intent for both files, not one per file. Every file's tags carry the
+    // same `nextly:media`, and the sink loops intents and tags without
+    // deduplicating across them — so N files would re-invalidate the collection
+    // tag N times, synchronously, before the delete returns.
+    const intents = flush.mock.calls.flatMap(
+      (call: unknown[]) => call[0] as unknown[]
+    );
+    expect(intents).toHaveLength(1);
+    expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
   });
 
   it("invalidates a file moved between folders through the folder service", async () => {
@@ -231,5 +257,38 @@ describe("the write surfaces that do NOT go through the unified service", () => 
 
     expect(moved.success).toBe(true);
     expect(flushedTags(flush)).toContain(`nextly:media:id:${uploaded.id}`);
+  });
+
+  it("invalidates BEFORE the physical file cleanup, not after it", async () => {
+    // Ordering, not presence. The row is gone the moment the transaction
+    // commits, so a cached page is already wrong; deferring the bust past
+    // storage deletes and their retry backoffs leaves it wrong for that whole
+    // window, and a storage call that hangs until the request is killed would
+    // leave it wrong permanently despite a committed delete.
+    const { handle, flush } = await bootWithSpy();
+    const uploaded = await handle.nextly.media.upload({
+      file: {
+        data: Buffer.from("x"),
+        name: "ordered.pdf",
+        mimetype: "application/pdf",
+        size: 1,
+      },
+    });
+    expect(uploaded.id).toBeTruthy();
+
+    const storageDelete = vi.spyOn(getMediaStorage(), "delete");
+    flush.mockClear();
+    await handle.nextly.media.delete({ id: uploaded.id });
+
+    // Two controls, because the comparison below is vacuous without both: the
+    // cache must have been busted, AND the storage cleanup must have actually
+    // run. If either never happened there is no ordering to check and the
+    // assertion would pass on an empty pair.
+    expect(flush).toHaveBeenCalled();
+    expect(storageDelete).toHaveBeenCalled();
+
+    expect(flush.mock.invocationCallOrder[0]).toBeLessThan(
+      storageDelete.mock.invocationCallOrder[0] as number
+    );
   });
 });

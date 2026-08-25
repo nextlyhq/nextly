@@ -106,13 +106,7 @@ export class MediaService extends BaseService {
    * Both absorb their own failures, so this never turns a committed write into
    * an error.
    */
-  private async afterWrite(recorded: boolean, mediaId: string): Promise<void> {
-    // Ahead of the guard below, deliberately. That guard is about the webhook
-    // drain and retention, neither of which a cache cares about — an install
-    // with no endpoint and no retention still serves cached pages, and skipping
-    // invalidation for it would leave them stale forever.
-    await revalidateMedia([mediaId], this.logger);
-
+  private async afterWrite(recorded: boolean): Promise<void> {
     if (!this.fastDrainScheduler && !this.retentionRunner) {
       return;
     }
@@ -474,9 +468,13 @@ export class MediaService extends BaseService {
         });
       });
 
+      // The row is visible to readers the moment the transaction commits, so
+      // invalidate here rather than after the drain and retention pass below.
+      await revalidateMedia([mediaId], this.logger);
+
       // The upload committed a media.uploaded outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite(recorded, mediaId);
+      await this.afterWrite(recorded);
 
       return {
         success: true,
@@ -798,6 +796,11 @@ export class MediaService extends BaseService {
         throw error;
       }
 
+      // Ahead of the variant cleanup below for the same reason the delete path
+      // invalidates ahead of its storage work: the row has changed, so a cached
+      // page is already wrong, and file cleanup can retry for a long time.
+      if (updatedRow) await revalidateMedia([mediaId], this.logger);
+
       if (!updatedRow) {
         // Concurrent delete: the row was not updated, so the freshly-uploaded
         // variants are orphaned. Same guard as the failure path — keep anything
@@ -830,7 +833,7 @@ export class MediaService extends BaseService {
 
       // The update committed a media.updated outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite(recorded, mediaId);
+      await this.afterWrite(recorded);
 
       return {
         success: true,
@@ -923,6 +926,13 @@ export class MediaService extends BaseService {
       }
       const mediaData = deletedRow;
 
+      // Invalidated here, not after the cleanup below. The row is already gone,
+      // so a cached page is already wrong; deferring past storage deletes and
+      // their retry backoffs leaves it wrong for as long as that takes, and a
+      // storage call that hangs until the request is killed would leave it
+      // wrong permanently despite a committed delete.
+      await revalidateMedia([mediaId], this.logger);
+
       // Best-effort physical cleanup AFTER the row + event have committed.
       // Swallow-and-warn: a storage failure must not fail a delete whose
       // authoritative row removal already succeeded.
@@ -968,7 +978,7 @@ export class MediaService extends BaseService {
 
       // The delete committed a media.deleted outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite(recorded, mediaId);
+      await this.afterWrite(recorded);
 
       return {
         success: true,

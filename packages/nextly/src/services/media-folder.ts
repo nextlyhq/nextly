@@ -569,6 +569,9 @@ export class MediaFolderService extends BaseService {
     deletedMedia?: number;
     deletedFolders?: number;
   }> {
+    // Declared outside the try so the `finally` can flush what actually
+    // committed, including when a later chunk threw.
+    const deletedMediaIds: string[] = [];
     try {
       const { mediaFolders, media } = this.tables;
 
@@ -601,8 +604,6 @@ export class MediaFolderService extends BaseService {
 
       let deletedMediaCount = 0;
       let deletedFoldersCount = 0;
-
-      let deletedMediaIds: string[] = [];
       if (deleteContents) {
         const subfolderIds = await this.collectAllSubfolderIds(folderId);
         const allFolderIds = [folderId, ...subfolderIds];
@@ -650,11 +651,10 @@ export class MediaFolderService extends BaseService {
 
         if (allMediaRecords.length > 0) {
           const mediaIds = allMediaRecords.map(r => r.id);
-          // Deleting a folder with its contents removes media rows WITHOUT
-          // going through the media service, so nothing else on this path
-          // invalidates them. A page holding one of these files would go on
-          // serving a file that no longer exists.
-          deletedMediaIds = mediaIds;
+          // Accumulated per chunk below, as each one COMMITS. Assigning the
+          // whole list up front would be a claim about work that has not
+          // happened yet, and this method has no encompassing transaction: if a
+          // later chunk throws, the earlier deletes are already durable.
           const chunkSize = 100;
           for (let i = 0; i < mediaIds.length; i += chunkSize) {
             const chunk = mediaIds.slice(i, i + chunkSize);
@@ -664,16 +664,15 @@ export class MediaFolderService extends BaseService {
                 sql`, `
               )})`
             );
+            // After the statement, so the list only ever names rows that are
+            // actually gone.
+            deletedMediaIds.push(...chunk);
           }
         }
       }
 
       // Delete folder (CASCADE handles subfolder records)
       await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));
-
-      // After the rows are gone, so a reader that races this cannot repopulate
-      // a cache entry from a row that is about to disappear.
-      await revalidateMedia(deletedMediaIds);
 
       return {
         success: true,
@@ -690,6 +689,12 @@ export class MediaFolderService extends BaseService {
         code: "INTERNAL_ERROR",
         message: "Failed to delete folder",
       };
+    } finally {
+      // Both paths. A chunk that committed before a later one threw still
+      // removed those files, and a page holding one is stale whether or not the
+      // operation reported success — reporting an error and leaving the cache
+      // serving deleted files is the worst of both.
+      await revalidateMedia(deletedMediaIds);
     }
   }
 

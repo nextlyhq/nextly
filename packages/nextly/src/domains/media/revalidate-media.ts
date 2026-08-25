@@ -55,12 +55,24 @@ export async function revalidateMedia(
     : undefined;
   if (!revalidator) return;
 
+  // ONE intent carrying the union, not one intent per file. Every file's tags
+  // include the same `nextly:media` collection tag, and the sink loops intents
+  // and tags without deduplicating across them — so N files would invoke
+  // `revalidateTag("nextly:media")` N times, synchronously, before returning.
+  // A folder holding a few hundred images makes that the slowest part of the
+  // delete.
+  const tags = new Set<string>();
+  for (const id of mediaIds) {
+    for (const tag of computeEntryRevalidation({
+      collection: MEDIA_TARGET,
+      id,
+    }).tags) {
+      tags.add(tag);
+    }
+  }
+
   try {
-    await revalidator.flush(
-      mediaIds.map(id =>
-        computeEntryRevalidation({ collection: MEDIA_TARGET, id })
-      )
-    );
+    await revalidator.flush([{ tags: [...tags] }]);
   } catch (error) {
     logger?.error?.("Cache revalidation failed after a media write", { error });
   }
