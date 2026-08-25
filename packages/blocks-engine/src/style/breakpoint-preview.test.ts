@@ -630,7 +630,29 @@ describe("a per-surface preview container", () => {
      * devtools — and the assertion there is about two values differing, which
      * two digests satisfy perfectly.
      */
-    expect(previewContainerFor("canvas-a")).toBe("nx-preview-canvas-a");
+    expect(previewContainerFor("canvas-a")).toBe("nx-preview-s-canvas-a");
+  });
+
+  it("cannot collide ACROSS the literal and digested paths", () => {
+    /*
+     * The two constructions share a prefix, so without a discriminator they
+     * share a namespace: a seed that must be digested produces some base-36
+     * string, and a second surface seeded with that very string is
+     * identifier-safe, carries literally, and lands on the same name. Two
+     * unrelated surfaces, one container, and the factory's whole purpose gone.
+     *
+     * Driven by taking the FIRST result's own tail as the second seed, so the
+     * collision is constructed rather than hoped for — a hand-picked pair would
+     * pass against a broken implementation whenever the digest happened not to
+     * equal it.
+     */
+    const digested = previewContainerFor("a/b");
+    const tail = digested.slice("nx-preview-".length);
+
+    // The population: the first seed really did take the digest path, so the
+    // case below is the cross-path one rather than two literals.
+    expect(previewContainerFor("a/b")).not.toBe("nx-preview-s-a-b");
+    expect(previewContainerFor(tail)).not.toBe(digested);
   });
 
   it("gives two long seeds DIFFERENT names, which is the whole point", () => {
