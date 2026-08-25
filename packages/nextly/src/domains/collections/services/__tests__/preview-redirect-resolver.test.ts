@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
+  previewCallerAuthorized,
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
   type PreviewRedirectDeps,
@@ -19,11 +20,32 @@ import {
 
 const SCOPE = { collection: "pages", entryId: "entry-1" };
 
+/**
+ * Loaders on the discriminated read shape.
+ *
+ * Named rather than spelled out at each site because the three cases are the
+ * point: a loader that folds a FAILED read into "no such document" is what made
+ * a database hiccup arrive as "this may have been deleted".
+ */
+const reads = (document: Record<string, unknown>) =>
+  vi.fn().mockResolvedValue({ kind: "document", document });
+const absent = () => vi.fn().mockResolvedValue({ kind: "absent" });
+const unreadable = () => vi.fn().mockResolvedValue({ kind: "unreadable" });
+
+/**
+ * Proof of authorization, which the explaining façades demand.
+ *
+ * Obtainable only from `previewCallerAuthorized`, which is the control: the
+ * symbol behind the type is not exported, so no anonymous handler can conjure
+ * one and reach a refusal cause.
+ */
+const CALLER = previewCallerAuthorized({ userId: "u1" });
+
 function deps(
   overrides: Partial<PreviewRedirectDeps> = {}
 ): PreviewRedirectDeps {
   return {
-    loadEntry: vi.fn().mockResolvedValue({ id: "entry-1", slug: "about" }),
+    loadEntry: reads({ id: "entry-1", slug: "about" }),
     loadDeclaration: vi.fn().mockResolvedValue({ urlTemplate: "/{slug}" }),
     loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
     ...overrides,
@@ -36,9 +58,7 @@ describe("resolvePreviewRedirect", () => {
   // link redirects to a different translation — and the draft gate, which does
   // carry the locale, then refuses the very draft the link was minted for.
   it("reads the entry in the locale the token names", async () => {
-    const loadEntry = vi
-      .fn()
-      .mockResolvedValue({ id: "entry-1", slug: "a-propos" });
+    const loadEntry = reads({ id: "entry-1", slug: "a-propos" });
     const d = deps({ loadEntry });
 
     await resolvePreviewRedirect({ ...SCOPE, locale: "fr" }, d);
@@ -47,9 +67,7 @@ describe("resolvePreviewRedirect", () => {
   });
 
   it("passes no locale when the token names none", async () => {
-    const loadEntry = vi
-      .fn()
-      .mockResolvedValue({ id: "entry-1", slug: "about" });
+    const loadEntry = reads({ id: "entry-1", slug: "about" });
     const d = deps({ loadEntry });
 
     await resolvePreviewRedirect(SCOPE, d);
@@ -89,7 +107,7 @@ describe("resolvePreviewRedirect", () => {
   // A link outlives what it points at: the entry can be deleted between minting
   // and clicking, which is a refusal rather than a fault.
   it("returns null when the entry no longer exists", async () => {
-    const d = deps({ loadEntry: vi.fn().mockResolvedValue(null) });
+    const d = deps({ loadEntry: absent() });
 
     expect(await resolvePreviewRedirect(SCOPE, d)).toBeNull();
   });
@@ -101,7 +119,7 @@ describe("resolvePreviewRedirect", () => {
   });
 
   it("returns null when a template placeholder has no value yet", async () => {
-    const d = deps({ loadEntry: vi.fn().mockResolvedValue({ id: "entry-1" }) });
+    const d = deps({ loadEntry: reads({ id: "entry-1" }) });
 
     expect(await resolvePreviewRedirect(SCOPE, d)).toBeNull();
   });
@@ -194,7 +212,7 @@ describe("resolveSinglePreviewRedirect", () => {
     overrides: Partial<SinglePreviewRedirectDeps> = {}
   ): SinglePreviewRedirectDeps {
     return {
-      loadSingle: vi.fn().mockResolvedValue({ path: "welcome" }),
+      loadSingle: reads({ path: "welcome" }),
       loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
       loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
       ...overrides,
@@ -208,7 +226,7 @@ describe("resolveSinglePreviewRedirect", () => {
   });
 
   it("reads the Single in the locale the token names", async () => {
-    const loadSingle = vi.fn().mockResolvedValue({ path: "accueil" });
+    const loadSingle = reads({ path: "accueil" });
 
     await resolveSinglePreviewRedirect(
       { single: "homepage", locale: "fr" },
@@ -243,7 +261,7 @@ describe("resolveSinglePreviewRedirect", () => {
   // A Single is not deleted the way an entry is, but it can be dropped from the
   // configuration — and a link minted before that points at nothing.
   it("returns null when the Single can no longer be read", async () => {
-    const d = singleDeps({ loadSingle: vi.fn().mockResolvedValue(null) });
+    const d = singleDeps({ loadSingle: absent() });
 
     expect(
       await resolveSinglePreviewRedirect({ single: "homepage" }, d)
@@ -292,7 +310,12 @@ const CAUSES: ReadonlyArray<{
   {
     cause: "documentGone",
     why: "the entry was deleted between minting and clicking",
-    deps: () => deps({ loadEntry: vi.fn().mockResolvedValue(null) }),
+    deps: () => deps({ loadEntry: absent() }),
+  },
+  {
+    cause: "documentUnreadable",
+    why: "the read itself failed, so absence was never established",
+    deps: () => deps({ loadEntry: unreadable() }),
   },
   {
     cause: "notConfigured",
@@ -302,8 +325,7 @@ const CAUSES: ReadonlyArray<{
   {
     cause: "unavailable",
     why: "declared, but this document has no slug yet",
-    deps: () =>
-      deps({ loadEntry: vi.fn().mockResolvedValue({ id: "entry-1" }) }),
+    deps: () => deps({ loadEntry: reads({ id: "entry-1" }) }),
   },
   {
     cause: "foreignOrigin",
@@ -367,7 +389,7 @@ const CAUSES: ReadonlyArray<{
 
 describe("explainPreviewRedirect", () => {
   it.each(CAUSES)("names $cause when $why", async ({ cause, deps: build }) => {
-    expect(await explainPreviewRedirect(SCOPE, build())).toEqual({
+    expect(await explainPreviewRedirect(SCOPE, build(), CALLER)).toEqual({
       kind: "refused",
       cause,
     });
@@ -376,7 +398,71 @@ describe("explainPreviewRedirect", () => {
   it("answers a path when there is one", async () => {
     // The control for the table above: these are refusals rather than a
     // function that refuses everything put to it.
-    expect(await explainPreviewRedirect(SCOPE, deps())).toEqual({
+    expect(await explainPreviewRedirect(SCOPE, deps(), CALLER)).toEqual({
+      kind: "path",
+      path: "/about",
+    });
+  });
+
+  it("does not report a failed read as a deletion", async () => {
+    /*
+     * The two are a pair, so they are asserted as a pair: each alone would pass
+     * against an implementation that returned the same cause for both. A read
+     * that failed establishes nothing about whether the document exists, and
+     * telling an editor their entry may have been deleted because the database
+     * hiccuped is the wrong-diagnosis failure this type exists to end.
+     */
+    const gone = await explainPreviewRedirect(
+      SCOPE,
+      deps({ loadEntry: absent() }),
+      CALLER
+    );
+    const failed = await explainPreviewRedirect(
+      SCOPE,
+      deps({ loadEntry: unreadable() }),
+      CALLER
+    );
+
+    expect(gone).toEqual({ kind: "refused", cause: "documentGone" });
+    expect(failed).toEqual({ kind: "refused", cause: "documentUnreadable" });
+    expect(gone).not.toEqual(failed);
+  });
+});
+
+describe("the authenticated boundary on the explaining form", () => {
+  /*
+   * A COMPILE-TIME assertion, which is the only kind that can state this.
+   *
+   * The property is "an anonymous handler cannot reach a refusal cause", and
+   * nothing at runtime enforces it — the docblock that used to be the whole
+   * control is exactly what AGENTS.md means by a documented rule with nothing
+   * behind it. `@ts-expect-error` fails the build when the line it guards
+   * COMPILES, so this test goes red the moment the witness stops being
+   * required. That is the control, and the assertions below are incidental.
+   */
+  it("will not compile without proof the caller was authorized", async () => {
+    // @ts-expect-error - omitting the witness must not typecheck.
+    const withoutProof = explainPreviewRedirect(SCOPE, deps());
+    // @ts-expect-error - and the same for the Single façade beside it.
+    const singleWithoutProof = explainSinglePreviewRedirect(
+      { single: "homepage" },
+      {
+        loadSingle: reads({ path: "welcome" }),
+        loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
+        loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
+      }
+    );
+
+    // Awaited so neither becomes an unhandled rejection; the values are not the
+    // point, the two lines above failing to compile is.
+    await expect(withoutProof).resolves.toBeDefined();
+    await expect(singleWithoutProof).resolves.toBeDefined();
+  });
+
+  it("compiles and answers WITH the witness, so the refusal above is about the proof", async () => {
+    // The control: the same call is fine once authorized, so `@ts-expect-error`
+    // above is catching the missing witness rather than some unrelated error.
+    expect(await explainPreviewRedirect(SCOPE, deps(), CALLER)).toEqual({
       kind: "path",
       path: "/about",
     });
@@ -422,7 +508,7 @@ describe("explainSinglePreviewRedirect", () => {
     overrides: Partial<SinglePreviewRedirectDeps> = {}
   ): SinglePreviewRedirectDeps {
     return {
-      loadSingle: vi.fn().mockResolvedValue({ path: "welcome" }),
+      loadSingle: reads({ path: "welcome" }),
       loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
       loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
       ...overrides,
@@ -433,7 +519,8 @@ describe("explainSinglePreviewRedirect", () => {
     expect(
       await explainSinglePreviewRedirect(
         { single: "homepage" },
-        singleDeps({ loadSingle: vi.fn().mockResolvedValue(null) })
+        singleDeps({ loadSingle: absent() }),
+        CALLER
       )
     ).toEqual({ kind: "refused", cause: "documentGone" });
   });
@@ -448,14 +535,19 @@ describe("explainSinglePreviewRedirect", () => {
           loadDeclaration: vi
             .fn()
             .mockResolvedValue({ url: () => "https://elsewhere.test/" }),
-        })
+        }),
+        CALLER
       )
     ).toEqual({ kind: "refused", cause: "foreignOrigin" });
   });
 
   it("answers a path when there is one", async () => {
     expect(
-      await explainSinglePreviewRedirect({ single: "homepage" }, singleDeps())
+      await explainSinglePreviewRedirect(
+        { single: "homepage" },
+        singleDeps(),
+        CALLER
+      )
     ).toEqual({ kind: "path", path: "/" });
   });
 
@@ -463,7 +555,7 @@ describe("explainSinglePreviewRedirect", () => {
     expect(
       await resolveSinglePreviewRedirect(
         { single: "homepage" },
-        singleDeps({ loadSingle: vi.fn().mockResolvedValue(null) })
+        singleDeps({ loadSingle: absent() })
       )
     ).toBeNull();
   });

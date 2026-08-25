@@ -123,7 +123,14 @@ export async function defaultRedirectTo(
         ...(scope.locale === undefined ? {} : { locale: scope.locale }),
       },
       {
-        loadSingle: loadSingleForPreview,
+        // `findSingle` reports no failure envelope, so absence is all this can
+        // ever distinguish. Same shape as the mint path's wrapper, deliberately.
+        loadSingle: async (slug, singleLocale) => {
+          const document = await loadSingleForPreview(slug, singleLocale);
+          return document === null
+            ? { kind: "absent" as const }
+            : { kind: "document" as const, document };
+        },
         loadDeclaration: singlePreviewDeclarationFor,
         loadSiteUrl: async () =>
           resolvePreviewSiteUrl(
@@ -169,8 +176,26 @@ export async function defaultRedirectTo(
           includeWorkingDraft: true,
         });
 
-        if (!read.success || read.data === null) return null;
-        return read.data as Record<string, unknown>;
+        /*
+         * The route flattens every refusal to one 404 regardless, so the
+         * distinction changes nothing it will say. It is drawn anyway because
+         * the loader is the only place that still HOLDS it: leaving the route's
+         * copy folding both into "absent" would leave a second definition of
+         * this read that answers differently from the mint's, and the next
+         * caller to want the reason would inherit whichever one it happened to
+         * be handed.
+         */
+        if (!read.success) {
+          return read.statusCode === 404
+            ? { kind: "absent" as const }
+            : { kind: "unreadable" as const };
+        }
+        return read.data === null
+          ? { kind: "absent" as const }
+          : {
+              kind: "document" as const,
+              document: read.data as Record<string, unknown>,
+            };
       },
       loadDeclaration: previewDeclarationFor,
       loadSiteUrl: async () =>

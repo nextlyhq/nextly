@@ -621,6 +621,55 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
     expect(message).not.toMatch(slugAdvice);
   });
 
+  /**
+   * A read that succeeds for AUTHORIZATION and then fails for the resolver.
+   *
+   * Both of the cases below are only reachable through this window, and
+   * discovering that was worth the fixture: the mint authorizes by reading the
+   * entry, so a read failing on the FIRST call is refused as a permission
+   * problem and never reaches the resolver at all. What the resolver can see is
+   * the race — the entry readable when the caller was authorized and not
+   * readable a moment later — which is exactly the situation being diagnosed.
+   */
+  function readableThenFailing(second: Record<string, unknown>): void {
+    getEntry.mockReset();
+    getEntry.mockResolvedValueOnce({
+      success: true,
+      statusCode: 200,
+      data: { id: "7", slug: "seven" },
+    });
+    getEntry.mockResolvedValue(second);
+  }
+
+  it("does not call a FAILED read a deletion", async () => {
+    /*
+     * A transient database error, a rate limit or a throwing read hook all
+     * arrive as `success: false` with a non-404 status. None of them shows the
+     * entry is absent, so "it may have been deleted" is a claim the read never
+     * established — and it is the most alarming possible wrong answer to give
+     * an editor about their own work.
+     */
+    readableThenFailing({ success: false, statusCode: 500 });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/could not be read just now|try again/i);
+    expect(message).not.toMatch(/deleted/i);
+    expect(message).not.toMatch(slugAdvice);
+  });
+
+  it("still calls a 404 a deletion, so the pair discriminates", async () => {
+    // The control for the case above: a read that DID establish absence keeps
+    // the permanent diagnosis, so the split is on the failure KIND rather than
+    // this endpoint having stopped saying "deleted" at all.
+    readableThenFailing({ success: false, statusCode: 404 });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/deleted/i);
+    expect(message).not.toMatch(/try again/i);
+  });
+
   it("says the preview URL names another site, rather than blaming the slug", async () => {
     // No field on this entry can move the declaration to another origin, so
     // sending the editor to fill one in is advice they cannot act on.
@@ -646,12 +695,12 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
     expect(message).not.toMatch(slugAdvice);
   });
 
-  it("gives all five refusals five different messages", async () => {
+  it("gives all six refusals six different messages", async () => {
     /*
      * Stronger than each matching its own pattern: two causes could both match
      * their phrases while sharing a message, and the whole point is that an
-     * editor can tell which of the five happened. The set having five members
-     * is the property; five individual assertions do not state it.
+     * editor can tell which of the six happened. The set having six members is
+     * the property; six individual assertions do not state it.
      */
     previewDeclaration.mockResolvedValue(undefined);
     const notConfigured = await refusalMessage();
@@ -662,6 +711,9 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
     previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
     getEntry.mockResolvedValue({ success: true, statusCode: 200, data: null });
     const documentGone = await refusalMessage();
+
+    readableThenFailing({ success: false, statusCode: 500 });
+    const documentUnreadable = await refusalMessage();
 
     getEntry.mockResolvedValue({
       success: true,
@@ -683,14 +735,15 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
       notConfigured,
       unavailable,
       documentGone,
+      documentUnreadable,
       foreignOrigin,
       unresolvable,
     ];
-    // Non-empty first, so five identical empty strings cannot satisfy the size
+    // Non-empty first, so six identical empty strings cannot satisfy the size
     // check by collapsing to one — and so a refusal that stopped carrying a
     // message at all fails here rather than passing quietly.
     expect(all.every(m => m.length > 0)).toBe(true);
-    expect(new Set(all).size).toBe(5);
+    expect(new Set(all).size).toBe(6);
   });
 });
 

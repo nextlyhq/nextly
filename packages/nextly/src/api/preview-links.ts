@@ -33,6 +33,7 @@ import {
 import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
+  previewCallerAuthorized,
   type PreviewPathOutcome,
   type PreviewRefusalCause,
 } from "../domains/collections/services/preview-redirect-resolver";
@@ -224,6 +225,23 @@ const REFUSALS: Record<
     remedy: string;
   }
 > = {
+  documentUnreadable: {
+    message: (_subject, noun) =>
+      `This ${noun} could not be read just now, so a shared link would have ` +
+      "nowhere to open. Nothing is known to be wrong with it — please try " +
+      "again in a moment.",
+    reason: "document-read-failed",
+    /*
+     * Deliberately NOT the deletion remedy. The read failed, which establishes
+     * nothing about whether the document exists, and an operator sent looking
+     * for a deletion that never happened is worse off than one told the read
+     * failed.
+     */
+    remedy:
+      "The trusted read returned a non-404 failure, so whether the document " +
+      "exists is unknown. Look at the read path — a transient database error, " +
+      "a rate limit, or a throwing read hook all arrive this way.",
+  },
   documentGone: {
     message: subject =>
       `This ${subject === "single" ? "single" : "entry"} could not be read, so ` +
@@ -641,9 +659,22 @@ async function mintForSingle(
     ? await explainSinglePreviewRedirect(
         { single, ...(locale === undefined ? {} : { locale }) },
         {
-          loadSingle: loadSingleForPreview,
+          // `findSingle` has no failure envelope — it either hands back the
+          // document or it does not — so this path can only ever report
+          // `absent`, never `unreadable`. Stated rather than inferred, because
+          // a reader comparing it with the entry loader beside it will notice
+          // the asymmetry and should know it is the API's, not an omission.
+          loadSingle: async (slug, singleLocale) => {
+            const document = await loadSingleForPreview(slug, singleLocale);
+            return document === null
+              ? { kind: "absent" }
+              : { kind: "document", document };
+          },
           ...sharedRedirectDeps(declaration),
-        }
+        },
+        // The gate above already required `update` on this Single, which is
+        // what makes naming a cause safe here.
+        previewCallerAuthorized(auth)
       )
     : { kind: "refused", cause: "notConfigured" };
 
@@ -774,15 +805,34 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
               ...(entryLocale === undefined ? {} : { locale: entryLocale }),
               includeWorkingDraft: true,
             });
-            return read.success && read.data !== null
-              ? (read.data as Record<string, unknown>)
-              : null;
+            /*
+             * A FAILED read is not an absent entry. Folding both into `null`
+             * made a transient database error, a rate limit or a throwing read
+             * hook arrive as "this may have been deleted" — telling an editor
+             * their work is gone while it sits there intact. Only a 404 is
+             * evidence of absence; every other failure means the question was
+             * not answered.
+             */
+            if (!read.success) {
+              return read.statusCode === 404
+                ? { kind: "absent" }
+                : { kind: "unreadable" };
+            }
+            return read.data === null
+              ? { kind: "absent" }
+              : {
+                  kind: "document",
+                  document: read.data as Record<string, unknown>,
+                };
           },
           // Already resolved above, so this hands back the value rather than
           // fetching it again — the resolver takes a loader and this call site
           // happens to have the answer.
           ...sharedRedirectDeps(declaration),
-        }
+        },
+        // The route gate above already required `update` on this entry, so its
+        // holder learns nothing from a cause they could not read anyway.
+        previewCallerAuthorized(auth)
       )
     : // Stated rather than resolved, so an undeclared collection costs no entry
       // read to learn what the absent declaration already says.
