@@ -18,6 +18,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { classUsageIndexCollection } from "./collections/class-usage-index";
 import { pagesCollection } from "./collections/pages";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
@@ -219,7 +220,14 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       services: {
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
-      collections: [pagesCollection(opts.pagePreviewPath, opts.limits)],
+      // The index is contributed unconditionally, alongside the pages it
+      // describes. Its table existing is what lets the maintenance path write
+      // to it without a first-run branch, exactly as the site style single is
+      // registered whether or not the host stated any defaults.
+      collections: [
+        pagesCollection(opts.pagePreviewPath, opts.limits),
+        classUsageIndexCollection(),
+      ],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated
       // defaults, because the storage existing is what the style studios and
