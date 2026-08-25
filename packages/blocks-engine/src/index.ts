@@ -464,6 +464,16 @@ export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
 export { compileSiteSheet } from "./style/site-sheet";
 export { styleOrigin } from "./style/style-origin";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
+/*
+ * What a stored breakpoint set MEANS, which the type does not say.
+ *
+ * Exported because more than one package now asks: the editor reads them to
+ * build its dialog and its switcher, and a preview surface outside the builder
+ * derives device presets from the same set. Reimplemented on either side, the
+ * two would agree about what a breakpoint IS and disagree about which rows an
+ * author defined and in what order they apply.
+ */
+export { authoredBreakpoints, inCascadeOrder } from "./style/breakpoint-set";
 
 // The remote-host policy: which hosts a compiled page may fetch from. Exported
 // so the React renderer applies the SAME matcher the style compiler does.
