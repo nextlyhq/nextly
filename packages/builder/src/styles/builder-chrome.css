@@ -249,6 +249,14 @@
   display: grid;
   grid-template-columns: auto 1fr;
   column-gap: 0.5rem;
+  /*
+   * ZERO, stated rather than inherited. The command primitive sets `gap-3` on
+   * every item, which is a column gap while the item is a flex ROW and becomes
+   * a row gap as well the moment it is a grid — pushing 12px between a label
+   * and the description belonging to it, so the two lines of one entry read as
+   * two entries and the row grows by the height of a line.
+   */
+  row-gap: 0;
 }
 
 /*

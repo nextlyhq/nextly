@@ -11,10 +11,20 @@
  * @module block-icon.test
  */
 import { BLOCK_ICONS } from "@nextlyhq/blocks-engine";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { BlockIconMark, DRAWN_ICONS } from "./block-icon";
+
+/*
+ * Nothing unmounts a render on its own here: this package configures no setup
+ * file, so `@testing-library/react` never registers its automatic cleanup. Left
+ * out, every render accumulates in one document and a `document.querySelector`
+ * returns the FIRST test's element for every test after it — each case then
+ * asserts about a mark some earlier case drew, and a table resolving no concept
+ * at all passes throughout.
+ */
+afterEach(cleanup);
 
 describe("a block's mark", () => {
   it("reads a populated vocabulary", () => {
@@ -45,6 +55,28 @@ describe("a block's mark", () => {
     // assertion above.
     const offered = new Set<string>(BLOCK_ICONS);
     expect(DRAWN_ICONS.filter(name => !offered.has(name))).toEqual([]);
+  });
+
+  it.each([...BLOCK_ICONS])("everyConceptDrawsAGlyph: %s", name => {
+    /*
+     * Per concept rather than per table entry. The coverage test above compares
+     * two lists of STRINGS, so it stays green when a name in the table resolves
+     * to nothing — and the names come from `lucide-react`, a peer dependency
+     * this package admits from `>=0.400.0` upward, which renames icons and
+     * drops the old names. An import of a name outside that range fails to link
+     * the built shell rather than failing here, so what this can catch is the
+     * table naming something the INSTALLED lucide no longer exports.
+     *
+     * Asserted as "not the fallback" rather than "an svg exists", because the
+     * fallback renders an svg too and would satisfy the weaker form for every
+     * concept in a table that resolved none of them.
+     */
+    render(<BlockIconMark icon={name} />);
+    const mark = document.querySelector(".nx-block-icon svg");
+    expect(mark, name).not.toBeNull();
+    expect(mark?.getAttribute("class") ?? "", name).not.toContain(
+      "lucide-blocks"
+    );
   });
 
   it("falls back rather than throwing on a name it has never seen", () => {

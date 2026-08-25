@@ -15,7 +15,6 @@ import {
   AudioLines,
   Blocks,
   Calendar,
-  ChartColumn,
   ChevronsUpDown,
   Code,
   Columns3,
@@ -29,6 +28,7 @@ import {
   Map,
   Minus,
   MousePointerClick,
+  MoveVertical,
   PanelTop,
   PanelTopOpen,
   Quote,
@@ -38,11 +38,11 @@ import {
   ShoppingCart,
   Square,
   SquareCheck,
-  SquareDashed,
   SquareStack,
-  StretchVertical,
   Star,
+  StretchVertical,
   Table2,
+  TrendingUp,
   Type,
   User,
   Video,
@@ -58,6 +58,20 @@ import type React from "react";
  * not by rule. `blockIconsCoverTheVocabulary` in the tests is what holds this
  * table to `BLOCK_ICONS`, so a concept added to the engine and not drawn here
  * fails rather than silently falling back to the generic mark.
+ *
+ * **Every name here must exist at this package's DECLARED peer floor**, which
+ * `package.json` puts at `lucide-react >=0.400.0` — not merely at whatever
+ * version is installed while developing. Lucide renames icons and DROPS the old
+ * names: `BarChart3`, `CheckSquare` and `Columns` are all gone from 0.544, and
+ * `ChartColumn` and `SquareDashed` do not yet exist at 0.400. A name from
+ * either end of that range makes the built shell, which keeps lucide external
+ * and imports these statically, fail to link before a panel can render — every
+ * block in the editor gone, for a decorative glyph.
+ *
+ * So a concept takes a long-standing name over the current canonical one where
+ * they differ, and `everyConceptDrawsAGlyph` in the tests renders all of them.
+ * Prefer that to raising the floor: widening what a host must install is a real
+ * cost for every consumer, and it is not worth paying for a mark.
  */
 const ICONS: Record<string, LucideIcon> = {
   // Structure
@@ -71,7 +85,7 @@ const ICONS: Record<string, LucideIcon> = {
   panel: PanelTopOpen,
   tabs: StretchVertical,
   divider: Minus,
-  spacer: SquareDashed,
+  spacer: MoveVertical,
   // Content
   heading: Heading,
   text: Type,
@@ -92,7 +106,7 @@ const ICONS: Record<string, LucideIcon> = {
   form: SquareCheck,
   search: Search,
   loop: Repeat,
-  chart: ChartColumn,
+  chart: TrendingUp,
   calendar: Calendar,
   user: User,
   cart: ShoppingCart,
