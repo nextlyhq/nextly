@@ -208,6 +208,19 @@ export interface StyleInspectorPanelProps {
    * wide canvas box is showing the large ones.
    */
   previewContainer?: string;
+  /**
+   * Which breakpoints the canvas is ACTUALLY applying, when the host can say.
+   *
+   * Needed in preview and unnecessary otherwise. Rendering at the browser's own
+   * width, this panel asks `matchMedia` and answers for itself; previewing
+   * inside a box, the queries are about that box and only whoever owns it can
+   * observe them.
+   *
+   * Absent while previewing, no indicator is drawn at all. Reporting the
+   * window's answer there would name the wrong tier as the visible winner,
+   * which is worse than naming none.
+   */
+  liveBreakpoints?: readonly BreakpointId[];
 }
 
 export function StyleInspectorPanel({
@@ -219,6 +232,7 @@ export function StyleInspectorPanel({
   cascade,
   breakpoints,
   previewContainer,
+  liveBreakpoints,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -364,6 +378,22 @@ export function StyleInspectorPanel({
     // gets no indicators, which is the honest answer for a surface that cannot
     // compile — and not the same as "nothing is inherited".
     if (cascade === undefined || subject === undefined) return undefined;
+    /*
+     * The same answer while the canvas is previewing and nobody has said which
+     * tier the preview BOX is showing.
+     *
+     * Under a preview compile the viewport tiers are container queries, and a
+     * `matchMedia` caller cannot evaluate them — so the window-derived set is
+     * the base context alone. Passed on, that is not silence: `["base"]` is the
+     * CLAIM that base is what the browser is applying, and a narrow box showing
+     * the mobile tier would have every mobile declaration excluded and the base
+     * value reported as the visible winner.
+     *
+     * No dot says "not asked", which is true until a caller observes the box.
+     */
+    if (previewContainer !== undefined && liveBreakpoints === undefined) {
+      return undefined;
+    }
     return styleProvenance({
       trace: cascade.entries,
       subject,
@@ -388,7 +418,7 @@ export function StyleInspectorPanel({
        * match reports its controls as unset. That is the honest answer, because
        * the dot describes what is DISPLAYED rather than what is stored.
        */
-      liveBreakpoints: matched,
+      liveBreakpoints: liveBreakpoints ?? matched,
     });
   };
 

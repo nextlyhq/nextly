@@ -511,6 +511,7 @@ export {
   MAX_PREVIEW_CONTAINER_LENGTH,
   PREVIEW_VIEWPORT_CONTAINER,
   UNPREVIEWABLE_CONTAINER,
+  previewContainerFor,
   previewContainerName,
   type BreakpointContextOptions,
 } from "./style/compile-page";

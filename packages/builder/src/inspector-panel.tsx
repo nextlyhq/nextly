@@ -119,6 +119,12 @@ export interface InspectorPanelProps {
    */
   previewContainer?: string;
   /**
+   * Which breakpoints the canvas is ACTUALLY applying, forwarded to the Style
+   * tab. Needed only while previewing, where the queries are about the preview
+   * box and only its owner can observe them.
+   */
+  liveBreakpoints?: readonly BreakpointId[];
+  /**
    * The site's design tokens, forwarded to the Style tab's colour controls.
    *
    * Carried rather than defaulted, as `policy` is: omitting it means the
@@ -157,6 +163,7 @@ export function InspectorPanel({
   cascade,
   breakpoints,
   previewContainer,
+  liveBreakpoints,
   tokens,
   blocks,
 }: InspectorPanelProps): React.JSX.Element {
@@ -298,6 +305,7 @@ export function InspectorPanel({
             cascade={cascade}
             breakpoints={breakpoints}
             previewContainer={previewContainer}
+            liveBreakpoints={liveBreakpoints}
             tokens={tokens}
           />
         </TabsContent>

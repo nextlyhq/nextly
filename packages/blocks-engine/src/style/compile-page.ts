@@ -447,12 +447,42 @@ function queryPrefix(
 }
 
 /**
- * The container name a preview sheet aims its VIEWPORT breakpoints at.
+ * The default container name a preview sheet aims its VIEWPORT breakpoints at.
  *
- * Reserved and never emitted by an author's own styles, so a query naming it
- * resolves against the previewing surface's box and nothing else.
+ * A DEFAULT, not a guarantee. A CSS identifier cannot be reserved globally and
+ * blocks render host-defined markup and stylesheets, so a nearer ancestor
+ * declaring `container: nx-preview-viewport / inline-size` would satisfy the
+ * named query first — and viewport tiers would then follow that inner element
+ * instead of the preview box, so resizing the canvas shows the wrong
+ * breakpoint. The container axis is protected by an impossible condition
+ * instead; the viewport axis cannot be, because it has to match something.
+ *
+ * A surface that renders untrusted or third-party blocks should mint its own
+ * name with {@link previewContainerFor} and pass the SAME value to the compile
+ * and to its box. This constant remains for the ordinary case, where the
+ * previewing surface controls the markup inside it.
  */
 export const PREVIEW_VIEWPORT_CONTAINER = "nx-preview-viewport";
+
+/**
+ * A preview container name unlikely to collide with an authored one.
+ *
+ * Derived from a seed the CALLER owns — a React `useId`, a surface id, anything
+ * stable for the lifetime of that box — rather than generated randomly here, so
+ * the name a server renders and the name a client hydrates are the same string.
+ * A random one would differ across that boundary and the preview would match
+ * nothing on exactly the first paint.
+ *
+ * The seed is reduced to identifier-safe characters rather than rejected, so a
+ * caller passing an opaque id from elsewhere does not have to know this
+ * function's rules to use it.
+ */
+export function previewContainerFor(seed: string): string {
+  const safe = seed.replace(/[^A-Za-z0-9_-]/g, "-");
+  return (
+    previewContainerName(`nx-preview-${safe}`) ?? PREVIEW_VIEWPORT_CONTAINER
+  );
+}
 
 /**
  * The container name a preview sheet aims its CONTAINER breakpoints at, which
@@ -1147,6 +1177,21 @@ function boundedAtRule(
   preview: string | undefined
 ): string | undefined {
   if (lowerBound === undefined) return context.atRule;
+  /*
+   * A band on a context that can never match cannot match either.
+   *
+   * The container axis under preview carries an impossible condition rather
+   * than a bound, and rebuilding the wrapper from the prefix alone dropped it —
+   * leaving a merely NAMED query that an authored ancestor could satisfy. The
+   * node's styles would stay impossible while its visibility band went live, so
+   * preview visibility disagreed with preview styling.
+   *
+   * Returned whole rather than reconstructed, because the context already
+   * states the condition and a second construction of it is what diverged.
+   */
+  if (context.atRule?.includes(UNSATISFIABLE_CONDITION) === true) {
+    return context.atRule;
+  }
   const feature = queryPrefix(context.axis ?? "viewport", preview);
   const upper =
     context.maxWidth === undefined

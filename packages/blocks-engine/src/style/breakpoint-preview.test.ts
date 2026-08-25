@@ -28,6 +28,7 @@ import {
   UNPREVIEWABLE_CONTAINER,
   breakpointContexts,
   compilePageCss,
+  previewContainerFor,
   previewContainerName,
 } from "./compile-page";
 import { EMITTABLE_STRING_BOUNDS } from "./emittable-string-bounds";
@@ -435,6 +436,90 @@ describe("refusing an oversized name", () => {
     // The control: at the cap with no padding, still accepted.
     expect(previewContainerName("a".repeat(MAX_PREVIEW_CONTAINER_LENGTH))).toBe(
       "a".repeat(MAX_PREVIEW_CONTAINER_LENGTH)
+    );
+  });
+});
+
+describe("a bounded visibility band on the container axis", () => {
+  it("keeps the impossible condition rather than rebuilding a named query", () => {
+    /*
+     * A band is emitted through a different path from the context it belongs
+     * to, and rebuilding its wrapper from the prefix alone dropped the
+     * impossible condition — leaving a merely NAMED query an authored ancestor
+     * could satisfy. The node's styles would stay impossible while its
+     * visibility band went live, so preview visibility disagreed with preview
+     * styling in the one direction nobody would look.
+     */
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          styles: { base: { "card-narrow": { color: "magenta" } } },
+          visibility: {
+            devices: { "card-wide": false, "card-narrow": true },
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    /*
+     * The POPULATION comes from the PUBLISHED compile, because that is where a
+     * bounded band takes its recognisable form. Under preview the band is the
+     * impossible condition itself, so looking for `width >` there would find
+     * nothing whether the fix worked or not — an assertion satisfied by absence.
+     */
+    const published = compilePageCss(page, { breakpoints: set() }).css;
+    expect(published).toContain("width >");
+
+    const previewed = compilePageCss(page, {
+      breakpoints: set(),
+      previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+    }).css;
+
+    // No band survives with a real bound to be satisfied against.
+    expect(previewed).not.toContain("width >");
+    // And every container-axis rule still carries the impossibility.
+    for (const rule of previewed.split("}")) {
+      if (rule.includes(UNPREVIEWABLE_CONTAINER)) {
+        expect(rule).toContain("(width < 0px)");
+      }
+    }
+  });
+});
+
+describe("a per-surface preview container", () => {
+  it("differs per seed, so an authored name cannot shadow every surface", () => {
+    /*
+     * The default is a globally predictable identifier, and a nearer ancestor
+     * declaring `container: nx-preview-viewport / inline-size` satisfies the
+     * named query first — so viewport tiers would follow that inner element
+     * rather than the preview box. The container axis is protected by an
+     * impossible condition; the viewport axis cannot be, because it has to
+     * match something.
+     */
+    expect(previewContainerFor("a1")).not.toBe(previewContainerFor("b2"));
+    // Derived from the seed rather than generated, so a server render and a
+    // client hydration produce the SAME string — a random one would differ
+    // across that boundary and match nothing on first paint.
+    expect(previewContainerFor("a1")).toBe(previewContainerFor("a1"));
+    // And whatever it produces is a name the compiler will actually emit.
+    expect(previewContainerName(previewContainerFor("a1"))).toBe(
+      previewContainerFor("a1")
+    );
+  });
+
+  it("reduces an opaque seed rather than refusing it", () => {
+    // A caller passing an id from elsewhere should not have to know this
+    // function's rules; a seed that cannot be made safe falls back rather than
+    // yielding a name the compiler would refuse.
+    expect(previewContainerName(previewContainerFor(":r1:"))).toBeDefined();
+    expect(previewContainerName(previewContainerFor("x".repeat(500)))).toBe(
+      PREVIEW_VIEWPORT_CONTAINER
     );
   });
 });

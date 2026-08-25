@@ -1519,6 +1519,76 @@ describe("where a control's value came from", () => {
     expect(text?.getAttribute("aria-hidden")).toBe("true");
   });
 
+  it("draws NOTHING while previewing and nobody has said which tier is live", () => {
+    /*
+     * Silence in this API is a CLAIM, which is what makes the obvious fix wrong.
+     *
+     * Under a preview compile the viewport tiers are container queries and a
+     * `matchMedia` caller cannot evaluate them, so the window-derived answer is
+     * the base context alone. Passed on, `liveBreakpoints: ["base"]` asserts
+     * that base is what the browser is applying — and a narrow preview box
+     * showing the mobile tier would have every mobile declaration excluded and
+     * the base value reported as the visible winner.
+     *
+     * No dot means "not asked", which is true until a caller observes the box.
+     */
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [entry()],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")).toBeNull();
+  });
+
+  it("draws one once the host SAYS which tier is live, which is the control", () => {
+    /*
+     * Without this, a panel that never drew a dot while previewing would satisfy
+     * the case above and the affordance would simply be gone rather than
+     * withheld — an absence proving nothing about the gate.
+     */
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={["base"]}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [entry()],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")).not.toBeNull();
+  });
+
   it("draws NOTHING for a property no tier set", () => {
     // Eight empty dots per section is the shape that trains an author to stop
     // reading the panel.
