@@ -41,9 +41,9 @@ export class SlidingWindowMemoryStore implements RateLimitStore {
     const windowStart = now - windowMs;
     const kept = (this.windows.get(key) ?? []).filter(t => t > windowStart);
 
-    // Recorded before the caller has judged it. A caller that refuses the
-    // attempt takes it back with `decrement`, which is what keeps a refused
-    // request from extending its own window.
+    // Unconditional: `increment` counts every attempt, which is what the REST
+    // limiter wants. A caller that must not count a refused attempt uses
+    // `consume` instead, where the decision and the record are one step.
     kept.push(now);
     this.windows.set(key, kept);
 
@@ -57,18 +57,42 @@ export class SlidingWindowMemoryStore implements RateLimitStore {
     });
   }
 
-  decrement(key: string): Promise<void> {
-    const timestamps = this.windows.get(key);
-    if (timestamps === undefined || timestamps.length === 0) {
-      return Promise.resolve();
+  /**
+   * Record an attempt only if it stays within `limit`.
+   *
+   * Atomic by construction: this runs to completion inside one turn of the
+   * event loop, so nothing can observe the window between the count and the
+   * push. That is the whole reason the decision lives in the store rather than
+   * in the limiter — a limiter that counted here and recorded after an await
+   * would leave a gap for another request to slip through.
+   */
+  consume(
+    key: string,
+    limit: number,
+    windowMs: number
+  ): Promise<RateLimitRecord & { allowed: boolean }> {
+    const now = Date.now();
+    const kept = (this.windows.get(key) ?? []).filter(t => t > now - windowMs);
+    const allowed = kept.length < limit;
+
+    // Only an allowed attempt is recorded, so a refused caller cannot push its
+    // own window forward by continuing to hammer — which would otherwise let
+    // them hold a key locked out indefinitely.
+    if (allowed) {
+      kept.push(now);
+      this.windows.set(key, kept);
+    } else if (kept.length > 0) {
+      // Still store the pruned array: dropping entries that aged out is what
+      // lets the window slide even while every attempt is being refused.
+      this.windows.set(key, kept);
     }
-    // The LAST entry, because `increment` appends and this undoes that same
-    // increment. Removing the oldest instead would slide the window forward on
-    // every refusal, which is the opposite of what a refusal should do.
-    timestamps.pop();
-    if (timestamps.length === 0) this.windows.delete(key);
-    else this.windows.set(key, timestamps);
-    return Promise.resolve();
+
+    const oldest = kept[0] ?? now;
+    return Promise.resolve({
+      allowed,
+      count: kept.length,
+      resetTime: oldest + windowMs,
+    });
   }
 
   reset(key: string): Promise<void> {

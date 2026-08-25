@@ -205,8 +205,17 @@ export interface RateLimitingConfig {
  * Sanitized rate limiting configuration with defaults applied.
  */
 export interface SanitizedRateLimitingConfig {
-  /** Rate limiting is enabled */
-  enabled: true;
+  /**
+   * Whether the REST limiter runs.
+   *
+   * A real boolean rather than the literal `true` it used to be. The block was
+   * previously omitted entirely when a user disabled rate limiting, which had
+   * two consequences: `routeHandler` spread nothing over its own
+   * `enabled: true` default and kept limiting anyway, and `store` — which the
+   * AUTH limiter also reads — went with it. Disabling the public limiter must
+   * not silently disarm the one in front of credentials.
+   */
+  enabled: boolean;
   /** Maximum requests per window for read operations (GET) */
   readLimit: number;
   /** Maximum requests per window for write operations (POST, PATCH, PUT, DELETE) */
@@ -904,22 +913,21 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
   }
 
   // Build rate limit config — enabled by default (opt-out with `enabled: false`).
-  let rateLimit: SanitizedRateLimitingConfig | undefined;
-  if (config.rateLimit?.enabled !== false) {
-    rateLimit = {
-      enabled: true,
-      readLimit:
-        config.rateLimit?.readLimit ?? DEFAULT_RATE_LIMIT_CONFIG.readLimit,
-      writeLimit:
-        config.rateLimit?.writeLimit ?? DEFAULT_RATE_LIMIT_CONFIG.writeLimit,
-      windowMs:
-        config.rateLimit?.windowMs ?? DEFAULT_RATE_LIMIT_CONFIG.windowMs,
-      store: config.rateLimit?.store,
-      keyGenerator: config.rateLimit?.keyGenerator,
-      skip: config.rateLimit?.skip,
-      collections: config.rateLimit?.collections,
-    };
-  }
+  // Emitted whether or not the REST limiter is on. `store` lives on this block
+  // and the AUTH limiter reads it from here, so dropping the block for
+  // `enabled: false` would disable a limiter the user never mentioned.
+  const rateLimit: SanitizedRateLimitingConfig = {
+    enabled: config.rateLimit?.enabled !== false,
+    readLimit:
+      config.rateLimit?.readLimit ?? DEFAULT_RATE_LIMIT_CONFIG.readLimit,
+    writeLimit:
+      config.rateLimit?.writeLimit ?? DEFAULT_RATE_LIMIT_CONFIG.writeLimit,
+    windowMs: config.rateLimit?.windowMs ?? DEFAULT_RATE_LIMIT_CONFIG.windowMs,
+    store: config.rateLimit?.store,
+    keyGenerator: config.rateLimit?.keyGenerator,
+    skip: config.rateLimit?.skip,
+    collections: config.rateLimit?.collections,
+  };
 
   // Build apiKeys config only if the block is provided; omitting it entirely
   // is valid — the auth middleware falls back to built-in defaults.

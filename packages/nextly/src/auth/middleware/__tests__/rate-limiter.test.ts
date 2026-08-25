@@ -99,73 +99,93 @@ describe("the store seam", () => {
     // store, this would pass as `true` and the seam would be decorative.
     const calls: string[] = [];
     const alwaysOver: RateLimitStore = {
-      async increment(key: string): Promise<RateLimitRecord> {
+      increment(key: string): Promise<RateLimitRecord> {
         calls.push(key);
-        return { count: 999, resetTime: Date.now() + WINDOW };
+        return Promise.resolve({ count: 999, resetTime: Date.now() + WINDOW });
       },
-      async reset(): Promise<void> {},
+      reset(): Promise<void> {
+        return Promise.resolve();
+      },
     };
 
-    const limiter = new RateLimiter(alwaysOver);
-    const result = await limiter.check("k", 100, WINDOW);
+    const result = await new RateLimiter(alwaysOver).check("k", 100, WINDOW);
 
     expect(result.allowed).toBe(false);
     expect(calls).toEqual(["k"]);
   });
 
-  it("still refuses when a store cannot take an increment back", async () => {
-    // `decrement` is optional. A store that omits it must not crash the
-    // request path — the attempt simply stays counted, which is the safe
-    // direction to degrade in.
-    const noDecrement: RateLimitStore = {
-      async increment(): Promise<RateLimitRecord> {
-        return { count: 5, resetTime: Date.now() + WINDOW };
+  it("prefers the store's ATOMIC decision over counting itself", async () => {
+    // The store says allowed while the count is far over the limit. Only a
+    // limiter that defers to `consume` produces `true` here; one that re-derived
+    // the verdict from `count` would say false. That is the point — the store
+    // owns the decision because only it can make it atomic.
+    const store: RateLimitStore = {
+      increment(): Promise<RateLimitRecord> {
+        throw new Error("increment must not be used when consume exists");
       },
-      async reset(): Promise<void> {},
+      reset(): Promise<void> {
+        return Promise.resolve();
+      },
+      consume(): Promise<RateLimitRecord & { allowed: boolean }> {
+        return Promise.resolve({
+          allowed: true,
+          count: 500,
+          resetTime: Date.now() + WINDOW,
+        });
+      },
     };
 
-    const limiter = new RateLimiter(noDecrement);
-    await expect(limiter.check("k", 1, WINDOW)).resolves.toMatchObject({
-      allowed: false,
-    });
+    await expect(
+      new RateLimiter(store).check("k", 1, WINDOW)
+    ).resolves.toMatchObject({ allowed: true });
   });
 
-  it("takes the increment back on refusal when the store supports it", async () => {
-    // Asserted on the STORE rather than on a later allow, so it cannot pass
-    // because the window happened to be long enough.
-    const decremented: string[] = [];
-    const store: RateLimitStore = {
-      async increment(): Promise<RateLimitRecord> {
-        return { count: 9, resetTime: Date.now() + WINDOW };
+  it("falls back to counting every attempt when the store is not atomic", async () => {
+    // A store without `consume` gets the stricter path: refused attempts count.
+    // Asserted as a REFUSAL at the boundary rather than as an absence, so it
+    // cannot pass against a limiter that allows everything.
+    let count = 0;
+    const notAtomic: RateLimitStore = {
+      increment(): Promise<RateLimitRecord> {
+        count += 1;
+        return Promise.resolve({ count, resetTime: Date.now() + WINDOW });
       },
-      async reset(): Promise<void> {},
-      async decrement(key: string): Promise<void> {
-        decremented.push(key);
+      reset(): Promise<void> {
+        return Promise.resolve();
       },
     };
 
-    const limiter = new RateLimiter(store);
+    const limiter = new RateLimiter(notAtomic);
+    expect((await limiter.check("k", 2, WINDOW)).allowed).toBe(true);
+    expect((await limiter.check("k", 2, WINDOW)).allowed).toBe(true);
+    expect((await limiter.check("k", 2, WINDOW)).allowed).toBe(false);
+  });
+
+  it("never asks a store to take an increment back", async () => {
+    // The property that closes the cross-window erasure: a rollback issued in
+    // one window can land in the next and delete an attempt that WAS budgeted,
+    // admitting excess logins right at a reset boundary. There is no rollback
+    // to mistime, and this fails if one is reintroduced.
+    const store = new SlidingWindowMemoryStore();
+    expect("decrement" in store).toBe(false);
+
+    // The control: the object is not simply empty — the methods it should have
+    // are present, so the absence above is meaningful.
+    expect(typeof store.consume).toBe("function");
+    expect(typeof store.increment).toBe("function");
+  });
+
+  it("keeps sliding while every attempt is being refused", async () => {
+    // A refused attempt is not recorded, but the window must still drain. If
+    // the store returned early on refusal without keeping the pruned array, an
+    // exhausted key would never recover.
+    const limiter = new RateLimiter(new SlidingWindowMemoryStore());
     await limiter.check("k", 1, WINDOW);
-    expect(decremented).toEqual(["k"]);
-  });
 
-  it("does NOT take it back when the request was allowed", async () => {
-    // The mirror of the case above. Without it, a limiter that decremented on
-    // every call would pass the previous test and silently never count anything.
-    const decremented: string[] = [];
-    const store: RateLimitStore = {
-      async increment(): Promise<RateLimitRecord> {
-        return { count: 1, resetTime: Date.now() + WINDOW };
-      },
-      async reset(): Promise<void> {},
-      async decrement(key: string): Promise<void> {
-        decremented.push(key);
-      },
-    };
+    vi.advanceTimersByTime(WINDOW / 2);
+    expect((await limiter.check("k", 1, WINDOW)).allowed).toBe(false);
 
-    const limiter = new RateLimiter(store);
-    const result = await limiter.check("k", 10, WINDOW);
-    expect(result.allowed).toBe(true);
-    expect(decremented).toEqual([]);
+    vi.advanceTimersByTime(WINDOW / 2 + 1);
+    expect((await limiter.check("k", 1, WINDOW)).allowed).toBe(true);
   });
 });

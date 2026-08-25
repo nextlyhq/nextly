@@ -98,19 +98,28 @@ export interface RateLimitStore {
   reset(key: string): Promise<void>;
 
   /**
-   * Take back the most recent increment for a key.
+   * Record an attempt ONLY if it stays within `limit`, atomically.
    *
-   * Optional, and only meaningful to a caller that decides AFTER incrementing
-   * that the attempt should not have counted. The auth limiter is that caller:
-   * a refused login must not extend its own window, or an attacker holding
-   * themselves refused would keep the window from ever draining.
+   * One operation, because two are not safe. A caller that increments and then
+   * takes the increment back on refusal has an await between the two, and in
+   * that gap another request can start a NEW window — the old rollback then
+   * erases the new window's count and admits attempts nobody budgeted for. The
+   * damage is worst at a window boundary, which is exactly where a limiter is
+   * most load-bearing.
    *
-   * Modelled on `express-rate-limit`'s `decrement`, which exists for the same
-   * reason — a request the caller chose to skip. A store that cannot support it
-   * omits it, and the caller degrades to counting the refused attempt rather
-   * than failing.
+   * Optional because not every store can be atomic. A caller that needs the
+   * guarantee checks for it and degrades deliberately when it is absent; see
+   * `RateLimiter.check`, which then counts refused attempts rather than
+   * risking the erasure — stricter, never looser.
+   *
+   * `allowed` is the store's decision, not a hint: only the store knows whether
+   * the entry was recorded.
    */
-  decrement?(key: string): Promise<void>;
+  consume?(
+    key: string,
+    limit: number,
+    windowMs: number
+  ): Promise<RateLimitRecord & { allowed: boolean }>;
 }
 
 /**

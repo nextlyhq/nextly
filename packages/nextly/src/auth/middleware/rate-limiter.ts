@@ -61,21 +61,26 @@ export class RateLimiter {
     limit: number,
     windowMs: number
   ): Promise<RateLimitCheckResult> {
-    // Counted first, then taken back if refused. The order matters: asking
-    // "would this be allowed?" and then recording it separately is two round
-    // trips to a shared store with a gap in between, and concurrent requests
-    // race through that gap. One increment is the only part that a store can
-    // make atomic.
+    // One atomic operation when the store offers it. The decision and the
+    // record cannot be separated safely: with two calls there is an await
+    // between them, and in that gap another request can start a new window that
+    // the second call then corrupts.
+    if (this.store.consume) {
+      const consumed = await this.store.consume(key, limit, windowMs);
+      return {
+        allowed: consumed.allowed,
+        remaining: Math.max(0, limit - consumed.count),
+        resetAt: new Date(consumed.resetTime),
+      };
+    }
+
+    // A store that cannot be atomic still gets a correct-but-stricter limiter:
+    // every attempt counts, including refused ones. That costs a caller who has
+    // exhausted their budget a longer wait than the atomic path would, and it
+    // is the only degradation that fails CLOSED. The alternative — increment
+    // then roll back — is the erasure this branch exists to avoid.
     const { count, resetTime } = await this.store.increment(key, windowMs);
     const allowed = count <= limit;
-
-    if (!allowed) {
-      // A refused attempt must not extend its own window, or an attacker who
-      // keeps hammering keeps the window from ever draining and locks the key
-      // out permanently. A store that cannot take an increment back leaves the
-      // attempt counted, which is the safe direction to degrade in.
-      await this.store.decrement?.(key);
-    }
 
     return {
       allowed,
