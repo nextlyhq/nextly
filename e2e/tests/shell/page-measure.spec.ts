@@ -23,10 +23,21 @@ import { expect, test } from "@playwright/test";
 import { gotoAdmin } from "../support/admin";
 
 /**
- * Routes rendering the measured frame, one per width it offers. Both are
- * reachable with no fixture beyond the seeded dev user.
+ * Routes rendering the measured frame, reachable with no fixture beyond the
+ * seeded dev user.
+ *
+ * The two form routes are the point rather than extra coverage: they are what
+ * this frame was built for, and a sweep of settings pages alone would report
+ * green while an editor bled out of its column. `/singles/site-settings` also
+ * carries the only STICKY descendant in a measured page, which is a position
+ * the containment walk has to measure rather than skip.
  */
-const MEASURED_ROUTES = ["/settings", "/settings/api-keys"];
+const MEASURED_ROUTES = [
+  "/settings",
+  "/settings/api-keys",
+  "/collections/posts/create",
+  "/singles/site-settings",
+];
 
 /**
  * Viewport widths chosen to cross both container-query steps. The gutter keys
@@ -39,7 +50,10 @@ const SWEEP = [1600, 1180, 740];
 interface Escape {
   readonly tag: string;
   readonly cls: string;
-  readonly over: number;
+  /** How far past the left bound, and past the right. Reported separately so a
+   *  failure says which edge moved rather than only how far. */
+  readonly overLeft: number;
+  readonly overRight: number;
 }
 
 interface Measurement {
@@ -109,12 +123,17 @@ async function measure(page: import("@playwright/test").Page) {
     /** The rect of a box this invariant applies to, or null for one it does not. */
     const placedRect = (el: Element) => {
       const style = getComputedStyle(el);
-      // Out-of-flow boxes are placed against the viewport or a positioned
-      // ancestor rather than against the column, so leaving it is what they
-      // are for: a dropdown, a dialog, a toast.
-      const inFlow =
-        style.position === "static" || style.position === "relative";
-      if (!inFlow) return null;
+      // Only `absolute` and `fixed` leave normal flow, and those are placed
+      // against a positioned ancestor or the viewport rather than against the
+      // column — so leaving it is what they are for: a dropdown, a dialog, a
+      // toast. Named as the pair that ESCAPES rather than as the set that
+      // stays, because the second list is the one with a hole in it: `sticky`
+      // is offset from its flow position and still occupies it, so a sticky
+      // child carrying a negative margin leaves the column exactly as a static
+      // one does. An editor rail on a measured page is sticky.
+      const outOfFlow =
+        style.position === "absolute" || style.position === "fixed";
+      if (outOfFlow) return null;
       const r = el.getBoundingClientRect();
       // `display: contents` and anything hidden have no box to place.
       if (r.width === 0 && r.height === 0) return null;
@@ -144,12 +163,14 @@ async function measure(page: import("@playwright/test").Page) {
       const { left, right } = boundsFor(el);
       // A pixel of tolerance for subpixel layout; the failure this guards was
       // 64px.
-      const over = Math.max(left - r.left, r.right - right);
-      if (over > 1) {
+      const overLeft = Math.round(left - r.left);
+      const overRight = Math.round(r.right - right);
+      if (Math.max(overLeft, overRight) > 1) {
         escapes.push({
           tag: el.tagName.toLowerCase(),
           cls: el.className?.toString().slice(0, 120) ?? "",
-          over: Math.round(over),
+          overLeft,
+          overRight,
         });
       }
     }
@@ -190,34 +211,47 @@ test.describe("a measured page keeps its children inside the page", () => {
     });
   }
 
-  test("the measurement reports a child that does escape", async ({ page }) => {
+  test("the measurement reports children that do escape", async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 900 });
     await gotoAdmin(page, "/settings");
     await expect(page.locator(".nx-page-shell")).toBeVisible();
 
-    // A real grid item on a real page, carrying the displacement that caused
+    // Real grid items on a real page, carrying the displacement that caused
     // the regression. Appended rather than borrowed from what the page already
     // rendered, so the control does not depend on which element happens to be
     // first or on how that element's own layout absorbs a margin — the point
-    // is to exercise the same walk over the same geometry, from a box whose
+    // is to exercise the same walk over the same geometry, from boxes whose
     // placement is known.
+    //
+    // One per flow position the walk claims to measure. A single static probe
+    // would pass just as well against a predicate that skipped sticky, which
+    // is the defect this pair exists to make visible.
     const placed = await page.evaluate(() => {
       const shell = document.querySelector(".nx-page-shell");
-      if (!shell) return false;
-      const probe = document.createElement("div");
-      probe.className = "nx-e2e-escapee";
-      probe.style.marginInline = "-8rem";
-      probe.style.height = "20px";
-      shell.appendChild(probe);
-      return true;
+      if (!shell) return 0;
+      const probes = [
+        { cls: "nx-e2e-escapee-static", position: "" },
+        { cls: "nx-e2e-escapee-sticky", position: "sticky" },
+      ];
+      for (const { cls, position } of probes) {
+        const probe = document.createElement("div");
+        probe.className = cls;
+        probe.style.marginInline = "-8rem";
+        probe.style.height = "20px";
+        if (position) probe.style.position = position;
+        shell.appendChild(probe);
+      }
+      return probes.length;
     });
-    expect(placed).toBe(true);
+    expect(placed).toBe(2);
 
     const m = await measure(page);
     expect(m.found).toBe(true);
     expect(m.tracks).toHaveLength(3);
     // Named, not counted: an unrelated escape already on the page would
-    // satisfy a non-empty list while the injected one stayed invisible.
-    expect(m.escapes.map(e => e.cls).join(" ")).toContain("nx-e2e-escapee");
+    // satisfy a non-empty list while an injected one stayed invisible.
+    const named = m.escapes.map(e => e.cls).join(" ");
+    expect(named).toContain("nx-e2e-escapee-static");
+    expect(named).toContain("nx-e2e-escapee-sticky");
   });
 });

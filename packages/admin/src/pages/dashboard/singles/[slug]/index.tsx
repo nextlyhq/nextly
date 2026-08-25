@@ -68,7 +68,9 @@ function SingleEditPageSkeleton() {
           replaces it would then jump 64px narrower. */}
       <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
         {/* Main Content */}
-        <div className="flex-1 space-y-6 lg:p-8 pt-6">
+        {/* `min-w-0` as the editor that replaces this carries it: without it
+            this pane will not shrink and pushes the rail past the column. */}
+        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />

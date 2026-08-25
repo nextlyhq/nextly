@@ -25,10 +25,19 @@
  * utilities whose names it never spells out — `{m,mx}-{8}` contains no class
  * at all — so no text scan of it can answer this question.
  *
- * The complete answer is in `scripts/build-css.mjs`, which refuses to ship a
- * stylesheet containing either utility, from any input. This scan earns its
- * place by being fast and by naming the FILE, which the compiled output cannot:
- * it turns "the stylesheet has this rule" into "this file put it there".
+ * Nor does it cover MAGNITUDE, which is the larger gap: `--nx-gutter` steps
+ * 2rem / 1.5rem / 1rem with the content panel, so a smaller negative cancels
+ * the inset at a narrower step while this matches one size. Widening it is not
+ * the remedy — measured, that reports nine call sites of which seven are
+ * correct, because whether a box sits inside a measured column is not a
+ * property of the source either.
+ *
+ * The BOUNDARY is `e2e/tests/shell/page-measure.spec.ts`, which holds every
+ * in-flow child of a rendered measured page to the bounds its own placement
+ * gives it. The column, the gutter step in effect and the resolved distance
+ * all exist there, and none of them exists here. This scan earns its place by
+ * being fast and by naming the FILE, which geometry cannot: it turns "a box
+ * left its column" into "this file put it there".
  *
  * That division is why the tree walk is affordable at all: the utility is used
  * nowhere in these trees, so every hit is a finding. A legitimate use would
@@ -66,11 +75,19 @@ const THIS_FILE =
  * Read from the `@source` directives rather than listed here, so a tree added
  * to the build joins this scan in the same edit.
  */
-function scannedRoots(): string[] {
-  const css = readFileSync(GLOBALS_CSS, "utf8");
-  const declared = [...css.matchAll(/@source\s+"([^"]+)"/g)]
-    .map(m => m[1])
+function declaredSources(css: string): string[] {
+  // Both quote styles, with the closing one required to MATCH the opening
+  // quote. CSS accepts either, so a single-quoted directive is a tree Tailwind
+  // compiles and this scan would otherwise never read — and the failure is
+  // silent, because the roots already declared keep the membership controls
+  // green while the new tree is simply absent.
+  return [...css.matchAll(/@source\s+(["'])([^"']+)\1/g)]
+    .map(m => m[2])
     .filter(spec => !spec.startsWith("inline("));
+}
+
+function scannedRoots(): string[] {
+  const declared = declaredSources(readFileSync(GLOBALS_CSS, "utf8"));
 
   return [
     ADMIN_SRC,
@@ -170,6 +187,17 @@ describe("a measured entry page", () => {
         `${suffix} is not in the scan`
       ).toBe(true);
     }
+  });
+
+  it("reads a source directive in either quote style", () => {
+    // The control for the reader itself: a directive it cannot see removes a
+    // whole tree from the scan without removing anything from this file's
+    // assertions, so every other test here stays green while coverage drops.
+    expect(
+      declaredSources("@source \"../double\";\n@source '../single';")
+    ).toEqual(["../double", "../single"]);
+    // A safelist spells out no class, so it is not a tree to walk.
+    expect(declaredSources('@source inline("{m,mx}-{8}");')).toEqual([]);
   });
 
   it("sees a two-axis inset when there is one", () => {
