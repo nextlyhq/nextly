@@ -35,7 +35,6 @@ const STRING_SEED_TYPES: ReadonlySet<string> = new Set([
 const SCALAR_DEFAULTS: Readonly<Record<string, unknown>> = Object.freeze({
   checkbox: false,
   number: null,
-  repeater: [],
 });
 
 /**
@@ -53,9 +52,10 @@ function getSelectDefault(field: FieldConfig, declared: unknown): unknown {
 
 /**
  * Returns the type-specific fallback default for a field that has no explicit defaultValue.
- * Uses Object.hasOwn to prevent Object.prototype key collision.
+ * Uses Object.hasOwn to prevent Object.prototype key collision and allocates mutable collections per field.
  */
 function getTypeDefault(type: string, subField: FieldConfig): unknown {
+  if (type === "repeater") return [];
   if (Object.hasOwn(SCALAR_DEFAULTS, type)) {
     return SCALAR_DEFAULTS[type];
   }

@@ -124,6 +124,7 @@ jobs:
 
             // Fetch existing review comments on this PR to prevent duplicate threads
             let existingComments = [];
+            let lookupSucceeded = false;
             try {
               existingComments = await github.paginate(
                 github.rest.pulls.listReviewComments,
@@ -134,8 +135,14 @@ jobs:
                   per_page: 100,
                 }
               );
+              lookupSucceeded = true;
             } catch (err) {
               console.log('Warning: could not fetch existing review comments:', err.message);
+            }
+
+            if (!lookupSucceeded) {
+              console.log('Skipping PR review creation because existing review comments could not be verified.');
+              return;
             }
 
             // Filter out comments that are already present on the same file & line

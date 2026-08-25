@@ -102,50 +102,8 @@ export interface RepeaterInputProps<
   renderField?: RenderFieldFunction<TFieldValues>;
 }
 
-// ============================================================
-// Component
-// ============================================================
-
 /**
- * RepeaterInput provides a repeater field for managing lists of structured data.
- *
- * Features:
- * - Add/remove rows with min/max constraints
- * - Drag-and-drop reordering via @dnd-kit
- * - Keyboard-accessible drag operations
- * - Collapsible rows for complex structures
- * - Custom row labels based on content
- * - Integration with React Hook Form
- *
- * @example Basic usage
- * ```tsx
- * <FieldWrapper field={socialLinksField} error={errors.socialLinks?.message}>
- *   <RepeaterInput
- *     name="socialLinks"
- *     field={socialLinksField}
- *     control={control}
- *   />
- * </FieldWrapper>
- * ```
- *
- * @example With custom field rendering
- * ```tsx
- * <RepeaterInput
- *   name="faq"
- *   field={faqField}
- *   control={control}
- *   renderField={(field, basePath, control, options) => (
- *     <FieldRenderer field={field} basePath={basePath} control={control} {...options} />
- *   )}
- * />
- * ```
- *
- * @example With FormProvider (no control prop needed)
- * ```tsx
- * <FormProvider {...methods}>
- *   <RepeaterInput name="items" field={itemsField} />
- * </FormProvider>
- * ```
+ * Collapsible header for the repeater card container displaying title, count, and chevron toggle.
  */
 function RepeaterHeader({
   isOpen,
@@ -224,6 +182,47 @@ function RepeaterAddButton({
   );
 }
 
+/**
+ * RepeaterInput provides a repeater field for managing lists of structured data.
+ *
+ * Features:
+ * - Add/remove rows with min/max constraints
+ * - Drag-and-drop reordering via @dnd-kit
+ * - Keyboard-accessible drag operations
+ * - Collapsible rows for complex structures
+ * - Custom row labels based on content
+ * - Integration with React Hook Form
+ *
+ * @example Basic usage
+ * ```tsx
+ * <FieldWrapper field={socialLinksField} error={errors.socialLinks?.message}>
+ *   <RepeaterInput
+ *     name="socialLinks"
+ *     field={socialLinksField}
+ *     control={control}
+ *   />
+ * </FieldWrapper>
+ * ```
+ *
+ * @example With custom field rendering
+ * ```tsx
+ * <RepeaterInput
+ *   name="faq"
+ *   field={faqField}
+ *   control={control}
+ *   renderField={(field, basePath, control, options) => (
+ *     <FieldRenderer field={field} basePath={basePath} control={control} {...options} />
+ *   )}
+ * />
+ * ```
+ *
+ * @example With FormProvider (no control prop needed)
+ * ```tsx
+ * <FormProvider {...methods}>
+ *   <RepeaterInput name="items" field={itemsField} />
+ * </FormProvider>
+ * ```
+ */
 export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
   name,
   field,

@@ -28,6 +28,17 @@ describe("createDefaultFieldValues", () => {
       expect(result).toEqual({ tags: [] });
     });
 
+    it("allocates distinct array instances for multiple repeater fields", () => {
+      const fields: FieldConfig[] = [
+        { type: "repeater", name: "tags", fields: [] } as never,
+        { type: "repeater", name: "categories", fields: [] } as never,
+      ];
+      const result = createDefaultFieldValues(fields);
+      expect(result.tags).toEqual([]);
+      expect(result.categories).toEqual([]);
+      expect(result.tags).not.toBe(result.categories);
+    });
+
     it("assigns null to single (non-repeatable) component fields", () => {
       const fields: FieldConfig[] = [
         {

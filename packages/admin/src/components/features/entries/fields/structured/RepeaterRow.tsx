@@ -124,33 +124,8 @@ export interface RepeaterRowProps<
   isSortable?: boolean;
 }
 
-// ============================================================
-// Component
-// ============================================================
-
 /**
- * RepeaterRow renders a single row within a repeater field.
- *
- * Features:
- * - Drag handle for reordering via @dnd-kit
- * - Collapsible content with smooth animation
- * - Dynamic row labels based on content
- * - Remove button with disabled state
- * - Visual feedback during drag operations
- *
- * @example
- * ```tsx
- * <RepeaterRow
- *   id={item.id}
- *   index={0}
- *   field={repeaterFieldConfig}
- *   basePath="socialLinks.0"
- *   data={item}
- *   control={control}
- *   onRemove={() => remove(0)}
- *   canRemove={fields.length > minRows}
- * />
- * ```
+ * Header bar for a single repeater row containing drag handle, label, collapse trigger, and remove button.
  */
 interface RepeaterRowHeaderProps {
   index: number;
@@ -349,6 +324,30 @@ function RepeaterRowSubFields<TFieldValues extends FieldValues = FieldValues>({
   );
 }
 
+/**
+ * RepeaterRow renders a single row within a repeater field.
+ *
+ * Features:
+ * - Drag handle for reordering via @dnd-kit
+ * - Collapsible content with smooth animation
+ * - Dynamic row labels based on content
+ * - Remove button with disabled state
+ * - Visual feedback during drag operations
+ *
+ * @example
+ * ```tsx
+ * <RepeaterRow
+ *   id={item.id}
+ *   index={0}
+ *   field={repeaterFieldConfig}
+ *   basePath="socialLinks.0"
+ *   data={item}
+ *   control={control}
+ *   onRemove={() => remove(0)}
+ *   canRemove={fields.length > minRows}
+ * />
+ * ```
+ */
 export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
   id,
   index,
