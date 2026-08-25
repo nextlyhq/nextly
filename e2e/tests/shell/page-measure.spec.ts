@@ -18,7 +18,7 @@
  * of the geometry the browser computed. That makes the check complete for any
  * spelling rather than for the spellings someone thought to enumerate.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "../support/admin";
 
@@ -26,11 +26,12 @@ import { gotoAdmin } from "../support/admin";
  * Routes rendering the measured frame, reachable with no fixture beyond the
  * seeded dev user.
  *
- * The two form routes are the point rather than extra coverage: they are what
- * this frame was built for, and a sweep of settings pages alone would report
- * green while an editor bled out of its column. `/singles/site-settings` also
- * carries the only STICKY descendant in a measured page, which is a position
- * the containment walk has to measure rather than skip.
+ * `awaitLoaded` is not a convenience here. Every one of these routes renders
+ * `.nx-page-shell` in its LOADING state too, so waiting for the shell says
+ * nothing about whether the editor is on screen — and the editors are what
+ * this frame exists for. Measured without it, the sweep read the skeletons on
+ * both form routes and would have stayed green while `EntryForm` itself bled
+ * out of its column.
  */
 const MEASURED_ROUTES = [
   "/settings",
@@ -38,6 +39,72 @@ const MEASURED_ROUTES = [
   "/collections/posts/create",
   "/singles/site-settings",
 ];
+
+const shellOf = (page: Page) => page.locator(".nx-page-shell");
+
+/**
+ * Placeholder boxes inside the shell, from the shared `Skeleton` and from the
+ * hand-rolled pulses several loading branches use instead of it.
+ *
+ * This is the discriminator rather than a status announcement, because the
+ * announcement does not separate the two states. Measured across these four
+ * routes: `/settings` and `/settings/api-keys` render NO `role="status"` while
+ * loading, and `/collections/posts/create` renders one while LOADED — so a
+ * check for its absence passes on a skeleton AND fails on a finished page,
+ * which is wrong in both directions.
+ *
+ * A placeholder is what "still loading" looks like on screen, and it is what
+ * the measurement must not be reading.
+ */
+const skeletons = (page: Page) =>
+  shellOf(page).locator('[data-slot="skeleton"], .animate-pulse');
+
+/**
+ * A real interactive control inside the shell, of either kind the admin uses.
+ *
+ * The POPULATION half. "No placeholders" is satisfied perfectly by a page that
+ * rendered nothing at all, and those are the same output.
+ */
+const aControl = (page: Page) =>
+  shellOf(page)
+    .getByRole("textbox")
+    .or(shellOf(page).getByRole("button"))
+    .first();
+
+/**
+ * The page failed instead of rendering, in either shape the admin uses.
+ *
+ * Two, because measurement showed one is not enough. `Alert` defaults to
+ * `role="alert"` and the entry and single routes use it; `/settings/api-keys`
+ * hands its query failure to `PageErrorFallback`, which renders an error PAGE
+ * and so carries no alert role at all. Measured in that state: zero skeletons,
+ * zero alerts, three controls still mounted — indistinguishable from a loaded
+ * page by everything this file checked before.
+ *
+ * `page-error` is page-scoped rather than shell-scoped because the fallback
+ * replaces the page's content, including the shell it was rendered in.
+ */
+const errors = (page: Page) =>
+  page.locator('[data-slot="page-error"]').or(shellOf(page).getByRole("alert"));
+
+/**
+ * The page is in its LOADED state — asserted as all the states these routes
+ * settle into, not as one of them.
+ *
+ * Each clause is here because a check without it passed on a page that was not
+ * the editor: the skeleton renders the same shell, the error branches keep a
+ * control mounted, and a page that rendered nothing satisfies every absence
+ * perfectly — so a real control must be present as well.
+ *
+ * `timeout` is a parameter so the tests below can ask this to fail fast while
+ * the sweep still waits properly for a cold route.
+ */
+async function awaitLoaded(page: Page, timeout = 20_000) {
+  await expect(shellOf(page)).toBeVisible({ timeout });
+  await expect(skeletons(page)).toHaveCount(0, { timeout });
+  await expect(errors(page)).toHaveCount(0, { timeout });
+  await expect(aControl(page)).toBeVisible({ timeout });
+}
 
 /**
  * Viewport widths chosen to cross both container-query steps. The gutter keys
@@ -84,7 +151,7 @@ interface Measurement {
  * examined. "No box escaped" is satisfied perfectly by a page that rendered no
  * boxes, and those are the same output.
  */
-async function measure(page: import("@playwright/test").Page) {
+async function measure(page: Page) {
   return page.evaluate((): Measurement => {
     const empty = { gutter: "", inFlow: 0, escapes: [], tracks: [] };
     const shell = document.querySelector(".nx-page-shell");
@@ -113,6 +180,15 @@ async function measure(page: import("@playwright/test").Page) {
     // design — a wide table in its own scroller — and the scroller is what has
     // to stay in the column. Asked of the ancestors rather than of a class
     // name, so any spelling that produces the clip is recognised.
+    //
+    // The exemption is sound because the clip is REAL: the overflow is not
+    // painted outside the ancestor, so nothing reaches the page edge however
+    // far the rect extends. It is worth knowing when verifying this test,
+    // though, since it is not obvious from a failure. Every card in the admin
+    // is `rounded-*` with `overflow-hidden`, so a negative margin planted
+    // inside one is correctly NOT reported — measured here at 7px past the
+    // column and clipped — and a break placed there looks like the check
+    // missing it. Plant the break outside the cards, or on a grid item.
     const clipped = (el: Element) => {
       for (let p = el.parentElement; p && p !== shell; p = p.parentElement) {
         if (getComputedStyle(p).overflowX !== "visible") return true;
@@ -187,7 +263,7 @@ test.describe("a measured page keeps its children inside the page", () => {
       for (const width of SWEEP) {
         await page.setViewportSize({ width, height: 900 });
         await gotoAdmin(page, route);
-        await expect(page.locator(".nx-page-shell")).toBeVisible();
+        await awaitLoaded(page);
 
         const m = await measure(page);
 
@@ -210,6 +286,83 @@ test.describe("a measured page keeps its children inside the page", () => {
       expect([...gutters].sort()).toEqual(["1.5rem", "1rem", "2rem"]);
     });
   }
+
+  // Readiness is the part of this file that has been wrong most often, and
+  // always the same way: satisfied by a page that was not the editor. These
+  // force the states it must refuse.
+  //
+  // Both use `/settings/api-keys` deliberately. It is the route whose loading
+  // AND error branches keep a control mounted — its Create API Key button
+  // lives in the layout, outside the part that varies — so each test can only
+  // pass by way of the clause it is named for. On the entry route the skeleton
+  // renders no control at all, so `aControl` alone would reject it and the
+  // skeleton clause would go unexercised.
+  const holdApiKeys = (page: Page, respond: "delay" | "fail") =>
+    page.route("**/admin/api/**", async route => {
+      const url = route.request().url();
+      if (/me\/permissions|dev-reload|\/me$|auth/.test(url))
+        return route.continue();
+      if (respond === "fail") {
+        return route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "forced" } }),
+        });
+      }
+      await new Promise(resolve => setTimeout(resolve, 10_000));
+      await route.continue();
+    });
+
+  test("readiness refuses a page that is still loading", async ({ page }) => {
+    await holdApiKeys(page, "delay");
+    await gotoAdmin(page, "/settings/api-keys");
+    // The control this route keeps mounted while loading, so the rejection
+    // below cannot come from `aControl`.
+    await expect(aControl(page)).toBeVisible();
+
+    await expect(awaitLoaded(page, 2_000)).rejects.toThrow();
+  });
+
+  test("readiness refuses a page that failed to load", async ({ page }) => {
+    await holdApiKeys(page, "fail");
+    await gotoAdmin(page, "/settings/api-keys");
+    // `PageErrorFallback`, which carries no alert role — the shape that got
+    // past the previous version of this check.
+    await expect(page.locator('[data-slot="page-error"]')).toBeVisible();
+    await expect(skeletons(page)).toHaveCount(0);
+
+    await expect(awaitLoaded(page, 2_000)).rejects.toThrow();
+  });
+
+  test("the loading skeleton keeps its children inside the page", async ({
+    page,
+  }) => {
+    // The skeleton is its own layout, not a blurred copy of the editor, and it
+    // is the state that regressed: its main pane was `flex-1` with no
+    // `min-w-0`, so it would not shrink and pushed the fixed-width rail 4px out
+    // of the column. Measured at 1180px because that is the panel width where
+    // the column is narrow enough for the rail to overflow it.
+    await page.setViewportSize({ width: 1180, height: 900 });
+
+    // Held open deliberately. On a warm dev server the skeleton lasts a few
+    // frames, so a test that merely navigated would race it and read the
+    // editor instead — passing while measuring the wrong state.
+    await page.route("**/api/collections/schema/**", async route => {
+      await new Promise(resolve => setTimeout(resolve, 5_000));
+      await route.continue();
+    });
+
+    await gotoAdmin(page, "/collections/posts/create");
+    await expect(shellOf(page)).toBeVisible();
+    // The skeleton IS what is on screen — asserted, not assumed, so this
+    // cannot quietly become a second measurement of the loaded editor.
+    await expect(skeletons(page).first()).toBeVisible();
+
+    const m = await measure(page);
+    expect(m.tracks).toHaveLength(3);
+    expect(m.inFlow).toBeGreaterThan(10);
+    expect(m.escapes, "at 1180px, loading").toEqual([]);
+  });
 
   test("the measurement reports children that do escape", async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 900 });

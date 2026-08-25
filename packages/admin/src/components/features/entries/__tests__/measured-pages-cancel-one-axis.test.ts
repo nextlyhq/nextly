@@ -163,7 +163,7 @@ const HORIZONTAL_ONLY = `-mx${"-8"}`;
  * `e2e/tests/shell/page-measure.spec.ts`, which asks the rendered geometry —
  * where the column, the gutter and the resolved distance all exist.
  */
-const HORIZONTAL_CANCEL = /(?:^|[\s:"'`{(,])-mx?-8\b/;
+const HORIZONTAL_CANCEL = /(?:^|[\s:"'`{(,!])-mx?-8\b/;
 
 describe("a measured entry page", () => {
   it("reads every tree the build reads", () => {
@@ -230,6 +230,22 @@ describe("a measured entry page", () => {
     );
     expect(HORIZONTAL_CANCEL.test('<div className="-my-8 flex">')).toBe(false);
     expect(HORIZONTAL_CANCEL.test('<div className="-mx-4">')).toBe(false);
+
+    // Both important spellings. Tailwind 4 puts the modifier at the END, and
+    // still accepts the leading form; compiled here, `!${HORIZONTAL_ONLY}` and
+    // `${HORIZONTAL_ONLY}!` each emit the same declaration with `!important`,
+    // so a rule that wins hardest must not be the one that reads as clean. The
+    // trailing form was already caught by the quote before it — the leading
+    // one was not, because `!` sat outside the boundary class.
+    expect(
+      HORIZONTAL_CANCEL.test(`<div className="!${HORIZONTAL_ONLY}">`)
+    ).toBe(true);
+    expect(
+      HORIZONTAL_CANCEL.test(`<div className="${HORIZONTAL_ONLY}!">`)
+    ).toBe(true);
+    expect(
+      HORIZONTAL_CANCEL.test(`<div className="@4xl/content:!${TWO_AXIS}">`)
+    ).toBe(true);
 
     expect(HORIZONTAL_CANCEL.test(`// cancels ${TWO_AXIS} horizontally`)).toBe(
       true
