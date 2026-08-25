@@ -209,6 +209,20 @@ async function assertRedirectTargetUsable(
   const nextly = context.req?.nextly;
   if (!nextly) return;
 
+  // Not inside a caller-owned transaction. `context.executor` is present only
+  // there, and the contract on it is explicit: a hook that reads the database
+  // must use that executor, because a second pooled connection can stall
+  // against a small pool while the caller's transaction holds the only one —
+  // and a pooled read cannot see the transaction's own uncommitted rows, so a
+  // page created in the same transaction would read as missing and this would
+  // refuse a correct write.
+  //
+  // `findByID` takes no executor, and reaching for Drizzle directly here would
+  // be raw database access inside a plugin. So the transactional path keeps
+  // the shape check and skips the read; the submit path is the backstop it
+  // already was.
+  if (context.executor) return;
+
   const target = (await nextly
     .findByID({ collection: reference.collection, id: reference.id })
     .catch(() => null)) as RedirectTargetDocument | null;

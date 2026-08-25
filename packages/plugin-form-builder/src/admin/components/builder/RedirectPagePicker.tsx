@@ -132,11 +132,15 @@ function useChoices(key: string, applied: string) {
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [failed, setFailed] = useState<readonly string[]>([]);
   const [hasMore, setHasMore] = useState(false);
-  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
+  // Per collection, not shared. A shared counter advances every collection
+  // when any one of them has more, so a collection whose page N failed is
+  // never asked for page N again — and if its N+1 succeeds the warning clears
+  // too, leaving those documents absent with nothing on screen saying so.
+  const [pages, setPages] = useState<Record<string, number>>({});
 
   // A new query is a new list, not more of the old one.
-  useEffect(() => setPage(1), [key, applied]);
+  useEffect(() => setPages({}), [key, applied]);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,29 +148,33 @@ function useChoices(key: string, applied: string) {
     setLoading(true);
 
     void Promise.all(
-      wanted.map(collection => fetchChoices(collection, applied, page))
+      wanted.map(collection =>
+        fetchChoices(collection, applied, pages[collection] ?? 1)
+      )
     ).then(results => {
       if (cancelled) return;
       setLoading(false);
+
       // WHICH collections failed, not merely whether any did: one unreadable
       // collection beside a readable-but-empty one otherwise reports "nothing
       // here" about a collection nobody could see.
       setFailed(wanted.filter((_, index) => results[index] === null));
+
       const loaded = results.filter(
         (result): result is { rows: Choice[]; hasMore: boolean } =>
           result !== null
       );
       setHasMore(loaded.some(result => result.hasMore));
+
       const rows = loaded.flatMap(result => result.rows);
-      setChoices(current =>
-        page === 1 ? rows : [...(current ?? []), ...rows]
-      );
+      const first = wanted.every(collection => (pages[collection] ?? 1) === 1);
+      setChoices(current => (first ? rows : [...(current ?? []), ...rows]));
     });
 
     return () => {
       cancelled = true;
     };
-  }, [key, applied, page]);
+  }, [key, applied, pages]);
 
   return {
     choices,
@@ -174,11 +182,30 @@ function useChoices(key: string, applied: string) {
     failed,
     hasMore,
     loading,
-    // Guarded rather than debounced: two clicks before page 2 resolves either
-    // batch into page 3 or cancel page 2's effect, and page 2's documents are
-    // then absent from a list that says it has loaded them.
+    /**
+     * Advances only the collections that have more to give, and RETRIES the
+     * ones whose last page failed rather than stepping over it.
+     *
+     * Guarded on the in-flight flag: two clicks before the first resolves
+     * either batch into a double increment or cancel the pending effect, and a
+     * skipped page is then absent from a list that reports having loaded it.
+     */
     loadMore: () => {
-      if (!loading) setPage(current => current + 1);
+      if (loading) return;
+      setPages(current => {
+        const next: Record<string, number> = { ...current };
+        for (const collection of key ? key.split(",") : []) {
+          // A failed collection stays on its page so the retry asks for the
+          // page it never got.
+          if (failed.includes(collection)) continue;
+          next[collection] = (current[collection] ?? 1) + 1;
+        }
+        return next;
+      });
+    },
+    /** Ask the failed collections again, without advancing anyone. */
+    retryFailed: () => {
+      if (!loading) setPages(current => ({ ...current }));
     },
   };
 }
@@ -200,6 +227,12 @@ function useSelectedChoice(
   choices: Choice[] | null,
   setChoices: (update: (current: Choice[] | null) => Choice[]) => void
 ) {
+  // Whether the stored selection could not be read. A controlled `Select`
+  // holding a value with no matching option renders BLANK, which looks
+  // identical to "nothing chosen" — so an author with a perfectly good
+  // destination is invited to pick over it. Reported rather than swallowed.
+  const [unreadable, setUnreadable] = useState(false);
+
   useEffect(() => {
     if (!selected || choices === null) return;
     const separator = selected.indexOf(":");
@@ -207,14 +240,14 @@ function useSelectedChoice(
     const id = selected.slice(separator + 1);
     // Collection AND id: two configured collections can hold the same id, and
     // matching on id alone skips the fetch while the option that is actually
-    // selected is absent — leaving the author looking at a blank control over
-    // a stored value.
+    // selected is absent.
     if (
       !id ||
       choices.some(
         choice => choice.id === id && choice.collection === collection
       )
     ) {
+      setUnreadable(false);
       return;
     }
 
@@ -222,24 +255,30 @@ function useSelectedChoice(
     void (async () => {
       try {
         // `status=all` for the same reason the listing carries it: a stored
-        // target may be a draft, and a published-only read answers 404 — so
-        // the control would drop a selection the listing would have shown.
+        // target may be a draft, and a published-only read answers 404.
         const response = await fetch(
           `/admin/api/collections/${collection}/entries/${id}?depth=0&status=all`,
           { credentials: "include" }
         );
-        if (!response.ok) return;
+        if (!response.ok) {
+          if (!cancelled) setUnreadable(true);
+          return;
+        }
         // A by-id read answers with the document ITSELF. Only mutations carry
-        // the `{ message, item }` envelope, and reaching for `item` here made
-        // this recovery a no-op that no listing-sized fixture could reveal.
+        // the `{ message, item }` envelope.
         const row = (await response.json()) as Record<string, unknown>;
-        if (cancelled || !row || typeof row.id !== "string") return;
+        if (cancelled) return;
+        if (!row || typeof row.id !== "string") {
+          setUnreadable(true);
+          return;
+        }
+        setUnreadable(false);
         setChoices(current => [
           { collection, id: row.id as string, label: documentLabel(row) },
           ...(current ?? []),
         ]);
       } catch {
-        // The list still renders; the selection simply cannot be named.
+        if (!cancelled) setUnreadable(true);
       }
     })();
 
@@ -247,6 +286,8 @@ function useSelectedChoice(
       cancelled = true;
     };
   }, [selected, choices, setChoices]);
+
+  return unreadable;
 }
 
 /** The options, grouped by collection only when there is more than one. */
@@ -309,10 +350,17 @@ export function RedirectPagePicker({
 
   // `collections` is an array prop, so a new identity every render would
   // refetch forever; the join is the value that actually decides the request.
-  const { choices, setChoices, failed, hasMore, loading, loadMore } =
-    useChoices(collections.join(","), applied);
+  const {
+    choices,
+    setChoices,
+    failed,
+    hasMore,
+    loading,
+    loadMore,
+    retryFailed,
+  } = useChoices(collections.join(","), applied);
   const selected = selectionKey(value, collections);
-  useSelectedChoice(selected, choices, setChoices);
+  const selectionUnreadable = useSelectedChoice(selected, choices, setChoices);
 
   if (choices === null) {
     return <p className="text-[12px] text-muted-foreground">Loading pages…</p>;
@@ -336,7 +384,26 @@ export function RedirectPagePicker({
       {failed.length > 0 && (
         <p className="text-[12px] text-destructive">
           Could not read {failed.join(" or ")}. You may not have permission to
-          list {failed.length > 1 ? "them" : "it"}, or the request failed.
+          list {failed.length > 1 ? "them" : "it"}, or the request failed.{" "}
+          <button
+            type="button"
+            onClick={retryFailed}
+            disabled={loading}
+            className="underline underline-offset-2 disabled:no-underline"
+          >
+            Try again
+          </button>
+        </p>
+      )}
+
+      {/* Said plainly, because the control cannot show it: a stored value with
+          no matching option renders blank, which reads as "nothing chosen" and
+          invites an author to replace a destination that is still set. */}
+      {selectionUnreadable && (
+        <p className="text-[12px] text-destructive">
+          This form has a page selected that could not be read. Leave it as it
+          is unless you mean to change it — saving a new choice replaces the
+          stored one.
         </p>
       )}
 
