@@ -138,17 +138,72 @@ function fromTextDefault(field: FieldConfig, declared: unknown): unknown {
     : [declared];
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A private copy of a structured default.
+ *
+ * The declared value lives on the field definition, which outlives every row
+ * seeded from it — the same definition fills every repeater row and every entry
+ * created from that collection. Handing it out directly would give all of them
+ * one shared object, so editing one row would reach into the others and into
+ * the config itself. `field-defaults.ts` guards the write path the same way.
+ */
+function cloneDeclared(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  try {
+    return structuredClone(value);
+  } catch {
+    // Only a value that cannot be stored at all fails to clone, and validation
+    // rejects that with a message about the value rather than about the copy.
+    return value;
+  }
+}
+
+/**
+ * A declared container merged with the defaults of the fields inside it.
+ *
+ * The declared keys win and the rest are seeded, which is what the write path
+ * arrives at from the other direction: `applyFieldDefaults` writes the declared
+ * value first, then fills each child only where the value is absent.
+ */
+function overlayDeclared(
+  seeded: Record<string, unknown>,
+  declared: unknown
+): Record<string, unknown> {
+  return isPlainObject(declared)
+    ? { ...seeded, ...(cloneDeclared(declared) as Record<string, unknown>) }
+    : seeded;
+}
+
+/** Each declared row, with any sub-field it leaves unset seeded from the schema. */
+function fromRowsDefault(
+  declared: unknown,
+  fields: FieldConfig[] | undefined
+): unknown[] {
+  // Rows are never invented: how many a new row starts with is the schema
+  // author's declaration, and `minRows` is a validation rule rather than an
+  // instruction to fabricate content — the same rule `fillRepeaterRows` states.
+  if (!Array.isArray(declared)) return [];
+  const seeded = fields ? getDefaultValues(fields) : {};
+  return declared.map(row => overlayDeclared(seeded, row));
+}
+
 /** A component's seed: a list when repeatable, its nested defaults when not. */
-function fromComponentDefault(field: FieldConfig): unknown {
-  const componentField = field as {
+function fromComponentDefault(field: FieldConfig, declared: unknown): unknown {
+  const { componentFields, repeatable } = field as {
     componentFields?: FieldConfig[];
     repeatable?: boolean;
   };
-  if (componentField.repeatable) return [];
-  if (componentField.componentFields) {
-    return getDefaultValues(componentField.componentFields);
+  if (repeatable) return fromRowsDefault(declared, componentFields);
+  if (componentFields) {
+    return overlayDeclared(getDefaultValues(componentFields), declared);
   }
-  return null;
+  // With no nested schema there is nothing to seed, so a declared value is the
+  // only thing that can fill it.
+  return isPlainObject(declared) ? cloneDeclared(declared) : null;
 }
 
 /**
@@ -177,13 +232,14 @@ const DECLARED_DEFAULT: Record<
   radio: fromMultiplicityDefault,
   relationship: fromMultiplicityDefault,
   upload: fromMultiplicityDefault,
-  repeater: () => [],
+  repeater: (f, d) =>
+    fromRowsDefault(d, (f as { fields?: FieldConfig[] }).fields),
   chips: (_f, d) => d ?? [],
-  group: f => {
+  group: (f, d) => {
     const { fields } = f as { fields?: FieldConfig[] };
-    return fields ? getDefaultValues(fields) : {};
+    return overlayDeclared(fields ? getDefaultValues(fields) : {}, d);
   },
-  component: f => fromComponentDefault(f),
+  component: fromComponentDefault,
 };
 
 /**

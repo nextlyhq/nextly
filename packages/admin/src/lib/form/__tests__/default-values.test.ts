@@ -222,6 +222,85 @@ describe("getDefaultValues — multiplicity and declared values", () => {
     });
   });
 
+  it("honours a declared default on a repeater, seeding each row's unset fields", () => {
+    // These synthesized [] and {} and discarded the declaration, so a nested
+    // repeater with a declared initial row started empty and the untouched
+    // outer row failed validation.
+    expect(
+      getDefaultValues([
+        f({
+          name: "links",
+          type: "repeater",
+          fields: [
+            { name: "label", type: "text" },
+            { name: "url", type: "text" },
+          ],
+          defaultValue: [{ label: "Home" }],
+        }),
+      ])
+      // `url` is unset in the declared row, so it takes the schema's seed —
+      // the same order the write path reaches by writing the declaration and
+      // then filling each child that is absent.
+    ).toEqual({ links: [{ label: "Home", url: "" }] });
+  });
+
+  it("lets a declared group value win per key and seeds the rest", () => {
+    expect(
+      getDefaultValues([
+        f({
+          name: "address",
+          type: "group",
+          fields: [
+            { name: "city", type: "text" },
+            { name: "country", type: "text" },
+          ],
+          defaultValue: { country: "NL" },
+        }),
+      ])
+    ).toEqual({ address: { city: "", country: "NL" } });
+  });
+
+  it("still seeds an empty list for a repeater with no declared default", () => {
+    // Rows are not invented: how many a new entry starts with is the schema
+    // author's declaration, not something minRows fabricates.
+    expect(
+      getDefaultValues([
+        f({ name: "links", type: "repeater", fields: [], minRows: 1 }),
+      ])
+    ).toEqual({ links: [] });
+  });
+
+  it("gives each seeded row a private copy of the declared default, nested values included", () => {
+    // The declaration lives on the field config, which outlives every row
+    // seeded from it. Handing it out directly would let an edit to one row
+    // reach the config and every other row seeded from it.
+    //
+    // The value mutated here is NESTED on purpose: merging the declared row
+    // already produces a fresh object at the top level, so a test that edits a
+    // top-level key passes whether or not the value was copied and proves
+    // nothing about the copy.
+    const field = f({
+      name: "links",
+      type: "repeater",
+      fields: [{ name: "label", type: "text" }],
+      defaultValue: [{ label: "Home", meta: { icon: "house" } }],
+    });
+
+    const first = getDefaultValues([field]).links as {
+      meta: { icon: string };
+    }[];
+    first[0].meta.icon = "edited";
+
+    const second = getDefaultValues([field]).links as {
+      meta: { icon: string };
+    }[];
+    expect(second[0].meta.icon).toBe("house");
+    expect(
+      (field as unknown as { defaultValue: { meta: { icon: string } }[] })
+        .defaultValue[0].meta.icon
+    ).toBe("house");
+  });
+
   it("resolves a function default against the values seeded so far", () => {
     // The write path's `applyFieldDefaults` passes the document built so far,
     // so a sibling-dependent default must see the same thing here. Resolving
