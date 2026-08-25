@@ -283,7 +283,15 @@ async function storedRowsWhere(
     });
     for (const item of result.items) {
       const row = readStoredRow(item);
-      if (row !== null) rows.push(row);
+      if (row === null) continue;
+      // Validated HERE rather than by each consumer. Every path that reads rows
+      // goes on to delete some of them, and a row outside the requested
+      // predicates is another document's — the misbound-query failure. Guarding
+      // at the source covers reconciliation, the per-subject forget and the
+      // removed-field sweep at once; guarding per consumer covered the first
+      // and missed the two added after it.
+      assertRowMatches(row, where, describe);
+      rows.push(row);
     }
     if (!result.meta.hasNext) return rows;
   }
@@ -295,6 +303,34 @@ async function storedRowsWhere(
       `${PAGE_SIZE} for ${describe}, ` +
       `which is more than any document can reference — the store's paging is wrong.`
   );
+}
+
+/**
+ * Refuse a row the query did not ask for.
+ *
+ * Compared against the PREDICATES rather than against a subject, so it holds
+ * for a document-wide read as well as a per-subject one — the two differ in
+ * which columns they bind, and a check written against a subject could not
+ * express the wider query at all.
+ *
+ * Thrown rather than skipped. Every caller of this goes on to delete rows, so
+ * silently dropping a foreign one would correct a misbound query's damage
+ * invisibly on every call and nothing would ever report it.
+ */
+function assertRowMatches(
+  row: StoredClassUsageRow,
+  where: Record<string, { equals: string }>,
+  describe: string
+): void {
+  for (const [column, predicate] of Object.entries(where)) {
+    const actual = (row as unknown as Record<string, unknown>)[column];
+    if (actual === predicate.equals) continue;
+    throw new Error(
+      `Class-usage row ${row.id} has ${column}="${String(actual)}" but the ` +
+        `query asked for "${predicate.equals}" while reading ${describe}; ` +
+        `the query is misbound and its rows must not be deleted.`
+    );
+  }
 }
 
 /** Every column that identifies one subject, as a query. */

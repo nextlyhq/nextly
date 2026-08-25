@@ -279,7 +279,36 @@ describe("maintaining one subject's rows", () => {
         subject: page,
         document: documentUsing("hero"),
       })
-    ).rejects.toThrow(/belongs to collection:pages:page-2:content/);
+    ).rejects.toThrow(
+      /has entityKey="page-2" but the query asked for "page-1"/
+    );
+  });
+
+  it("refuses a foreign row on the destructive paths too", async () => {
+    // `forgetClassUsage` and `forgetRemovedFields` delete every row they read.
+    // Neither goes through the reconciler, so a guard living only there left
+    // both able to delete another document's rows on a misbound query.
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [{ ...page, entityKey: "page-2", id: "r9", classId: "hero" }],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async () => {
+        throw new Error("must not delete a row from another document");
+      },
+    };
+
+    await expect(forgetClassUsage({ store, subject: page })).rejects.toThrow(
+      /the query is misbound/
+    );
+    await expect(
+      forgetRemovedFields({
+        store,
+        document: { scope: "collection", entity: "pages", entityKey: "page-1" },
+        presentFields: [],
+      })
+    ).rejects.toThrow(/the query is misbound/);
   });
 });
 
