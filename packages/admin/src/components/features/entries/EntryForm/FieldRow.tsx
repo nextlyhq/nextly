@@ -1,7 +1,14 @@
 import type { FieldConfig } from "nextly/config";
 import type React from "react";
 
+// fallow-ignore-next-line circular-dependency
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
+import {
+  fieldWeight,
+  computeGridColumns,
+} from "@admin/lib/forms/pack-fields-into-rows";
+
+export { fieldWeight };
 
 export interface FieldRowProps {
   /** Fields packed onto this row by `packFieldsIntoRows()`. */
@@ -14,21 +21,6 @@ export interface FieldRowProps {
   basePath?: string;
   /** Form mode; write-only fields (password) adjust their affordances */
   mode?: "create" | "edit";
-}
-
-/**
- * Returns the field's `admin.width` parsed to a number 0-100, or 100 when
- * absent/malformed. Mirrors the parser in pack-fields-into-rows.ts but
- * without the dependency to keep this file self-contained.
- */
-export function fieldWeight(field: FieldConfig): number {
-  const w = (field as { admin?: { width?: string } }).admin?.width;
-  if (!w) return 100;
-  const m = /^(\d+(?:\.\d+)?)%$/.exec(w.trim());
-  if (!m) return 100;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n) || n <= 0 || n > 100) return 100;
-  return n;
 }
 
 /**
@@ -50,12 +42,7 @@ export function FieldRow({
   basePath,
   mode,
 }: FieldRowProps): React.ReactElement {
-  const weights = fields.map(fieldWeight);
-  const sum = weights.reduce((a, b) => a + b, 0);
-  const cols =
-    sum < 100
-      ? [...weights, 100 - sum].map(w => `${w}fr`).join(" ")
-      : weights.map(w => `${w}fr`).join(" ");
+  const cols = computeGridColumns(fields.map(fieldWeight));
 
   return (
     <div

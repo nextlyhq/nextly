@@ -12,8 +12,9 @@
   //                         agent gate runs before a commit.
   //
   // In CI, .github/workflows/code-hygiene.yml runs a changed-files audit
-  // gate alongside a full-repository scan for dead-code, dupes, and health
-  // (excluding apps/playground).
+  // gate (with inline annotations and PR review threads) alongside a
+  // full-repository scan combining dead-code, dupes, and health into one
+  // sticky PR comment (excluding apps/playground).
   //
   // The lists below exist because a static reader cannot see every way this
   // repo reaches code: a path spelled inside a string, a package pulled in by

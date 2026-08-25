@@ -23,7 +23,7 @@ function parseWidth(width: string | undefined): number {
   return n;
 }
 
-function isBlockField(field: FieldConfig): boolean {
+function isBlockField(field: { type: string }): boolean {
   return BLOCK_FIELD_TYPES.has(field.type);
 }
 
@@ -36,10 +36,12 @@ function isBlockField(field: FieldConfig): boolean {
  * Pure function — no side effects, no React, easy to unit-test. Consumed by
  * EntryFormContent which renders each row inside a flex container.
  */
-export function packFieldsIntoRows(fields: FieldConfig[]): FieldConfig[][] {
+export function packFieldsIntoRows<
+  T extends { type: string; admin?: { width?: string } } = FieldConfig,
+>(fields: T[]): T[][] {
   if (!fields || !Array.isArray(fields)) return [];
-  const rows: FieldConfig[][] = [];
-  let current: FieldConfig[] = [];
+  const rows: T[][] = [];
+  let current: T[] = [];
   let runningSum = 0;
 
   const flush = () => {
@@ -75,4 +77,23 @@ export function packFieldsIntoRows(fields: FieldConfig[]): FieldConfig[][] {
 
   flush();
   return rows;
+}
+
+/**
+ * Returns the field's `admin.width` parsed to a number 0-100, or 100 when absent/malformed.
+ */
+export function fieldWeight(field: unknown): number {
+  if (!field || typeof field !== "object") return 100;
+  const w = (field as { admin?: { width?: string } }).admin?.width;
+  return parseWidth(w);
+}
+
+/**
+ * Computes the CSS grid-template-columns string for a list of field widths in a row.
+ */
+export function computeGridColumns(weights: number[]): string {
+  const sum = weights.reduce((a, b) => a + b, 0);
+  return sum < 100
+    ? [...weights, 100 - sum].map(w => `${w}fr`).join(" ")
+    : weights.map(w => `${w}fr`).join(" ");
 }
