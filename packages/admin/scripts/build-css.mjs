@@ -12,6 +12,11 @@
  * 3. This prevents any style conflicts with consumer app's Tailwind/CSS
  */
 
+import {
+  cancelsInset,
+  components,
+  horizontalOfMargin,
+} from "./horizontal-inset.mjs";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -208,37 +213,9 @@ try {
   // inset is what lets the editors reach the panel's top and bottom.
   const shipped = fs.readFileSync(outputFile, "utf-8");
 
-  /**
-   * One declaration's value split into its top-level components.
-   *
-   * `calc(...)` has spaces inside it, so its interior is collapsed before the
-   * split — otherwise `calc(var(--spacing) * -8)` becomes three components and
-   * every position after it is read wrong.
-   */
-  const components = value =>
-    value
-      .replace(/calc\((?:[^()]|\([^()]*\))*\)/g, term => term.replace(/\s+/g, ""))
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-
-  /**
-   * The page's own inset, negated, in every serialisation Tailwind emits for
-   * it. `--spacing` is 0.25rem, so the eight-step is 2rem: the utility compiles
-   * to the calc form, its arbitrary-value spelling to the literal `-2rem`, and
-   * a pixel value would be `-32px`.
-   *
-   * Spelled as a value rather than as a class ON PURPOSE. This file sits in a
-   * tree Tailwind scans, so naming the utility here emits the rule — which is
-   * what the error below tells the reader not to do.
-   *
-   * This is a check on ONE DISTANCE, not on negative horizontal margins in
-   * general. Smaller ones are legitimate and shipped — a card pulling its own
-   * edge past its padding, a -1px rule overlap — and refusing those would make
-   * the guard something to switch off rather than something to keep.
-   */
-  const NEGATIVE_INSET =
-    /^(?:calc\(var\(--spacing\)\*-8\)|-2rem|-32px)$/;
+  const spacingRem = Number(
+    (/--spacing:\s*([\d.]+)rem/.exec(shipped) ?? [, "0.25"])[1]
+  );
 
   /**
    * Every property that can move a box's LEFT or RIGHT edge, enumerated from
@@ -266,12 +243,6 @@ try {
    * value sets all four, two and three put the pair second, and four are
    * clockwise from the top, so right is second and left fourth.
    */
-  const horizontalOfMargin = parts => {
-    if (parts.length === 1) return parts;
-    if (parts.length === 4) return [parts[1], parts[3]];
-    return [parts[1]];
-  };
-
   const horizontalValues = (prop, parts) => {
     if (prop === "margin") return horizontalOfMargin(parts);
     // `margin-inline` is horizontal whole: one value sets both sides, two set
@@ -288,7 +259,7 @@ try {
     // The important-flagged utility emits it. Left in place it defeats the
     // match on the very declaration that wins hardest.
     const parts = components(value.replace(/!important\s*$/, "").trim());
-    if (horizontalValues(prop, parts).some(part => NEGATIVE_INSET.test(part))) {
+    if (horizontalValues(prop, parts).some(part => cancelsInset(part, spacingRem))) {
       offenders.push(`${prop}: ${value.trim()}`);
     }
   }
