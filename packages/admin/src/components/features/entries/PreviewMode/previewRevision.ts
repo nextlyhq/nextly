@@ -2,7 +2,7 @@
  * What the preview would render, as a value that changes when it does.
  *
  * One function rather than an expression at the call site, because it answers a
- * question with more than one part and getting either part wrong is silent: the
+ * question with more than one part and getting any part wrong is silent: the
  * frame simply keeps showing content that is no longer there.
  *
  * @module components/features/entries/PreviewMode/previewRevision
@@ -35,22 +35,42 @@ function modifiedAt(document: unknown): string {
 }
 
 /**
- * DERIVED from the document rather than notified by whoever wrote it.
+ * THREE facts, because no two of them cover the writes the third does.
  *
- * A form submission is not the only write. Discarding a working draft and
- * restoring a version each persist through their own mutation, so a token
- * bumped by the submit handler leaves the frame showing content that was just
- * discarded. Deriving means a write nobody remembered to announce still moves
- * the value — the difference between covering the writes that were listed and
- * covering the writes there are.
+ * Derived from the document, and counted from this form's own saves, because
+ * each half is blind to writes the other sees.
  *
- * TWO facts, because the preview route reads both. `updatedAt` moves on a save
- * and on a version restore, which resubmits through the ordinary update path.
- * It does NOT move when a working draft is discarded — the draft is a separate
- * row from the published one — and that discard changes what the preview
- * renders, because the route reads the draft overlay. Either fact alone misses
- * a write the frame would then keep showing.
+ * `updatedAt` moves on a save and on a version restore, which resubmits through
+ * the ordinary update path. It does NOT move when a working draft is discarded
+ * — the draft is a separate row from the published one — and that discard
+ * changes what the preview renders, because the route reads the draft overlay.
+ * So `hasPendingWorkingDraft` is read too.
+ *
+ * And BOTH derived facts stand still for the case that turns out to be the
+ * ordinary one: editing a published entry. A status-less save of a published,
+ * drafts-enabled document writes the working-draft sidecar and leaves the live
+ * row alone, and `shapeDraftForResponse` then copies the LIVE parent's
+ * timestamps onto the response — so after the first such save `_isWorkingDraft`
+ * is already `true` and `updatedAt` is frozen at the published row's value.
+ * Every later draft save changes the content and moves neither fact. The
+ * sidecar does carry its own advancing `updatedAt`, but it never leaves the
+ * server, so no amount of care with the document can recover it.
+ *
+ * `savedCount` closes exactly that gap and nothing else. It is a NOTIFICATION,
+ * which is the weaker kind of evidence and why it is not the whole answer: it
+ * knows only about writes this form performed, so a discard, a restore, or
+ * another author's change would move nothing if it were used alone. The derived
+ * facts cover those. Used together each covers the other's blind spot — writes
+ * nobody announced, and announced writes that move nothing observable.
+ *
+ * A save the server treated as a no-op still bumps the count, costing one
+ * reload of identical content. That is the safe direction: a reload is a
+ * remount of an existing credential, while a missed change is a preview that
+ * quietly stops matching the document.
  */
-export function previewRevisionOf(document: unknown): string {
-  return `${modifiedAt(document)}|${hasPendingWorkingDraft(document)}`;
+export function previewRevisionOf(
+  document: unknown,
+  savedCount: number
+): string {
+  return `${modifiedAt(document)}|${hasPendingWorkingDraft(document)}|${savedCount}`;
 }

@@ -58,13 +58,18 @@ export interface PreviewPanesProps {
   /**
    * What the preview would render, as a value that changes when it does.
    *
-   * DERIVED from the document rather than notified by whoever wrote it, because
-   * a form submission is not the only write: discarding a working draft and
-   * restoring a version both persist through their own mutations, and a token
-   * bumped by the submit handler leaves the frame showing content that was just
-   * discarded. Deriving means a write nobody remembered to announce still moves
-   * it — which is the difference between covering the writes we listed and
-   * covering the writes there are.
+   * Both DERIVED from the document and COUNTED from the form's own saves,
+   * because each kind of evidence is blind where the other sees. Deriving
+   * catches writes nobody announced — discarding a working draft and restoring
+   * a version each persist through their own mutation, so a token bumped only
+   * by the submit handler leaves the frame showing content that was just
+   * discarded. Counting catches the opposite: a status-less save of a published
+   * entry writes the draft sidecar and moves nothing the document exposes, so
+   * every save after the first is invisible to derivation alone.
+   *
+   * {@link previewRevisionOf} builds it. Passed in rather than computed here so
+   * the pane stays a layout: the facts it is made of belong to the form that
+   * holds the document.
    */
   revision: string;
   children: ReactNode;

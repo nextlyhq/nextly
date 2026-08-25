@@ -52,3 +52,13 @@ this is a pane beside the editor, not a surface that took the window.
 The credential is minted when the pane opens and re-minted only as it approaches
 expiry. An ordinary refresh remounts the frame, so watching a page through a long edit
 does not issue a bearer credential per save.
+
+Two situations leave the pane empty with a sentence rather than a frame, because in
+both the browser would quietly serve the PUBLISHED page into something captioned as a
+draft. A site served from a different address than the admin cannot receive the preview
+cookie in a frame at all — the Preview button still opens it in a tab, which works
+everywhere. And because a site keeps one preview session per browser, opening previews
+for two different entries takes the session from the first; that pane now says so and
+takes it back when refreshed, instead of showing published content under a draft label.
+The default scaffold, where the admin is mounted inside the site's own app, is affected
+by neither.

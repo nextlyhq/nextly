@@ -264,6 +264,21 @@ export function EntryForm({
    */
   const [previewOpen, setPreviewOpen] = useState(false);
 
+  /*
+   * How many times THIS form has saved, which the preview revision folds in.
+   *
+   * Needed because the derived half of that revision goes blind for the most
+   * ordinary edit there is. A status-less save of a published entry writes the
+   * working-draft sidecar and leaves the live row untouched, so from the second
+   * such save onward the document's `updatedAt` and its working-draft flag both
+   * stand still while its content changes underneath them. Counting saves is
+   * the only signal to that write available on this side of the wire.
+   *
+   * A count rather than a timestamp: two saves inside the same millisecond are
+   * indistinguishable by clock, and nothing here needs to know WHEN.
+   */
+  const [savedCount, setSavedCount] = useState(0);
+
   const {
     form,
     handleSubmit,
@@ -279,6 +294,10 @@ export function EntryForm({
     locale,
     readDraft,
     onSuccess: data => {
+      // Before the caller's handler, which may navigate away: this is the only
+      // point that knows a write landed, and a revision that misses one leaves
+      // the pane showing the previous draft.
+      setSavedCount(n => n + 1);
       onSuccess?.(data);
     },
     onError,
@@ -630,7 +649,7 @@ export function EntryForm({
    * grant over every translation, while a preview opened without one silently
    * shows the wrong one.
    */
-  const previewRevision = previewRevisionOf(entry);
+  const previewRevision = previewRevisionOf(entry, savedCount);
 
   const canPreview =
     entryPreview.isPreviewAvailable &&

@@ -1,13 +1,21 @@
 /**
- * When a refresh RELOADS and when it mints a new credential.
+ * When a refresh RELOADS and when it mints a new credential, and when the pane
+ * refuses to frame a URL it nonetheless holds.
  *
- * The distinction is the whole of this hook's reason to exist: reloading is
- * free and re-minting issues a bearer credential and an audit row, so doing
- * the second every time would be wasteful, and doing the first when the token
- * has lapsed shows the PUBLISHED page while looking like a working preview.
+ * The reload/re-mint distinction is the hook's original reason to exist:
+ * reloading is free and re-minting issues a bearer credential and an audit row,
+ * so doing the second every time would be wasteful, and doing the first when the
+ * token has lapsed shows the PUBLISHED page while looking like a working
+ * preview.
+ *
+ * The refusals are the same failure by two other routes. A cross-origin frame
+ * never receives the preview cookie, and a second pane overwrites the one cookie
+ * the site keeps — both end in the published page rendering inside something
+ * captioned as a draft. None of the three is visible from inside the frame, so
+ * each is asserted here on the state the pane renders from.
  */
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mint = vi.hoisted(() => vi.fn());
 vi.mock("@admin/hooks/useEntryPreview", () => ({
@@ -17,16 +25,34 @@ vi.mock("@admin/hooks/useEntryPreview", () => ({
 
 import { usePreviewFrame } from "../usePreviewFrame";
 
+/*
+ * Same-origin by construction. jsdom serves the test document from some origin
+ * and the pane only frames a URL matching it, so hardcoding a host here would
+ * make every case below exercise the cross-origin refusal instead of the
+ * behaviour it names.
+ */
+const ORIGIN = window.location.origin;
+
 /** A mint that expires the given number of milliseconds from now. */
-function expiringIn(ms: number) {
+function expiringIn(ms: number, url = `${ORIGIN}/blog/post?preview=1`) {
   return {
     kind: "open" as const,
-    url: "https://site.example/api/preview?token=t",
+    url,
     expiresAt: new Date(Date.now() + ms).toISOString(),
   };
 }
 
 const args = { collection: "pages", entryId: "7", active: true };
+
+/** The channel the panes announce on. Must match `previewSessionLock`. */
+const CHANNEL = "nextly.preview.session";
+
+/** Another pane, on another entry, taking the browser's one preview session. */
+function anotherPaneClaims(scopeKey = "pages 9 ") {
+  const other = new BroadcastChannel(CHANNEL);
+  other.postMessage({ scopeKey });
+  other.close();
+}
 
 /*
  * REAL timers, deliberately. `waitFor` polls on real ones, so faking them
@@ -36,6 +62,10 @@ const args = { collection: "pages", entryId: "7", active: true };
  */
 beforeEach(() => {
   mint.mockReset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("usePreviewFrame", () => {
@@ -101,7 +131,6 @@ describe("usePreviewFrame", () => {
     });
 
     await waitFor(() => expect(mint).toHaveBeenCalledTimes(2));
-    vi.useRealTimers();
   });
 
   it("schedules NOTHING for a token that is already inside the margin", async () => {
@@ -123,7 +152,6 @@ describe("usePreviewFrame", () => {
     });
 
     expect(mint).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
   });
 
   it("reports the reason a mint refused, and shows no frame", async () => {
@@ -133,5 +161,129 @@ describe("usePreviewFrame", () => {
     await waitFor(() => expect(result.current.reason).toBe("noSiteUrl"));
 
     expect(result.current.url).toBeNull();
+  });
+});
+
+describe("a site served from another origin", () => {
+  it("blocks the frame but KEEPS the url, because the tab still works", async () => {
+    /*
+     * The browser will not carry the preview cookie into a cross-origin frame,
+     * and the site answers a frame without one by serving the published page.
+     * Nothing about that is observable from the admin — the frame's document
+     * belongs to the site — so the pane declines rather than rendering
+     * something it cannot check.
+     */
+    mint.mockResolvedValue(expiringIn(15 * 60_000, "https://elsewhere.test/p"));
+
+    const { result } = renderHook(() => usePreviewFrame(args));
+    await waitFor(() => expect(result.current.block).toBe("crossOrigin"));
+
+    // Kept, so the toolbar's "open in a new tab" — which is the remedy this
+    // state points the author at — has somewhere to go.
+    expect(result.current.url).toBe("https://elsewhere.test/p");
+    expect(result.current.reason).toBeNull();
+  });
+
+  it("does NOT block a same-origin site", async () => {
+    // The control: the refusal above is about the origin rather than about a
+    // gate that blocks everything.
+    mint.mockResolvedValue(expiringIn(15 * 60_000));
+
+    const { result } = renderHook(() => usePreviewFrame(args));
+    await waitFor(() => expect(result.current.url).not.toBeNull());
+
+    expect(result.current.block).toBeNull();
+  });
+
+  it("schedules no renewal for a blocked pane", async () => {
+    // Nothing is framed, so nothing needs a live credential — and renewing
+    // would claim the shared cookie away from a pane that is using it.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mint.mockResolvedValue(expiringIn(90_000, "https://elsewhere.test/p"));
+
+    const { result } = renderHook(() => usePreviewFrame(args));
+    await waitFor(() => expect(result.current.block).toBe("crossOrigin"));
+
+    await act(async () => {
+      vi.advanceTimersByTime(31_000);
+    });
+
+    expect(mint).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("another pane taking the browser's one preview session", () => {
+  it("marks this pane superseded when another scope claims", async () => {
+    /*
+     * The site keeps ONE preview cookie, so the last mint wins and the loser is
+     * not told. Its next in-frame navigation carries the winner's scope, the
+     * draft gate refuses it, and the published page is served into a pane
+     * captioned "last saved draft".
+     */
+    mint.mockResolvedValue(expiringIn(15 * 60_000));
+
+    const { result } = renderHook(() => usePreviewFrame(args));
+    await waitFor(() => expect(result.current.url).not.toBeNull());
+
+    act(() => anotherPaneClaims());
+
+    await waitFor(() => expect(result.current.block).toBe("superseded"));
+    // The url survives so refreshing can take the session back.
+    expect(result.current.url).not.toBeNull();
+  });
+
+  it("ignores a claim on the SAME scope, which shares one valid cookie", async () => {
+    // The control, and a real case: the same entry open in two tabs is not a
+    // conflict, because both are covered by the one cookie.
+    mint.mockResolvedValue(expiringIn(15 * 60_000));
+
+    const { result } = renderHook(() => usePreviewFrame(args));
+    await waitFor(() => expect(result.current.url).not.toBeNull());
+
+    act(() => anotherPaneClaims("pages 7 "));
+    await act(async () => {});
+
+    expect(result.current.block).toBeNull();
+  });
+
+  it("takes the session back on refresh, by minting rather than reloading", async () => {
+    /*
+     * A superseded pane holds no session, so remounting the frame would replay
+     * the same refusal. Only a mint rewrites the cookie.
+     */
+    mint.mockResolvedValue(expiringIn(15 * 60_000));
+
+    const { result } = renderHook(() => usePreviewFrame(args));
+    await waitFor(() => expect(result.current.url).not.toBeNull());
+    act(() => anotherPaneClaims());
+    await waitFor(() => expect(result.current.block).toBe("superseded"));
+
+    act(() => result.current.refresh());
+
+    // A second credential, even though the first has 15 minutes left — which is
+    // exactly what the reload/re-mint rule would otherwise have declined.
+    await waitFor(() => expect(mint).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.block).toBeNull());
+  });
+
+  it("schedules no renewal while superseded, so two panes cannot fight", async () => {
+    /*
+     * Renewal re-claims. Two idle panes both renewing on a timer would take the
+     * session from each other forever with nobody touching anything, trading a
+     * silent failure for a perpetual one.
+     */
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mint.mockResolvedValue(expiringIn(90_000));
+
+    const { result } = renderHook(() => usePreviewFrame(args));
+    await waitFor(() => expect(result.current.url).not.toBeNull());
+    act(() => anotherPaneClaims());
+    await waitFor(() => expect(result.current.block).toBe("superseded"));
+
+    await act(async () => {
+      vi.advanceTimersByTime(31_000);
+    });
+
+    expect(mint).toHaveBeenCalledTimes(1);
   });
 });

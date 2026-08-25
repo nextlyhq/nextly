@@ -22,12 +22,14 @@ const frameState = vi.hoisted(() => ({
     reloadKey: 0,
     isLoading: false,
     reason: null,
+    block: null,
     refresh: vi.fn(),
   } as {
     url: string | null;
     reloadKey: number;
     isLoading: boolean;
     reason: string | null;
+    block: string | null;
     refresh: ReturnType<typeof vi.fn>;
   },
 }));
@@ -36,7 +38,13 @@ vi.mock("@admin/components/layout/ChromeSuppression", () => ({
   useSuppressAdminChrome: (o: unknown) => suppress(o),
 }));
 
-vi.mock("../usePreviewFrame", () => ({
+/*
+ * Only the HOOK is replaced. The block messages come from the real module, so
+ * the cases below render the copy an author would actually read rather than a
+ * fixture that would keep passing after the real text was emptied.
+ */
+vi.mock("../usePreviewFrame", async importOriginal => ({
+  ...(await importOriginal<typeof import("../usePreviewFrame")>()),
   usePreviewFrame: () => frameState.current,
 }));
 
@@ -60,6 +68,7 @@ beforeEach(() => {
     reloadKey: 0,
     isLoading: false,
     reason: null,
+    block: null,
     refresh: vi.fn(),
   };
 });
@@ -163,6 +172,81 @@ describe("retrying after a mint that failed", () => {
     expect(
       screen.getByRole("button", { name: "Refresh the preview" })
     ).toBeDisabled();
+  });
+});
+
+describe("a pane that holds a url it must not frame", () => {
+  /*
+   * Both blocking states end the same way if the frame is rendered anyway: the
+   * site receives a request with no preview session and answers with the
+   * PUBLISHED page, inside a pane captioned as a draft. So the assertion that
+   * matters is the absence of the iframe, and it carries its control below.
+   */
+  it("renders no iframe when the site is on another origin", () => {
+    frameState.current = { ...frameState.current, block: "crossOrigin" };
+
+    const { container } = render(
+      <PreviewPanes {...props} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  it("renders no iframe when another pane took the session", () => {
+    frameState.current = { ...frameState.current, block: "superseded" };
+
+    const { container } = render(
+      <PreviewPanes {...props} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  it("DOES render one when nothing blocks it", () => {
+    // The control for both absences above: the pane is capable of rendering a
+    // frame, so those are refusals rather than a component that never does.
+    const { container } = render(
+      <PreviewPanes {...props} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(container.querySelector("iframe")).not.toBeNull();
+  });
+
+  it("keeps the new-tab link, which is what the message points at", () => {
+    // A cross-origin site previews perfectly well in a TAB — only the frame
+    // cannot carry the cookie — so removing the link with the frame would take
+    // away the remedy along with the problem.
+    frameState.current = { ...frameState.current, block: "crossOrigin" };
+
+    render(
+      <PreviewPanes {...props} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(
+      screen.getByRole("link", { name: "Open the preview in a new tab" })
+    ).toHaveAttribute("href", "https://site.example/api/preview?token=t");
+  });
+
+  it("leaves refresh enabled, since refreshing is how the session comes back", () => {
+    frameState.current = { ...frameState.current, block: "superseded" };
+
+    render(
+      <PreviewPanes {...props} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Refresh the preview" })
+    ).toBeEnabled();
   });
 });
 
