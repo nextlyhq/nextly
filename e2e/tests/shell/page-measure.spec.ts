@@ -18,7 +18,7 @@
  * of the geometry the browser computed. That makes the check complete for any
  * spelling rather than for the spellings someone thought to enumerate.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "../support/admin";
 
@@ -26,11 +26,12 @@ import { gotoAdmin } from "../support/admin";
  * Routes rendering the measured frame, reachable with no fixture beyond the
  * seeded dev user.
  *
- * The two form routes are the point rather than extra coverage: they are what
- * this frame was built for, and a sweep of settings pages alone would report
- * green while an editor bled out of its column. `/singles/site-settings` also
- * carries the only STICKY descendant in a measured page, which is a position
- * the containment walk has to measure rather than skip.
+ * `awaitLoaded` is not a convenience here. Every one of these routes renders
+ * `.nx-page-shell` in its LOADING state too, so waiting for the shell says
+ * nothing about whether the editor is on screen — and the editors are what
+ * this frame exists for. Measured without it, the sweep read the skeletons on
+ * both form routes and would have stayed green while `EntryForm` itself bled
+ * out of its column.
  */
 const MEASURED_ROUTES = [
   "/settings",
@@ -38,6 +39,37 @@ const MEASURED_ROUTES = [
   "/collections/posts/create",
   "/singles/site-settings",
 ];
+
+const shellOf = (page: Page) => page.locator(".nx-page-shell");
+
+/** The announcement every one of these routes renders while it is loading. */
+const loadingStatus = (page: Page) =>
+  page.locator('[role="status"]').filter({ hasText: /Loading/ });
+
+/**
+ * A real interactive control inside the shell, of either kind the admin uses.
+ *
+ * This is the POPULATION half of readiness. The loading skeletons render only
+ * `Skeleton` divs, so a control being present separates the loaded page from
+ * them — and it separates both from a page that rendered nothing, which
+ * satisfies "the announcement is gone" perfectly.
+ */
+const aControl = (page: Page) =>
+  shellOf(page)
+    .getByRole("textbox")
+    .or(shellOf(page).getByRole("button"))
+    .first();
+
+/**
+ * Both halves of "the page is ready": the loading announcement gone, and a
+ * real control present. Absence alone is satisfied by a page that rendered
+ * nothing at all, which is the same output as a page that finished.
+ */
+async function awaitLoaded(page: Page) {
+  await expect(shellOf(page)).toBeVisible();
+  await expect(loadingStatus(page)).toHaveCount(0);
+  await expect(aControl(page)).toBeVisible();
+}
 
 /**
  * Viewport widths chosen to cross both container-query steps. The gutter keys
@@ -84,7 +116,7 @@ interface Measurement {
  * examined. "No box escaped" is satisfied perfectly by a page that rendered no
  * boxes, and those are the same output.
  */
-async function measure(page: import("@playwright/test").Page) {
+async function measure(page: Page) {
   return page.evaluate((): Measurement => {
     const empty = { gutter: "", inFlow: 0, escapes: [], tracks: [] };
     const shell = document.querySelector(".nx-page-shell");
@@ -187,7 +219,7 @@ test.describe("a measured page keeps its children inside the page", () => {
       for (const width of SWEEP) {
         await page.setViewportSize({ width, height: 900 });
         await gotoAdmin(page, route);
-        await expect(page.locator(".nx-page-shell")).toBeVisible();
+        await awaitLoaded(page);
 
         const m = await measure(page);
 
@@ -210,6 +242,36 @@ test.describe("a measured page keeps its children inside the page", () => {
       expect([...gutters].sort()).toEqual(["1.5rem", "1rem", "2rem"]);
     });
   }
+
+  test("the loading skeleton keeps its children inside the page", async ({
+    page,
+  }) => {
+    // The skeleton is its own layout, not a blurred copy of the editor, and it
+    // is the state that regressed: its main pane was `flex-1` with no
+    // `min-w-0`, so it would not shrink and pushed the fixed-width rail 4px out
+    // of the column. Measured at 1180px because that is the panel width where
+    // the column is narrow enough for the rail to overflow it.
+    await page.setViewportSize({ width: 1180, height: 900 });
+
+    // Held open deliberately. On a warm dev server the skeleton lasts a few
+    // frames, so a test that merely navigated would race it and read the
+    // editor instead — passing while measuring the wrong state.
+    await page.route("**/api/collections/schema/**", async route => {
+      await new Promise(resolve => setTimeout(resolve, 5_000));
+      await route.continue();
+    });
+
+    await gotoAdmin(page, "/collections/posts/create");
+    await expect(shellOf(page)).toBeVisible();
+    // The skeleton IS what is on screen — asserted, not assumed, so this
+    // cannot quietly become a second measurement of the loaded editor.
+    await expect(loadingStatus(page)).toBeVisible();
+
+    const m = await measure(page);
+    expect(m.tracks).toHaveLength(3);
+    expect(m.inFlow).toBeGreaterThan(10);
+    expect(m.escapes, "at 1180px, loading").toEqual([]);
+  });
 
   test("the measurement reports children that do escape", async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 900 });
