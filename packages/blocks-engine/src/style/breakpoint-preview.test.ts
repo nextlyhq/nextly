@@ -607,6 +607,32 @@ describe("a per-surface preview container", () => {
     expect(long).not.toBe(PREVIEW_VIEWPORT_CONTAINER);
   });
 
+  it("gives two SHORT seeds different names when the reduction collapses them", () => {
+    /*
+     * The reduction to identifier-safe characters is many-to-one, so carrying a
+     * seed literally is only sound when it changed nothing. `a/b` and `a:b` both
+     * reduce to `a-b`, and two surfaces handed one name is exactly the collision
+     * this factory exists to prevent — worse, an authored container spelled
+     * `nx-preview-a-b` would then capture the responsive queries of both.
+     *
+     * SHORT deliberately. The long-seed case below exercises the same property
+     * on inputs that exceed the emitted-name bound and therefore digest anyway,
+     * so it holds whether or not the lossy case is handled — it cannot see this
+     * defect at all.
+     */
+    expect(previewContainerFor("a/b")).not.toBe(previewContainerFor("a:b"));
+  });
+
+  it("carries a LOSSLESS short seed literally, which is the control", () => {
+    /*
+     * Without this, digesting every seed would satisfy the case above while
+     * throwing away the readable names that make a surface identifiable in
+     * devtools — and the assertion there is about two values differing, which
+     * two digests satisfy perfectly.
+     */
+    expect(previewContainerFor("canvas-a")).toBe("nx-preview-canvas-a");
+  });
+
   it("gives two long seeds DIFFERENT names, which is the whole point", () => {
     /*
      * The control. A digest that ignored its input, or a function returning one
