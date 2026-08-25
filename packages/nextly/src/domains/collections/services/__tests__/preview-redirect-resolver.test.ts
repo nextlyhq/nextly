@@ -6,7 +6,9 @@
  * entry that was deleted, for a collection that declares no preview, and — the
  * one with teeth — for a host that is not the site's.
  */
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -47,12 +49,7 @@ const unreadable = () => vi.fn().mockResolvedValue({ kind: "unreadable" });
  * symbol behind the type is not exported, so no anonymous handler can conjure
  * one and reach a refusal cause.
  */
-const PRINCIPAL = {
-  userId: "u1",
-  permissions: [],
-  roles: [],
-  authMethod: "session" as const,
-};
+const PRINCIPAL = { id: "u1" };
 
 /** A grant for the entry `SCOPE` names, which is what most cases ask about. */
 const CALLER = previewCallerAuthorized(PRINCIPAL, SCOPE);
@@ -618,6 +615,31 @@ describe("readFromEnvelope, the one place a service result becomes an outcome", 
     });
   });
 
+  it("reads a 404 carrying a CODE as unreadable, not as absence", () => {
+    /*
+     * The pair the `code` check exists for. A thrown `NextlyError` reaches this
+     * envelope through `errorEnvelopeFields`, which always sets `code` — so an
+     * `afterRead` hook raising not-found for a DEPENDENT lookup arrives as a
+     * 404 while the previewed row loaded perfectly well. Calling that absence
+     * tells an author their entry may have been deleted because something it
+     * references was.
+     */
+    expect(
+      readFromEnvelope({
+        success: false,
+        statusCode: 404,
+        code: "NOT_FOUND",
+      })
+    ).toEqual({ kind: "unreadable" });
+
+    // The control, asserted beside it: a BARE 404 is the service's own
+    // not-found branch and still establishes absence, so the split is on
+    // provenance rather than the endpoint having stopped reporting deletions.
+    expect(readFromEnvelope({ success: false, statusCode: 404 })).toEqual({
+      kind: "absent",
+    });
+  });
+
   it("reads any other failure as unreadable", () => {
     expect(readFromEnvelope({ success: false, statusCode: 500 })).toEqual({
       kind: "unreadable",
@@ -787,26 +809,43 @@ describe("the authenticated boundary on the explaining form", () => {
     expect(singleWitnessIsExact).toBe(true);
   });
 
-  it("mints proof only from a full authenticated context, not a bare id", () => {
+  it("is minted from exactly ONE module, the authorization gate", () => {
     /*
-     * The anonymous preview route holds a plausible user id — a verified token
-     * records its minter — so a constructor asking only for `{ userId }` could
-     * be called there with a REAL value and would read as reasonable. Pinning
-     * the whole authenticated shape is what makes that call an obvious
-     * fabrication instead, and pinning it EXACTLY is what stops the requirement
-     * being quietly narrowed back to an id.
+     * THE control, and the reason the parameter shape no longer is one.
+     *
+     * An earlier version demanded the whole route-auth shape on the theory that
+     * an anonymous handler could not produce it — a proxy for "you
+     * authenticated", and a weak one, because any handler can assemble an
+     * object literal and the anonymous preview route holds a real user id to
+     * put in it. What establishes the claim is provenance: the grant is
+     * returned by `assertEntryPreviewable` / `assertSinglePreviewable` after
+     * their refusals have all been passed FOR THIS DOCUMENT, so one cannot
+     * exist unless the gate ran and allowed it.
+     *
+     * A second importer would quietly restore the self-asserted grant, so this
+     * asserts the whole importer set rather than that some particular module is
+     * absent — a test naming one module passes for every module it does not
+     * name.
      */
-    const demandsAuthenticatedContext: Exactly<
-      Parameters<typeof previewCallerAuthorized>[0],
-      {
-        userId: string;
-        permissions: string[];
-        roles: string[];
-        authMethod: "session" | "api-key";
-      }
-    > = true;
+    const root = new URL("../../../../", import.meta.url);
+    const importers = execFileSync(
+      "grep",
+      ["-rl", "--include=*.ts", "previewCallerAuthorized", fileURLToPath(root)],
+      { encoding: "utf8" }
+    )
+      .split("\n")
+      .filter(Boolean)
+      .map(p => p.slice(fileURLToPath(root).length))
+      .filter(p => !p.includes("__tests__") && !p.endsWith(".test.ts"))
+      .sort();
 
-    expect(demandsAuthenticatedContext).toBe(true);
+    // Control: the search found something, so an empty list cannot pass by
+    // having looked in the wrong place.
+    expect(importers.length).toBeGreaterThan(0);
+    expect(importers).toEqual([
+      "api/preview-access.ts",
+      "domains/collections/services/preview-redirect-resolver.ts",
+    ]);
   });
 
   it("refuses to mint proof without an authenticated identity", () => {
@@ -814,15 +853,7 @@ describe("the authenticated boundary on the explaining form", () => {
     // no principal cannot satisfy it with a placeholder.
     let thrown: unknown;
     try {
-      previewCallerAuthorized(
-        {
-          userId: "",
-          permissions: [],
-          roles: [],
-          authMethod: "session",
-        },
-        SCOPE
-      );
+      previewCallerAuthorized({ id: "" }, SCOPE);
     } catch (error) {
       thrown = error;
     }

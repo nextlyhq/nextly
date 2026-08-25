@@ -33,7 +33,6 @@ import {
 import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
-  previewCallerAuthorized,
   readFromEnvelope,
   readOrReport,
   type PreviewPathOutcome,
@@ -647,7 +646,7 @@ async function mintForSingle(
   // read below, so a refused caller reaches neither.
   refuseApiKeyMint(auth);
   const { user } = await callerFor(auth);
-  await assertSinglePreviewable(single, locale, user, {
+  const singleGrant = await assertSinglePreviewable(single, locale, user, {
     // The route above ran the coarse gate for `update` on this Single, so
     // repeating it here would ask a question already answered. The preview
     // RENDER passes `false`: it has no route gate at all.
@@ -675,10 +674,11 @@ async function mintForSingle(
             readOrReport(() => loadSingleForPreview(slug, singleLocale)),
           ...sharedRedirectDeps(declaration),
         },
-        // The gate above already required `update` on THIS Single, and the
-        // witness carries which one — so the grant proves the thing the
-        // explainer relies on rather than merely that somebody signed in.
-        previewCallerAuthorized(auth, { single })
+        // The grant the gate above RETURNED, rather than one assembled here:
+        // a witness built at the call site would assert the very thing the gate
+        // exists to establish, and would be accepted by a comparison against
+        // that same self-asserted value.
+        singleGrant
       )
     : { kind: "refused", cause: "notConfigured" };
 
@@ -761,7 +761,7 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // visible at all INCLUDING one never published, and whether this caller may
   // edit it — which is what the draft overlay requires before surfacing the
   // working draft the token hands out.
-  await assertEntryPreviewable(collection, entryId, user, {
+  const entryGrant = await assertEntryPreviewable(collection, entryId, user, {
     // The route above ran the coarse gate for `update` on this collection, so
     // repeating it here would ask a question already answered. The preview
     // RENDER passes `false`: it has no route gate at all.
@@ -824,11 +824,9 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
           // happens to have the answer.
           ...sharedRedirectDeps(declaration),
         },
-        // The route gate above already required `update` on THIS entry, so its
-        // holder learns nothing from a cause they could not read anyway — and
-        // the witness names the entry, so that claim is checked rather than
-        // assumed.
-        previewCallerAuthorized(auth, { collection, entryId })
+        // The grant `assertEntryPreviewable` returned. See the Single path:
+        // it cannot exist unless that gate passed for this exact document.
+        entryGrant
       )
     : // Stated rather than resolved, so an undeclared collection costs no entry
       // read to learn what the absent declaration already says.

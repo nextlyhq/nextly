@@ -63,10 +63,26 @@ export type PreviewDocumentRead =
 export function readFromEnvelope(read: {
   success: boolean;
   statusCode?: number;
+  /** Present only when a typed error was flattened into this envelope. */
+  code?: string;
   data?: unknown;
 }): PreviewDocumentRead {
   if (!read.success) {
-    return read.statusCode === 404
+    /*
+     * A 404 alone does NOT establish absence, and `code` is what separates the
+     * two. The service's own not-found branch returns a bare
+     * `{ success: false, statusCode: 404, message: "Entry not found" }`, while
+     * a THROWN NextlyError reaches this envelope through `errorEnvelopeFields`,
+     * which always sets `code` — and an `afterRead` hook raising not-found for
+     * a DEPENDENT lookup lands there with a 404 while the previewed row loaded
+     * perfectly well. Reading that as absence tells an author their entry may
+     * have been deleted because something it references was.
+     *
+     * Erring toward `unreadable` is the safe direction and STAYS safe if that
+     * branch ever gains a code: absence becomes unreachable and every failure
+     * reads as "could not be read", which is unhelpful rather than alarming.
+     */
+    return read.statusCode === 404 && read.code === undefined
       ? { kind: "absent" }
       : { kind: "unreadable" };
   }
@@ -263,40 +279,34 @@ export interface AuthorizedPreviewCaller {
 }
 
 /**
- * Mint that proof, from an AUTHENTICATED context and nothing less.
+ * Mint that proof. Called from ONE place: the per-document authorization gate.
  *
- * The parameter is the whole shape `requireRoutePermission` and
- * `requireRouteCollectionAccess` return, not just an id. That matters because
- * the anonymous preview route DOES hold a plausible id — a verified token
- * carries its minter — so a witness asking only for `{ userId }` could be built
- * there from a real value and would look entirely reasonable in review. Nothing
- * on that path has permissions, roles or an auth method, so demanding them
- * turns a natural-looking call into an obvious fabrication.
+ * The parameter SHAPE is not the control and must not be mistaken for it. An
+ * earlier version demanded the whole route-auth shape on the theory that an
+ * anonymous handler could not produce one — a proxy for "you authenticated",
+ * and a weak one, since any handler can assemble an object literal. What
+ * actually establishes the claim is WHERE this is called from:
+ * `assertEntryPreviewable` and `assertSinglePreviewable` return it only after
+ * every one of their refusals has been passed FOR THIS DOCUMENT, so a grant
+ * cannot exist unless the gate ran and allowed it.
  *
- * The identity is CARRIED rather than discarded, and an empty one is refused:
- * a witness that reads nothing from its argument is a witness that would accept
- * anything shaped vaguely right.
+ * That provenance is enforced by a test asserting exactly one non-test module
+ * imports this, rather than by a comment asking nicely — a second importer is
+ * a failing build, which is the difference between a control and a convention.
  *
- * Within one package no value is unforgeable against code that means to forge
- * it. What this buys is that the honest path is the easy one and the dishonest
- * path cannot be reached by accident — which, with the export manifest beside
- * it, is the enforcement this boundary can actually have.
+ * The identity is carried rather than discarded, and an empty one refused: a
+ * gate that authorized nobody has not authorized this document either.
  */
 export function previewCallerAuthorized(
-  auth: {
-    userId: string;
-    permissions: string[];
-    roles: string[];
-    authMethod: "session" | "api-key";
-  },
+  principal: { id: string },
   authorizedFor: AuthorizedPreviewScope
 ): AuthorizedPreviewCaller {
-  if (auth.userId === "") {
+  if (principal.id === "") {
     /*
      * The public message stays generic and the detail goes to the log: reaching
-     * this is a programming mistake in a handler, not something the person
-     * making the request can act on, and naming the boundary in a response
-     * would describe an internal control to whoever tripped it.
+     * this is a programming mistake in a gate, not something the person making
+     * the request can act on, and naming the boundary in a response would
+     * describe an internal control to whoever tripped it.
      */
     throw new NextlyError({
       code: "INTERNAL_ERROR",
@@ -306,7 +316,7 @@ export function previewCallerAuthorized(
     });
   }
   return {
-    [AUTHORIZED_PREVIEW_CALLER]: { userId: auth.userId, scope: authorizedFor },
+    [AUTHORIZED_PREVIEW_CALLER]: { userId: principal.id, scope: authorizedFor },
   };
 }
 
