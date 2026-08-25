@@ -223,12 +223,30 @@ try {
   const NEGATIVE_8 = /^calc\(var\(--spacing\)\*-8\)$/;
 
   /**
-   * The components of a `margin` shorthand that set the HORIZONTAL sides.
+   * Every property that can move a box's LEFT or RIGHT edge, enumerated from
+   * the CSS box model rather than from whichever one was last seen doing it.
    *
-   * One value sets all four; two and three put the horizontal pair second;
-   * four are clockwise from the top, so right is second and left fourth. A
-   * check that only read the first component sees `margin: 0 <negative>` as
-   * harmless while both sides move.
+   * Two shapes. The longhands set one side outright, so a negative value
+   * anywhere in them counts. The two shorthands need reading by position:
+   * `margin` takes one to four values and `margin-inline` one or two.
+   *
+   * The vertical family — `margin-block`, `margin-top`, `margin-bottom` and
+   * the block longhands — is deliberately absent. Cancelling the page's
+   * vertical inset is what lets the editors reach the panel's top and bottom,
+   * so a check that could not tell the axes apart would have to be switched
+   * off the first time it fired.
+   */
+  const HORIZONTAL_LONGHANDS = [
+    "margin-left",
+    "margin-right",
+    "margin-inline-start",
+    "margin-inline-end",
+  ];
+
+  /**
+   * The components of a `margin` shorthand that set the horizontal sides: one
+   * value sets all four, two and three put the pair second, and four are
+   * clockwise from the top, so right is second and left fourth.
    */
   const horizontalOfMargin = parts => {
     if (parts.length === 1) return parts;
@@ -236,16 +254,20 @@ try {
     return [parts[1]];
   };
 
+  const horizontalValues = (prop, parts) => {
+    if (prop === "margin") return horizontalOfMargin(parts);
+    // `margin-inline` is horizontal whole: one value sets both sides, two set
+    // start and end. The longhands are a single side each.
+    return parts;
+  };
+
+  const PROPERTIES = ["margin", "margin-inline", ...HORIZONTAL_LONGHANDS];
   const offenders = [];
   for (const [, prop, value] of shipped.matchAll(
-    /[;{]\s*(margin|margin-inline)\s*:\s*([^;}]+)/g
+    new RegExp(`[;{]\\s*(${PROPERTIES.join("|")})\\s*:\\s*([^;}]+)`, "g")
   )) {
     const parts = components(value.trim());
-    // `margin-inline` is horizontal by definition: one value sets both sides,
-    // two set start and end.
-    const horizontal =
-      prop === "margin-inline" ? parts : horizontalOfMargin(parts);
-    if (horizontal.some(part => NEGATIVE_8.test(part))) {
+    if (horizontalValues(prop, parts).some(part => NEGATIVE_8.test(part))) {
       offenders.push(`${prop}: ${value.trim()}`);
     }
   }
