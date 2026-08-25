@@ -3269,39 +3269,126 @@ export function applyOps(
 ): AppliedOps {
   assertUsableLimits(limits);
   if (ops.length === 0) return { document, inverses: [] };
+  // A group of one has no intermediate to be ordered around, so it is the
+  // single call and nothing else: no endpoint comparison, and — since the
+  // editor routes every single-block edit through here — no cost added to the
+  // commonest edit in the builder.
+  //
+  // A COST decision, and not one a test pins: removing this branch leaves the
+  // path below handling one op with the same result, so nothing observable
+  // changes. Said here rather than implied by a test that would pass either
+  // way. What IS pinned is that the two paths agree, which is what makes the
+  // shortcut safe to take.
 
-  // What the document started at, by the same reading `assertFitsCaps` takes:
-  // a document inside the cap settles it without being measured in full, and
-  // only one already over it — the repair case a site creates by lowering its
-  // own limit — pays for its exact size. Without that branch the ceiling below
-  // would sit under such a document and refuse every op, including the removals
-  // that would bring it back under.
-  const starting = measureBytes(document, limits.maxBytes);
-  const startingBytes = starting.exceeded
-    ? measureBytes(document, Number.POSITIVE_INFINITY).bytes
-    : limits.maxBytes;
-  const transient: DocumentLimits = {
-    ...limits,
-    // Clamped, because `assertUsableLimits` refuses a limit that is not a safe
-    // integer — and a limit that cannot be compared removes the cap rather than
-    // raising it.
-    maxBytes: Math.min(
-      Number.MAX_SAFE_INTEGER,
-      startingBytes + limits.maxBytes
-    ),
-  };
-
-  let working = document;
-  const inverses: BuilderOp[] = [];
-  for (const op of ops) {
-    const applied = applyOp(working, op, transient);
-    working = applied.document;
-    inverses.unshift(applied.inverse);
+  if (ops.length === 1) {
+    const only = applyOp(document, ops[0], limits);
+    return { document: only.document, inverses: [only.inverse] };
   }
 
-  assertFitsCaps(document, working, "these edits", limits);
-  // Endpoints, not ops. Every op may have changed something and the group still
-  // leave the document as it found it.
-  if (sameStoredValue(document, working)) return { document, inverses: [] };
+  // The ORDINARY pass first, with the caps exactly as a caller set them. A group
+  // that never presses on a cap — which is nearly all of them — costs precisely
+  // what folding `applyOp` cost before, and nothing here measures the document
+  // or walks it a second time.
+  //
+  // It also keeps the repair case on this path: `assertFitsCaps` already allows
+  // an edit that shrinks a document already over its cap, so a group repairing
+  // one succeeds here and never reaches the retry below.
+  try {
+    return settled(document, fold(document, ops, limits));
+  } catch (error) {
+    if (!(error instanceof OpError)) throw error;
+  }
+
+  // A cap refused a step. Retry the whole group with a transient ceiling, which
+  // is what makes the outcome independent of the order the ops arrived in: a
+  // selection at the byte cap where one block grows and another shrinks by more
+  // is refused when the growing one comes first and accepted when it comes
+  // second, for the same resulting document.
+  //
+  // Only `maxBytes` is raised. `maxNodes` and `maxDepth` also bound the WORK an
+  // op may cost before anything refuses it — `assertNodeShape` stops at
+  // `maxNodes + 1` for exactly that reason — so raising them would let a group
+  // validate, snapshot, insert and scan a subtree of any size first.
+  const transient: DocumentLimits = {
+    ...limits,
+    // Twice what a document may hold: the document it started from, plus one
+    // more document's worth of new content. Clamped because a limit that is not
+    // a safe integer cannot decide anything, so it would remove the cap rather
+    // than raise it. Not derived from a measurement of `document`, deliberately
+    // — measuring it here would read its fields before `applyOp` has checked
+    // that they are fields rather than accessors.
+    maxBytes: Math.min(Number.MAX_SAFE_INTEGER, limits.maxBytes * 2),
+  };
+  // Retained against the same ceiling the steps are allowed, not against the
+  // caller's cap: an op that replaced an over-cap intermediate holds an over-cap
+  // value in its inverse, so budgeting the aggregate at the cap would refuse the
+  // very grow-then-shrink group the ceiling exists to permit. Measured — the
+  // first version did exactly that.
+  const applied = fold(document, ops, transient, transient.maxBytes);
+  // The caps the CALLER set, asked once, of the group's own endpoints.
+  assertFitsCaps(document, applied.document, "these edits", limits);
+  return settled(document, applied);
+}
+
+/** Applies each op in turn, keeping the inverses in undo order. */
+function fold(
+  document: BlockDocument,
+  ops: readonly BuilderOp[],
+  limits: DocumentLimits,
+  /**
+   * How many bytes of REPLACED values the group may retain, when the steps are
+   * allowed past the caller's cap.
+   *
+   * An op's inverse snapshots the value it replaced, so a group whose steps may
+   * each sit just under a raised ceiling can hand back an undo entry holding
+   * many times what any document may hold — a hundred updates of one node,
+   * each a little under the ceiling, retains all hundred. Bounding each step
+   * does not bound their sum, so the sum is bounded here: a group may keep at
+   * most what the ceiling allows one document to reach.
+   *
+   * Absent on the ordinary pass, where every step was already inside the
+   * caller's cap and the inverses are bounded by the documents they came from.
+   */
+  retained?: number
+): AppliedOps {
+  let working = document;
+  const inverses: BuilderOp[] = [];
+  let kept = 0;
+  for (const op of ops) {
+    const applied = applyOp(working, op, limits);
+    working = applied.document;
+    if (retained !== undefined) {
+      const size = measureBytes(applied.inverse, retained - kept);
+      if (size.exceeded) {
+        throw new OpError(
+          `these edits: undoing them would have to remember more than ` +
+            `${String(retained)} bytes of replaced values. The edit would ` +
+            `apply and leave a history entry larger than the page it edits.`
+        );
+      }
+      kept += size.bytes;
+    }
+    // Front, so undoing the group runs the LAST op's inverse first: each
+    // inverse describes the document as it stood when its op ran.
+    inverses.unshift(applied.inverse);
+  }
   return { document: working, inverses };
+}
+
+/**
+ * The group as the caller should record it, with a net-nothing group recording
+ * nothing.
+ *
+ * `applyOp` refuses an op that changes nothing, because a history entry whose
+ * undo has no visible effect reads as the history being broken. A GROUP reaches
+ * the same place while every op in it changed something — grow a value, then
+ * restore it — so the endpoints are compared with the predicate `applyOp` uses
+ * for its own no-op check, rather than a second opinion about what changing
+ * nothing means.
+ */
+function settled(before: BlockDocument, applied: AppliedOps): AppliedOps {
+  if (sameStoredValue(before, applied.document)) {
+    return { document: applied.document, inverses: [] };
+  }
+  return applied;
 }

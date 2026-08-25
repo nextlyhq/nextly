@@ -3183,6 +3183,103 @@ describe("a group of ops judged against the caps once", () => {
     expect(applied.inverses).toEqual([]);
   });
 
+  it("bounds what an undo entry has to remember, not just each step", () => {
+    /*
+     * Bounding each intermediate does not bound their SUM. Every op's inverse
+     * snapshots the value it replaced, so a group whose steps each sit just
+     * under the raised ceiling hands back an undo entry holding many times what
+     * any document may hold — and repeated batches accumulate that in history
+     * behind final documents that all fit.
+     *
+     * Ten updates of one node, each a little under twice the cap, ending on a
+     * small value: every document along the way is inside the ceiling and the
+     * result is tiny, and it is still refused.
+     */
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
+    const start = doc([sized("a", 100)]);
+    const many = [
+      ...Array.from({ length: 10 }, (_, index) => resize("a", 4_000 + index)),
+      resize("a", 120),
+    ];
+
+    // Population first: a single step of that size IS allowed by the ceiling,
+    // so the refusal is about the aggregate rather than about any one step.
+    expect(() =>
+      applyOps(start, [resize("a", 4_000), resize("a", 120)], limits)
+    ).not.toThrow();
+
+    expect(() => applyOps(start, many, limits)).toThrow(OpError);
+  });
+
+  it("leaves a single-op group on the plain path", () => {
+    /*
+     * A group of one has no intermediate to order, so it must be the single
+     * call and nothing else — no second cap pass and no endpoint comparison.
+     * The editor routes every single-block edit through here, so anything extra
+     * is paid on the commonest edit in the builder.
+     *
+     * Asserted through behaviour rather than by counting calls: a document that
+     * `applyOp` REFUSES on its own must be refused identically, and one it
+     * accepts must come back identical.
+     */
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
+    const start = doc([sized("a", 100)]);
+
+    const one = applyOp(start, resize("a", 400), limits);
+    const grouped = applyOps(start, [resize("a", 400)], limits);
+    expect(grouped.document).toEqual(one.document);
+    expect(grouped.inverses).toEqual([one.inverse]);
+
+    expect(() => applyOps(start, [resize("a", 9_000)], limits)).toThrow(
+      OpError
+    );
+  });
+
+  it("does not read the document before `applyOp` has checked it", () => {
+    /*
+     * The starting size used to be measured up front, which read the document's
+     * own fields before `applyOp` reached the guards that decide whether they
+     * are fields at all. A `toJSON` accessor was therefore invoked by the
+     * measurement — running document-supplied code on input that was about to
+     * be rejected.
+     *
+     * `applyOp` rejects a computed field without invoking it, and a group must
+     * not be the path that does otherwise.
+     */
+    let calls = 0;
+    const hostile = doc([sized("a", 100)]) as unknown as Record<
+      string,
+      unknown
+    >;
+    Object.defineProperty(hostile, "toJSON", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        calls += 1;
+        return () => ({});
+      },
+    });
+
+    // Population: `applyOp` refuses this document and reads nothing from the
+    // accessor, which is the behaviour the group has to match.
+    expect(() =>
+      applyOp(
+        hostile as unknown as BlockDocument,
+        resize("a", 200),
+        DEFAULT_LIMITS
+      )
+    ).toThrow(OpError);
+    const afterSingle = calls;
+
+    expect(() =>
+      applyOps(hostile as unknown as BlockDocument, [
+        resize("a", 200),
+        resize("a", 300),
+      ])
+    ).toThrow(OpError);
+    expect(calls).toBe(afterSingle);
+  });
+
   it("records nothing for an empty group", () => {
     // No ops, no inverses, and the same document back — an empty group that
     // produced a history entry would undo to no visible effect.

@@ -46,6 +46,11 @@ Deferring is not skipping: a group that leaves the document over the cap is
 refused exactly as one op would be, and a group that shrinks an already-oversized
 document is allowed exactly as a shrinking edit already was.
 
+The ordinary path is unchanged. A group is applied with the caps exactly as they
+were set, and only a group a cap actually refuses is retried with the ceiling —
+so a batch that never presses on a limit costs what it always did, and a document
+already over its cap still repairs on the first pass.
+
 Only the size cap defers, and only up to a ceiling. The node and depth caps stay
 per op, because they also bound the WORK an edit may cost before it is refused —
 a group free of them could validate and insert a subtree of any size before
@@ -53,6 +58,11 @@ anything objected. The size cap defers to what the document started with plus on
 more document's worth, because an op's inverse snapshots the value it replaced,
 so a group free to write an arbitrarily large intermediate would leave that value
 alive in undo history behind a document that fits.
+
+What an undo entry has to remember is bounded too. Each step being inside the
+ceiling does not bound their sum — a hundred edits of one node, each a little
+under it, would retain all hundred — so a group may keep at most what the ceiling
+allows one document to reach.
 
 A group whose ops cancel out records nothing. Each op changed something, the
 document ended where it began, and an entry recording that would undo to no
