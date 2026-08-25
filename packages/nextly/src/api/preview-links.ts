@@ -27,6 +27,10 @@ import { buildUserContext } from "../auth/user-context";
 import { container, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import {
+  buildAuditLogWriter,
+  type AuditLogWriter,
+} from "../domains/audit/audit-log-writer";
+import {
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
 } from "../domains/collections/services/preview-redirect-resolver";
@@ -240,11 +244,63 @@ function refuseUnservableLink(args: {
 }
 
 /**
+ * The audit writer, resolved the way the auth router resolves it.
+ *
+ * The container's `getService` is keyed on `ServiceMap`, and the writer takes
+ * the loose form because it is shared with callers outside that map. The widen
+ * is the same one `route-handler/auth-handler.ts` performs at its own call
+ * site; it lives in one function here so the two recording sites below cannot
+ * drift into widening it differently.
+ *
+ * Built per call rather than once at module load: the adapter it reaches is
+ * registered by whichever container is live, and a writer captured at import
+ * time would outlast a reload and write through a connection nobody is using.
+ */
+function auditWriter(): AuditLogWriter {
+  return buildAuditLogWriter(getService as (name: string) => unknown);
+}
+
+/**
+ * What a scope looks like in an audit row.
+ *
+ * Its own function because the trail asks a narrower question than the token
+ * does: WHICH DOCUMENT was opened up, in terms that stay readable years later
+ * and identify no person. The scope's discriminant is projected to an explicit
+ * `scope` key rather than left to the reader to infer from which of
+ * `collection` or `single` is present — an audit row is read by someone who was
+ * not there, and a shape they have to deduce is one they can deduce wrongly.
+ *
+ * The TOKEN never enters. It is the credential itself, so a trail carrying it
+ * would hand its reader the access it exists to record — and an audit table is
+ * readable by exactly the operators a preview link is meant to be scoped away
+ * from. What is recorded is what the credential was FOR, never the credential.
+ */
+function auditScope(scope: PreviewTokenScope): Record<string, unknown> {
+  const locale =
+    "locale" in scope && scope.locale !== undefined
+      ? { locale: scope.locale }
+      : {};
+  return "single" in scope
+    ? { scope: "single", single: scope.single, ...locale }
+    : {
+        scope: "collection",
+        collection: scope.collection,
+        entryId: scope.entryId,
+        ...locale,
+      };
+}
+
+/**
  * Sign a scope and answer with the link, which is identical for both paths.
  *
  * The generation is read here rather than by each caller, so a link minted for
  * a Single and one minted for an entry cannot end up recorded against different
  * revocation generations — which would make "revoke everything" miss one kind.
+ *
+ * The audit row is written here for that same reason. Both mints funnel through
+ * this function, so recording at each call site instead would be one rule with
+ * two implementations — and the one that was forgotten would issue credentials
+ * silently, which is precisely the state this replaces.
  */
 async function respondWithPreviewLink(
   scope: PreviewTokenScope,
@@ -276,6 +332,35 @@ async function respondWithPreviewLink(
       ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
     }
   );
+
+  /*
+   * Recorded AFTER signing, so nothing claims a credential exists that was
+   * never produced — a failed sign throws past this line and leaves no row.
+   *
+   * The writer never throws, deliberately, and that direction is right here for
+   * the same reason it is right for a login: an unreachable audit table must
+   * not be what stops an editor previewing their own draft. The cost is that a
+   * database failure loses the row and the link still works, which is a gap the
+   * writer logs. Fail-closed would be the wrong trade — it converts a reporting
+   * outage into an outage of the feature being reported on.
+   *
+   * No IP or user agent. Capturing them honestly needs the `trustProxy` and
+   * `trustedProxyIps` configuration that decides which forwarded address may be
+   * believed, and that read lives behind the auth handlers' own bridge; no
+   * route in this layer captures either today. Recording the proxy's address as
+   * the caller's would put a confidently wrong value in an audit field, which
+   * is worse than an absent one — the actor, which is the load-bearing fact
+   * here, is recorded either way.
+   */
+  await auditWriter().write({
+    kind: "preview-link-minted",
+    actorUserId: minter,
+    metadata: {
+      ...auditScope(scope),
+      generation,
+      expiresAt: expiresAt.toISOString(),
+    },
+  });
 
   const settings = await (await settingsService()).getSettings();
 
@@ -647,7 +732,24 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
  * flight. Auth: `manage settings`, because the generation is site-wide.
  */
 export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
-  await requireRoutePermission(req, "manage", "settings");
+  const auth = await requireRoutePermission(req, "manage", "settings");
   const generation = await (await settingsService()).revokeAllPreviewTokens();
+
+  /*
+   * The counterpart to the mint row, and the one an incident actually starts
+   * from: revocation is site-wide and cuts every reader off mid-session, so the
+   * question afterwards is who did it and when — which nothing could answer.
+   *
+   * The new generation is recorded because it is what makes the two kinds of
+   * row relate: every `preview-link-minted` carrying a lower generation is
+   * covered by this revocation, so the trail can say which credentials a given
+   * revocation actually killed rather than only that one happened.
+   */
+  await auditWriter().write({
+    kind: "preview-links-revoked",
+    actorUserId: auth.userId,
+    metadata: { generation },
+  });
+
   return respondMutation("Preview links revoked", { generation });
 });

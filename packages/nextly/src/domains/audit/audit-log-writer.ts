@@ -53,6 +53,18 @@ export type AuditEventKind =
   | "login-failed"
   | "login-succeeded"
   | "password-changed"
+  /**
+   * A preview link was signed, handing its holder draft read access to one
+   * document under the MINTER's permissions.
+   *
+   * A security event rather than a content one, which is why it belongs here
+   * and not in the activity log beside creates and updates: nothing about the
+   * document changed, and what was produced is a bearer credential that works
+   * for anyone holding it until it expires or the generation moves.
+   */
+  | "preview-link-minted"
+  /** Every preview link ever issued was invalidated, including live sessions. */
+  | "preview-links-revoked"
   | "role-assigned"
   | "role-revoked"
   | "user-deleted";
