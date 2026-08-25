@@ -91,24 +91,36 @@ function fromStoredValue(field: FieldConfig, existingValue: unknown): unknown {
   return coerce ? coerce(existingValue, field) : existingValue;
 }
 
-/** A select or radio's seed, which depends on whether it holds one value or many. */
-function fromSelectDefault(field: FieldConfig, declared: unknown): unknown {
-  // The declared default may be a single value or, for hasMany, an array
-  // (`defaultValue: ["technology", "design"]`). Treating an array default as a
-  // scalar would wrap it again and hand the field [["technology", "design"]],
-  // which renders as one nonsense badge and fails array validation.
-  const selectField = field as { hasMany?: boolean };
-  const defaultValue = declared as string | string[] | undefined;
+/**
+ * The seed for a field whose multiplicity is decided by `hasMany`.
+ *
+ * `select`, `radio`, `relationship` and `upload` all ask the same question —
+ * does this hold one value or a list — so they answer it here rather than four
+ * times. The declared default may be written either way round: a list field may
+ * declare a scalar (`defaultValue: "design"`) and a single field may declare an
+ * array, and each is coerced toward the shape its own schema validates.
+ *
+ * Treating an array default as a scalar would wrap it again and hand the field
+ * [["technology", "design"]], which renders as one nonsense badge and fails
+ * array validation.
+ */
+function fromMultiplicityDefault(
+  field: FieldConfig,
+  declared: unknown
+): unknown {
+  const { hasMany } = field as { hasMany?: boolean };
 
-  if (selectField.hasMany) {
-    if (Array.isArray(defaultValue)) return defaultValue;
-    return defaultValue ? [defaultValue] : [];
+  if (hasMany) {
+    if (Array.isArray(declared)) return declared;
+    // Absence is the empty list. Tested for explicitly rather than by
+    // truthiness, so an id of `0` seeds `[0]` instead of dropping out.
+    return declared === undefined || declared === null || declared === ""
+      ? []
+      : [declared];
   }
-  // A single-value select given an array default takes its first entry rather
+  // A single-value field given an array default takes its first entry rather
   // than stringifying the whole array into the control.
-  return Array.isArray(defaultValue)
-    ? (defaultValue[0] ?? null)
-    : (defaultValue ?? null);
+  return Array.isArray(declared) ? (declared[0] ?? null) : (declared ?? null);
 }
 
 /**
@@ -161,10 +173,10 @@ const DECLARED_DEFAULT: Record<
   password: (_f, d) => d ?? "",
   code: (_f, d) => d ?? "",
   checkbox: (_f, d) => d ?? false,
-  select: (f, d) => fromSelectDefault(f, d),
-  radio: (f, d) => fromSelectDefault(f, d),
-  relationship: f => ((f as { hasMany?: boolean }).hasMany ? [] : null),
-  upload: f => ((f as { hasMany?: boolean }).hasMany ? [] : null),
+  select: fromMultiplicityDefault,
+  radio: fromMultiplicityDefault,
+  relationship: fromMultiplicityDefault,
+  upload: fromMultiplicityDefault,
   repeater: () => [],
   chips: (_f, d) => d ?? [],
   group: f => {
@@ -184,13 +196,26 @@ const DECLARED_DEFAULT: Record<
  * what lets a plugin field open a create form with the value its schema author
  * chose.
  */
-function fromDeclaredDefault(field: FieldConfig): unknown {
+function fromDeclaredDefault(
+  field: FieldConfig,
+  soFar: Record<string, unknown>
+): unknown {
   // A schema author may declare the default as a function to compute it per
   // document. It is resolved here, before the table dispatches, so every type
   // sees a value rather than each entry having to unwrap it — and so the form
   // never holds the function object itself.
+  //
+  // It receives the values seeded so far, which is what the write path's
+  // `applyFieldDefaults` passes: a documented default may read its siblings
+  // (`data => data.isUrgent ? "express" : "standard"`), and resolving it
+  // against an empty object instead would seed the branch the document does
+  // not take. The admin submits that value explicitly, so the server never
+  // recomputes it and the divergence reaches the row.
   const raw = (field as { defaultValue?: unknown }).defaultValue;
-  const declared = typeof raw === "function" ? raw({}) : raw;
+  const declared =
+    typeof raw === "function"
+      ? (raw as (data: Record<string, unknown>) => unknown)(soFar)
+      : raw;
   const seed = DECLARED_DEFAULT[field.type as string];
   return seed ? seed(field, declared) : (declared ?? null);
 }
@@ -231,7 +256,7 @@ export function getDefaultValues(
     defaults[fieldName] =
       existingValue !== undefined && !nullStructural
         ? fromStoredValue(field, existingValue)
-        : fromDeclaredDefault(field);
+        : fromDeclaredDefault(field, defaults);
   }
 
   return defaults;

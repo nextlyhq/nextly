@@ -164,3 +164,80 @@ describe("getDefaultValues — reading an existing document", () => {
     expect(getDefaultValues([f({ type: "row" })])).toEqual({});
   });
 });
+
+describe("getDefaultValues — multiplicity and declared values", () => {
+  it("honours a declared default on a relationship or upload", () => {
+    // These decided multiplicity from `hasMany` and discarded the declared
+    // value entirely, so a required relationship with a configured default
+    // opened as null and the untouched row failed validation.
+    expect(
+      getDefaultValues([
+        f({ name: "category", type: "relationship", defaultValue: "cat-1" }),
+        f({
+          name: "tags",
+          type: "relationship",
+          hasMany: true,
+          defaultValue: ["t-1", "t-2"],
+        }),
+        f({ name: "cover", type: "upload", defaultValue: "media-9" }),
+      ])
+    ).toEqual({
+      category: "cat-1",
+      tags: ["t-1", "t-2"],
+      cover: "media-9",
+    });
+  });
+
+  it("coerces a declared default toward the shape its own schema validates", () => {
+    expect(
+      getDefaultValues([
+        // A list field declaring a scalar takes it as a one-item list...
+        f({
+          name: "authors",
+          type: "relationship",
+          hasMany: true,
+          defaultValue: "u-1",
+        }),
+        // ...and a single field declaring a list takes its first entry.
+        f({
+          name: "owner",
+          type: "relationship",
+          defaultValue: ["u-2", "u-3"],
+        }),
+        // Absence is the empty list, tested rather than inferred from
+        // truthiness, so an id of 0 survives.
+        f({ name: "empty", type: "relationship", hasMany: true }),
+        f({
+          name: "zero",
+          type: "relationship",
+          hasMany: true,
+          defaultValue: 0,
+        }),
+      ])
+    ).toEqual({
+      authors: ["u-1"],
+      owner: "u-2",
+      empty: [],
+      zero: [0],
+    });
+  });
+
+  it("resolves a function default against the values seeded so far", () => {
+    // The write path's `applyFieldDefaults` passes the document built so far,
+    // so a sibling-dependent default must see the same thing here. Resolving
+    // against an empty object seeds the branch the document does not take, and
+    // the admin submits that value explicitly — so the server never recomputes
+    // it and the divergence reaches the row.
+    expect(
+      getDefaultValues([
+        f({ name: "isUrgent", type: "checkbox", defaultValue: true }),
+        f({
+          name: "shipping",
+          type: "text",
+          defaultValue: (data: Record<string, unknown>) =>
+            data.isUrgent ? "express" : "standard",
+        }),
+      ])
+    ).toEqual({ isUrgent: true, shipping: "express" });
+  });
+});
