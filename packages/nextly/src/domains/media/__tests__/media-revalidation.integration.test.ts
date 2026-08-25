@@ -222,9 +222,9 @@ describe("the write surfaces that do NOT go through the unified service", () => 
   });
 
   it("invalidates a file that arrives while the folder is being deleted", async () => {
-    // The window Codex named: `media.folder_id` is ON DELETE SET NULL, so
-    // deleting the folder CHANGES any row that arrived after the delete
-    // collected its list — and that row is in nobody's invalidation set.
+    // `media.folder_id` is ON DELETE SET NULL, so deleting the folder CHANGES
+    // any row that arrived after the delete collected its list — and that row
+    // is in nobody's invalidation set.
     //
     // The injected storage is the seam that makes the race deterministic:
     // `removeStoredFiles` calls it between the collection and the folder
