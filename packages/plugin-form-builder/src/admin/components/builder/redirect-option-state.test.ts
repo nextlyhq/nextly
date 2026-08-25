@@ -83,6 +83,18 @@ describe("hasStoredRedirectPage", () => {
     ).toBe(true);
   });
 
+  it("counts a bare id, which is a valid stored shape", () => {
+    // Valid when exactly one collection is configured. Asking
+    // `parseRedirectReference` with no collections cannot resolve WHICH
+    // document it is — but the question here is whether anything is stored,
+    // and answering "no" hides the destination in exactly the states where the
+    // author needs to see it: configuration failed, or the collection went
+    // away.
+    expect(hasStoredRedirectPage({ redirectPage: "pg1" })).toBe(true);
+    expect(hasStoredRedirectPage({ redirectPage: "" })).toBe(false);
+    expect(hasStoredRedirectPage({ redirectPage: "   " })).toBe(false);
+  });
+
   it("reads a reference without needing the configuration", () => {
     // Configuration is exactly what may be missing when this is asked.
     expect(

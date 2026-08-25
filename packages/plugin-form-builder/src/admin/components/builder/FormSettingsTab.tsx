@@ -176,14 +176,19 @@ interface FormSettingsTabProps {
  * stored: a picker with no collections to offer, and a save that could only be
  * refused. Selecting a confirmation is not a destination.
  *
- * An empty collection list is passed deliberately — a reference carrying its
- * own `relationTo` is readable without configuration, and configuration is
- * exactly what may be missing here.
+ * A BARE id counts. `parseRedirectReference` resolves one only when exactly
+ * one collection is configured, which is the right rule for "which document is
+ * this" — but the question here is "is anything stored at all", and the answer
+ * must not depend on configuration that may have failed to load or been
+ * removed. Those are precisely the states where an author needs to be shown
+ * what is already saved.
  */
 export function hasStoredRedirectPage(settings: {
   redirectPage?: unknown;
 }): boolean {
-  return parseRedirectReference(settings.redirectPage, []) !== null;
+  const value = settings.redirectPage;
+  if (typeof value === "string") return value.trim().length > 0;
+  return parseRedirectReference(value, []) !== null;
 }
 
 export type RedirectOptionState =

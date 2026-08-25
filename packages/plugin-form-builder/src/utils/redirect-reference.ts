@@ -51,12 +51,13 @@ export function parseRedirectReference(
   const inner = record.value;
 
   if (typeof relationTo === "string" && relationTo.trim()) {
-    // Trimmed, because a blank or whitespace collection name is not a
-    // collection: it passes a truthiness test, reads as a valid reference to
-    // the public validator, and then fails the membership check on save while
-    // resolving to no URL at submit time.
+    // Trimmed for the TEST and in the VALUE returned. A blank or whitespace
+    // name is not a collection, and a padded one is not the same string as the
+    // configured key — accepting `" pages "` while returning it unchanged
+    // makes this read valid to the public validator and unusable to every
+    // consumer that looks the name up.
     const id = referenceId(inner);
-    return id ? { collection: relationTo, id } : null;
+    return id ? { collection: relationTo.trim(), id } : null;
   }
 
   // A populated row with no `relationTo` beside it: same ambiguity as a bare

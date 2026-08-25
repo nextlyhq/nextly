@@ -104,6 +104,15 @@ describe("parseRedirectReference", () => {
     ).toEqual({ collection: "pages", id: "pg1" });
   });
 
+  it("returns the collection name trimmed, not merely accepts it", () => {
+    // Accepting a padded name while returning it padded is worse than
+    // rejecting it: the validator calls the form valid and every consumer that
+    // looks the name up against configuration then fails to find it.
+    expect(
+      parseRedirectReference({ relationTo: " pages ", value: "p1" }, many)
+    ).toEqual({ collection: "pages", id: "p1" });
+  });
+
   it("refuses a blank collection name", () => {
     // Truthy, and not a collection. The public validator would call the form
     // valid while the collection save refuses it and submit-time resolution

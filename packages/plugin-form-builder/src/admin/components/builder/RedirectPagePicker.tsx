@@ -409,6 +409,65 @@ function Empty({
   );
 }
 
+/**
+ * The things this control has to say that its options cannot.
+ *
+ * Three separate states, kept apart deliberately. A collection that could not
+ * be read, a saved page that cannot be IDENTIFIED because no collection is
+ * configured to look it up in, and a saved page whose lookup FAILED are three
+ * different situations, and each one previously appeared as an empty control —
+ * which reads as "nothing is set" and invites an author to overwrite a
+ * destination they were never shown.
+ */
+function PickerNotices({
+  failed,
+  loading,
+  onRetry,
+  unidentifiable,
+  unreadableSelection,
+}: {
+  failed: readonly string[];
+  loading: boolean;
+  onRetry: () => void;
+  unidentifiable: boolean;
+  unreadableSelection: boolean;
+}) {
+  return (
+    <>
+      {failed.length > 0 && (
+        <p className="text-[12px] text-destructive">
+          Could not read {failed.join(" or ")}. You may not have permission to
+          list {failed.length > 1 ? "them" : "it"}, or the request failed.{" "}
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={loading}
+            className="underline underline-offset-2 disabled:no-underline"
+          >
+            Try again
+          </button>
+        </p>
+      )}
+
+      {unidentifiable && (
+        <p className="text-[12px] text-muted-foreground">
+          A page is saved on this form, but it cannot be identified without a
+          configured redirect collection. Choosing a different confirmation
+          replaces it.
+        </p>
+      )}
+
+      {unreadableSelection && (
+        <p className="text-[12px] text-destructive">
+          This form has a page selected that could not be read. Leave it as it
+          is unless you mean to change it — saving a new choice replaces the
+          stored one.
+        </p>
+      )}
+    </>
+  );
+}
+
 export function RedirectPagePicker({
   collections,
   value,
@@ -435,6 +494,11 @@ export function RedirectPagePicker({
     retryFailed,
   } = useChoices(collections.join(","), applied);
   const selected = selectionKey(value, collections);
+  // A value is stored and this control cannot say WHICH document it is: a bare
+  // id names no collection, and with none configured there is nowhere to look
+  // it up. Distinct from an unreadable selection, which is a failed request
+  // rather than missing information.
+  const unidentifiable = value != null && selected === undefined;
   const selectionUnreadable = useSelectedChoice(selected, choices, setChoices);
 
   if (choices === null) {
@@ -460,31 +524,13 @@ export function RedirectPagePicker({
       {/* Reported BESIDE the choices rather than instead of them: a collection
           the author cannot read is a different problem from one that is empty,
           and the collections that did load are still choosable. */}
-      {failed.length > 0 && (
-        <p className="text-[12px] text-destructive">
-          Could not read {failed.join(" or ")}. You may not have permission to
-          list {failed.length > 1 ? "them" : "it"}, or the request failed.{" "}
-          <button
-            type="button"
-            onClick={retryFailed}
-            disabled={loading}
-            className="underline underline-offset-2 disabled:no-underline"
-          >
-            Try again
-          </button>
-        </p>
-      )}
-
-      {/* Said plainly, because the control cannot show it: a stored value with
-          no matching option renders blank, which reads as "nothing chosen" and
-          invites an author to replace a destination that is still set. */}
-      {selectionUnreadable && (
-        <p className="text-[12px] text-destructive">
-          This form has a page selected that could not be read. Leave it as it
-          is unless you mean to change it — saving a new choice replaces the
-          stored one.
-        </p>
-      )}
+      <PickerNotices
+        failed={failed}
+        loading={loading}
+        onRetry={retryFailed}
+        unidentifiable={unidentifiable}
+        unreadableSelection={selectionUnreadable}
+      />
 
       {choices.length === 0 ? (
         failed.length < collections.length && (
