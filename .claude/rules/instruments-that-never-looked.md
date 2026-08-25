@@ -9,7 +9,7 @@ Every instance produces a confident, well-formed, ordinary-looking result. None
 produces an error. That is what separates this from the failures the other files
 describe: there is nothing to read more carefully.
 
-**Ten instances were measured in a single day, across three lanes working
+**Twelve instances were measured in a single day, across three lanes working
 independently.** They are listed below with what each one actually did, because
 the shape is only convincing at that density — any one of them reads as an
 ordinary mistake.
@@ -42,6 +42,10 @@ ordinary mistake.
 - `ledger pending` returned nothing and was read as "this never reached the
   founder". It means "nothing is waiting"; the decision had already been made.
   Absence of a pending item and absence of a decision are different sets.
+- A task was recommended to the founder as "the quietest row, one commit in two
+  weeks", from a history query run against two paths that DO NOT EXIST. The real
+  paths had fifteen commits in three weeks. An empty history reads as "quiet";
+  it never reads as "you asked about somewhere else".
 
 **The subject never reached the instrument.**
 
@@ -66,6 +70,15 @@ ordinary mistake.
   an over-cap string, so the assertion could not separate them and the property
   the test was named for had no coverage at all.
 
+**The claim was never checked against the act.**
+
+- A lane reported to the founder that it had released a tracker claim, then
+  checked and found the claim still held. Nothing failed; the release simply had
+  not happened, and the report was written from the intention rather than from
+  the state. Saying and doing are different facts, and only one of them is
+  observable — so the report is not evidence about the system, it is evidence
+  about the reporter's belief.
+
 **A proxy was read as the property.**
 
 - `scripts/verify-merge.mjs` printing `(merge commit; branch <sha>)` was cited
@@ -89,6 +102,23 @@ lacked it. The control is not the same as a second test: it is the same
 instrument, on an input whose answer you already know, run in the same
 conditions. If the control and the treatment produce the same result, the
 instrument is not discriminating and neither result is evidence.
+
+**A break that moves something is not yet a regression test.** The control tells
+you the instrument discriminates; it does not tell you WHAT it discriminates on.
+A test dying to some mutation proves only that it reaches some code — a
+replacement mutation that happens to hit a branch the fixture never selects
+kills the test for a reason unrelated to its name. Only a mutation of the branch
+the test's NAME claims makes the green mean what the name says. Measured twice
+in one day from opposite ends: a test that could not fail for its intended
+reason, and its replacement, which also could not.
+
+**Prefer a question the system can answer STRUCTURALLY over a string it
+printed.** The positive form of the proxy failure below, measured today: asked
+whether a pull request landed as a squash or a merge commit, `git merge-base
+--is-ancestor <branch-head> origin/main` is decisive, because it asks the commit
+graph something the graph itself determines. Reading a printed label answers a
+different question — the one whose output that string was generated for — and
+the two agree until they do not.
 
 **Assert the substitution, the file list, the row count — the thing the
 instrument consumed, not the verdict it emitted.** A verdict cannot tell you
