@@ -95,15 +95,38 @@ jobs:
           # prevents its intentional loose dependency declarations from
           # appearing as findings in unrelated pull requests.
           workspace: "!playground"
+      # Two runs of the same analysis, because they answer different questions
+      # and only the JSON one carries attribution. The envelope names WHERE each
+      # finding is (path, line, side, fingerprint) but not whether the change
+      # introduced it; the JSON `attribution` block counts introduced vs
+      # inherited. The posting step needs both.
+      #
+      # `audit` exits 1 on a fail verdict, which is a findings exit rather than a
+      # tooling failure, so 0 and 1 are both success here. Anything above 1 —
+      # a crash, a bad config, an unwritable output — is recorded rather than
+      # swallowed: a step that cannot produce an envelope must not read as a step
+      # that found nothing to say.
       - name: Generate audit review envelope
+        id: envelope
         if: always() && steps.audit.conclusion != 'skipped'
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
-          pnpm exec fallow audit \
-            --changed-since "origin/${{ github.base_ref || 'main' }}" \
-            --gate new-only \
-            --workspace "!playground" \
-            --config .fallowrc.jsonc \
-            --format review-github > /tmp/audit-review.json 2>/dev/null || true
+          set +e
+          for format in review-github json; do
+            pnpm exec fallow audit \
+              --changed-since "origin/$BASE_REF" \
+              --gate new-only \
+              --workspace "!playground" \
+              --config .fallowrc.jsonc \
+              --format "$format" > "/tmp/audit-$format.json" 2> "/tmp/audit-$format.err"
+            code=$?
+            if [ "$code" -gt 1 ]; then
+              echo "envelope-failed=true" >> "$GITHUB_OUTPUT"
+              echo "::warning::fallow audit --format $format exited $code, so no review threads can be derived from it."
+              cat "/tmp/audit-$format.err" >&2
+            fi
+          done
 
       - name: Post PR review comments for changed files
         id: post-review
@@ -115,15 +138,41 @@ jobs:
             const fs = require('fs');
             const prNumber = context.issue.number;
 
-            if (!fs.existsSync('/tmp/audit-review.json')) return;
-            let review;
-            try {
-              review = JSON.parse(fs.readFileSync('/tmp/audit-review.json', 'utf8'));
-            } catch (err) {
+            const readJson = (path) => {
+              if (!fs.existsSync(path)) return null;
+              try {
+                return JSON.parse(fs.readFileSync(path, 'utf8'));
+              } catch (err) {
+                console.log(`Could not parse ${path}: ${err.message}`);
+                return null;
+              }
+            };
+
+            const review = readJson('/tmp/audit-review-github.json');
+            const audit = readJson('/tmp/audit-json.json');
+
+            if (!review || !review.comments || review.comments.length === 0) return;
+
+            // This job reports what the CHANGE introduced. Dependency findings
+            // are project-level, so they reach the envelope whatever the diff
+            // touched: measured on this repository, a branch with zero
+            // introduced findings still produced 27 inline comments, every one
+            // about a pre-existing unused dependency in a file the PR never
+            // opened. The gate already excludes those from the verdict, so
+            // posting them is noise that arrives again on every push.
+            const attribution = audit && audit.attribution;
+            if (attribution) {
+              const introduced = Object.entries(attribution)
+                .filter(([key]) => key.endsWith('_introduced'))
+                .reduce((sum, [, count]) => sum + (count || 0), 0);
+              if (introduced === 0) {
+                console.log('The change introduced no findings. Inherited findings are reported by the whole-repository job, not as review threads here.');
+                return;
+              }
+            } else {
+              console.log('No attribution available, so introduced findings cannot be separated from inherited ones. Posting nothing rather than every inherited finding.');
               return;
             }
-
-            if (!review.comments || review.comments.length === 0) return;
 
             // Fetch existing review comments on this PR to prevent duplicate threads
             let existingComments = [];
@@ -149,17 +198,40 @@ jobs:
               return;
             }
 
-            // Filter out comments that are already present on the same file & line
+            // Deduplicate on the FINGERPRINT fallow embeds in each comment body,
+            // not on the body text. A fingerprint identifies the finding itself,
+            // so it survives a reworded message, a moved line and a rebase —
+            // where comparing bodies reposts the whole set as soon as any of
+            // those changes. The envelope carries the pattern that reads it, so
+            // this matches what produced the comment rather than a shape guessed
+            // here.
+            const markerRegex = new RegExp(
+              review.marker_regex || '<!-- fallow-fingerprint:v2: ([0-9a-f]{16}) -->',
+              review.marker_regex_flags || 'm'
+            );
+            const fingerprintOf = (body) => {
+              const match = markerRegex.exec(body || '');
+              return match && match[1];
+            };
+            const seen = new Set(
+              existingComments.map(c => fingerprintOf(c.body)).filter(Boolean)
+            );
+
             const newComments = review.comments.filter(c => {
-              return !existingComments.some(existing =>
-                existing.path === c.path &&
-                (existing.line === c.line || existing.original_line === c.line) &&
-                existing.body && (existing.body.trim() === c.body.trim() || existing.body.includes(c.body.trim()))
-              );
+              const fingerprint = c.fingerprint || fingerprintOf(c.body);
+              // A finding with no fingerprint cannot be reconciled across runs,
+              // so it falls back to path and line rather than posting blind.
+              if (!fingerprint) {
+                return !existingComments.some(existing =>
+                  existing.path === c.path &&
+                  (existing.line === c.line || existing.original_line === c.line)
+                );
+              }
+              return !seen.has(fingerprint);
             });
 
             if (newComments.length === 0) {
-              console.log('All audit review comments are already present on this PR. Skipping duplicate review creation.');
+              console.log('Every introduced finding already has a thread on this PR. Skipping duplicate review creation.');
               return;
             }
 
@@ -170,10 +242,14 @@ jobs:
                 pull_number: prNumber,
                 commit_id: context.payload.pull_request.head.sha,
                 event: 'COMMENT',
-                body: review.body || '### 🛑 Fallow Audit: Issues found in changed files',
+                body: review.body || '### Fallow audit: findings introduced by this change',
                 comments: newComments.map(c => ({
                   path: c.path,
                   line: c.line,
+                  // `side` defaults to RIGHT when omitted, which is correct for
+                  // an added line and wrong for a finding the envelope placed on
+                  // the base side, so it is forwarded rather than assumed.
+                  side: c.side || 'RIGHT',
                   body: c.body,
                 })),
               });
@@ -195,6 +271,7 @@ jobs:
           UNSCOPED: ${{ steps.audit.outputs.changed-files-unavailable }}
           POST_SKIPPED: ${{ steps.audit.outputs.post-skipped-reason }}
           DEDUP_FAILED: ${{ steps.audit.outputs.dedup-lookup-failed || steps.post-review.outputs.dedup-lookup-failed }}
+          ENVELOPE_FAILED: ${{ steps.envelope.outputs.envelope-failed }}
           VERDICT: ${{ steps.audit.outputs.verdict }}
           GATE: ${{ steps.audit.outputs.gate }}
         run: |
@@ -205,6 +282,12 @@ jobs:
           fi
           if [ "$DEDUP_FAILED" = "true" ] || { [ -n "$POST_SKIPPED" ] && [ "$POST_SKIPPED" != "none" ]; }; then
             echo "::warning::fallow could not reconcile its own pull-request comment (dedup-lookup-failed=$DEDUP_FAILED, post-skipped-reason=$POST_SKIPPED). The verdict still stands; only the comment is unreliable."
+          fi
+          # The envelope drives the review threads only. The action above owns
+          # the verdict, so a crashed envelope costs the inline comments and not
+          # the gate — but it must say so rather than reading as nothing to say.
+          if [ "$ENVELOPE_FAILED" = "true" ]; then
+            echo "::warning::fallow could not produce a review envelope, so no inline threads were derived from this run. The verdict above still stands."
           fi
           # An empty verdict is the gate never having produced one, which is not
           # a pass. Absence of a failure is not a verdict.
