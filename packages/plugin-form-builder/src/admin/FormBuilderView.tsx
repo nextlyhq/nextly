@@ -288,11 +288,11 @@ function FormBuilderViewInner({
         body: JSON.stringify(saveData),
       });
       if (!response.ok) {
-        const err = (await response.json().catch(() => ({}))) as {
-          error?: { message?: string };
-        };
         throw new Error(
-          err.error?.message ?? `Failed to save form: ${response.statusText}`
+          saveErrorMessage(
+            await response.json().catch(() => ({})),
+            response.statusText
+          )
         );
       }
 
@@ -610,6 +610,35 @@ function FormBuilderViewInner({
 // ============================================================================
 // Main Component (provides context)
 // ============================================================================
+
+/**
+ * What to tell an author when a save is refused.
+ *
+ * A validation refusal carries the generic `"Validation failed."` at the top
+ * level and puts the actionable part in `data.errors`. Reporting only the top
+ * level tells an author their form was rejected and nothing about what to
+ * change — every rule in the collection produces that same sentence.
+ */
+export function saveErrorMessage(body: unknown, statusText: string): string {
+  const error = (
+    body as {
+      error?: {
+        message?: string;
+        data?: { errors?: { message?: string }[] };
+      };
+    }
+  )?.error;
+
+  const fieldIssues = (error?.data?.errors ?? [])
+    .map(issue => issue.message)
+    .filter((message): message is string => Boolean(message));
+
+  return (
+    fieldIssues.join(" ") ||
+    error?.message ||
+    `Failed to save form: ${statusText}`
+  );
+}
 
 export function FormBuilderView({
   id,

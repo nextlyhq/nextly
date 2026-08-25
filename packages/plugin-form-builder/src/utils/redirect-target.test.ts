@@ -24,6 +24,21 @@ describe("normalizeRedirectRelationships", () => {
     ).toEqual({ pages: "/{slug}", posts: "/blog/{slug}" });
   });
 
+  it("drops a collection whose pattern cannot produce a URL", () => {
+    // Kept, it would be offered in the picker and accepted by validation while
+    // resolving to nothing at submit time.
+    expect(
+      normalizeRedirectRelationships({ pages: "", posts: "/blog/{slug}" })
+    ).toEqual({ posts: "/blog/{slug}" });
+  });
+
+  it("keeps a function pattern, which has no empty form", () => {
+    const pattern = () => "/x";
+    expect(normalizeRedirectRelationships({ pages: pattern })).toEqual({
+      pages: pattern,
+    });
+  });
+
   it("treats an unset option as no redirect collections", () => {
     expect(normalizeRedirectRelationships(undefined)).toEqual({});
     expect(normalizeRedirectRelationships([])).toEqual({});

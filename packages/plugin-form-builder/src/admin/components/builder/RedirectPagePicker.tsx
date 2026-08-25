@@ -133,6 +133,7 @@ function useChoices(key: string, applied: string) {
   const [failed, setFailed] = useState<readonly string[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
 
   // A new query is a new list, not more of the old one.
   useEffect(() => setPage(1), [key, applied]);
@@ -140,11 +141,13 @@ function useChoices(key: string, applied: string) {
   useEffect(() => {
     let cancelled = false;
     const wanted = key ? key.split(",") : [];
+    setLoading(true);
 
     void Promise.all(
       wanted.map(collection => fetchChoices(collection, applied, page))
     ).then(results => {
       if (cancelled) return;
+      setLoading(false);
       // WHICH collections failed, not merely whether any did: one unreadable
       // collection beside a readable-but-empty one otherwise reports "nothing
       // here" about a collection nobody could see.
@@ -170,7 +173,13 @@ function useChoices(key: string, applied: string) {
     setChoices,
     failed,
     hasMore,
-    loadMore: () => setPage(current => current + 1),
+    loading,
+    // Guarded rather than debounced: two clicks before page 2 resolves either
+    // batch into page 3 or cancel page 2's effect, and page 2's documents are
+    // then absent from a list that says it has loaded them.
+    loadMore: () => {
+      if (!loading) setPage(current => current + 1);
+    },
   };
 }
 
@@ -300,10 +309,8 @@ export function RedirectPagePicker({
 
   // `collections` is an array prop, so a new identity every render would
   // refetch forever; the join is the value that actually decides the request.
-  const { choices, setChoices, failed, hasMore, loadMore } = useChoices(
-    collections.join(","),
-    applied
-  );
+  const { choices, setChoices, failed, hasMore, loading, loadMore } =
+    useChoices(collections.join(","), applied);
   const selected = selectionKey(value, collections);
   useSelectedChoice(selected, choices, setChoices);
 
@@ -365,9 +372,10 @@ export function RedirectPagePicker({
         <button
           type="button"
           onClick={loadMore}
-          className="text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          disabled={loading}
+          className="text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:no-underline disabled:opacity-60"
         >
-          Load more
+          {loading ? "Loading…" : "Load more"}
         </button>
       )}
     </div>

@@ -62,9 +62,17 @@ export function normalizeRedirectRelationships(
   option: string[] | RedirectRelationships | undefined
 ): RedirectRelationships {
   if (!option) return {};
-  if (!Array.isArray(option)) return { ...option };
+  const entries = Array.isArray(option)
+    ? option.map(collection => [collection, DEFAULT_REDIRECT_PATTERN] as const)
+    : Object.entries(option);
+
+  // An empty pattern is dropped rather than kept, so that being OFFERED as a
+  // redirect target and being able to PRODUCE a URL are one decision. Kept,
+  // the collection appears in the picker, validation accepts a reference into
+  // it, and every submission then resolves to nothing — a form that passes
+  // every check and sends nobody anywhere.
   return Object.fromEntries(
-    option.map(collection => [collection, DEFAULT_REDIRECT_PATTERN])
+    entries.filter(([, pattern]) => typeof pattern !== "string" || pattern)
   );
 }
 
