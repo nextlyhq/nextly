@@ -244,10 +244,18 @@ const REFUSALS: Record<
      * for a deletion that never happened is worse off than one told the read
      * failed.
      */
+    /*
+     * Deliberately NOT "a non-404 failure". A 404 CARRYING A CODE lands here
+     * too, because a thrown not-found — an `afterRead` hook refusing a
+     * dependent lookup — cannot be told apart from the document itself being
+     * absent. Describing this as necessarily non-404 sends an operator looking
+     * anywhere but the hook path that produced it.
+     */
     remedy:
-      "The trusted read returned a non-404 failure, so whether the document " +
-      "exists is unknown. Look at the read path — a transient database error, " +
-      "a rate limit, or a throwing read hook all arrive this way.",
+      "The trusted read failed without establishing that the previewed " +
+      "document is absent. Look at the read path — a transient database " +
+      "error, a rate limit, or a read hook raising not-found for something " +
+      "the document merely references all arrive this way.",
   },
   documentGone: {
     message: subject =>

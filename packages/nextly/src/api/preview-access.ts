@@ -257,5 +257,10 @@ export async function assertSinglePreviewable(
   }
 
   // See {@link assertEntryPreviewable}: the check produces the grant.
-  return previewCallerAuthorized(user, { single });
+  return previewCallerAuthorized(user, {
+    single,
+    // The locale this check was run FOR. Omitting it would grant every
+    // translation on the strength of one having been checked.
+    ...(locale === undefined ? {} : { locale }),
+  });
 }

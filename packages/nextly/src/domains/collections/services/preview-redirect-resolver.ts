@@ -256,7 +256,18 @@ const AUTHORIZED_PREVIEW_CALLER = Symbol("nextly.preview.authorizedCaller");
  */
 export type AuthorizedPreviewScope =
   | { collection: string; entryId: string }
-  | { single: string };
+  | { single: string; locale?: string | undefined };
+
+/*
+ * The locale is on the SINGLE arm only, and the asymmetry is the gates', not an
+ * oversight. `assertSinglePreviewable(single, locale, …)` runs a locale-specific
+ * readable check, so a grant that named only the Single would claim more than
+ * was verified: an `en` grant would answer for `fr`, whose custom read rule may
+ * deny it. `assertEntryPreviewable(collection, entryId, …)` takes no locale and
+ * checks none, so an entry grant carries none and the comparison below does not
+ * ask for one — requiring it there would refuse every entry preview for a
+ * precondition nothing establishes.
+ */
 
 /**
  * Proof that the caller was authorized FOR THIS DOCUMENT before a refusal
@@ -339,7 +350,11 @@ function assertGrantCovers(
   const granted = caller[AUTHORIZED_PREVIEW_CALLER].scope;
   const covers =
     "single" in asked
-      ? "single" in granted && granted.single === asked.single
+      ? "single" in granted &&
+        granted.single === asked.single &&
+        // Both undefined is a match: an unlocalized Single is checked and asked
+        // about without one. Anything else is a different translation.
+        granted.locale === asked.locale
       : "collection" in granted &&
         granted.collection === asked.collection &&
         granted.entryId === asked.entryId;
@@ -591,7 +606,12 @@ export async function explainSinglePreviewRedirect(
 ): Promise<PreviewPathOutcome> {
   // See {@link explainPreviewRedirect}: the grant is compared against the
   // document actually being asked about, not merely presented.
-  assertGrantCovers(caller, { single: scope.single });
+  assertGrantCovers(caller, {
+    single: scope.single,
+    // Carried so the grant is judged against the translation actually being
+    // asked about, which is the one the gate checked readability for.
+    ...(scope.locale === undefined ? {} : { locale: scope.locale }),
+  });
   return computeSinglePreviewRedirect(scope, deps, requestOrigin);
 }
 

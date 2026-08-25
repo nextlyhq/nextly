@@ -593,6 +593,60 @@ describe("a grant covers ONE document, not the holder", () => {
     ).rejects.toThrow();
   });
 
+  it("refuses a grant for a DIFFERENT translation of the same Single", async () => {
+    /*
+     * `assertSinglePreviewable` runs a locale-specific readable check, so a
+     * grant naming only the Single would claim more than was verified — an `en`
+     * grant answering for `fr`, whose custom read rule may deny it. The locale
+     * travels in the grant and the comparison asks for it.
+     */
+    const forEnglish = previewCallerAuthorized(PRINCIPAL, {
+      single: "homepage",
+      locale: "en",
+    });
+
+    await expect(
+      explainSinglePreviewRedirect(
+        { single: "homepage", locale: "fr" },
+        {
+          loadSingle: reads({ path: "accueil" }),
+          loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
+          loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
+        },
+        forEnglish
+      )
+    ).rejects.toThrow();
+  });
+
+  it("ALLOWS the translation the grant names", async () => {
+    // The control: the refusal above is about the locale rather than the
+    // comparison having stopped accepting anything.
+    const forFrench = previewCallerAuthorized(PRINCIPAL, {
+      single: "homepage",
+      locale: "fr",
+    });
+
+    expect(
+      await explainSinglePreviewRedirect(
+        { single: "homepage", locale: "fr" },
+        {
+          loadSingle: reads({ path: "accueil" }),
+          loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
+          loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
+        },
+        forFrench
+      )
+    ).toEqual({ kind: "path", path: "/" });
+  });
+
+  it("still covers an UNLOCALIZED Single, where neither side names a locale", () => {
+    // Both undefined must match, or every unlocalized Single would be refused
+    // for a precondition nothing establishes.
+    expect(() =>
+      previewCallerAuthorized(PRINCIPAL, { single: "homepage" })
+    ).not.toThrow();
+  });
+
   it("ALLOWS the document the grant names", async () => {
     // The control for all four refusals above: a matching grant works, so the
     // comparison discriminates rather than rejecting everything.
