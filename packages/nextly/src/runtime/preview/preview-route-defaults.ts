@@ -23,6 +23,7 @@ import {
 } from "../../auth/preview/preview-token";
 import { container, getService } from "../../di";
 import {
+  readOrReport,
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
 } from "../../domains/collections/services/preview-redirect-resolver";
@@ -123,14 +124,11 @@ export async function defaultRedirectTo(
         ...(scope.locale === undefined ? {} : { locale: scope.locale }),
       },
       {
-        // `findSingle` reports no failure envelope, so absence is all this can
-        // ever distinguish. Same shape as the mint path's wrapper, deliberately.
-        loadSingle: async (slug, singleLocale) => {
-          const document = await loadSingleForPreview(slug, singleLocale);
-          return document === null
-            ? { kind: "absent" as const }
-            : { kind: "document" as const, document };
-        },
+        // `findSingle` reports failure by THROWING, so the translation is
+        // shared rather than written twice — the route flattens both refusals
+        // to one 404 anyway, but an untranslated throw would escape as a 500.
+        loadSingle: (slug, singleLocale) =>
+          readOrReport(() => loadSingleForPreview(slug, singleLocale)),
         loadDeclaration: singlePreviewDeclarationFor,
         loadSiteUrl: async () =>
           resolvePreviewSiteUrl(

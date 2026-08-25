@@ -8,10 +8,14 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
+
+import * as resolverModule from "../preview-redirect-resolver";
 import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
   previewCallerAuthorized,
+  readOrReport,
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
   type PreviewRedirectDeps,
@@ -429,39 +433,127 @@ describe("explainPreviewRedirect", () => {
   });
 });
 
-describe("the authenticated boundary on the explaining form", () => {
-  /*
-   * A COMPILE-TIME assertion, which is the only kind that can state this.
-   *
-   * The property is "an anonymous handler cannot reach a refusal cause", and
-   * nothing at runtime enforces it — the docblock that used to be the whole
-   * control is exactly what AGENTS.md means by a documented rule with nothing
-   * behind it. `@ts-expect-error` fails the build when the line it guards
-   * COMPILES, so this test goes red the moment the witness stops being
-   * required. That is the control, and the assertions below are incidental.
-   */
-  it("will not compile without proof the caller was authorized", async () => {
-    // @ts-expect-error - omitting the witness must not typecheck.
-    const withoutProof = explainPreviewRedirect(SCOPE, deps());
-    // @ts-expect-error - and the same for the Single façade beside it.
-    const singleWithoutProof = explainSinglePreviewRedirect(
-      { single: "homepage" },
-      {
-        loadSingle: reads({ path: "welcome" }),
-        loadDeclaration: vi.fn().mockResolvedValue({ url: () => "/" }),
-        loadSiteUrl: vi.fn().mockResolvedValue("https://site.example"),
-      }
-    );
+describe("what this module lets anyone reach", () => {
+  it("exports exactly these, and nothing else that hands out a cause", () => {
+    /*
+     * A MANIFEST rather than a check that one function is private, because the
+     * property is about every path to a refusal cause and not about the one
+     * that was found. `reduceToSitePath` became a bypass the moment its return
+     * type changed from `string | null` to the detailed outcome — it was still
+     * exported, and nothing noticed. This fails when the surface changes at
+     * all, so a new export has to be considered rather than merely added.
+     *
+     * The two `explain*` façades are on the list because they demand a witness;
+     * `readOrReport` and `previewCallerAuthorized` carry no cause at all.
+     */
+    expect(Object.keys(resolverModule).sort()).toEqual([
+      "explainPreviewRedirect",
+      "explainSinglePreviewRedirect",
+      "previewCallerAuthorized",
+      "readOrReport",
+      "resolvePreviewRedirect",
+      "resolveSinglePreviewRedirect",
+    ]);
+  });
+});
 
-    // Awaited so neither becomes an unhandled rejection; the values are not the
-    // point, the two lines above failing to compile is.
-    await expect(withoutProof).resolves.toBeDefined();
-    await expect(singleWithoutProof).resolves.toBeDefined();
+describe("readOrReport, for loaders that throw instead of returning", () => {
+  /*
+   * The Direct API has no failure envelope: `findSingle` throws for every
+   * unsuccessful result. A loader that only checked for `null` produced neither
+   * `absent` nor `unreadable` — the throw travelled straight past it, and the
+   * endpoint answered with a raw internal error instead of the refusal it had
+   * prepared. These cases exist because a mock returning `null` cannot
+   * reproduce that contract, so the suite agreed with an implementation
+   * production never runs.
+   */
+  it("reads a 404 as absence, because that status DOES establish it", async () => {
+    const notFound = new NextlyError({
+      code: "NOT_FOUND",
+      statusCode: 404,
+      publicMessage: "No such single",
+    });
+
+    expect(await readOrReport(() => Promise.reject(notFound))).toEqual({
+      kind: "absent",
+    });
   });
 
-  it("compiles and answers WITH the witness, so the refusal above is about the proof", async () => {
-    // The control: the same call is fine once authorized, so `@ts-expect-error`
-    // above is catching the missing witness rather than some unrelated error.
+  it("reads any other failure as unreadable, never as absence", async () => {
+    const boom = new NextlyError({
+      code: "INTERNAL_ERROR",
+      statusCode: 500,
+      publicMessage: "Database unavailable",
+    });
+
+    expect(await readOrReport(() => Promise.reject(boom))).toEqual({
+      kind: "unreadable",
+    });
+  });
+
+  it("reads a non-Nextly throw as unreadable rather than assuming anything", async () => {
+    // A driver error or a bug in a read hook arrives as a plain Error with no
+    // status at all. Guessing absence from it would be the same wrong
+    // diagnosis reached by a different route.
+    expect(
+      await readOrReport(() => Promise.reject(new Error("socket hang up")))
+    ).toEqual({ kind: "unreadable" });
+  });
+
+  it("still reads a returned null as absence", async () => {
+    expect(await readOrReport(() => Promise.resolve(null))).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("hands back the document when there is one", async () => {
+    // The control: it is a translator, not a function that reports failure
+    // whatever it is given.
+    expect(
+      await readOrReport(() => Promise.resolve({ path: "welcome" }))
+    ).toEqual({ kind: "document", document: { path: "welcome" } });
+  });
+});
+
+describe("the authenticated boundary on the explaining form", () => {
+  /*
+   * The parameter SHAPE, asserted two ways, and neither is a suppressed error.
+   *
+   * A blanket directive would accept ANY diagnostic on the line beneath it, so
+   * an unrelated signature or fixture mistake keeps the purported contract
+   * green while proving nothing about the witness. Both assertions below name
+   * exactly what is expected instead.
+   */
+  it("takes the witness as a positional parameter of its own", () => {
+    /*
+     * Four: scope, deps, caller, requestOrigin. A TypeScript `?` compiles to an
+     * ordinary parameter with no default, so `Function.length` counts it —
+     * which means this is 4 while the witness is present and 3 the moment it is
+     * removed. Evaluated at run time, and unlike a blanket directive it cannot
+     * be satisfied by an unrelated error somewhere else in the file.
+     */
+    expect(explainPreviewRedirect).toHaveLength(4);
+    expect(explainSinglePreviewRedirect).toHaveLength(4);
+  });
+
+  it("types that parameter as the proof only previewCallerAuthorized mints", () => {
+    /*
+     * A compile-time assertion that names its type. If the third parameter
+     * stopped being `AuthorizedPreviewCaller` — widened to `unknown`, reordered,
+     * or dropped — these assignments stop typechecking, and `check-types` fails
+     * on THIS line rather than somewhere a directive happened to be pointing.
+     */
+    const witness: Parameters<typeof explainPreviewRedirect>[2] = CALLER;
+    const singleWitness: Parameters<typeof explainSinglePreviewRedirect>[2] =
+      CALLER;
+
+    expect(witness).toBe(CALLER);
+    expect(singleWitness).toBe(CALLER);
+  });
+
+  it("answers normally once the witness is supplied", async () => {
+    // The control: the boundary refuses the missing proof rather than the
+    // function being unusable.
     expect(await explainPreviewRedirect(SCOPE, deps(), CALLER)).toEqual({
       kind: "path",
       path: "/about",

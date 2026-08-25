@@ -464,6 +464,52 @@ describe("mintPreviewLink for a Single", () => {
     expect(response.status).toBe(409);
   });
 
+  /*
+   * A Single's read reports failure by THROWING, not by returning null.
+   * `findSingle` raises a typed error for every unsuccessful service result, so
+   * a loader that only checked for null let the throw travel past it and the
+   * endpoint answered with the raw error instead of a refusal. A fixture that
+   * resolves null cannot reproduce that, which is why these reject instead.
+   */
+  it("refuses, rather than erroring, when the Single's read throws not-found", async () => {
+    findSingle.mockRejectedValue(
+      new NextlyError({
+        code: "NOT_FOUND",
+        statusCode: 404,
+        publicMessage: "No such single",
+      })
+    );
+
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+    const message = String(
+      ((await json(response)).error as { message?: string } | undefined)
+        ?.message ?? ""
+    );
+
+    expect(response.status).toBe(409);
+    expect(message).toMatch(/deleted|removed/i);
+  });
+
+  it("says a FAILED Single read could not be read, not that it was deleted", async () => {
+    findSingle.mockRejectedValue(
+      new NextlyError({
+        code: "INTERNAL_ERROR",
+        statusCode: 500,
+        publicMessage: "Database unavailable",
+      })
+    );
+
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+    const message = String(
+      ((await json(response)).error as { message?: string } | undefined)
+        ?.message ?? ""
+    );
+
+    expect(response.status).toBe(409);
+    expect(message).toMatch(/could not be read just now|try again/i);
+    expect(message).not.toMatch(/deleted/i);
+  });
+
   // Naming both is not a narrower request, it is two different documents — and
   // silently honouring one would mint a credential for a document the caller
   // may not have meant.
@@ -656,6 +702,11 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
     expect(message).toMatch(/could not be read just now|try again/i);
     expect(message).not.toMatch(/deleted/i);
     expect(message).not.toMatch(slugAdvice);
+    // The ENTRY, not the collection. What failed is the trusted read of one
+    // document; the collection and its declaration were both read fine a
+    // moment earlier, so naming the collection points at the wrong scope.
+    expect(message).toMatch(/this entry/i);
+    expect(message).not.toMatch(/this collection/i);
   });
 
   it("still calls a 404 a deletion, so the pair discriminates", async () => {

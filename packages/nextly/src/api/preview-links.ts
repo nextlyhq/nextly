@@ -34,6 +34,7 @@ import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
   previewCallerAuthorized,
+  readOrReport,
   type PreviewPathOutcome,
   type PreviewRefusalCause,
 } from "../domains/collections/services/preview-redirect-resolver";
@@ -226,10 +227,16 @@ const REFUSALS: Record<
   }
 > = {
   documentUnreadable: {
-    message: (_subject, noun) =>
-      `This ${noun} could not be read just now, so a shared link would have ` +
-      "nowhere to open. Nothing is known to be wrong with it — please try " +
-      "again in a moment.",
+    /*
+     * The DOCUMENT, not the collection. What failed is the trusted read of one
+     * entry; the collection and its declaration were both read successfully a
+     * moment earlier. Naming the collection sends the editor to look at the
+     * wrong scope, which is the same misdirection this cause was added to stop.
+     */
+    message: subject =>
+      `This ${subject === "single" ? "single" : "entry"} could not be read ` +
+      "just now, so a shared link would have nowhere to open. Nothing is " +
+      "known to be wrong with it — please try again in a moment.",
     reason: "document-read-failed",
     /*
      * Deliberately NOT the deletion remedy. The read failed, which establishes
@@ -659,17 +666,12 @@ async function mintForSingle(
     ? await explainSinglePreviewRedirect(
         { single, ...(locale === undefined ? {} : { locale }) },
         {
-          // `findSingle` has no failure envelope — it either hands back the
-          // document or it does not — so this path can only ever report
-          // `absent`, never `unreadable`. Stated rather than inferred, because
-          // a reader comparing it with the entry loader beside it will notice
-          // the asymmetry and should know it is the API's, not an omission.
-          loadSingle: async (slug, singleLocale) => {
-            const document = await loadSingleForPreview(slug, singleLocale);
-            return document === null
-              ? { kind: "absent" }
-              : { kind: "document", document };
-          },
+          // `findSingle` reports failure by THROWING rather than by returning
+          // an envelope, so checking for `null` here saw neither absence nor a
+          // failed read — the throw simply travelled past, and the endpoint
+          // answered with a raw internal error instead of this refusal.
+          loadSingle: (slug, singleLocale) =>
+            readOrReport(() => loadSingleForPreview(slug, singleLocale)),
           ...sharedRedirectDeps(declaration),
         },
         // The gate above already required `update` on this Single, which is

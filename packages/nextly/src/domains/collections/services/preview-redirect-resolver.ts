@@ -17,6 +17,8 @@
  * @module domains/collections/services/preview-redirect-resolver
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 import {
   resolvePreviewUrl,
   type PreviewDeclaration,
@@ -42,6 +44,35 @@ export type PreviewDocumentRead =
   | { kind: "absent" }
   /** The read itself failed, so whether the document exists is UNKNOWN. */
   | { kind: "unreadable" };
+
+/**
+ * A read whose failures arrive as THROWN errors, as one of the three outcomes.
+ *
+ * The Direct API does not hand back a failure envelope: `findSingle` throws for
+ * every unsuccessful result. A loader that only checked for `null` therefore
+ * never produced `absent` OR `unreadable` — the throw travelled past it and the
+ * caller answered with a raw internal error instead of the refusal it had
+ * carefully prepared.
+ *
+ * Written ONCE and shared by every caller with a throwing loader, because two
+ * copies of "which status counts as absent" agree until one is edited. Only a
+ * 404 is evidence of absence; anything else means the question went unanswered,
+ * which is the same rule the entry loader applies to its envelope.
+ */
+export async function readOrReport(
+  load: () => Promise<Record<string, unknown> | null>
+): Promise<PreviewDocumentRead> {
+  try {
+    const document = await load();
+    return document === null
+      ? { kind: "absent" }
+      : { kind: "document", document };
+  } catch (error) {
+    return error instanceof NextlyError && error.statusCode === 404
+      ? { kind: "absent" }
+      : { kind: "unreadable" };
+  }
+}
 
 /** What this resolver needs from the outside world. */
 export interface PreviewRedirectDeps {
@@ -250,7 +281,7 @@ async function computePreviewRedirect(
  * of an origin comparison agree only until one is edited, at which point the
  * one that drifted still returns a plausible-looking path.
  */
-export function reduceToSitePath({
+function reduceToSitePath({
   preview,
   document,
   siteUrl,
