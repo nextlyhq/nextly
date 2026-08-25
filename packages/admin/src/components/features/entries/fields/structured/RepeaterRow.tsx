@@ -26,14 +26,17 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
-import { fieldWeight } from "@admin/components/features/entries/EntryForm/FieldRow";
 import {
   GripVertical,
   ChevronDown,
   ChevronRight,
   Trash2,
 } from "@admin/components/icons";
-import { packFieldsIntoRows } from "@admin/lib/forms/pack-fields-into-rows";
+import {
+  packFieldsIntoRows,
+  fieldWeight,
+  computeGridColumns,
+} from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
 
 import { RepeaterRowLabel } from "./RepeaterRowLabel";
@@ -129,7 +132,7 @@ export interface RepeaterRowProps<
  */
 interface RepeaterRowHeaderProps {
   index: number;
-  field: EnrichedRepeaterFieldConfig;
+  field: RepeaterFieldConfig;
   data: Record<string, unknown>;
   isOpen: boolean;
   isSortable: boolean;
@@ -213,7 +216,11 @@ function RepeaterRowHeader({
   );
 }
 
-function RepeaterRowFallbackList({ fields }: { fields: FieldConfig[] }) {
+function RepeaterRowFallbackList({
+  fields,
+}: {
+  fields: RepeaterFieldConfig["fields"];
+}) {
   return (
     <div className="text-sm text-muted-foreground bg-primary/5 rounded-lg p-4 border border-border border-dashed">
       <p className="font-medium mb-2">Sub-fields:</p>
@@ -254,17 +261,12 @@ function RepeaterRowFallbackList({ fields }: { fields: FieldConfig[] }) {
 interface RepeaterRowSubFieldsProps<
   TFieldValues extends FieldValues = FieldValues,
 > {
-  field: EnrichedRepeaterFieldConfig;
+  field: RepeaterFieldConfig;
   basePath: string;
   control: Control<TFieldValues>;
   disabled: boolean;
   readOnly: boolean;
-  renderField?: (
-    field: unknown,
-    basePath: string,
-    control: Control<TFieldValues>,
-    options?: { disabled?: boolean; readOnly?: boolean }
-  ) => ReactNode;
+  renderField?: RenderFieldFunction<TFieldValues>;
 }
 
 function RepeaterRowSubFields<TFieldValues extends FieldValues = FieldValues>({
@@ -291,12 +293,7 @@ function RepeaterRowSubFields<TFieldValues extends FieldValues = FieldValues>({
   return (
     <>
       {rows.map((row, rIdx) => {
-        const weights = row.map(fieldWeight);
-        const sum = weights.reduce((a, b) => a + b, 0);
-        const cols =
-          sum < 100
-            ? [...weights, 100 - sum].map(w => `${w}fr`).join(" ")
-            : weights.map(w => `${w}fr`).join(" ");
+        const cols = computeGridColumns(row.map(fieldWeight));
 
         return (
           <div
@@ -310,7 +307,7 @@ function RepeaterRowSubFields<TFieldValues extends FieldValues = FieldValues>({
               }
               return (
                 <div key={(subField as { name: string }).name || idx}>
-                  {renderField(subField, basePath, control, {
+                  {renderField(subField as FieldConfig, basePath, control, {
                     disabled,
                     readOnly,
                   })}
