@@ -534,6 +534,13 @@ something and watching what failed, and in two of them the break changed no test
 result at all, which was itself the finding. A break-verify that moves nothing
 is not a clean bill; it means the property has no coverage yet.
 
+**And a break that moves something is not automatically evidence either**, which
+is the generalisation of everything above: the break has to have reached the
+code. A string replacement that matched nothing, a probe whose worktree was
+unbuilt, and a redirect that swallowed a build's failure all produce a result
+that reads as a verdict about the change. `instruments-that-never-looked.md`
+collects those, with the controls that separate them.
+
 The tell is a sentence where the evidence names one thing and the conclusion
 names a family: a queue, a marker, a control — against load, a merge, a set of
 findings. When you notice it, do not look for a better number first. Name the

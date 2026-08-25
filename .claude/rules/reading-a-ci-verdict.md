@@ -102,6 +102,12 @@ node scripts/check-comment-convention.mjs > out.log 2>&1; echo "EXIT=$?"
 An unavailable answer must never read as a passing one, and neither must an
 answer whose status you did not look at.
 
+Both of those are the same shape one level up — an instrument reporting on
+something it never examined — and it reaches well past CI: a test fixture that
+never reaches the mechanism, a search over the wrong set, a printed label that
+means something adjacent to what you asked. `instruments-that-never-looked.md`
+carries the measured instances and the controls that catch them.
+
 **A redirect is not safe BECAUSE it is a redirect — it is safe because the
 status is read on the next line.** Redirecting to `/dev/null` destroys the
 verdict exactly as a pipe does, and the silence that follows is
