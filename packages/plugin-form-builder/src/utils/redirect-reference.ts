@@ -36,7 +36,10 @@ export function parseRedirectReference(
   if (value == null) return null;
 
   if (typeof value === "string") {
-    return collections.length === 1
+    // Emptiness checked here as `referenceId` already does below. Without it a
+    // CLEARED `redirectPage` reads as a reference to id "", which validation
+    // then accepts as a usable target and the submit path resolves to nothing.
+    return value && collections.length === 1
       ? { collection: collections[0], id: value }
       : null;
   }

@@ -20,6 +20,33 @@ import { afterEach, describe, expect, it } from "vitest";
 import { submitForm } from "../handlers/submit-form";
 import { formBuilder } from "../plugin";
 
+/**
+ * Asserts the write was refused BY THE REDIRECT RULE.
+ *
+ * A bare `rejects.toThrow()` passes on any failure — an unregistered
+ * collection, a schema error, a boot problem — so it cannot tell "the rule
+ * refused this" from "the fixture was wrong". Matching the message does not
+ * help either: `NextlyError.validation` carries the generic
+ * `"Validation failed."` and puts the detail in `publicData.errors`, so every
+ * validation rule in the collection produces the same string.
+ *
+ * The field path is the thing that identifies WHICH rule fired.
+ */
+async function expectRedirectRefusal(write: Promise<unknown>) {
+  let refusal: unknown;
+  try {
+    await write;
+  } catch (error) {
+    refusal = error;
+  }
+
+  expect(refusal, "expected the write to be refused").toBeDefined();
+  const errors =
+    (refusal as { publicData?: { errors?: { path?: string }[] } })?.publicData
+      ?.errors ?? [];
+  expect(errors.map(entry => entry.path)).toContain("settings.redirectPage");
+}
+
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -151,11 +178,11 @@ describe("a form that redirects to a picked page", () => {
     // Previously this saved and then produced no destination on every
     // submission. The write path now refuses it, because a reference into a
     // collection the plugin cannot build a URL for is not a destination.
-    await expect(
+    await expectRedirectRefusal(
       submitPointingAt((id: string) => ({ relationTo: "pages", value: id }), {
         redirectRelationships: { posts: "/blog/{slug}" },
       })
-    ).rejects.toThrow();
+    );
   });
 });
 
@@ -186,23 +213,21 @@ describe("saving a form that redirects to a page", () => {
     // Through the write path the admin actually uses. `validateFormConfig` is
     // a library entry point that no save goes through, so a rule living only
     // there would let this save and fail at submit time instead.
-    await expect(
-      create({ confirmationType: "relationship" })
-    ).rejects.toThrow();
+    await expectRedirectRefusal(create({ confirmationType: "relationship" }));
   });
 
   it("refuses a reference that names nothing", async () => {
     // Truthy and unreadable: a presence check admits exactly the values that
     // resolve to no destination.
-    await expect(
+    await expectRedirectRefusal(
       create({ confirmationType: "relationship", redirectPage: {} })
-    ).rejects.toThrow();
-    await expect(
+    );
+    await expectRedirectRefusal(
       create({
         confirmationType: "relationship",
         redirectPage: { relationTo: "pages" },
       })
-    ).rejects.toThrow();
+    );
   });
 
   it("accepts one that names a page", async () => {
@@ -261,7 +286,7 @@ describe("a host that overrides the forms collection's hooks", () => {
       });
 
     // The plugin's rule still refuses...
-    await expect(save({ confirmationType: "relationship" })).rejects.toThrow();
+    await expectRedirectRefusal(save({ confirmationType: "relationship" }));
 
     // ...and the host's hook is genuinely wired, not merely tolerated.
     await save({
@@ -313,22 +338,22 @@ describe("a host hook that rewrites the payload after validation", () => {
     // mutation — which means a host that mutates AFTERWARDS was judged on a
     // payload it then replaced. The trailing `beforeChange` call is what makes
     // this an invariant rather than a check.
-    await expect(
+    await expectRedirectRefusal(
       saveThrough(data => {
         data.settings = { confirmationType: "relationship" };
       })
-    ).rejects.toThrow();
+    );
   });
 
   it("still refuses a reference the host rewrote into an unusable one", async () => {
-    await expect(
+    await expectRedirectRefusal(
       saveThrough(data => {
         data.settings = {
           confirmationType: "relationship",
           redirectPage: { relationTo: "unconfigured", value: "x1" },
         };
       })
-    ).rejects.toThrow();
+    );
   });
 
   it("accepts what the host rewrites into something usable", async () => {
@@ -340,5 +365,60 @@ describe("a host hook that rewrites the payload after validation", () => {
       };
     });
     expect(saved).toMatchObject({ item: { id: expect.any(String) } });
+  });
+});
+
+describe("updating a form that already redirects to a page", () => {
+  /** A saved, valid form; returns its id and the harness it lives in. */
+  async function savedForm() {
+    const { plugin } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [pagesCollection],
+    });
+
+    const created = await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "pages", value: "pg1" },
+        },
+      },
+    });
+    return (created as { item: { id: string } }).item.id;
+  }
+
+  it("does not reject an update that leaves the settings alone", async () => {
+    // The partial-update trap the fields rule beside it already documents: an
+    // update carries the patch, so treating an absent `settings` as empty
+    // would refuse a rename for a setting it never touched.
+    const id = await savedForm();
+    const renamed = await current!.nextly.update({
+      collection: "forms",
+      id,
+      data: { name: "Renamed" },
+    });
+    expect(renamed).toMatchObject({ item: { id } });
+  });
+
+  it("rejects an update that clears the page", async () => {
+    // The other half: an update that DOES set settings is judged on what it
+    // sets, so removing the target is refused rather than silently leaving a
+    // form that submits to nowhere.
+    const id = await savedForm();
+    await expectRedirectRefusal(
+      current!.nextly.update({
+        collection: "forms",
+        id,
+        data: { settings: { confirmationType: "relationship" } },
+      })
+    );
   });
 });

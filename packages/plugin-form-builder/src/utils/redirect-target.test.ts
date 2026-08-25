@@ -65,6 +65,12 @@ describe("parseRedirectReference", () => {
     });
   });
 
+  it("refuses an empty bare id", () => {
+    // A cleared field is not a reference to the empty document. Accepting it
+    // lets validation pass a form whose every submission ends nowhere.
+    expect(parseRedirectReference("", ["pages"])).toBeNull();
+  });
+
   it("refuses a bare id when several collections are configured", () => {
     // The id names no collection, and picking one would build the URL from
     // another collection's pattern — a wrong destination, not a missing one.

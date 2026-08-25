@@ -80,26 +80,33 @@ export function documentLabel(row: Record<string, unknown>): string {
  */
 async function fetchChoices(
   collection: string,
-  query: string
-): Promise<Choice[] | null> {
+  query: string,
+  page: number
+): Promise<{ rows: Choice[]; hasMore: boolean } | null> {
   const search = query ? `&search=${encodeURIComponent(query)}` : "";
   try {
     const response = await fetch(
       `/admin/api/collections/${collection}/entries` +
-        `?limit=${PAGE_SIZE}&status=all&depth=0${search}`,
+        `?limit=${PAGE_SIZE}&page=${page}&status=all&depth=0${search}`,
       { credentials: "include" }
     );
     if (!response.ok) return null;
     const body = (await response.json()) as {
       items?: Record<string, unknown>[];
+      meta?: { totalPages?: number };
     };
-    return (body.items ?? [])
-      .filter(row => typeof row.id === "string")
-      .map(row => ({
-        collection,
-        id: row.id as string,
-        label: documentLabel(row),
-      }));
+    return {
+      rows: (body.items ?? [])
+        .filter(row => typeof row.id === "string")
+        .map(row => ({
+          collection,
+          id: row.id as string,
+          label: documentLabel(row),
+        })),
+      // Reported rather than assumed, so the control can offer the rest
+      // instead of truncating where the author cannot see it.
+      hasMore: page < (body.meta?.totalPages ?? 1),
+    };
   } catch {
     return null;
   }
@@ -124,30 +131,47 @@ function renderChoice(choice: Choice) {
 function useChoices(key: string, applied: string) {
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [failed, setFailed] = useState<readonly string[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(1);
+
+  // A new query is a new list, not more of the old one.
+  useEffect(() => setPage(1), [key, applied]);
 
   useEffect(() => {
     let cancelled = false;
     const wanted = key ? key.split(",") : [];
 
     void Promise.all(
-      wanted.map(collection => fetchChoices(collection, applied))
+      wanted.map(collection => fetchChoices(collection, applied, page))
     ).then(results => {
       if (cancelled) return;
       // WHICH collections failed, not merely whether any did: one unreadable
       // collection beside a readable-but-empty one otherwise reports "nothing
       // here" about a collection nobody could see.
       setFailed(wanted.filter((_, index) => results[index] === null));
-      setChoices(
-        results.filter((rows): rows is Choice[] => rows !== null).flat()
+      const loaded = results.filter(
+        (result): result is { rows: Choice[]; hasMore: boolean } =>
+          result !== null
+      );
+      setHasMore(loaded.some(result => result.hasMore));
+      const rows = loaded.flatMap(result => result.rows);
+      setChoices(current =>
+        page === 1 ? rows : [...(current ?? []), ...rows]
       );
     });
 
     return () => {
       cancelled = true;
     };
-  }, [key, applied]);
+  }, [key, applied, page]);
 
-  return { choices, setChoices, failed };
+  return {
+    choices,
+    setChoices,
+    failed,
+    hasMore,
+    loadMore: () => setPage(current => current + 1),
+  };
 }
 
 /**
@@ -172,7 +196,18 @@ function useSelectedChoice(
     const separator = selected.indexOf(":");
     const collection = selected.slice(0, separator);
     const id = selected.slice(separator + 1);
-    if (!id || choices.some(choice => choice.id === id)) return;
+    // Collection AND id: two configured collections can hold the same id, and
+    // matching on id alone skips the fetch while the option that is actually
+    // selected is absent — leaving the author looking at a blank control over
+    // a stored value.
+    if (
+      !id ||
+      choices.some(
+        choice => choice.id === id && choice.collection === collection
+      )
+    ) {
+      return;
+    }
 
     let cancelled = false;
     void (async () => {
@@ -185,10 +220,10 @@ function useSelectedChoice(
           { credentials: "include" }
         );
         if (!response.ok) return;
-        const body = (await response.json()) as {
-          item?: Record<string, unknown>;
-        };
-        const row = body.item;
+        // A by-id read answers with the document ITSELF. Only mutations carry
+        // the `{ message, item }` envelope, and reaching for `item` here made
+        // this recovery a no-op that no listing-sized fixture could reveal.
+        const row = (await response.json()) as Record<string, unknown>;
         if (cancelled || !row || typeof row.id !== "string") return;
         setChoices(current => [
           { collection, id: row.id as string, label: documentLabel(row) },
@@ -265,7 +300,7 @@ export function RedirectPagePicker({
 
   // `collections` is an array prop, so a new identity every render would
   // refetch forever; the join is the value that actually decides the request.
-  const { choices, setChoices, failed } = useChoices(
+  const { choices, setChoices, failed, hasMore, loadMore } = useChoices(
     collections.join(","),
     applied
   );
@@ -321,6 +356,19 @@ export function RedirectPagePicker({
             <Options choices={choices} collections={collections} />
           </SelectContent>
         </Select>
+      )}
+
+      {/* The rest of the matches, reachable rather than silently absent. A cap
+          with no way past it makes a document beyond it unselectable however
+          high the cap is set. */}
+      {hasMore && (
+        <button
+          type="button"
+          onClick={loadMore}
+          className="text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Load more
+        </button>
       )}
     </div>
   );
