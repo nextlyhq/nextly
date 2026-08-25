@@ -1126,6 +1126,73 @@ describe("the audit trail a preview link leaves", () => {
    * before the refusal, the trail would claim access was handed out that never
    * was — and an investigator reading it would be chasing a link nobody holds.
    */
+  /*
+   * `userId` on an api-key request is the key's OWNER. A row carrying only that
+   * would state that a person personally revoked every link on the site when a
+   * delegated key did — backwards in exactly the case this trail exists for,
+   * where the key is what is under suspicion.
+   */
+  it("names the KEY when an api key revokes, not just its owner", async () => {
+    (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: "owner-1",
+      permissions: [],
+      roles: [],
+      authMethod: "api-key",
+      apiKeyId: "key-9",
+    });
+
+    await revokePreviewLinks(
+      post({}, "http://x/api/nextly/preview-links/revoke")
+    );
+
+    expect(meta()).toMatchObject({ authMethod: "api-key", apiKeyId: "key-9" });
+  });
+
+  // The control for the case above: a session revocation must NOT invent a key
+  // id, so a reader can tell "no key was involved" from "a key id was lost".
+  it("carries no key id when a session revokes", async () => {
+    await revokePreviewLinks(
+      post({}, "http://x/api/nextly/preview-links/revoke")
+    );
+
+    expect(meta()).toMatchObject({ authMethod: "session" });
+    expect(Object.keys(meta())).not.toContain("apiKeyId");
+  });
+
+  /*
+   * Signing is not the moment a credential exists for anyone: the settings read
+   * and the link assembly come after it, and a failure in either returns an
+   * error while the token never leaves the process. A row written before them
+   * would durably assert that access was handed out on a request that handed
+   * out nothing.
+   */
+  it("records nothing when the response cannot be assembled after signing", async () => {
+    /*
+     * The application config is the ONLY read that happens strictly after the
+     * token is signed — the settings read cannot serve here, because the
+     * redirect resolver reads settings too, so failing it aborts the request
+     * before anything is signed and the assertion passes without ever reaching
+     * the ordering it claims to test.
+     */
+    (container.get as ReturnType<typeof vi.fn>).mockImplementation(
+      (key: string) => {
+        if (key === "config") throw new Error("config unavailable");
+        return {
+          getPreviewTokenGeneration: getGeneration,
+          revokeAllPreviewTokens: revokeAll,
+          getSettings,
+        };
+      }
+    );
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).not.toBe(200);
+    expect(auditWrite).not.toHaveBeenCalled();
+  });
+
   it("records nothing when the mint is refused", async () => {
     previewDeclaration.mockResolvedValue(undefined);
 

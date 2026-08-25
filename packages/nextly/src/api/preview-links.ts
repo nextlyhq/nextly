@@ -333,16 +333,31 @@ async function respondWithPreviewLink(
     }
   );
 
+  const settings = await (await settingsService()).getSettings();
+  const url = previewLinkUrl({
+    siteUrl: resolvePreviewSiteUrl(settings.siteUrl),
+    route: resolvePreviewRoute(
+      container.get<NextlyServiceConfig>("config")?.preview
+    ),
+    token,
+  });
+
   /*
-   * Recorded AFTER signing, so nothing claims a credential exists that was
-   * never produced — a failed sign throws past this line and leaves no row.
+   * Recorded LAST, after everything that can still fail has succeeded.
+   *
+   * Signing is not the moment a credential exists for anyone — the settings
+   * read and the link assembly come after it, and a failure in either returns
+   * an error while the token never leaves the process. A row written before
+   * them would durably assert that draft access was handed out on a request
+   * that handed out nothing, and an investigator reading the trail would be
+   * hunting a link nobody holds.
    *
    * The writer never throws, deliberately, and that direction is right here for
    * the same reason it is right for a login: an unreachable audit table must
-   * not be what stops an editor previewing their own draft. The cost is that a
-   * database failure loses the row and the link still works, which is a gap the
-   * writer logs. Fail-closed would be the wrong trade — it converts a reporting
-   * outage into an outage of the feature being reported on.
+   * not be what stops an editor previewing their own draft. The cost is the
+   * opposite gap — a database failure loses the row while the link works — and
+   * the writer logs it. Fail-closed would convert a reporting outage into an
+   * outage of the feature being reported on.
    *
    * No IP or user agent. Capturing them honestly needs the `trustProxy` and
    * `trustedProxyIps` configuration that decides which forwarded address may be
@@ -362,17 +377,9 @@ async function respondWithPreviewLink(
     },
   });
 
-  const settings = await (await settingsService()).getSettings();
-
   return respondMutation("Preview link created", {
     token,
-    url: previewLinkUrl({
-      siteUrl: resolvePreviewSiteUrl(settings.siteUrl),
-      route: resolvePreviewRoute(
-        container.get<NextlyServiceConfig>("config")?.preview
-      ),
-      token,
-    }),
+    url,
     expiresAt: expiresAt.toISOString(),
   });
 }
@@ -744,11 +751,42 @@ export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
    * row relate: every `preview-link-minted` carrying a lower generation is
    * covered by this revocation, so the trail can say which credentials a given
    * revocation actually killed rather than only that one happened.
+   *
+   * That correlation holds for revocations that do not overlap, which is what
+   * a site-wide break-glass action normally looks like, and NOT for concurrent
+   * ones. `revokeAllPreviewTokens` increments atomically and then reads the
+   * counter back in a separate statement, so two revocations racing can both
+   * observe the later value and record it — the increments are all applied, but
+   * one actor's row names a generation another actor produced. The value is
+   * recorded rather than withheld because it is the only thing that relates the
+   * two kinds of row at all, and stated here rather than left to be inferred
+   * because a reader correlating an incident needs to know which of those two
+   * cases they are in.
    */
   await auditWriter().write({
     kind: "preview-links-revoked",
     actorUserId: auth.userId,
-    metadata: { generation },
+    metadata: {
+      generation,
+      /*
+       * WHICH CREDENTIAL acted, not only whose account it belongs to.
+       *
+       * Unlike minting, this route accepts an API key: a key holding
+       * `manage settings` can already change the settings this generation
+       * lives in, so refusing it here would remove an automation capability
+       * without closing anything. But `userId` on an api-key request is the
+       * key's OWNER, and recording that alone would state that a person
+       * personally revoked every link on the site when a delegated key did —
+       * which is exactly backwards in the case this trail exists for, where a
+       * key is the thing under suspicion.
+       *
+       * `apiKeyId` is present only on an api-key request, so `authMethod` is
+       * recorded beside it rather than inferred from its absence: a session row
+       * and a row whose key id failed to resolve would otherwise read alike.
+       */
+      authMethod: auth.authMethod,
+      ...(auth.apiKeyId === undefined ? {} : { apiKeyId: auth.apiKeyId }),
+    },
   });
 
   return respondMutation("Preview links revoked", { generation });
