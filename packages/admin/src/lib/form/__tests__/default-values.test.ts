@@ -319,4 +319,48 @@ describe("getDefaultValues — multiplicity and declared values", () => {
       ])
     ).toEqual({ isUrgent: true, shipping: "express" });
   });
+
+  it("cannot read a sibling's DECLARED default from earlier in the order, matching the write path", () => {
+    // On a create form there is no document, so a default can only read what
+    // earlier fields settled on. `shipping` is declared first and sees no
+    // `isUrgent` yet, so it takes the absent branch.
+    //
+    // This is asserted rather than fixed BECAUSE the write path does the same:
+    // `applyFieldDefaults` walks the fields in order over the body it was
+    // handed, so on an empty body it reaches `"standard"` too. Seeding later
+    // siblings' declared defaults here would make the admin submit `"express"`
+    // where the server computes `"standard"` — a divergence, which is the whole
+    // thing this helper exists to prevent.
+    expect(
+      getDefaultValues([
+        f({
+          name: "shipping",
+          type: "text",
+          defaultValue: (data: Record<string, unknown>) =>
+            data.isUrgent ? "express" : "standard",
+        }),
+        f({ name: "isUrgent", type: "checkbox", defaultValue: true }),
+      ])
+    ).toEqual({ shipping: "standard", isUrgent: true });
+  });
+
+  it("resolves a function default against the stored document when editing", () => {
+    // The field was added to the schema after this entry was written, so it has
+    // no stored value and takes its default — computed against the entry, which
+    // is what the write path would have seen.
+    expect(
+      getDefaultValues(
+        [
+          f({
+            name: "shipping",
+            type: "text",
+            defaultValue: (data: Record<string, unknown>) =>
+              data.isUrgent ? "express" : "standard",
+          }),
+          f({ name: "isUrgent", type: "checkbox" }),
+        ],
+        { isUrgent: true }
+      )
+    ).toEqual({ shipping: "express", isUrgent: true });
+  });
 });

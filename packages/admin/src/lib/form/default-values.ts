@@ -289,14 +289,30 @@ export function getDefaultValues(
 ): Record<string, unknown> {
   const defaults: Record<string, unknown> = {};
 
+  // The entry API may return DB column names (snake_case) while field configs
+  // use camelCase. Try camelCase first, then the snake_case column.
+  const storedValue = (name: string) =>
+    existingData?.[name] ?? existingData?.[toSnakeCase(name)];
+
+  // What a functional default reads. It starts as the whole stored document
+  // rather than filling up field by field, because declaration ORDER is not the
+  // document: a default reading a sibling declared after it would otherwise see
+  // that sibling as absent and take the wrong branch on an entry that plainly
+  // has it. The write path has no such gap — `applyFieldDefaults` receives the
+  // supplied document whole — and the admin then submits the value it computed,
+  // so the server never recomputes it and the divergence would reach the row.
+  const context: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (!("name" in field) || !field.name) continue;
+    const stored = storedValue(field.name);
+    if (stored !== undefined) context[field.name] = stored;
+  }
+
   for (const field of fields) {
     if (!("name" in field) || !field.name) continue;
     const fieldName = field.name;
 
-    // The entry API may return DB column names (snake_case) while field configs
-    // use camelCase. Try camelCase first, then the snake_case column.
-    const existingValue =
-      existingData?.[fieldName] ?? existingData?.[toSnakeCase(fieldName)];
+    const existingValue = storedValue(fieldName);
 
     // A STORED NULL for a structural field is not a value to keep. The field's
     // own inputs materialise the shape as they register — `seo: null` becomes
@@ -312,7 +328,12 @@ export function getDefaultValues(
     defaults[fieldName] =
       existingValue !== undefined && !nullStructural
         ? fromStoredValue(field, existingValue)
-        : fromDeclaredDefault(field, defaults);
+        : fromDeclaredDefault(field, context);
+
+    // A later default reads the value this one settled on, coerced, rather than
+    // the raw stored one — the same progression `applyFieldDefaults` makes as it
+    // fills the document it was handed.
+    context[fieldName] = defaults[fieldName];
   }
 
   return defaults;
