@@ -17,6 +17,7 @@ import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../revalidate-media";
+import { MediaService as UnifiedMediaService } from "../services/media-service";
 
 /** Register a recording revalidator and hand back the intents it receives. */
 function captureFlushes(): { intents: { tags: string[] }[] } {
@@ -133,5 +134,49 @@ describe("withMediaRevalidationBatch", () => {
     // The control: the throwing sink was actually reached, so this is not
     // passing because nothing was flushed.
     expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+describe("the bulk surface stays inside a batch scope", () => {
+  /**
+   * Every method on the service whose name marks it a fan-out.
+   *
+   * DERIVED from the prototype rather than listed here, which is the whole
+   * point: a hand-kept list agrees with the class on the day it is written and
+   * silently stops covering the method added afterwards.
+   */
+  function bulkMethodNames(): string[] {
+    return Object.getOwnPropertyNames(UnifiedMediaService.prototype)
+      .filter(name => name.startsWith("bulk"))
+      .sort();
+  }
+
+  it("names every bulk method, so adding one has to be a deliberate act", () => {
+    // This assertion exists to FAIL when the bulk surface grows. A new
+    // `bulk*` method that fans out over the single-item path without opening a
+    // scope is not merely slower — it looks correct at every call site, and
+    // nothing observes the difference except a count of flushes nobody takes.
+    // Failing here forces the author to the test below.
+    expect(bulkMethodNames()).toEqual(["bulkDelete", "bulkUpload"]);
+  });
+
+  it("wraps each of them in withMediaRevalidationBatch", () => {
+    const names = bulkMethodNames();
+
+    // The control. Without it an empty list satisfies the loop perfectly, and
+    // a rename that took every method out of the filter would report as full
+    // coverage of nothing.
+    expect(names.length).toBeGreaterThan(0);
+
+    for (const name of names) {
+      const source = String(
+        (UnifiedMediaService.prototype as unknown as Record<string, unknown>)[
+          name
+        ]
+      );
+      expect(source, `${name} must open a batch scope`).toContain(
+        "withMediaRevalidationBatch"
+      );
+    }
   });
 });
