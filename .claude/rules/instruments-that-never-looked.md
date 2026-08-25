@@ -5,9 +5,12 @@ answer that was never about your subject at all — a check that ran on nothing,
 a search pointed at the wrong set, a probe that failed before reaching the
 mechanism, a label that means something adjacent to what you asked.
 
-Every instance produces a confident, well-formed, ordinary-looking result. None
-produces an error. That is what separates this from the failures the other files
-describe: there is nothing to read more carefully.
+Every instance produces a confident, well-formed, ordinary-looking result, and
+none of them produces any indication that the subject went unexamined. Some
+produce no error at all; one below produces a RED — an export-removal probe
+whose worktree was unbuilt, so a setup guard threw before a single test ran.
+That is worse rather than better, because a failure is read as a verdict about
+the change. Either way there is nothing in the output to read more carefully.
 
 **Twelve instances were measured in a single day, across three lanes working
 independently.** They are listed below with what each one actually did, because
@@ -29,11 +32,13 @@ ordinary mistake.
 **The input set was empty, or was not the set being claimed.**
 
 - A landed-whole check derived its file list from
-  `git diff $(git merge-base $HEAD origin/main)..$HEAD`. Under a merge commit
-  the merge-base IS the head, so the range was empty and the check reported
-  `files touched: 0 · 0 differing` — a clean verification from a loop that
-  examined nothing. Caught because the count was absurd, not because anything
-  asserted.
+  `git diff $(git merge-base $HEAD origin/main)..$HEAD`, run after the branch
+  merged. The precondition is not "a merge commit exists" — it is that
+  `origin/main` already CONTAINS `$HEAD`, which a two-parent merge of the branch
+  achieves and a squash never does. The merge-base is then `$HEAD` itself, the
+  range is empty, and the check reported `files touched: 0 · 0 differing` — a
+  clean verification from a loop that examined nothing. Caught because the count
+  was absurd, not because anything asserted.
 - A sweep for one defect enumerated every site that PASSED an option and
   reported the property complete. The defect lived in the sites that consumed
   the CONSEQUENCE of that option being set — a different population, which no
@@ -50,9 +55,13 @@ ordinary mistake.
 **The subject never reached the instrument.**
 
 - A break-verification patched a file with `str.replace(old, new, 1)` where
-  `old` occurred twice. It matched neither, wrote the file unchanged, and the
-  suite passed — reported as the break not being covered. An assertion on the
-  substitution count is what exposed it.
+  `old` occurred TWICE. It duly replaced the first — which was not the site
+  under test — so the file changed, the build succeeded, and the suite passed.
+  Reported as the break not being covered. The count assertion added on the
+  retry is what exposed it, by refusing rather than by patching: `assert
+s.count(old) == 1` failed, and the failure named the ambiguity. Note the
+  shape — the mutation DID reach the code, just not the code whose behaviour
+  was being claimed.
 - A probe removing two exports to prove a manifest test would catch them
   reported a red. The worktree had no built declarations, so a global-setup
   guard threw before any test ran. The restored control failed identically,
@@ -96,32 +105,57 @@ generated them. Where the instrument is a command, that means reading its
 source or its gating condition. Where it is a query, it means naming the set it
 selected from.
 
-**Establish the control BEFORE the treatment, and require it to move.** Every
-instance that was caught was caught this way, and every instance that survived
-lacked it. The control is not the same as a second test: it is the same
+**Establish the control BEFORE the treatment, and require it to move.** This is
+the most broadly useful of the checks here and it is not how every instance
+above was caught — two were found by the population checks below instead, the
+empty merge-base range by a count that was absurd and the misplaced replacement
+by an assertion on the substitution. Those are different instruments and the
+file needs all of them; a reader who takes the control as the sole safeguard
+will keep the two that it does not reach. The control is not the same as a second test: it is the same
 instrument, on an input whose answer you already know, run in the same
 conditions. If the control and the treatment produce the same result, the
 instrument is not discriminating and neither result is evidence.
 
 **A break that moves something is not yet a regression test.** The control tells
 you the instrument discriminates; it does not tell you WHAT it discriminates on.
-A test dying to some mutation proves only that it reaches some code — a
-replacement mutation that happens to hit a branch the fixture never selects
-kills the test for a reason unrelated to its name. Only a mutation of the branch
-the test's NAME claims makes the green mean what the name says. Measured twice
-in one day from opposite ends: a test that could not fail for its intended
-reason, and its replacement, which also could not.
+A test dying to some mutation proves only that it reaches some code. Both
+directions of that are live and they need separating:
+
+- a mutation the fixture never REACHES leaves the test green, so the property
+  reads as covered while nothing exercises it;
+- a mutation the fixture does reach, but which breaks something other than the
+  named property — a shared helper, a constructor, an import — kills the test
+  for a reason that has nothing to do with what its name claims.
+
+Only a mutation of the behaviour the test's NAME claims makes the green mean
+what the name says. Measured twice in one day from opposite ends: a test that
+could not fail for its intended reason, and its replacement, which also could
+not.
 
 **Prefer a question the system can answer STRUCTURALLY over a string it
-printed.** The positive form of the proxy failure below, measured today: asked
-whether a pull request landed as a squash or a merge commit, `git merge-base
---is-ancestor <branch-head> origin/main` is decisive, because it asks the commit
-graph something the graph itself determines. Reading a printed label answers a
-different question — the one whose output that string was generated for — and
-the two agree until they do not.
+printed.** The positive form of the proxy failure below. Asked how a pull
+request landed, read the MERGE COMMIT's parents rather than any printed label:
 
-**Assert the substitution, the file list, the row count — the thing the
-instrument consumed, not the verdict it emitted.** A verdict cannot tell you
+```sh
+gh pr view N --json mergeCommit --jq .mergeCommit.oid   # then fetch it
+git log --format='%H %P' -1 <mergeCommit>               # two parents = a merge
+```
+
+`git merge-base --is-ancestor <head> origin/main` is the tempting one-liner and
+it answers a DIFFERENT question — whether one commit is reachable from another,
+which says nothing about strategy on its own. It also depends on a ref that
+moves: unfetched, a genuine merge reports non-ancestor; later, unrelated
+commits can make ancestry true. `verifying-merged-work.md` already requires
+fetching both objects and probing the merge commit rather than `origin/main`,
+and that requirement is exactly this failure seen from the other side.
+
+**Assert what the instrument CONSUMED, not the verdict it emitted** — the
+substitutions made, the files read, the rows fetched. Assert them by MEMBERSHIP
+rather than by cardinality: a count is the same substitution one level up, and a
+selector that drops an expected row while adding an unrelated one matches any
+total you compare against. `derived-checks.md` makes this case at length; it is
+repeated here only because the instruments in this file fail at the point where
+the count is the easiest thing to reach for. A verdict cannot tell you
 whether it had anything to judge. This is the population rule from
 `derived-checks.md`, and the instances above are what it looks like when the
 population is not merely small but absent.
@@ -156,11 +190,21 @@ first.
 
 ### Where this sits
 
-`derived-checks.md` covers a check that computes the right thing over the wrong
-domain, and an assertion satisfied by absence. `reading-a-ci-verdict.md` covers
-a verdict that is green because nothing ran. This file is the generalisation
-both are instances of, written after the shape appeared ten times in one day in
-places none of those files reach — a shell redirect, a test fixture, a string
-replacement, a worktree's build state, and a printed label.
+**Most of what is here is already covered somewhere, and this file does not
+replace any of it.** `reading-a-ci-verdict.md` gives the shell redirect with an
+unread status its own table. `derived-checks.md` gives fixtures that never reach
+the mechanism, the positive controls that expose them, and the population rule
+in full. Where those two are the authority, defer to them: the guidance above
+restates only enough to make the shape visible, and where it is thinner than
+they are, they are right.
 
-When you find the next one, add it. The list is the argument.
+What is not covered elsewhere is the SHAPE — that a check reading the wrong set,
+a probe dying before it starts, a self-reported label read as a structural fact,
+and a report written from intention rather than state are one failure wearing
+four costumes. Each of those files describes its own instance as a property of
+its own domain. Seeing them as one is what predicts the next instance, which is
+in whatever domain nobody has written a file about yet.
+
+So the value here is the density, not the individual entries. When you find the
+next one, add it — and if it is a fourth example of a mechanism already listed
+three times, leave it out. The list is an argument, and a catalogue is skimmed.
