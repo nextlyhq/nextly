@@ -503,3 +503,15 @@ export {
   type RichTextNode,
   type RichTextValue,
 } from "./rich-text";
+
+/**
+ * Emitting a page's breakpoints for a surface that is not the published page.
+ *
+ * Appended rather than folded into the `compile-page` export above, so that
+ * three lanes editing this file at once collide on nothing.
+ */
+export {
+  PREVIEW_VIEWPORT_CONTAINER,
+  UNPREVIEWABLE_CONTAINER,
+  type BreakpointContextOptions,
+} from "./style/compile-page";

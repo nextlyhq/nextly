@@ -336,6 +336,52 @@ function emittableBound(maxWidth: unknown): boolean {
 }
 
 /**
+ * The container name a preview sheet aims its VIEWPORT breakpoints at.
+ *
+ * Reserved and never emitted by an author's own styles, so a query naming it
+ * resolves against the previewing surface's box and nothing else.
+ */
+export const PREVIEW_VIEWPORT_CONTAINER = "nx-preview-viewport";
+
+/**
+ * The container name a preview sheet aims its CONTAINER breakpoints at, which
+ * is deliberately one nothing carries.
+ *
+ * A container breakpoint responds to the width of the element's OWN container,
+ * so it cannot be previewed by resizing a canvas — the answer depends on where
+ * the block sits, not on the surface around it. Left unnamed, those queries
+ * would resolve against the preview container instead, and the editor would
+ * show container styles the published page does not.
+ *
+ * Named to something no element declares rather than omitted, so the contexts
+ * keep their ids: a style stored at a container breakpoint stays a KNOWN
+ * breakpoint that simply does not apply here, instead of becoming an unknown
+ * one and collecting a warning on every render.
+ */
+export const UNPREVIEWABLE_CONTAINER = "nx-not-previewable";
+
+/**
+ * How to emit the contexts, when the caller is not the published page.
+ */
+export interface BreakpointContextOptions {
+  /**
+   * Emit VIEWPORT breakpoints as container queries against this container name.
+   *
+   * For a surface that shows the page inside a resizable box rather than at the
+   * browser's own width. `@media` asks the WINDOW, so a box narrowed to a
+   * breakpoint's width changes nothing about which rules apply — the block gets
+   * narrower and keeps its widest styling, which is a preview that lies. A
+   * container query asked of the box answers about the box.
+   *
+   * Absent for every published render, and absent is the default so that the
+   * artifact identity a caller derives from these contexts is byte-identical to
+   * what it was before this option existed. A stamp that moved would invalidate
+   * every artifact on the site for CSS that did not change.
+   */
+  readonly previewContainer?: string;
+}
+
+/**
  * The breakpoints to emit, in cascade order.
  *
  * The base breakpoint first and unconditional, then viewport widths descending,
@@ -359,8 +405,10 @@ export function breakpointContexts(
   // readers hold the stored settings record rather than a validated context.
   // The body already treats the argument as untrusted, so an absent set answers
   // with the base context alone rather than being a case to guard at each call.
-  set: BreakpointSet | undefined
+  set: BreakpointSet | undefined,
+  options?: BreakpointContextOptions
 ): BreakpointContext[] {
+  const preview = options?.previewContainer;
   // The base context carries no upper bound and no at-rule, but it still needs
   // to be bounded from below when a narrower breakpoint shows a node again:
   // without that, hiding at base emits an unconditional rule that a later
@@ -489,7 +537,12 @@ export function breakpointContexts(
               maxWidth: def.maxWidth,
               ...(def.maxWidth === undefined
                 ? {}
-                : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
+                : {
+                    atRule:
+                      preview === undefined
+                        ? `@media (max-width: ${def.maxWidth}px)`
+                        : `@container ${preview} (max-width: ${def.maxWidth}px)`,
+                  }),
             }
           : {
               id: def.id,
@@ -500,10 +553,24 @@ export function breakpointContexts(
               // apply to a node with no query-container ancestor at all, and would
               // outrank every viewport rule while doing it. `min-width: 0` matches
               // inside any container and nowhere else, which is exactly the scope.
+              //
+              // NAMED under preview, to a name nothing carries. An unnamed
+              // container query resolves against the nearest ancestor that has
+              // `container-type` set — named or not — so a preview surface that
+              // makes its canvas a query container would capture these for every
+              // node with no authored container ancestor, and show container
+              // styles the published page does not. Naming them rather than
+              // omitting them keeps their ids present, so a style stored at a
+              // container breakpoint stays a known breakpoint rather than
+              // becoming an unknown one.
               atRule:
-                def.maxWidth === undefined
-                  ? `@container (min-width: 0)`
-                  : `@container (max-width: ${def.maxWidth}px)`,
+                preview === undefined
+                  ? def.maxWidth === undefined
+                    ? `@container (min-width: 0)`
+                    : `@container (max-width: ${def.maxWidth}px)`
+                  : def.maxWidth === undefined
+                    ? `@container ${UNPREVIEWABLE_CONTAINER} (min-width: 0)`
+                    : `@container ${UNPREVIEWABLE_CONTAINER} (max-width: ${def.maxWidth}px)`,
             }
       );
     }
