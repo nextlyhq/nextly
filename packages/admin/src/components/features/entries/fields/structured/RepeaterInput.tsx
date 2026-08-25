@@ -11,20 +11,6 @@
  */
 
 import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import {
   Button,
   Card,
   CardContent,
@@ -46,6 +32,13 @@ import {
 import { Plus, ChevronDown, ChevronRight } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import {
+  useSortableFieldArray,
+  getFieldArrayConstraints,
+  SortableFieldArrayContainer,
+  RowLimitNotice,
+} from "./field-array-helpers";
+import { createDefaultFieldValues } from "./nested-field-defaults";
 import { RepeaterRow, type RenderFieldFunction } from "./RepeaterRow";
 
 // ============================================================
@@ -109,72 +102,85 @@ export interface RepeaterInputProps<
   renderField?: RenderFieldFunction<TFieldValues>;
 }
 
-// ============================================================
-// Helpers
-// ============================================================
-
 /**
- * Creates default values for a new repeater row based on field definitions.
- *
- * @param fields - Sub-field configurations
- * @returns Object with default values for each field
+ * Collapsible header for the repeater card container displaying title, count, and chevron toggle.
  */
-function createDefaultRowValues(
-  fields: FieldConfig[] | undefined
-): Record<string, unknown> {
-  const defaultValues: Record<string, unknown> = {};
-
-  if (!fields) return defaultValues;
-
-  for (const subField of fields) {
-    // Only process fields with names (skip layout-only fields)
-    if (!("name" in subField) || !subField.name) continue;
-
-    // Get the field name (TypeScript needs help here after the type guard)
-    const fieldName = (subField as { name: string }).name;
-
-    // Use field's defaultValue if defined
-    if ("defaultValue" in subField && subField.defaultValue !== undefined) {
-      // Handle function default values
-      defaultValues[fieldName] =
-        typeof subField.defaultValue === "function"
-          ? subField.defaultValue({})
-          : subField.defaultValue;
-    } else {
-      // Set sensible defaults based on field type
-      switch (subField.type) {
-        case "checkbox":
-          defaultValues[fieldName] = false;
-          break;
-        case "number":
-          defaultValues[fieldName] = null;
-          break;
-        case "repeater":
-          defaultValues[fieldName] = [];
-          break;
-        case "group":
-          // Recursively create defaults for group fields
-          if ("fields" in subField) {
-            defaultValues[fieldName] = createDefaultRowValues(
-              subField.fields as FieldConfig[]
-            );
-          } else {
-            defaultValues[fieldName] = {};
-          }
-          break;
-        default:
-          // String fields, relationships, etc. default to empty/null
-          defaultValues[fieldName] = null;
-      }
-    }
-  }
-
-  return defaultValues;
+function RepeaterHeader({
+  isOpen,
+  title,
+  count,
+}: {
+  isOpen: boolean;
+  title: string;
+  count: number;
+}) {
+  return (
+    <CardHeader
+      className="bg-primary/5 border-b border-border dark:border-border p-0"
+      noBorder
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex items-center gap-2 w-full text-left cursor-pointer",
+            "rounded-md p-4",
+            "hover-unified focus:outline-none"
+          )}
+          aria-expanded={isOpen}
+        >
+          {isOpen ? (
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
+          <span className="text-sm font-semibold text-foreground dark:text-muted-foreground">
+            {title}
+          </span>
+          <span className="text-xs text-muted-foreground ml-1">({count})</span>
+        </button>
+      </CollapsibleTrigger>
+    </CardHeader>
+  );
 }
 
-// ============================================================
-// Component
-// ============================================================
+function RepeaterEmptyState({
+  pluralLabel,
+  canAdd,
+}: {
+  pluralLabel: string;
+  canAdd: boolean;
+}) {
+  return (
+    <div className="text-center py-8 text-muted-foreground border border-border border-dashed rounded-md bg-primary/5">
+      <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
+      {canAdd && <p className="text-sm">Click the button below to add one.</p>}
+    </div>
+  );
+}
+
+function RepeaterAddButton({
+  singularLabel,
+  disabled,
+  onAdd,
+}: {
+  singularLabel: string;
+  disabled?: boolean;
+  onAdd: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      onClick={onAdd}
+      className="w-full"
+      disabled={disabled}
+    >
+      <Plus className="h-4 w-4" />
+      Add {singularLabel}
+    </Button>
+  );
+}
 
 /**
  * RepeaterInput provides a repeater field for managing lists of structured data.
@@ -226,7 +232,6 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
   className,
   renderField,
 }: RepeaterInputProps<TFieldValues>) {
-  // Get control from context if not provided
   const formContext = useFormContext<TFieldValues>();
   const control = controlProp ?? formContext?.control;
 
@@ -236,7 +241,6 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
     );
   }
 
-  // useFieldArray for managing array state
   const {
     fields: items,
     append,
@@ -247,176 +251,87 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
     name,
   });
 
-  // Sensor setup for drag-and-drop
-  // PointerSensor: mouse/touch with 8px activation distance to prevent accidental drags
-  // KeyboardSensor: Arrow keys for accessibility (WCAG 2.2 compliance)
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
+  const { sensors, handleDragEnd } = useSortableFieldArray(items, move);
 
-  // Handle drag end - reorder items
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-
-      if (over && active.id !== over.id) {
-        const oldIndex = items.findIndex(item => item.id === active.id);
-        const newIndex = items.findIndex(item => item.id === over.id);
-
-        if (oldIndex !== -1 && newIndex !== -1) {
-          move(oldIndex, newIndex);
-        }
-      }
-    },
-    [items, move]
-  );
-
-  // Handle adding a new row
   const handleAdd = useCallback(() => {
-    const defaultValues = createDefaultRowValues(field.fields as FieldConfig[]);
+    const defaultValues = createDefaultFieldValues(
+      field.fields as FieldConfig[]
+    );
     append(defaultValues as TFieldValues[FieldArrayPath<TFieldValues>][number]);
   }, [append, field.fields]);
 
-  // Constraints
-  const canAdd =
-    !disabled &&
-    !readOnly &&
-    (field.maxRows === undefined || items.length < field.maxRows);
+  const { canAdd, canRemove, isSortable } = getFieldArrayConstraints({
+    count: items.length,
+    minRows: field.minRows,
+    maxRows: field.maxRows,
+    isSortable: field.admin?.isSortable,
+    disabled,
+    readOnly,
+  });
 
-  const canRemove =
-    !disabled &&
-    !readOnly &&
-    (field.minRows === undefined || items.length > field.minRows);
-
-  // Check if sorting is enabled
-  const isSortable = field.admin?.isSortable !== false;
-
-  // Labels
   const singularLabel = field.labels?.singular || "Item";
   const pluralLabel = field.labels?.plural || "Items";
+  const title = field.label || pluralLabel;
 
-  // Collapsible state
   const [isOpen, setIsOpen] = useState(!field.admin?.initCollapsed);
 
   return (
     <Card
       className={cn(
-        "shadow-none  border border-border dark:border-border overflow-hidden",
+        "shadow-none border border-border dark:border-border overflow-hidden",
         className
       )}
     >
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        {/* Collapsible Header */}
-        <CardHeader
-          className="bg-primary/5 border-b border-border dark:border-border p-0"
-          noBorder
-        >
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                "flex items-center gap-2 w-full text-left cursor-pointer",
-                "rounded-md p-4",
-                "hover-unified focus:outline-none"
-              )}
-              aria-expanded={isOpen}
-            >
-              {isOpen ? (
-                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-              )}
-              <span className="text-sm font-semibold text-foreground dark:text-muted-foreground">
-                {field.label || pluralLabel}
-              </span>
-              <span className="text-xs text-muted-foreground ml-1">
-                ({items.length})
-              </span>
-            </button>
-          </CollapsibleTrigger>
-        </CardHeader>
+        <RepeaterHeader isOpen={isOpen} title={title} count={items.length} />
 
         <CollapsibleContent>
           <CardContent className="p-3 space-y-3">
-            {/* Sortable List */}
-            <DndContext
+            <SortableFieldArrayContainer
+              items={items}
               sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
+              handleDragEnd={handleDragEnd}
+              isSortable={isSortable}
+              disabled={disabled}
+              readOnly={readOnly}
             >
-              <SortableContext
-                items={items.map(item => item.id)}
-                strategy={verticalListSortingStrategy}
-                disabled={!isSortable || disabled || readOnly}
-              >
-                <div className="space-y-3">
-                  {items.map((item, index) => (
-                    <RepeaterRow
-                      key={item.id}
-                      id={item.id}
-                      index={index}
-                      field={field}
-                      basePath={`${name}.${index}`}
-                      data={item as Record<string, unknown>}
-                      control={control}
-                      onRemove={() => remove(index)}
-                      canRemove={canRemove}
-                      disabled={disabled}
-                      readOnly={readOnly}
-                      renderField={renderField}
-                    />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
+              {items.map((item, index) => (
+                <RepeaterRow
+                  key={item.id}
+                  id={item.id}
+                  index={index}
+                  field={field}
+                  basePath={`${name}.${index}`}
+                  data={item as Record<string, unknown>}
+                  control={control}
+                  onRemove={() => remove(index)}
+                  canRemove={canRemove}
+                  disabled={disabled}
+                  readOnly={readOnly}
+                  renderField={renderField}
+                  isSortable={isSortable}
+                />
+              ))}
+            </SortableFieldArrayContainer>
 
-            {/* Empty State */}
             {items.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-md bg-primary/5">
-                <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
-                {canAdd && (
-                  <p className="text-sm">Click the button below to add one.</p>
-                )}
-              </div>
+              <RepeaterEmptyState pluralLabel={pluralLabel} canAdd={canAdd} />
             )}
 
-            {/* Add Button */}
             {canAdd && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleAdd}
-                className="w-full"
+              <RepeaterAddButton
+                singularLabel={singularLabel}
                 disabled={disabled}
-              >
-                <Plus className="h-4 w-4" />
-                Add {singularLabel}
-              </Button>
+                onAdd={handleAdd}
+              />
             )}
 
-            {/* Min Rows Warning */}
-            {field.minRows !== undefined &&
-              items.length < field.minRows &&
-              items.length > 0 && (
-                <p className="text-sm text-warning-600 dark:text-warning-500">
-                  Minimum {field.minRows} {pluralLabel.toLowerCase()} required.
-                  Currently have {items.length}.
-                </p>
-              )}
-
-            {/* Max Rows Info */}
-            {field.maxRows !== undefined && items.length >= field.maxRows && (
-              <p className="text-sm text-muted-foreground">
-                Maximum {field.maxRows} {pluralLabel.toLowerCase()} reached.
-              </p>
-            )}
+            <RowLimitNotice
+              count={items.length}
+              minRows={field.minRows}
+              maxRows={field.maxRows}
+              label={pluralLabel}
+            />
           </CardContent>
         </CollapsibleContent>
       </Collapsible>

@@ -102,6 +102,98 @@ const globalForInit = globalThis as unknown as {
 };
 
 // ============================================================
+// Instance Construction
+// ============================================================
+
+/**
+ * Build the public `Nextly` singleton object from the Direct API.
+ *
+ * Both construction paths — the `getNextly({ config })` factory and the
+ * `getCachedNextly()` fallback for services registered via
+ * `registerServices()` directly — must hand out the same object, so the
+ * object literal lives here and nowhere else. The return type is the public
+ * interface, so a member missing from this literal fails to compile rather
+ * than shipping an incomplete SDK object on one path.
+ */
+function buildNextlyInstance(
+  directAPI: ReturnType<typeof getDirectAPI>
+): Nextly {
+  const instance: Nextly = {
+    // Direct API methods
+    find: directAPI.find.bind(directAPI),
+    findByID: directAPI.findByID.bind(directAPI),
+    create: directAPI.create.bind(directAPI),
+    update: directAPI.update.bind(directAPI),
+    delete: directAPI.delete.bind(directAPI),
+    count: directAPI.count.bind(directAPI),
+    bulkDelete: directAPI.bulkDelete.bind(directAPI),
+    duplicate: directAPI.duplicate.bind(directAPI),
+    findSingle: directAPI.findSingle.bind(directAPI),
+    updateSingle: directAPI.updateSingle.bind(directAPI),
+    findSingles: directAPI.findSingles.bind(directAPI),
+
+    // Authentication methods
+    login: directAPI.login.bind(directAPI),
+    logout: directAPI.logout.bind(directAPI),
+    me: directAPI.me.bind(directAPI),
+    updateMe: directAPI.updateMe.bind(directAPI),
+    register: directAPI.register.bind(directAPI),
+    changePassword: directAPI.changePassword.bind(directAPI),
+    forgotPassword: directAPI.forgotPassword.bind(directAPI),
+    resetPassword: directAPI.resetPassword.bind(directAPI),
+    verifyEmail: directAPI.verifyEmail.bind(directAPI),
+
+    // Users API namespace (Direct API style)
+    users: directAPI.users,
+
+    // Media API namespace (Direct API style)
+    media: directAPI.media,
+
+    // Forms API namespace (Direct API style)
+    forms: directAPI.forms,
+
+    // Field groups namespace (Direct API style)
+    fieldGroups: directAPI.fieldGroups,
+
+    // Email & User Field namespaces
+    emailProviders: directAPI.emailProviders,
+    emailTemplates: directAPI.emailTemplates,
+    userFields: directAPI.userFields,
+    email: directAPI.email,
+
+    // RBAC namespaces
+    roles: directAPI.roles,
+    permissions: directAPI.permissions,
+    access: directAPI.access,
+
+    // Service accessors
+    collections: getService("collectionService"),
+    userService: getService("userService"),
+    mediaService: getService("mediaService"),
+    storage: getService("mediaStorage"),
+    meta: getService("metaService"),
+
+    // Direct adapter access
+    adapter: getService("adapter"),
+
+    // Shutdown method
+    shutdown: async () => {
+      await shutdownServices();
+      globalForInit.__nextly_cachedInstance = null;
+      console.log("Nextly shutdown complete");
+    },
+  };
+
+  // The instance is a plain object rather than a `Nextly`, so it does not
+  // inherit the class guard: without this, reaching for the pre-rename
+  // namespace here would produce the bare TypeError the guard exists to
+  // replace, on the very entry point the docs recommend.
+  installLegacyFieldGroupsNamespaceGuard(instance);
+
+  return instance;
+}
+
+// ============================================================
 // Main API
 // ============================================================
 
@@ -295,81 +387,9 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         void runPostInitTasks();
       }
 
-      // Get the Direct API instance
+      // Get the Direct API instance and build the singleton from it.
       const directAPI = getDirectAPI();
-
-      // Build and cache the instance
-      const instance: Nextly = {
-        // Direct API methods
-        find: directAPI.find.bind(directAPI),
-        findByID: directAPI.findByID.bind(directAPI),
-        create: directAPI.create.bind(directAPI),
-        update: directAPI.update.bind(directAPI),
-        delete: directAPI.delete.bind(directAPI),
-        count: directAPI.count.bind(directAPI),
-        bulkDelete: directAPI.bulkDelete.bind(directAPI),
-        duplicate: directAPI.duplicate.bind(directAPI),
-        findSingle: directAPI.findSingle.bind(directAPI),
-        updateSingle: directAPI.updateSingle.bind(directAPI),
-        findSingles: directAPI.findSingles.bind(directAPI),
-
-        // Authentication methods
-        login: directAPI.login.bind(directAPI),
-        logout: directAPI.logout.bind(directAPI),
-        me: directAPI.me.bind(directAPI),
-        updateMe: directAPI.updateMe.bind(directAPI),
-        register: directAPI.register.bind(directAPI),
-        changePassword: directAPI.changePassword.bind(directAPI),
-        forgotPassword: directAPI.forgotPassword.bind(directAPI),
-        resetPassword: directAPI.resetPassword.bind(directAPI),
-        verifyEmail: directAPI.verifyEmail.bind(directAPI),
-
-        // Users API namespace (Direct API style)
-        users: directAPI.users,
-
-        // Media API namespace (Direct API style)
-        media: directAPI.media,
-
-        // Forms API namespace (Direct API style)
-        forms: directAPI.forms,
-
-        // Field groups namespace (Direct API style)
-        fieldGroups: directAPI.fieldGroups,
-
-        // Email & User Field namespaces
-        emailProviders: directAPI.emailProviders,
-        emailTemplates: directAPI.emailTemplates,
-        userFields: directAPI.userFields,
-        email: directAPI.email,
-
-        // RBAC namespaces
-        roles: directAPI.roles,
-        permissions: directAPI.permissions,
-        access: directAPI.access,
-
-        // Service accessors
-        collections: getService("collectionService"),
-        userService: getService("userService"),
-        mediaService: getService("mediaService"),
-        storage: getService("mediaStorage"),
-        meta: getService("metaService"),
-
-        // Direct adapter access
-        adapter: getService("adapter"),
-
-        // Shutdown method
-        shutdown: async () => {
-          await shutdownServices();
-          globalForInit.__nextly_cachedInstance = null;
-          console.log("Nextly shutdown complete");
-        },
-      };
-
-      // This instance is a plain object rather than a `Nextly`, so it does not
-      // inherit the class guard: without this, reaching for the pre-rename
-      // namespace here would produce the bare TypeError the guard exists to
-      // replace, on the very entry point the docs recommend.
-      installLegacyFieldGroupsNamespaceGuard(instance);
+      const instance = buildNextlyInstance(directAPI);
 
       globalForInit.__nextly_cachedInstance = instance;
 
@@ -436,51 +456,7 @@ export async function getCachedNextly(): Promise<Nextly> {
   // Nextly instance, so a later `getNextly({ config })` call from
   // user code returns the same singleton.
   if (isServicesRegistered()) {
-    const directAPI = getDirectAPI();
-    const instance: Nextly = {
-      find: directAPI.find.bind(directAPI),
-      findByID: directAPI.findByID.bind(directAPI),
-      create: directAPI.create.bind(directAPI),
-      update: directAPI.update.bind(directAPI),
-      delete: directAPI.delete.bind(directAPI),
-      count: directAPI.count.bind(directAPI),
-      bulkDelete: directAPI.bulkDelete.bind(directAPI),
-      duplicate: directAPI.duplicate.bind(directAPI),
-      findSingle: directAPI.findSingle.bind(directAPI),
-      updateSingle: directAPI.updateSingle.bind(directAPI),
-      findSingles: directAPI.findSingles.bind(directAPI),
-      login: directAPI.login.bind(directAPI),
-      logout: directAPI.logout.bind(directAPI),
-      me: directAPI.me.bind(directAPI),
-      updateMe: directAPI.updateMe.bind(directAPI),
-      register: directAPI.register.bind(directAPI),
-      changePassword: directAPI.changePassword.bind(directAPI),
-      forgotPassword: directAPI.forgotPassword.bind(directAPI),
-      resetPassword: directAPI.resetPassword.bind(directAPI),
-      verifyEmail: directAPI.verifyEmail.bind(directAPI),
-      users: directAPI.users,
-      media: directAPI.media,
-      forms: directAPI.forms,
-      fieldGroups: directAPI.fieldGroups,
-      emailProviders: directAPI.emailProviders,
-      emailTemplates: directAPI.emailTemplates,
-      userFields: directAPI.userFields,
-      email: directAPI.email,
-      roles: directAPI.roles,
-      permissions: directAPI.permissions,
-      access: directAPI.access,
-      collections: getService("collectionService"),
-      userService: getService("userService"),
-      mediaService: getService("mediaService"),
-      storage: getService("mediaStorage"),
-      meta: getService("metaService"),
-      adapter: getService("adapter"),
-      shutdown: async () => {
-        await shutdownServices();
-        globalForInit.__nextly_cachedInstance = null;
-      },
-    };
-    installLegacyFieldGroupsNamespaceGuard(instance);
+    const instance = buildNextlyInstance(getDirectAPI());
     globalForInit.__nextly_cachedInstance = instance;
     return instance;
   }

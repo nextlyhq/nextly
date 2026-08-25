@@ -109,7 +109,14 @@ export function PageErrorFallback({
 
   return (
     <PageContainer>
-      <div className="flex min-h-[60vh] items-center justify-center p-4">
+      {/* Named so a caller can tell this apart from the page it replaced.
+          It renders no `role="alert"` deliberately — an error PAGE is the
+          document, not an interruption announced over one — which leaves
+          nothing else that separates it from a page that simply rendered. */}
+      <div
+        data-slot="page-error"
+        className="flex min-h-[60vh] items-center justify-center p-4"
+      >
         <div className="w-full max-w-xl bg-background  border border-border rounded-lg p-8 md:p-12 flex flex-col items-center text-center animate-in fade-in zoom-in duration-500">
           <div className="h-16 w-16 bg-primary/5 rounded-md flex items-center justify-center mb-8">
             <AlertCircle className="h-8 w-8 text-foreground" />
