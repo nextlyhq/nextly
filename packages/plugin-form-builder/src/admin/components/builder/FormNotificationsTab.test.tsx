@@ -247,4 +247,23 @@ describe("the notification list", () => {
     expect(editor?.className ?? "").not.toContain("opacity");
     expect(editor?.closest(".opacity-60")).toBeNull();
   });
+
+  it("keeps the toggle's accessible name still while it expands", async () => {
+    // `aria-expanded` carries the state, so the NAME must not. A name that
+    // moves with state cannot be referred to twice — a screen-reader user
+    // loses the control they were on, and any caller holding a handle to it
+    // loses it the moment they use it. That is precisely how the browser test
+    // for this broke.
+    notifications = [aNotification()];
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+
+    const toggle = screen.getByRole("button", {
+      name: "Edit notification Admin notification",
+    });
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAccessibleName("Edit notification Admin notification");
+  });
 });
