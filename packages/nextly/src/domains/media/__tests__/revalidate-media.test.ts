@@ -17,6 +17,7 @@ import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../revalidate-media";
+import { MediaService as LegacyMediaService } from "../../../services/media";
 import { MediaService as UnifiedMediaService } from "../services/media-service";
 
 /** Register a recording revalidator and hand back the intents it receives. */
@@ -190,43 +191,69 @@ describe("withMediaRevalidationBatch", () => {
   });
 });
 
-describe("the bulk surface stays inside a batch scope", () => {
+describe("every media fan-out opens a batch scope", () => {
   /**
-   * Every PROTOTYPE method whose name marks it a fan-out — and prototype is the
-   * operative word.
+   * The two services, CONSTRUCTED — which is what lets this see a class field.
    *
-   * This finds `async bulkDelete(...)` and finds NOTHING for the same method
-   * declared as a class field: `bulkArchive = async (...) => ...` is an own
-   * property of each instance, initialised in the constructor, never on the
-   * prototype. Measured, not reasoned about — adding one leaves every assertion
-   * below passing.
+   * `Object.getOwnPropertyNames(SomeClass.prototype)` finds
+   * `async bulkDelete(...)` and finds NOTHING for the same method written as
+   * `bulkArchive = async (...) => ...`: a class field is an own property of the
+   * INSTANCE, initialised in the constructor, never on the prototype. Measured
+   * — adding one left an earlier version of this guard entirely silent.
    *
-   * So the NAME-SET claim is not made here. It lives in
-   * `../services/media-bulk-surface.test-d.ts`, where `keyof` sees both
-   * declaration forms because they are the same member of the type. What
-   * remains here is the source check, which needs a callable and therefore only
-   * reaches the prototype form.
+   * Both constructors have empty bodies, so stub dependencies are enough; the
+   * instance is never driven, only read. Reaching for real ones would make this
+   * the next fixture to rot.
    */
-  function bulkPrototypeMethods(): string[] {
-    return Object.getOwnPropertyNames(UnifiedMediaService.prototype)
-      .filter(name => name.startsWith("bulk"))
+  function instances(): Array<{ label: string; value: object }> {
+    return [
+      {
+        label: "MediaService (unified)",
+        value: new UnifiedMediaService(
+          {} as never,
+          {} as never,
+          null,
+          {} as never,
+          {} as never
+        ),
+      },
+      {
+        label: "MediaService (legacy)",
+        value: new LegacyMediaService({} as never, {} as never),
+      },
+    ];
+  }
+
+  /**
+   * Callable members whose name marks them a fan-out, from the prototype AND
+   * the instance's own properties — the two places the two declaration forms
+   * land. The unified service names them `bulk*`; the legacy one `*Bulk`.
+   */
+  function fanOutMembers(target: object): string[] {
+    const proto = Object.getPrototypeOf(target) as object;
+    const names = new Set([
+      ...Object.getOwnPropertyNames(proto),
+      ...Object.getOwnPropertyNames(target),
+    ]);
+    return [...names]
+      .filter(name => /^bulk|Bulk$/.test(name))
+      .filter(
+        name => typeof (target as Record<string, unknown>)[name] === "function"
+      )
       .sort();
   }
 
-  it("wraps each prototype bulk method in withMediaRevalidationBatch", () => {
-    const names = bulkPrototypeMethods();
+  it.each(instances())("$label wraps each fan-out in a scope", ({ value }) => {
+    const members = fanOutMembers(value);
 
-    // The control. Without it an empty list satisfies the loop perfectly, and
-    // a rename that took every method out of the filter would report as full
-    // coverage of nothing.
-    expect(names.length).toBeGreaterThan(0);
+    // The control. Without it an empty list satisfies the loop perfectly, and a
+    // rename that took every member out of the filter would report as full
+    // coverage of nothing. The name SET itself is pinned by the checker, in
+    // `../services/media-bulk-surface.test-d.ts`.
+    expect(members.length).toBeGreaterThan(0);
 
-    for (const name of names) {
-      const source = String(
-        (UnifiedMediaService.prototype as unknown as Record<string, unknown>)[
-          name
-        ]
-      );
+    for (const name of members) {
+      const source = String((value as Record<string, unknown>)[name]);
       expect(source, `${name} must open a batch scope`).toContain(
         "withMediaRevalidationBatch"
       );

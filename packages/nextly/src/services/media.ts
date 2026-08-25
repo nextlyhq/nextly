@@ -41,7 +41,10 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
-import { revalidateMedia } from "../domains/media/revalidate-media";
+import {
+  revalidateMedia,
+  withMediaRevalidationBatch,
+} from "../domains/media/revalidate-media";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -61,6 +64,38 @@ import type {
 import { BaseService } from "./base-service";
 import { ImageSizeService } from "./image-size";
 import type { Logger } from "./shared";
+
+/**
+ * The shape both legacy bulk media methods report.
+ *
+ * Named rather than written inline on each signature, because the wrapper that
+ * opens the invalidation batch and the fan-out it delegates to must agree on
+ * it exactly — two copies of a nine-line structural type are two things to keep
+ * in step, and nothing would catch them drifting apart except the next reader.
+ */
+interface BulkOutcome<TResult> {
+  success: boolean;
+  totalFiles: number;
+  successCount: number;
+  failureCount: number;
+  results: TResult[];
+}
+
+/** Per-file outcome of a bulk upload: positional, since a failure has no id. */
+type BulkUploadOutcome = BulkOutcome<{
+  filename: string;
+  success: boolean;
+  data?: Media;
+  error?: string;
+  statusCode?: number;
+}>;
+
+/** Per-id outcome of a bulk delete. */
+type BulkDeleteOutcome = BulkOutcome<{
+  mediaId: string;
+  success: boolean;
+  error?: string;
+}>;
 
 export class MediaService extends BaseService {
   // Lazy-initialized to avoid capturing a stale MediaStorage singleton
@@ -1022,19 +1057,26 @@ export class MediaService extends BaseService {
    * });
    * ```
    */
-  async uploadMediaBulk(inputs: UploadMediaInput[]): Promise<{
-    success: boolean;
-    totalFiles: number;
-    successCount: number;
-    failureCount: number;
-    results: Array<{
-      filename: string;
-      success: boolean;
-      data?: Media;
-      error?: string;
-      statusCode?: number;
-    }>;
-  }> {
+  async uploadMediaBulk(
+    inputs: UploadMediaInput[]
+  ): Promise<BulkUploadOutcome> {
+    // ONE shared-tag flush for the whole fan-out. Each file below reaches
+    // `uploadMedia`, which invalidates against its own commit; without a scope
+    // here N files re-invalidate the `nextly:media` tag they all share. The
+    // rows' own tags still go at commit time — see `withMediaRevalidationBatch`.
+    return withMediaRevalidationBatch(
+      () => this.uploadMediaBulkFanOut(inputs),
+      this.logger
+    );
+  }
+
+  /**
+   * The per-file fan-out, split out so the method above owns nothing but the
+   * batch scope its invalidation needs.
+   */
+  private async uploadMediaBulkFanOut(
+    inputs: UploadMediaInput[]
+  ): Promise<BulkUploadOutcome> {
     const results: Array<{
       filename: string;
       success: boolean;
@@ -1095,17 +1137,21 @@ export class MediaService extends BaseService {
    * @param mediaIds - Array of media IDs to delete
    * @returns Object with success status and individual results
    */
-  async deleteMediaBulk(mediaIds: string[]): Promise<{
-    success: boolean;
-    totalFiles: number;
-    successCount: number;
-    failureCount: number;
-    results: Array<{
-      mediaId: string;
-      success: boolean;
-      error?: string;
-    }>;
-  }> {
+  async deleteMediaBulk(mediaIds: string[]): Promise<BulkDeleteOutcome> {
+    // ONE shared-tag flush for the whole fan-out — see `uploadMediaBulk`.
+    return withMediaRevalidationBatch(
+      () => this.deleteMediaBulkFanOut(mediaIds),
+      this.logger
+    );
+  }
+
+  /**
+   * The per-id fan-out, split out so the method above owns nothing but the
+   * batch scope its invalidation needs.
+   */
+  private async deleteMediaBulkFanOut(
+    mediaIds: string[]
+  ): Promise<BulkDeleteOutcome> {
     const results: Array<{
       mediaId: string;
       success: boolean;

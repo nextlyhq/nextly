@@ -213,14 +213,11 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     expect(tags).toContain(`nextly:media:id:${uploaded.id}`);
     expect(tags).toContain(`nextly:media:id:${second.id}`);
 
-    // ONE intent for both files, not one per file. Every file's tags carry the
-    // same `nextly:media`, and the sink loops intents and tags without
-    // deduplicating across them — so N files would re-invalidate the collection
-    // tag N times, synchronously, before the delete returns.
-    const intents = flush.mock.calls.flatMap(
-      (call: unknown[]) => call[0] as unknown[]
-    );
-    expect(intents).toHaveLength(1);
+    // The shared tag once, not once per chunk. The cascade deletes in chunks of
+    // 100 and busts each chunk's row tags as it commits — this method has no
+    // encompassing transaction, so an earlier chunk is already durable when a
+    // later one throws. What the scope saves is `nextly:media`, the one string
+    // every row emits, which would otherwise be re-invalidated per chunk.
     expect(tags.filter(t => t === "nextly:media")).toHaveLength(1);
   });
 
