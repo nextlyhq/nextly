@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   documentLabel,
+  labelFieldsFor,
+  selectParam,
   selectionKey,
   groupChoices,
 } from "./RedirectPagePicker";
@@ -115,5 +117,157 @@ describe("groupChoices", () => {
     ];
     const groups = groupChoices(choices, ["pages"]);
     expect(groups.flatMap(g => g.choices)).toHaveLength(choices.length);
+  });
+});
+
+describe("labelFieldsFor", () => {
+  it("leads with the field the collection says names its documents", () => {
+    // A collection whose `admin.useAsTitle` is `headline` is listed by its
+    // headlines. Without this the control neither requests nor inspects that
+    // field, so every row falls through to its id and an author picking a
+    // redirect target chooses between opaque strings.
+    expect(labelFieldsFor("headline")).toEqual([
+      "id",
+      "headline",
+      "title",
+      "name",
+      "label",
+      "slug",
+    ]);
+  });
+
+  it("does not list a configured field twice", () => {
+    // `useAsTitle: "title"` is the ordinary case. A duplicate would be
+    // harmless in the projection and misleading in the order.
+    expect(labelFieldsFor("title")).toEqual([
+      "id",
+      "title",
+      "name",
+      "label",
+      "slug",
+    ]);
+  });
+
+  it("keeps the conventional names behind the configured one", () => {
+    // So a row whose configured title field is empty still reads as something
+    // recognisable rather than as an id.
+    expect(labelFieldsFor("headline")).toContain("slug");
+  });
+
+  it("falls back to the conventional names when nothing is configured", () => {
+    // Undefined covers "declares no title field" and "metadata unreadable"
+    // alike; the control does the same thing for both.
+    for (const unset of [undefined, "", "   "]) {
+      expect(labelFieldsFor(unset)).toEqual([
+        "id",
+        "title",
+        "name",
+        "label",
+        "slug",
+      ]);
+    }
+  });
+
+  it("always asks for the id, because the control stores it", () => {
+    expect(labelFieldsFor("headline")[0]).toBe("id");
+    expect(labelFieldsFor(undefined)[0]).toBe("id");
+  });
+});
+
+describe("selectParam", () => {
+  /**
+   * The server's own acceptance rule, mirrored.
+   *
+   * `parseSelectParam` (packages/nextly/src/dispatcher/helpers/validation.ts)
+   * reads the parameter with `JSON.parse` and keeps only the keys whose values
+   * are booleans. A value it cannot parse becomes `undefined` — no error, no
+   * warning, and a response carrying every field of every row. That silence is
+   * why this needs asserting: a projection that is ignored looks exactly like
+   * a projection that worked, from the client's side.
+   */
+  const asServerReads = (
+    param: string
+  ): Record<string, boolean> | undefined => {
+    try {
+      const parsed: unknown = JSON.parse(decodeURIComponent(param));
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      )
+        return undefined;
+      const map: Record<string, boolean> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === "boolean") map[key] = value;
+      }
+      return Object.keys(map).length > 0 ? map : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  it("emits a projection the server applies", () => {
+    expect(asServerReads(selectParam(["id", "headline"]))).toEqual({
+      id: true,
+      headline: true,
+    });
+  });
+
+  it("projects every field it was given, and no others", () => {
+    const fields = labelFieldsFor("headline");
+    expect(
+      Object.keys(asServerReads(selectParam(fields)) ?? {}).sort()
+    ).toEqual([...fields].sort());
+  });
+
+  it("survives being embedded in a query string", () => {
+    // The value is interpolated into a URL beside `limit`, `page` and
+    // `search`; an unescaped `{`, `"` or `&` would truncate it there.
+    const url = new URL(
+      `https://example.test/e?limit=50&select=${selectParam(["id", "title"])}&search=x`
+    );
+    expect(asServerReads(url.searchParams.get("select") ?? "")).toEqual({
+      id: true,
+      title: true,
+    });
+    expect(url.searchParams.get("search")).toBe("x");
+  });
+
+  it("is not the comma-separated list this control shipped with", () => {
+    // The regression itself. `JSON.parse("id,title,name")` throws, the server
+    // returns `undefined`, and every scalar and JSON field of up to fifty
+    // documents per collection is downloaded to fill a dropdown — for
+    // page-builder documents, the whole block tree.
+    expect(asServerReads("id,title,name,label,slug")).toBeUndefined();
+    expect(asServerReads(selectParam(["id", "title"]))).toBeDefined();
+  });
+});
+
+describe("documentLabel with a collection's own title field", () => {
+  it("prefers the configured field over the conventional ones", () => {
+    expect(
+      documentLabel(
+        { id: "1", headline: "Launch day", title: "untitled" },
+        labelFieldsFor("headline")
+      )
+    ).toBe("Launch day");
+  });
+
+  it("falls through to a conventional field when the configured one is blank", () => {
+    expect(
+      documentLabel(
+        { id: "1", headline: "   ", title: "Launch day" },
+        labelFieldsFor("headline")
+      )
+    ).toBe("Launch day");
+  });
+
+  it("still reaches the id, then the placeholder, with a configured field", () => {
+    // The configured field does not displace the last resorts: a row carrying
+    // none of the title fields is still an option an author can see.
+    expect(documentLabel({ id: "pg1" }, labelFieldsFor("headline"))).toBe(
+      "pg1"
+    );
+    expect(documentLabel({}, labelFieldsFor("headline"))).toBe("Untitled");
   });
 });

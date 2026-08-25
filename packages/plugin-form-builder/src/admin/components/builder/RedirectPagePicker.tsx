@@ -29,12 +29,53 @@ import { parseRedirectReference } from "../../../utils/redirect-reference";
 const PAGE_SIZE = 50;
 
 /**
- * The only fields this control reads, in the order `documentLabel` prefers.
+ * The conventional title fields, tried in order when a collection does not say
+ * which of its fields names a document.
+ */
+const FALLBACK_TITLE_FIELDS = ["title", "name", "label", "slug"] as const;
+
+/**
+ * The fields this control reads for one collection, in the order
+ * `documentLabel` prefers them.
+ *
+ * A collection declares what names its documents through `admin.useAsTitle`,
+ * and that declaration leads here: a collection titled by `headline` is listed
+ * by its headlines rather than by opaque ids, which is the difference between
+ * choosing a redirect target and guessing at one. The conventional names still
+ * follow it, so a row whose configured title field happens to be empty reads
+ * as something recognisable instead of falling straight through to an id.
+ *
+ * `id` is always first because the control stores it.
  *
  * One declaration, used to build the request AND to choose the label, so a
  * field added to one cannot go missing from the other.
  */
-const LABEL_FIELDS = ["id", "title", "name", "label", "slug"] as const;
+export function labelFieldsFor(useAsTitle?: string): readonly string[] {
+  const configured = useAsTitle?.trim();
+  if (!configured) return ["id", ...FALLBACK_TITLE_FIELDS];
+  return [
+    "id",
+    configured,
+    ...FALLBACK_TITLE_FIELDS.filter(field => field !== configured),
+  ];
+}
+
+/**
+ * The `select` query value that projects a read down to `fields`.
+ *
+ * The dispatcher reads this parameter with `JSON.parse` and keeps only the
+ * keys whose values are booleans (`parseSelectParam`,
+ * packages/nextly/src/dispatcher/helpers/validation.ts). A value it cannot
+ * parse becomes `undefined` — no error, no warning, and a response carrying
+ * every field of every row. A comma-separated list is precisely such a value,
+ * so the encoding is the whole difference between projecting a read and
+ * appearing to project it.
+ */
+export function selectParam(fields: readonly string[]): string {
+  return encodeURIComponent(
+    JSON.stringify(Object.fromEntries(fields.map(field => [field, true])))
+  );
+}
 
 /** One selectable document, reduced to what the control shows and stores. */
 interface Choice {
@@ -68,8 +109,11 @@ export function selectionKey(
 }
 
 /** What to call a document, preferring the field an author would recognise. */
-export function documentLabel(row: Record<string, unknown>): string {
-  for (const field of LABEL_FIELDS.filter(name => name !== "id")) {
+export function documentLabel(
+  row: Record<string, unknown>,
+  fields: readonly string[] = labelFieldsFor()
+): string {
+  for (const field of fields.filter(name => name !== "id")) {
     const candidate = row[field];
     if (typeof candidate === "string" && candidate.trim()) return candidate;
   }
@@ -83,24 +127,25 @@ export function documentLabel(row: Record<string, unknown>): string {
  * the default of 10. `status=all` because a form is usually configured
  * alongside the page it points at, and filtering to published shows "create
  * one first" while the page sits in the next tab. `depth=0` because this reads
- * five fields and would otherwise inherit the collection API's expansion,
- * pulling every nested relation of every row to fill a dropdown.
+ * a handful of scalar fields and would otherwise inherit the collection API's
+ * expansion, pulling every nested relation of every row to fill a dropdown.
  */
 async function fetchChoices(
   collection: string,
   query: string,
-  page: number
+  page: number,
+  fields: readonly string[]
 ): Promise<{ rows: Choice[]; hasMore: boolean } | null> {
   const search = query ? `&search=${encodeURIComponent(query)}` : "";
   try {
-    // `select` as well as `depth=0`. Without it every scalar and JSON field of
-    // up to fifty documents is downloaded per collection — for page-builder
-    // documents that is the whole block tree — to fill a dropdown that reads
-    // five fields.
+    // `select` as well as `depth=0`. Without one the server sends every scalar
+    // and JSON field of up to fifty documents per collection — for
+    // page-builder documents that is the whole block tree — to fill a dropdown
+    // that reads a handful of them.
     const response = await fetch(
       `/admin/api/collections/${collection}/entries` +
         `?limit=${PAGE_SIZE}&page=${page}&status=all&depth=0` +
-        `&select=${LABEL_FIELDS.join(",")}${search}`,
+        `&select=${selectParam(fields)}${search}`,
       { credentials: "include" }
     );
     if (!response.ok) return null;
@@ -114,7 +159,7 @@ async function fetchChoices(
         .map(row => ({
           collection,
           id: row.id as string,
-          label: documentLabel(row),
+          label: documentLabel(row, fields),
         })),
       // Reported rather than assumed, so the control can offer the rest
       // instead of truncating where the author cannot see it.
@@ -157,10 +202,86 @@ function renderChoice(choice: Choice) {
 }
 
 /**
+ * The field a collection says names its documents, or undefined when it does
+ * not say or cannot be asked.
+ *
+ * Undefined covers both "this collection declares no title field" and "the
+ * metadata could not be read", because the control does the same thing in
+ * either case: fall back to the conventional names. Nothing on screen depends
+ * on telling them apart, and the listing itself still reports its own
+ * failures.
+ */
+async function fetchTitleField(
+  collection: string
+): Promise<string | undefined> {
+  try {
+    // The bare document, not a `{ message, item }` envelope — that shape is
+    // for mutations, and this is a read.
+    const response = await fetch(`/admin/api/collections/${collection}`, {
+      credentials: "include",
+    });
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as {
+      admin?: { useAsTitle?: unknown };
+    };
+    const configured = body.admin?.useAsTitle;
+    return typeof configured === "string" && configured.trim()
+      ? configured.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The fields to read and to label from, per configured collection.
+ *
+ * Resolved once per collection list rather than per search: what a collection
+ * calls its title does not change while an author types, and folding this into
+ * the listing effect would spend a request per keystroke to re-learn a
+ * constant.
+ *
+ * `null` means not resolved yet. The listing waits for it, because a first
+ * page fetched under the fallback fields would have to be refetched or else
+ * left labelled differently from every page after it.
+ */
+function useTitleFields(key: string) {
+  const [fields, setFields] = useState<Record<
+    string,
+    readonly string[]
+  > | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const wanted = key ? key.split(",") : [];
+    setFields(null);
+
+    void Promise.all(
+      wanted.map(async collection => {
+        const configured = await fetchTitleField(collection);
+        return [collection, labelFieldsFor(configured)] as const;
+      })
+    ).then(pairs => {
+      if (!cancelled) setFields(Object.fromEntries(pairs));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+
+  return fields;
+}
+
+/**
  * The matching documents for every configured collection, and which of them
  * could not be read.
  */
-function useChoices(key: string, applied: string) {
+function useChoices(
+  key: string,
+  applied: string,
+  titleFields: Record<string, readonly string[]> | null
+) {
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [failed, setFailed] = useState<readonly string[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -184,13 +305,23 @@ function useChoices(key: string, applied: string) {
   }, [key, applied]);
 
   useEffect(() => {
+    // Nothing to request until each collection's title field is known —
+    // see `useTitleFields`. `choices` stays null, which the control already
+    // renders as loading.
+    if (titleFields === null) return;
+
     let cancelled = false;
     const wanted = key ? key.split(",") : [];
     setLoading(true);
 
     void Promise.all(
       wanted.map(collection =>
-        fetchChoices(collection, applied, pages[collection] ?? 1)
+        fetchChoices(
+          collection,
+          applied,
+          pages[collection] ?? 1,
+          titleFields[collection] ?? labelFieldsFor(undefined)
+        )
       )
     ).then(results => {
       if (cancelled) return;
@@ -219,7 +350,7 @@ function useChoices(key: string, applied: string) {
     return () => {
       cancelled = true;
     };
-  }, [key, applied, pages]);
+  }, [key, applied, pages, titleFields]);
 
   return {
     choices,
@@ -270,7 +401,8 @@ function useChoices(key: string, applied: string) {
 function useSelectedChoice(
   selected: string | undefined,
   choices: Choice[] | null,
-  setChoices: (update: (current: Choice[] | null) => Choice[]) => void
+  setChoices: (update: (current: Choice[] | null) => Choice[]) => void,
+  titleFields: Record<string, readonly string[]> | null
 ) {
   // Whether the stored selection could not be read. A controlled `Select`
   // holding a value with no matching option renders BLANK, which looks
@@ -319,7 +451,14 @@ function useSelectedChoice(
         }
         setUnreadable(false);
         setChoices(current => [
-          { collection, id: row.id as string, label: documentLabel(row) },
+          {
+            collection,
+            id: row.id as string,
+            // The same fields the listing labels by. Labelling the recovered
+            // document differently would show one document under two names
+            // depending on whether the listing happened to reach it.
+            label: documentLabel(row, titleFields?.[collection]),
+          },
           ...(current ?? []),
         ]);
       } catch {
@@ -330,7 +469,7 @@ function useSelectedChoice(
     return () => {
       cancelled = true;
     };
-  }, [selected, choices, setChoices]);
+  }, [selected, choices, setChoices, titleFields]);
 
   return unreadable;
 }
@@ -512,6 +651,7 @@ export function RedirectPagePicker({
 
   // `collections` is an array prop, so a new identity every render would
   // refetch forever; the join is the value that actually decides the request.
+  const titleFields = useTitleFields(collections.join(","));
   const {
     choices,
     setChoices,
@@ -520,14 +660,19 @@ export function RedirectPagePicker({
     loading,
     loadMore,
     retryFailed,
-  } = useChoices(collections.join(","), applied);
+  } = useChoices(collections.join(","), applied, titleFields);
   const selected = selectionKey(value, collections);
   // A value is stored and this control cannot say WHICH document it is: a bare
   // id names no collection, and with none configured there is nowhere to look
   // it up. Distinct from an unreadable selection, which is a failed request
   // rather than missing information.
   const unidentifiable = value != null && selected === undefined;
-  const selectionUnreadable = useSelectedChoice(selected, choices, setChoices);
+  const selectionUnreadable = useSelectedChoice(
+    selected,
+    choices,
+    setChoices,
+    titleFields
+  );
 
   if (choices === null) {
     return <p className="text-[12px] text-muted-foreground">Loading pages…</p>;
