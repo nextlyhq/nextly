@@ -34,6 +34,7 @@ import {
   useSortableRow,
   RowDragHandle,
   RowRemoveButton,
+  type RowDragHandleProps,
 } from "./field-array-helpers";
 import { RepeaterRowLabel } from "./RepeaterRowLabel";
 
@@ -135,8 +136,8 @@ interface RepeaterRowHeaderProps {
   isInteractive: boolean;
   canRemove: boolean;
   onRemove: () => void;
-  attributes: ReturnType<typeof useSortable>["attributes"];
-  listeners: ReturnType<typeof useSortable>["listeners"];
+  attributes: RowDragHandleProps["attributes"];
+  listeners: RowDragHandleProps["listeners"];
 }
 
 function RepeaterRowHeader({

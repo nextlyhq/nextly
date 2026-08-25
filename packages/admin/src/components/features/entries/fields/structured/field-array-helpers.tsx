@@ -27,10 +27,12 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Button, cn } from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/ui";
 import { GripVertical, Trash2 } from "lucide-react";
 import type React from "react";
 import { useCallback, useState } from "react";
+
+import { cn } from "@admin/lib/utils";
 
 export interface RowDragHandleProps {
   isSortable: boolean;
