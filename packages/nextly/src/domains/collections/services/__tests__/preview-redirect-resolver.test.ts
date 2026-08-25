@@ -902,6 +902,67 @@ describe("the authenticated boundary on the explaining form", () => {
     ]);
   });
 
+  it("is not reachable from any of the package's PUBLIC entry points", () => {
+    /*
+     * The importer scan above is a syntax search over this package's own
+     * sources, and on its own it would miss the escape that matters: a barrel
+     * adding `export * from "…/preview-redirect-resolver"` puts the constructor
+     * on the public API, after which an application outside the scanned tree
+     * can self-mint a grant for any scope — and every assertion above stays
+     * green, because nothing inside `src` gained a reference.
+     *
+     * So the entry points are checked directly, DERIVED from `package.json`
+     * rather than listed here: a new export map entry is covered the day it is
+     * added, which a hand-written list would not be.
+     *
+     * What this reaches is a direct re-export from an entry point, which is the
+     * shape a barrel takes. It does not walk the full resolved graph — a chain
+     * through an intermediate barrel would evade it — and that limit is stated
+     * rather than left for someone to discover.
+     */
+    const pkgRoot = new URL("../../../../../", import.meta.url);
+    const pkg = JSON.parse(
+      readFileSync(new URL("package.json", pkgRoot), "utf8")
+    ) as { exports?: Record<string, { import?: string }> };
+
+    /*
+     * From `import`, not `types`. They do not always name the same module —
+     * `./field-catalog` declares `dist/field-catalog.d.ts` beside
+     * `dist/collections/fields/catalog.mjs` — and the runtime entry is the one
+     * that decides what an application can actually import.
+     */
+    const entrySources = Object.values(pkg.exports ?? {})
+      .map(e => e.import)
+      .filter((i): i is string => typeof i === "string")
+      .map(i => i.replace(/^\.\/dist\//, "src/").replace(/\.mjs$/, ".ts"));
+
+    // Control: the export map was read and produced entries, so an empty list
+    // cannot certify a package whose manifest this failed to parse.
+    expect(entrySources.length).toBeGreaterThan(0);
+
+    const reachable = entrySources.filter(rel => {
+      let source: string;
+      try {
+        source = readFileSync(new URL(rel, pkgRoot), "utf8");
+      } catch {
+        try {
+          // A bundled entry may be a directory index rather than a file.
+          source = readFileSync(
+            new URL(rel.replace(/\.ts$/, "/index.ts"), pkgRoot),
+            "utf8"
+          );
+        } catch {
+          // An entry whose source is nowhere the map implies is not evidence of
+          // safety; surface it by name rather than skipping it.
+          return true;
+        }
+      }
+      return /preview-redirect-resolver|previewCallerAuthorized/.test(source);
+    });
+
+    expect(reachable).toEqual([]);
+  });
+
   it("refuses to mint proof without an authenticated identity", () => {
     // The witness CARRIES the id rather than discarding it, so a handler with
     // no principal cannot satisfy it with a placeholder.
