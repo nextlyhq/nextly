@@ -14,9 +14,9 @@
 
 import {
   Button,
+  Card,
   FieldShell,
   FormActions,
-  FormLayout,
   Input,
   toast,
   Tabs,
@@ -45,6 +45,7 @@ import {
   FormSettingsTab,
   type SpamDefaults,
 } from "./components/builder/FormSettingsTab";
+import { notificationsBlockingSave } from "./components/builder/notification-addresses";
 import {
   FormBuilderProvider,
   useFormBuilder,
@@ -240,6 +241,17 @@ function FormBuilderViewInner({
       return;
     }
 
+    // A notification is written to the form as it is typed, so nothing between
+    // the editor and here refuses one. The sheet this replaced disabled its own
+    // commit for a blank name, and the field rejects a malformed address on
+    // blur — both preconditions move to this save, which is now the only
+    // commit, and both are answered by the module the editor itself asks.
+    const blocked = notificationsBlockingSave(notifications);
+    if (blocked) {
+      toast.error(blocked);
+      return;
+    }
+
     const { id: _id, ...formDataWithoutId } = formData;
     const saveData = {
       ...formDataWithoutId,
@@ -351,10 +363,13 @@ function FormBuilderViewInner({
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────
-  // `FormLayout` owns the page measure, centring and padding, so nothing here
-  // hand-rolls a card, a width cap or a hack to escape either.
+  // The host page owns the measure, the centring and the padding — this view
+  // renders as content inside its frame, under its breadcrumb. Declaring a
+  // shell here would nest one inset inside another and put this heading out of
+  // line with that breadcrumb. Nothing below hand-rolls a card, a width cap or
+  // a hack to escape either.
   return (
-    <FormLayout>
+    <>
       {/* ── Page header ── */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">
@@ -367,8 +382,12 @@ function FormBuilderViewInner({
         </p>
       </div>
 
-      {/* ── Metadata & tab navigation ── */}
-      <div className="border-b border-border space-y-4 pb-4 mb-6">
+      {/* ── Form metadata ──
+          A card, so the fields that identify the form read as one group and
+          have a surface to sit on. The builder canvas below is deliberately
+          NOT carded: it draws its own drop zone, and a frame around a frame
+          reads as a nested box rather than as structure. */}
+      <Card className="mb-6 px-6 py-5">
         <div className="flex flex-wrap gap-4">
           <FieldShell
             label="Form Name"
@@ -380,7 +399,6 @@ function FormBuilderViewInner({
               value={formData.name || ""}
               onChange={e => handleNameChange(e.target.value)}
               placeholder="e.g., Contact Form"
-              className="bg-transparent"
             />
           </FieldShell>
 
@@ -394,7 +412,7 @@ function FormBuilderViewInner({
               value={formData.slug || ""}
               onChange={e => updateFormData({ slug: e.target.value })}
               placeholder="e.g., contact-form"
-              className="bg-transparent placeholder:text-muted-foreground"
+              className="placeholder:text-muted-foreground"
             />
           </FieldShell>
 
@@ -422,7 +440,6 @@ function FormBuilderViewInner({
                     id={id}
                     aria-describedby={describedBy}
                     aria-invalid={invalid}
-                    className="bg-transparent"
                   >
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
@@ -436,8 +453,13 @@ function FormBuilderViewInner({
             </FieldShell>
           </div>
         </div>
+      </Card>
 
-        {/* ── Main tab navigation ── */}
+      {/* ── Main tab navigation ──
+          On the page rather than inside the card above: the rail switches what
+          is BELOW it, so grouping it with the metadata would attach it to the
+          wrong thing. */}
+      <div className="border-b border-border mb-6">
         <Tabs
           value={activeTab}
           onValueChange={v => setActiveTab(v as typeof activeTab)}
@@ -568,7 +590,7 @@ function FormBuilderViewInner({
           )}
         </Button>
       </FormActions>
-    </FormLayout>
+    </>
   );
 }
 

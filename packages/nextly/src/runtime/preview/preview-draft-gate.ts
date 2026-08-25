@@ -16,10 +16,16 @@
  *
  * @module runtime/preview/preview-draft-gate
  */
-import type { PreviewTokenScope } from "../../auth/preview/preview-token";
+import { assertEntryPreviewable } from "../../api/preview-access";
+import {
+  isSingleScope,
+  type PreviewTokenScope,
+} from "../../auth/preview/preview-token";
+import type { UserContext } from "../../domains/collections/services/collection-types";
 import type { ResolvedContext } from "../routing/content-route";
 
-import { previewGrantsDraft, readPreviewScope } from "./preview-route";
+import { resolvePreviewIdentity } from "./preview-identity";
+import { previewGrantsDraft, readPreviewSession } from "./preview-route";
 import type { PreviewScopeReaderConfig } from "./preview-route";
 
 /**
@@ -78,14 +84,23 @@ export type PreviewDraftGateConfig = PreviewScopeReaderConfig;
  */
 export function previewDraftGate(
   config: PreviewDraftGateConfig = {}
-): (request: DraftGateRequest) => Promise<{ entryId: string } | false> {
+): (
+  request: DraftGateRequest
+) => Promise<{ entryId: string; readAs: UserContext } | false> {
   return async ({ collection, locale }) => {
     // Re-read per request. The config is captured once at module scope while
     // whether this visitor is previewing — and whether their token has since
     // expired or been revoked — is a fact about the request in hand.
-    const scope = await readPreviewScope(config);
+    const verified = await readPreviewSession(config);
 
-    if (scope === null) return false;
+    if (verified === null) return false;
+    const { scope, minter } = verified;
+
+    // A Single's token cannot grant a collection draft. Both name one document
+    // and only one, but they are different documents — and this gate answers
+    // for a COLLECTION path, so a single-scoped token reaching it is a token
+    // for somewhere else entirely.
+    if (isSingleScope(scope)) return false;
 
     // `previewGrantsDraft` owns the whole authorization question — an absent
     // session AND whether a present one reaches the document — so it is asked
@@ -110,6 +125,55 @@ export function previewDraftGate(
     };
     if (!previewGrantsDraft(scope, requested)) return false;
 
-    return { entryId: scope.entryId };
+    // The row is read trusted so the working draft appears at all, and trust
+    // switched field-level read rules off with it. So the fields are judged
+    // separately, as the person who shared the link — otherwise the recipient
+    // sees fields the sharer cannot, which turns the link into a way to read
+    // past your own permissions by sending yourself one.
+    //
+    // **No identity, no draft.** Two cases reach this line without one: a token
+    // minted before the claim existed, and a sharer whose account has since
+    // been deleted. Granting the draft anyway would read it with no field rules
+    // at all, which IS the defect — so the grant is refused and the request
+    // resolves published-only, indistinguishable from an expired link. That
+    // does invalidate preview links minted in the hour before this ships;
+    // keeping a known field leak open for the lifetime of a token is the worse
+    // trade, and nothing new is mintable without a minter.
+    if (minter === undefined) return false;
+    const readAs = await resolvePreviewIdentity(minter);
+    if (readAs === null) return false;
+
+    // Asked again, on every render, and that is what makes revocation real.
+    //
+    // Rebuilding the sharer's identity re-evaluates FIELD rules against their
+    // current permissions and nothing else: the read below runs with
+    // `overrideAccess: true`, so the collection gate and every row-level rule
+    // are bypassed. A sharer who loses their update role, or stops satisfying
+    // an owner-only rule, would therefore keep serving the draft to whoever
+    // holds the link until it expired — an account that is still ACTIVE, so the
+    // deactivation check does not reach it either.
+    //
+    // The SAME function the mint uses, rather than a second implementation of
+    // "may this person preview this entry". Two versions of that question agree
+    // on the day they are written; the one that drifts is the one nobody runs,
+    // and here they would drift into a link that mints and cannot render, or
+    // renders and should not.
+    try {
+      await assertEntryPreviewable(collection, scope.entryId, readAs, {
+        // FALSE, and this is the load-bearing half. A render is an anonymous
+        // public request: nothing ran the coarse RBAC / code-defined access
+        // gate for it, so claiming otherwise would skip the check that notices
+        // a sharer's role was withdrawn — leaving this "re-authorization" able
+        // to catch only a deleted or deactivated account.
+        routeAuthorized: false,
+      });
+    } catch {
+      // Refused rather than propagated. A revoked link is an ordinary request
+      // outcome — the visitor sees the published page or a 404, the same as an
+      // expired one — not a 500 on a page that was working yesterday.
+      return false;
+    }
+
+    return { entryId: scope.entryId, readAs };
   };
 }

@@ -13,6 +13,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { StatusOption } from "../../lib/status-filter";
 import type { RevalidationIntent } from "../../revalidation/types";
+import type { TrustBound } from "../../services/collections/trust-grant";
 
 /**
  * User context for Single operations.
@@ -48,7 +49,7 @@ export interface GetSingleOptions {
    * the caller's trust, which is unchanged behaviour. Evaluated as
    * `overrideAccess && trusted(target)`, so it can only ever narrow.
    */
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
 
   /**
    * Depth for relationship expansion.
@@ -86,6 +87,35 @@ export interface GetSingleOptions {
    * @default true (when called via Direct API)
    */
   overrideAccess?: boolean;
+
+  /**
+   * Enforce FIELD-level read rules even on a read that is otherwise trusted.
+   *
+   * `overrideAccess` governs two different trusts with one boolean — "you may
+   * see this document" and "skip every field rule" — and a caller can need the
+   * first without the second. A shared preview link is the case that forced
+   * them apart: it must reach an unpublished document, which only
+   * `overrideAccess` grants, and it must not show its recipient fields the
+   * person who shared it cannot see.
+   *
+   * Absent means today's behaviour exactly — field trust follows document trust
+   * — so no existing caller changes. Set it beside a `user`: the rules are
+   * evaluated as THAT user.
+   *
+   * Mirrors the collection read path, and is not optional there either: the
+   * option is declared on the configuration BOTH APIs inherit, so a Single read
+   * that ignored it would return fields the caller was promised were redacted.
+   */
+  enforceFieldAccess?: boolean;
+
+  /**
+   * Whose field-level read rules to judge by, when that is NOT the caller.
+   *
+   * See the collection read path: a preview's bearer is anonymous and must stay
+   * anonymous to every hook, while the FIELDS are judged as the person who
+   * shared the link. A redaction basis, never a principal.
+   */
+  fieldAccessUser?: UserContext;
 
   /**
    * Set by a route whose middleware already authenticated AND authorized the
@@ -139,7 +169,7 @@ export interface UpdateSingleOptions {
    * the caller's trust, which is unchanged behaviour. Evaluated as
    * `overrideAccess && trusted(target)`, so it can only ever narrow.
    */
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
 
   /**
    * Set when this write restores an earlier version, recording which one on the

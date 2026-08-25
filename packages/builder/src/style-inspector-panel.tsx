@@ -30,19 +30,25 @@
  */
 
 import {
+  breakpointContexts,
   findNode,
   isTokenRef,
   trimCssWhitespace,
+  walkNodes,
   type BreakpointId,
+  type BreakpointSet,
   type ContrastResult,
   type NodeStyles,
   type SiteTokenSet,
   type TokenMode,
   type StyleLeaf,
   type StyleShape,
+  type StyleOrigin,
   type StyleState,
+  type StyleTraceEntry,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   Accordion,
   AccordionContent,
@@ -62,6 +68,8 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
+import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
 import {
@@ -98,12 +106,29 @@ import {
   withUnit,
 } from "./style-numeric";
 import {
+  propertiesWriting,
+  styleProvenance,
+  type StyleProvenance,
+} from "./style-provenance";
+import { styleSubjectFor } from "./style-subject";
+import {
   readStyleValue,
-  styleClearOp,
-  styleWriteOp,
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
+
+/**
+ * Where one control's value came from, asked per control against a subject and a
+ * trace the panel resolved ONCE.
+ *
+ * A function rather than a precomputed map because the key would have to be the
+ * control's CSS property AND its descendant selector — the catalog writes
+ * `color` from three different controls — and a map keyed on that pair is a
+ * second spelling of the filter `styleProvenance` already applies.
+ *
+ * `undefined` means nothing can answer, which is not the same as "unset".
+ */
+type ProvenanceOf = (leaf: StyleLeaf) => StyleProvenance | undefined;
 
 export interface StyleInspectorPanelProps {
   /**
@@ -141,6 +166,36 @@ export interface StyleInspectorPanelProps {
    * by the identity the document holds, because that is the only name it has.
    */
   tokens?: SiteTokenSet;
+  /**
+   * The declarations the compiler wrote for this document, WITH the tree they
+   * describe.
+   *
+   * What lets a control say where its value came from. Supplied by the host
+   * rather than compiled here, and that is the point: the panel renders once per
+   * control, so compiling in this component would walk the cascade per control
+   * — the thing this file's own comments say must not happen.
+   *
+   * The tree travels with the entries rather than being taken from
+   * {@link editor}, because the two are one answer. Read-time repair can change
+   * WHICH node owns an id: a duplicated id whose first node is condition-gated
+   * leaves a later node rendering under it, and a lookup in the raw document
+   * then returns a node with different classes, a different type and a different
+   * chain of ancestors than the declarations belong to. A visibly applied class
+   * is reported as unset, or attributed to the wrong tier.
+   *
+   * Absent means the question was never asked, not that nothing is inherited: a
+   * host that supplies no cascade gets no indicators, which is the honest answer
+   * for a surface that cannot compile.
+   */
+  cascade?: PageStyleCascade;
+  /**
+   * The site's breakpoints, for deciding which declarations are live.
+   *
+   * Carried rather than derived from {@link breakpoint}: which rules are in PLAY
+   * is a fact about the width being viewed, and the edited breakpoint only says
+   * which of them counts as authored here.
+   */
+  breakpoints?: BreakpointSet;
 }
 
 export function StyleInspectorPanel({
@@ -149,6 +204,8 @@ export function StyleInspectorPanel({
   tokens,
   state,
   breakpoint,
+  cascade,
+  breakpoints,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -163,6 +220,7 @@ export function StyleInspectorPanel({
     {}
   );
   const prefersDark = usePrefersDark();
+  const matched = useMatchedBreakpoints(breakpoints);
 
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
@@ -201,6 +259,38 @@ export function StyleInspectorPanel({
     );
   }
 
+  /*
+   * A block whose id is not unique cannot be styled, and saying so is the only
+   * honest answer this panel has.
+   *
+   * The compiler already reaches this conclusion for the same reason, and its
+   * words are worth keeping: a class is derived from the id, so two nodes
+   * sharing one share a class, and "writing corrupts a node the author did not
+   * touch". It refuses to emit their rules.
+   *
+   * The editor has to refuse for a second reason the compiler does not face. The
+   * cascade is read from the PREPARED tree, where read-time repair has already
+   * dropped the later duplicate — but gating runs first, so a gated first node
+   * leaves a LATER one owning that id there, while every lookup in the stored
+   * document returns the first. The controls would then show and write one
+   * block while the provenance dots describe another, and typing into a field
+   * would silently change a block that is not on screen.
+   *
+   * Refused rather than reconciled: pointing the controls at the rendered node
+   * would not help, because a write is addressed by id and would still land on
+   * the first. There is no edit here that means what it appears to mean.
+   */
+  if (editor.selectedId !== null && sharesItsId(editor, editor.selectedId)) {
+    return (
+      <div className="nx-style-inspector" data-empty="duplicate-id">
+        <p className="nx-inspector__note">
+          Another block on this page has the same id, so styles written here
+          could not be told apart. Give one of them a new id to style either.
+        </p>
+      </div>
+    );
+  }
+
   if (inspection === null) {
     return (
       <div className="nx-style-inspector" data-empty="no-selection">
@@ -218,6 +308,76 @@ export function StyleInspectorPanel({
       </div>
     );
   }
+
+  /*
+   * ONE subject for the whole panel, and one live-breakpoint set.
+   *
+   * Every control on this panel asks about the SAME node, so building either per
+   * control would walk the document per control — which is the cost this file's
+   * own comments say the indicator must not pay.
+   *
+   * Recomputed each render rather than memoised, exactly as the inspection above
+   * is: both are only valid against the document they were read from, and an
+   * edit anywhere changes the document and the values shown together.
+   */
+  const subject =
+    editor.selectedId === null
+      ? undefined
+      : styleSubjectFor(
+          /*
+           * The cascade's OWN tree where there is one. Asking the raw document
+           * instead would answer about a node the declarations may not describe,
+           * and the fallback below is only for a panel with no cascade at all —
+           * where no indicator is drawn and the subject is read for the block
+           * type alone.
+           */
+          cascade?.nodes ?? editor.document.nodes,
+          editor.selectedId
+        );
+  /*
+   * What the panel is editing, so an inherited label can say what DIFFERS from
+   * it. Built once beside the subject for the same reason: every control is
+   * asking about one node at one address.
+   */
+  const editing: EditedAddress = {
+    nodeId: inspection.nodeId,
+    blockType: subject?.blockType,
+    state: inspection.state,
+    breakpoint: inspection.breakpoint,
+    labelOf: id => breakpointLabel(breakpoints, id),
+  };
+  const provenanceOf: ProvenanceOf = leaf => {
+    // Absent means the question was never asked. A host that supplies no cascade
+    // gets no indicators, which is the honest answer for a surface that cannot
+    // compile — and not the same as "nothing is inherited".
+    if (cascade === undefined || subject === undefined) return undefined;
+    return styleProvenance({
+      trace: cascade.entries,
+      subject,
+      // The control's own leaf, never the catalog key: two keys can write one
+      // CSS property, and the trace records what was WRITTEN.
+      cssProperty: leaf.cssProperty,
+      descendant: leaf.descendant,
+      state: inspection.state,
+      breakpoint: inspection.breakpoint,
+      /*
+       * What the BROWSER is applying, and ONLY that. The edited breakpoint is a
+       * different fact and travels separately in `breakpoint`: it says where a
+       * write lands, not what is on screen.
+       *
+       * An earlier version forced the edited breakpoint into this set so a value
+       * authored there could be called "authored here". That inverted the
+       * premise — a host editing `mobile` while the canvas sits at desktop width
+       * would have the mobile declaration reported as the visible winner, which
+       * is a value the browser is not showing.
+       *
+       * The consequence is deliberate: editing a breakpoint whose query does not
+       * match reports its controls as unset. That is the honest answer, because
+       * the dot describes what is DISPLAYED rather than what is stored.
+       */
+      liveBreakpoints: matched,
+    });
+  };
 
   const groups = inspection.sections.map(section => section.group);
   // Held rather than left to the accordion, so the open section survives a
@@ -254,6 +414,8 @@ export function StyleInspectorPanel({
             policy={policy}
             tokens={tokens}
             prefersDark={prefersDark}
+            provenanceOf={provenanceOf}
+            editing={editing}
             onChooseForm={chooseForm}
           />
         ))}
@@ -300,6 +462,55 @@ function usePrefersDark(): boolean {
   return prefersDark;
 }
 
+/**
+ * The breakpoints whose rules the browser is applying right now.
+ *
+ * Modelled on {@link usePrefersDark} directly below it, and for the same reason:
+ * a media query's state is a fact about the viewer that nothing in React tells
+ * this panel, so it is read and then subscribed to.
+ *
+ * Starts from the unconditional contexts and widens after mount, so a server
+ * render and the first client render agree — React discards a subtree whose two
+ * renders disagree, which would take the whole Style tab with it. The cost is
+ * one frame reporting fewer origins than apply; the alternative is a hydration
+ * mismatch.
+ */
+function useMatchedBreakpoints(
+  breakpoints: BreakpointSet | undefined
+): readonly BreakpointId[] {
+  const never = React.useCallback(() => false, []);
+  const [matches, setMatches] = React.useState<readonly BreakpointId[]>(() =>
+    matchedBreakpoints(breakpoints, never)
+  );
+  React.useEffect(() => {
+    // Detected by CALLABILITY rather than presence, the lesson `usePrefersDark`
+    // records: `"matchMedia" in window` is true under jsdom while the value is
+    // not a function, so the property test passes and the call throws.
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    ) {
+      return;
+    }
+    const ask = (query: string): boolean => window.matchMedia(query).matches;
+    const read = (): void => setMatches(matchedBreakpoints(breakpoints, ask));
+    read();
+    /*
+     * Subscribed to every emitted query, not to a resize. A resize fires
+     * continuously and would re-measure on each frame of a drag, while a media
+     * query change event fires exactly when an answer here would differ.
+     */
+    const lists = breakpointQueries(breakpoints).map(query =>
+      window.matchMedia(query)
+    );
+    for (const list of lists) list.addEventListener("change", read);
+    return () => {
+      for (const list of lists) list.removeEventListener("change", read);
+    };
+  }, [breakpoints]);
+  return matches;
+}
+
 /** One catalog group, as a section that opens onto its properties. */
 function StyleSectionItem({
   section,
@@ -310,6 +521,8 @@ function StyleSectionItem({
   policy,
   tokens,
   prefersDark,
+  provenanceOf,
+  editing,
   onChooseForm,
 }: {
   section: StyleSection;
@@ -320,6 +533,8 @@ function StyleSectionItem({
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
+  provenanceOf: ProvenanceOf;
+  editing: EditedAddress;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   // How many of this section's properties this node sets HERE, so an author can
@@ -353,6 +568,8 @@ function StyleSectionItem({
               policy={policy}
               tokens={tokens}
               prefersDark={prefersDark}
+              provenanceOf={provenanceOf}
+              editing={editing}
               onChooseForm={onChooseForm}
             />
           ))}
@@ -379,6 +596,8 @@ function StylePropertyFields({
   policy,
   tokens,
   prefersDark,
+  provenanceOf,
+  editing,
   onChooseForm,
 }: {
   property: InspectedStyleProperty;
@@ -389,6 +608,8 @@ function StylePropertyFields({
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
+  provenanceOf: ProvenanceOf;
+  editing: EditedAddress;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   const many = property.controls.length > 1;
@@ -468,6 +689,8 @@ function StylePropertyFields({
           policy={policy}
           tokens={tokens}
           prefersDark={prefersDark}
+          provenanceOf={provenanceOf}
+          editing={editing}
         />
       ))}
     </div>
@@ -556,8 +779,11 @@ function FormChoice({
     // Read at this position for the same reason: `property.set` answers for the
     // whole property, which is true whenever any sibling holds a value.
     if (readStyleValue(current.styles, address) === undefined) return;
-    const cleared = styleClearOp(nodeId, current.styles, address, policy);
-    if (cleared.ok && cleared.op !== null) editor.apply(cleared.op);
+    // Through the batch layer as a group of ONE, like every other style write
+    // in this panel. A refusal or an already-absent value both come back as no
+    // ops, which is what the two conditions here used to say separately.
+    const cleared = batchStyleClearOps([current], address, policy);
+    if (cleared.ops.length > 0) editor.applyAll(cleared.ops);
   };
 
   return (
@@ -617,6 +843,8 @@ function StyleControlField({
   policy,
   tokens,
   prefersDark,
+  provenanceOf,
+  editing,
 }: {
   control: StyleControl;
   label: string;
@@ -649,6 +877,8 @@ function StyleControlField({
   policy: StylePolicy | undefined;
   tokens: SiteTokenSet | undefined;
   prefersDark: boolean;
+  provenanceOf: ProvenanceOf;
+  editing: EditedAddress;
 }): React.JSX.Element {
   const id = React.useId();
   // The message's own id, so the control can point at it. A `role="alert"`
@@ -714,6 +944,11 @@ function StyleControlField({
     <div className="nx-inspector__field" data-control={control.kind}>
       <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
         {label}
+        <ProvenanceDot
+          provenance={provenanceOf(control.leaf)}
+          editing={editing}
+          descendant={control.leaf.descendant}
+        />
       </Label>
       <ControlValue
         id={id}
@@ -1164,30 +1399,331 @@ function writeStyleValue({
 }): CommitOutcome {
   const current = findNode(editor.document.nodes, nodeId);
   if (current === undefined) return "refused";
+  /*
+   * A ONE-NODE BATCH, and the single write path for a style edit in this
+   * builder.
+   *
+   * Not because this panel needs batching — it edits one block — but because
+   * the alternative is two implementations of "what ops set this address".
+   * They agree the day they are written: `batchStyleWriteOps` was in fact
+   * written from this function. Then one of them learns something — a policy
+   * that varies, a refusal worded differently, a value the other still
+   * accepts — and the surface an author reaches through a multi-selection
+   * behaves unlike the one they reach through a single click, for a reason no
+   * test names because each path passes its own.
+   *
+   * A group of one is exactly the single-op case: `applyAll(ops)` and
+   * `apply(op)` are both `run(ops, "new")` in the store, so one op through
+   * here costs one history entry and behaves identically. The batch layer is
+   * therefore not a detour around the simple case — it IS the simple case,
+   * with the count left open.
+   */
   const write =
     value === null
-      ? styleClearOp(nodeId, current.styles, address, policy)
-      : styleWriteOp(nodeId, current.styles, address, value, policy);
-  if (!write.ok) {
-    setIssue(write.issues[0]?.message ?? "This value cannot be used here.");
+      ? batchStyleClearOps([current], address, policy)
+      : batchStyleWriteOps([current], address, value, policy);
+  if (write.refused !== undefined) {
+    setIssue(write.refused);
     return "refused";
   }
   setIssue(null);
-  // Null is the store saying the document already holds this value, which is
-  // the ordinary case for a field blurred without being changed. Applying it
+  // No ops is the document already holding this value, which is the ordinary
+  // case for a field blurred without being changed. Applying an empty group
   // would ask the op store for a history entry that undoes to no visible
   // effect, which it refuses.
-  if (write.op === null) return "unchanged";
+  if (write.ops.length === 0) return "unchanged";
   // The store's own refusal, which the validator cannot anticipate: it judges
   // the edited leaf, while `applyOp` judges the whole document — a page at its
   // byte limit rejects an edit whose value is perfectly valid. Unreported, the
   // field goes on showing the draft and reads as saved while neither the
   // document nor the undo history moved.
-  if (editor.apply(write.op) === null) {
+  if (editor.applyAll(write.ops) === null) {
     setIssue("This edit could not be applied to the document.");
     return "refused";
   }
   return "applied";
+}
+
+/**
+ * Where a control's value came from, as a dot beside its label.
+ *
+ * Three visible states, following the affordance `style-provenance.ts` already
+ * says it follows: nothing set draws no dot at all, a value authored here is
+ * accented, and one arriving from anywhere else is warned. An author scanning a
+ * section sees at a glance which fields are theirs and which they would be
+ * taking over by typing.
+ *
+ * **A dot rather than a written badge**, because a section holds eight or more
+ * controls and a label naming the source would have to name its AXIS too once
+ * breakpoints are in play — which does not fit beside a numeric input without
+ * widening the panel or wrapping every row.
+ *
+ * **The source is named in the accessible label, not only in the tooltip.** A
+ * `title` reaches a mouse and nothing else, so a dot carrying its meaning only
+ * there is decoration to a screen-reader user and to anyone navigating by
+ * keyboard. The text is the same in both.
+ *
+ * **`ambiguous` deliberately draws NOTHING.** One CSS property can be written by
+ * two catalog controls — `background-image` comes from both `background.url`
+ * and `backgroundGradient` — and with one of the pair stored, the trace cannot
+ * say which control wrote it. A dot claiming a value this control does not hold
+ * is worse than no dot, which is the same judgement `StyleProvenance` makes by
+ * reporting the case rather than guessing.
+ */
+function ProvenanceDot({
+  provenance,
+  editing,
+  descendant,
+}: {
+  provenance: StyleProvenance | undefined;
+  editing: EditedAddress;
+  /** The control's own descendant selector, to tell its rules from a sibling's. */
+  descendant: string | undefined;
+}): React.JSX.Element | null {
+  const described = describeProvenance(provenance, editing, descendant);
+  if (described === null) return null;
+  return (
+    <>
+      <span
+        className="nx-style-inspector__provenance"
+        data-provenance={described.kind}
+        title={described.text}
+        /*
+         * A role, because the element is empty: the dot is drawn by the
+         * stylesheet, so without one the label is the only content and assistive
+         * technology has nothing to attach the description to.
+         */
+        role="img"
+        aria-label={described.text}
+      />
+      {/*
+       * The same sentence, for a sighted keyboard user.
+       *
+       * `title` reaches a POINTER and nothing else, and `aria-label` reaches
+       * assistive technology and nothing else. Between them sits the person who
+       * tabs to a control and can see the screen: they got a coloured dot with
+       * no way to learn what it means, which is the one group the first two
+       * accommodations do not cover.
+       *
+       * Revealed on `:focus-within` of the field rather than made focusable
+       * itself. A focusable dot would put a second tab stop in front of every
+       * control in a panel that already has eight or more per section, so
+       * reaching the last field would cost twice the presses — fixing the
+       * explanation by damaging the navigation it explains.
+       *
+       * `aria-hidden` because the dot beside it already carries this text: two
+       * copies in the accessibility tree is the same sentence announced twice,
+       * which reads as a stutter rather than as emphasis.
+       */}
+      <span className="nx-style-inspector__provenance-text" aria-hidden="true">
+        {described.text}
+      </span>
+    </>
+  );
+}
+
+/**
+ * The dot's state and the sentence that names it, or `null` to draw nothing.
+ *
+ * Separated from the component so the wording is testable without rendering,
+ * and so the two cannot drift: the tooltip and the accessible label are the same
+ * string by construction rather than by two call sites agreeing.
+ */
+export function describeProvenance(
+  provenance: StyleProvenance | undefined,
+  editing: EditedAddress,
+  controlDescendant?: string
+): { kind: "authored" | "inherited"; text: string } | null {
+  if (provenance === undefined) return null;
+  if (provenance.kind === "authored") {
+    return { kind: "authored", text: "Set here" };
+  }
+  if (provenance.kind !== "inherited") return null;
+  return {
+    kind: "inherited",
+    text: `Inherited from ${originName(provenance.from, provenance.entry, editing, controlDescendant)}`,
+  };
+}
+
+/**
+ * Which block, class or tier a value came from — the SUBJECT of the phrase.
+ *
+ * Split from {@link originName} because the address that qualifies it is the
+ * same for every tier while the subject is different for each, and composing
+ * both in one function made the tier answers hard to read past the qualifiers.
+ *
+ * A same-node origin resolves to the CONTROL where one differs, because there
+ * the control is what the author must open: a rule reaches a control whose
+ * descendant selector is more specific than its own — `linkColorHover` displays
+ * the plain `a` declaration when no hover value exists — and told "this block",
+ * the author cannot find the field that holds it.
+ */
+function originSubject(
+  origin: StyleOrigin,
+  editing: EditedAddress,
+  control: string | undefined
+): string {
+  switch (origin.kind) {
+    case "class":
+      return `.${origin.slug}`;
+    case "blockType":
+      /*
+       * The same problem the `node` case has, and it arrives by the same route:
+       * `reachesThroughAncestor` asks `reachesNode` about each ancestor, and
+       * that matches a `blockType` origin against the ANCESTOR's type. So a
+       * descendant rule from an enclosing block's defaults reaches this control
+       * carrying that block's type, not this one's.
+       */
+      return origin.type === editing.blockType
+        ? "this block's defaults"
+        : "an enclosing block's defaults";
+    case "page":
+      return "the page";
+    case "node":
+      if (origin.id !== editing.nodeId) return "an enclosing block";
+      return control ?? "this block";
+  }
+}
+
+/**
+ * The control a declaration came from, when it was not this one.
+ *
+ * `undefined` when the declaration belongs to this control's own address.
+ *
+ * The catalog is asked rather than the selector rendered: ` a` is not a name an
+ * author has seen anywhere, while the property that writes it is the field they
+ * are looking at.
+ *
+ * The multiple-writers guard is NOT currently reachable, and that is recorded
+ * rather than left for someone to rediscover. Measured over the whole catalog,
+ * exactly one `(cssProperty, descendant)` pair has two writers —
+ * `background-image` with no descendant, from `background` and
+ * `backgroundGradient` — and nothing writes `background-image` at a descendant
+ * at all. So a differing descendant always resolves to one property today.
+ *
+ * It is kept because it is not redundant: nothing else stops this naming one of
+ * two writers arbitrarily, and a control labelled with a field the author did
+ * not touch is the failure this whole indicator exists to avoid. A catalog leaf
+ * added at a descendant would reach it on the day it lands.
+ */
+function sourceControl(
+  entry: StyleTraceEntry,
+  controlDescendant: string | undefined
+): string | undefined {
+  const mine = (controlDescendant ?? "").trim();
+  const theirs = (entry.descendant ?? "").trim();
+  if (mine === theirs) return undefined;
+  const writers = propertiesWriting(entry.property, entry.descendant);
+  if (writers.length !== 1) return undefined;
+  return `the ${fieldLabel(writers[0] ?? "")} control`;
+}
+
+/**
+ * A breakpoint's author-facing name, or its id when the site defines no such
+ * breakpoint.
+ *
+ * Resolved through `breakpointContexts` — the engine's own normalisation — and
+ * not by searching the stored axes. The two disagree, and the disagreement is
+ * exactly the case a label matters in. `breakpointContexts` sorts each axis
+ * WIDEST-FIRST and then claims each id once, so of two rows storing the same id
+ * the wider one survives and emits the rule; a raw search returns whichever was
+ * stored first. With a narrow `dup` above a wider `dup`, the value on screen
+ * comes from the wide row while the tooltip names the narrow one — an author
+ * sent to a definition that did not produce the value.
+ *
+ * The surviving DEFINITION is then matched by axis and bound rather than by id
+ * alone, because id alone is what is ambiguous here. Two rows sharing an id and
+ * a bound differ only in their label, and the compiler's sort is stable, so the
+ * first of those is the one it kept.
+ *
+ * Falling back to the id rather than to a placeholder: a value keyed to a
+ * breakpoint the settings no longer define is exactly the case an author needs
+ * to recognise, and "unknown" tells them nothing they can act on.
+ */
+export function breakpointLabel(
+  breakpoints: BreakpointSet | undefined,
+  id: BreakpointId
+): string {
+  const context = breakpointContexts(breakpoints).find(
+    found => found.id === id
+  );
+  if (context === undefined) return id;
+  const axis =
+    context.axis === "container"
+      ? breakpoints?.container
+      : breakpoints?.viewport;
+  const survivor = (axis ?? []).find(
+    def => def.id === id && def.maxWidth === context.maxWidth
+  );
+  return survivor?.label ?? id;
+}
+
+/**
+ * Whether the stored document holds this id more than once.
+ *
+ * Asked of the STORED document rather than of the cascade's tree, which is the
+ * whole point: preparation drops the later duplicate, so the tree the
+ * declarations describe never contains one and could never report this.
+ *
+ * `walkNodes` rather than a walk written here — it is cycle-safe and
+ * depth-bounded, and it deliberately visits the same node object twice when it
+ * sits in two slots, which is precisely the shape being counted.
+ */
+function sharesItsId(editor: EditorState, id: string): boolean {
+  let seen = 0;
+  walkNodes(editor.document.nodes, node => {
+    if (node.id === id) seen += 1;
+  });
+  return seen > 1;
+}
+
+/** Which node, state and breakpoint the panel is editing, to say what DIFFERS. */
+export interface EditedAddress {
+  readonly nodeId: string;
+  /** The selected block's type, to tell its own defaults from an ancestor's. */
+  readonly blockType: string | undefined;
+  readonly state: StyleState;
+  readonly breakpoint: BreakpointId;
+  /** A breakpoint's author-facing name, for saying which one a value came from. */
+  readonly labelOf: (breakpoint: BreakpointId) => string;
+}
+
+/**
+ * What to call the place a value came from, as ONE address.
+ *
+ * Every axis that differs from what the panel is editing is named, not just the
+ * first. Naming a subset is not a vaguer answer, it is a WRONG one: editing
+ * hover at Tablet, a value arriving from base at Mobile labelled "this block at
+ * Mobile" sends the author to a real address that does not hold the value, and
+ * finding nothing there they conclude the indicator is broken.
+ *
+ * The qualifiers apply to EVERY tier, not only to a node. A class carries
+ * responsive and interaction-state values of its own, so `.card` alone leaves an
+ * author who opens the class editor at base looking at the wrong row — the same
+ * misdirection, one tier over.
+ *
+ * The control is the SUBJECT for a same-node origin and a `via` clause for every
+ * other tier, because that is what it means in each: on this block it is the
+ * field to open, while on a class or an enclosing block it says which field's
+ * rule reached here, and the place to go is still the class or the block.
+ */
+function originName(
+  origin: StyleOrigin,
+  entry: StyleTraceEntry,
+  editing: EditedAddress,
+  controlDescendant: string | undefined
+): string {
+  const control = sourceControl(entry, controlDescendant);
+  const ownControl = origin.kind === "node" && origin.id === editing.nodeId;
+  const parts = [originSubject(origin, editing, control)];
+  if (!ownControl && control !== undefined) parts.push(`via ${control}`);
+  if (entry.breakpoint !== editing.breakpoint) {
+    parts.push(`at ${editing.labelOf(entry.breakpoint)}`);
+  }
+  if (entry.state !== editing.state) {
+    parts.push(`in its ${entry.state} state`);
+  }
+  return parts.join(" ");
 }
 
 /**

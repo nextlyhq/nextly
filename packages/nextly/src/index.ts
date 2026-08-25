@@ -153,6 +153,14 @@ export type {
   DeleteFieldGroupArgs,
 } from "./direct-api/types";
 
+// The vocabulary a caller needs to answer `DirectAPIConfig.trusted`. Exported
+// as a VALUE, not only a type: the escape hatch is a constant a caller has to
+// be able to write, and a bound it cannot name is a bound it will not draw.
+export {
+  TRUSTS_EVERY_COLLECTION,
+  type TrustBound,
+} from "./services/collections/trust-grant";
+
 // Direct API types - core operation argument types
 export type {
   DirectAPIConfig,
@@ -510,6 +518,15 @@ export type {
   ServiceOpts,
   PluginCollectionService,
 } from "./plugins/service-opts";
+// Exported alongside `PluginCollectionService` because a plugin typing its own
+// helper against `ctx.services.singles` needs to name the type, and an
+// unexported one leaves it reaching into a deep path or widening to `unknown`.
+export type {
+  PluginSinglesService,
+  PluginSinglesResult,
+  PluginSingleRecord,
+  SerializedFieldConfig,
+} from "./plugins/plugin-singles";
 export type { AuthUser } from "./types/auth";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +

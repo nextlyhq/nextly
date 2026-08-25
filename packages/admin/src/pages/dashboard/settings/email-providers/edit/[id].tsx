@@ -103,8 +103,8 @@ export default function EditEmailProviderPage() {
   // Invalid ID
   if (!providerId) {
     return (
-      <PageContainer>
-        <SettingsLayout>
+      <PageContainer width="form">
+        <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
               Invalid provider ID. Please go back and try again.
@@ -123,8 +123,8 @@ export default function EditEmailProviderPage() {
   // Loading state
   if (isLoading) {
     return (
-      <PageContainer>
-        <SettingsLayout>
+      <PageContainer width="form">
+        <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
           <div className="space-y-6">
             <Skeleton className="h-12 w-full rounded-md" />
             <Skeleton className="h-[500px] w-full rounded-lg" />
@@ -137,8 +137,8 @@ export default function EditEmailProviderPage() {
   // Error state
   if (fetchError) {
     return (
-      <PageContainer>
-        <SettingsLayout>
+      <PageContainer width="form">
+        <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
           <Alert variant="destructive">
             <AlertDescription className="flex items-center justify-between">
               <span>
@@ -204,8 +204,9 @@ export default function EditEmailProviderPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="form">
         <SettingsLayout
+          {...EMAIL_PROVIDER_PAGE}
           actions={
             <>
               {/* Test Connection — preserves the previous form behaviour
@@ -250,3 +251,18 @@ export default function EditEmailProviderPage() {
     </QueryErrorBoundary>
   );
 }
+
+/**
+ * This page renders the settings chrome in several branches — loading,
+ * error and the resolved document — and its identity is the same in all of
+ * them. Stated once here so the branches cannot drift apart.
+ */
+const EMAIL_PROVIDER_PAGE = {
+  title: "Edit Email Provider",
+  description: "Update the email provider configuration",
+  crumb: "Edit Email Provider",
+  parentCrumb: {
+    label: "Email Providers",
+    href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
+  },
+} as const;

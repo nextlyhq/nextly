@@ -13,7 +13,6 @@ import {
   Button,
   FieldShell,
   FormActions,
-  FormLayout,
   Grid,
   Input,
   Select,
@@ -158,226 +157,229 @@ export function ImageSizeForm({
 
   return (
     <Form {...form}>
-      <FormLayout>
-        <form
-          onSubmit={e => {
-            void form.handleSubmit(handleSubmit)(e);
-          }}
-          className="space-y-6"
-        >
-          <SettingsSection label="Image Size">
-            {/* Name */}
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field, fieldState }) => (
-                <FieldShell
-                  label="Name"
-                  description="Used as the key in the API response. Cannot be changed after creation."
-                  error={fieldState.error?.message}
-                >
-                  <Input
-                    placeholder="e.g., thumbnail, medium, large"
-                    disabled={isEdit || isPending}
-                    {...field}
-                  />
-                </FieldShell>
-              )}
-            />
-
-            {/* Width + Height — two controls, one shared label/description, so
-                this stays a hand-rolled row rather than FieldShell: there is no
-                single control for one id/error pair to describe. Each Input
-                keeps its own FieldShell for error display. */}
-            <div className="flex flex-col gap-1.5 py-5">
-              <span className="text-sm font-medium text-foreground">
-                Dimensions
-              </span>
-              <p className="text-sm text-muted-foreground">
-                Leave one blank to keep aspect ratio. At least one dimension is
-                required.
-              </p>
-              <Grid cols={2} gap={3} responsive className="mt-1.5">
-                <FormField
-                  control={form.control}
-                  name="width"
-                  render={({ field, fieldState }) => (
-                    <FieldShell error={fieldState.error?.message} width="fill">
-                      <Input
-                        type="number"
-                        placeholder="Width (px)"
-                        min={1}
-                        max={10000}
-                        disabled={isPending}
-                        value={field.value ?? ""}
-                        onChange={e => {
-                          const v = e.target.value;
-                          field.onChange(v === "" ? null : Number(v));
-                        }}
-                        onBlur={field.onBlur}
-                        name={field.name}
-                        ref={field.ref}
-                      />
-                    </FieldShell>
-                  )}
+      <form
+        onSubmit={e => {
+          void form.handleSubmit(handleSubmit)(e);
+        }}
+        className="space-y-6"
+      >
+        <SettingsSection label="Image Size">
+          {/* Name */}
+          <FormField
+            control={form.control}
+            name="name"
+            render={({ field, fieldState }) => (
+              <FieldShell
+                label="Name"
+                description="Used as the key in the API response. Cannot be changed after creation."
+                error={fieldState.error?.message}
+              >
+                <Input
+                  placeholder="e.g., thumbnail, medium, large"
+                  disabled={isEdit || isPending}
+                  {...field}
                 />
-                <FormField
-                  control={form.control}
-                  name="height"
-                  render={({ field, fieldState }) => (
-                    <FieldShell error={fieldState.error?.message} width="fill">
-                      <Input
-                        type="number"
-                        placeholder="Height (px)"
-                        min={1}
-                        max={10000}
-                        disabled={isPending}
-                        value={field.value ?? ""}
-                        onChange={e => {
-                          const v = e.target.value;
-                          field.onChange(v === "" ? null : Number(v));
-                        }}
-                        onBlur={field.onBlur}
-                        name={field.name}
-                        ref={field.ref}
-                      />
-                    </FieldShell>
-                  )}
-                />
-              </Grid>
-            </div>
+              </FieldShell>
+            )}
+          />
 
-            {/* Fit / Resize Mode */}
-            <FormField
-              control={form.control}
-              name="fit"
-              render={({ field, fieldState }) => (
-                <FieldShell
-                  label="Resize Mode"
-                  description="How the image is resized to fit the target dimensions."
-                  error={fieldState.error?.message}
-                >
-                  {({ id, describedBy, invalid }) => (
-                    <Select
-                      value={field.value}
-                      onValueChange={field.onChange}
+          {/* Width + Height — two controls, one shared label/description, so
+              this stays a hand-rolled row rather than FieldShell: there is no
+              single control for one id/error pair to describe. Each Input
+              keeps its own FieldShell for error display.
+
+              No vertical padding here, deliberately. The enclosing `SettingsSection` supplies the vertical rhythm to every
+              direct child through `--nx-field-gap`, so this row must not pad
+              itself: the two paddings are additive and a row that carried its
+              own would render at double the gap. */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium text-foreground">
+              Dimensions
+            </span>
+            <p className="text-sm text-muted-foreground">
+              Leave one blank to keep aspect ratio. At least one dimension is
+              required.
+            </p>
+            <Grid cols={2} gap={3} responsive className="mt-1.5">
+              <FormField
+                control={form.control}
+                name="width"
+                render={({ field, fieldState }) => (
+                  <FieldShell error={fieldState.error?.message} width="fill">
+                    <Input
+                      type="number"
+                      placeholder="Width (px)"
+                      min={1}
+                      max={10000}
                       disabled={isPending}
-                    >
-                      <SelectTrigger
-                        id={id}
-                        aria-describedby={describedBy}
-                        aria-invalid={invalid}
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="inside">
-                          Fit (shrink to fit, no cropping)
-                        </SelectItem>
-                        <SelectItem value="cover">
-                          Cover (crop to fill exact size)
-                        </SelectItem>
-                        <SelectItem value="contain">
-                          Contain (fit with padding)
-                        </SelectItem>
-                        <SelectItem value="fill">
-                          Stretch (may distort)
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
-                </FieldShell>
-              )}
-            />
-
-            {/* Format */}
-            <FormField
-              control={form.control}
-              name="format"
-              render={({ field, fieldState }) => (
-                <FieldShell
-                  label="Format"
-                  description="Output format for the generated image."
-                  error={fieldState.error?.message}
-                >
-                  {({ id, describedBy, invalid }) => (
-                    <Select
-                      value={field.value}
-                      onValueChange={field.onChange}
+                      value={field.value ?? ""}
+                      onChange={e => {
+                        const v = e.target.value;
+                        field.onChange(v === "" ? null : Number(v));
+                      }}
+                      onBlur={field.onBlur}
+                      name={field.name}
+                      ref={field.ref}
+                    />
+                  </FieldShell>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="height"
+                render={({ field, fieldState }) => (
+                  <FieldShell error={fieldState.error?.message} width="fill">
+                    <Input
+                      type="number"
+                      placeholder="Height (px)"
+                      min={1}
+                      max={10000}
                       disabled={isPending}
-                    >
-                      <SelectTrigger
-                        id={id}
-                        aria-describedby={describedBy}
-                        aria-invalid={invalid}
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="auto">
-                          Auto (WebP when possible)
-                        </SelectItem>
-                        <SelectItem value="webp">WebP</SelectItem>
-                        <SelectItem value="jpeg">JPEG</SelectItem>
-                        <SelectItem value="png">PNG</SelectItem>
-                        <SelectItem value="avif">AVIF</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
-                </FieldShell>
-              )}
-            />
+                      value={field.value ?? ""}
+                      onChange={e => {
+                        const v = e.target.value;
+                        field.onChange(v === "" ? null : Number(v));
+                      }}
+                      onBlur={field.onBlur}
+                      name={field.name}
+                      ref={field.ref}
+                    />
+                  </FieldShell>
+                )}
+              />
+            </Grid>
+          </div>
 
-            {/* Quality */}
-            <FormField
-              control={form.control}
-              name="quality"
-              render={({ field, fieldState }) => (
-                <FieldShell
-                  label="Quality"
-                  description="Compression quality (1–100). Higher values produce larger but better-looking files."
-                  error={fieldState.error?.message}
-                >
-                  <Input
-                    type="number"
-                    min={1}
-                    max={100}
+          {/* Fit / Resize Mode */}
+          <FormField
+            control={form.control}
+            name="fit"
+            render={({ field, fieldState }) => (
+              <FieldShell
+                label="Resize Mode"
+                description="How the image is resized to fit the target dimensions."
+                error={fieldState.error?.message}
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Select
+                    value={field.value}
+                    onValueChange={field.onChange}
                     disabled={isPending}
-                    value={field.value ?? ""}
-                    onChange={e => {
-                      const v = e.target.value;
-                      field.onChange(v === "" ? 0 : Number(v));
-                    }}
-                    onBlur={field.onBlur}
-                    name={field.name}
-                    ref={field.ref}
-                  />
-                </FieldShell>
-              )}
-            />
-          </SettingsSection>
+                  >
+                    <SelectTrigger
+                      id={id}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inside">
+                        Fit (shrink to fit, no cropping)
+                      </SelectItem>
+                      <SelectItem value="cover">
+                        Cover (crop to fill exact size)
+                      </SelectItem>
+                      <SelectItem value="contain">
+                        Contain (fit with padding)
+                      </SelectItem>
+                      <SelectItem value="fill">
+                        Stretch (may distort)
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </FieldShell>
+            )}
+          />
 
-          <FormActions dirty={form.formState.isDirty}>
-            <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
-              <Button type="button" variant="outline" disabled={isPending}>
-                Cancel
-              </Button>
-            </Link>
-            <Button type="submit" disabled={isPending}>
-              {isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  {isEdit ? "Updating..." : "Creating..."}
-                </>
-              ) : isEdit ? (
-                "Update Image Size"
-              ) : (
-                "Create Image Size"
-              )}
+          {/* Format */}
+          <FormField
+            control={form.control}
+            name="format"
+            render={({ field, fieldState }) => (
+              <FieldShell
+                label="Format"
+                description="Output format for the generated image."
+                error={fieldState.error?.message}
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Select
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    disabled={isPending}
+                  >
+                    <SelectTrigger
+                      id={id}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">
+                        Auto (WebP when possible)
+                      </SelectItem>
+                      <SelectItem value="webp">WebP</SelectItem>
+                      <SelectItem value="jpeg">JPEG</SelectItem>
+                      <SelectItem value="png">PNG</SelectItem>
+                      <SelectItem value="avif">AVIF</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </FieldShell>
+            )}
+          />
+
+          {/* Quality */}
+          <FormField
+            control={form.control}
+            name="quality"
+            render={({ field, fieldState }) => (
+              <FieldShell
+                label="Quality"
+                description="Compression quality (1–100). Higher values produce larger but better-looking files."
+                error={fieldState.error?.message}
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  disabled={isPending}
+                  value={field.value ?? ""}
+                  onChange={e => {
+                    const v = e.target.value;
+                    field.onChange(v === "" ? 0 : Number(v));
+                  }}
+                  onBlur={field.onBlur}
+                  name={field.name}
+                  ref={field.ref}
+                />
+              </FieldShell>
+            )}
+          />
+        </SettingsSection>
+
+        <FormActions dirty={form.formState.isDirty}>
+          <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
+            <Button type="button" variant="outline" disabled={isPending}>
+              Cancel
             </Button>
-          </FormActions>
-        </form>
-      </FormLayout>
+          </Link>
+          <Button type="submit" disabled={isPending}>
+            {isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {isEdit ? "Updating..." : "Creating..."}
+              </>
+            ) : isEdit ? (
+              "Update Image Size"
+            ) : (
+              "Create Image Size"
+            )}
+          </Button>
+        </FormActions>
+      </form>
     </Form>
   );
 }

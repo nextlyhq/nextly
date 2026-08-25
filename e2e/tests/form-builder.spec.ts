@@ -77,7 +77,7 @@ test("builds a form with catalog fields, keyboard reorder, and a guarded delete"
   await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
 });
 
-test("seeds a default notification, edits it in the sheet, and guards referenced fields", async ({
+test("seeds a default notification, edits it in place, and guards referenced fields", async ({
   page,
 }) => {
   await gotoAdmin(page, "/collections/forms/create");
@@ -98,27 +98,36 @@ test("seeds a default notification, edits it in the sheet, and guards referenced
   await expect(page.getByText("Admin notification")).toBeVisible();
   await expect(page.getByText("No template — will not send")).toBeVisible();
 
-  // Edit in the sheet: recipient, visitor reply-to, and a send condition.
-  await page
-    .getByRole("button", { name: "Edit notification Admin notification" })
-    .click();
-  const sheet = page.getByRole("dialog");
-  await sheet
+  // Edit in place: the row expands into an editor on the page, not a panel
+  // over it. Scoped to that region rather than to the page so a control with
+  // the same name elsewhere cannot satisfy these steps.
+  const toggle = page.getByRole("button", {
+    name: "Edit notification Admin notification",
+  });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+  // There is no overlay. A `getByRole("dialog")` here would have found the
+  // sheet this replaced, which is how this test failed when it moved.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  const editor = page.locator('[id^="notification-editor-"]');
+  await editor
     .getByRole("textbox", { name: "Recipient address" })
     .fill("team@example.com");
 
-  await sheet.getByLabel("Reply-To").click();
+  await editor.getByLabel("Reply-To").click();
   await page.getByRole("option", { name: "The visitor (email field)" }).click();
-  await sheet.getByLabel("Visitor email field").click();
+  await editor.getByLabel("Visitor email field").click();
   await page.getByRole("option", { name: "Email" }).click();
 
-  await sheet.getByRole("button", { name: "Add condition" }).click();
-  await sheet.getByLabel("Comparison").click();
+  await editor.getByRole("button", { name: "Add condition" }).click();
+  await editor.getByLabel("Comparison").click();
   await page.getByRole("option", { name: "Is not empty" }).click();
 
-  await sheet.getByRole("button", { name: "Save changes" }).click();
-
-  // The card now shows the condition badge and the recipient summary.
+  // No save press: the editor writes through to the form as it is typed, and
+  // the page's own action bar is the only commit. The summary above proves it
+  // — it is driven by the same state the editor is writing.
   await expect(page.getByText("Conditional")).toBeVisible();
   await expect(page.getByText("To team@example.com")).toBeVisible();
 

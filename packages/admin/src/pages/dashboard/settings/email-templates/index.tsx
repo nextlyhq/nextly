@@ -509,8 +509,11 @@ function EmailTemplateTable() {
 const EmailTemplatesPage: React.FC = () => {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      <PageContainer width="wide">
         <SettingsLayout
+          title="Email Templates"
+          description="Manage and customize system email content"
+          crumb="Email Templates"
           actions={
             <Button
               onClick={() => navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE)}

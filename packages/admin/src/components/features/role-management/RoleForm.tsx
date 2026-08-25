@@ -4,7 +4,6 @@ import {
   AlertTitle,
   Button,
   FormActions,
-  FormLayout,
 } from "@nextlyhq/ui";
 import { FormProvider } from "react-hook-form";
 
@@ -55,7 +54,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
   } = useRoleForm(roleId);
 
   return (
-    <FormLayout>
+    <>
       {/* Error Alert */}
       {error && (
         <Alert variant="destructive" className="mb-6">
@@ -104,9 +103,16 @@ export function RoleForm({ roleId }: RoleFormProps) {
             aria-labelledby="role-form-title"
             noValidate
           >
-            {/* Top section: Role Details (full width) */}
+            {/* Top section: Role Details (full width).
+
+                Neither this wrapper nor the Permissions one below pads itself
+                vertically. `SettingsSection` applies the rhythm to every direct
+                child through `--nx-field-gap`, and the two paddings are
+                additive, so a wrapper that restored its own would render at
+                double the gap on exactly the sections that already looked
+                correct. */}
             <SettingsSection label="Role Details">
-              <div className="flex flex-col gap-6 py-5">
+              <div className="flex flex-col gap-6">
                 <RoleBasicInfo
                   form={form}
                   isEditMode={isEditMode}
@@ -130,7 +136,7 @@ export function RoleForm({ roleId }: RoleFormProps) {
 
             {/* Bottom section: Permissions (full width) */}
             <SettingsSection label="Permissions">
-              <div className="py-5 -mx-6">
+              <div className="-mx-6">
                 <p className="px-6 text-sm text-muted-foreground mb-4">
                   Choose what this role can do. Each tab groups a kind of
                   resource, and each column is an action it allows.
@@ -175,6 +181,6 @@ export function RoleForm({ roleId }: RoleFormProps) {
           </form>
         </FormProvider>
       )}
-    </FormLayout>
+    </>
   );
 }

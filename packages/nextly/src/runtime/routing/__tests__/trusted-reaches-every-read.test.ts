@@ -40,10 +40,18 @@ function reads(file: string): { issued: number; bounded: number } {
   const text = source(file);
   return {
     issued: [...text.matchAll(/\.(find|findByID)\(\{/g)].length,
-    // The pass-through form only. A `trusted?:` in a doc block or an
-    // interface is a declaration, not a read carrying the bound.
-    bounded: [...text.matchAll(/^\s*(trusted|trustedCollections)[,:][^?]*$/gm)]
-      .length,
+    // The pass-through form only: a property being SET inside an object
+    // literal, which is what carrying the bound into a read looks like.
+    //
+    // Keyed on the trailing comma rather than on the absence of `?`. Optionality
+    // stopped separating the two the moment a declaration became REQUIRED — a
+    // union arm that obliges a trusted caller to state its bound reads as
+    // `trustedCollections: ...;` with no `?` anywhere, and the older form
+    // counted it as a read. A literal's property ends in `,`; a type member ends
+    // in `;`, and that distinction does not depend on how the type is written.
+    bounded: [
+      ...text.matchAll(/^\s*(trusted|trustedCollections)(?::[^?;]*)?,\s*$/gm),
+    ].length,
   };
 }
 

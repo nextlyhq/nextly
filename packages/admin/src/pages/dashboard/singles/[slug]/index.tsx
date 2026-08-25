@@ -23,6 +23,7 @@ import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
+import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
@@ -56,15 +57,20 @@ interface SingleEditPageProps {
  */
 function SingleEditPageSkeleton() {
   return (
-    <PageContainer>
+    <PageContainer width="form">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading...
       </div>
 
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-m-8">
+      {/* Cancels the page's vertical inset only. The horizontal half would
+          pull this skeleton past the measured column, and the editor that
+          replaces it would then jump 64px narrower. */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
         {/* Main Content */}
-        <div className="flex-1 space-y-6 lg:p-8 pt-6">
+        {/* `min-w-0` as the editor that replaces this carries it: without it
+            this pane will not shrink and pushes the rail past the column. */}
+        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />
@@ -204,10 +210,24 @@ export default function SingleEditPage({
   const isLoading = isLoadingSchema || isLoadingDocument;
   const error = schemaError || documentError;
 
+  /**
+   * The page's measure, on every branch.
+   *
+   * `form` because a Single is a labelled form, and because it now shares the
+   * translation pane with entries: the pane stops padding where the editor goes
+   * edge-to-edge, so a Single rendering into an UNMEASURED page would be the
+   * one consumer still expecting that padding to be there.
+   *
+   * Every branch carries it — loading, each error state, and the editor —
+   * because they are the SAME page at different moments. Measuring only the
+   * editor would leave the skeleton full-width and reflow the page the instant
+   * data arrived.
+   */
+
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             No Single was specified in the URL.
@@ -230,7 +250,7 @@ export default function SingleEditPage({
   // Error state
   if (error) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load Single:{" "}
@@ -249,7 +269,7 @@ export default function SingleEditPage({
   // Schema not found
   if (!schema) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Single &quot;{slug}&quot; not found.
@@ -267,7 +287,7 @@ export default function SingleEditPage({
   // Document not found (should auto-create, but handle edge case)
   if (!document) {
     return (
-      <PageContainer>
+      <PageContainer width="form">
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load document data for Single &quot;{slug}&quot;.
@@ -304,7 +324,12 @@ export default function SingleEditPage({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
+      {/* Through the shared frame rather than a bare container: translation
+          mode asks to suppress `pageFrame` from inside the form, and only this
+          component reacts to that. A page that declared its own measure here
+          would keep the two-pane translation surface inside a 56rem column
+          while the entry editor beside it took the whole panel. */}
+      <MeasuredPageFrame>
         <SingleForm
           // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
           // expects FieldConfig[] (discriminated). The runtime payload is the
@@ -331,7 +356,7 @@ export default function SingleEditPage({
           // via the consolidated dropdown in the system header.
           onViewApi={() => navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))}
         />
-      </PageContainer>
+      </MeasuredPageFrame>
     </QueryErrorBoundary>
   );
 }

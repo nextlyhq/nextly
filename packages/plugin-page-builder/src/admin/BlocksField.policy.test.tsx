@@ -26,7 +26,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const seen: {
   inspector: Record<string, unknown> | undefined;
   canvas: Record<string, unknown> | undefined;
-} = { inspector: undefined, canvas: undefined };
+  breakpoints: Record<string, unknown> | undefined;
+} = { inspector: undefined, canvas: undefined, breakpoints: undefined };
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
@@ -69,16 +70,25 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     // would leave the canvas unrendered and its assertion passing on absence.
     BuilderShell: ({
       inspector,
+      topBar,
       children,
     }: {
       inspector: React.ReactNode;
+      topBar?: React.ReactNode;
       children?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
+        {/*
+         * The top bar is rendered for the same reason the children are: the
+         * breakpoint manager lives there, and a stub that dropped the slot
+         * would leave its assertions passing on absence.
+         */}
+        {topBar}
         {inspector}
         {children}
       </div>
     ),
+    BreakpointManager: record("breakpoints"),
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
     BlockKeyboardActions: passthrough,
@@ -119,6 +129,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // `null` is a real answer the pill handles — "no status has been persisted",
+  // which is what a create form and a preview both look like — so this mounts
+  // the top bar without putting a second subject in the assertions below.
+  useDocumentStatus: () => null,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the
   // merge of stored over defaults is `site-style-client`'s own question and has
@@ -151,6 +165,7 @@ function openEditor(): void {
 beforeEach(() => {
   seen.inspector = undefined;
   seen.canvas = undefined;
+  seen.breakpoints = undefined;
   clientConfig = undefined;
   siteStyleRead = { data: undefined, isPending: false, error: null };
 });
@@ -358,5 +373,250 @@ describe("the shell mock keeps up with the shell", () => {
     ]) {
       expect(shell[name], name).toBeDefined();
     }
+  });
+});
+
+describe("the shell mock", () => {
+  it("carries exports this file never named, so a new one cannot break it here", () => {
+    // The property the spread exists for, asserted directly rather than left to
+    // be noticed the next time it fails.
+    //
+    // Named exports are checked rather than a count, because a count agrees with
+    // any list of the same size: a spread that dropped `StyleInspectorPanel` and
+    // gained something else would match a total and still break the import this
+    // is protecting. `StyleInspectorPanel` is named first for being the likeliest
+    // next import — it is the surface a per-control provenance badge lives on.
+    return import("@nextlyhq/builder/shell").then(shell => {
+      for (const name of [
+        "StyleInspectorPanel",
+        "useShellIsActive",
+        "MAX_HISTORY",
+        "CANVAS_ROOT_CLASS",
+      ]) {
+        expect(shell, name).toHaveProperty(name);
+      }
+    });
+  });
+
+  it("still overrides the surfaces it records, so the spread did not undo them", () => {
+    // The other half, and the reason a spread cannot simply be trusted: it
+    // brings the REAL components with it, and an override that stopped winning
+    // would leave these tests rendering the live inspector while every
+    // assertion above went on reading a `seen` nothing writes to any more.
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.canvas).toBeDefined();
+  });
+});
+
+describe("what the breakpoint manager is told", () => {
+  it("is NOT ready while the stored style is still arriving", () => {
+    /*
+     * The same gate the canvas and the cascade are held behind, and the one
+     * whose failure is a write rather than a wrong pixel. Until the read
+     * answers, the value handed to the manager is the host's CONFIG DEFAULTS —
+     * so an author who opened the dialog then would edit a set the site never
+     * chose, and saving it would overwrite the site's real breakpoints with
+     * defaults they never saw.
+     */
+    siteStyleRead = { data: undefined, isPending: true, error: null };
+
+    openEditor();
+
+    expect(seen.breakpoints).toBeDefined();
+    expect(seen.breakpoints?.status).toBe("loading");
+  });
+
+  it("is NOT ready after a FAILED read, which is not a passing state", () => {
+    /*
+     * The half a `pending` check alone gets wrong: on failure `pending` goes
+     * false while the value falls back to defaults, so gating on pending alone
+     * would arm the manager over a tier nobody has read.
+     */
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("nope"),
+    };
+
+    openEditor();
+
+    // Named as the FAILURE it is, not as loading: told "still loading" after a
+    // permission denial, an author waits for a request that already finished.
+    expect(seen.breakpoints?.status).toBe("unavailable");
+  });
+
+  it("IS ready once the read has answered, which is the control", () => {
+    /*
+     * Without this, a manager that was never ready would satisfy both cases
+     * above and the feature would be permanently unreachable rather than
+     * gated — which is exactly what shipped once before on this surface, when
+     * an `!== undefined` test against an `Error | null` was true on success too.
+     */
+    openEditor();
+
+    expect(seen.breakpoints?.status).toBe("ready");
+  });
+
+  it("refuses an empty set while the host config states breakpoints", async () => {
+    /*
+     * `resolveSiteStyle` decides "was anything stored" with `hasBreakpoints`,
+     * which is `viewport.length > 0 || container.length > 0`. So writing an
+     * empty set succeeds, reads back as NOTHING STORED, and the config defaults
+     * return — the author removes every row, is told it saved, and watches them
+     * reappear.
+     *
+     * Refused with a reason rather than reported as saved. Representing
+     * "explicitly none" would take a stored-format change, which is not a
+     * decision this callback makes silently.
+     */
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+    };
+
+    openEditor();
+
+    const onSave = seen.breakpoints?.onSave as (
+      next: unknown
+    ) => Promise<string | undefined>;
+    expect(onSave).toBeDefined();
+
+    const refusal = await onSave({ viewport: [], container: [] });
+
+    expect(refusal).toBeDefined();
+    expect(refusal).toContain("configuration");
+  });
+
+  it("does not count a config base row as a configured breakpoint", async () => {
+    /*
+     * A config carrying only the built-in `{ id: "base" }` row states no
+     * authored breakpoint. Counted, it refuses the one save that returns such a
+     * site to its base-only state — and tells the author to remove a config row
+     * the manager deliberately hides as built in, so the instruction cannot be
+     * followed from any screen they can reach.
+     */
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "base", label: "Base" }],
+          container: [],
+        },
+      },
+    };
+
+    openEditor();
+
+    const onSave = seen.breakpoints?.onSave as (
+      next: unknown
+    ) => Promise<string | undefined>;
+    expect(onSave).toBeDefined();
+
+    await expect(
+      onSave({ viewport: [], container: [] })
+    ).resolves.toBeUndefined();
+  });
+
+  it("saves a NON-empty set, which is the control", async () => {
+    // Without this, a callback that refused everything would satisfy the case
+    // above and no breakpoint could ever be written.
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+    };
+
+    openEditor();
+
+    const onSave = seen.breakpoints?.onSave as (
+      next: unknown
+    ) => Promise<string | undefined>;
+
+    await expect(
+      onSave({
+        viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+        container: [],
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("is given the SAME breakpoints the canvas renders against", () => {
+    /*
+     * One derivation, not two. The manager edits the set the cascade was
+     * compiled with, so a second call to `siteBreakpoints` beside the canvas's
+     * would let the dialog show and save a set the page was never drawn with.
+     */
+    openEditor();
+
+    expect(seen.breakpoints?.value).toBe(
+      (seen.canvas?.render as { styleContext?: { breakpoints?: unknown } })
+        ?.styleContext?.breakpoints
+    );
+  });
+});
+
+describe("what the inspector is told about provenance", () => {
+  it("withholds the trace while the stored style is still arriving", () => {
+    /*
+     * The same reason the canvas is held back, one surface over. While the read
+     * is pending `useSiteStyle` answers with the host's config defaults, so a
+     * cascade compiled from it is not the page's: a class the site adds is
+     * missing and one it overrides is wrong. The dots would say where a value
+     * came from, confidently and incorrectly, and then change under the author.
+     */
+    siteStyleRead = { data: undefined, isPending: true, error: null };
+
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.cascade).toBeUndefined();
+  });
+
+  it("withholds it after a FAILED read, which is not a passing state", () => {
+    /*
+     * The half that a `pending` check alone gets wrong. On failure `pending`
+     * goes false while the value falls back to the defaults, so the inspector
+     * would become permanently certain about a tier nobody has read.
+     */
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("nope"),
+    };
+
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.cascade).toBeUndefined();
+  });
+
+  it("passes a trace once the read has ANSWERED", () => {
+    /*
+     * The control, and it is the most load-bearing assertion in this file.
+     *
+     * Without it the two withholding tests above are satisfied by a gate that
+     * withholds ALWAYS — which is exactly what shipped: `useSiteStyle` types
+     * `error` as `Error | null` and normalises success to `null`, so a
+     * `!== undefined` test was true on every render and no provenance dot ever
+     * appeared anywhere.
+     *
+     * I wrote this control, watched it fail, and removed it on the reasoning
+     * that the harness could not produce a trace — the registry is real and
+     * empty, so nothing compiles. That reasoning was available, plausible, and
+     * not the cause. A red test explained away is the same error as a green one
+     * taken at face value, and this is the shape it takes.
+     */
+    openEditor();
+
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector?.cascade).toBeDefined();
   });
 });

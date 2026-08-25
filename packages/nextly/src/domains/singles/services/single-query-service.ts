@@ -57,6 +57,12 @@ import {
   applyMediaTrustBound,
   expansionAccess,
 } from "../../../services/collections/trust-bound";
+import type { TrustBound } from "../../../services/collections/trust-grant";
+import {
+  TRUSTS_EVERY_COLLECTION,
+  assumedBound,
+  narrows,
+} from "../../../services/collections/trust-grant";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -486,7 +492,7 @@ export async function checkSingleAccess(params: {
    * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
    * can only ever narrow. See {@link RelatedRowReadContext.trusted}.
    */
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
   routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
   // The caller's authenticated scope. A scoped API key is judged on its OWN
@@ -992,6 +998,10 @@ export class SingleQueryService extends BaseService {
       options.depth,
       {
         enforceFieldAccess: enforceRelatedFieldAccess,
+        // Beside the flag, never folded into `user`: a preview judges a related
+        // row's fields as the sharer while every hook goes on seeing the
+        // anonymous visitor who is actually asking.
+        fieldAccessUser: options.fieldAccessUser,
         // Always on, unlike field redaction: the authorization view must not be
         // shown a related row the response is going to withhold, or its rule
         // approves the document and the read's side effects run before the
@@ -1001,7 +1011,7 @@ export class SingleQueryService extends BaseService {
         overrideAccess: options.overrideAccess,
         // Narrows that bypass per RELATED collection. Absent means unchanged;
         // dropping it here would silently restore the full bypass.
-        trusted: options.trusted,
+        trusted: assumedBound(options.trusted),
         authenticatedScope: options.authenticatedScope,
         // Collects the references a target collection refused, so the
         // completeness check below reads them as absent on purpose.
@@ -1014,7 +1024,7 @@ export class SingleQueryService extends BaseService {
         status: expansionStatusScope({
           status: options.status,
           overrideAccess: options.overrideAccess,
-          bounded: options.trusted !== undefined,
+          bounded: narrows(options.trusted),
         }),
       },
       strict,
@@ -1064,12 +1074,16 @@ export class SingleQueryService extends BaseService {
           // caller travels down to reach the related row's own rules.
           access: {
             enforceFieldAccess: enforceRelatedFieldAccess,
+            // Beside the flag, never folded into `user`: a preview judges a related
+            // row's fields as the sharer while every hook goes on seeing the
+            // anonymous visitor who is actually asking.
+            fieldAccessUser: options.fieldAccessUser,
             enforceCollectionAccess: true,
             user: options.user as Record<string, unknown> | undefined,
             overrideAccess: options.overrideAccess,
             // Narrows that bypass per RELATED collection. Absent means unchanged;
             // dropping it here would silently restore the full bypass.
-            trusted: options.trusted,
+            trusted: assumedBound(options.trusted),
             // A relationship inside a component is populated by the same
             // service, so a refusal there has to reach the completeness check
             // too, and the rows of one population share a policy cache.
@@ -1081,7 +1095,7 @@ export class SingleQueryService extends BaseService {
             status: expansionStatusScope({
               status: options.status,
               overrideAccess: options.overrideAccess,
-              bounded: options.trusted !== undefined,
+              bounded: narrows(options.trusted),
             }),
           },
           // Read errors otherwise become empty component values, which reads to a
@@ -1947,12 +1961,20 @@ export class SingleQueryService extends BaseService {
       // field see that field absent — the same "missing means allowed" reading
       // that admits a caller the rule exists to refuse. Access decides on the
       // document as assembled; the response is narrowed once it is decided.
+      // Document trust and FIELD trust are separate questions and this read may
+      // answer them differently. `overrideAccess` alone means both; a caller
+      // that asked for field rules to be enforced keeps its document bypass and
+      // gives up only the field one. Mirrors the collection read path.
       await applyFieldReadAccess({
         kind: "single",
         slug,
         entry: doc,
-        user: options.user,
-        overrideAccess: options.overrideAccess,
+        // The field-access identity, never the hook one. A preview judges these
+        // fields as the sharer while the hooks above go on seeing the anonymous
+        // bearer who is actually asking.
+        user: options.fieldAccessUser ?? options.user,
+        overrideAccess:
+          options.enforceFieldAccess === true ? false : options.overrideAccess,
       });
 
       // Defense in depth, after every user callback on this document: hooks,
@@ -2712,7 +2734,7 @@ export class SingleQueryService extends BaseService {
     // collection's fields. Enforcement is opt-in because a caller that has not
     // supplied a user is indistinguishable from an anonymous one here, and
     // enforcing for the former strips protected fields from everybody.
-    access: RelatedRowReadContext = { trusted: undefined },
+    access: RelatedRowReadContext = { trusted: TRUSTS_EVERY_COLLECTION },
     /**
      * Propagate expansion failures instead of returning the document
      * unexpanded. A response is better served incomplete than not at all, but a
@@ -2764,6 +2786,11 @@ export class SingleQueryService extends BaseService {
           enforceFieldAccess: access.enforceFieldAccess,
           enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
+          // Beside `user`, never folded into it. Dropped here, every top-level
+          // relationship — live and working-draft alike — is judged as the
+          // anonymous bearer while the document above it is judged as the
+          // sharer, which is the disclosure the identity exists to close.
+          fieldAccessUser: access.fieldAccessUser,
           overrideAccess: access.overrideAccess,
           // Narrows that bypass per RELATED collection. Absent means unchanged;
           // dropping it here would silently restore the full bypass.

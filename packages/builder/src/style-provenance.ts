@@ -159,6 +159,37 @@ function normalizeDescendant(value: string | undefined): string {
 }
 
 /**
+ * Whether a PAGE declaration lands on this block at all.
+ *
+ * `styleOrigin` treats every page-origin entry as reaching every subject, which
+ * is right for the question it answers and wrong for this one. The page's own
+ * settings compile onto the page ROOT, so a non-inherited property written there
+ * — padding, width, a background colour — styles that root element and nothing
+ * inside it. Reported unfiltered, a block control shows "Inherited from the
+ * page" for a value the browser is not applying to it.
+ *
+ * A page entry carrying a DESCENDANT selector is the case that genuinely
+ * reaches: `.page a` styles the links inside, this block's included, which is
+ * the same rule `reachesThroughAncestor` applies to an ancestor's declarations.
+ *
+ * **What this deliberately gives up.** A property that truly inherits — `color`,
+ * the font properties — set on the page IS visibly active on this block, and
+ * that case is now reported as unset rather than as coming from the page.
+ * Separating it needs to know which properties inherit, which the catalog does
+ * not declare; this module's own `unset` docblock already states that limit for
+ * an ancestor's declarations and says the knowledge belongs to the engine that
+ * owns the cascade. Answering the two cases differently here would be a second,
+ * partial model of CSS inheritance in the layer that reads the output.
+ *
+ * Quiet where it cannot tell, rather than confidently wrong, which is the same
+ * judgement `ambiguous` makes one level up.
+ */
+function landsOnTheBlock(entry: StyleTraceEntry): boolean {
+  if (entry.origin.kind !== "page") return true;
+  return normalizeDescendant(entry.descendant) !== "";
+}
+
+/**
  * Whether a recorded declaration reaches the element this control addresses.
  *
  * Exact equality is too narrow, because a descendant selector carries the
@@ -186,7 +217,7 @@ function reachesControl(entry: string, query: string): boolean {
  * Derived from the catalog rather than listed, so a property added there is
  * covered without an edit here.
  */
-function propertiesWriting(
+export function propertiesWriting(
   cssProperty: string,
   descendant: string | undefined
 ): string[] {
@@ -218,15 +249,47 @@ function lastWritten(
 ): StyleTraceEntry | undefined {
   let best: StyleTraceEntry | undefined;
   let bestIndex = -1;
+  let bestSpecificity = -1;
   for (const winner of winners) {
     if (winner === undefined) continue;
     const index = trace.indexOf(winner);
-    if (best === undefined || index > bestIndex) {
+    const specificity = pseudoClassesIn(winner.descendant);
+    /*
+     * SPECIFICITY before source order, which is the order the cascade itself
+     * applies them in — and `styleOrigin` already ranks this way WITHIN a state.
+     * Across states it cannot, because it is asked once per state and each
+     * answer is a separate winner, so the comparison lands here.
+     *
+     * Position alone is wrong wherever the states disagree on specificity. A
+     * state's rules are wrapped in `:where()`, which contributes NOTHING, so an
+     * earlier `.card a:hover` outranks a later `:where(:hover) a` however far
+     * apart they were emitted — and picking the later one names a declaration
+     * the browser is not showing.
+     */
+    if (
+      best === undefined ||
+      specificity > bestSpecificity ||
+      (specificity === bestSpecificity && index > bestIndex)
+    ) {
       best = winner;
       bestIndex = index;
+      bestSpecificity = specificity;
     }
   }
   return best;
+}
+
+/**
+ * How many pseudo-classes a descendant selector carries.
+ *
+ * The same count `styleOrigin` uses for its own ranking, which is the point: two
+ * different ideas of what makes one selector beat another would disagree exactly
+ * where the answer is hard, and this comparison exists only to extend that
+ * ranking across the states it is asked about separately.
+ */
+function pseudoClassesIn(descendant: string | undefined): number {
+  if (descendant === undefined) return 0;
+  return descendant.split(":").length - 1;
 }
 
 /** Whether an entry is this node's own value at the position being edited. */
@@ -262,8 +325,10 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   // this only removes the declarations that belong to a different control, so
   // nothing here re-implements tier order, breakpoint axes or specificity.
   const wanted = normalizeDescendant(query.descendant);
-  const candidates = query.trace.filter(entry =>
-    reachesControl(normalizeDescendant(entry.descendant), wanted)
+  const candidates = query.trace.filter(
+    entry =>
+      reachesControl(normalizeDescendant(entry.descendant), wanted) &&
+      landsOnTheBlock(entry)
   );
   const ask = (state: StyleState): StyleTraceEntry | undefined =>
     styleOrigin(candidates, query.subject, {
@@ -284,9 +349,19 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   // the cascade is settling — rather than by a second idea of tier order.
   // Every state matching right now, base included: base always matches, and the
   // state being edited is the one the canvas is simulating.
+  /*
+   * A SUPPLIED set is authoritative. The field's own contract says omitting it
+   * means the edited state plus base — so adding the edited state back when a
+   * caller did state one contradicts the answer they gave: a canvas simulating
+   * only `base` while the panel edits `hover` would have a hover declaration
+   * reported as the visible winner, which is exactly the case the field exists
+   * to let a host rule out.
+   *
+   * `base` is added either way because base rules are not state-gated and match
+   * whatever else is.
+   */
   const live = new Set<StyleState>([
-    ...(query.liveStates ?? []),
-    query.state,
+    ...(query.liveStates ?? [query.state]),
     "base",
   ]);
   const winner = lastWritten(

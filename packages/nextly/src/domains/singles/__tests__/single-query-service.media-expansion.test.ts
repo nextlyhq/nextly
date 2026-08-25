@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getDialectTables } from "../../../database";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { SingleQueryService } from "../services/single-query-service";
+import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 
 /**
  * These cover media expansion itself, not the trust bound, so they read as a
@@ -21,7 +22,7 @@ import { SingleQueryService } from "../services/single-query-service";
  * required precisely because "no bound" and "forgot the caller" want opposite
  * outcomes and look identical when omitted.
  */
-const UNBOUNDED = { trusted: undefined } as const;
+const UNBOUNDED = { trusted: TRUSTS_EVERY_COLLECTION } as const;
 
 // absolutizeMediaUrls resolves the app base URL through the validated env,
 // which unit tests don't populate; pin it like media-variant.test.ts does.

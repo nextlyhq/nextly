@@ -30,6 +30,19 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
  * `MAX_ATTEMPT_LOG` cap in the webhook deliver pipeline). Mirrored here so the
  * timeline can say so when the log is full and older attempts are truncated.
  */
+
+/**
+ * This page renders the settings chrome in several branches — loading,
+ * error and the resolved document — and its identity is the same in all of
+ * them. Stated once here so the branches cannot drift apart.
+ */
+const DELIVERIES_PAGE = {
+  title: "Deliveries",
+  description:
+    "Delivery attempts for this endpoint, with response status and retries",
+  crumb: "Deliveries",
+  parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
+} as const;
 const ATTEMPT_LOG_LIMIT = 20;
 
 /** One read-only label/value row in a metadata card. */
@@ -279,8 +292,8 @@ export default function WebhookDeliveryDetailPage() {
 
   if (!id || !deliveryId) {
     return (
-      <PageContainer>
-        <SettingsLayout>
+      <PageContainer width="wide">
+        <SettingsLayout {...DELIVERIES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
               Invalid delivery reference. Please go back and try again.
@@ -298,8 +311,8 @@ export default function WebhookDeliveryDetailPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
-        <SettingsLayout>
+      <PageContainer width="wide">
+        <SettingsLayout {...DELIVERIES_PAGE}>
           <DeliveryDetailContent webhookId={id} deliveryId={deliveryId} />
         </SettingsLayout>
       </PageContainer>

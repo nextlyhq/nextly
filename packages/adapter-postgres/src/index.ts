@@ -77,12 +77,7 @@ import type {
   TransactionContext,
   TransactionOptions,
   SqlParam,
-  SelectOptions,
   InsertOptions,
-  UpdateOptions,
-  DeleteOptions,
-  UpsertOptions,
-  WhereClause,
   DatabaseError,
   DatabaseErrorKind,
 } from "@nextlyhq/adapter-drizzle/types";
@@ -1073,47 +1068,7 @@ export class PostgresAdapter extends DrizzleAdapter {
         );
       },
 
-      // TransactionContext CRUD methods delegate to the adapter's Drizzle CRUD
-      // but pass the transaction-bound executor so they run inside this
-      // transaction rather than on the pool.
-      select: async <T = unknown>(
-        table: string,
-        options?: SelectOptions
-      ): Promise<T[]> => {
-        return this.select<T>(table, options, txDb());
-      },
-
-      selectOne: async <T = unknown>(
-        table: string,
-        options?: SelectOptions
-      ): Promise<T | null> => {
-        return this.selectOne<T>(table, options, txDb());
-      },
-
-      update: async <T = unknown>(
-        table: string,
-        data: Record<string, unknown>,
-        where: WhereClause,
-        options?: UpdateOptions
-      ): Promise<T[]> => {
-        return this.update<T>(table, data, where, options, txDb());
-      },
-
-      delete: async (
-        table: string,
-        where: WhereClause,
-        options?: DeleteOptions
-      ): Promise<number> => {
-        return this.delete(table, where, options, txDb());
-      },
-
-      upsert: async <T = unknown>(
-        table: string,
-        data: Record<string, unknown>,
-        options: UpsertOptions
-      ): Promise<T> => {
-        return this.upsert<T>(table, data, options, txDb());
-      },
+      ...this.createTransactionForwarders(txDb),
 
       savepoint: async (name: string): Promise<void> => {
         await client.query(`SAVEPOINT ${this.escapeIdentifier(name)}`);
@@ -1128,12 +1083,6 @@ export class PostgresAdapter extends DrizzleAdapter {
       releaseSavepoint: async (name: string): Promise<void> => {
         await client.query(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
       },
-
-      // Expose the transaction-bound Drizzle instance so callers can run
-      // Drizzle sql templates inside this transaction (junction-table writes
-      // need this to be atomic with the entry write). Reuses the memoized
-      // txDb() built for the delegated CRUD methods.
-      getDrizzle: <T = unknown>(): T => txDb() as T,
     };
   }
 
@@ -1144,7 +1093,10 @@ export class PostgresAdapter extends DrizzleAdapter {
    * @param sql - SQL statement that caused the error (optional)
    * @returns DatabaseError with proper classification
    */
-  private classifyError(error: unknown, sql?: string): DatabaseError {
+  protected override classifyError(
+    error: unknown,
+    sql?: string
+  ): DatabaseError {
     // Why short-circuit on existing DatabaseError: F17's
     // UnsupportedDialectVersionError is already a typed DatabaseError with
     // kind: "unsupported_version" plus detectedVersion/requiredVersion
@@ -1184,28 +1136,6 @@ export class PostgresAdapter extends DrizzleAdapter {
       hint: pgError.hint,
       cause: error instanceof Error ? error : undefined,
     });
-  }
-
-  /**
-   * Override handleQueryError to use PostgreSQL-specific classification.
-   */
-  protected override handleQueryError(
-    error: unknown,
-    operation: string,
-    table: string
-  ): DatabaseError {
-    const dbError = this.classifyError(error);
-
-    // Add operation context if not already present
-    if (!dbError.message.includes(operation)) {
-      dbError.message = `${operation} operation failed on table '${table}': ${dbError.message}`;
-    }
-
-    if (!dbError.table) {
-      dbError.table = table;
-    }
-
-    return dbError;
   }
 }
 

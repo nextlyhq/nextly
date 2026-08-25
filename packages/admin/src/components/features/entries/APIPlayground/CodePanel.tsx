@@ -11,18 +11,7 @@
  * @module components/entries/APIPlayground/CodePanel
  */
 
-import {
-  Button,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-  toast,
-} from "@nextlyhq/ui";
-import { useState, useCallback } from "react";
-
-import { Check, Copy } from "@admin/components/icons";
-import { UI } from "@admin/constants/ui";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 
 import type { CodeBlockLanguage } from "./CodeBlock";
 import { CodeBlock } from "./CodeBlock";
@@ -56,26 +45,25 @@ const FLAVOURS: {
 
 export interface CodePanelProps {
   code: CodeSnippets;
+  /**
+   * Which flavour is open.
+   *
+   * Controlled by the response pane rather than held here, because its toolbar
+   * has to copy the snippet being READ. A panel owning this privately meant the
+   * only control that knew which flavour was open was the one that could not
+   * reach the clipboard button.
+   */
+  flavour: keyof CodeSnippets;
+  onFlavourChange: (flavour: keyof CodeSnippets) => void;
 }
 
-export function CodePanel({ code }: CodePanelProps) {
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
-  const copy = useCallback(async (key: string, snippet: string) => {
-    try {
-      await navigator.clipboard.writeText(snippet);
-      setCopiedKey(key);
-      toast.success("Code copied to clipboard");
-      setTimeout(() => setCopiedKey(null), UI.COPY_FEEDBACK_TIMEOUT_MS);
-    } catch {
-      toast.error("Failed to copy code");
-    }
-  }, []);
-
+export function CodePanel({ code, flavour, onFlavourChange }: CodePanelProps) {
   return (
-    // The SDK first: it is the one that belongs in the app being built, and
-    // the default should be the answer rather than the fallback.
-    <Tabs defaultValue="sdk" className="flex h-full min-h-0 flex-col">
+    <Tabs
+      value={flavour}
+      onValueChange={value => onFlavourChange(value as keyof CodeSnippets)}
+      className="flex h-full min-h-0 flex-col"
+    >
       <div className="flex shrink-0 items-center justify-between gap-2 px-6 py-2">
         <TabsList variant="ghost">
           {FLAVOURS.map(f => (
@@ -92,28 +80,14 @@ export function CodePanel({ code }: CodePanelProps) {
           value={f.value}
           className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden"
         >
-          <div className="flex shrink-0 items-center justify-between gap-4 px-6 pb-2">
+          {/* The copy control lives in the pane's toolbar, which now knows
+              which flavour is open. Two buttons a few pixels apart, one of them
+              copying something else, is worse than one. */}
+          <div className="flex shrink-0 items-center gap-4 px-6 pb-2">
             <p className="text-xs text-muted-foreground">{f.hint}</p>
-            {/* One copy button per flavour, so the snippet you are reading is
-                the snippet you get. */}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                void copy(f.value, code[f.value]);
-              }}
-              className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-            >
-              {copiedKey === f.value ? (
-                <Check className="h-3.5 w-3.5 text-success" />
-              ) : (
-                <Copy className="h-3.5 w-3.5" />
-              )}
-              {copiedKey === f.value ? "Copied" : "Copy"}
-            </Button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto border-t border-border bg-background">
+          <div className="min-h-0 flex-1 overflow-auto border-t border-border bg-code-bg">
             <CodeBlock value={code[f.value]} language={f.language} />
           </div>
         </TabsContent>

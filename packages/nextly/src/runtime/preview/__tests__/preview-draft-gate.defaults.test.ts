@@ -20,6 +20,19 @@ let cookieValue: string | undefined;
 // mid-suite, which is the whole point of reading it per request.
 let generation = 1;
 
+// The identity lookup reaches the container and the database; these cases are
+// about the unwired gate's defaults. Who a draft renders as is covered in
+// `preview-identity.test.ts`.
+const resolvePreviewIdentity = vi.hoisted(() => vi.fn());
+vi.mock("../preview-identity", () => ({ resolvePreviewIdentity }));
+
+// The per-render re-authorization. It reaches the container and the database;
+// what it decides is covered in the integration suite, where a real revocation
+// can actually be performed. Here it stands aside so these cases stay about
+// CONFINEMENT — which document a token reaches.
+const assertEntryPreviewable = vi.hoisted(() => vi.fn());
+vi.mock("../../../api/preview-access", () => ({ assertEntryPreviewable }));
+
 vi.mock("../preview-route-defaults", () => ({
   defaultSecret: () => TEST_SECRET,
   defaultGeneration: () => Promise.resolve(generation),
@@ -38,6 +51,7 @@ async function cookieFor(
 ): Promise<void> {
   const { token } = await signPreviewToken(scope, TEST_SECRET, {
     generation: options.generation ?? 1,
+    minter: "minter-1",
     ...(options.ttlSeconds === undefined
       ? {}
       : { ttlSeconds: options.ttlSeconds }),
@@ -49,6 +63,14 @@ describe("previewDraftGate with no arguments", () => {
   beforeEach(() => {
     cookieValue = undefined;
     generation = 1;
+    resolvePreviewIdentity.mockClear();
+    assertEntryPreviewable.mockClear();
+    assertEntryPreviewable.mockResolvedValue(undefined);
+    resolvePreviewIdentity.mockResolvedValue({
+      id: "minter-1",
+      roles: ["editor"],
+      role: "editor",
+    });
   });
 
   it("grants the entry its token names", async () => {
@@ -57,10 +79,26 @@ describe("previewDraftGate with no arguments", () => {
     const gate = previewDraftGate();
 
     await expect(gate({ collection: "pages", slug: "about" })).resolves.toEqual(
-      {
-        entryId: "entry-1",
-      }
+      expect.objectContaining({ entryId: "entry-1" })
     );
+  });
+
+  // The grant carries the identity the draft is READ as, because the row is
+  // read TRUSTED and trust switched field-level read rules off with it. Without
+  // one the page renders every field, including any the sharer cannot see.
+  it("carries the sharer's identity when the token records who shared it", async () => {
+    await cookieFor({ collection: "pages", entryId: "entry-1" });
+
+    const grant = await previewDraftGate()({
+      collection: "pages",
+      slug: "about",
+    });
+
+    expect(resolvePreviewIdentity).toHaveBeenCalledWith("minter-1");
+    expect(grant).toMatchObject({
+      entryId: "entry-1",
+      readAs: { id: "minter-1" },
+    });
   });
 
   it("refuses a request with no preview cookie", async () => {
@@ -93,7 +131,7 @@ describe("previewDraftGate with no arguments", () => {
 
     await expect(
       gate({ collection: "pages", slug: "some-other-page" })
-    ).resolves.toEqual({ entryId: "entry-A" });
+    ).resolves.toEqual(expect.objectContaining({ entryId: "entry-A" }));
   });
 
   it("refuses an expired token", async () => {

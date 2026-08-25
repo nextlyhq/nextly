@@ -146,3 +146,208 @@ describe("the Tailwind v3 preset", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * The component-class selectors `theme.css` declares inside `@layer
+ * components`, read from the stylesheet rather than listed here so the guard
+ * below covers whichever ones exist rather than whichever ones someone
+ * remembered.
+ */
+/**
+ * The class selectors of the rules inside ONE brace-delimited block, given the
+ * index of its opening brace. Nested at-rules count: a rule inside a
+ * `@media` inside the layer is still a component rule.
+ */
+function selectorsInBlock(source: string, open: number): string[] {
+  const found: string[] = [];
+  let depth = 0;
+
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === "}") {
+      depth--;
+      if (depth === 0) break;
+      continue;
+    }
+    if (source[i] !== "{") continue;
+
+    depth++;
+    if (depth < 2) continue;
+
+    // The text between the previous brace and this one is the selector of the
+    // rule being opened. Depth 1 is the block itself; deeper is a rule in it.
+    const head = source.slice(0, i);
+    const from = Math.max(head.lastIndexOf("{"), head.lastIndexOf("}")) + 1;
+    const selector = head.slice(from).trim().replace(/\s+/g, " ");
+    if (selector.startsWith(".")) found.push(selector);
+  }
+
+  return found;
+}
+
+function themeComponentSelectors(css: string): Set<string> {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const selectors = new Set<string>();
+
+  // EVERY component layer, not the first one. A cascade layer may be opened as
+  // many times as its author likes and the declarations accumulate, so a
+  // stylesheet with two `@layer components` blocks is ordinary CSS rather than
+  // a mistake. Reading only the first would leave every selector in the later
+  // ones unguarded while the guard still reported success.
+  for (const layer of source.matchAll(/@layer\s+components\s*\{/g)) {
+    const open = layer.index + layer[0].length - 1;
+    for (const selector of selectorsInBlock(source, open)) {
+      selectors.add(selector);
+    }
+  }
+
+  return selectors;
+}
+
+/**
+ * Every selector the preset registers through a plugin's `addComponents`.
+ *
+ * The preset is read through a widened parameter because it declares no
+ * `plugins` key today, and a property access typed against its literal shape
+ * would not compile. Widening rather than asserting keeps this readable on the
+ * day a plugin IS added — which is the day the guard below has to work.
+ * `theme` is named alongside it only to give the two types a property in
+ * common, without which TypeScript rejects the assignment as a weak-type
+ * mismatch.
+ *
+ * Taking the preset as an argument, defaulted to the real one, is what lets a
+ * fixture exercise THIS function rather than a copy of its branch: a test that
+ * restated the plugin-shape handling inline would pass while the shipped guard
+ * remained blind.
+ */
+function presetComponentSelectors(
+  preset: { theme?: unknown; plugins?: unknown[] } = uiPreset
+): Set<string> {
+  const selectors = new Set<string>();
+  const plugins: unknown[] = preset.plugins ?? [];
+  for (const plugin of plugins) {
+    // Tailwind accepts a plugin in two shapes, and the guard has to see both.
+    // A bare function is one; the `plugin()` helper wraps that function in an
+    // object under a `handler` key so it can carry a `config` alongside, and
+    // that object form is what the documented helper produces. Reading only
+    // the callable form would let the helper's output register anything at all
+    // while this file reported a clean boundary.
+    const run =
+      typeof plugin === "function"
+        ? plugin
+        : typeof plugin === "object" &&
+            plugin !== null &&
+            typeof (plugin as { handler?: unknown }).handler === "function"
+          ? (plugin as { handler: (api: unknown) => void }).handler
+          : undefined;
+    run?.({
+      addComponents: (rules: Record<string, unknown>) => {
+        for (const selector of Object.keys(rules)) selectors.add(selector);
+      },
+      addUtilities: (rules: Record<string, unknown>) => {
+        for (const selector of Object.keys(rules)) selectors.add(selector);
+      },
+      addBase: () => {},
+      addVariant: () => {},
+      theme: () => undefined,
+      config: () => undefined,
+      e: (value: string) => value,
+    });
+  }
+  return selectors;
+}
+
+describe("the boundary between the preset and the stylesheet", () => {
+  it("reads the component layer at all", () => {
+    // The guard below compares against this set, and an empty set exonerates
+    // every possible preset. A renamed layer or a moved stylesheet has to fail
+    // here rather than reporting that nothing is duplicated.
+    const selectors = themeComponentSelectors(themeCss);
+    expect(selectors.has(".nx-page-shell")).toBe(true);
+    expect(selectors.has(".nx-form-section-rows > *")).toBe(true);
+  });
+
+  it("reads rules, not the layer's own opening brace", () => {
+    // Depth is what separates a rule inside the layer from the layer itself,
+    // and a parser that mistook one for the other would collect `@layer
+    // components` as a selector and then agree with any preset at all.
+    const fixture = `
+      /* .nx-decoy in a comment */
+      @layer components {
+        .nx-real { color: red; }
+        @media (min-width: 40rem) {
+          .nx-nested { color: blue; }
+        }
+      }
+      .nx-outside { color: green; }
+    `;
+
+    expect([...themeComponentSelectors(fixture)].sort()).toEqual([
+      ".nx-nested",
+      ".nx-real",
+    ]);
+  });
+
+  it("collects rules from a second component layer", () => {
+    // A layer may be opened more than once and the declarations accumulate, so
+    // a parser that stopped at the first block would leave everything after it
+    // unguarded while still reporting a clean boundary.
+    const fixture = `
+      @layer components {
+        .nx-first { color: red; }
+      }
+      @layer utilities {
+        .nx-not-a-component { color: grey; }
+      }
+      @layer components {
+        .nx-second { color: blue; }
+      }
+    `;
+
+    expect([...themeComponentSelectors(fixture)].sort()).toEqual([
+      ".nx-first",
+      ".nx-second",
+    ]);
+  });
+
+  it("sees a rule registered through a plugin object, not only a bare function", () => {
+    // `plugin()` returns `{ handler, config }` rather than the function itself,
+    // and it is the documented way to write one. A guard blind to that shape
+    // reports a clean boundary for the very form a contributor is most likely
+    // to reach for.
+    type Api = { addComponents: (rules: Record<string, unknown>) => void };
+
+    const found = presetComponentSelectors({
+      plugins: [
+        {
+          handler: ({ addComponents }: Api) =>
+            addComponents({ ".nx-from-object": { color: "red" } }),
+          config: {},
+        },
+        ({ addComponents }: Api) =>
+          addComponents({ ".nx-from-function": { color: "blue" } }),
+      ],
+    });
+
+    expect([...found].sort()).toEqual([".nx-from-function", ".nx-from-object"]);
+  });
+
+  it("registers no rule the stylesheet already declares", () => {
+    // One decision, one implementation. A component rule restated here would
+    // agree with the stylesheet on the day it was written and drift silently
+    // afterwards, because each copy reaches a different consumer and neither
+    // looks wrong on its own. The stylesheet is the implementation; this preset
+    // carries the token contract, and consumers import both.
+    const theme = themeComponentSelectors(themeCss);
+    const duplicated = [...presetComponentSelectors()]
+      .filter(selector => theme.has(selector))
+      .sort();
+
+    expect(
+      duplicated,
+      `These selectors are declared both in theme.css and by this preset, so ` +
+        `a change to either leaves the two build paths rendering ` +
+        `differently. Delete the copy here and let consumers import ` +
+        `theme.css:\n${duplicated.join("\n")}`
+    ).toEqual([]);
+  });
+});

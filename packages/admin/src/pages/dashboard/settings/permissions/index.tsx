@@ -378,8 +378,12 @@ function PermissionsContent() {
 const SettingsPermissionsPage: React.FC = () => {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
-        <SettingsLayout>
+      <PageContainer width="wide">
+        <SettingsLayout
+          title="Permissions"
+          description="Define user roles and access control levels"
+          crumb="Permissions"
+        >
           <PermissionsContent />
         </SettingsLayout>
       </PageContainer>

@@ -20,7 +20,10 @@ import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
 import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
-import { checkSingleAccess } from "../domains/singles";
+import {
+  singleDocumentEditable,
+  singleDocumentReadable,
+} from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
@@ -36,7 +39,6 @@ import type {
   ResolvedVersionsConfig,
   VersionScopeKind,
 } from "../schemas/versions/types";
-import { AccessControlService } from "../services/access/access-control-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 import { applyFieldReadAccess } from "../shared/lib/field-level-registry";
 import { stripPasswordFieldValues } from "../shared/lib/password-fields";
@@ -213,40 +215,19 @@ async function canUpdateLiveSingle(
   user: UserContext,
   authenticatedScope?: AuthenticatedScope
 ): Promise<boolean> {
-  const registry = getService("singleRegistryService");
-  const record = await registry.getSingleBySlug(slug);
-  if (!record?.tableName) return false;
-
   const liveId = await resolveSingleDocumentId(slug);
   if (liveId === null || liveId !== entryId) return false;
 
-  const adapter = getService("adapter");
-  // Loaded because an owner-only rule compares against the stored row, and
-  // `checkSingleAccess` refuses outright when such a rule has no document.
-  const document = await adapter.selectOne<Record<string, unknown>>(
-    record.tableName,
-    {}
-  );
-  if (!document) return false;
-
-  const denied = await checkSingleAccess({
-    slug,
-    operation: "update",
+  // The access evaluation itself is shared with draft preview, which authorizes
+  // the same disclosure for the same reason. Only the identity comparison above
+  // is this gate's own.
+  return singleDocumentEditable(slug, {
     user,
-    overrideAccess: false,
+    // A version-label edit is a route-authorized `update`, so the coarse gate
+    // for the operation being probed here has already run.
     routeAuthorized: true,
-    rbacAccessControlService: getService("rbacAccessControlService"),
-    // Stateless evaluator for the Single's stored rules; it holds no
-    // per-request state, so constructing one here matches the write path.
-    accessControlService: new AccessControlService(),
-    accessRules: record.accessRules,
-    document,
-    // A scoped API key is judged on its own update grant, so a super-admin-owned
-    // key does not skip stored owner/role rules on a version-label edit.
-    authenticatedScope,
-    logger: getService("logger"),
+    ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
   });
-  return denied === null;
 }
 
 /**
@@ -317,17 +298,15 @@ async function canReadLiveSingle(
   const liveId = await resolveSingleDocumentId(slug);
   if (liveId === null || liveId !== entryId) return false;
 
-  const singles = getService("singleEntryService");
-  const result = await singles.get(slug, {
+  // Shared with draft preview for the reason the update gate above gives.
+  return singleDocumentReadable(slug, {
     user,
-    overrideAccess: false,
+    // The version route gates on `read` before reaching here, so the coarse
+    // read check has run and re-running it would reject a scoped API key by
+    // resolving its creator's roles.
     routeAuthorized: true,
-    // A scoped API key is judged on its OWN read grant, mirroring the collection
-    // read gate above.
-    authenticatedScope,
-    status: "all",
+    ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
   });
-  return interpretReadResult(result.success, result.statusCode);
 }
 
 /**

@@ -17,6 +17,16 @@
  * Usage (Tailwind v4 with @config):
  *   Consumers define the equivalent @theme tokens in their CSS.
  *   This file serves as the reference contract.
+ *
+ * Scope: tokens and the utilities derived from them, and nothing else. The
+ * component classes the library writes into its own markup — `.nx-page-shell`,
+ * `.nx-bleed`, `.nx-form-section-rows` — are CSS rules rather than token
+ * mappings, and they ship in `theme.css` for every consumer alike. Restating
+ * one of them here would express a single decision in two places that agree
+ * until one of them is edited, and would still leave the others missing; the
+ * boundary holds for all of them or it holds for none. `theme.css` is
+ * therefore required alongside this preset, not an alternative to it, and
+ * `tailwind-preset.test.ts` fails if a component selector reappears here.
  */
 /**
  * The numbered shade scale for a color, mixed from its base the same way the v4

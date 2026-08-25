@@ -87,7 +87,30 @@ export async function resolvePreviewRedirect(
   // and clicking, and that is a refusal rather than a fault.
   if (entry === null) return null;
 
-  const resolution = resolvePreviewUrl({ preview, entry, siteUrl });
+  return reduceToSitePath({ preview, document: entry, siteUrl, requestOrigin });
+}
+
+/**
+ * A preview declaration and a document reduced to a site-relative path.
+ *
+ * Shared by the entry path above and the Single path beside it rather than
+ * written twice. Both ask the identical question — given a declaration and the
+ * document it describes, what path on this site does it name — and two copies
+ * of an origin comparison agree only until one is edited, at which point the
+ * one that drifted still returns a plausible-looking path.
+ */
+export function reduceToSitePath({
+  preview,
+  document,
+  siteUrl,
+  requestOrigin,
+}: {
+  preview: PreviewDeclaration | undefined;
+  document: Record<string, unknown>;
+  siteUrl: string | null;
+  requestOrigin?: string;
+}): string | null {
+  const resolution = resolvePreviewUrl({ preview, entry: document, siteUrl });
 
   // `noSiteUrl` is ACCEPTED here, and it is the case that matters most: having
   // no site URL is the default state of a fresh install.
@@ -105,22 +128,19 @@ export async function resolvePreviewRedirect(
 
   if (resolution.status !== "resolved") return null;
 
-  // The origin is COMPARED against the site's, never stripped from the URL.
+  // The origin is COMPARED, never stripped from the URL.
   //
-  // A collection's `preview.url` is application code, free to return any host.
+  // A declaration's `url` is application code, free to return any host.
   // Removing the origin would reduce another site's URL to a bare path, and a
   // bare path is precisely what the route's site-relative guard is built to
   // approve — so the guard would run, pass, and have been handed a value that
-  // already destroyed the evidence it exists to judge. Comparing first means
-  // the only URL that survives is one already on the site's own origin.
+  // already destroyed the evidence it exists to judge.
   //
-  // With no site URL configured there is no origin to compare against at all,
-  // which is why the branch above checks the path's SHAPE instead.
   // With no site URL configured, the origin serving this request is the only
-  // honest thing to compare an absolute declaration against — and it is the
-  // right one, because this resolver answers a route running ON the site.
-  // Rejecting outright would mean a fresh installation whose collection returns
-  // an absolute same-origin URL still gets a 404.
+  // honest thing to compare against — and it is the right one, because this
+  // answers a route running ON the site. Rejecting outright would mean a fresh
+  // installation whose declaration returns an absolute same-origin URL still
+  // gets a 404.
   const comparisonOrigin = siteUrl ?? requestOrigin;
   if (comparisonOrigin === undefined) return null;
   try {
@@ -160,4 +180,56 @@ function siteRelativePath(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** What resolving a Single's redirect needs from the outside world. */
+export interface SinglePreviewRedirectDeps {
+  /**
+   * The Single's document in the locale the token names, or `null` if it cannot
+   * be read.
+   *
+   * A Single is addressed by slug, so unlike an entry there is nothing to look
+   * up by id — but the document is still needed, because a declaration may
+   * derive the path from it.
+   */
+  loadSingle: (
+    slug: string,
+    locale: string | undefined
+  ) => Promise<Record<string, unknown> | null>;
+  /** The Single's preview declaration, from whichever authoring path wrote it. */
+  loadDeclaration: (slug: string) => Promise<PreviewDeclaration | undefined>;
+  /** The configured site URL, or `null` when none is set. */
+  loadSiteUrl: () => Promise<string | null>;
+}
+
+/** A Single-scoped token reduced to what a redirect needs. */
+export interface SinglePreviewRedirectScope {
+  single: string;
+  locale?: string;
+}
+
+/**
+ * The site-relative path a Single's preview token should land on, or `null`.
+ *
+ * Deliberately its own function rather than a branch inside the entry resolver:
+ * the two differ in everything they LOAD — one by id from a collection, one by
+ * slug with no id at all — and share only what they do with the result, which
+ * is `reduceToSitePath` and is called by both.
+ */
+export async function resolveSinglePreviewRedirect(
+  scope: SinglePreviewRedirectScope,
+  deps: SinglePreviewRedirectDeps,
+  requestOrigin?: string
+): Promise<string | null> {
+  const [document, preview, siteUrl] = await Promise.all([
+    deps.loadSingle(scope.single, scope.locale),
+    deps.loadDeclaration(scope.single),
+    deps.loadSiteUrl(),
+  ]);
+
+  // A Single is never deleted the way an entry is, but it can be removed from
+  // the configuration, and a link minted before that is a link to nothing.
+  if (document === null) return null;
+
+  return reduceToSitePath({ preview, document, siteUrl, requestOrigin });
 }

@@ -37,6 +37,7 @@ import { describeValue, pointer } from "../issue-text";
 import { DEFAULT_LIMITS } from "../limits";
 import type { DocumentLimits } from "../limits";
 import { isPlainRecord } from "../plain-record";
+import { selectNodes } from "../select-nodes";
 import type { ValidationIssue } from "../validation";
 import { isConditionGated } from "../visibility";
 
@@ -1036,91 +1037,48 @@ function documentNodes(
   limits: DocumentLimits = DEFAULT_LIMITS,
   drawsNothing?: (node: BlockNode) => boolean
 ): PlacedNode[] {
-  const placed: PlacedNode[] = [];
-  if (!Array.isArray(doc.nodes)) return placed;
-  // A worklist rather than recursion. A stored document is not required to have
-  // been validated before it is compiled — a render pass may validate
-  // forgivingly, or not at all — and a deeply nested slot chain would then
-  // overflow the stack and fail the request with a RangeError instead of
-  // returning a stylesheet. Validation walks the same adversarial shape the
-  // same way.
-  const saysItDrawsNothing = (node: BlockNode): boolean =>
-    containedDrawsNothing(drawsNothing, node);
-  const queue: {
-    nodes: readonly BlockNode[];
-    base: string;
-    depth: number;
-    gated: boolean;
-  }[] = [{ nodes: doc.nodes, base: "/nodes", depth: 1, gated: false }];
-  // Iterating instead of recursing keeps a deep document from overflowing the
-  // stack; it does not keep one from exhausting memory. Every queued level
-  // retains the cumulative pointer to it, so a chain nested as deep as the byte
-  // cap allows holds path text growing with its own depth at every level, and a
-  // document nothing rejected can still stall the render it was asked for.
-  // Stopping at the same limits validation enforces bounds the work rather than
-  // only the shape of it.
-  let stopped = false;
-  // Every array entry read, usable or not.
-  let seen = 0;
-  const stop = (path: string, reason: string): void => {
-    if (stopped) return;
-    stopped = true;
+  // WHICH nodes are read is `selectNodes`, shared with every other reader of a
+  // stored document, because two readers stopping in different places is not a
+  // difference anyone sees until a class is deleted off a page still rendering
+  // it. What this function adds is the part only styling needs: the gating a
+  // node inherits, and how to phrase the limit for an author.
+  const selection = selectNodes(doc, limits);
+
+  if (selection.stopped !== undefined) {
     pushBoundedWarning(warningAllowance, warnings, {
-      path,
+      path: selection.stopped.path,
       code: "node-count-exceeded",
       severity: "warning",
-      message: reason,
+      message:
+        selection.stopped.reason === "depth"
+          ? `Nodes below depth ${selection.stopped.limit} were not styled, because the document nests deeper than a document may.`
+          : `Only the first ${selection.stopped.limit} nodes were styled, because the document holds more than a document may.`,
     });
-  };
-  for (let at = 0; at < queue.length && !stopped; at += 1) {
-    const level = queue[at];
-    if (level === undefined) continue;
-    if (level.depth > limits.maxDepth) {
-      stop(
-        level.base,
-        `Nodes below depth ${limits.maxDepth} were not styled, because the document nests deeper than a document may.`
-      );
-      break;
-    }
-    // An indexed loop rather than `forEach`, and counting every ENTRY rather
-    // than every entry that turned out usable. `forEach` cannot be broken out
-    // of, so reaching the cap still walked the rest of an oversized array; and
-    // a malformed entry never reached `placed`, so an array made entirely of
-    // them passed the cap without ever tripping it. The bound has to be on what
-    // is READ, since reading is the work being bounded.
-    for (let index = 0; index < level.nodes.length; index += 1) {
-      if (seen >= limits.maxNodes) {
-        stop(
-          level.base,
-          `Only the first ${limits.maxNodes} nodes were styled, because the document holds more than a document may.`
-        );
-        break;
-      }
-      seen += 1;
-      const node = level.nodes[index];
-      if (!isPlainRecord(node) || typeof node.id !== "string") continue;
-      const path = pointer(level.base, index);
-      // Once gated, gated for the whole subtree: a descendant cannot be served when the ancestor
-      // carrying it is not. A block that draws nothing takes its slots with it for the same
-      // reason — a slot's children are placed by the markup the block returns, and a block
-      // returning nothing places none of them.
-      const gated =
-        level.gated || isConditionGated(node) || saysItDrawsNothing(node);
-      placed.push({ node, path, gated });
-      if (!isPlainRecord(node.slots)) continue;
-      // Sorted, so two documents whose slots were written in a different order
-      // still compile to the same bytes.
-      for (const slot of Object.keys(node.slots).sort()) {
-        const children = node.slots[slot];
-        if (!Array.isArray(children)) continue;
-        queue.push({
-          nodes: children,
-          base: pointer(pointer(path, "slots"), slot),
-          depth: level.depth + 1,
-          gated,
-        });
-      }
-    }
+  }
+
+  const saysItDrawsNothing = (node: BlockNode): boolean =>
+    containedDrawsNothing(drawsNothing, node);
+
+  const placed: PlacedNode[] = [];
+  for (const entry of selection.nodes) {
+    // Once gated, gated for the whole subtree: a descendant cannot be served
+    // when the ancestor carrying it is not. A block that draws nothing takes
+    // its slots with it for the same reason — a slot's children are placed by
+    // the markup the block returns, and a block returning nothing places none
+    // of them.
+    //
+    // Read from the parent already placed rather than carried down the walk.
+    // Level order puts a parent before its children, so by the time a child is
+    // reached its parent's verdict is final.
+    const inherited = entry.parent === -1 ? false : placed[entry.parent].gated;
+    placed.push({
+      node: entry.node,
+      path: entry.path,
+      gated:
+        inherited ||
+        isConditionGated(entry.node) ||
+        saysItDrawsNothing(entry.node),
+    });
   }
   return placed;
 }

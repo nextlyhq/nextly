@@ -11,6 +11,7 @@ import {
   signPreviewToken,
   verifyPreviewToken,
 } from "../preview-token";
+import type { SignPreviewTokenOptions } from "../preview-token";
 
 const TEST_SECRET = "preview-test-secret-at-least-32-characters-long!!";
 const GENERATION = 1;
@@ -21,6 +22,7 @@ describe("preview tokens", () => {
   it("authorizes the document it was minted for", async () => {
     const { token, expiresAt } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
 
     const result = await verifyPreviewToken(token, TEST_SECRET, {
@@ -39,6 +41,7 @@ describe("preview tokens", () => {
     const before = Date.now();
     const { expiresAt } = await signPreviewToken(SCOPE, TEST_SECRET, {
       generation: GENERATION,
+      minter: "minter-1",
     });
 
     const lifetimeSeconds = (expiresAt.getTime() - before) / 1000;
@@ -55,6 +58,7 @@ describe("preview tokens", () => {
       // session cookie would turn "see this page" into an account.
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       const asSession = await verifyAccessToken(token, TEST_SECRET);
@@ -80,6 +84,7 @@ describe("preview tokens", () => {
     it("refuses a token signed with a different secret", async () => {
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       const result = await verifyPreviewToken(token, `${TEST_SECRET}-other`, {
@@ -92,6 +97,7 @@ describe("preview tokens", () => {
     it("refuses a tampered payload", async () => {
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
       const [header, payload, signature] = token.split(".");
       const decoded = JSON.parse(
@@ -117,6 +123,7 @@ describe("preview tokens", () => {
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         ttlSeconds: 1,
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       vi.useFakeTimers();
@@ -136,6 +143,7 @@ describe("preview tokens", () => {
     it("refuses every outstanding token once the generation moves", async () => {
       const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
         generation: GENERATION,
+        minter: "minter-1",
       });
 
       const result = await verifyPreviewToken(token, TEST_SECRET, {
@@ -151,7 +159,7 @@ describe("preview tokens", () => {
       const { token } = await signPreviewToken(
         { collection: "", entryId: "" },
         TEST_SECRET,
-        { generation: GENERATION + 1 }
+        { generation: GENERATION + 1, minter: "minter-1" }
       );
 
       const result = await verifyPreviewToken(token, TEST_SECRET, {
@@ -173,6 +181,7 @@ describe("preview tokens", () => {
       await expect(
         signPreviewToken({ ...SCOPE, locale: "" }, TEST_SECRET, {
           generation: GENERATION,
+          minter: "minter-1",
         })
       ).rejects.toMatchObject({
         code: "VALIDATION_ERROR",
@@ -235,6 +244,166 @@ describe("preview tokens", () => {
     it("covers any locale when it names none", async () => {
       expect(previewTokenCovers(SCOPE, { ...SCOPE, locale: "de" })).toBe(true);
       expect(previewTokenCovers(SCOPE, SCOPE)).toBe(true);
+    });
+  });
+  describe("a minter the type says is present", () => {
+    // The type is not a boundary: a JavaScript caller omits the property and
+    // compiles nothing, and a typed one can still pass "". Either way the `mnt`
+    // claim would be dropped, verification would read the result as a token
+    // minted before the claim existed, and the draft gate would skip redaction
+    // — handing the recipient every field, which is the hole the claim exists
+    // to close. Refused rather than defaulted: there is no safe stand-in for
+    // "whose permissions is this seen through".
+    const withoutMinter = (minter?: unknown): SignPreviewTokenOptions =>
+      ({
+        generation: GENERATION,
+        ...(minter === undefined ? {} : { minter }),
+      }) as unknown as SignPreviewTokenOptions;
+
+    it("refuses to mint when the minter is omitted", async () => {
+      await expect(
+        signPreviewToken(SCOPE, TEST_SECRET, withoutMinter())
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: { errors: [{ path: "minter", code: "REQUIRED" }] },
+      });
+    });
+
+    it("refuses to mint when the minter is empty", async () => {
+      await expect(
+        signPreviewToken(SCOPE, TEST_SECRET, withoutMinter(""))
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: { errors: [{ path: "minter", code: "REQUIRED" }] },
+      });
+    });
+
+    it("refuses to mint when the minter is only whitespace", async () => {
+      // Whitespace is not a user id, and it would satisfy any check written as
+      // a truthiness test — so it is asserted rather than assumed unreachable.
+      await expect(
+        signPreviewToken(SCOPE, TEST_SECRET, withoutMinter("   "))
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: { errors: [{ path: "minter", code: "REQUIRED" }] },
+      });
+    });
+
+    it("carries the minter through to verification when it is real", async () => {
+      // The refusals above are only worth anything if a real minter still
+      // survives the round trip: a guard that also dropped the claim would pass
+      // every test above and leak exactly the same way.
+      const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
+        generation: GENERATION,
+        minter: "user-42",
+      });
+
+      const result = await verifyPreviewToken(token, TEST_SECRET, {
+        generation: GENERATION,
+      });
+
+      expect(result).toMatchObject({ valid: true, minter: "user-42" });
+    });
+  });
+});
+
+describe("a token that names a Single", () => {
+  // A Single has a draft lifecycle but no entry id — it is addressed by slug
+  // and there is exactly one of it. Squeezing that into `{collection, entryId}`
+  // would mean inventing an id that names nothing, and `previewTokenCovers`
+  // comparing two made-up values.
+  it("round-trips a single scope", async () => {
+    const { token } = await signPreviewToken(
+      { kind: "single", single: "homepage" },
+      TEST_SECRET,
+      { generation: GENERATION, minter: "minter-1" }
+    );
+
+    const verified = await verifyPreviewToken(token, TEST_SECRET, {
+      generation: GENERATION,
+    });
+
+    expect(verified.valid && verified.scope).toEqual({
+      kind: "single",
+      single: "homepage",
+    });
+  });
+
+  it("round-trips a single scope restricted to one locale", async () => {
+    const { token } = await signPreviewToken(
+      { kind: "single", single: "homepage", locale: "fr" },
+      TEST_SECRET,
+      { generation: GENERATION, minter: "minter-1" }
+    );
+
+    const verified = await verifyPreviewToken(token, TEST_SECRET, {
+      generation: GENERATION,
+    });
+
+    expect(verified.valid && verified.scope).toEqual({
+      kind: "single",
+      single: "homepage",
+      locale: "fr",
+    });
+  });
+
+  it("does not cover a different single", () => {
+    expect(
+      previewTokenCovers(
+        { kind: "single", single: "homepage" },
+        { kind: "single", single: "footer" }
+      )
+    ).toBe(false);
+  });
+
+  // The two kinds must not satisfy each other. A single named `pages` and a
+  // collection named `pages` are different documents, and a comparison that
+  // ignored the kind would let one link open the other.
+  it("does not cover a collection entry, nor the reverse", () => {
+    expect(
+      previewTokenCovers(
+        { kind: "single", single: "pages" },
+        { collection: "pages", entryId: "pages" }
+      )
+    ).toBe(false);
+    expect(
+      previewTokenCovers(
+        { collection: "pages", entryId: "pages" },
+        { kind: "single", single: "pages" }
+      )
+    ).toBe(false);
+  });
+
+  it("refuses an empty single slug at the mint, as it does an empty locale", async () => {
+    await expect(
+      signPreviewToken({ kind: "single", single: "" }, TEST_SECRET, {
+        generation: GENERATION,
+        minter: "minter-1",
+      })
+    ).rejects.toThrow();
+  });
+});
+
+describe("tokens minted before the scope gained a kind", () => {
+  // The load-bearing compatibility case. Every outstanding link was signed
+  // without a `kind` claim, and an editor who shared one last week must not
+  // find it dead because the type grew a discriminant.
+  it("still verifies as an entry scope", async () => {
+    // Signed through the same signer, which omits `kind` for an entry scope —
+    // so this is byte-identical to what the previous version produced.
+    const { token } = await signPreviewToken(
+      { collection: "pages", entryId: "7" },
+      TEST_SECRET,
+      { generation: GENERATION, minter: "minter-1" }
+    );
+
+    const verified = await verifyPreviewToken(token, TEST_SECRET, {
+      generation: GENERATION,
+    });
+
+    expect(verified.valid && verified.scope).toEqual({
+      collection: "pages",
+      entryId: "7",
     });
   });
 });

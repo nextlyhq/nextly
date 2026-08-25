@@ -5,7 +5,6 @@ import {
   Button,
   FieldShell,
   FormActions,
-  FormLayout,
   Select,
   SelectContent,
   SelectItem,
@@ -210,133 +209,134 @@ const SettingsGeneralPage: React.FC = () => {
   }
 
   return (
-    <PageContainer>
+    <PageContainer width="form">
       <Form {...form}>
         <form
           onSubmit={e => {
             void form.handleSubmit(onSubmit)(e);
           }}
         >
-          <SettingsLayout>
-            <FormLayout>
-              {isLoading ? (
-                <GeneralSettingsSkeleton />
-              ) : (
-                // ── Section: Locale & Formatting ──
-                <SettingsSection label="Locale & Formatting">
-                  <FormField
-                    control={form.control}
-                    name="timezone"
-                    render={({ field, fieldState }) => (
-                      <FieldShell
-                        label="Timezone"
-                        description="Time zone used across the admin and email notifications."
-                        error={fieldState.error?.message}
-                      >
-                        {({ id, describedBy, invalid }) => (
-                          <Select
-                            onValueChange={field.onChange}
-                            value={field.value ?? ""}
-                            disabled={isLoading}
+          <SettingsLayout
+            title="General Settings"
+            description="Manage your application and configuration"
+          >
+            {isLoading ? (
+              <GeneralSettingsSkeleton />
+            ) : (
+              // ── Section: Locale & Formatting ──
+              <SettingsSection label="Locale & Formatting">
+                <FormField
+                  control={form.control}
+                  name="timezone"
+                  render={({ field, fieldState }) => (
+                    <FieldShell
+                      label="Timezone"
+                      description="Time zone used across the admin and email notifications."
+                      error={fieldState.error?.message}
+                    >
+                      {({ id, describedBy, invalid }) => (
+                        <Select
+                          onValueChange={field.onChange}
+                          value={field.value ?? ""}
+                          disabled={isLoading}
+                        >
+                          <SelectTrigger
+                            id={id}
+                            aria-describedby={describedBy}
+                            aria-invalid={invalid}
                           >
-                            <SelectTrigger
-                              id={id}
-                              aria-describedby={describedBy}
-                              aria-invalid={invalid}
-                            >
-                              <SelectValue placeholder="Select a timezone" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {TIMEZONE_OPTIONS.map(opt => (
-                                <SelectItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </FieldShell>
-                    )}
-                  />
+                            <SelectValue placeholder="Select a timezone" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TIMEZONE_OPTIONS.map(opt => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </FieldShell>
+                  )}
+                />
 
-                  <FormField
-                    control={form.control}
-                    name="dateFormat"
-                    render={({ field, fieldState }) => (
-                      <FieldShell
-                        label="Date Format"
-                        description="How dates appear in lists and detail pages."
-                        error={fieldState.error?.message}
-                      >
-                        {({ id, describedBy, invalid }) => (
-                          <Select
-                            onValueChange={field.onChange}
-                            value={field.value ?? ""}
-                            disabled={isLoading}
+                <FormField
+                  control={form.control}
+                  name="dateFormat"
+                  render={({ field, fieldState }) => (
+                    <FieldShell
+                      label="Date Format"
+                      description="How dates appear in lists and detail pages."
+                      error={fieldState.error?.message}
+                    >
+                      {({ id, describedBy, invalid }) => (
+                        <Select
+                          onValueChange={field.onChange}
+                          value={field.value ?? ""}
+                          disabled={isLoading}
+                        >
+                          <SelectTrigger
+                            id={id}
+                            aria-describedby={describedBy}
+                            aria-invalid={invalid}
                           >
-                            <SelectTrigger
-                              id={id}
-                              aria-describedby={describedBy}
-                              aria-invalid={invalid}
-                            >
-                              <SelectValue placeholder="Select a date format" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {DATE_FORMAT_OPTIONS.map(opt => (
-                                <SelectItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </FieldShell>
-                    )}
-                  />
+                            <SelectValue placeholder="Select a date format" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {DATE_FORMAT_OPTIONS.map(opt => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </FieldShell>
+                  )}
+                />
 
-                  <FormField
-                    control={form.control}
-                    name="timeFormat"
-                    render={({ field, fieldState }) => (
-                      <FieldShell
-                        label="Time Format"
-                        description="12-hour vs 24-hour clock."
-                        error={fieldState.error?.message}
-                      >
-                        {({ id, describedBy, invalid }) => (
-                          <Select
-                            onValueChange={field.onChange}
-                            value={field.value ?? ""}
-                            disabled={isLoading}
+                <FormField
+                  control={form.control}
+                  name="timeFormat"
+                  render={({ field, fieldState }) => (
+                    <FieldShell
+                      label="Time Format"
+                      description="12-hour vs 24-hour clock."
+                      error={fieldState.error?.message}
+                    >
+                      {({ id, describedBy, invalid }) => (
+                        <Select
+                          onValueChange={field.onChange}
+                          value={field.value ?? ""}
+                          disabled={isLoading}
+                        >
+                          <SelectTrigger
+                            id={id}
+                            aria-describedby={describedBy}
+                            aria-invalid={invalid}
                           >
-                            <SelectTrigger
-                              id={id}
-                              aria-describedby={describedBy}
-                              aria-invalid={invalid}
-                            >
-                              <SelectValue placeholder="Select a time format" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {TIME_FORMAT_OPTIONS.map(opt => (
-                                <SelectItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </FieldShell>
-                    )}
-                  />
-                </SettingsSection>
-              )}
+                            <SelectValue placeholder="Select a time format" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TIME_FORMAT_OPTIONS.map(opt => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </FieldShell>
+                  )}
+                />
+              </SettingsSection>
+            )}
 
-              <FormActions dirty={form.formState.isDirty}>
-                <Button type="submit" disabled={isPending || isLoading}>
-                  {isPending ? "Saving…" : "Save Changes"}
-                </Button>
-              </FormActions>
-            </FormLayout>
+            <FormActions dirty={form.formState.isDirty}>
+              <Button type="submit" disabled={isPending || isLoading}>
+                {isPending ? "Saving…" : "Save Changes"}
+              </Button>
+            </FormActions>
           </SettingsLayout>
         </form>
       </Form>

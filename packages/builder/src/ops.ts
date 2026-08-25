@@ -463,9 +463,131 @@ const COMPARISON_BUDGET = MAX_VALUE_PARTS;
  * Iterative, for the reason every other walk in this module is: a deep value
  * would otherwise exhaust the call stack and leave a native RangeError where
  * this module promises an `OpError`.
+ *
+ * Bounded in DEPTH as well as in parts, and the depth is what stops a cycle.
+ * The parts budget alone is a machine-size number, so two distinct
+ * self-referential values compare by descending forever until four million
+ * entries are spent — measured at roughly half a second for one pair, on a
+ * read a panel performs per address. {@link isJsonValue} already bounds its own
+ * walk this way and refuses such a value in a few steps; this now matches it,
+ * so a cycle costs {@link MAX_VALUE_DEPTH} rather than the whole budget.
+ *
+ * Answering "different" past the bound is the same safe direction the budget
+ * takes, and no value from a document reaches it: anything nested deeper is
+ * refused before it can be stored.
  */
-function equalWithin(a: unknown, b: unknown, budget: number): boolean {
-  const pending: [unknown, unknown][] = [[a, b]];
+/**
+ * The keys two records must agree on value by value, or `null` when their key
+ * sets already settle it.
+ *
+ * Asked BEFORE any value is compared, because it is a different question: two
+ * records can disagree on their keys alone, and answering that first means the
+ * walk never queues a pair for a record that was never going to match.
+ *
+ * ORDER, not just membership, unless the caller's domain sorts. A stored
+ * document's identity is its serialized form, and `JSON.stringify` writes keys
+ * in insertion order — so `{ first: 1, second: 2 }` and `{ second: 2, first: 1 }`
+ * are different stored documents, and a block rendering `Object.entries(props)`
+ * produces different output from them. Comparing membership alone calls that
+ * reordering a no-op and refuses an edit that changes what the reader sees.
+ *
+ * Sorting both lists is what lets ONE comparison answer the other domain, where
+ * a compiler sorts the keys before emitting them and a reorder changes nothing.
+ * A second walk for that would be a second answer to drift from this one.
+ */
+function comparableKeys(
+  left: Readonly<Record<string, unknown>>,
+  right: Readonly<Record<string, unknown>>,
+  keyOrderMatters: boolean,
+  limit: number
+): readonly string[] | null {
+  const leftKeys = ownKeysWithin(left, limit);
+  if (leftKeys === null) return null;
+  const rightKeys = ownKeysWithin(right, limit);
+  if (rightKeys === null) return null;
+  if (leftKeys.length !== rightKeys.length) return null;
+  if (!keyOrderMatters) {
+    leftKeys.sort();
+    rightKeys.sort();
+  }
+  for (let index = 0; index < leftKeys.length; index += 1) {
+    if (leftKeys[index] !== rightKeys[index]) return null;
+  }
+  return leftKeys;
+}
+
+/**
+ * A record's own enumerable keys, or `null` when there are more than `limit`.
+ *
+ * Counted DURING enumeration rather than after it. `Object.keys(value)` builds
+ * the whole list before anything can refuse it, and sorting it costs more
+ * again — so a value carrying hundreds of thousands of keys, which an import or
+ * a corrupt document can produce, is paid for in full before the budget is
+ * consulted even once.
+ *
+ * `for...in` reaches the prototype, so `Object.hasOwn` filters; the pair reads
+ * exactly what `Object.keys` would, one key at a time and interruptibly.
+ */
+function ownKeysWithin(
+  value: Readonly<Record<string, unknown>>,
+  limit: number
+): string[] | null {
+  const keys: string[] = [];
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
+    if (keys.length >= limit) return null;
+    keys.push(key);
+  }
+  return keys;
+}
+
+/**
+ * What two holders store at one position, or `null` when either cannot be read
+ * without running code.
+ *
+ * The comparison walks values a caller supplied and does it while a panel is
+ * inspecting a selection, so a bracket read is not a neutral act: an own
+ * accessor would run — a side-effecting getter from rendering alone, a throwing
+ * one aborting the read — and an inherited one would answer for a value the
+ * holder does not have. Descriptors read only what is stored, and only what is
+ * stored HERE.
+ *
+ * `null` for three cases that are all "there is nothing to compare": an
+ * accessor, an inherited property, and a HOLE in a sparse array. The caller
+ * reports different, which is the same direction the budget and the depth bound
+ * take — the one that cannot hide a disagreement behind something unreadable.
+ *
+ * Asked as a PAIR because the two sides are only ever read together, and asked
+ * once because an array index and a record key are the same question about
+ * different positions. Answering it in both branches is how one of them came to
+ * read descriptors while the other still used brackets.
+ */
+function ownDataPair(
+  left: object,
+  right: object,
+  key: string | number
+): [unknown, unknown] | null {
+  const leftPart = Object.getOwnPropertyDescriptor(left, key);
+  if (leftPart === undefined || !("value" in leftPart)) return null;
+  const rightPart = Object.getOwnPropertyDescriptor(right, key);
+  if (rightPart === undefined || !("value" in rightPart)) return null;
+  return [leftPart.value, rightPart.value];
+}
+
+function equalWithin(
+  a: unknown,
+  b: unknown,
+  budget: number,
+  /**
+   * Whether two records holding the same keys in a different order differ.
+   *
+   * True for a STORED value, false for a STYLE value, and the difference is a
+   * property of who reads them rather than a preference. The reasoning for each
+   * sits at {@link sameStoredValue} and {@link sameStyleValue}.
+   */
+  keyOrderMatters = true
+): boolean {
+  const pending: [unknown, unknown, number][] = [[a, b, 1]];
   // Charged at ENQUEUE, not on the way out. A budget checked per pop still
   // allocates one tuple per element before the next check can run, so a dense
   // array near the parts ceiling builds millions of temporary pairs to answer a
@@ -475,35 +597,34 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
   while (pending.length > 0) {
     const pair = pending.pop();
     if (pair === undefined) break;
-    const [left, right] = pair;
+    const [left, right, depth] = pair;
     if (left === right) continue;
+    if (depth > MAX_VALUE_DEPTH) return false;
     if (Array.isArray(left) || Array.isArray(right)) {
       if (!Array.isArray(left) || !Array.isArray(right)) return false;
       if (left.length !== right.length) return false;
       if (queued + left.length > budget) return false;
       queued += left.length;
-      for (let i = 0; i < left.length; i += 1)
-        pending.push([left[i], right[i]]);
+      for (let i = 0; i < left.length; i += 1) {
+        const pair = ownDataPair(left, right, i);
+        if (pair === null) return false;
+        pending.push([pair[0], pair[1], depth + 1]);
+      }
       continue;
     }
     if (isPlainRecord(left) && isPlainRecord(right)) {
-      const leftKeys = Object.keys(left);
-      const rightKeys = Object.keys(right);
-      if (leftKeys.length !== rightKeys.length) return false;
-      if (queued + leftKeys.length > budget) return false;
-      queued += leftKeys.length;
-      for (let index = 0; index < leftKeys.length; index += 1) {
-        const key = leftKeys[index];
-        if (key === undefined) return false;
-        // ORDER, not just membership. A document's identity is its serialized
-        // form, and `JSON.stringify` writes keys in insertion order — so
-        // `{ first: 1, second: 2 }` and `{ second: 2, first: 1 }` are different
-        // stored documents, and a block rendering `Object.entries(props)`
-        // produces different output from them. Comparing membership alone calls
-        // that reordering a no-op and refuses an edit that changes what the
-        // reader sees.
-        if (key !== rightKeys[index]) return false;
-        pending.push([left[key], right[key]]);
+      const keys = comparableKeys(
+        left,
+        right,
+        keyOrderMatters,
+        budget - queued
+      );
+      if (keys === null) return false;
+      queued += keys.length;
+      for (const key of keys) {
+        const pair = ownDataPair(left, right, key);
+        if (pair === null) return false;
+        pending.push([pair[0], pair[1], depth + 1]);
       }
       continue;
     }
@@ -531,6 +652,34 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
  */
 export function sameStoredValue(a: unknown, b: unknown): boolean {
   return equalWithin(a, b, COMPARISON_BUDGET);
+}
+
+/**
+ * Whether two STYLE values are the same one, by the comparison the style
+ * compiler's own output makes.
+ *
+ * Differs from {@link sameStoredValue} in exactly one way — key order is not a
+ * difference — and the reason is not a preference. `partDeclarations` sorts a
+ * composite's keys before emitting it, and says so beside the sort: "two
+ * documents differing only in the order their keys were written compile to the
+ * same bytes". So for a style value, a reorder changes nothing anybody can see,
+ * and reporting it as a change means an edit that rewrites the document and
+ * costs an undo entry while rendering identically.
+ *
+ * The general predicate stays order sensitive because a general stored value
+ * has no such compiler: a block rendering `Object.entries(props)` really does
+ * produce different output from a reordered record.
+ *
+ * ONE walk with a flag, not a second implementation. Two comparisons of "are
+ * these the same value" drift, and they drift about exactly the composites that
+ * are hard.
+ *
+ * Weaker than {@link sameStoredValue}, which is the safe direction here: every
+ * pair this calls different is one that calls different too, so an op built on
+ * this answer is never one `applyOp` would refuse as a no-op.
+ */
+export function sameStyleValue(a: unknown, b: unknown): boolean {
+  return equalWithin(a, b, COMPARISON_BUDGET, false);
 }
 
 /**

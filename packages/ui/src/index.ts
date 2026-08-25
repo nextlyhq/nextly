@@ -563,16 +563,13 @@ export { FormSection } from "./components/form-section";
 export type { FormSectionProps } from "./components/form-section";
 
 /**
- * @experimental The form-layout kit's page measure and its single action bar.
- * No first-party plugin has exercised either in production yet.
+ * @experimental A form's single action bar. The page measure it used to sit
+ * beside is `PageShell`'s, reached through the page rather than the form. No
+ * first-party plugin has exercised it in production yet.
  */
-export { FormActions, FormLayout } from "./components/form-layout";
+export { FormActions } from "./components/form-actions";
 /** @experimental */
-export type {
-  FormActionsProps,
-  FormLayoutProps,
-  FormMeasure,
-} from "./types/form-layout";
+export type { FormActionsProps } from "./types/form-layout";
 
 /**
  * @experimental The page shell: the gutter, the measure and the sanctioned
@@ -581,5 +578,13 @@ export type {
  * measure in order to escape it. No first-party plugin has exercised it yet.
  */
 export { Bleed, PageShell } from "./components/page-shell";
+/**
+ * @experimental A page's own identity — trail, name, summary and actions — fed
+ * entirely by props, so a page declares what it is instead of a foreign file
+ * deriving it from the URL. No first-party plugin has exercised it yet.
+ */
+export { PageHeader } from "./components/page-header";
+/** @experimental */
+export type { PageHeaderProps } from "./components/page-header";
 /** @experimental */
 export type { BleedProps, PageShellProps } from "./components/page-shell";

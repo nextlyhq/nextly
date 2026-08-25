@@ -862,24 +862,8 @@ export async function listRoleSlugsForUser(
   // Optional transaction-bound executor; see `hasPermission`.
   executor?: unknown
 ): Promise<string[]> {
-  if (!userId) return [];
-
   try {
-    const checker = new PermissionChecker();
-    const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
-
-    if (roleIds.size === 0) return [];
-
-    const t = getTablesLazy();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { roles } = t as any;
-
-    const rows = await rbacQuery(executor)
-      .select({ slug: roles.slug })
-      .from(roles)
-      .where(inArray(roles.id, Array.from(roleIds)));
-
-    return (rows as Array<{ slug: string }>).map(r => r.slug);
+    return await listRoleSlugsForUserStrict(userId, executor);
   } catch (error) {
     getAuthLogger()?.log?.("error", {
       category: "auth",
@@ -889,6 +873,49 @@ export async function listRoleSlugsForUser(
     });
     return [];
   }
+}
+
+/**
+ * The same lookup, where a failure to ASK is not an answer.
+ *
+ * `listRoleSlugsForUser` degrades a lookup error to an empty set, which is the
+ * safe direction for a rule that grants on a role: no roles, no grant. It is
+ * the WRONG direction for a rule that withholds on one — `!roles.includes(
+ * "restricted")` passes for a caller whose roles could not be read — and for
+ * any caller that must distinguish "this user holds no roles" from "the
+ * database did not answer".
+ *
+ * So the swallowing version is derived from this one rather than the two being
+ * written separately: they ask the identical question of the identical rows,
+ * and differ only in what they do when the question cannot be asked. Written
+ * twice, they would drift, and the drift would be invisible because both would
+ * still look correct.
+ *
+ * @throws whatever the underlying query throws.
+ */
+export async function listRoleSlugsForUserStrict(
+  userId: string,
+  executor?: unknown
+): Promise<string[]> {
+  // An absent id names nobody rather than failing, matching the row-level
+  // reading of an anonymous caller: there is no lookup to fail at.
+  if (!userId) return [];
+
+  const checker = new PermissionChecker();
+  const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
+
+  if (roleIds.size === 0) return [];
+
+  const t = getTablesLazy();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { roles } = t as any;
+
+  const rows = await rbacQuery(executor)
+    .select({ slug: roles.slug })
+    .from(roles)
+    .where(inArray(roles.id, Array.from(roleIds)));
+
+  return (rows as Array<{ slug: string }>).map(r => r.slug);
 }
 
 /**

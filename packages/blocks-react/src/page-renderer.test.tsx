@@ -5349,3 +5349,594 @@ describe("PageRenderer", () => {
     });
   });
 });
+
+describe("a block that does not render a single element", () => {
+  /*
+   * `BlockRenderArgs.className` is the contract every block author is handed:
+   * "The generated class the block MUST place on its own root element. Blocks
+   * render a single element and never wrap it, so styles target that element."
+   *
+   * A block returning a Fragment has no root element of its own for that class,
+   * so it is already outside the contract. Until now the only signal came from
+   * the placeholder, which fires when a DOCUMENT asks for `cssId` or an
+   * attribute: the page author who set an anchor watched the block vanish,
+   * while the block author never heard about it.
+   *
+   * NOT "its compiled styles never apply", which is the stronger claim and is
+   * false for a shape tested directly below: `test/fragment-forwards` places
+   * the supplied class on a child, and the assertions there read it back out of
+   * the served HTML. What such a block certainly loses is the node's ROOT
+   * FIELDS, which the renderer attaches to a root element it does not have.
+   */
+  const wrapped = defineBlock<{ value: string }>({
+    name: "test/wrapped",
+    version: 1,
+    description: "Wraps its output in a fragment, against the contract.",
+    example: { props: { value: "hi" } },
+    defaultProps: { value: "" },
+    render: ({ props }) => (
+      <>
+        <p>{props.value}</p>
+      </>
+    ),
+  });
+
+  const renderWith = async (
+    definition: AnyBlockDefinition,
+    extra: Partial<BlockNode> = {}
+  ): Promise<string> =>
+    renderToHtml(
+      <PageRenderer
+        document={doc(node("a", definition.name, extra))}
+        blocks={createBlockResolver([definition])}
+      />
+    );
+
+  it("warns the BLOCK author on the first render, asked for nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(wrapped as AnyBlockDefinition);
+      // The control on the assertions below: the block RENDERED. Its output is
+      // on the page, so this is not a placeholder case and nobody asked for a
+      // root field — the warning is the only thing that fired.
+      expect(html).not.toMatch(PLACEHOLDER);
+      expect(html).toContain("<p>");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/wrapped");
+      expect(said).toContain("returned a wrapper rather than an element");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns about a wrapper root that DOES forward the class to a child", async () => {
+    /*
+     * The fixture that separates wrapper DETECTION from style LOSS, which the
+     * fragment above cannot: it drops `className` entirely, so a message
+     * claiming its styles were lost and a message claiming its shape is wrong
+     * both pass against it.
+     *
+     * This block wraps, against the contract, and forwards the class to the
+     * child it wraps. Both halves are then measurable at once: the class is on
+     * the page, and the warning still fires — because the shape is what it
+     * reports, not a styling outcome it cannot know.
+     *
+     * The oracle is the RENDER. Asking the renderer a second time whether the
+     * class "would" land compares two derivations of one source and agrees with
+     * whichever is wrong; the served HTML is the only witness that the CSS
+     * matches something.
+     */
+    const forwarding = defineBlock({
+      name: "test/fragment-forwards",
+      version: 1,
+      description: "Wraps a child and forwards the class to it.",
+      example: { props: {} },
+      defaultProps: {},
+      render: ({ className }) => (
+        <>
+          <div className={className}>forwarded</div>
+        </>
+      ),
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(forwarding as AnyBlockDefinition);
+      // The class REACHED the DOM, so this block's compiled styles do apply.
+      expect(html).toContain("forwarded");
+      expect(html).toMatch(bothClasses("test/fragment-forwards"));
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      // Warned all the same: the shape is outside the contract, and the node's
+      // root fields still have nowhere to go.
+      expect(said).toContain("test/fragment-forwards");
+      expect(said).toContain("returned a wrapper rather than an element");
+      // And it must NOT tell this author their styles are gone. They are on the
+      // page two assertions above.
+      expect(said).not.toMatch(/styles do not apply|nowhere to go/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a block that renders one element", async () => {
+    // The control that stops this warning firing on every conforming block.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await renderWith(text as AnyBlockDefinition);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a block whose root is a COMPONENT", async () => {
+    /*
+     * The shape this must not scold. A component that renders one host element
+     * and forwards `className` gets its compiled styles applied, so it is not
+     * broken — even though the placeholder path still refuses to attach root
+     * fields to it, because the renderer cannot know the component forwards
+     * those. Two questions, two answers, and only the narrower one belongs in a
+     * diagnostic: a warning that is sometimes false is one people scroll past.
+     */
+    const Root = ({ className }: { className: string }) => (
+      <div className={className}>via a component</div>
+    );
+    const componentRoot = defineBlock({
+      name: "test/component-root",
+      version: 1,
+      description: "Renders its root through a component.",
+      example: { props: {} },
+      defaultProps: {},
+      render: ({ className }) => <Root className={className} />,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(componentRoot as AnyBlockDefinition);
+      // Population first: the block rendered AND its class landed, which is
+      // what makes "not broken" a measurement rather than an assumption.
+      expect(html).toContain("via a component");
+      expect(html).toMatch(bothClasses("test/component-root"));
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing in production, including where `process` is absent", async () => {
+    /*
+     * The diagnostic is undeduplicated by design, so a production runtime that
+     * still evaluated it would write a line on every render of every such
+     * block. An Edge or Worker runtime need not define `process` at all, and
+     * unable to tell, this says nothing — the opposite default to the
+     * placeholder, which is a visible box rather than a log.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Modelled the way the placeholder's own absent-runtime test models it,
+      // and without disabling type checking to do so.
+      vi.stubGlobal("process", undefined);
+      await renderWith(wrapped as AnyBlockDefinition);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  });
+
+  it("warns about a React wrapper that is not a fragment", async () => {
+    /*
+     * `Suspense`, `StrictMode` and `Profiler` have symbol types like `Fragment`
+     * and render no element of their own, so the generated class has nowhere to
+     * go in any of them. Special-casing `Fragment` alone left the diagnostic
+     * silent about the rest — and a list of the wrappers that exist today is
+     * the instrument that falls behind as React adds more.
+     */
+    const suspended = defineBlock({
+      name: "test/suspense-root",
+      version: 1,
+      description: "Wraps its output in Suspense, against the contract.",
+      example: { props: {} },
+      defaultProps: {},
+      render: () => <Suspense fallback={null}>held</Suspense>,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(suspended as AnyBlockDefinition);
+      // Population first: it rendered, so this is a warning about working
+      // output rather than about a block that failed some other way.
+      expect(html).toContain("held");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/suspense-root");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns about output that is not an element at all", async () => {
+    /*
+     * The `none` branch, which nothing reached: a block returning a string
+     * renders visible output with no element to carry the class. Distinct from
+     * drawing nothing, which is a decision and is exempt below.
+     */
+    const bare = defineBlock({
+      name: "test/bare-string",
+      version: 1,
+      description: "Returns a string, against the contract.",
+      example: { props: {} },
+      defaultProps: {},
+      render: () => "just text" as never,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(bare as AnyBlockDefinition);
+      expect(html).toContain("just text");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/bare-string");
+      expect(said).toContain("returned no element");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing in a production runtime that DOES define `process`", async () => {
+    /*
+     * The ordinary production build, and the branch the absent-runtime test
+     * cannot reach: with `process` undefined the check exits at the first
+     * condition, so `NODE_ENV === "production"` is never evaluated. Both halves
+     * of that expression need a test or half of it is unmeasured.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubGlobal("process", { env: { NODE_ENV: "production" } });
+      await renderWith(wrapped as AnyBlockDefinition);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  });
+
+  it("warns about a context PROVIDER root", async () => {
+    /*
+     * React 19 tags both `Ctx` and `Ctx.Provider` as `react.context`, and
+     * renders their children itself — so there is no element of its own for the
+     * generated class, exactly as with a fragment. Classifying by "is the type
+     * a symbol" missed it, because a provider's type is a tagged OBJECT.
+     */
+    const Ctx = createContext("none");
+    const provided = defineBlock({
+      name: "test/provider-root",
+      version: 1,
+      description: "Roots at a context provider, against the contract.",
+      example: { props: {} },
+      defaultProps: {},
+      render: () => <Ctx value="held">shown</Ctx>,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(provided as AnyBlockDefinition);
+      // Population first: it rendered, so this is a warning about working
+      // output rather than about a block that failed some other way.
+      expect(html).toContain("shown");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/provider-root");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a `memo` root, which may forward the class", async () => {
+    /*
+     * The boundary that stops the provider fix from becoming "every tagged
+     * object is broken". `memo` wraps a component that may render a host
+     * element and forward `className` to it, and only calling it would say —
+     * so warning about it would be false.
+     */
+    const Inner = ({ className }: { className: string }) => (
+      <div className={className}>memoised</div>
+    );
+    const Memo = memo(Inner);
+    const memoised = defineBlock({
+      name: "test/memo-root",
+      version: 1,
+      description: "Roots at a memoised component.",
+      example: { props: {} },
+      defaultProps: {},
+      render: ({ className }) => <Memo className={className} />,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderWith(memoised as AnyBlockDefinition);
+      expect(html).toContain("memoised");
+      expect(html).toMatch(bothClasses("test/memo-root"));
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a block that DECLARES it draws nothing", async () => {
+    /*
+     * The declaration exemption on its own. A block that also RETURNS nothing
+     * is exempted by `rendersNothing(output)` whatever the declaration says, so
+     * a fixture doing both cannot tell the two apart — this one declares it
+     * draws nothing while returning a fragment, which only the declaration
+     * excuses.
+     */
+    const declares = defineBlock({
+      name: "test/declares-drawless",
+      version: 1,
+      description: "Says it draws nothing, and returns a fragment.",
+      example: { props: {} },
+      defaultProps: {},
+      rendersNothing: () => true,
+      render: () => <></>,
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await renderWith(declares as AnyBlockDefinition);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing about a block that draws nothing on purpose", async () => {
+    /*
+     * Rendering nothing is a DECISION, not a violation — `core/image` with no
+     * source returns null deliberately. The same exemption the placeholder
+     * grants, asked the same way, or every conditional block would be scolded
+     * for working correctly.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await renderWith(drawless as AnyBlockDefinition, {
+        props: { draw: false },
+      });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("an element type that answers differently on a later read", () => {
+  /*
+   * The root shape is a reading of author-controlled data: `output.type`, and
+   * the tag on the type object. Nothing makes that reading stable — a getter
+   * can count, a proxy can flip — so every place that reads it is a place the
+   * author can raise from.
+   *
+   * It used to be read twice per block root: once by the contract warning,
+   * which had a floor under it, and again by the placeholder policy, which had
+   * none. A type whose accessor threw on that second read left this package
+   * entirely: the stream never settled, so not even an error page.
+   *
+   * Now it is read ONCE, under one floor, and both policies are handed the
+   * result. This asserts the property that follows and not the arithmetic
+   * behind it: WHICHEVER read the accessor picks to throw on, containment
+   * holds. Pinning the index instead would pass forever after any change to how
+   * many times the value happens to be read.
+   */
+  const trickyBlock = (onRead: () => void): AnyBlockDefinition =>
+    defineBlock({
+      name: "test/stateful-type-tag",
+      version: 1,
+      description: "Roots at a type whose tag accessor is stateful.",
+      example: { props: {} },
+      defaultProps: {},
+      render: () =>
+        createElement(
+          {
+            get $$typeof() {
+              onRead();
+              // A context object, which React 19 renders as a provider — a
+              // wrapper root, so the shape question is genuinely asked of it.
+              return Symbol.for("react.context");
+            },
+            _currentValue: "held",
+          } as never,
+          null,
+          "shown"
+        ),
+    }) as AnyBlockDefinition;
+
+  const renderTricky = async (
+    onRead: () => void,
+    extra: Partial<BlockNode> = {}
+  ): Promise<string> => {
+    const definition = trickyBlock(onRead);
+    return renderToHtml(
+      <PageRenderer
+        document={doc(node("a", definition.name, extra))}
+        blocks={createBlockResolver([definition])}
+      />
+    );
+  };
+
+  it("renders the fixture when its tag accessor behaves", async () => {
+    /*
+     * The control, and the thing that stops every assertion below passing
+     * because the fixture is broken in some other way: with the accessor
+     * answering consistently, React renders it and its children reach the page.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = await renderTricky(() => {});
+      expect(html).toContain("shown");
+      expect(html).not.toMatch(PLACEHOLDER);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("placeholders instead of escaping, whichever read throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      /*
+       * `cssId` is set so BOTH policies run: the warning classifies, and the
+       * placeholder policy — the one that had no floor — classifies too.
+       *
+       * The bound is MEASURED rather than picked. A sweep past the last read is
+       * a run of iterations whose accessor never throws, and every one of them
+       * passes anyway — this node carries `cssId` on a wrapper root, so it is
+       * replaced by an ordinary `invalid-output` placeholder whether anything
+       * raised or not. Those iterations would report containment without ever
+       * reaching the mechanism, and the count they pad is the only number that
+       * says how much of it was covered.
+       */
+      let observed = 0;
+      await renderTricky(
+        () => {
+          observed += 1;
+        },
+        { cssId: "anchor" }
+      );
+      // The premise of the whole finding: this path reads the tag more than
+      // once. If that stops being true there is nothing here to contain.
+      expect(observed).toBeGreaterThan(1);
+
+      for (let throwOn = 1; throwOn <= observed; throwOn += 1) {
+        let reads = 0;
+        let threw = false;
+        const html = await renderTricky(
+          () => {
+            reads += 1;
+            if (reads === throwOn) {
+              threw = true;
+              throw new Error("tag read");
+            }
+          },
+          { cssId: "anchor" }
+        );
+        // Evidence before verdict: this iteration actually reached the read it
+        // names. Without it the assertion below is satisfied by a placeholder
+        // the node was getting anyway.
+        expect(threw).toBe(true);
+        /*
+         * Contained: the render RESOLVED, and what came back is this block's
+         * placeholder rather than its output.
+         *
+         * Which placeholder depends on where the throw lands, and both are
+         * containment: React validates a type inside `createElement`, so the
+         * earliest read happens while the block's own `render` is running and
+         * the render guard answers it. The later reads are this renderer's, and
+         * they answer `invalid-output`. What matters is that neither escapes,
+         * so the assertion names both rather than pinning an index.
+         */
+        expect(placeholderReasons(html)).toEqual([
+          expect.stringMatching(/^(render-error|invalid-output)$/),
+        ]);
+        expect(html).not.toContain("shown");
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("which runtimes the contract warning is willing to speak in", () => {
+  const wrapped2 = defineBlock({
+    name: "test/wrapped-env",
+    version: 1,
+    description: "Wraps its output in a fragment, against the contract.",
+    example: { props: {} },
+    defaultProps: {},
+    render: () => <>{"held"}</>,
+  });
+
+  const renderIt = async (): Promise<string> =>
+    renderToHtml(
+      <PageRenderer
+        document={doc(node("a", "test/wrapped-env"))}
+        blocks={createBlockResolver([wrapped2 as AnyBlockDefinition])}
+      />
+    );
+
+  const saysNothingWhen = async (env: unknown): Promise<void> => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubGlobal("process", { env });
+      await renderIt();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  };
+
+  it("says nothing when NODE_ENV is absent from a real `process`", async () => {
+    /*
+     * A standalone SSR runtime can expose a partial Node shim and never set
+     * `NODE_ENV`. Reading only "is `process` absent" covered ONE way of being
+     * unable to tell, so this one warned — undeduplicated, on every render of
+     * every affected block, in something that may well be production.
+     */
+    await saysNothingWhen({});
+  });
+
+  it("says nothing for an environment name it does not recognise", async () => {
+    // `staging` is neither development nor production, and guessing which it
+    // resembles is exactly the judgement a diagnostic should decline to make.
+    await saysNothingWhen({ NODE_ENV: "staging" });
+  });
+
+  it("says nothing when reading the environment THROWS", async () => {
+    /*
+     * A standalone SSR host supplies its own `process`, and nothing says its
+     * `env` has to be a plain object — a throwing getter or a proxy is a shape
+     * this renderer will meet. The read used to sit ahead of the diagnostic's
+     * own guard, so it raised before there was anything to catch it.
+     *
+     * Where that lands is the point. `checkedOutput` is called PAST the try
+     * that contains the block's `render` on the synchronous path, so the throw
+     * is not contained into a placeholder: it leaves the package and takes the
+     * page — `renderToHtml` fails the test through its `onError`. An advisory
+     * warning must never be able to do that.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubGlobal("process", {
+        get env(): never {
+          throw new Error("no env here");
+        },
+      });
+      // Population first: the render COMPLETED and the block's output is on the
+      // page, so this is containment rather than a page that failed some other
+      // way and happened to log nothing.
+      const html = await renderIt();
+      expect(html).toContain("held");
+      expect(html).not.toMatch(PLACEHOLDER);
+      // And unable to tell, it stayed quiet — the same answer every other
+      // unidentifiable environment gets.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  });
+
+  it("DOES speak in development", async () => {
+    /*
+     * The control on all three silences above, and the one that stops this
+     * being satisfied by a warning that never fires at all.
+     */
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.stubGlobal("process", { env: { NODE_ENV: "development" } });
+      const html = await renderIt();
+      expect(html).toContain("held");
+      const said = warn.mock.calls.map(call => String(call[0])).join("\n");
+      expect(said).toContain("test/wrapped-env");
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  });
+});

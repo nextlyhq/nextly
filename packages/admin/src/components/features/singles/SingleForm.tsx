@@ -79,6 +79,7 @@ import { getDefaultValues } from "@admin/lib/form/default-values";
 import { cn } from "@admin/lib/utils";
 
 import { relaxIdentityRequired } from "./identity-fields";
+import { useSinglePreviewLink } from "./useSinglePreviewLink";
 
 // ============================================================================
 // Types
@@ -235,6 +236,7 @@ export interface SingleFormProps {
  * }
  * ```
  */
+
 export function SingleForm({
   schema,
   document,
@@ -446,6 +448,18 @@ export function SingleForm({
     enabled: localizationEnabled,
   } = useLocalization();
 
+  // One decision rather than three: which language the link is for, whether it
+  // can be offered at all, and the mint itself. No site URL is computed here —
+  // a link that travels by email or chat has to name a host, and the server is
+  // the only place that can.
+  const previewLink = useSinglePreviewLink({
+    slug: schema.slug,
+    localized: schema.localized === true,
+    hasStatus,
+    locale,
+    defaultLocale,
+  });
+
   // The per-locale translation-status map, read once and shared by the header
   // adapter and the language panel: two reads of the same document key would
   // agree today and drift the moment one of them learns a new shape.
@@ -605,13 +619,16 @@ export function SingleForm({
                     className="mx-6 mt-3"
                   />
 
-                  <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+                  <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
                     {/* Main column */}
                     <div className="flex-1 min-w-0 flex flex-col">
-                      {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
-                already cancels PageContainer's px-8, so wrapping the header / meta
-                strip in another -mx-8 was double-negative and pushed them
-                past the page edges. */}
+                      {/* No horizontal compensation here, and none needed. The
+                parent's `-my-8` cancels the page's VERTICAL inset only; the
+                horizontal inset is spent as grid columns on a measured page and
+                is not a padding any margin can pull back from. A horizontal one here
+                would not cancel anything — it would push the header and meta
+                strip past the content column, which is what it did when the
+                parent still cancelled both axes. */}
                       <EntrySystemHeader
                         autosaveEnabled={autosaveScope !== null}
                         autosaveStatus={autosave.status}
@@ -632,6 +649,14 @@ export function SingleForm({
                         locale={locale}
                         onLocaleChange={onLocaleChange}
                         localized={schema.localized === true}
+                        /* A Single has a draft lifecycle, so it has drafts worth
+                   sharing. The control is offered whenever the Single carries
+                   that lifecycle; whether a link can actually be minted is the
+                   server's call, and it refuses with a message naming what is
+                   missing rather than handing out one that 404s. */
+                        isLinkAvailable={previewLink.isAvailable}
+                        onCopyLink={previewLink.copy}
+                        isCopyingLink={previewLink.isCopying}
                         toolbarSlot={
                           <EntryFormToolbarSlots
                             context="single"

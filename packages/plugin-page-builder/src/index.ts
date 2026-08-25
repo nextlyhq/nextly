@@ -70,6 +70,16 @@ export { resolveSiteStyle, siteBreakpoints, siteSheet } from "./site-style";
 export type { SiteStyleData } from "./site-style";
 export { SITE_STYLE_SLUG, loadSiteStyle } from "./site-style-storage";
 export type { SiteStyleReader } from "./site-style-storage";
+
+// The class-usage record and the walk that repairs it. Both are public because
+// the record is a CACHE of something derivable: a host that has written pages
+// outside the hook — a restore, an import, a direct database edit — needs the
+// rebuild to bring the record back into agreement with the documents, and a
+// cache with no reachable way to rebuild it is a second source of truth.
+export { classUsageOf } from "./class-usage";
+export type { ClassUsage } from "./class-usage";
+export { rebuildClassUsage } from "./class-usage-rebuild";
+export type { PageUsageStore, RebuildReport } from "./class-usage-rebuild";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
  *

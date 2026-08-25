@@ -145,6 +145,21 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental Read-only registry access to the app's Singles.
+ *
+ * Forwarded here because this package is the supported import surface for a
+ * plugin author: a type exported only from `nextly` cannot be named by a plugin
+ * following the documented surface, so the helper it was added for would have
+ * had to widen to `unknown`.
+ */
+export type {
+  PluginSinglesService,
+  PluginSinglesResult,
+  PluginSingleRecord,
+  SerializedFieldConfig,
+} from "nextly";
+
+/**
  * Plugin HTTP routes (P4, D25/D26/D27) — `contributes.routes` author surface.
  * @public Exercised by redirects (lookup) and seo (sitemap).
  */

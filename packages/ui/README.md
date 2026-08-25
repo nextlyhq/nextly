@@ -60,8 +60,35 @@ utilities the components use:
 
 `theme.css` defines the tokens as complete OKLCH color values (`--nx-background`, `--nx-primary`,
 `--nx-border`, …) with `@theme inline` mappings and the dark-mode overrides. Reference tokens
-directly (`var(--nx-primary)`) — never wrap them in `hsl()`. `uiPreset` remains available
-as a Tailwind v3 preset from `@nextlyhq/ui/tailwind-preset`.
+directly (`var(--nx-primary)`) — never wrap them in `hsl()`.
+
+**Bring your own Tailwind v3 build**
+
+`uiPreset` from `@nextlyhq/ui/tailwind-preset` maps the same tokens to v3 utilities:
+
+```js
+// tailwind.config.js
+const { uiPreset } = require("@nextlyhq/ui/tailwind-preset");
+
+module.exports = {
+  presets: [uiPreset],
+  content: [
+    "./src/**/*.{js,jsx,ts,tsx}",
+    // Required. Tailwind generates a utility only for a class it has SEEN, and
+    // the classes these components write live in the published bundle rather
+    // than in your source. Omit this path and the components render with their
+    // utilities missing — no error, just unstyled markup.
+    "./node_modules/@nextlyhq/ui/dist/**/*.{js,mjs,cjs}",
+  ],
+};
+```
+
+Import `@nextlyhq/ui/theme.css` alongside it. The preset carries tokens and the utilities
+derived from them; a handful of components also write their own classes — `nx-page-shell`,
+`nx-bleed`, `nx-form-section-rows` — and the rules behind those classes are CSS, shipped in
+`theme.css` for every consumer alike. Scanning a component finds the class it writes, never
+the rule, so a build with the preset and no stylesheet renders those components unstyled
+without erroring.
 
 > Inside a Nextly admin plugin you need neither import — the admin already provides the
 > tokens. See the [**Plugin UI authoring guide**](./docs/plugin-ui-authoring.md).
@@ -97,7 +124,7 @@ as a Tailwind v3 preset from `@nextlyhq/ui/tailwind-preset`.
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `@nextlyhq/ui/styles.css`        | The app is yours end to end. Styles the whole document, Tailwind preflight included.                                                  |
 | `@nextlyhq/ui/styles.scoped.css` | Dropping a few components into an existing app. Every rule is confined to `.nextly-ui`, so the rest of the page keeps its own styles. |
-| `@nextlyhq/ui/theme.css`         | You compile Tailwind yourself and want the token contract only.                                                                       |
+| `@nextlyhq/ui/theme.css`         | You compile Tailwind yourself. Carries the token contract and the component rules; required on both the v4 and the v3-preset path.    |
 
 The scoped sheet needs a wrapper element, and dark mode goes on the same element:
 
@@ -150,11 +177,11 @@ This does not apply to `styles.css`, where the rules are document-wide and
 
 ## Compatibility
 
-| Tool           | Version                                                                |
-| -------------- | ---------------------------------------------------------------------- |
-| React          | 18 or 19                                                               |
-| Tailwind CSS   | 4+ (`@nextlyhq/ui/tailwind-preset` also works as a Tailwind v3 preset) |
-| `lucide-react` | 0.400+                                                                 |
+| Tool           | Version                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| React          | 18 or 19                                                                                 |
+| Tailwind CSS   | 4+ (`@nextlyhq/ui/tailwind-preset` also works as a Tailwind v3 preset, with `theme.css`) |
+| `lucide-react` | 0.400+                                                                                   |
 
 ## Documentation
 

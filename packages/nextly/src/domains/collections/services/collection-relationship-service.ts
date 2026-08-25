@@ -44,6 +44,12 @@ import {
   boundRefuses,
   callerId,
 } from "../../../services/collections/trust-bound";
+import type { TrustBound } from "../../../services/collections/trust-grant";
+import {
+  assumedBound,
+  boundReaches,
+  TRUSTS_EVERY_COLLECTION,
+} from "../../../services/collections/trust-grant";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { detachData } from "../../../shared/lib/detach";
@@ -313,7 +319,7 @@ type RelatedRowAccess = RelatedRowReadContext;
  */
 function widensLifecycle(access: RelatedRowAccess): boolean {
   if (access.overrideAccess !== true) return false;
-  return access.trusted === undefined;
+  return access.trusted === TRUSTS_EVERY_COLLECTION;
 }
 
 /**
@@ -334,7 +340,7 @@ function trustsTarget(
   targetCollection: string
 ): boolean {
   if (access.overrideAccess !== true) return false;
-  return access.trusted === undefined || access.trusted(targetCollection);
+  return boundReaches(access.trusted, targetCollection);
 }
 
 /**
@@ -380,13 +386,19 @@ export interface RelationshipExpansionOptions {
    * Narrows `overrideAccess` to the collections a caller names, judged per
    * expansion TARGET. See {@link RelatedRowAccess.trusted}.
    */
-  trusted?: (collection: string) => boolean;
+  trusted?: TrustBound;
 
   /**
    * Opt in to evaluating the target collection's field read rules. Set by the
    * read paths that forward a real caller; see {@link RelatedRowAccess}.
    */
   enforceFieldAccess?: boolean;
+  /**
+   * Whose field rules related rows are judged by, when that is not the caller.
+   * See {@link RelatedRowReadContext.fieldAccessUser}. Applied to the access
+   * pass alone — hooks keep seeing `user`, who is who is actually asking.
+   */
+  fieldAccessUser?: Record<string, unknown>;
 
   /**
    * Evaluate the target collection's own read rules even when field redaction
@@ -2087,8 +2099,13 @@ export class CollectionRelationshipService extends BaseService {
       enforceCollectionAccess: options.enforceCollectionAccess,
       fieldAccessStage: options.fieldAccessStage,
       user: options.user,
+      // Carried BESIDE `user`, never folded into it. A preview judges a related
+      // row's fields as the sharer while every hook goes on seeing the
+      // anonymous bearer; dropping it here silently restores the anonymous
+      // reading for the whole expansion, which is the direction that leaks.
+      fieldAccessUser: options.fieldAccessUser,
       overrideAccess: options.overrideAccess,
-      trusted: options.trusted,
+      trusted: assumedBound(options.trusted),
       authenticatedScope: options.authenticatedScope,
       locale: options.locale,
       status: options.status,
@@ -2467,7 +2484,7 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     relatedIds: string[],
     field: FieldDefinition,
-    access: RelatedRowAccess = { trusted: undefined }
+    access: RelatedRowAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, Record<string, unknown>>> {
     const resultMap = new Map<string, Record<string, unknown>>();
 
@@ -2545,7 +2562,7 @@ export class CollectionRelationshipService extends BaseService {
     sourceCollectionName: string,
     sourceEntryIds: string[],
     field: FieldDefinition,
-    access: RelatedRowAccess = { trusted: undefined }
+    access: RelatedRowAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, Record<string, unknown>[]>> {
     const resultMap = new Map<string, Record<string, unknown>[]>();
 
@@ -2683,8 +2700,13 @@ export class CollectionRelationshipService extends BaseService {
       enforceCollectionAccess: options.enforceCollectionAccess,
       fieldAccessStage: options.fieldAccessStage,
       user: options.user,
+      // Carried BESIDE `user`, never folded into it. A preview judges a related
+      // row's fields as the sharer while every hook goes on seeing the
+      // anonymous bearer; dropping it here silently restores the anonymous
+      // reading for the whole expansion, which is the direction that leaks.
+      fieldAccessUser: options.fieldAccessUser,
       overrideAccess: options.overrideAccess,
-      trusted: options.trusted,
+      trusted: assumedBound(options.trusted),
       authenticatedScope: options.authenticatedScope,
       locale: options.locale,
       status: options.status,
@@ -3151,7 +3173,7 @@ export class CollectionRelationshipService extends BaseService {
   private async redactRelatedRows(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    access: RelatedRowAccess = { trusted: undefined }
+    access: RelatedRowAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<void> {
     if (rows.length === 0) return;
     // The system owner column must never ride along a populated relationship:
@@ -3999,7 +4021,10 @@ export class CollectionRelationshipService extends BaseService {
           kind: "collection",
           slug: targetCollection,
           entry: row,
-          user: access.user,
+          // The field-access identity, never the hook one: a preview judges a
+          // related row's fields as the sharer while every hook goes on seeing
+          // the anonymous bearer who is actually asking.
+          user: access.fieldAccessUser ?? access.user,
           overrideAccess: false,
         },
         redactions
@@ -4044,7 +4069,7 @@ export class CollectionRelationshipService extends BaseService {
   async fetchRelatedEntry(
     collectionName: string,
     entryId: string,
-    access: RelatedRowAccess = { trusted: undefined }
+    access: RelatedRowAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown> | null> {
     try {
       const [readable] = await this.readTargetRows(
@@ -4128,7 +4153,7 @@ export class CollectionRelationshipService extends BaseService {
     // written in it. The target-entry fetch stays on the pool: related rows live
     // in another (already-committed) collection, so they need no tx visibility.
     executor?: RelationshipDbExecutor,
-    access: RelatedRowAccess = { trusted: undefined }
+    access: RelatedRowAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown>[]> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.

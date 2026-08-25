@@ -143,3 +143,96 @@ describe("EntryForm wires the shareable link into its header", () => {
     expect(typeof lastHeaderProps().onCopyLink).toBe("function");
   });
 });
+
+/*
+ * The OTHER half of the same control, and the one that was missing entirely.
+ *
+ * `useEntryPreview` answers both of these and was called by nothing, so
+ * `isPreviewAvailable` and `onPreview` arrived at the header as their defaults
+ * and `PreviewActions` could only ever draw its copy-link shape. Every layer
+ * existed — the hook, its 24 tests, the control's four shapes, the server
+ * resolver — and nothing joined them, which is the defect this file's own
+ * docblock describes for the link half.
+ *
+ * So these assert the PROPS the header receives, for the same reason the link
+ * tests do: reconstructing the condition here would keep passing after someone
+ * edits the line that decides it.
+ */
+describe("EntryForm wires the preview action into its header", () => {
+  /** A collection that declares a preview, which the one above does not. */
+  const previewable = {
+    ...(collection as unknown as Record<string, unknown>),
+    admin: { preview: { hasPreview: true, label: "View page" } },
+  } as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localization.current = { defaultLocale: "en" };
+    settings.current = { siteUrl: "https://site.example" };
+  });
+
+  function renderPreviewable(mode: "edit" | "create" = "edit"): void {
+    render(
+      <EntryForm
+        collection={previewable}
+        {...(mode === "create" ? {} : { entry })}
+        mode={mode}
+      />
+    );
+  }
+
+  it("offers the preview action when the collection declares one", () => {
+    renderPreviewable();
+
+    expect(lastHeaderProps().isPreviewAvailable).toBe(true);
+  });
+
+  it("hands the header a handler rather than only a flag", () => {
+    // The same trap as the link half: `PreviewActions` draws nothing without
+    // both, so a flag alone is indistinguishable from no preview at all — and
+    // that is exactly the state this change repairs.
+    renderPreviewable();
+
+    expect(typeof lastHeaderProps().onPreview).toBe("function");
+  });
+
+  it("carries the collection's own label through", () => {
+    // Proves the props come from the hook reading this collection rather than
+    // from a default that would look identical on a collection labelled
+    // "Preview".
+    renderPreviewable();
+
+    expect(lastHeaderProps().previewLabel).toBe("View page");
+  });
+
+  it("offers nothing for a collection that declares no preview", () => {
+    // The negative control. Without it, a wiring that hardcoded `true` would
+    // satisfy every assertion above.
+    renderForm();
+
+    expect(lastHeaderProps().isPreviewAvailable).toBe(false);
+    expect(lastHeaderProps().onPreview).toBeUndefined();
+  });
+
+  it("withholds the preview while the language is still unknown", () => {
+    // The token's scope is what the preview route redirects from, so opening
+    // without a resolved language sends the editor to the default translation
+    // rather than the one on screen. The link half withholds here too, for a
+    // different reason — an unscoped token grants every translation — and both
+    // reasons bite.
+    localization.current = { defaultLocale: "" };
+    renderPreviewable();
+
+    expect(lastHeaderProps().isPreviewAvailable).toBe(false);
+    expect(lastHeaderProps().onPreview).toBeUndefined();
+  });
+
+  it("withholds the preview while the entry is unsaved", () => {
+    // What opens renders the SAVED row, so on a create form the address names
+    // nothing yet. Offering it would open a 404 the author cannot act on.
+    renderPreviewable("create");
+
+    expect(lastHeaderProps().isPreviewAvailable).toBe(false);
+    expect(lastHeaderProps().onPreview).toBeUndefined();
+  });
+});

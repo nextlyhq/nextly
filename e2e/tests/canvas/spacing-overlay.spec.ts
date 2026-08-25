@@ -431,12 +431,24 @@ test.describe("spacing values on the canvas", () => {
           }
           if (key === "a scroll container reserving a scrollbar gutter") {
             /*
-             * `scrollbar-gutter: stable` reserves the space deterministically.
-             * Left to the platform this is a coin toss — macOS uses overlay
-             * scrollbars that reserve nothing, so the defect only appears on
-             * Windows and Linux, and a test that depended on that would pass
-             * locally while covering nothing.
+             * The gutter is forced with a CLASSIC scrollbar, not with
+             * `scrollbar-gutter: stable` alone.
+             *
+             * `stable` reserves space only for a scrollbar that occupies
+             * layout, and on macOS Chromium the scrollbar is an OVERLAY with no
+             * width — measured, `offsetWidth - clientWidth` is 0 there with
+             * `stable` set, in headless and headed alike. The refusal under
+             * test reads exactly that difference, so on macOS it correctly
+             * finds no gutter and the assertion below fails, while the same
+             * test passes on the Linux runner where the scrollbar is classic.
+             *
+             * Sizing `::-webkit-scrollbar` opts the element out of the overlay
+             * treatment, so the gutter is real on every platform: measured at
+             * 15px on macOS, where `stable` alone gives 0.
              */
+            const style = el.ownerDocument.createElement("style");
+            style.textContent = `[data-nx-node="${el.dataset.nxNode ?? ""}"]::-webkit-scrollbar { width: 15px; height: 15px; } [data-nx-node="${el.dataset.nxNode ?? ""}"]::-webkit-scrollbar-thumb { background: #888; }`;
+            el.ownerDocument.head.appendChild(style);
             el.style.overflow = "scroll";
             el.style.scrollbarGutter = "stable";
           }

@@ -45,6 +45,18 @@ export type { PageRendererProps } from "./page-renderer";
 // a `DarkModeStrategy`. A caller writing a site's design system needs every one
 // of them by name, so withholding any makes the prop typeable but unusable —
 // which is the same defect as not exporting the outer type, one level in.
+/**
+ * The cascade behind a page, for chrome that names where a value came from.
+ *
+ * Exported because the reconciliation it needs — named classes, block bases, the
+ * token prefix and the fetch predicate, each resolved from two tiers — is
+ * private to this package. A consumer assembling its own context compiles a
+ * cascade the page never had, and the shortfall is silent: no class declaration
+ * reaches the trace, so every value from a named class reports as set by nobody.
+ */
+export { pageStyleTrace } from "./page-style-trace";
+export type { PageStyleCascade, PageStyleTraceInput } from "./page-style-trace";
+
 export type {
   DarkModeStrategy,
   FontFaceDef,
@@ -59,7 +71,14 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the
 // attribute must not hard-code its spelling, or the renderer and the editor hold
 // two copies of one string and the editor breaks silently when it moves.
-export { NODE_ID_ATTRIBUTE, PROP_ATTRIBUTE } from "./block-boundary";
+export {
+  EDITOR_NAMESPACE,
+  NODE_ID_ATTRIBUTE,
+  PROP_ATTRIBUTE,
+} from "./block-boundary";
+// The render-safe attribute rule, public so an editor asks it instead of
+// keeping a second copy that would accept names the renderer drops.
+export { isAllowedAttribute } from "./block-boundary";
 export type { BlockBoundaryProps, BlockListProps } from "./block-boundary";
 
 /**
@@ -89,9 +108,14 @@ export {
   // recompile its CSS on every render for ever.
   fetchPolicyLabel,
   resolvePageStyles,
+  resolvePageStylesWithTrace,
   styleTextForInjection,
 } from "./styles";
-export type { PageStyles, ResolveStyleOptions } from "./styles";
+export type {
+  PageStyles,
+  ResolvedPageStyles,
+  ResolveStyleOptions,
+} from "./styles";
 
 /**
  * Exported because `resolvePageStyles` has a precondition a caller could not otherwise meet.
@@ -119,7 +143,7 @@ export type { PageStyles, ResolveStyleOptions } from "./styles";
  * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
-export { prepareDocumentForRead } from "./prepare-document";
+export { prepareDocumentForRead, rendersOwnMarkup } from "./prepare-document";
 export type { PrepareDocumentArgs } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";

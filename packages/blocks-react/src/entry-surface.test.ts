@@ -26,6 +26,7 @@ import * as blocksEntry from "./blocks/index";
 import * as contextModule from "./context";
 import * as richTextModule from "./rich-text";
 import * as pageRendererModule from "./page-renderer";
+import * as pageStyleTraceModule from "./page-style-trace";
 import * as placeholderModule from "./placeholder";
 import * as prepareModule from "./prepare-document";
 import * as readPageModule from "./read-page";
@@ -94,6 +95,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     // is the same walk the CMS uses, rather than a second one here.
     internal: [],
   },
+  { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
   { name: "resolver", module: resolverModule, internal: [] },
   {
     name: "shared-style-inputs",
@@ -218,7 +220,32 @@ const SOURCE_MODULES: ReadonlyArray<{
     internal: ["drawsNothing", "isUnconditional", "pruneNodes"],
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
-  { name: "page-renderer", module: pageRendererModule, internal: [] },
+  {
+    name: "page-renderer",
+    module: pageRendererModule,
+    // Crosses a module boundary inside this package and is not a consumer
+    // surface, the same case `prepare-document` records below: exported to
+    // DELETE a copy rather than to offer an API.
+    //
+    // `sharedStyleInputs` reconciles the site tier with the route's context —
+    // named classes, block bases, the token prefix — and a THIRD compile needs
+    // the same answer: `pageStyleTrace` asks for the cascade behind the page so
+    // an editor can say where a value came from. Assembled separately there, the
+    // trace carries no named classes at all and every value from a class reports
+    // as set by nobody. Published instead of shared, it would be a second public
+    // way to build a compile context, which is what `compileContextFor` exists
+    // to prevent.
+    //
+    // `pruneRenderedPlaceholders` is the same shape and the same third caller.
+    // It answers "which tree does this page's sheet describe" for the nodes a
+    // placeholder replaced, and the editor's cascade read has to ask exactly
+    // that: pruned harder, the trace withholds an account of markup that is on
+    // the page; pruned less, it names a source for markup that is not. Rebuilt
+    // there from `rendersOwnMarkup` it would be a second implementation of one
+    // pass, which is the drift the pass's own docblock argues against. An
+    // internal derivation, not something a host composes with.
+    internal: ["pruneRenderedPlaceholders", "sharedStyleInputs"],
+  },
   {
     name: "prepare-document",
     module: prepareModule,
@@ -272,6 +299,9 @@ describe("the root entry", () => {
       "BlockBoundary",
       "BlockList",
       "BlockPlaceholder",
+      // The editor marker namespace, public so an editor refuses a name the
+      // renderer would drop rather than keeping a list beside it.
+      "EDITOR_NAMESPACE",
       "NODE_ID_ATTRIBUTE",
       "PROP_ATTRIBUTE",
       "PageRenderer",
@@ -281,12 +311,18 @@ describe("the root entry", () => {
       "defineBlock",
       "emptyDataProvider",
       "fetchPolicyLabel",
+      // The render-safe attribute rule. Public because the editor offering that
+      // field asks it rather than keeping a copy that would drift.
+      "isAllowedAttribute",
       "migrationSourceFor",
+      "pageStyleTrace",
       "prepareDocumentForRead",
       "preparePageForRead",
       "pruneHiddenNodes",
       "registeredBlocks",
+      "rendersOwnMarkup",
       "resolvePageStyles",
+      "resolvePageStylesWithTrace",
       "styleTextForInjection",
     ]);
   });

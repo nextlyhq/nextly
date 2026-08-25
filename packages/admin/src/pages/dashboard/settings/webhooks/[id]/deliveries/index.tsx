@@ -34,6 +34,19 @@ import type {
 } from "@admin/types/webhooks";
 
 /** A short human summary of a drain pass for the toast. */
+
+/**
+ * This page renders the settings chrome in several branches — loading,
+ * error and the resolved document — and its identity is the same in all of
+ * them. Stated once here so the branches cannot drift apart.
+ */
+const DELIVERIES_PAGE = {
+  title: "Deliveries",
+  description:
+    "Delivery attempts for this endpoint, with response status and retries",
+  crumb: "Deliveries",
+  parentCrumb: { label: "Webhooks", href: ROUTES.SETTINGS_WEBHOOKS },
+} as const;
 function summarizeDrain(result: RunDrainResult): string {
   return `${result.attempted} attempted · ${result.delivered} delivered · ${result.retried} retrying · ${result.failed} failed.`;
 }
@@ -221,8 +234,8 @@ export default function WebhookDeliveriesPage() {
 
   if (!id) {
     return (
-      <PageContainer>
-        <SettingsLayout>
+      <PageContainer width="wide">
+        <SettingsLayout {...DELIVERIES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
               Invalid endpoint ID. Please go back and try again.
@@ -240,8 +253,8 @@ export default function WebhookDeliveriesPage() {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
-        <SettingsLayout>
+      <PageContainer width="wide">
+        <SettingsLayout {...DELIVERIES_PAGE}>
           <DeliveriesContent id={id} />
         </SettingsLayout>
       </PageContainer>
