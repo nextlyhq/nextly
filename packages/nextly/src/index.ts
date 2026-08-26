@@ -578,6 +578,12 @@ export type {
   DraftSplitDisabledReason,
 } from "./domains/versions/draft-split-eligibility";
 
+// Which fields a level addresses, with presentational groups flattened.
+// Exported because a plugin that walks a collection's fields was otherwise
+// reaching into core's file layout, and a second copy of this walk is a second
+// answer to one question.
+export { addressableFields } from "./shared/addressable-fields";
+
 // What a form answers a visitor who reaches it. Exported because the plugin
 // that contributes the forms collection refuses submissions too, and a second
 // implementation of this is how the four public paths came to disagree.

@@ -64,6 +64,7 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -127,7 +128,6 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
-  addressableFields,
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
   tagComponentTypes,
