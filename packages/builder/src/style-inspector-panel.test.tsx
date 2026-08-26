@@ -2074,3 +2074,163 @@ describe("naming the place a value came from", () => {
     expect(describeProvenance(undefined, editing as never)).toBeNull();
   });
 });
+
+describe("the action a control's breakpoint provenance earns", () => {
+  const SITE = {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  } as never;
+
+  const action = (kind: "reset" | "jump") =>
+    document.querySelector(
+      `[data-property="color"] [data-action="${kind}"]`
+    ) as HTMLElement | null;
+
+  const entryAt = (breakpoint: string) =>
+    ({
+      origin: { kind: "node", id: "a" },
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint,
+    }) as never;
+
+  function mount(opts: {
+    stored: string;
+    entries: readonly unknown[];
+    onJump?: (breakpoint: string) => void;
+    /** Which tier the panel is editing; base unless a case needs otherwise. */
+    editing?: string;
+  }) {
+    register({ color: true });
+    const editor = editorFor(
+      documentOf({ base: { [opts.stored]: { color: "#111" } } })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={SITE}
+        {...(opts.editing === undefined
+          ? {}
+          : { breakpoint: opts.editing as never })}
+        /*
+         * PREVIEWING, which is what makes the host's live set authoritative.
+         * Published, the window decides and a supplied set is ignored — so
+         * without this the panel asks jsdom's absent `matchMedia`, gets the
+         * base context alone, and every control reads as unset. The real mount
+         * previews whenever the site defines a viewport tier.
+         */
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          { entries: opts.entries, nodes: editor.document.nodes } as never
+        }
+        {...(opts.onJump === undefined
+          ? {}
+          : { onJumpToBreakpoint: opts.onJump as never })}
+      />
+    );
+    return editor;
+  }
+
+  it("offers NOTHING on a control the author has not touched", () => {
+    /*
+     * The bound the whole design rests on. `ProvenanceDot` refuses to be
+     * focusable because a stop per control would double the presses to cross a
+     * section of eight or more, and a button on every control would spend that
+     * same cost. Unset controls are the large majority of a panel, and they
+     * earn no action.
+     */
+    /*
+     * The jump handler IS supplied, so this asserts the absence for the reason
+     * it claims: the control earns no action, rather than the host merely being
+     * unable to honour one.
+     *
+     * Measured while break-verifying: the `none` early exit cannot be
+     * distinguished by any test, because the jump handler is bound per leaf and
+     * only for an `inherited` badge — so a `none` badge reaches the jump branch
+     * with nothing to call and returns anyway. The guard is a readable exit
+     * rather than a load-bearing one, and this case does not pretend to cover
+     * it.
+     */
+    mount({ stored: BASE_BREAKPOINT, entries: [], onJump: () => {} });
+
+    expect(action("reset")).toBeNull();
+    expect(action("jump")).toBeNull();
+  });
+
+  it("offers a RESET for a value authored at the tier being edited", () => {
+    mount({ stored: BASE_BREAKPOINT, entries: [entryAt(BASE_BREAKPOINT)] });
+
+    expect(action("reset")).not.toBeNull();
+    expect(action("jump")).toBeNull();
+  });
+
+  it("names what the reset will REVEAL, rather than only that it clears", () => {
+    /*
+     * "Reset" alone asks an author to guess whether the control becomes unset
+     * or falls back to a wider tier's value. In a desktop-first cascade it is
+     * usually the second, and not always base.
+     */
+    /*
+     * Editing the NARROW tier, which is the only arrangement where a control is
+     * authored here AND something wider shows through. At base the narrower
+     * entry wins the cascade instead, so the control reads as inherited and
+     * earns a jump rather than a reset.
+     */
+    mount({
+      stored: "tablet",
+      editing: "tablet",
+      entries: [entryAt(BASE_BREAKPOINT), entryAt("tablet")],
+    });
+
+    const label = action("reset")?.getAttribute("aria-label");
+    expect(label).toContain("Reset");
+    /*
+     * The tier a reset falls back to is NAMED, not left to be guessed. The
+     * unconditional tier has no authored definition to take a label from, so it
+     * is called by its id here — the same name every other sentence in this
+     * panel gives it, which is the point: one naming, not a second one invented
+     * for this button.
+     */
+    expect(label).toContain("from base");
+  });
+
+  it("offers a JUMP for a value that came from another tier", () => {
+    mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")).not.toBeNull();
+  });
+
+  it("withholds the jump when the host cannot move the canvas", () => {
+    /*
+     * A button that does nothing reads as broken rather than as absent, and a
+     * host with no canvas width to move has no way to honour it.
+     */
+    mount({ stored: BASE_BREAKPOINT, entries: [entryAt("tablet")] });
+
+    expect(action("jump")).toBeNull();
+  });
+
+  it("jumps to the tier the VALUE came from, not to a fixed one", () => {
+    /*
+     * The target is this control's own source: a different control on the same
+     * panel jumps somewhere else, which is why the handler is bound per leaf
+     * rather than threaded as one prop.
+     */
+    const jumped: string[] = [];
+    mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt("tablet")],
+      onJump: id => jumped.push(id),
+    });
+
+    fireEvent.click(action("jump") as HTMLElement);
+
+    expect(jumped).toEqual(["tablet"]);
+  });
+});

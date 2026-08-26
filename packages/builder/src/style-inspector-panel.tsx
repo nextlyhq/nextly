@@ -30,7 +30,6 @@
  */
 
 import {
-  breakpointContexts,
   findNode,
   isTokenRef,
   trimCssWhitespace,
@@ -45,6 +44,7 @@ import {
   type StyleShape,
   type StyleOrigin,
   type StyleState,
+  type StyleSubject,
   type StyleTraceEntry,
   type StyleValue,
   previewContainerName,
@@ -107,8 +107,11 @@ import {
   withUnit,
 } from "./style-numeric";
 import {
+  breakpointBadge,
+  breakpointSource,
   propertiesWriting,
   styleProvenance,
+  type BreakpointBadge,
   type StyleProvenance,
 } from "./style-provenance";
 import { styleSubjectFor } from "./style-subject";
@@ -129,7 +132,26 @@ import {
  *
  * `undefined` means nothing can answer, which is not the same as "unset".
  */
-type ProvenanceOf = (leaf: StyleLeaf) => StyleProvenance | undefined;
+/** What one control knows about where its value came from, and what to do. */
+interface ProvenanceAnswer {
+  provenance: StyleProvenance;
+  badge: BreakpointBadge;
+  /**
+   * Move the canvas to the tier this control's value came from.
+   *
+   * Carried per LEAF rather than threaded as its own prop, because the
+   * target is this control's own source: a different control on the same
+   * panel jumps somewhere else. Bundling it here also keeps three
+   * intermediate components from gaining a prop they only pass on.
+   *
+   * Absent when the host supplies no handler, which is a host that cannot
+   * move its canvas — and a button that does nothing reads as broken rather
+   * than as missing.
+   */
+  jump?: () => void;
+}
+
+type ProvenanceOf = (leaf: StyleLeaf) => ProvenanceAnswer | undefined;
 
 export interface StyleInspectorPanelProps {
   /**
@@ -222,6 +244,18 @@ export interface StyleInspectorPanelProps {
    * which is worse than naming none.
    */
   liveBreakpoints?: readonly BreakpointId[];
+  /**
+   * Move the canvas to a breakpoint, for a control offering to go where its
+   * value was set.
+   *
+   * The panel cannot do this itself: which tier the canvas shows is a fact
+   * about the surface that OWNS the canvas width, and this panel sits several
+   * layers below it. Supplied, each control whose value came from another tier
+   * offers the jump; omitted, none does — a host with no canvas to move would
+   * otherwise draw a button that does nothing, which reads as broken rather
+   * than absent.
+   */
+  onJumpToBreakpoint?: (breakpoint: BreakpointId) => void;
 }
 
 export function StyleInspectorPanel({
@@ -234,6 +268,7 @@ export function StyleInspectorPanel({
   breakpoints,
   previewContainer,
   liveBreakpoints,
+  onJumpToBreakpoint,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -363,20 +398,7 @@ export function StyleInspectorPanel({
    * is: both are only valid against the document they were read from, and an
    * edit anywhere changes the document and the values shown together.
    */
-  const subject =
-    editor.selectedId === null
-      ? undefined
-      : styleSubjectFor(
-          /*
-           * The cascade's OWN tree where there is one. Asking the raw document
-           * instead would answer about a node the declarations may not describe,
-           * and the fallback below is only for a panel with no cascade at all —
-           * where no indicator is drawn and the subject is read for the block
-           * type alone.
-           */
-          cascade?.nodes ?? editor.document.nodes,
-          editor.selectedId
-        );
+  const subject = selectedSubject(editor, cascade);
   /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
@@ -389,52 +411,15 @@ export function StyleInspectorPanel({
     breakpoint: inspection.breakpoint,
     labelOf: id => breakpointLabel(breakpoints, id),
   };
-  const provenanceOf: ProvenanceOf = leaf => {
-    // Absent means the question was never asked. A host that supplies no cascade
-    // gets no indicators, which is the honest answer for a surface that cannot
-    // compile — and not the same as "nothing is inherited".
-    if (cascade === undefined || subject === undefined) return undefined;
-    /*
-     * The same answer while the canvas is previewing and nobody has said which
-     * tier the preview BOX is showing.
-     *
-     * Under a preview compile the viewport tiers are container queries, and a
-     * `matchMedia` caller cannot evaluate them — so the window-derived set is
-     * the base context alone. Passed on, that is not silence: `["base"]` is the
-     * CLAIM that base is what the browser is applying, and a narrow box showing
-     * the mobile tier would have every mobile declaration excluded and the base
-     * value reported as the visible winner.
-     *
-     * No dot says "not asked", which is true until a caller observes the box.
-     */
-    if (live === undefined) return undefined;
-    return styleProvenance({
-      trace: cascade.entries,
-      subject,
-      // The control's own leaf, never the catalog key: two keys can write one
-      // CSS property, and the trace records what was WRITTEN.
-      cssProperty: leaf.cssProperty,
-      descendant: leaf.descendant,
-      state: inspection.state,
-      breakpoint: inspection.breakpoint,
-      /*
-       * What the BROWSER is applying, and ONLY that. The edited breakpoint is a
-       * different fact and travels separately in `breakpoint`: it says where a
-       * write lands, not what is on screen.
-       *
-       * An earlier version forced the edited breakpoint into this set so a value
-       * authored there could be called "authored here". That inverted the
-       * premise — a host editing `mobile` while the canvas sits at desktop width
-       * would have the mobile declaration reported as the visible winner, which
-       * is a value the browser is not showing.
-       *
-       * The consequence is deliberate: editing a breakpoint whose query does not
-       * match reports its controls as unset. That is the honest answer, because
-       * the dot describes what is DISPLAYED rather than what is stored.
-       */
-      liveBreakpoints: live,
-    });
-  };
+  const provenanceOf = provenanceReader({
+    cascade,
+    subject,
+    live,
+    state: inspection.state,
+    breakpoint: inspection.breakpoint,
+    breakpoints,
+    onJumpToBreakpoint,
+  });
 
   const groups = inspection.sections.map(section => section.group);
   // Held rather than left to the accordion, so the open section survives a
@@ -1012,6 +997,11 @@ function StyleControlField({
 
   const commit = (value: StyleValue | null): CommitOutcome =>
     writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
+  /*
+   * The provenance and its breakpoint reading, from ONE ranking of the trace.
+   * The dot and the action are two readings of one answer, not two answers.
+   */
+  const answer = provenanceOf(control.leaf);
 
   const readOnly = showsNoField(control, stored, clearOnly);
   const labelId = `${id}-label`;
@@ -1039,7 +1029,7 @@ function StyleControlField({
       <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
         {label}
         <ProvenanceDot
-          provenance={provenanceOf(control.leaf)}
+          answer={answer}
           editing={editing}
           descendant={control.leaf.descendant}
         />
@@ -1058,12 +1048,208 @@ function StyleControlField({
         describedBy={describedBy}
         onCommit={commit}
       />
+      <BreakpointAction
+        answer={answer}
+        label={label}
+        editing={editing}
+        onReset={() => commit(null)}
+      />
       {issue === null ? null : (
         <p className="nx-inspector__error" id={errorId} role="alert">
           {issue}
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * The node the declarations describe, or `undefined` with nothing selected.
+ *
+ * Read from the CASCADE's own tree where there is one. Asking the raw document
+ * instead would answer about a node the declarations may not describe — read
+ * time repair can drop or replace one — and the fallback is only for a panel
+ * with no cascade at all, where no indicator is drawn and the subject is read
+ * for the block type alone.
+ */
+function selectedSubject(
+  editor: EditorState,
+  cascade: PageStyleCascade | undefined
+): StyleSubject | undefined {
+  if (editor.selectedId === null) return undefined;
+  return styleSubjectFor(
+    cascade?.nodes ?? editor.document.nodes,
+    editor.selectedId
+  );
+}
+
+/**
+ * The reader that answers, per control, where its value came from.
+ *
+ * Built OUTSIDE the panel because nothing in it is React: it is a pure function
+ * of inputs the panel has already resolved — one subject, one live set, one
+ * trace — and closing over them inside the component put the whole derivation
+ * into a body that also renders.
+ */
+function provenanceReader({
+  cascade,
+  subject,
+  live,
+  state,
+  breakpoint,
+  breakpoints,
+  onJumpToBreakpoint,
+}: {
+  cascade: PageStyleCascade | undefined;
+  subject: StyleSubject | undefined;
+  live: readonly BreakpointId[] | undefined;
+  state: StyleState;
+  breakpoint: BreakpointId;
+  breakpoints: BreakpointSet | undefined;
+  onJumpToBreakpoint: ((breakpoint: BreakpointId) => void) | undefined;
+}): ProvenanceOf {
+  return leaf => {
+    // Absent means the question was never asked. A host that supplies no cascade
+    // gets no indicators, which is the honest answer for a surface that cannot
+    // compile — and not the same as "nothing is inherited".
+    if (cascade === undefined || subject === undefined) return undefined;
+    /*
+     * The same answer while the canvas is previewing and nobody has said which
+     * tier the preview BOX is showing.
+     *
+     * Under a preview compile the viewport tiers are container queries, and a
+     * `matchMedia` caller cannot evaluate them — so the window-derived set is
+     * the base context alone. Passed on, that is not silence: `["base"]` is the
+     * CLAIM that base is what the browser is applying, and a narrow box showing
+     * the mobile tier would have every mobile declaration excluded and the base
+     * value reported as the visible winner.
+     *
+     * No dot says "not asked", which is true until a caller observes the box.
+     */
+    if (live === undefined) return undefined;
+    const query = {
+      trace: cascade.entries,
+      subject,
+      // The control's own leaf, never the catalog key: two keys can write one
+      // CSS property, and the trace records what was WRITTEN.
+      cssProperty: leaf.cssProperty,
+      descendant: leaf.descendant,
+      state: state,
+      breakpoint: breakpoint,
+      /*
+       * What the BROWSER is applying, and ONLY that. The edited breakpoint is a
+       * different fact and travels separately in `breakpoint`: it says where a
+       * write lands, not what is on screen.
+       *
+       * An earlier version forced the edited breakpoint into this set so a value
+       * authored there could be called "authored here". That inverted the
+       * premise — a host editing `mobile` while the canvas sits at desktop width
+       * would have the mobile declaration reported as the visible winner, which
+       * is a value the browser is not showing.
+       *
+       * The consequence is deliberate: editing a breakpoint whose query does not
+       * match reports its controls as unset. That is the honest answer, because
+       * the dot describes what is DISPLAYED rather than what is stored.
+       */
+      liveBreakpoints: live,
+    };
+    /*
+     * ONE query, ONE ranking, read twice. The badge is the breakpoint dimension
+     * of the same answer rather than a second opinion about it — two rankings
+     * of one trace would first disagree at exactly the boundaries the trace
+     * exists to settle.
+     */
+    const provenance = styleProvenance(query);
+    const badge = breakpointBadge(query, provenance, breakpoints);
+    const target =
+      badge.kind === "inherited" ? badge.source.breakpoint : undefined;
+    return {
+      provenance,
+      badge,
+      ...(onJumpToBreakpoint === undefined || target === undefined
+        ? {}
+        : { jump: () => onJumpToBreakpoint(target) }),
+    };
+  };
+}
+
+/**
+ * The action a control's breakpoint provenance earns, or nothing.
+ *
+ * Rendered ONLY where it means something: a Reset for a value authored at the
+ * tier being edited, a Jump for a value that arrived from another tier, and
+ * nothing at all for the unset controls that are the large majority of a panel.
+ *
+ * That bound is the whole design. {@link ProvenanceDot} refuses to be focusable
+ * because a stop per control would double the presses to cross a section of
+ * eight or more — and the same objection would apply here if every control
+ * carried a button. Tying the affordance to the state that makes it meaningful
+ * puts the cost only on controls the author has actually touched.
+ *
+ * AFTER the input in DOM order, so a keyboard user reaches the value first and
+ * the action second. Before it, every control would answer its own question in
+ * the wrong order: what to do about a value, then the value.
+ *
+ * Jump is withheld when no handler is supplied rather than rendered inert. A
+ * host that cannot move the canvas — one with no width to move — would
+ * otherwise offer a button that does nothing, which is worse than a missing
+ * affordance because it reads as a broken one.
+ */
+function BreakpointAction({
+  answer,
+  label,
+  editing,
+  onReset,
+}: {
+  answer: ProvenanceAnswer | undefined;
+  /** The property's own label, so several of these are told apart by name. */
+  label: string;
+  editing: EditedAddress;
+  onReset: () => void;
+}): React.JSX.Element | null {
+  const badge = answer?.badge;
+  const onJump = answer?.jump;
+  // `none` is also refused below, by having no handler bound for it — this is
+  // the readable exit rather than the load-bearing one.
+  if (badge === undefined || badge.kind === "none") return null;
+  if (badge.kind === "authored") {
+    /*
+     * What the reset REVEALS is named where there is one. "Reset" alone asks an
+     * author to guess whether the control becomes unset or falls back to a
+     * wider tier's value, and in a desktop-first cascade it is usually the
+     * second — but not always, and not always base.
+     */
+    const reveals =
+      badge.revealed === undefined
+        ? "leaving it unset"
+        : `showing the value from ${badge.revealed.label}`;
+    return (
+      <button
+        type="button"
+        className="nx-style-inspector__breakpoint-action"
+        data-action="reset"
+        onClick={onReset}
+        aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
+      >
+        Reset
+      </button>
+    );
+  }
+  if (onJump === undefined) return null;
+  const where =
+    badge.source.axis === "container"
+      ? `${badge.source.label} (container)`
+      : badge.source.label;
+  return (
+    <button
+      type="button"
+      className="nx-style-inspector__breakpoint-action"
+      data-action="jump"
+      onClick={onJump}
+      aria-label={`Edit ${label} at ${where}, where its value was set`}
+    >
+      Go to {where}
+    </button>
   );
 }
 
@@ -1565,16 +1751,16 @@ function writeStyleValue({
  * reporting the case rather than guessing.
  */
 function ProvenanceDot({
-  provenance,
+  answer,
   editing,
   descendant,
 }: {
-  provenance: StyleProvenance | undefined;
+  answer: ProvenanceAnswer | undefined;
   editing: EditedAddress;
   /** The control's own descendant selector, to tell its rules from a sibling's. */
   descendant: string | undefined;
 }): React.JSX.Element | null {
-  const described = describeProvenance(provenance, editing, descendant);
+  const described = describeProvenance(answer?.provenance, editing, descendant);
   if (described === null) return null;
   return (
     <>
@@ -1738,18 +1924,10 @@ export function breakpointLabel(
   breakpoints: BreakpointSet | undefined,
   id: BreakpointId
 ): string {
-  const context = breakpointContexts(breakpoints).find(
-    found => found.id === id
-  );
-  if (context === undefined) return id;
-  const axis =
-    context.axis === "container"
-      ? breakpoints?.container
-      : breakpoints?.viewport;
-  const survivor = (axis ?? []).find(
-    def => def.id === id && def.maxWidth === context.maxWidth
-  );
-  return survivor?.label ?? id;
+  // One matcher, in `style-provenance`. The survivor is found by BOUND as well
+  // as id — among definitions sharing an id the compiler keeps one — and a
+  // second lookup here would be a second place to lose that.
+  return breakpointSource(id, breakpoints)?.label ?? id;
 }
 
 /**

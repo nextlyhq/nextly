@@ -456,13 +456,18 @@ export type BreakpointBadge =
 /**
  * Resolve a breakpoint id to something an author can be shown.
  *
+ * Exported because it is the ONE answer to "what is this breakpoint called" —
+ * the panel's own label helper reads it rather than repeating the lookup, which
+ * would be two matchers for a rule that has a subtlety in it (the survivor is
+ * matched on the BOUND as well as the id) and two places to lose it.
+ *
  * The AXIS and the bound come from `breakpointContexts`, which is the reader
  * that decides what a site's breakpoints are for the sheet; the label is then
  * matched on the bound as well as the id, because among definitions sharing an
  * id the compiler keeps one and a lookup by id alone can name the survivor
  * after a row the sheet discarded.
  */
-function sourceOf(
+export function breakpointSource(
   breakpoint: BreakpointId,
   breakpoints: BreakpointSet | undefined
 ): BreakpointSource | undefined {
@@ -537,7 +542,7 @@ export function breakpointBadge(
     if (provenance.from.kind !== "node") return { kind: "none" };
     if (provenance.entry.breakpoint === query.breakpoint)
       return { kind: "none" };
-    const source = sourceOf(provenance.entry.breakpoint, breakpoints);
+    const source = breakpointSource(provenance.entry.breakpoint, breakpoints);
     return source === undefined
       ? { kind: "none" }
       : { kind: "inherited", source };
@@ -560,7 +565,7 @@ export function breakpointBadge(
   if (revealedBy.kind === "unset" || revealedBy.kind === "ambiguous") {
     return { kind: "authored" };
   }
-  const source = sourceOf(revealedBy.entry.breakpoint, breakpoints);
+  const source = breakpointSource(revealedBy.entry.breakpoint, breakpoints);
   return source === undefined
     ? { kind: "authored" }
     : { kind: "authored", revealed: source };
