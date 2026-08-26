@@ -50,7 +50,17 @@ import { useToolbarState } from "./useToolbarState";
 // Constants
 // ============================================================
 
-const FONT_FAMILY_OPTIONS = [
+/**
+ * The font families this toolbar offers.
+ *
+ * EXPORTED because the published renderer restates this vocabulary — it lives
+ * in `blocks-react`, which may not import this package — and a restatement that
+ * drifts is silent: the author picks a face and the page drops it, with nothing
+ * anywhere reporting the loss. `renderer-covers-the-editor.test.ts` holds the
+ * two together, and it imports this rather than reading the file, so a
+ * reformatting cannot make the check pass by finding nothing.
+ */
+export const FONT_FAMILY_OPTIONS = [
   { label: "Default", value: "" },
   { label: "Arial", value: "Arial" },
   { label: "Courier New", value: "Courier New" },
@@ -60,7 +70,8 @@ const FONT_FAMILY_OPTIONS = [
   { label: "Verdana", value: "Verdana" },
 ];
 
-const FONT_SIZE_OPTIONS = [
+/** The font sizes this toolbar offers. See {@link FONT_FAMILY_OPTIONS}. */
+export const FONT_SIZE_OPTIONS = [
   "10px",
   "11px",
   "12px",

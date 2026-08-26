@@ -12,7 +12,7 @@
 import {
   cssColor,
   hasCssInjection,
-  normalizeCssValue,
+  sanitizeInlineStyle as sanitizeInlineStyleValue,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -32,26 +32,6 @@ function containsInjection(value: string): boolean {
  * Only these properties are permitted in user-supplied `style` attributes.
  * Properties not on this list are silently dropped.
  */
-const ALLOWED_STYLE_PROPERTIES = new Set([
-  "color",
-  "background-color",
-  "font-size",
-  "font-family",
-  "font-weight",
-  "font-style",
-  "text-decoration",
-  "text-decoration-line",
-  "text-decoration-color",
-  "text-decoration-style",
-  "text-align",
-  "vertical-align",
-  "line-height",
-  "letter-spacing",
-  "word-spacing",
-  "white-space",
-  "text-transform",
-  "opacity",
-]);
 
 /**
  * Check whether a string is a valid CSS color value.
@@ -105,53 +85,14 @@ export function sanitizeCssColor(value: string): string | null {
 }
 
 /**
- * Sanitize an inline style string by:
- * 1. Splitting into individual CSS declarations
- * 2. Checking each property name against the allowlist
- * 3. Checking each value against injection patterns
- * 4. Reassembling only passing declarations
+ * Sanitize an inline style string, keeping only declarations safe to publish.
  *
- * Properties not on the allowlist are silently dropped.
- * Values containing injection patterns cause the entire declaration to be dropped.
- *
- * @example
- * sanitizeInlineStyle('color: red; font-size: 16px')
- * // 'color: red; font-size: 16px'
- *
- * sanitizeInlineStyle('color: red; behavior: url(evil.htc); font-size: 16px')
- * // 'color: red; font-size: 16px'
- *
- * sanitizeInlineStyle('background-image: url(javascript:alert(1))')
- * // ''
- *
- * sanitizeInlineStyle('color: expression(alert(1))')
- * // ''
+ * Delegated rather than implemented. The React renderer draws the same stored
+ * string and the versions differ compares it, and neither can import this
+ * package — so the property allowlist and the value check live in
+ * `blocks-engine`, which all three already depend on. A second copy here is how
+ * one surface starts publishing what another refuses.
  */
 export function sanitizeInlineStyle(value: string): string {
-  if (!value || typeof value !== "string") return "";
-
-  const normalized = normalizeCssValue(value);
-  if (!normalized) return "";
-
-  const declarations = normalized.split(";");
-  const safe: string[] = [];
-
-  for (const decl of declarations) {
-    const trimmed = decl.trim();
-    if (!trimmed) continue;
-
-    const colonIndex = trimmed.indexOf(":");
-    if (colonIndex === -1) continue;
-
-    const property = trimmed.slice(0, colonIndex).trim().toLowerCase();
-    const propValue = trimmed.slice(colonIndex + 1).trim();
-
-    if (!ALLOWED_STYLE_PROPERTIES.has(property)) continue;
-
-    if (containsInjection(propValue)) continue;
-
-    safe.push(`${property}:${propValue}`);
-  }
-
-  return safe.join(";");
+  return sanitizeInlineStyleValue(value);
 }

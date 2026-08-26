@@ -3,6 +3,7 @@ import {
   cssColor,
   hasFormat,
   isRichTextNode,
+  readInlineStyle,
   isRichTextValue,
   TEXT_FORMAT,
   type RichTextNode,
@@ -95,7 +96,68 @@ const CASE_TRANSFORM: readonly {
 ];
 
 /** Wraps text in the elements its format bits ask for, innermost first. */
-function formatted(text: string, format: number | undefined): ReactNode {
+/**
+ * The React name for each property {@link readInlineStyle} can return.
+ *
+ * Written out rather than derived by camel-casing the hyphens, because a
+ * derived name is a STRING and `style` takes typed keys — the conversion would
+ * have to be asserted through, and an assertion is exactly what hides a name
+ * React does not know. Every entry here is a key the type system checked.
+ *
+ * `everyInlineStylePropertyHasAReactName` in the test file holds this to the
+ * engine's list, so a property added there and forgotten here fails rather than
+ * being dropped from the page in silence.
+ */
+const REACT_STYLE_PROPERTY = {
+  color: "color",
+  "background-color": "backgroundColor",
+  "font-size": "fontSize",
+  "font-family": "fontFamily",
+  "font-weight": "fontWeight",
+  "font-style": "fontStyle",
+  "text-decoration": "textDecoration",
+  "text-decoration-line": "textDecorationLine",
+  "text-decoration-color": "textDecorationColor",
+  "text-decoration-style": "textDecorationStyle",
+  "text-align": "textAlign",
+  "vertical-align": "verticalAlign",
+  "line-height": "lineHeight",
+  "letter-spacing": "letterSpacing",
+  "word-spacing": "wordSpacing",
+  "white-space": "whiteSpace",
+  "text-transform": "textTransform",
+  opacity: "opacity",
+} as const satisfies Readonly<Record<string, keyof CSSProperties>>;
+
+/**
+ * An author's stored font, size, colour and highlight, as a style object.
+ *
+ * The engine decides WHAT survives; this only renames what it kept. A property
+ * the map above has no name for is dropped rather than passed through as a
+ * string key, because React would silently ignore it and the page would differ
+ * from the CMS's HTML for the same node.
+ */
+function inlineStyle(value: unknown): CSSProperties {
+  const style: Record<string, string> = {};
+  for (const [property, declared] of readInlineStyle(value)) {
+    if (!Object.hasOwn(REACT_STYLE_PROPERTY, property)) continue;
+    style[REACT_STYLE_PROPERTY[property as keyof typeof REACT_STYLE_PROPERTY]] =
+      declared;
+  }
+  // Accumulated as a record because indexing `CSSProperties` with a UNION of
+  // keys gives the INTERSECTION of their value types — which for these eighteen
+  // is the CSS-wide keywords and nothing else, so a plain `"16px"` is rejected
+  // on a type that has no business rejecting it. The record is assignable as it
+  // stands, so nothing is asserted through here; the KEYS, which are the half
+  // that could be wrong, were checked by the `satisfies` on the map above.
+  return style;
+}
+
+function formatted(
+  text: string,
+  format: number | undefined,
+  style: unknown
+): ReactNode {
   let out: ReactNode = text;
   for (const { flag, wrap } of FORMAT_ELEMENTS) {
     if (hasFormat(format, flag)) out = wrap(out);
@@ -105,9 +167,19 @@ function formatted(text: string, format: number | undefined): ReactNode {
   // property, so a value carrying two case bits would otherwise render whichever
   // wrapper happened to be inner. Taking the first keeps that deterministic.
   const transform = CASE_TRANSFORM.find(entry => hasFormat(format, entry.flag));
-  if (transform === undefined) return out;
-  const style: CSSProperties = { textTransform: transform.value };
-  return <span style={style}>{out}</span>;
+  const declared: CSSProperties = {
+    ...inlineStyle(style),
+    // LAST, so the format bit wins a disagreement. The bit is a button an
+    // author pressed on this selection; a `text-transform` in the style string
+    // is whatever a document happened to arrive carrying, and where they
+    // conflict the deliberate act is the one to honour.
+    ...(transform === undefined ? {} : { textTransform: transform.value }),
+  };
+  // No wrapper when there is nothing to put on it: an empty `<span>` around
+  // every text node doubles the size of a published document and gives a
+  // stylesheet a hook that means nothing.
+  if (Object.keys(declared).length === 0) return out;
+  return <span style={declared}>{out}</span>;
 }
 
 function children(
@@ -1089,7 +1161,8 @@ function RichTextNodeView({
     if (view !== undefined) return view(node, policy);
   }
 
-  if (typeof node.text === "string") return formatted(node.text, node.format);
+  if (typeof node.text === "string")
+    return formatted(node.text, node.format, node.style);
 
   // Unknown node: keep the words, lose the wrapper. See the module docblock.
   return <>{children(node.children, policy)}</>;

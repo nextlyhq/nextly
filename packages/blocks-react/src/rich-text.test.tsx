@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
-import { TEXT_FORMAT, type RichTextValue } from "@nextlyhq/blocks-engine";
+import {
+  INLINE_STYLE_PROPERTIES,
+  TEXT_FORMAT,
+  type RichTextValue,
+} from "@nextlyhq/blocks-engine";
 import { render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup } from "@testing-library/react";
@@ -1714,5 +1718,97 @@ describe("rich-text media wrappers carry what no stylesheet will", () => {
     // `width:100%` — a substring refusal passes on the very output it is meant
     // to reject, and passed on the correct output here too.
     expect(html).toContain('style="max-width:100%;height:auto"');
+  });
+});
+
+describe("rich-text inline styles reach the page", () => {
+  const styled = (style: string, format?: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "text",
+            text: "Hi",
+            style,
+            ...(format === undefined ? {} : { format }),
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("draws the font, size, colour and highlight an author chose", () => {
+    /*
+     * The defect: Lexical keeps these on the text node's `style` string, the
+     * renderer read the text and the format bitfield and never opened it, so
+     * every one of these choices published as plain prose. Silent in both
+     * directions — the author saw it in the editor, the visitor saw nothing
+     * missing.
+     */
+    const html = renderToStaticMarkup(
+      <RichText
+        value={styled(
+          "font-family: Georgia; font-size: 24px; color: #ff0000; background-color: #00ff00"
+        )}
+      />
+    );
+    expect(html).toContain(
+      '<span style="font-family:Georgia;font-size:24px;color:#ff0000;background-color:#00ff00">Hi</span>'
+    );
+  });
+
+  it("wraps nothing when there is nothing to put on it", () => {
+    // The control, and a real cost rather than tidiness: a `<span>` around every
+    // text node in a document is bytes on every page and a hook a stylesheet can
+    // catch on. Plain text must stay plain text.
+    expect(renderToStaticMarkup(<RichText value={para("Hi")} />)).toBe(
+      "<p>Hi</p>"
+    );
+  });
+
+  it.each([...INLINE_STYLE_PROPERTIES])(
+    "carries %s through to the page",
+    property => {
+      /*
+       * Behavioural rather than a read of the renderer's name map: what matters
+       * is that the property ARRIVES, and a test that compared two lists would
+       * pass while a wrong camel-case name dropped it silently — React ignores a
+       * key it does not know and says nothing.
+       *
+       * `inherit` because it is legal for every one of these, so one fixture
+       * serves the whole list without inventing a value per property.
+       */
+      const html = renderToStaticMarkup(
+        <RichText value={styled(`${property}: inherit`)} />
+      );
+      expect(html).toContain(`${property}:inherit`);
+    }
+  );
+
+  it("refuses a declaration that would break out of the style attribute", () => {
+    // Same boundary the button colours cross. React does not escape a style
+    // value, so a stored `;` ends the declaration and starts another.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={styled(
+          "color: red;position:fixed;background-image:url(https://attacker.test/x)"
+        )}
+      />
+    );
+    expect(html).toContain("color:red");
+    expect(html).not.toContain("position:fixed");
+    expect(html).not.toContain("attacker.test");
+  });
+
+  it("lets the format bit win a disagreement about case", () => {
+    // The bit is a button pressed on this selection; a `text-transform` in the
+    // style string is whatever the document arrived carrying.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={styled("text-transform: lowercase", TEXT_FORMAT.UPPERCASE)}
+      />
+    );
+    expect(html).toContain("text-transform:uppercase");
+    expect(html).not.toContain("text-transform:lowercase");
   });
 });

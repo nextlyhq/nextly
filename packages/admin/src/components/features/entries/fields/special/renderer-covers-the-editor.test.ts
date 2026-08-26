@@ -37,6 +37,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { RICH_TEXT_NODES } from "@admin/components/features/entries/fields/special/rich-text-kit";
+import {
+  FONT_FAMILY_OPTIONS,
+  FONT_SIZE_OPTIONS,
+} from "@admin/components/features/entries/fields/special/RichTextToolbar/RichTextToolbar";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -45,6 +49,20 @@ const RENDERER = join(
   HERE,
   "../../../../../../..",
   "blocks-react/src/rich-text.tsx"
+);
+
+/**
+ * Where the engine decides what a stored inline style may carry.
+ *
+ * Read as SOURCE for the same reason the renderer is, and it is not the same
+ * reason as the renderer's: this package has NO dependency on `blocks-engine`
+ * and must not gain one — measured, and it is why the video node is declared
+ * unrendered above rather than fixed. A static read creates no dependency.
+ */
+const ENGINE_INLINE_STYLE = join(
+  HERE,
+  "../../../../../../..",
+  "blocks-engine/src/style/inline-style.ts"
 );
 
 /**
@@ -282,11 +300,19 @@ function unionMembers(source: string, name: string): string[] {
   return [...match[1].matchAll(/"([a-z0-9-]+)"/g)].map(m => m[1] ?? "");
 }
 
-/** A `const X = ["a", "b"] as const;` array's members, from the renderer. */
+/**
+ * A `const X = ["a", "b"] as const;` array's members, from a source file.
+ *
+ * ANY quoted string, not only a lowercase one. A font family is `"Courier New"`
+ * — capitals and a space — and a pattern written for node types reads that
+ * array as EMPTY, which is the reassuring direction: two empty lists agree
+ * perfectly. The slice ends at the array's own closing bracket, so widening it
+ * cannot reach prose elsewhere in the file.
+ */
 function constMembers(source: string, name: string): string[] {
   const match = new RegExp(`const ${name} = \\[([^\\]]*)\\]`).exec(source);
   if (match?.[1] === undefined) return [];
-  return [...match[1].matchAll(/"([a-z0-9-]+)"/g)].map(m => m[1] ?? "");
+  return [...match[1].matchAll(/"([^"]*)"/g)].map(m => m[1] ?? "");
 }
 
 /**
@@ -396,4 +422,60 @@ describe("richTextValueVocabulariesAgree", () => {
       );
     }
   );
+});
+
+describe("richTextInlineStyleVocabulariesAgree", () => {
+  /*
+   * The renderer restates the toolbar's font vocabularies, because
+   * `blocks-engine` may not import this package. A restatement that drifts does
+   * not fail loudly — the author picks a face or a size, the reader does not
+   * recognise it, and the page publishes without it while the editor goes on
+   * showing it.
+   *
+   * IMPORTED on both sides rather than read from source. The two checks above
+   * parse the renderer because a dispatch table has no runtime form to ask; a
+   * list of strings does, and a parse of one is a second implementation that
+   * can quietly come back empty — which is how the class-scanning version of
+   * the check above saw eight of twenty types and reported full coverage.
+   */
+  const engine = readFileSync(ENGINE_INLINE_STYLE, "utf8");
+
+  it("offers the editor's own families to the renderer", () => {
+    // The population first: two empty lists agree perfectly, and this parser
+    // has already been widened once for exactly that failure.
+    const restated = constMembers(engine, "RICH_TEXT_FONT_FAMILIES");
+    const offered = FONT_FAMILY_OPTIONS.map(option => option.value).filter(
+      value => value !== ""
+    );
+    expect(restated.length).toBeGreaterThan(1);
+    expect(offered.length).toBeGreaterThan(1);
+    expect([...restated].sort()).toEqual([...offered].sort());
+  });
+
+  it("offers the editor's own sizes to the renderer", () => {
+    const restated = constMembers(engine, "RICH_TEXT_FONT_SIZES");
+    expect(restated.length).toBeGreaterThan(1);
+    expect(FONT_SIZE_OPTIONS.length).toBeGreaterThan(1);
+    expect([...restated].sort()).toEqual([...FONT_SIZE_OPTIONS].sort());
+  });
+
+  it("declares every property the toolbar can actually write", () => {
+    /*
+     * The other half, and the one a vocabulary check alone would miss: the
+     * families and sizes could agree perfectly while the PROPERTY carrying them
+     * was absent from the engine's allowlist, and every value would still be
+     * dropped. These four are what `$patchStyleText` writes in
+     * `useToolbarState.ts`.
+     */
+    const allowed = constMembers(engine, "INLINE_STYLE_PROPERTIES");
+    expect(allowed.length).toBeGreaterThan(1);
+    for (const property of [
+      "font-family",
+      "font-size",
+      "color",
+      "background-color",
+    ]) {
+      expect(allowed, property).toContain(property);
+    }
+  });
 });
