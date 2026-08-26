@@ -27,6 +27,9 @@ const page: ClassUsageSubject = {
   // Empty because this field is not localized. A localized blocks field stores
   // a document per locale, and each is its own subject.
   locale: "",
+  // The live row rather than a pending draft: a collection with drafts holds
+  // two documents under one id and they are separate subjects.
+  variant: "published",
 };
 
 const documentUsing = (...classes: string[]) => ({
@@ -74,7 +77,7 @@ describe("maintaining one subject's rows", () => {
 
     expect(report).toEqual({ inserted: 2, removed: 0, undetermined: false });
     expect(calls).toEqual([
-      "find:sort=id:where=entity,entityKey,field,locale,scope",
+      "find:sort=id:where=entity,entityKey,field,locale,scope,variant",
       "create:card",
       "create:hero",
     ]);
@@ -97,7 +100,7 @@ describe("maintaining one subject's rows", () => {
 
     expect(report).toEqual({ inserted: 0, removed: 0, undetermined: false });
     expect(calls).toEqual([
-      "find:sort=id:where=entity,entityKey,field,locale,scope",
+      "find:sort=id:where=entity,entityKey,field,locale,scope,variant",
     ]);
   });
 
@@ -116,7 +119,7 @@ describe("maintaining one subject's rows", () => {
     });
 
     expect(calls).toEqual([
-      "find:sort=id:where=entity,entityKey,field,locale,scope",
+      "find:sort=id:where=entity,entityKey,field,locale,scope,variant",
       "create:new",
       "delete:r1",
     ]);
@@ -148,7 +151,7 @@ describe("maintaining one subject's rows", () => {
     expect(report).toEqual({ inserted: 1, removed: 0, undetermined: true });
     // One create, and it carries the marker rather than any id it did read.
     expect(calls).toEqual([
-      "find:sort=id:where=entity,entityKey,field,locale,scope",
+      "find:sort=id:where=entity,entityKey,field,locale,scope,variant",
       `create:${UNDETERMINED_CLASS_ID}`,
     ]);
   });
@@ -218,6 +221,7 @@ describe("a row written before the locale column existed", () => {
             entity: "pages",
             entityKey: "page-1",
             field: "content",
+            variant: "published",
             classId: "hero",
           },
         ],

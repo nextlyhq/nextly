@@ -28,6 +28,13 @@
 
 The page builder can now rebuild a COLLECTION's class-usage rows from its documents.
 
+A collection with drafts holds TWO documents under one id, and they can apply different
+classes: a pure draft edit leaves the live row untouched, so the published page and the
+pending draft disagree until somebody publishes. The key therefore carries a `variant`
+alongside the locale, and a rebuild of one variant leaves the other's rows untouched.
+Counting both is deliberate - deleting a class an unpublished draft applies breaks that
+draft the moment it is published.
+
 Two limits are worth stating, because "the index is recoverable" is wider than what this
 rebuilds. It repairs one collection's field at a time, so rows whose subject names a
 collection that no longer exists - or whose columns were corrupted by a restore or a

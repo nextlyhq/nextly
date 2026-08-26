@@ -88,6 +88,22 @@ export interface ClassUsageRow {
    */
   locale: string;
   /**
+   * Which stored variant of the document the reference was found in —
+   * `"published"` or `"draft"`.
+   *
+   * A collection with drafts holds TWO documents under one id, and they can
+   * apply different classes: a pure draft edit leaves the live row untouched,
+   * so the published page and the pending draft disagree until it is
+   * published. Without this column they share one key, and indexing either
+   * removes the rows the other justifies — so a class the published page still
+   * renders reads as unused because a draft dropped it.
+   *
+   * Both are worth counting rather than only the published one. The count
+   * answers "is this class safe to delete", and deleting a class an unpublished
+   * draft applies breaks that draft the moment somebody publishes it.
+   */
+  variant: string;
+  /**
    * The named class's id, as stored in `node.classes`, or the marker id on a
    * marker row.
    *
@@ -139,6 +155,7 @@ export function classUsageIndexCollection() {
       text({ name: "entityKey", label: "Entity key", index: true }),
       text({ name: "field", label: "Field" }),
       text({ name: "locale", label: "Locale" }),
+      text({ name: "variant", label: "Variant" }),
       // Indexed because this is the column the library filters on: the count
       // is shown beside every class, so "which documents use this one" is asked
       // once per class per render rather than once per delete. Declared on the

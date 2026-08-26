@@ -19,12 +19,21 @@
  * confusing direction a failure can take — an author would retry a write that
  * already landed. So a failure is REPORTED and swallowed.
  *
- * A swallowed failure needs something that repairs the record, and there is no
- * such thing for this table yet: `rebuildClassUsage` walks pages and rewrites
- * the legacy per-page `usedClasses` column, and never reads or writes
- * `nx_pb_class_usage`. Until an index rebuild exists, a failed write here
- * leaves the subject stale until its document is next saved. The write path
- * must not be wired on the strength of a repair that has not been built.
+ * A swallowed failure needs something that repairs the record, and
+ * `rebuildClassUsageIndex` is it — a walk over a collection's documents that
+ * brings each one's rows back into agreement. It is exported from the package,
+ * so a host can run it.
+ *
+ * Its reach is narrower than "the index", and the write path should be wired
+ * knowing that rather than assuming a total repair. It rebuilds one
+ * collection, one field, one locale and one variant per invocation, so rows
+ * whose subject names a collection that no longer exists, or whose columns a
+ * restore corrupted, are unreachable by every query it makes. Singles have no
+ * rebuild at all, because a plugin has no supported way to read a Single's
+ * document.
+ *
+ * Note that the LEGACY `rebuildClassUsage` is a different thing: it rewrites
+ * the per-page `usedClasses` column and never touches `nx_pb_class_usage`.
  *
  * That is not the same as the event bus, which was rejected for this job: an
  * event handler's failure is never surfaced to anybody, while this one reaches
@@ -139,6 +148,7 @@ const ROW_STRING_COLUMNS = [
   "entity",
   "entityKey",
   "field",
+  "variant",
   "classId",
 ] as const;
 
@@ -195,9 +205,9 @@ function readStoredRow(item: unknown): StoredClassUsageRow | null {
 
   const parts = readStrings(item, ROW_STRING_COLUMNS);
   if (parts === null) return null;
-  const [id, entity, entityKey, field, classId] = parts;
+  const [id, entity, entityKey, field, variant, classId] = parts;
 
-  return { id, scope, entity, entityKey, field, locale, classId };
+  return { id, scope, entity, entityKey, field, locale, variant, classId };
 }
 
 /**
@@ -284,6 +294,7 @@ function subjectWhere(
     entityKey: { equals: subject.entityKey },
     field: { equals: subject.field },
     locale: { equals: subject.locale },
+    variant: { equals: subject.variant },
   };
 }
 
@@ -382,6 +393,7 @@ export async function forgetAbsentDocuments(args: {
   entity: string;
   field: string;
   locale: string;
+  variant: string;
   /** Every `entityKey` the walk actually visited. */
   visited: ReadonlySet<string>;
   /**
@@ -404,6 +416,7 @@ export async function forgetAbsentDocuments(args: {
     entity: { equals: args.entity },
     field: { equals: args.field },
     locale: { equals: args.locale },
+    variant: { equals: args.variant },
   };
   const rows = await storedRowsWhere(
     args.store,

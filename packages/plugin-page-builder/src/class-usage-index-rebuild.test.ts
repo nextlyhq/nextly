@@ -83,6 +83,7 @@ describe("rebuilding the class-usage index", () => {
       field: "content",
       // Not localized, which is what the empty string means here.
       locale: "",
+      variant: "published",
     });
 
     expect(report).toEqual({
@@ -110,6 +111,7 @@ describe("rebuilding the class-usage index", () => {
       field: "content",
       // Not localized, which is what the empty string means here.
       locale: "",
+      variant: "published",
     });
 
     expect(docs.calls).toEqual(["find:page=1:sort=id:locale="]);
@@ -130,6 +132,7 @@ describe("rebuilding the class-usage index", () => {
         entityKey: "page-1",
         field: "content",
         locale: "",
+        variant: "published",
         classId: "hero",
       },
     ]);
@@ -141,6 +144,7 @@ describe("rebuilding the class-usage index", () => {
       field: "content",
       // Not localized, which is what the empty string means here.
       locale: "",
+      variant: "published",
     });
 
     expect(report).toEqual({
@@ -204,6 +208,7 @@ describe("rebuilding the class-usage index", () => {
       field: "content",
       // Not localized, which is what the empty string means here.
       locale: "",
+      variant: "published",
     });
 
     expect(report).toEqual({
@@ -233,6 +238,7 @@ describe("rebuilding the class-usage index", () => {
         field: "content",
         // Not localized, which is what the empty string means here.
         locale: "",
+        variant: "published",
       })
     ).rejects.toThrow(/stopped after \d+ pages/);
   });
@@ -256,6 +262,7 @@ describe("the locale a rebuild reads under", () => {
       collection: "pages",
       field: "content",
       locale: "fr",
+      variant: "published",
     });
 
     expect(docs.calls).toEqual(["find:page=1:sort=id:locale=fr"]);
@@ -279,6 +286,7 @@ describe("rows whose document no longer exists", () => {
         entityKey: "page-1",
         field: "content",
         locale: "",
+        variant: "published",
         classId: "hero",
       },
       {
@@ -288,6 +296,7 @@ describe("rows whose document no longer exists", () => {
         entityKey: "deleted-page",
         field: "content",
         locale: "",
+        variant: "published",
         classId: "ghost",
       },
     ];
@@ -316,6 +325,7 @@ describe("rows whose document no longer exists", () => {
       field: "content",
       // Not localized, which is what the empty string means here.
       locale: "",
+      variant: "published",
     });
 
     // `page-1` was seen and agreed, so nothing was repaired. `deleted-page` was
@@ -346,6 +356,7 @@ describe("a document the walk missed but which still exists", () => {
         entityKey: "shifted-page",
         field: "content",
         locale: "",
+        variant: "published",
         classId: "hero",
       },
     ];
@@ -376,6 +387,7 @@ describe("a document the walk missed but which still exists", () => {
       field: "content",
       // Not localized, which is what the empty string means here.
       locale: "",
+      variant: "published",
     });
 
     expect(report.orphansRemoved).toBe(0);

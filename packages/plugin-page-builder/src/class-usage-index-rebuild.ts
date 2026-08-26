@@ -156,6 +156,7 @@ async function rebuildOnePage(
     collection: string;
     field: string;
     locale: string;
+    variant: string;
     limits?: DocumentLimits;
   },
   visited: Set<string>
@@ -177,6 +178,7 @@ async function rebuildOnePage(
         entityKey: item.id,
         field: args.field,
         locale: args.locale,
+        variant: args.variant,
       },
       document: item[args.field],
       limits: args.limits,
@@ -233,6 +235,22 @@ export async function rebuildClassUsageIndex(args: {
    */
   locale: string;
   /**
+   * Which stored variant is being rebuilt — `"published"` or `"draft"`.
+   *
+   * The caller's to know, because the query its document store makes is what
+   * decides which of the two comes back. A collection with drafts holds two
+   * documents under one id and they can apply different classes: a pure draft
+   * edit leaves the live row untouched, so the published page and the pending
+   * draft disagree until somebody publishes.
+   *
+   * Rebuilding one variant leaves the other's rows untouched, which is what
+   * makes running this once per variant safe rather than destructive. Under a
+   * shared subject, rebuilding either would have removed the rows the other
+   * justifies — and a class the published page still renders would read as
+   * unused because a draft had dropped it.
+   */
+  variant: string;
+  /**
    * The bounds the documents are rendered under, when not the engine defaults.
    *
    * The SAME value the plugin and the renderer are given. A rebuild deriving
@@ -280,6 +298,7 @@ export async function rebuildClassUsageIndex(args: {
     entity: args.collection,
     field: args.field,
     locale: args.locale,
+    variant: args.variant,
     visited,
     // Asked only about a document the walk did not see, so a stable collection
     // costs nothing. A row survives unless the document is confirmed GONE —
