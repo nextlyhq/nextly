@@ -148,10 +148,6 @@ export function classUsageIndexStore(
  * relationships would replace ids with documents, which changes the shape the
  * derivation walks while adding reads a save does not need.
  *
- * `disableErrors` turns a missing document into `null`, which the caller treats
- * as "leave this subject alone" rather than as a failure. That is the right
- * reading for an untranslated locale or a document with no pending draft, both
- * ordinary states.
  */
 export function classUsageDocumentReader(
   nextly: ClassUsageDirectApi
@@ -188,7 +184,16 @@ async function readWorkingDraft(
     draft: true,
     ...localeOptions(subject),
     depth: 0,
-    disableErrors: true,
+    // No error suppression. `disableErrors` converts EVERY unsuccessful result
+    // to null, not only a missing row — so a failing `afterRead` hook or a
+    // broken overlay query would read as "this document has no draft", and the
+    // subject would be left alone with the caller told nothing. A raised
+    // failure is reported instead, which is what tells a caller the index is
+    // stale.
+    //
+    // Nothing is lost by dropping it: a document with no pending draft is a
+    // SUCCESSFUL read of the live row, which the marker check below refuses.
+    // Absence and failure were never the same answer here.
     ...AS_THE_SYSTEM,
   });
   if (typeof row !== "object" || row === null) return undefined;

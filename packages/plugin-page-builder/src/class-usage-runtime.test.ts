@@ -284,3 +284,60 @@ describe("writing the index", () => {
     expect(page).toEqual({ items: [], meta: { hasNext: false } });
   });
 });
+
+describe("a failure on the DRAFT read", () => {
+  it("does not ASK the API to suppress errors", async () => {
+    // Asserted on the argument, not on a thrown error, and that distinction is
+    // the point. `disableErrors` is honoured inside the Direct API — it
+    // converts every unsuccessful result to null, not only a missing row — so
+    // a fake that simply throws propagates whether or not the flag is set, and
+    // a test written that way passes with the defect present. Measured: it
+    // did.
+    //
+    // What this module controls is whether it asks for the suppression, so
+    // that is what is asserted. Setting it would make a failing `afterRead`
+    // hook read as "this document has no pending draft": the subject is left
+    // alone, the caller is told nothing, and a class the saved draft added
+    // still passes the safe-delete check.
+    const { api, calls } = recordingApi();
+
+    await classUsageDocumentReader(api)(subject({ variant: "draft" }));
+
+    expect(calls[0]).not.toHaveProperty("disableErrors");
+  });
+
+  it("does not ask for it on the PUBLISHED read either", async () => {
+    const { api, calls } = recordingApi();
+
+    await classUsageDocumentReader(api)(subject({ variant: "published" }));
+
+    expect(calls[0]).not.toHaveProperty("disableErrors");
+  });
+
+  it("propagates a read failure to the caller", async () => {
+    // Separate from the flag: whatever the API raises must reach the caller
+    // rather than being caught here.
+    const { api } = recordingApi({
+      findByID: async () => {
+        throw new Error("afterRead hook failed");
+      },
+    });
+
+    await expect(
+      classUsageDocumentReader(api)(subject({ variant: "draft" }))
+    ).rejects.toThrow("afterRead hook failed");
+  });
+
+  it("still reads a live row as NO draft, which is a success and not a failure", async () => {
+    // The control. A document with no pending draft is a successful read of
+    // the live row, refused by the marker — so dropping the suppression cannot
+    // turn an ordinary state into a reported failure.
+    const { api } = recordingApi({
+      findByID: async () => ({ id: "p1", content: documentUsing("hero") }),
+    });
+
+    await expect(
+      classUsageDocumentReader(api)(subject({ variant: "draft" }))
+    ).resolves.toBeUndefined();
+  });
+});
