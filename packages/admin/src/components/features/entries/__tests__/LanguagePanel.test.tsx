@@ -387,7 +387,7 @@ describe("LanguagePanel", () => {
     // with the list's badge on the very same entry.
     useBranding.mockReturnValue({ locales: LOCALES });
     renderPanel({ translations: TRANSLATIONS });
-    expect(screen.getByText("1 of 2 translated")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 languages translated")).toBeInTheDocument();
   });
 
   it("marks the language being edited instead of offering to open it", () => {
@@ -611,7 +611,7 @@ describe("LanguagePanel", () => {
 
     // Reading is not withheld — the panel is how the author sees where the
     // document stands, and that stays true while looking at history.
-    expect(screen.getByText("1 of 2 translated")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 languages translated")).toBeInTheDocument();
     expect(rows()[2]).toHaveTextContent("not translated");
   });
 
