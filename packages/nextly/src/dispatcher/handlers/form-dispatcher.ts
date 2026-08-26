@@ -172,15 +172,17 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
         });
       }
       if (availability.kind === "closed") {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "form",
-              code: "FORM_CLOSED",
-              message: availability.message,
-            },
-          ],
-          logContext: { slug },
+        // A state conflict, not a validation failure. `validation` fixes the
+        // canonical `error.message` to "Validation failed." and nests the real
+        // one under `error.data.errors[0]`, so a client reading the documented
+        // envelope would be handed the explanation the author wrote and never
+        // show it. `conflict` carries a domain message at the top level, which
+        // is what its own contract describes it as being for: an endpoint that
+        // is deliberately not accepting this request.
+        throw NextlyError.conflict({
+          reason: "state",
+          message: availability.message,
+          logContext: { entity: "form", slug, reason: "closed" },
         });
       }
 

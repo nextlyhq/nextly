@@ -313,6 +313,52 @@ describe("what a form that is not taking submissions says", () => {
     );
   });
 
+  it("keeps a form that was live before the stamp existed reachable when it closes", async () => {
+    // Every form already published when this shipped has no stamp. Its first
+    // edit is the only chance to record one, and if that edit is the one
+    // closing it, the incoming status says `closed` and nothing else — the
+    // proof it was public is on the stored side. Getting this wrong takes a
+    // form that HAD been public offline at its own address.
+    const fb = formBuilder({
+      spamProtection: { honeypot: false, recaptcha: { enabled: false } },
+    });
+    const probe = contextProbe("@test/fb-legacy-live");
+    current = await createTestNextly({ plugins: [fb.plugin, probe.plugin] });
+
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        closedMessage: "Applications closed on 31 March.",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+      },
+    });
+
+    // Back-date the row to what an upgraded database actually holds: live,
+    // with no record of when it went live.
+    await (
+      current as unknown as {
+        adapter: { executeQuery: (sql: string) => Promise<unknown> };
+      }
+    ).adapter.executeQuery("UPDATE dc_forms SET went_live_at = NULL");
+
+    await current.nextly.update({
+      collection: "forms",
+      where: { slug: { equals: "contact" } },
+      data: { status: "closed" },
+    });
+
+    const result = await submitForm(
+      { formSlug: "contact", data: { message: "hello" } },
+      { pluginContext: probe.get(), pluginConfig: fb.config }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Applications closed on 31 March.");
+  });
+
   it("says nothing specific about a form created closed and never released", async () => {
     // `closed` does not by itself mean a form was ever public: the collection
     // accepts it on creation. Relaying an author's message here would confirm

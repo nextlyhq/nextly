@@ -387,3 +387,63 @@ describe("dispatchForms, what a form's own address answers", () => {
     await expect(askFor([])).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
+
+describe("dispatchForms, what a submission to a closed form is told", () => {
+  const submitTo = async (doc: unknown) => {
+    const handler: CollectionsHandlerLike = {
+      listEntries: vi.fn().mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        message: "ok",
+        data: {
+          docs: [doc],
+          totalDocs: 1,
+          limit: 1,
+          page: 1,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
+      }),
+      createEntry: vi.fn(),
+    };
+    wireHandler(handler);
+    return dispatchForms(
+      makeContainer(handler),
+      "submitForm",
+      { slug: "contact" },
+      { data: { message: "hello" } }
+    );
+  };
+
+  const closed = {
+    id: "f1",
+    slug: "contact",
+    status: "closed",
+    wentLiveAt: "2026-01-01T00:00:00Z",
+    closedMessage: "Applications closed on 31 March.",
+    fields: [],
+  };
+
+  it("carries the author's message as the error itself", async () => {
+    // Not nested inside a validation envelope. `NextlyError.validation` fixes
+    // the canonical message to "Validation failed." and puts the real one
+    // under `error.data.errors[0]`, so a client reading the documented shape
+    // is handed the explanation and never shows it.
+    await expect(submitTo(closed)).rejects.toMatchObject({
+      publicMessage: "Applications closed on 31 March.",
+    });
+  });
+
+  it("reports it as a state conflict, not a validation failure", async () => {
+    await expect(submitTo(closed)).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("still answers a form that was never public as an unused slug", async () => {
+    // The control. "Carries the message" must not be satisfied by a handler
+    // that has stopped distinguishing which forms may be explained at all.
+    await expect(
+      submitTo({ ...closed, wentLiveAt: undefined })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});

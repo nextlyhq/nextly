@@ -699,23 +699,38 @@ export function isMissingTarget(error: unknown): boolean {
  * released and later stopped, and one created closed that nobody ever saw —
  * and the public by-slug endpoint served both.
  *
- * Written once. A form that is republished after being closed keeps the
- * original date, because the question this answers is "has this ever been
- * public", not "when was it last".
+ * Written once. A form republished after being closed keeps the original date,
+ * because the question this answers is "has this ever been public", not "when
+ * was it last".
  */
 function stampFirstPublish(context: HookContext): void {
   const data = context.data as Record<string, unknown> | undefined;
-  if (!data || data.status !== "published") return;
+  if (!data) return;
+  const stored = context.originalData as Record<string, unknown> | undefined;
 
-  // Presence, not the payload: a whole-document save carries `wentLiveAt`
-  // on every write, so reading the patch alone would restamp a form each time
-  // it is edited while live.
-  const already =
-    (context.originalData as Record<string, unknown> | undefined)?.wentLiveAt ??
-    data.wentLiveAt;
-  if (already !== undefined && already !== null && already !== "") return;
+  // Written here or not at all. Duplicating an entry copies every non-system
+  // field, so a copy of a closed form arrives carrying the original's stamp
+  // and would qualify as previously public at a slug nobody has ever seen. The
+  // same goes for any caller that simply sends the field. Removing it from the
+  // patch leaves a stamp that IS stored untouched, because a column absent
+  // from an update is a column not written.
+  delete data.wentLiveAt;
 
-  data.wentLiveAt = new Date();
+  if (recordedStamp(stored) !== undefined) return;
+
+  // Either side of the transition is proof. A form live before this field
+  // existed carries no stamp, so its first edit is the only chance to record
+  // one — and if that edit is the one CLOSING it, reading the incoming status
+  // alone would miss it and take a form that had been public offline.
+  if (data.status === "published" || stored?.status === "published") {
+    data.wentLiveAt = new Date();
+  }
+}
+
+/** The stamp a form already carries, treating blank as absent. */
+function recordedStamp(stored: Record<string, unknown> | undefined): unknown {
+  const value = stored?.wentLiveAt;
+  return value === null || value === "" ? undefined : value;
 }
 
 /** One shape for every refusal this rule makes, so callers see one field. */

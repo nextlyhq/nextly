@@ -186,15 +186,56 @@ describe("forms beforeChange - recording the first publish", () => {
 
   it("keeps the original date when a live form is saved again", async () => {
     // FormBuilderView spreads the whole document into every save, so a form
-    // edited while live arrives carrying its own stamp. Restamping here would
-    // move the date on every keystroke-driven save.
+    // edited while live arrives carrying its own stamp. Removing it from the
+    // patch is what KEEPS it: a column an update does not name is a column the
+    // update does not write. Restamping would move the date on every save, and
+    // passing the incoming value through would let a caller choose it.
     const first = new Date("2026-01-01T00:00:00Z");
     expect(
       await stamped(
         { status: "published", wentLiveAt: first },
         { status: "published", wentLiveAt: first }
       )
-    ).toBe(first);
+    ).toBeUndefined();
+  });
+
+  it("stamps a form that was live before the stamp existed and is now closing", async () => {
+    // The only chance to record it. A form published before this field existed
+    // carries no stamp, and if its first edit is the one that closes it, an
+    // incoming status of `closed` is all the patch says — the proof that it was
+    // public is on the stored side. Missing it takes a form that HAD been
+    // public offline at its own address.
+    expect(
+      await stamped({ status: "closed" }, { status: "published" })
+    ).toBeInstanceOf(Date);
+  });
+
+  it("does not stamp a form closing from draft", async () => {
+    // The control for the case above: neither side is published, so there is
+    // no history to record and the form stays unreachable.
+    expect(
+      await stamped({ status: "closed" }, { status: "draft" })
+    ).toBeUndefined();
+  });
+
+  it("does not let a create inherit a copied stamp", async () => {
+    // Duplicating an entry copies every non-system field. A copy of a closed
+    // form would arrive already qualifying as previously public, at a slug
+    // nobody has ever seen.
+    const copied = new Date("2026-01-01T00:00:00Z");
+    expect(
+      await stamped({ status: "closed", wentLiveAt: copied })
+    ).toBeUndefined();
+  });
+
+  it("stamps a create that publishes with its own date, not a supplied one", async () => {
+    const supplied = new Date("2020-01-01T00:00:00Z");
+    const written = await stamped({
+      status: "published",
+      wentLiveAt: supplied,
+    });
+    expect(written).toBeInstanceOf(Date);
+    expect(written).not.toBe(supplied);
   });
 
   it("writes nothing when a closed form is published again", async () => {
