@@ -19,6 +19,7 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -80,7 +81,7 @@ function CreateEntryBreadcrumbs({
  */
 function CreateEntryPageSkeleton() {
   return (
-    <PageContainer width="form">
+    <PageContainer width={CONTENT_PAGE_MEASURE}>
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading collection...
@@ -202,7 +203,7 @@ export default function CreateEntryPage({
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             No collection was specified in the URL.
@@ -225,7 +226,7 @@ export default function CreateEntryPage({
   // Error state
   if (error) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load collection:{" "}
@@ -244,7 +245,7 @@ export default function CreateEntryPage({
   // Collection not found
   if (!collection) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Collection &quot;{slug}&quot; not found.

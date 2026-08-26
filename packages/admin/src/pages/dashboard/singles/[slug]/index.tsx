@@ -23,6 +23,7 @@ import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
+import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -57,7 +58,7 @@ interface SingleEditPageProps {
  */
 function SingleEditPageSkeleton() {
   return (
-    <PageContainer width="form">
+    <PageContainer width={CONTENT_PAGE_MEASURE}>
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading...
@@ -227,7 +228,7 @@ export default function SingleEditPage({
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             No Single was specified in the URL.
@@ -250,7 +251,7 @@ export default function SingleEditPage({
   // Error state
   if (error) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load Single:{" "}
@@ -269,7 +270,7 @@ export default function SingleEditPage({
   // Schema not found
   if (!schema) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Single &quot;{slug}&quot; not found.
@@ -287,7 +288,7 @@ export default function SingleEditPage({
   // Document not found (should auto-create, but handle edge case)
   if (!document) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load document data for Single &quot;{slug}&quot;.

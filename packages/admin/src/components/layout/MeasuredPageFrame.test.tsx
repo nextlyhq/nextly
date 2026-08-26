@@ -8,7 +8,7 @@
  * window while editing a record was framed and capped at the form measure while
  * creating one.
  */
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { useEffect, useState } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -16,6 +16,9 @@ import {
   ChromeSuppressionProvider,
   useSuppressAdminChrome,
 } from "./ChromeSuppression";
+
+import { CONTENT_PAGE_MEASURE } from "./content-measure";
+import { PageContainer } from "./page-container";
 
 import { MeasuredPageFrame } from "./MeasuredPageFrame";
 
@@ -52,6 +55,11 @@ describe("MeasuredPageFrame", () => {
     expect(container.className).toContain("nx-page-shell");
     expect(container.className).not.toContain("contents");
     expect(container.style.getPropertyValue("--nx-shell-measure")).toBe(
+      "var(--nx-measure-wide)"
+    );
+    // The control for the line above: asserting only that SOME measure is set
+    // would pass on a frame that had silently kept the settings measure.
+    expect(container.style.getPropertyValue("--nx-shell-measure")).not.toBe(
       "var(--nx-measure-form)"
     );
   });
@@ -161,5 +169,35 @@ describe("MeasuredPageFrame", () => {
 
     const trail = screen.getByTestId("page-container").firstElementChild;
     expect(trail?.className).toBe("");
+  });
+});
+
+describe("the content measure is declared once", () => {
+  it("renders whatever the shared constant says, not a literal of its own", () => {
+    // Reading the constant back is what makes this a wiring test rather than a
+    // restatement: change `CONTENT_PAGE_MEASURE` and this follows, while a
+    // frame that had drifted back to its own literal fails here.
+    render(
+      <ChromeSuppressionProvider>
+        <MeasuredPageFrame>
+          <p>body</p>
+        </MeasuredPageFrame>
+      </ChromeSuppressionProvider>
+    );
+    const framed = screen.getByTestId("page-container");
+
+    cleanup();
+    render(
+      <PageContainer width={CONTENT_PAGE_MEASURE}>reference</PageContainer>
+    );
+    const reference = screen.getByTestId("page-container");
+
+    // A page's loading skeleton reaches the container directly while its loaded
+    // state reaches it through the frame. The two must resolve to one measure,
+    // or every field moves sideways when the data arrives.
+    expect(framed.style.getPropertyValue("--nx-shell-measure")).toBe(
+      reference.style.getPropertyValue("--nx-shell-measure")
+    );
+    expect(reference.style.getPropertyValue("--nx-shell-measure")).not.toBe("");
   });
 });

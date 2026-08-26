@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 
 import { useSuppressedChrome } from "./ChromeSuppression";
+import { CONTENT_PAGE_MEASURE } from "./content-measure";
 import { PageContainer } from "./page-container";
 
 interface MeasuredPageFrameProps {
@@ -48,6 +49,15 @@ interface MeasuredPageFrameProps {
  * add a second inset to it, which is the disagreement the shell exists to end.
  * Framed and immersive are the whole vocabulary; there is no third case for a
  * width to answer.
+ *
+ * The measure is `wide`, not the form measure. Both are reading widths and the
+ * difference is what is being read. A settings form is a short column of
+ * labelled controls and nothing else. An entry is a document: its fields
+ * include rich text, media and repeated groups, and it shares its column with
+ * the document rail, so the rail's width comes out of the author's. At the form
+ * measure that leaves the widest field under half the column, and controls that
+ * lay out horizontally — an editor toolbar, the header's actions — wrap onto
+ * extra rows or drop their labels for icons.
  */
 export function MeasuredPageFrame({
   breadcrumbs,
@@ -84,7 +94,10 @@ export function MeasuredPageFrame({
     : "hidden";
 
   return (
-    <PageContainer width="form" className={framed ? undefined : "contents"}>
+    <PageContainer
+      width={CONTENT_PAGE_MEASURE}
+      className={framed ? undefined : "contents"}
+    >
       <div className={trailClass}>{breadcrumbs}</div>
       {children}
     </PageContainer>

@@ -19,6 +19,7 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -87,7 +88,7 @@ function EditEntryBreadcrumbs({
  */
 function EditEntryPageSkeleton() {
   return (
-    <PageContainer width="form">
+    <PageContainer width={CONTENT_PAGE_MEASURE}>
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading entry...
@@ -323,7 +324,7 @@ export default function EditEntryPage({
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             No collection was specified in the URL.
@@ -341,7 +342,7 @@ export default function EditEntryPage({
   // Missing ID error state
   if (!id) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             No entry ID was specified in the URL.
@@ -374,7 +375,7 @@ export default function EditEntryPage({
   // Error state
   if (error) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load entry:{" "}
@@ -393,7 +394,7 @@ export default function EditEntryPage({
   // Collection not found
   if (!collection) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Collection &quot;{slug}&quot; not found.
@@ -411,7 +412,7 @@ export default function EditEntryPage({
   // Entry not found
   if (!entry) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Entry &quot;{id}&quot; not found in collection &quot;{slug}&quot;.
