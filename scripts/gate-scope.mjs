@@ -228,66 +228,52 @@ export function filterArguments(filters) {
 
 function main() {
   const args = process.argv.slice(2);
-  const emitFilters = args.includes("--filters");
   const base = args.find(arg => !arg.startsWith("--")) ?? "origin/main";
   const cwd = process.cwd();
+  const paths = changedPaths(cwd, base);
+  const { filters, unreadable } = packageFilters(
+    workspaceDirsOf(paths, workspaceGlobs(readFileSync(`${cwd}/pnpm-workspace.yaml`, "utf8"))),
+    manifestReader(cwd)
+  );
 
-  // The MERGE BASE, and a two-dot diff against the WORKING TREE.
-  //
-  // `base...HEAD` compares two commits, so everything still uncommitted is
-  // invisible — and this runs before a commit, which is exactly when the files
-  // being gated are uncommitted. It fails in the dangerous direction: it names
-  // FEWER packages than the branch touches, for precisely the files under
-  // active edit, while reading as though it ran.
-  //
-  // Diffing `base` directly instead over-reports: it sweeps in everything the
-  // base gained since this branch left it, which on a busy day is dozens of
-  // other lanes' packages.
+  if (args.includes("--filters")) emitFilters(filters, unreadable);
+  else console.log(report({ filters, unreadable, scripts: touchesScripts(paths) }));
+}
+
+/**
+ * Everything this branch changes: tracked edits AND untracked additions.
+ *
+ * The MERGE BASE, and a two-dot diff against the WORKING TREE. `base...HEAD`
+ * compares two commits, so everything still uncommitted is invisible — and
+ * this runs before a commit, which is exactly when the files being gated are
+ * uncommitted. Diffing `base` directly instead over-reports by everything the
+ * base gained since this branch left it.
+ *
+ * `git diff` reports neither an untracked file nor its directory, so a branch
+ * that only ADDS files would derive an empty scope and gate nothing.
+ */
+function changedPaths(cwd, base) {
   const mergeBase = git(cwd, ["merge-base", base, "HEAD"]).trim();
-  // Tracked changes AND untracked additions. `git diff` reports neither an
-  // untracked file nor its directory, and a NEW file is what a new module or a
-  // new test is — so a branch that only ADDS files would derive an empty scope
-  // and gate nothing, while printing a report that reads as though it looked.
-  const paths = [
+  return [
     ...git(cwd, ["diff", "--name-only", mergeBase]).split("\n"),
     ...git(cwd, ["ls-files", "--others", "--exclude-standard"]).split("\n"),
   ].filter(Boolean);
-
-  const globs = workspaceGlobs(
-    readFileSync(`${cwd}/pnpm-workspace.yaml`, "utf8")
-  );
-  const dirs = workspaceDirsOf(paths, globs);
-  const { filters, unreadable } = packageFilters(dirs, manifestReader(cwd));
-
-  if (emitFilters) {
-    // Only the filters on stdout, so a caller can splice them into a command.
-    //
-    // An unreadable directory FAILS rather than being skipped. It emits no
-    // filter — there is no package name to give — so a hook consuming this
-    // would see an empty value and run nothing, and a change that DELETES a
-    // workspace manifest would pass its gate having tested nothing at all.
-    // That is the silent under-scoping this whole module exists to remove,
-    // reappearing in the one mode written to be consumed rather than read.
-    //
-    // The reason goes to stderr so it reaches a person without polluting the
-    // command substitution the filters are read into.
-    const line = filterArguments(filters);
-    if (line) console.log(line);
-    const refusal = filtersRefusal(unreadable);
-    if (refusal !== null) {
-      console.error(refusal);
-      process.exitCode = 1;
-    }
-    return;
-  }
-
-  console.log(report({ filters, unreadable, scripts: touchesScripts(paths) }));
 }
 
-// Compared as a normalised file URL. Interpolating the raw path leaves any
-// character the URL form percent-encodes — a space in the checkout path is
-// enough — so the comparison is false, `main()` never runs, and the command
-// exits 0 having printed nothing. A gate that silently becomes a no-op is
-// worse than one that fails, because its silence reads as "no packages
-// changed".
+/**
+ * The consumed form: filters on stdout, the reason to refuse on stderr.
+ *
+ * Split from the report so the two audiences stay separate — one is spliced
+ * into a command, the other is read by a person — and so the refusal is not
+ * buried in a branch of a function that mostly formats prose.
+ */
+function emitFilters(filters, unreadable) {
+  const line = filterArguments(filters);
+  if (line) console.log(line);
+  const refusal = filtersRefusal(unreadable);
+  if (refusal === null) return;
+  console.error(refusal);
+  process.exitCode = 1;
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();
