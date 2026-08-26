@@ -301,7 +301,7 @@ function assertRowMatches(
 }
 
 /** Every column that identifies one subject, as a query. */
-function subjectWhere(
+export function subjectWhere(
   subject: ClassUsageSubject
 ): Record<string, { equals: string }> {
   return {
