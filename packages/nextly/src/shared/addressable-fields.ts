@@ -1,16 +1,29 @@
 /**
  * Which fields are addressable at a level, with presentational groups flattened.
  *
- * One implementation, in one place. It answered the same question in two —
- * `domains/versions/tag-component-types.ts` and the page-builder plugin's own
- * copy — and the second existed because this one was exported from its module
- * and from no public entry, so a plugin could only reach it by importing core's
- * file layout. Two functions deciding which fields a level addresses is two
- * functions that can drift, and the drift is silent because both look correct.
+ * CORE's implementation, in one place, and reachable. It answered the same
+ * question in two — `domains/versions/tag-component-types.ts` and the
+ * page-builder plugin's own copy — and the second existed because this one was
+ * exported from its module and from no public entry, so a plugin could only
+ * reach it by importing core's file layout.
+ *
+ * The plugin's copy is NOT deleted by this change and that is not an oversight:
+ * it lives in another lane's package, on its open branch, and the two walks do
+ * not yet agree. This one descends any unnamed field carrying an array of
+ * `fields` — which is exactly what core's previous version did, and what core's
+ * five call sites still expect. The plugin's additionally requires
+ * `type === "group"`, deliberately, because descending an unnamed repeater
+ * would file index rows per row that no rebuild can reconcile or sweep.
+ *
+ * So converging them is a behavioural decision for that lane, not a deletion:
+ * adopting this walk unchanged widens what they descend into. Until they make
+ * it, this is published and theirs is not — which is the half that stops a
+ * THIRD copy being written, and the half worth having first.
  *
  * @module shared/addressable-fields
  */
 
+import type { FieldConfig } from "../collections/fields/types";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 
 /**
@@ -45,12 +58,26 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
  * where a schema is WRITTEN, not in the type every internal reader shares, and
  * core's own callers would start seeing `{} | null` on ordinary property reads.
  *
- * The generic assumes a field list is homogeneous with its nested lists, which
- * holds here because a group's `fields` is the same union as its siblings. A
- * caller with no type at all falls to the second signature and gets the
- * authorable union, which is the widest thing it can honestly be told.
+ * Two concrete signatures rather than a generic, because a generic cannot be
+ * sound here and saying so in a comment was not enough. A group's children are
+ * typed `GroupFieldConfig_FieldConfig` — a deliberately open `@internal` bag
+ * with an `any` index signature — so a field list is NOT homogeneous with its
+ * nested lists at the type level, and `<T extends object>` let
+ * `addressableFields([group({ fields: [text(...)] })])` infer
+ * `GroupFieldConfig[]` while returning the text child. A caller could then read
+ * `.fields` off a text field and compile.
+ *
+ * Naming the two unions that are actually passed fixes that by construction: a
+ * narrower element type widens to whichever union contains it, which is the
+ * honest answer, and `.fields` on the result is a type error again unless the
+ * caller narrows first.
  */
-export function addressableFields<T extends object>(fields: readonly T[]): T[];
+export function addressableFields(
+  fields: readonly FieldConfig[]
+): FieldConfig[];
+export function addressableFields(
+  fields: readonly AuthorableFieldConfig[]
+): AuthorableFieldConfig[];
 export function addressableFields(fields: unknown): AuthorableFieldConfig[];
 export function addressableFields(fields: unknown): AuthorableFieldConfig[] {
   const out: AuthorableFieldConfig[] = [];
