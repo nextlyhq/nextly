@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { formAvailability, GENERIC_REFUSAL } from "../form-availability";
+import {
+  formAvailability,
+  GENERIC_REFUSAL,
+  NO_SUCH_FORM,
+} from "../form-availability";
 
 const live = { status: "published", wentLiveAt: "2026-01-01T00:00:00Z" };
 
@@ -81,5 +85,25 @@ describe("formAvailability - forms that were never public", () => {
     expect(formAvailability(null).kind).toBe(
       formAvailability({ status: "draft" }).kind
     );
+  });
+});
+
+describe("the sentence a hidden form is answered with", () => {
+  // Every path's assertion is bound to this constant rather than repeating it,
+  // which is what makes the four provably equal — and leaves nothing pinning
+  // the text itself. Emptying it would keep all of them green.
+  it("says something", () => {
+    expect(NO_SUCH_FORM.trim().length).toBeGreaterThan(0);
+  });
+
+  it("says nothing about why", () => {
+    // The whole point of answering a draft, a never-released form and an unused
+    // slug identically is that the answer cannot distinguish them. A sentence
+    // naming any of those states would put the distinction back into the text
+    // after the code had removed it.
+    const leaks = ["draft", "closed", "publish", "unpublish", "not accepting"];
+    for (const word of leaks) {
+      expect(NO_SUCH_FORM.toLowerCase()).not.toContain(word);
+    }
   });
 });

@@ -11,9 +11,20 @@
  * @module domains/forms/form-availability
  */
 
-/** What every path says when it has no better answer, and the only one a form that was never public gets. */
+/** What every path says when it has no better answer. */
 export const GENERIC_REFUSAL =
   "This form is not currently accepting submissions";
+
+/**
+ * What a caller is told about a form they may not be entitled to know exists.
+ *
+ * Named here rather than at each path because it is the visitor-facing half of
+ * `absent`. The four entry points had already been given one reading of WHICH
+ * forms are absent while still formatting the answer independently — so a draft
+ * was "Form not found" through the Direct API and "Not found." over REST, and
+ * which of those a visitor saw still depended on their client.
+ */
+export const NO_SUCH_FORM = "Form not found.";
 
 /**
  * A form's answer to a visitor.

@@ -10,6 +10,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
+import { NO_SUCH_FORM } from "../../domains/forms/form-availability";
 
 describe("Direct API - Forms Operations", () => {
   let nextly: Nextly;
@@ -267,7 +268,7 @@ describe("Direct API - Forms Operations", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe("Form not found");
+      expect(result.error).toBe(NO_SUCH_FORM);
     });
 
     it("should return error when form is not published", async () => {
@@ -297,7 +298,7 @@ describe("Direct API - Forms Operations", () => {
       // A draft has never been public, so it answers as an unused slug does —
       // the same answer the HTTP paths give, which is the point of routing all
       // of them through one reading.
-      expect(result.error).toBe("Form not found");
+      expect(result.error).toBe(NO_SUCH_FORM);
     });
 
     it("relays a closed form's own message, as the HTTP paths do", async () => {

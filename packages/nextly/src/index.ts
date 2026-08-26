@@ -553,6 +553,7 @@ export type { BatchOperationResult } from "./domains/collections/services/collec
 export {
   formAvailability,
   GENERIC_REFUSAL,
+  NO_SUCH_FORM,
   type FormAvailability,
   type FormAvailabilityInput,
 } from "./domains/forms/form-availability";

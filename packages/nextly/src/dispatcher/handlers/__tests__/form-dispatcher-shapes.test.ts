@@ -16,6 +16,7 @@ import { NextlyError } from "../../../errors";
 import type { ServiceContainer } from "../../../services";
 import { getCollectionsHandlerFromDI } from "../../helpers/di";
 import { dispatchForms } from "../form-dispatcher";
+import { NO_SUCH_FORM } from "../../../domains/forms/form-availability";
 
 type CollectionsHandlerLike = {
   listEntries: ReturnType<typeof vi.fn>;
@@ -428,10 +429,17 @@ describe("dispatchForms, what a form's own address answers", () => {
     // forms one guess at a time.
     const draft = { id: "f1", slug: "contact", status: "draft", fields: [] };
 
+    // The SENTENCE as well as the code, and taken from the shared constant
+    // rather than repeated as a literal: every path formats this answer, and a
+    // literal per path cannot say the four of them MATCH.
     await expect(askFor([draft])).rejects.toMatchObject({
       code: "NOT_FOUND",
+      publicMessage: NO_SUCH_FORM,
     });
-    await expect(askFor([])).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(askFor([])).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      publicMessage: NO_SUCH_FORM,
+    });
   });
 });
 

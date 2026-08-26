@@ -8,7 +8,7 @@
  * @since 0.1.0
  */
 
-import { formAvailability } from "nextly";
+import { formAvailability, NO_SUCH_FORM } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -92,9 +92,6 @@ export interface SubmitFormContext {
 // ============================================================
 // Main Submission Handler
 // ============================================================
-
-/** What a caller is told about a form they may not be entitled to know exists. */
-const NO_SUCH_FORM = "Form not found";
 
 /**
  * Process a form submission.

@@ -8,7 +8,10 @@
  * @packageDocumentation
  */
 
-import { formAvailability } from "../../domains/forms/form-availability";
+import {
+  formAvailability,
+  NO_SUCH_FORM,
+} from "../../domains/forms/form-availability";
 import { NextlyError } from "../../errors/nextly-error";
 import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import type { WhereFilter } from "../../services/collections/query-operators";
@@ -171,11 +174,11 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
       // `absent` and a missing row give the caller the same answer, and say so
       // in one place: a different one for the second would let anyone discover
       // unreleased forms by probing slugs.
-      if (!form) return { success: false, error: "Form not found" };
+      if (!form) return { success: false, error: NO_SUCH_FORM };
 
       const availability = formAvailability(form);
       if (availability.kind === "absent") {
-        return { success: false, error: "Form not found" };
+        return { success: false, error: NO_SUCH_FORM };
       }
       if (availability.kind === "closed") {
         return { success: false, error: availability.message };

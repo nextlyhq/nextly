@@ -21,6 +21,7 @@ import {
 } from "../../api/response-shapes";
 import {
   formAvailability,
+  NO_SUCH_FORM,
   type FormAvailabilityInput,
 } from "../../domains/forms/form-availability";
 import { NextlyError } from "../../errors";
@@ -115,6 +116,10 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
       if (availability.kind === "absent") {
         // §13.8: identifier (slug) belongs in logContext only.
         throw NextlyError.notFound({
+          // The same sentence the Direct API and the plugin handler give. The
+          // canonical "Not found." would make what a visitor is told depend on
+          // whether their client spoke HTTP.
+          message: NO_SUCH_FORM,
           logContext: { entity: "form", slug, reason: availability.reason },
         });
       }
@@ -187,6 +192,10 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
       const availability = formAvailability(candidate);
       if (availability.kind === "absent") {
         throw NextlyError.notFound({
+          // The same sentence the Direct API and the plugin handler give. The
+          // canonical "Not found." would make what a visitor is told depend on
+          // whether their client spoke HTTP.
+          message: NO_SUCH_FORM,
           logContext: { entity: "form", slug, reason: availability.reason },
         });
       }

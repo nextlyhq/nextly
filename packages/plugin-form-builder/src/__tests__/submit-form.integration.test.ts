@@ -12,6 +12,8 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { NO_SUCH_FORM } from "nextly";
+
 import { submitForm } from "../handlers/submit-form";
 import { formBuilder } from "../plugin";
 
@@ -389,11 +391,10 @@ describe("what a form that is not taking submissions says", () => {
     expect(result.error).toBe(HIDDEN);
   });
 
-  // What a caller is told about a form they may not be entitled to know exists.
-  // Named once here so the tests below compare against the same sentence a
-  // missing row produces, rather than each restating a literal that could drift
-  // apart from it.
-  const HIDDEN = "Form not found";
+  // The sentence core gives, not a copy of it. Every one of the four public
+  // paths formats this answer, and a literal repeated per path cannot say the
+  // four of them MATCH — which is exactly how they came to differ.
+  const HIDDEN = NO_SUCH_FORM;
 
   it("answers a slug nobody used with that sentence", async () => {
     // The anchor the two tests below are measured against. Without it they
