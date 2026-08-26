@@ -11,19 +11,18 @@
  * had been mutually exclusive: canvas width became the single source of truth
  * and the device menu was demoted to a way of setting one.
  *
- * The founder's 2026-08-24 ruling deferred this control until canvas width
- * simulation existed, on the grounds that a selector changing which values you
- * edit while the canvas still shows desktop is confusing. That is precisely the
- * state deriving both facts from one width makes unrepresentable.
+ * A selector that changed which values you edit while the canvas still showed
+ * desktop would leave the author editing one tier and looking at another.
+ * Deriving both facts from one width makes that state unrepresentable rather
+ * than merely unlikely.
  *
  * **A breakpoint selector, not a device preview.** It says which of the site's
  * tiers the canvas is sized to; it does not promise that the result matches
  * what a visitor sees. It cannot: the canvas is not an iframe, so a page sized
  * in `vw`/`vh`, a hand-authored `@media` rule, or a block reading
- * `window.innerWidth` still answers to the admin window. `decision:preview-truth-is-the-iframe`
- * settles that the iframe is the authoritative preview and this is the correct
- * interim, so the labels here stay in the vocabulary of breakpoints and make no
- * fidelity claim.
+ * `window.innerWidth` still answers to the admin window. An iframe is what can
+ * make a preview authoritative; until the canvas is one, the labels here stay
+ * in the vocabulary of breakpoints and make no fidelity claim.
  *
  * **In the top bar beside the manager**, which `breakpoint-manager.tsx` chose
  * its own placement to leave room for: the two read as one control — what the
@@ -32,12 +31,17 @@
  * @module breakpoint-switcher
  */
 
-import type { BreakpointId, BreakpointSet } from "@nextlyhq/blocks-engine";
+import {
+  BASE_BREAKPOINT,
+  breakpointContexts,
+  type BreakpointId,
+  type BreakpointSet,
+} from "@nextlyhq/blocks-engine";
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 
-import { authoredBreakpoints, inCascadeOrder } from "./breakpoints";
-import { editedBreakpointAtWidth, widthForBreakpoint } from "./canvas-width";
+import { authoredBreakpoints, isUsableWidth } from "./breakpoints";
+import { editedBreakpointAtWidth } from "./canvas-width";
 
 /**
  * Props for BreakpointSwitcher.
@@ -101,23 +105,67 @@ export function BreakpointSwitcher({
 }: BreakpointSwitcherProps): React.JSX.Element | null {
   const ready = status === "ready";
   /*
-   * The AUTHORED set, in cascade order.
+   * The tiers this control offers, taken from the COMPILER's contexts rather
+   * than from the stored definitions.
    *
-   * `authoredBreakpoints` strips a stored row using the reserved base id — the
-   * plugin's own README documents a host config carrying one — which would
-   * otherwise appear here as a tier named "Base" beside the unconditional tier
-   * this control already offers, two entries for one thing. `inCascadeOrder`
-   * puts them widest-first, which is the order the cascade resolves in and the
-   * order every builder surveyed presents.
+   * `breakpointContexts` is the only reader that decides what a site's
+   * breakpoints ARE for the sheet: it drops a definition whose bound it cannot
+   * use, and — the case that matters here — it claims each id ONCE, so a stored
+   * set carrying two rows with the same id yields one context. Built from the
+   * raw definitions instead, this list keeps both: two radios sharing a React
+   * key, sharing a bound, and one of them permanently unselectable because the
+   * match resolves to the first. The stylesheet has one tier and the control
+   * offers two, only one of which does anything.
+   *
+   * A tier the compiler emits no bound for is DROPPED for the same reason. The
+   * author would pick it, the canvas would resize to a number nothing responds
+   * to, and the page would not change — which reads as the feature being
+   * broken rather than as the definition being unusable.
+   *
+   * The contexts arrive widest-first, which is the order the cascade resolves
+   * in and the order every builder surveyed presents, so no second sort is
+   * applied here.
+   *
+   * The viewport axis only. A container tier is a question about an element's
+   * query container, which sizing the canvas cannot answer — the same exclusion
+   * `canvas-width.ts` makes, for the same reason.
    */
   const tiers = React.useMemo(() => {
+    /*
+     * Labels come from the authored set, because a context carries none — and
+     * are matched on the BOUND as well as the id.
+     *
+     * Measured: among rows sharing an id, `breakpointContexts` keeps the
+     * WIDEST rather than the first stored. So a lookup by id alone can label
+     * the surviving tier after a definition the sheet discarded — stored as
+     * `[{tablet, 700, "Draft"}, {tablet, 991, "Tablet"}]`, the sheet has the
+     * 991 tier and the control would call it "Draft".
+     *
+     * Falling back to the id rather than to another row's label: a context with
+     * no authored definition at that bound has no honest name here, and
+     * borrowing one would attach a label to a tier it does not describe.
+     *
+     * `authoredBreakpoints` strips a stored row using the reserved base id —
+     * the plugin's own README documents a host config carrying one — so its
+     * label cannot be picked up for the unconditional tier this control
+     * already names.
+     */
     const authored = authoredBreakpoints(
       breakpoints ?? { viewport: [], container: [] }
-    );
-    // The viewport axis only. A container tier is a question about an element's
-    // query container, which sizing the canvas cannot answer — the same
-    // exclusion `canvas-width.ts` makes, for the same reason.
-    return inCascadeOrder(authored.viewport);
+    ).viewport;
+    return breakpointContexts(breakpoints)
+      .filter(
+        (context): context is typeof context & { maxWidth: number } =>
+          context.axis !== "container" && isUsableWidth(context.maxWidth)
+      )
+      .map(context => ({
+        id: context.id,
+        label:
+          authored.find(
+            def => def.id === context.id && def.maxWidth === context.maxWidth
+          )?.label ?? context.id,
+        bound: context.maxWidth,
+      }));
   }, [breakpoints]);
 
   /*
@@ -148,9 +196,7 @@ export function BreakpointSwitcher({
    * nothing while the tier indicator still reports what is applying. Gutenberg
    * needed the same distinction once it allowed free resizing.
    */
-  const exact = tiers.some(
-    tier => widthForBreakpoint(breakpoints, tier.id) === width
-  );
+  const exact = tiers.some(tier => tier.bound === width);
   const atWidest = width === undefined;
 
   /*
@@ -160,32 +206,9 @@ export function BreakpointSwitcher({
    * user one Tab per breakpoint to cross a control they may not be using, and
    * assistive technology announces the group's size for them anyway.
    */
-  /*
-   * The bound comes from the COMPILER, not from the stored definition.
-   *
-   * They are the same number whenever the compiler accepted the definition, and
-   * the case that matters is the one where it did not: `breakpointContexts`
-   * applies its own reading of a stored axis, so a definition it declines to
-   * emit a bounded context for has no query in the sheet at all. Sizing the
-   * canvas to that stored width would put the box at a number nothing responds
-   * to — the author picks a tier, the canvas resizes, and the page does not
-   * change, which reads as the whole feature being broken.
-   *
-   * A tier the compiler emits no bound for is therefore DROPPED rather than
-   * offered, which is the honest answer: there is nothing to switch to.
-   */
   const options: Array<{ id: BreakpointId; label: string; bound?: number }> = [
-    { id: "base", label: "Full width" },
-    ...tiers
-      .map(tier => ({
-        id: tier.id,
-        label: tier.label,
-        bound: widthForBreakpoint(breakpoints, tier.id),
-      }))
-      .filter(
-        (option): option is typeof option & { bound: number } =>
-          option.bound !== undefined
-      ),
+    { id: BASE_BREAKPOINT, label: "Full width" },
+    ...tiers,
   ];
   /*
    * Which option the current width CORRESPONDS to, or -1 for none.
@@ -212,8 +235,8 @@ export function BreakpointSwitcher({
    * box is not actually in is the narrow-region case: the author asked for the
    * full width, the region handed the box less than the widest tier's bound,
    * and their edits are landing in a narrower tier with nothing on screen to
-   * say so. That is the confusion the founder's 2026-08-24 ruling named, and
-   * the reason this indicator is not merely decorative.
+   * say so. That is what makes this indicator load-bearing rather than
+   * decorative.
    */
   const describedBySelection = matchedIndex >= 0 && appliedTier === claimedTier;
   /*
@@ -226,10 +249,29 @@ export function BreakpointSwitcher({
       option => option.bound !== undefined && option.id === appliedTier
     )?.label ?? "Full width";
 
+  /*
+   * The rendered radios, so an arrow key can move FOCUS as well as selection.
+   *
+   * A roving tabindex makes the unselected options `tabIndex={-1}`, so leaving
+   * focus where it was after an arrow press strands it on a button that is no
+   * longer checked and no longer in the tab order. Assistive technology then
+   * announces nothing for the option that just became selected, and every
+   * further arrow press changes a radio the user cannot hear — which is the
+   * failure mode the roving pattern exists to avoid rather than a refinement
+   * of it.
+   */
+  const radios = React.useRef<Array<HTMLButtonElement | null>>([]);
+
   const move = (delta: number): void => {
-    const next =
-      options[(activeIndex + delta + options.length) % options.length];
+    const index = (activeIndex + delta + options.length) % options.length;
+    const next = options[index];
     if (next === undefined) return;
+    /*
+     * Focused BEFORE the selection is raised, while the element is still the
+     * one this render drew. Raising first re-renders the group, and the ref
+     * this reads may then point at a node React has already replaced.
+     */
+    radios.current[index]?.focus();
     onSelect(next.bound);
   };
 
@@ -264,6 +306,9 @@ export function BreakpointSwitcher({
         return (
           <button
             key={option.id}
+            ref={element => {
+              radios.current[index] = element;
+            }}
             type="button"
             role="radio"
             aria-checked={selected}

@@ -9,11 +9,10 @@
  * with what is on screen.
  *
  * That is not a stylistic preference. The alternative — a stored "current
- * breakpoint" beside a canvas width — is two facts about one thing, and the
- * founder's 2026-08-24 ruling deferred this control precisely because a
- * selector that changes which values you edit while the canvas still shows
- * desktop is confusing. Deriving removes the state that could drift rather
- * than keeping the two in step.
+ * breakpoint" beside a canvas width — is two facts about one thing, and they
+ * drift: a selector that changes which values you edit while the canvas still
+ * shows desktop leaves the author editing one tier and looking at another.
+ * Deriving removes the state that could drift rather than keeping two in step.
  *
  * Gutenberg reached the same answer from the opposite direction: its device
  * dropdown and its resizable canvas were mutually exclusive surfaces until it

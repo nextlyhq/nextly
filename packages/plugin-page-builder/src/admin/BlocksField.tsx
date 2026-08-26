@@ -809,9 +809,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    *
    * Only the MEASURED one decides which tier is edited. Deriving that from the
    * request would tell an author they are editing the tier they picked while
-   * the box is in a narrower one — the disagreement between what you see and
-   * what you edit that the founder's 2026-08-24 ruling deferred this control
-   * over.
+   * the box is in a narrower one, which is the disagreement between what you
+   * see and what you edit that this control exists to remove.
    */
   const [requestedWidth, setRequestedWidth] = useState<number | undefined>(
     undefined

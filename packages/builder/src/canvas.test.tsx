@@ -655,6 +655,43 @@ describe("what the canvas reports about the box it got", () => {
     ]);
   });
 
+  it("falls back to contentRect when contentBoxSize is absent", () => {
+    /*
+     * Polyfills and older engines expose only `contentRect`. Read as an array
+     * alone, they report `undefined` on every notification — and the caller
+     * cannot tell that from "nothing measured yet", so the canvas applies a
+     * narrower tier's rules while the inspector stays on base and the author's
+     * edits land in a breakpoint they are not looking at.
+     *
+     * `contentRect` is a LAYOUT size like `contentBoxSize`, so the canvas zoom
+     * does not scale it; it is a fallback, not a compromise.
+     */
+    const onMeasured = vi.fn();
+    measured(onMeasured);
+
+    FakeResizeObserver.last?.deliver({
+      contentRect: { width: 880 } as DOMRectReadOnly,
+    });
+
+    expect(onMeasured).toHaveBeenCalledWith(880);
+  });
+
+  it("reads contentBoxSize when it is a single object rather than a sequence", () => {
+    /*
+     * The spec settled on a sequence; Firefox shipped a single object first and
+     * that shape is still reachable. Indexing `[0]` on it yields `undefined`,
+     * which is the same silent stall as having no size at all.
+     */
+    const onMeasured = vi.fn();
+    measured(onMeasured);
+
+    FakeResizeObserver.last?.deliver({
+      contentBoxSize: { inlineSize: 640, blockSize: 480 } as never,
+    });
+
+    expect(onMeasured).toHaveBeenCalledWith(640);
+  });
+
   it("says UNDEFINED rather than a number when the entry carries no size", () => {
     /*
      * An entry without `contentBoxSize` is a real answer from older engines,

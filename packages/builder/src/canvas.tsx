@@ -175,18 +175,40 @@ export function nodeElements(root: HTMLElement): readonly Element[] {
 }
 
 /**
+ * The observed entry's inline size, across the shapes `ResizeObserver` has had.
+ *
+ * `contentBoxSize` was specified as a SEQUENCE, and Firefox shipped it as a
+ * single object first; both shapes are still reachable, and polyfills predating
+ * it expose only `contentRect`. Read as an array alone, every one of those
+ * reports `undefined` on every notification — and the caller cannot tell that
+ * from "nothing has been measured yet", so the canvas would apply tablet rules
+ * while the inspector stayed on the base tier and the author's edits landed in
+ * a breakpoint they were not looking at.
+ *
+ * `contentRect` is the right fallback rather than a lesser one: like
+ * `contentBoxSize` it is a LAYOUT size, so the editor's canvas zoom does not
+ * scale it — which `getBoundingClientRect()` would, reporting what a reader
+ * sees rather than what a container query resolves against. `builder-shell.tsx`
+ * measures on the same property for the same reason. It carries `width` rather
+ * than an inline size, so the two agree only in a horizontal writing mode; the
+ * admin is one, and the sequence shape above is preferred wherever it exists.
+ */
+function inlineSizeOf(entry: ResizeObserverEntry): number | undefined {
+  const box: unknown = entry.contentBoxSize;
+  const first: unknown = Array.isArray(box) ? box[0] : box;
+  const inline = (first as ResizeObserverSize | undefined)?.inlineSize;
+  if (typeof inline === "number") return inline;
+  const width = entry.contentRect?.width;
+  return typeof width === "number" ? width : undefined;
+}
+
+/**
  * Report a box's real inline size to its owner whenever it changes.
  *
  * `ResizeObserver` rather than a resize listener on the window: the box changes
  * width when the inspector opens, when a rail panel is toggled and when the
  * pane is dragged, none of which resize the window. A window listener would
  * report the same number across all three.
- *
- * `contentBoxSize` rather than `getBoundingClientRect().width`, because the
- * editor applies a canvas zoom transform and the rect is the TRANSFORMED size —
- * which is what a reader sees but not what the container queries resolve
- * against. A container query asks the element's own layout size, so reporting
- * the visual one would name the wrong tier at any zoom but 100%.
  */
 function useReportedInlineWidth(
   box: React.RefObject<HTMLElement | null>,
@@ -202,8 +224,7 @@ function useReportedInlineWidth(
     const observer = new ResizeObserver(entries => {
       const entry = entries[0];
       if (entry === undefined) return;
-      const inline = entry.contentBoxSize[0]?.inlineSize;
-      report(typeof inline === "number" ? inline : undefined);
+      report(inlineSizeOf(entry));
     });
     observer.observe(element);
     return () => observer.disconnect();

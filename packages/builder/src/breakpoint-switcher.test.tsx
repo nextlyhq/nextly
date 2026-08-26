@@ -191,8 +191,7 @@ describe("what the control reports as selected", () => {
      *
      * Without this the author sees "Full width" selected, edits what they
      * believe is the base tier, and every value silently goes to tablet — the
-     * exact "what you edit disagrees with what you see" state the founder's
-     * 2026-08-24 ruling deferred this control over.
+     * exact state where what you edit disagrees with what you see.
      *
      * The selection is asserted alongside, because the honest answer is BOTH:
      * the author did ask for the full width, and the box is in tablet.
@@ -476,5 +475,121 @@ describe("a site with no viewport breakpoints", () => {
     );
 
     expect(container.firstChild).toBeNull();
+  });
+});
+
+describe("a stored set the compiler has to reconcile", () => {
+  it("offers ONE option per id when a set carries the id twice", () => {
+    /*
+     * A set written through the API or an import can carry two rows with one
+     * id. `breakpointContexts` claims each id once, so the sheet has a single
+     * tier — but a control built from the raw definitions keeps both, giving
+     * two radios that share a React key and a bound, one of which can never be
+     * selected because the match resolves to the first.
+     *
+     * Asserted as a count over the whole group rather than "Tablet appears
+     * once", so a version emitting two DIFFERENTLY-labelled duplicates fails
+     * here too.
+     */
+    render(
+      <BreakpointSwitcher
+        breakpoints={{
+          viewport: [
+            { id: "tablet", label: "Tablet", maxWidth: 991 },
+            { id: "tablet", label: "Tablet Copy", maxWidth: 700 },
+          ],
+          container: [],
+        }}
+        width={undefined}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    // Full width, and one tablet.
+    expect(options()).toHaveLength(2);
+  });
+
+  it("labels the surviving tier from the definition the compiler KEPT", () => {
+    /*
+     * Measured: among rows sharing an id the compiler keeps the WIDEST, not the
+     * first stored. A label looked up by id alone therefore names the surviving
+     * tier after the row the sheet discarded — here the control would offer a
+     * 991px tier called "Draft".
+     *
+     * The stored order puts the discarded row FIRST deliberately: with the kept
+     * row first, a by-id lookup would produce the right answer by accident and
+     * this case could not fail.
+     */
+    render(
+      <BreakpointSwitcher
+        breakpoints={{
+          viewport: [
+            { id: "tablet", label: "Draft", maxWidth: 700 },
+            { id: "tablet", label: "Tablet", maxWidth: 991 },
+          ],
+          container: [],
+        }}
+        width={undefined}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(
+      screen.getByRole("radio", { name: "Tablet, up to 991 pixels" })
+    ).toBeDefined();
+    expect(screen.queryByRole("radio", { name: /Draft/ })).toBeNull();
+  });
+});
+
+describe("where focus goes when the keyboard moves the selection", () => {
+  it("moves FOCUS to the option the arrow key selected", () => {
+    /*
+     * The roving tabindex makes every unselected option `tabIndex={-1}`, so
+     * focus left behind is stranded on a button that is neither checked nor in
+     * the tab order. Assistive technology announces nothing for the option that
+     * just became selected, and every further arrow press changes a radio the
+     * user cannot hear.
+     *
+     * Asserted on `document.activeElement` rather than on a focus handler
+     * firing, because what matters is where focus ENDED UP.
+     */
+    render(
+      <BreakpointSwitcher
+        breakpoints={site()}
+        width={undefined}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    const group = screen.getByRole("radiogroup");
+    options()[0]?.focus();
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(options()[1]);
+  });
+
+  it("leaves focus alone when the control is not ready", () => {
+    /*
+     * The control. Without it, a version that focused on every key event —
+     * including while disabled, where no selection can be made — would satisfy
+     * the case above.
+     */
+    render(
+      <BreakpointSwitcher
+        breakpoints={site()}
+        width={undefined}
+        onSelect={vi.fn()}
+        status="loading"
+      />
+    );
+
+    const group = screen.getByRole("radiogroup");
+    const before = document.activeElement;
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(before);
   });
 });
