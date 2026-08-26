@@ -248,6 +248,60 @@ function holdsBlockContent(
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 
 /**
+ * What a `summary` may hold besides phrasing content.
+ *
+ * The HTML content model is phrasing content, optionally intermixed with heading
+ * content — so a stored or imported `collapsible-title -> heading` is LEGAL, and
+ * moving it out takes the disclosure's only label with it.
+ */
+const SUMMARY_PERMITS: ReadonlySet<string> = new Set(["heading"]);
+
+/** A heading admits no block content of any kind, a nested heading included. */
+const PERMITS_NOTHING: ReadonlySet<string> = new Set<string>();
+
+/** A node's children, as the array the rest of this file can rely on. */
+function kidsOf(node: RichTextNode): readonly RichTextNode[] {
+  return Array.isArray(node.children) ? node.children : [];
+}
+
+/**
+ * Children split into what a phrasing-only container keeps and what follows it.
+ *
+ * See {@link PhrasingOnly} for why each branch answers the way it does.
+ */
+function partitionPhrasing(
+  nodes: readonly RichTextNode[],
+  permits: ReadonlySet<string>
+): { keeps: RichTextNode[]; moves: RichTextNode[] } {
+  const keeps: RichTextNode[] = [];
+  const moves: RichTextNode[] = [];
+  for (const child of nodes) {
+    if (!isRichTextNode(child)) {
+      keeps.push(child);
+    } else if (permits.has(child.type)) {
+      // Kept, but its OWN block content still may not live here. Moved out
+      // unwrapped: a second copy of this heading would be a second outline entry.
+      const inner = partitionPhrasing(kidsOf(child), PERMITS_NOTHING);
+      keeps.push({ ...child, children: inner.keeps });
+      moves.push(...inner.moves);
+    } else if (BLOCK_LEVEL.has(child.type)) {
+      moves.push(child);
+    } else if (!holdsBlockContent(child.children)) {
+      keeps.push(child);
+    } else {
+      // An inline wrapper holding both. Split it, keeping the wrapper on each
+      // side so the words stay linked and the media stays linked.
+      const inner = partitionPhrasing(kidsOf(child), permits);
+      if (inner.keeps.length > 0)
+        keeps.push({ ...child, children: inner.keeps });
+      if (inner.moves.length > 0)
+        moves.push({ ...child, children: inner.moves });
+    }
+  }
+  return { keeps, moves };
+}
+
+/**
  * A container that may hold only phrasing content, with the rest moved AFTER it.
  *
  * `h1`-`h6` take phrasing content, and `summary` takes phrasing content or a
@@ -265,10 +319,19 @@ const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
  * becomes part of the disclosure's body, which is the only place inside a
  * `details` it can legally go.
  *
- * A child is moved WHOLE when it merely contains block content — a link around
- * an image leaves the heading entirely rather than being taken apart. Splitting
- * one node across the boundary would need the renderer to rebuild the author's
- * markup, and a heading keeping its words is the property worth protecting.
+ * An INLINE wrapper holding both — a link around a label AND an image — is
+ * SPLIT rather than moved whole, and the wrapper is kept on both sides. Moving
+ * it whole drags the label out and leaves the container empty, which is the
+ * opposite of the property this exists to protect: a heading whose words happen
+ * to sit inside a link is still a heading with words. Duplicating an inline
+ * wrapper costs nothing in the outline and keeps the author's link on the words
+ * and on the media alike.
+ *
+ * A BLOCK container is never duplicated that way. Where `summary` permits a
+ * heading — it does, phrasing content optionally intermixed with heading
+ * content — that heading is kept and its own block content leaves UNWRAPPED,
+ * because re-wrapping it in a copy of the heading would put a second entry in
+ * the document outline.
  */
 function PhrasingOnly({
   tag: Tag,
@@ -281,10 +344,10 @@ function PhrasingOnly({
 }): ReactNode {
   const kids = Array.isArray(node.children) ? node.children : [];
   if (!holdsBlockContent(kids)) return <Tag>{children(kids, policy)}</Tag>;
-  // Asked per child through the same walk the container was judged by, so
-  // "what counts as block" has one answer rather than two that can drift.
-  const keeps = kids.filter(child => !holdsBlockContent([child]));
-  const moves = kids.filter(child => holdsBlockContent([child]));
+  const { keeps, moves } = partitionPhrasing(
+    kids,
+    Tag === "summary" ? SUMMARY_PERMITS : PERMITS_NOTHING
+  );
   return (
     <>
       <Tag>{children(keeps, policy)}</Tag>

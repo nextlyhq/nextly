@@ -1548,3 +1548,103 @@ describe("rich-text phrasing-only containers", () => {
     );
   });
 });
+
+describe("rich-text phrasing-only containers keep their label", () => {
+  const IMAGE = {
+    type: "image",
+    version: 1,
+    src: "https://cdn.example.com/a.jpg",
+    altText: "A",
+  };
+  const linked = (kids: unknown[]) => ({
+    type: "link",
+    url: "https://example.com",
+    children: kids,
+  });
+  const disclosure = (title: unknown[]): RichTextValue =>
+    doc([
+      {
+        type: "collapsible-container",
+        children: [{ type: "collapsible-title", children: title }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("keeps a heading a summary is allowed to hold", () => {
+    // `summary` takes phrasing content optionally intermixed with HEADING
+    // content, so a stored or imported title that is a heading is legal. Moving
+    // it out leaves `<summary></summary>` — a disclosure with no label at all,
+    // which is worse than the invalid nesting the move exists to prevent.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={disclosure([
+          {
+            type: "heading",
+            tag: "h2",
+            children: [{ type: "text", text: "Title" }],
+          },
+        ])}
+      />
+    );
+    expect(html).toContain("<summary><h2>Title</h2></summary>");
+  });
+
+  it("keeps that heading while its own media still leaves the summary", () => {
+    // The allowance is for the heading, not for what the heading contains.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={disclosure([
+          {
+            type: "heading",
+            tag: "h2",
+            children: [{ type: "text", text: "Title" }, IMAGE],
+          },
+        ])}
+      />
+    );
+    expect(html).toContain("<summary><h2>Title</h2></summary>");
+    expect(html).not.toContain("<h2>Title<figure");
+    expect(html).toContain("<figure");
+  });
+
+  it("splits a link that carries both the label and the media", () => {
+    /*
+     * The case a direct-sibling fixture cannot reach. Moving the wrapper WHOLE
+     * drags the label out with the image and leaves `<h2></h2>` — an empty
+     * heading, which is precisely the outcome the split exists to avoid. A
+     * heading whose words happen to sit inside a link is still a heading with
+     * words.
+     *
+     * The wrapper is kept on BOTH sides: the words stay linked where the author
+     * put them, and the media stays linked too. Duplicating an INLINE wrapper is
+     * safe in a way duplicating the heading would not be — it adds nothing to
+     * the document outline.
+     */
+    const value = doc([
+      {
+        type: "heading",
+        tag: "h2",
+        children: [linked([{ type: "text", text: "Label" }, IMAGE])],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+    expect(html).toContain('<h2><a href="https://example.com">Label</a></h2>');
+    expect(html).toContain("<figure");
+    expect(html).not.toContain("<h2></h2>");
+  });
+
+  it("splits the same wrapper inside a disclosure label", () => {
+    // The sibling container. A rule applied to headings alone leaves the
+    // disclosure with an empty label by the identical route.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={disclosure([linked([{ type: "text", text: "Label" }, IMAGE])])}
+      />
+    );
+    expect(html).toContain(
+      '<summary><a href="https://example.com">Label</a></summary>'
+    );
+    expect(html).not.toContain("<summary></summary>");
+    expect(html).toContain("<figure");
+  });
+});
