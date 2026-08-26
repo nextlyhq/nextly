@@ -496,11 +496,19 @@ describe("going to the tier a value came from", () => {
     expect(box().width).toBe(991);
   });
 
-  it("RELEASES the canvas for a tier the compiler emits no bound for", () => {
+  it("SIZES the canvas for the unconditional tier too, not releases it", () => {
     /*
-     * The control, and the honest answer for the unconditional tier: there is
-     * no width that puts it on screen, so the box goes back to the region
-     * rather than being pinned to a number nothing responds to.
+     * It used to release the canvas here, on the reasoning that no width puts
+     * the unconditional tier on screen. There is one: the width it applies
+     * FROM, one past the widest bound.
+     *
+     * Releasing sends the box back to the region — and wherever the region is
+     * narrower than the widest bound, which is the ordinary case, the tier that
+     * then applies is the one the author was jumping AWAY from. The control
+     * would look like it had worked and land on the wrong tier.
+     *
+     * A jump and a choice are the same act reached two ways, so this has to
+     * agree with what pressing the option in the switcher sets.
      */
     openEditor();
     const jump = seen.inspector?.onJumpToBreakpoint as
@@ -513,6 +521,29 @@ describe("going to the tier a value came from", () => {
 
     React.act(() => {
       jump?.("base");
+    });
+
+    expect(box().width).toBe(992);
+  });
+
+  it("RELEASES the canvas for a tier that is genuinely unreachable", () => {
+    /*
+     * The control, and the case the old reasoning was right about. A tier the
+     * compiler emits no bound for — one the site does not define at all here —
+     * has no width that shows it, so the box goes back to the region rather
+     * than being pinned to a number nothing responds to.
+     */
+    openEditor();
+    const jump = seen.inspector?.onJumpToBreakpoint as
+      | ((breakpoint: string) => void)
+      | undefined;
+    React.act(() => {
+      jump?.("tablet");
+    });
+    expect(box().width).toBe(991);
+
+    React.act(() => {
+      jump?.("no-such-tier");
     });
 
     expect(box().width).toBeUndefined();

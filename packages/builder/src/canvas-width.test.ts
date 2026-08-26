@@ -146,14 +146,32 @@ describe("the width a tier is shown at", () => {
     expect(widthForBreakpoint(site(), "mobile")).toBe(575);
   });
 
-  it("is UNBOUNDED for the unconditional tier, not a number", () => {
+  it("is the APPLIES-FROM width for the unconditional tier", () => {
     /*
-     * `undefined` means "as wide as the region allows". Pinning the widest tier
-     * to a number would invent a bound the site never declared and make the
-     * widest preset narrower than the space available — the canvas would gain
-     * empty gutters on selecting the tier it was already showing.
+     * It used to be `undefined` — as wide as the region allows — on the
+     * reasoning that pinning the widest tier to a number would invent a bound
+     * the site never declared and put empty gutters around a canvas that was
+     * already the right size. The number is not invented: it is one past the
+     * widest bound, and the canvas is scaled to fit rather than guttered.
+     *
+     * A JUMP and a CHOICE are the same act reached two ways, so this has to
+     * agree with what the switcher sets. Answering `undefined` here released
+     * the canvas to the region — which, wherever the region is narrower than
+     * the widest bound, lands on the tier the author was jumping AWAY from.
      */
-    expect(widthForBreakpoint(site(), "base")).toBeUndefined();
+    expect(widthForBreakpoint(site(), "base")).toBe(baseWidth(site()));
+    expect(widthForBreakpoint(site(), "base")).toBe(992);
+  });
+
+  it("is UNBOUNDED for base where the site bounds NOTHING", () => {
+    /*
+     * The control, and the case the old reasoning was right about: with no
+     * viewport tier there is no width to go to, base applies everywhere, and
+     * the region is where the canvas belongs.
+     */
+    expect(
+      widthForBreakpoint({ viewport: [], container: [] }, "base")
+    ).toBeUndefined();
   });
 
   it("is UNBOUNDED for an id the site does not define", () => {
