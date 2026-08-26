@@ -135,7 +135,7 @@ describe("MeasuredPageFrame", () => {
     // `BlocksField` asks from INSIDE the form rather than as a registered
     // view, so the default branch has to honour the request too. A page that
     // declared a measure without honouring it would hand the page builder a
-    // 56rem column to work in.
+    // measured column to work in.
     function FormWithTakeoverField() {
       useSuppressAdminChrome({ layers: ["pageFrame"], canExit: false });
       return <p>builder canvas</p>;

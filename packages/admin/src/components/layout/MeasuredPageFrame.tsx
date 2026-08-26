@@ -42,7 +42,7 @@ interface MeasuredPageFrameProps {
  *
  * The default form matters as much as the custom one. `BlocksField` suppresses
  * `pageFrame` from inside it, and a page that declares a measure without
- * honouring that would hand the page builder a 56rem column to work in.
+ * honouring that would hand the page builder a measured column to work in.
  *
  * A framed view is page CONTENT, so the measure is the page's, declared here.
  * A view that declared its own would sit inside this container's padding and

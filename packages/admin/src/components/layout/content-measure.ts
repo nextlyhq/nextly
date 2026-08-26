@@ -7,10 +7,11 @@
  * document at another moves every field sideways at the moment the data
  * arrives, which reads as the page loading twice.
  *
- * Agreement is not something a reviewer can see, because the states are in
- * different branches of different files and each one looks correct beside its
- * own neighbours. So the value is declared here and imported, and divergence
- * stops being possible rather than being something a test has to notice.
+ * That agreement has no single place it can be observed: the states are early
+ * returns in different branches of different files, and each width is correct
+ * on its own terms wherever it appears. Declaring the value here and importing
+ * it makes divergence unrepresentable instead of something that has to be
+ * noticed by comparing the sites.
  *
  * `wide` rather than the form measure because of what a content page holds. A
  * settings form is a short column of labelled controls; an entry is a document

@@ -10,8 +10,8 @@
  *
  * The property that actually matters is that no state names a width of its own.
  * A skeleton at one measure followed by a document at another moves every field
- * sideways at the moment data arrives, and each literal looks correct beside its
- * own neighbours, so nothing in review catches the disagreement.
+ * sideways at the moment data arrives, and because each literal is correct on
+ * its own terms, the disagreement is visible only by comparing the sites.
  *
  * Reading the route source is what reaches those states. Rendering them would be
  * stronger and is not available: the skeletons are module-private, and exporting

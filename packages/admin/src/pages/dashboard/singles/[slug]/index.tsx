@@ -328,8 +328,8 @@ export default function SingleEditPage({
       {/* Through the shared frame rather than a bare container: translation
           mode asks to suppress `pageFrame` from inside the form, and only this
           component reacts to that. A page that declared its own measure here
-          keep the two-pane translation surface inside the content measure
-          while the entry editor beside it took the whole panel. */}
+          would keep the two-pane translation surface inside the content
+          measure while the entry editor beside it took the whole panel. */}
       <MeasuredPageFrame>
         <SingleForm
           // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
