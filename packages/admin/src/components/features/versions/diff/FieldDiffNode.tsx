@@ -368,6 +368,30 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
         </FieldRow>
       );
     }
+
+    default: {
+      // A node kind this build does not draw. Falling through would return
+      // nothing, and a field that VANISHES from a comparison reads exactly like
+      // a field that did not change — the one conclusion that must never be
+      // reached by accident. Degrading to the name and status loses the detail
+      // and keeps the fact.
+      const unrecognised = node as {
+        name?: string;
+        label?: string;
+        status?: DiffStatus;
+      };
+      return (
+        <FieldRow
+          label={unrecognised.label ?? unrecognised.name ?? "Field"}
+          status={unrecognised.status ?? "changed"}
+        >
+          <p className="text-xs text-muted-foreground">
+            This field changed, but this version of the admin cannot display the
+            comparison. Open the version to read it.
+          </p>
+        </FieldRow>
+      );
+    }
   }
 }
 

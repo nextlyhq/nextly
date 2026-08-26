@@ -32,6 +32,7 @@ import { withErrorHandler } from "./with-error-handler";
 // admin renderer) can import them through the published package rather than
 // deep-importing an internal module.
 export type {
+  ComparableStatus,
   DiffStatus,
   FieldDiff,
   FieldDisplay,
@@ -39,7 +40,11 @@ export type {
   ListFieldDiff,
   ListItemDiff,
   RelationTarget,
+  RichTextBlockDiff,
+  RichTextFieldDiff,
   SetFieldDiff,
+  SourceFieldDiff,
+  SourceLineDiff,
   TextFieldDiff,
   TextSegment,
   UnknownFieldDiff,
