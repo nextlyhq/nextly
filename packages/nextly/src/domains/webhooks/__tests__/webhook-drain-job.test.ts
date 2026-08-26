@@ -11,9 +11,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { JobRegistry } from "../../jobs/job-registry";
-import type { JobRow } from "../../jobs/jobs-repository";
+import type { FinalizeInput, JobRow } from "../../jobs/jobs-repository";
 import { runJobs, type JobsStore } from "../../jobs/run-jobs";
+import type {
+  WebhookDrainDatabase,
+  WebhookDrainRegistry,
+} from "../drain-runner";
 import { WEBHOOK_DRAIN_JOB, createWebhookDrainJob } from "../webhook-drain-job";
+
+/** The transaction shape the drain's database surface hands its callback. */
+type WebhookDrainTx = Parameters<
+  Parameters<WebhookDrainDatabase["transaction"]>[0]
+>[0];
 
 const NOW = new Date("2026-01-01T00:00:00.000Z");
 
@@ -37,9 +46,9 @@ function jobRow(over: Partial<JobRow> = {}): JobRow {
   };
 }
 
-function store(rows: JobRow[]): JobsStore & { finalized: any[] } {
+function store(rows: JobRow[]): JobsStore & { finalized: FinalizeInput[] } {
   let handed = false;
-  const finalized: any[] = [];
+  const finalized: FinalizeInput[] = [];
   return {
     finalized,
     findDue: async () => {
@@ -80,13 +89,15 @@ describe("the webhook drain as a job", () => {
     );
   });
 
-  it("does NOT retry the pass — the outbox rows carry their own retry state", () => {
-    // A drain is a sweep, not a unit of work. Re-running the sweep would
-    // re-attempt deliveries that already recorded an outcome and restart their
-    // backoff from the wrong clock.
+  it("IS retryable, so a transient failure does not strand the outbox", () => {
+    // Repeating a sweep is safe: deliverDueDeliveries selects only due
+    // pending/retrying rows whose lease is free, so a completed delivery is
+    // already excluded and a deferred one stays deferred. A single attempt
+    // meant a brief database outage failed the job terminally and left the
+    // remaining outbox work to whenever some other trigger happened to fire.
     expect(
       createWebhookDrainJob(fakeAdapter(), fakeRegistry()).retry.maxAttempts
-    ).toBe(1);
+    ).toBeGreaterThan(1);
   });
 
   it("runs the drain when the runner claims its row, and records it done", async () => {

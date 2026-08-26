@@ -233,4 +233,52 @@ describe("runJobs", () => {
     expect(result.claimed).toBeGreaterThan(0);
     expect(result.claimed).toBeLessThan(50);
   });
+
+  it("records a transient identity-lookup FAILURE as a retryable attempt, not as an aborted pass", async () => {
+    // A failed lookup is not the same as a missing user. Letting it throw would
+    // abort the whole drain after the row was claimed: the row keeps its lease
+    // until expiry, the candidates behind it are never reached, and a
+    // persistent lookup failure on an early row aborts every scheduled pass
+    // rather than exhausting one job's budget.
+    const s = store([row({ runAsUserId: "u1", attemptCount: 0 })]);
+    const result = await runJobs({
+      store: s,
+      registry: registryWith(
+        defineJob({ slug: "test:noop", handler: async () => {} })
+      ),
+      runAs: {
+        findUser: async () => {
+          throw new Error("rbac database unreachable");
+        },
+        listRoleSlugs: async () => [],
+      },
+      now: () => NOW,
+    });
+
+    expect(result).toMatchObject({ retried: 1, failed: 0 });
+    expect(s.finalized[0]).toMatchObject({
+      outcome: "retry",
+      lastError: expect.stringContaining("unreachable"),
+    });
+  });
+
+  it("does not count an outcome the fence refused to record", async () => {
+    // A lease reclaimed before finalization means the write did not land. It
+    // must be reported as unrecorded and NOT also as done, or the same attempt
+    // is counted twice and completed work is overstated.
+    const s: JobsStore & { finalized: unknown[] } = {
+      ...store([row()]),
+      finalize: async () => false,
+    };
+    const result = await runJobs({
+      store: s,
+      registry: registryWith(
+        defineJob({ slug: "test:noop", handler: async () => {} })
+      ),
+      runAs: runAs(),
+      now: () => NOW,
+    });
+
+    expect(result).toMatchObject({ claimed: 1, unrecorded: 1, done: 0 });
+  });
 });

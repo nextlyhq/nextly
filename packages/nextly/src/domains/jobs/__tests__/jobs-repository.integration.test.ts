@@ -219,4 +219,113 @@ describe.each(getConfiguredTestDialects())("JobsRepository (%s)", dialect => {
     });
     expect(wrote).toBe(true);
   });
+
+  it("does not let older not-yet-due rows crowd a runnable one out of the page", async () => {
+    // The head-of-line failure. If the due predicate is applied AFTER the
+    // database limits the page, a page filled with future-scheduled rows comes
+    // back, is filtered to nothing, and the runnable row behind them is never
+    // reached — on this pass or any later one, because the same rows fill the
+    // page every time.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+
+    for (let n = 0; n < 5; n++) {
+      await repo.enqueue({
+        slug: "test:future",
+        input: {},
+        runAt: new Date(NOW.getTime() + 3_600_000),
+        runAsUserId: null,
+        dedupeKey: null,
+        now: new Date(NOW.getTime() - 10_000 + n),
+      });
+    }
+    const { id: runnable } = await repo.enqueue({
+      slug: "test:now",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: null,
+      now: NOW,
+    });
+
+    const due = await repo.findDue({ now: NOW, limit: 5 });
+    expect(due.map(j => j.id)).toContain(runnable);
+  });
+
+  it("does not report a job another runner currently holds", async () => {
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+    const { id } = await repo.enqueue({
+      slug: "test:noop",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: null,
+      now: NOW,
+    });
+    await repo.claim(id, "runner-a", NOW, 30_000);
+    expect(await repo.findDue({ now: NOW, limit: 10 })).toEqual([]);
+  });
+
+  it("frees a dedupe key once its job reaches a terminal state", async () => {
+    // Recurring work with a stable logical key — "apply release r1", a nightly
+    // sweep — must be enqueueable again after the previous run finished.
+    // Holding the key forever means the SECOND request is silently reported as
+    // a duplicate of a job that has already been and gone.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+
+    const first = await repo.enqueue({
+      slug: "releases:apply",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: "release:r1",
+      now: NOW,
+    });
+    await repo.claim(first.id, "runner-a", NOW, 30_000);
+    await repo.finalize({
+      id: first.id,
+      runnerId: "runner-a",
+      outcome: "done",
+      nextAttemptAt: null,
+      lastError: null,
+      now: NOW,
+    });
+
+    const second = await repo.enqueue({
+      slug: "releases:apply",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: "release:r1",
+      now: NOW,
+    });
+    expect(second.deduped).toBe(false);
+    expect(second.id).not.toBe(first.id);
+  });
+
+  it("still refuses a duplicate while the first job is STILL ACTIVE", async () => {
+    // The control for the case above: releasing the key on completion must not
+    // become releasing it always, or duplicate suppression stops working at all.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+    await repo.enqueue({
+      slug: "releases:apply",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: "release:r2",
+      now: NOW,
+    });
+    const again = await repo.enqueue({
+      slug: "releases:apply",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: "release:r2",
+      now: NOW,
+    });
+    expect(again.deduped).toBe(true);
+  });
 });

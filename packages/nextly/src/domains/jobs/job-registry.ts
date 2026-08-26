@@ -28,6 +28,17 @@ import type { UserContext } from "../collections/services/collection-types";
 /** Attempts a job gets before it is given up on. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
 
+/**
+ * The longest slug every supported dialect can store.
+ *
+ * MySQL holds the slug in `varchar(191)` — the widest utf8mb4 value it will
+ * index — while PostgreSQL and SQLite use unbounded text. Validating here means
+ * a slug that is too long is refused when the job type is DEFINED, on every
+ * dialect, rather than accepted at definition and failing only at enqueue time
+ * and only on MySQL.
+ */
+export const MAX_JOB_SLUG_LENGTH = 191;
+
 /** What a handler is told about the run it is in. */
 export interface JobContext {
   /**
@@ -78,6 +89,13 @@ export function defineJob<TInput = unknown>(
     // blank one stores rows nothing can ever claim.
     throw NextlyError.invalidInput({
       message: "A job type needs a non-empty slug.",
+    });
+  }
+
+  if (slug.length > MAX_JOB_SLUG_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `A job slug may be at most ${MAX_JOB_SLUG_LENGTH} characters.`,
+      logContext: { slug, length: slug.length },
     });
   }
 

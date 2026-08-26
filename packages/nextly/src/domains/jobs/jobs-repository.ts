@@ -83,6 +83,21 @@ export interface JobsDatabase {
     where: WhereClause,
     options?: UpdateOptions
   ): Promise<T[]>;
+  /**
+   * Update and report how many rows CHANGED.
+   *
+   * Used by `finalize` instead of `update({ returning })`, because MySQL has no
+   * RETURNING: the adapter emulates it by re-selecting with the original
+   * predicate, and `finalize`'s predicate includes `locked_by` — which the same
+   * write clears. The re-select therefore matches nothing and the fenced update
+   * reports failure even when it succeeded. `updateCount` is the adapter's
+   * documented path for a conditional update that moves a predicate column.
+   */
+  updateCount(
+    table: string,
+    data: Record<string, unknown>,
+    where: WhereClause
+  ): Promise<number>;
   transaction<T>(fn: (tx: JobsTx) => Promise<T>): Promise<T>;
 }
 
@@ -196,24 +211,53 @@ export class JobsRepository {
     }
   }
 
-  /** Jobs whose time has come and whose lease is free, oldest first. */
+  /**
+   * Jobs whose time has come and whose lease is free, oldest first.
+   *
+   * Every predicate is applied by the DATABASE, before the limit. Filtering in
+   * memory afterwards looks equivalent and is not: a page filled with rows that
+   * are not yet due comes back, is filtered to nothing, and a runnable row
+   * behind them is never reached — on this pass or any later one, because the
+   * same rows fill the page every time. That is head-of-line blocking, and it
+   * is permanent rather than transient.
+   *
+   * `nextly_webhook_deliveries` selects its due rows the same way, for the same
+   * reason.
+   */
   async findDue(input: { now: Date; limit: number }): Promise<JobRow[]> {
-    const rows = await this.db.select<JobRow>(JOBS, {
-      where: { and: [{ column: "state", op: "=", value: "pending" }] },
+    return this.db.select<JobRow>(JOBS, {
+      where: {
+        and: [
+          { column: "state", op: "=", value: "pending" },
+          // `runAt` is the schedule and `nextAttemptAt` is the retry. Either
+          // being unset means "no constraint from that side", which is why each
+          // is a null-or-past pair rather than a single comparison.
+          {
+            or: [
+              { column: "runAt", op: "IS NULL", value: null },
+              { column: "runAt", op: "<=", value: input.now },
+            ],
+          },
+          {
+            or: [
+              { column: "nextAttemptAt", op: "IS NULL", value: null },
+              { column: "nextAttemptAt", op: "<=", value: input.now },
+            ],
+          },
+          // A row another runner currently holds is not due. It stays `pending`
+          // so a retry can find it once the lease lapses, so state alone cannot
+          // answer this.
+          {
+            or: [
+              { column: "lockedUntil", op: "IS NULL", value: null },
+              { column: "lockedUntil", op: "<=", value: input.now },
+            ],
+          },
+        ],
+      },
       orderBy: [{ column: "createdAt", direction: "asc" }],
       limit: input.limit,
     });
-    // A row another runner currently holds is NOT due. It is still `pending`,
-    // because a retry has to be able to find it again once the lease lapses,
-    // so state alone cannot answer this.
-    // The due predicate is applied here rather than in SQL because it spans
-    // two nullable columns with different meanings — `runAt` is the schedule
-    // and `nextAttemptAt` is the retry — and expressing "either is null or
-    // either has passed" as a portable where-clause across three dialects
-    // costs more than filtering a bounded page.
-    return rows.filter(
-      row => isDue(row, input.now) && isLeaseFree(row, input.now)
-    );
   }
 
   /**
@@ -283,21 +327,28 @@ export class JobsRepository {
             last_error: input.lastError,
             locked_by: null,
             locked_until: null,
+            // Release the dedupe key. It exists to stop a SECOND copy of work
+            // that is still outstanding; once this row is terminal there is no
+            // outstanding work, and holding the key would report the next
+            // request for the same logical job as a duplicate of one that has
+            // already been and gone. Recurring work with a stable key — "apply
+            // release r1", a nightly sweep — would be enqueued exactly once
+            // ever.
+            dedupe_key: null,
             updated_at: input.now,
           };
 
-    const affected = await this.db.update(
-      JOBS,
-      data,
-      {
-        and: [
-          { column: "id", op: "=", value: input.id },
-          { column: "lockedBy", op: "=", value: input.runnerId },
-        ],
-      },
-      { returning: "*" }
-    );
-    return affected.length > 0;
+    // The write always moves `locked_by` (to null), so on MySQL — which counts
+    // CHANGED rows rather than matched ones — a matched row is always a counted
+    // row. `updateCount`'s own docblock requires exactly that of a caller using
+    // it as a compare-and-set.
+    const affected = await this.db.updateCount(JOBS, data, {
+      and: [
+        { column: "id", op: "=", value: input.id },
+        { column: "lockedBy", op: "=", value: input.runnerId },
+      ],
+    });
+    return affected > 0;
   }
 
   /** Increment the attempt counter. Called by the runner as it starts work. */

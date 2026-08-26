@@ -31,6 +31,19 @@ interface UsersReadDb {
   ): Promise<Array<Record<string, unknown>>>;
 }
 
+/**
+ * The executor a role lookup should run on, when the handle exposes one.
+ *
+ * `undefined` lets the lookup fall back to the global executor, which is
+ * correct for the single-instance case and is what a plain adapter gives.
+ */
+function executorOf(db: UsersReadDb): unknown {
+  const candidate = db as { getDrizzle?: () => unknown };
+  return typeof candidate.getDrizzle === "function"
+    ? candidate.getDrizzle()
+    : undefined;
+}
+
 export interface RunJobsPassOptions {
   now?: () => Date;
   runnerId?: string;
@@ -57,7 +70,13 @@ export function databaseRunAs(
   db: UsersReadDb,
   // Injected so the propagation guarantee above is TESTABLE. A guarantee whose
   // only guard is a comment is a guarantee nobody can prove still holds.
-  listRoleSlugs: (id: string) => Promise<string[]> = listRoleSlugsForUserStrict
+  listRoleSlugs: (id: string) => Promise<string[]> = id =>
+    // Bound to the SAME handle `findUser` reads from. `listRoleSlugsForUserStrict`
+    // otherwise queries through the process-global executor, so with more than
+    // one Nextly instance a context could pair a user from one database with
+    // roles from another — and run the handler with an authority that exists in
+    // neither.
+    listRoleSlugsForUserStrict(id, executorOf(db))
 ): RunAsDeps {
   return {
     async findUser(id: string): Promise<RunAsUser | null> {

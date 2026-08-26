@@ -88,5 +88,14 @@ export async function resolveRunAs(
   if (!user.isActive) return { ok: false, reason: "JOB_IDENTITY_DISABLED" };
 
   const roles = await deps.listRoleSlugs(user.id);
-  return { ok: true, user: { id: user.id, roles } satisfies UserContext };
+  // Every attribute the user carries, not just id and roles. Access predicates
+  // in this repository inspect `user.email`; a context missing it evaluates
+  // such a rule against `undefined`, which denies authorized work — or, for a
+  // negative predicate like `email !== blocked`, GRANTS work it should refuse.
+  // Either way the job is not running with the named person's authority, which
+  // is the one thing this function exists to guarantee.
+  const context: UserContext = { id: user.id, roles };
+  if (user.name !== undefined) context.name = user.name;
+  if (user.email !== undefined) context.email = user.email;
+  return { ok: true, user: context };
 }

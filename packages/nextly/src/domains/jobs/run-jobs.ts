@@ -13,6 +13,24 @@
  * next tick continues from them. This is the same shape the webhook drain
  * already uses, and the reason it can be triggered the same three ways.
  *
+ * ## The contract is AT-LEAST-ONCE, and saying otherwise would be a lie
+ *
+ * The lease makes two runners unable to claim one job AT THE SAME INSTANT, and
+ * the fence makes a runner that lost its lease unable to record an outcome over
+ * its successor's. Neither stops a handler that OUTLIVES its lease: while it is
+ * still running, the lease expires, another pass reclaims the row, and the same
+ * handler runs again concurrently. The fence then refuses the first runner's
+ * write — but it cannot undo anything that runner already did outside the
+ * database.
+ *
+ * So: **handlers must be idempotent**, and `leaseMs` must be sized to the work.
+ * This is the same contract SQS, BullMQ and pg-boss give, for the same reason —
+ * exactly-once across a process boundary and an external side effect is not
+ * something a queue can offer.
+ *
+ * What IS guaranteed: a job's outcome is recorded once, by whoever holds the
+ * lease when it finishes.
+ *
  * ## Every outcome is recorded
  *
  * There is no branch here that leaves a claimed row untouched. A row that is
@@ -23,7 +41,7 @@
  * @module domains/jobs/run-jobs
  */
 
-import type { JobRegistry } from "./job-registry";
+import { DEFAULT_MAX_ATTEMPTS, type JobRegistry } from "./job-registry";
 import { nextAttempt } from "./job-backoff";
 import type { FinalizeInput, JobRow } from "./jobs-repository";
 import { resolveRunAs, type RunAsDeps } from "./resolve-run-as";
@@ -104,9 +122,18 @@ export async function runJobs(deps: RunJobsDeps): Promise<RunJobsResult> {
     if (job === null) continue;
     result.claimed += 1;
 
-    const outcome = await runOne(deps, job, runnerId, now, result);
+    const outcome = await runOne(deps, job, runnerId, now);
     const wrote = await deps.store.finalize(outcome);
-    if (!wrote) result.unrecorded += 1;
+    // Counted only once the write LANDED. Counting when the decision was made
+    // would report an attempt as both done and unrecorded when the fence
+    // refuses it, which overstates completed work to whatever reads this.
+    if (!wrote) {
+      result.unrecorded += 1;
+      continue;
+    }
+    if (outcome.outcome === "done") result.done += 1;
+    else if (outcome.outcome === "failed") result.failed += 1;
+    else result.retried += 1;
   }
 
   return result;
@@ -122,11 +149,9 @@ async function runOne(
   deps: RunJobsDeps,
   job: JobRow,
   runnerId: string,
-  now: () => Date,
-  result: RunJobsResult
+  now: () => Date
 ): Promise<FinalizeInput> {
   const terminal = (lastError: string): FinalizeInput => {
-    result.failed += 1;
     return {
       id: job.id,
       runnerId,
@@ -137,14 +162,33 @@ async function runOne(
     };
   };
 
-  const identity = await resolveRunAs(deps.runAs, job.runAsUserId);
-  // Terminal, not retried: a deleted or deactivated user does not come back on
-  // the next pass, and retrying would cycle an unrunnable row forever.
-  if (!identity.ok) return terminal(identity.reason);
-
   const definition = deps.registry.get(job.slug);
   const attempt = job.attemptCount + 1;
   await deps.store.markAttempt(job.id, attempt, now());
+
+  // The identity READS can fail — a transient RBAC database error, say — and
+  // that is a different thing from the identity being gone. Letting it throw
+  // would abort the whole pass after this row was claimed: the row keeps its
+  // lease until expiry, later candidates are never reached, and a persistent
+  // lookup failure on an early row aborts every scheduled drain instead of
+  // exhausting one job's retry budget.
+  let identity: Awaited<ReturnType<typeof resolveRunAs>>;
+  try {
+    identity = await resolveRunAs(deps.runAs, job.runAsUserId);
+  } catch (error) {
+    return decide(
+      job,
+      attempt,
+      definition?.retry.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+      error instanceof Error ? error.message : String(error),
+      runnerId,
+      now,
+      deps.random
+    );
+  }
+  // Terminal, not retried: a deleted or deactivated user does not come back on
+  // the next pass, and retrying would cycle an unrunnable row forever.
+  if (!identity.ok) return terminal(identity.reason);
 
   if (definition === undefined) {
     // NOT terminal on its own. A deploy that has not finished rolling out can
@@ -155,14 +199,14 @@ async function runOne(
     return decide(
       job,
       attempt,
-      // The registry's own default budget governs, since the definition that
-      // would have carried one is exactly what is missing.
-      5,
+      // Derived from the registry's own default rather than restated, so
+      // changing that default cannot leave orphan rows on a different budget
+      // from registered jobs.
+      DEFAULT_MAX_ATTEMPTS,
       `No job type is registered for "${job.slug}".`,
       runnerId,
       now,
-      deps.random,
-      result
+      deps.random
     );
   }
 
@@ -179,12 +223,10 @@ async function runOne(
       error instanceof Error ? error.message : String(error),
       runnerId,
       now,
-      deps.random,
-      result
+      deps.random
     );
   }
 
-  result.done += 1;
   return {
     id: job.id,
     runnerId,
@@ -203,8 +245,7 @@ function decide(
   lastError: string,
   runnerId: string,
   now: () => Date,
-  random: (() => number) | undefined,
-  result: RunJobsResult
+  random: (() => number) | undefined
 ): FinalizeInput {
   const decision = nextAttempt({
     attemptCount: attempt,
@@ -214,7 +255,6 @@ function decide(
   });
 
   if (decision.outcome === "failed") {
-    result.failed += 1;
     return {
       id: job.id,
       runnerId,
@@ -225,7 +265,6 @@ function decide(
     };
   }
 
-  result.retried += 1;
   return {
     id: job.id,
     runnerId,

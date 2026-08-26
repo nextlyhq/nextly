@@ -47,11 +47,21 @@ export const WEBHOOK_DRAIN_JOB = "webhooks:drain";
 /**
  * A drain pass, as a job.
  *
- * `maxAttempts: 1`. A drain is not a unit of work that either succeeds or
- * fails — it is a sweep over an outbox whose OWN rows carry the retry state.
- * Retrying the sweep would re-attempt deliveries that already recorded their
- * outcome and re-run their backoff from the wrong clock, so the retry belongs
- * to the deliveries and not to the pass over them.
+ * The pass is RETRYABLE, and an earlier version of this module was wrong about
+ * why it should not be.
+ *
+ * The reasoning then was that re-running a sweep would re-attempt deliveries
+ * that had already recorded an outcome and restart their backoff from the wrong
+ * clock. It would not: `deliverDueDeliveries` selects only `pending`/`retrying`
+ * rows whose `nextAttemptAt` has passed and whose lease is free
+ * (`deliver.ts:706-719`), so a completed delivery is already excluded and a
+ * deferred one stays deferred. Per-row retry state is exactly what makes the
+ * sweep safe to repeat.
+ *
+ * What a single attempt DID cost: a transient failure — the database briefly
+ * unreachable, the endpoint registry erroring — made the job row terminally
+ * failed and left the remaining outbox work to whenever some other trigger
+ * happened to fire.
  */
 export function createWebhookDrainJob(
   adapter: WebhookDrainDatabase,
@@ -60,7 +70,9 @@ export function createWebhookDrainJob(
 ): JobDefinition<unknown> {
   return defineJob({
     slug: WEBHOOK_DRAIN_JOB,
-    retry: { maxAttempts: 1 },
+    // The default budget. Nothing about a sweep calls for a narrower one, and
+    // deriving it rather than restating a number keeps it with every other job.
+
     handler: async () => {
       await runWebhookDrain(adapter, registry, options);
     },

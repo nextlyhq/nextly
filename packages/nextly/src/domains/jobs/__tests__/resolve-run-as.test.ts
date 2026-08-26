@@ -88,4 +88,45 @@ describe("resolveRunAs", () => {
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toMatch(/system|admin|root/i);
   });
+
+  it("carries every attribute the user has, not just id and roles", async () => {
+    // Access predicates in this repository inspect `user.email`. A context
+    // missing it evaluates such a rule against `undefined` — which denies
+    // authorized work, or for a negative predicate like `email !== blocked`
+    // GRANTS work it should refuse. Either way the job is not running with the
+    // named person's authority, which is the whole point of resolving one.
+    const result = await resolveRunAs(
+      deps({
+        findUser: async () => ({
+          id: "u1",
+          isActive: true,
+          name: "Ada",
+          email: "ada@example.com",
+        }),
+        listRoleSlugs: async () => ["editor"],
+      }),
+      "u1"
+    );
+    expect(result).toEqual({
+      ok: true,
+      user: {
+        id: "u1",
+        roles: ["editor"],
+        name: "Ada",
+        email: "ada@example.com",
+      },
+    });
+  });
+
+  it("omits attributes the user does not have rather than setting them undefined", async () => {
+    // The control for the case above. Spreading unconditionally would put
+    // `email: undefined` on the context, which reads as "has an email, and it
+    // is nothing" to a predicate testing presence.
+    const result = await resolveRunAs(deps(), "u1");
+    expect(result).toEqual({ ok: true, user: { id: "u1", roles: [] } });
+    expect(Object.keys((result as { user: object }).user)).toEqual([
+      "id",
+      "roles",
+    ]);
+  });
 });

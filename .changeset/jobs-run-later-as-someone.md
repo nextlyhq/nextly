@@ -39,12 +39,18 @@ nothing to run alongside your site.
 
 Two things it will not do, both deliberate.
 
-It will not run the same job twice. Whichever process picks a job up takes a
-short lease on it, and a second process that finds the same job simply leaves it
-alone. If the first process stalls long enough for the lease to lapse, another
-picks the job up — and the stalled one is then refused when it tries to record
-what it did, so a slow worker cannot overwrite the result of the one that
-replaced it.
+Two processes will not pick up the same job at the same moment. Whichever gets
+there first takes a short lease on it, and the other simply leaves it alone. If
+the first stalls long enough for the lease to lapse, another picks the job up —
+and the stalled one is then refused when it tries to record what it did, so a
+slow worker cannot overwrite the result of the one that replaced it.
+
+That is a guarantee about the RECORD, not about the work. A job whose handler
+runs longer than its lease can be picked up again while the first attempt is
+still going, and both will do whatever the handler does. Every durable queue
+works this way — it is not possible to promise otherwise once a job can touch
+something outside the database — so a handler should be written so that running
+it twice is harmless, and the lease should be set longer than the work takes.
 
 It will not quietly run as somebody more powerful. A job remembers who queued
 it, and it acts as that person, with their roles. If that account has since been
