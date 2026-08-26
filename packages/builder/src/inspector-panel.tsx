@@ -125,6 +125,14 @@ export interface InspectorPanelProps {
    */
   liveBreakpoints?: readonly BreakpointId[];
   /**
+   * Move the canvas to a breakpoint, forwarded to the Style tab.
+   *
+   * Only the surface owning the canvas width can do this, and it sits above
+   * this panel — so the capability is passed down and each control whose value
+   * came from another tier offers to use it.
+   */
+  onJumpToBreakpoint?: (breakpoint: BreakpointId) => void;
+  /**
    * The site's design tokens, forwarded to the Style tab's colour controls.
    *
    * Carried rather than defaulted, as `policy` is: omitting it means the
@@ -164,6 +172,7 @@ export function InspectorPanel({
   breakpoints,
   previewContainer,
   liveBreakpoints,
+  onJumpToBreakpoint,
   tokens,
   blocks,
 }: InspectorPanelProps): React.JSX.Element {
@@ -306,6 +315,7 @@ export function InspectorPanel({
             breakpoints={breakpoints}
             previewContainer={previewContainer}
             liveBreakpoints={liveBreakpoints}
+            onJumpToBreakpoint={onJumpToBreakpoint}
             tokens={tokens}
           />
         </TabsContent>

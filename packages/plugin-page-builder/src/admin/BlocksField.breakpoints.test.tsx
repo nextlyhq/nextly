@@ -429,3 +429,50 @@ describe("a site with nothing to simulate", () => {
     expect(box().container).toBe(context?.previewContainer);
   });
 });
+
+describe("going to the tier a value came from", () => {
+  it("SIZES THE CANVAS to that tier rather than storing a second answer", () => {
+    /*
+     * The whole architecture is one width with everything derived from it. A
+     * jump that wrote its own "which tier am I editing" would put the two back
+     * in the disagreement deriving them from one width exists to remove — the
+     * canvas would keep showing one tier while the inspector claimed another.
+     *
+     * Asserted on the BOX's requested width, which is the only thing a jump is
+     * allowed to change.
+     */
+    openEditor();
+
+    const jump = seen.inspector?.onJumpToBreakpoint as
+      | ((breakpoint: string) => void)
+      | undefined;
+    expect(jump).toBeTypeOf("function");
+    React.act(() => {
+      jump?.("tablet");
+    });
+
+    expect(box().width).toBe(991);
+  });
+
+  it("RELEASES the canvas for a tier the compiler emits no bound for", () => {
+    /*
+     * The control, and the honest answer for the unconditional tier: there is
+     * no width that puts it on screen, so the box goes back to the region
+     * rather than being pinned to a number nothing responds to.
+     */
+    openEditor();
+    const jump = seen.inspector?.onJumpToBreakpoint as
+      | ((breakpoint: string) => void)
+      | undefined;
+    React.act(() => {
+      jump?.("tablet");
+    });
+    expect(box().width).toBe(991);
+
+    React.act(() => {
+      jump?.("base");
+    });
+
+    expect(box().width).toBeUndefined();
+  });
+});
