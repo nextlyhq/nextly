@@ -300,15 +300,19 @@ const REFUSALS: Record<
   },
   declarationFailed: {
     message: (_subject, noun) =>
-      `This ${noun}'s preview URL could not be built, so a shared link would ` +
-      "have nowhere to open. Nothing on the document can fix it — a developer " +
-      "needs to correct the preview declaration.",
+      `This ${noun}'s preview URL could not be built: the preview declaration ` +
+      "failed while producing an address. That is a developer's to look at — " +
+      `either the declaration itself, or a value on this ${noun} it did not ` +
+      "expect.",
     reason: "preview-declaration-failed",
     remedy:
       "The declaration threw while running, or returned pieces that do not " +
-      "compose into a URL under the site. Both are faults in " +
-      "`admin.preview.url` / `admin.preview.urlTemplate` rather than in this " +
-      "document, so they reproduce for every document in the collection.",
+      "compose into a URL under the site. Whether it fails for EVERY document " +
+      "or only for this one is NOT observable from a caught throw — a " +
+      "declaration reading a field that happens to be empty here raises the " +
+      "same error a broken one does — so this names neither. Check " +
+      "`admin.preview.url` / `admin.preview.urlTemplate` and the fields it " +
+      "reads.",
   },
   foreignOrigin: {
     message: (_subject, noun) =>

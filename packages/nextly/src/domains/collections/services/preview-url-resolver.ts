@@ -79,11 +79,17 @@ export type PreviewUrlResolution =
    * function threw, or the pieces it returned do not compose into a URL under
    * the site.
    *
-   * Kept apart from `unavailable` because the two have opposite remedies. An
-   * `unavailable` document becomes previewable once someone fills in the field
-   * the URL is built from; this one cannot be fixed by editing the document at
-   * all, and telling an editor to fill in a slug sends them after a field that
-   * is already full.
+   * Kept apart from `unavailable` because the two are different EVENTS, and the
+   * separation is deliberately not a claim about the remedy. `unavailable` is
+   * the declaration DECLINING — it returned null, or a placeholder has no value
+   * — which is a definite statement that there is no address yet. This one is
+   * the declaration FAILING, and a caught throw does not say whether the fault
+   * is in the declaration or in a value on this document that it did not
+   * expect: `entry.slug.toUpperCase()` raises the same error on a broken
+   * declaration and on an empty slug.
+   *
+   * So a caller may say the declaration failed. It may not say which document
+   * that is true for.
    */
   | { status: "declarationFailed" };
 
@@ -235,11 +241,11 @@ export function resolvePreviewUrl({
 
   if (typeof preview?.url === "function") {
     // The authored function is user code running inside a request. It may throw,
-    // and a throw here is the declaration being broken rather than a server
-    // fault, so it is reported rather than failing the request — and reported
-    // as its own status, because a deliberate `return null` is a document
-    // without an address yet while this is a declaration that cannot produce
-    // one for any document.
+    // and a throw here is the declaration failing rather than the server
+    // failing, so it is reported rather than escaping the request — and
+    // reported as its own status, because a deliberate `return null` states
+    // that there is no address yet while a throw states only that producing one
+    // did not work.
     try {
       path = preview.url(entry);
     } catch {
@@ -271,8 +277,7 @@ export function resolvePreviewUrl({
 
   const joined = joinUnderSite(`${basePath}${suffix}`, base);
   // The pieces parsed separately and not together, which is a declaration this
-  // resolver cannot turn into an address — for this document or any other, so
-  // it is the declaration's failure rather than the document's.
+  // resolver cannot turn into an address.
   //
   // DEFENSIVE: the candidate is built from an origin and path this function
   // already parsed, so nothing an author can return reaches it today. It is
