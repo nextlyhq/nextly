@@ -550,6 +550,51 @@ describe("a clipping ancestor inside a canvas that is PAINTED smaller", () => {
     expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
   });
 
+  it("measures a root built by ANOTHER realm's constructor", () => {
+    /*
+     * The canvas can be portalled into a same-origin iframe, and each document
+     * has its own `HTMLElement`. An ambient `instanceof HTMLElement` is false
+     * for an ordinary div from that other realm, so a scaled canvas would be
+     * treated as unscaled — substituting the identity precisely where the
+     * composition is needed, and reintroducing the defect above only for the
+     * surface that is hardest to notice it on.
+     *
+     * The separating property is that the element IS its own realm's
+     * `HTMLElement` while not being this one's, which is exactly what a plain
+     * `instanceof` cannot see.
+     */
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    expect(inner).not.toBeNull();
+    if (inner === null) return;
+
+    const foreign = inner.createElement("div");
+    // The precondition the case rests on: a real element, from a real window,
+    // that this realm's constructor does not claim.
+    expect(foreign instanceof HTMLElement).toBe(false);
+    expect(
+      foreign instanceof
+        (inner.defaultView as Window & typeof globalThis).HTMLElement
+    ).toBe(true);
+
+    foreign.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 400, height: 400, top: 0, left: 0 }) as DOMRect;
+    Object.defineProperty(foreign, "offsetWidth", { value: 800 });
+    Object.defineProperty(foreign, "offsetHeight", { value: 800 });
+
+    const ancestor = clipper({ x: 0, y: 0, width: 400, height: 400 });
+    foreign.append(ancestor);
+    const child = box({ x: 10, y: 10, width: 100, height: 100 });
+    ancestor.append(child);
+
+    // The same flush-against-the-padding-edge child as above. Read through the
+    // ambient constructor alone, the scale is 1 and this reads as clipped.
+    expect(clippedByAncestor(child, foreign, SQUARE_CORNERS)).toBe(false);
+
+    frame.remove();
+  });
+
   it("still reports a child that IS cut", () => {
     /*
      * The control, and it has to come out the other way or the case above says

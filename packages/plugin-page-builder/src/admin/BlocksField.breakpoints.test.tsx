@@ -356,6 +356,38 @@ describe("a width the site stops offering", () => {
     expect(box().width).toBeUndefined();
   });
 
+  it("FOLLOWS the base width when the widest bound is edited", () => {
+    /*
+     * A width identifies an option only until the site's bounds move. Editing
+     * the widest breakpoint changes the width the unconditional tier applies
+     * FROM, so the number the author's choice produced is suddenly nobody's.
+     *
+     * Reconciled by number, that reads as a deleted tier and releases the
+     * canvas — which, in a region narrower than the new bound, drops the editor
+     * straight back into the bounded tier while the option they chose still
+     * exists and still reads as selected. Every edit after that lands in a tier
+     * they did not pick.
+     *
+     * Stored as the TIER, the width simply follows.
+     */
+    const view = openEditor();
+    choose(992);
+    expect(box().width).toBe(992);
+
+    // The site's widest tier widens: base now applies from 1201 rather than 992.
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1200 }],
+          container: [],
+        },
+      },
+    };
+    view.rerender();
+
+    expect(box().width).toBe(1201);
+  });
+
   it("KEEPS the unconditional tier's width, which is no tier's BOUND", () => {
     /*
      * The width that reaches the base tier is one PAST the widest bound, so it

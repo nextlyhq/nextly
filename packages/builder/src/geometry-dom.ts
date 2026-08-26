@@ -904,13 +904,25 @@ function cutByAncestor(
    * so the symptom is an overlay that silently stops drawing rather than one
    * that draws wrongly.
    */
+  const realm = root.ownerDocument.defaultView;
   const painted =
-    root instanceof HTMLElement
+    realm !== null && root instanceof realm.HTMLElement
       ? paintedScale(root, root.getBoundingClientRect())
-      : // Identity for a root with no layout box of its own to compare against.
-        // `offsetWidth` is an HTML property; an SVG or foreign root cannot be
-        // asked how much smaller it is painted, and answering 1 leaves the
-        // arithmetic exactly as it was before there was a canvas scale.
+      : /*
+         * Identity for a root this cannot measure.
+         *
+         * Asked against the root's OWN realm, as {@link canvasRootFrom} already
+         * does. A canvas portalled into a same-origin iframe has a root built
+         * by that document's constructor, so the ambient `HTMLElement` is a
+         * different function object and a plain `instanceof` is false for an
+         * ordinary div — substituting an identity scale on a canvas that really
+         * is scaled, which is the very case this composition exists for.
+         *
+         * `offsetWidth` is an HTML property, so a genuinely foreign root — an
+         * SVG element, or one with no window at all — cannot be asked how much
+         * smaller it is painted. Answering 1 leaves the arithmetic exactly as it
+         * was before there was a canvas scale.
+         */
         { x: 1, y: 1 };
   const own = renderedScale(node, root);
   const scale: RenderedScale = {
@@ -946,11 +958,26 @@ function cutByAncestor(
    * describe.
    */
   if (!scale.describable) return true;
+  /*
+   * The BLOCK's radii are composed here too, and for the same reason the
+   * ancestor's geometry is.
+   *
+   * The caller scales them by the block's own composition, which stops below
+   * the root — so the outer curve below carries the canvas scale and the inner
+   * one does not. Compared across that difference, an oversized inner curve
+   * reads as fitting inside the outer one, and a block whose visible corner IS
+   * clipped keeps its bands and draws them over clipped pixels.
+   *
+   * Done at the comparison rather than at the call site: this is the only place
+   * that holds both curves, and asking the caller to pre-compose one of them
+   * puts half a decision somewhere that cannot see the other half.
+   */
+  const inner = scaleCornerRadii(radii, painted);
   const clip = clipEdges(outer, style, scale);
   if (cutByEdges(box, clip, clipsX, clipsY)) return true;
   return cutByCorner(
     box,
-    radii,
+    inner,
     clip,
     style,
     scale,
