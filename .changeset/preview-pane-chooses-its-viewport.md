@@ -68,3 +68,11 @@ different facts — what the box says and what the frame is sized to — so an e
 box committed "no width", which selected Responsive, which removed the input the
 author was typing in. The text being typed is now kept separately, and a width
 is committed only once the box names one a frame can be sized to.
+
+The custom width box commits the whole number it shows. `parseInt` read `390.5`
+as `390` and `1e3` as `1` — both of which a number input accepts and displays in
+full — so the frame was sized to a width the box was not showing, and blurring
+replaced the author's text with the truncated value.
+
+The pane measures itself before the browser paints rather than after, so a frame
+cannot be drawn at the wrong width on the way to the right one.

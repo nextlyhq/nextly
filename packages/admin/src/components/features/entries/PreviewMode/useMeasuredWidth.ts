@@ -14,14 +14,39 @@
  *
  * @module components/features/entries/PreviewMode/useMeasuredWidth
  */
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
+
+/**
+ * A layout effect where there is a DOM, a passive one where there is not.
+ *
+ * The same alias `ChromeSuppression` keeps, for the same reason: a layout
+ * effect during a server render warns and cannot run, and nothing has painted
+ * there for it to be ahead of.
+ */
+const useMeasureEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 export function useMeasuredWidth(
   ref: RefObject<HTMLElement | null>
 ): number | null {
   const [width, setWidth] = useState<number | null>(null);
 
-  useEffect(() => {
+  /*
+   * BEFORE paint, not after.
+   *
+   * The first measurement decides whether the frame is drawn at the requested
+   * width or left to fill the pane, and an effect that runs after paint means
+   * the browser has already drawn the second. Reopening a pane that remembers a
+   * custom width therefore laid the site out responsively for one frame and
+   * then jumped — visible as a flash of the wrong layout on any page that
+   * crosses a breakpoint between the two widths.
+   *
+   * A layout effect runs after the DOM is in place and before the browser
+   * paints, which is exactly when a box first has a width to report. The
+   * alternative — hiding the frame until it has been measured — trades a wrong
+   * layout for a blank one, and still costs a frame.
+   */
+  useMeasureEffect(() => {
     const element = ref.current;
     if (element === null) return;
 

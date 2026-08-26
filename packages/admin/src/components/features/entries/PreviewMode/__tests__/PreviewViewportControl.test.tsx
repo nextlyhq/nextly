@@ -123,6 +123,41 @@ describe("PreviewViewportControl — the width box", () => {
     expect(ui.committed()).toBe("1280");
   });
 
+  it("commits the WHOLE number the box shows, not its integer prefix", () => {
+    /*
+     * `parseInt` stops at the first character that cannot continue an integer,
+     * so it reads `390.5` as `390` and `1e3` as `1` — both of which a number
+     * input accepts and displays in full. The frame was then sized to a width
+     * the box was not showing, and blurring replaced the author's text with the
+     * truncated value as though they had typed it.
+     *
+     * A fractional width is a real width: CSS sizes to it and the site's media
+     * queries resolve against it, so there is nothing to reject here.
+     */
+    const ui = renderControl(1280);
+    const box = ui.box() as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "390.5" } });
+    expect(ui.committed()).toBe("390.5");
+
+    fireEvent.change(box, { target: { value: "1e3" } });
+    expect(ui.committed()).toBe("1000");
+  });
+
+  it("still refuses text that names no width at all", () => {
+    // The control on the case above: reading the whole value must not turn
+    // every string into a width. `Number("")` is `0` and `Number("abc")` is
+    // `NaN`, and both mean the box is not saying anything a frame can be at.
+    const ui = renderControl(1280);
+    const box = ui.box() as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "abc" } });
+    expect(ui.committed()).toBe("1280");
+
+    fireEvent.change(box, { target: { value: "" } });
+    expect(ui.committed()).toBe("1280");
+  });
+
   it("snaps back to the committed width when the edit is abandoned", () => {
     // Blur ends the edit. A draft left behind would name a width the frame is
     // not at, which is the control disagreeing with itself.

@@ -131,8 +131,15 @@ export function PreviewViewportControl({
                * for the same reason `previewFrameFit` refuses them: it fills
                * the pane instead, and committing one would leave this control
                * and the frame describing different states.
+               *
+               * `Number`, not `parseInt`. A number input accepts and displays
+               * `390.5` and `1e3`, and `parseInt` reads those as `390` and `1`
+               * — sizing the frame to a width the box is not showing, and
+               * replacing the author's text with the truncated value on blur.
+               * A fractional width is a real one: CSS sizes to it and the
+               * site's media queries resolve against it.
                */
-              const next = Number.parseInt(text, 10);
+              const next = Number(text);
               if (Number.isFinite(next) && next > 0) onRequestWidth(next);
             }}
             onBlur={() => {
