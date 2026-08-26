@@ -523,3 +523,231 @@ describe("RichText preserved node attributes", () => {
     expect(container.querySelector("pre > code")?.textContent).toBe("const x");
   });
 });
+
+/*
+ * The MEDIA leaves.
+ *
+ * Each keeps its content in its own fields rather than in `children`, so the
+ * unknown-node fallback drew them as nothing at all: an author placed an image
+ * in their prose, saw it in the editor, and the published page had no trace of
+ * it. Shapes below are the editor's `exportJSON` output, field for field.
+ */
+const IMAGE_SRC = "https://cdn.example.com/photo.jpg";
+
+const image = (extra: Record<string, unknown> = {}) =>
+  doc([
+    {
+      type: "image",
+      version: 1,
+      src: IMAGE_SRC,
+      altText: "A photo",
+      ...extra,
+    },
+  ] as unknown as RichTextValue["root"]["children"]);
+
+describe("rich-text media leaves", () => {
+  it("draws an image an author placed in their prose", () => {
+    /*
+     * The population before every property below: this document really does
+     * reach an `<img>`, so a later assertion that some variant renders NOTHING
+     * is a statement about that variant rather than about media never working.
+     */
+    const { container } = render(<RichText value={image()} />);
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute("src")).toBe(IMAGE_SRC);
+    expect(img?.getAttribute("alt")).toBe("A photo");
+  });
+
+  it("writes an EMPTY alt when the author described nothing", () => {
+    // Absent, a screen reader announces the file name, which is worse than
+    // silence. An undescribed image inside prose is decorative far more often
+    // than it is unlabelled.
+    const { container } = render(
+      <RichText value={image({ altText: undefined })} />
+    );
+    expect(container.querySelector("img")?.getAttribute("alt")).toBe("");
+  });
+
+  it("refuses a scheme that could execute, with no policy configured", () => {
+    // The scheme filter is NOT part of the operator's bargain: a `javascript:`
+    // source is not a site setting. It applies whether or not a policy was
+    // passed, which is what this asserts by passing none.
+    const { container } = render(
+      <RichText value={image({ src: "javascript:alert(1)" })} />
+    );
+    expect(container.querySelector("img")).toBeNull();
+    // And nothing broken is left behind in its place.
+    expect(container.querySelector("figure")).toBeNull();
+  });
+
+  it("draws an image when the site configured NO fetch list", () => {
+    /*
+     * `remotePatterns` absent means UNASKED, not allowed-nothing — the
+     * semantics `BlockHostPolicy` states for the field. Defaulted closed, every
+     * existing site would lose its rich-text images the day this shipped.
+     */
+    const { container } = render(<RichText value={image()} hostPolicy={{}} />);
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("refuses a host the site's fetch list does not name", () => {
+    const { container } = render(
+      <RichText
+        value={image()}
+        hostPolicy={{ remotePatterns: [{ hostname: "images.example.org" }] }}
+      />
+    );
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("draws it when that same list DOES name the host", () => {
+    // The control on the assertion above: without it, a refusal caused by the
+    // list being read wrongly is indistinguishable from one caused by the host
+    // genuinely not matching.
+    const { container } = render(
+      <RichText
+        value={image()}
+        hostPolicy={{ remotePatterns: [{ hostname: "cdn.example.com" }] }}
+      />
+    );
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(IMAGE_SRC);
+  });
+
+  it("writes both dimensions or neither", () => {
+    /*
+     * A lone `width` makes a browser compute the other from the intrinsic size,
+     * so the space reserved is not the space the author saw and the layout
+     * moves as the image loads — the shift this is supposed to prevent.
+     */
+    const both = render(
+      <RichText value={image({ width: 800, height: 600 })} />
+    );
+    const sized = both.container.querySelector("img");
+    expect(sized?.getAttribute("width")).toBe("800");
+    expect(sized?.getAttribute("height")).toBe("600");
+    cleanup();
+
+    const lone = render(<RichText value={image({ width: 800 })} />);
+    const half = lone.container.querySelector("img");
+    expect(half).not.toBeNull();
+    expect(half?.getAttribute("width")).toBeNull();
+    expect(half?.getAttribute("height")).toBeNull();
+  });
+
+  it("writes neither dimension when one is not a usable number", () => {
+    /*
+     * The other half of "both or neither", and a separate case: the test above
+     * omits `height` entirely and is answered by the type guard, so it never
+     * reaches the bounds check. A value that IS a number and still yields no
+     * usable size — the editor recording a division by zero, a caller passing an
+     * in-memory object rather than parsed JSON — has to take its partner with
+     * it, or the reserved space is computed from one dimension again.
+     */
+    const { container } = render(
+      <RichText value={image({ width: 800, height: Number.NaN })} />
+    );
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute("width")).toBeNull();
+    expect(img?.getAttribute("height")).toBeNull();
+  });
+
+  it("drops only the gallery image the site will not fetch", () => {
+    /*
+     * One refused source must not take the gallery with it: the others are
+     * fine, and an author loses a row of pictures over a single bad URL.
+     *
+     * Population first — three go in, so "two came out" is a statement about
+     * the filter rather than about a gallery that never rendered.
+     */
+    const value = doc([
+      {
+        type: "gallery",
+        version: 1,
+        images: [
+          { src: "https://cdn.example.com/a.jpg", alt: "A" },
+          { src: "javascript:alert(1)", alt: "bad" },
+          { src: "https://cdn.example.com/b.jpg", alt: "B" },
+        ],
+        columns: 3,
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    const found = container.querySelectorAll("img");
+    expect(found.length).toBe(2);
+    expect([...found].map(el => el.getAttribute("alt"))).toEqual(["A", "B"]);
+  });
+
+  it("draws a button as an ANCHOR, never a button element", () => {
+    // It navigates, so it must be announced as a link and behave like one —
+    // followed by a keyboard, opened in a new tab, its address copied. Looking
+    // like a button is a class, not an element.
+    const value = doc([
+      {
+        type: "button-link",
+        version: 1,
+        url: "https://example.com/buy",
+        text: "Buy now",
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    expect(container.querySelector("button")).toBeNull();
+    const link = screen.getByRole("link", { name: "Buy now" });
+    expect(link.getAttribute("href")).toBe("https://example.com/buy");
+  });
+
+  it("leaves no orphaned label when a button's destination is refused", () => {
+    // Unlike a link wrapping prose, a button's text IS the button. Left behind
+    // as bare words it puts a stray "Buy now" in the middle of an article.
+    const value = doc([
+      {
+        type: "button-link",
+        version: 1,
+        url: "javascript:alert(1)",
+        text: "Buy now",
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    expect(container.textContent).not.toContain("Buy now");
+  });
+
+  it("keeps the other buttons when one of a group is refused", () => {
+    const value = doc([
+      {
+        type: "button-group",
+        version: 1,
+        buttons: [
+          { url: "https://example.com/a", text: "Alpha" },
+          { url: "javascript:alert(1)", text: "Bad" },
+          { url: "https://example.com/b", text: "Beta" },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    const links = container.querySelectorAll("a");
+    expect([...links].map(el => el.textContent)).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("adds rel protection to a button opening a new tab", () => {
+    // The same bargain a link makes: `target="_blank"` without `rel` hands the
+    // opened page a handle on this one.
+    const value = doc([
+      {
+        type: "button-link",
+        version: 1,
+        url: "https://example.com/buy",
+        text: "Buy",
+        target: "_blank",
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    const rel = container.querySelector("a")?.getAttribute("rel") ?? "";
+    expect(rel).toContain("noopener");
+  });
+});

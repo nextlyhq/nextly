@@ -1,6 +1,7 @@
 import {
   codeTokenClass,
   hasFormat,
+  isFetchableUrl,
   isRichTextNode,
   isRichTextValue,
   TEXT_FORMAT,
@@ -8,7 +9,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { CSSProperties, ReactNode } from "react";
 
-import { relFor, url } from "./blocks/props";
+import { number, oneOf, relFor, text, url } from "./blocks/props";
+import type { BlockHostPolicy } from "./context";
 
 /**
  * Drawing stored rich text as React.
@@ -108,7 +110,10 @@ function formatted(text: string, format: number | undefined): ReactNode {
   return <span style={style}>{out}</span>;
 }
 
-function children(nodes: readonly RichTextNode[] | undefined): ReactNode {
+function children(
+  nodes: readonly RichTextNode[] | undefined,
+  policy: BlockHostPolicy | undefined
+): ReactNode {
   // Array-checked, not undefined-checked. `children` is stored JSON like
   // everything else here, so it can arrive as `{}` or `"oops"`, and calling
   // `.map` on either throws while rendering a published page. The type cannot
@@ -119,7 +124,7 @@ function children(nodes: readonly RichTextNode[] | undefined): ReactNode {
     // node carries no identity, and a rich-text tree is replaced wholesale on
     // every edit rather than reordered in place, so React never has to match a
     // node across renders.
-    <RichTextNodeView key={i} node={node} />
+    <RichTextNodeView key={i} node={node} policy={policy} />
   ));
 }
 
@@ -147,7 +152,13 @@ const SIMPLE_ELEMENTS: Readonly<
 /** Heading levels Lexical serializes; anything else is a document from a version this does not know. */
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 
-function HeadingView({ node }: { node: RichTextNode }): ReactNode {
+function HeadingView({
+  node,
+  policy,
+}: {
+  node: RichTextNode;
+  policy: BlockHostPolicy | undefined;
+}): ReactNode {
   // `h2` rather than `h1` when the tag is unrecognised: guessing `h1` invents a
   // second top-level heading and breaks the page outline, which is worse than
   // rendering one level too deep.
@@ -156,10 +167,16 @@ function HeadingView({ node }: { node: RichTextNode }): ReactNode {
       ? node.tag
       : "h2";
   const Heading = tag as "h1";
-  return <Heading>{children(node.children)}</Heading>;
+  return <Heading>{children(node.children, policy)}</Heading>;
 }
 
-function LinkView({ node }: { node: RichTextNode }): ReactNode {
+function LinkView({
+  node,
+  policy,
+}: {
+  node: RichTextNode;
+  policy: BlockHostPolicy | undefined;
+}): ReactNode {
   // Sanitized, not merely read: the destination is stored text that lands in an
   // `href`. `url()` is the same boundary the URL props cross, so a scheme
   // refused in a button cannot be reached through a link beside it.
@@ -168,7 +185,7 @@ function LinkView({ node }: { node: RichTextNode }): ReactNode {
   // announced as a link by a screen reader and goes nowhere when followed, and
   // that is also the right answer for a destination this refuses: the author's
   // words survive, the navigation does not.
-  if (href === undefined) return <>{children(node.children)}</>;
+  if (href === undefined) return <>{children(node.children, policy)}</>;
 
   // Only `_blank` is honoured. It is the one target the editor writes, and it
   // is the one that needs the `rel` below; passing an arbitrary stored string
@@ -176,17 +193,253 @@ function LinkView({ node }: { node: RichTextNode }): ReactNode {
   const target = node.target === "_blank" ? "_blank" : undefined;
   return (
     <a href={href} target={target} rel={relFor(target, node.rel)}>
-      {children(node.children)}
+      {children(node.children, policy)}
     </a>
   );
 }
 
-function TableCellView({ node }: { node: RichTextNode }): ReactNode {
+function TableCellView({
+  node,
+  policy,
+}: {
+  node: RichTextNode;
+  policy: BlockHostPolicy | undefined;
+}): ReactNode {
   // Lexical marks a header cell with `headerState`, a bitfield where any set bit
   // means the cell heads its row or its column.
   const header = typeof node.headerState === "number" && node.headerState !== 0;
   const Cell = header ? "th" : "td";
-  return <Cell>{children(node.children)}</Cell>;
+  return <Cell>{children(node.children, policy)}</Cell>;
+}
+
+/**
+ * A stored image source this page is willing to write into an `<img>`.
+ *
+ * TWO filters, both asked, in the order the blocks ask them. `url()` refuses a
+ * scheme that could execute and applies whether or not an operator configured
+ * anything; `remotePatterns` is the site's own list of hosts it will fetch
+ * from, and an ABSENT list means unasked rather than allowed-nothing — the
+ * semantics `BlockHostPolicy` states for the field, and the reason an existing
+ * site does not lose its images the day this starts rendering them.
+ *
+ * `undefined` where either refuses, so a caller can decide what to draw instead
+ * of an image element pointing nowhere.
+ */
+function mediaSource(
+  value: unknown,
+  policy: BlockHostPolicy | undefined
+): string | undefined {
+  const src = url(value);
+  if (src === undefined) return undefined;
+  const patterns = policy?.remotePatterns;
+  if (patterns !== undefined && !isFetchableUrl(src, patterns))
+    return undefined;
+  return src;
+}
+
+/**
+ * Dimensions, when the editor recorded usable ones.
+ *
+ * BOTH or NEITHER. A lone `width` on an `<img>` makes a browser compute the
+ * other from the intrinsic size, which is a different number from the one the
+ * author saw and moves the layout as the image loads — the reserved space this
+ * exists to provide, reserved wrongly.
+ */
+function boxOf(
+  node: RichTextNode
+): { width: number; height: number } | undefined {
+  if (typeof node.width !== "number" || typeof node.height !== "number") {
+    return undefined;
+  }
+  const width = number(node.width, { min: 1, max: 20000, fallback: 0 });
+  const height = number(node.height, { min: 1, max: 20000, fallback: 0 });
+  return width === 0 || height === 0 ? undefined : { width, height };
+}
+
+/** A caption, when the author wrote one. */
+function CaptionView({ value }: { value: unknown }): ReactNode {
+  const caption = text(value);
+  if (caption === "") return null;
+  return (
+    <figcaption className="nextly-rich-text-caption">{caption}</figcaption>
+  );
+}
+
+/**
+ * An image an author placed inside their prose.
+ *
+ * Refused sources render NOTHING rather than a broken element. An `<img>` whose
+ * source this page will not load is an alt-text box on the published page and a
+ * request the operator said not to make; the prose around it is unaffected
+ * either way, which is what makes dropping it the better answer.
+ *
+ * `alt` is always written, empty when the author gave none. Absent, a screen
+ * reader announces the FILENAME, which is worse than silence — and an image
+ * inside prose that carries no description is decorative far more often than it
+ * is unlabelled.
+ *
+ * A plain `<img>` rather than `next/image`, and that is the package boundary
+ * rather than an oversight: this entry's layering test forbids importing
+ * `next/*`, so the root renderer works in any React host. A Next.js app that
+ * wants optimisation reaches this file through the `/next` subpath's helpers.
+ */
+function ImageView({
+  node,
+  policy,
+}: {
+  node: RichTextNode;
+  policy: BlockHostPolicy | undefined;
+}): ReactNode {
+  const src = mediaSource(node.src, policy);
+  if (src === undefined) return null;
+  const box = boxOf(node);
+  return (
+    <figure className="nextly-rich-text-image">
+      <img
+        src={src}
+        alt={text(node.altText)}
+        {...(text(node.title) === "" ? {} : { title: text(node.title) })}
+        {...(box ?? {})}
+        loading="lazy"
+        decoding="async"
+      />
+      <CaptionView value={node.caption} />
+    </figure>
+  );
+}
+
+/** The column counts the editor offers; anything else is a document it did not write. */
+const GALLERY_COLUMNS = ["2", "3", "4"] as const;
+
+/**
+ * A gallery of images, as a list.
+ *
+ * A LIST rather than a row of figures, because that is what it is: a screen
+ * reader announces the count before the first item, which is the one fact a
+ * non-visual reader most needs about a gallery and the one a bare sequence of
+ * images cannot convey.
+ *
+ * Each source crosses the same two filters separately, so one image the site
+ * will not fetch removes itself rather than the gallery around it. A gallery
+ * left with no usable image renders nothing, for the reason a single refused
+ * image does.
+ */
+function GalleryView({
+  node,
+  policy,
+}: {
+  node: RichTextNode;
+  policy: BlockHostPolicy | undefined;
+}): ReactNode {
+  if (!Array.isArray(node.images)) return null;
+  const images = node.images
+    .map(entry => {
+      if (entry === null || typeof entry !== "object") return undefined;
+      const item = entry as Record<string, unknown>;
+      const src = mediaSource(item.src, policy);
+      return src === undefined ? undefined : { src, alt: text(item.alt) };
+    })
+    .filter(
+      (entry): entry is { src: string; alt: string } => entry !== undefined
+    );
+  if (images.length === 0) return null;
+
+  // Read as a STRING because the count reaches CSS as a data attribute, and a
+  // stored `3` and a stored `"3"` are the same gallery to an author.
+  const columns = oneOf(String(node.columns), GALLERY_COLUMNS, "3");
+  return (
+    <figure className="nextly-rich-text-gallery">
+      <ul className="nextly-rich-text-gallery-items" data-columns={columns}>
+        {images.map((image, i) => (
+          <li key={i}>
+            <img
+              src={image.src}
+              alt={image.alt}
+              loading="lazy"
+              decoding="async"
+            />
+          </li>
+        ))}
+      </ul>
+      <CaptionView value={node.caption} />
+    </figure>
+  );
+}
+
+/** The variants and sizes the editor offers. */
+const BUTTON_VARIANTS = ["primary", "secondary", "outline", "ghost"] as const;
+const BUTTON_SIZES = ["sm", "md", "lg"] as const;
+const BUTTON_ALIGNMENTS = ["left", "center", "right"] as const;
+
+/**
+ * One button, as the ANCHOR it is.
+ *
+ * Never a `<button>`. It navigates, so it has to be announced as a link and
+ * behave like one — opening in a new tab, copying its address, being followed
+ * by a keyboard. Styling it to look like a button is a class, not an element.
+ *
+ * The destination crosses `url()` for the reason {@link LinkView} gives, and a
+ * refused one renders nothing at all rather than the label alone: unlike a link
+ * wrapping prose, a button's text IS the button, and leaving it behind as bare
+ * words puts an orphaned "Buy now" in the middle of an article.
+ */
+function ButtonView({ item }: { item: Record<string, unknown> }): ReactNode {
+  const href = url(item.url);
+  if (href === undefined) return null;
+  const label = text(item.text);
+  if (label === "") return null;
+  const target = item.target === "_blank" ? "_blank" : undefined;
+  return (
+    <a
+      className="nextly-rich-text-button"
+      href={href}
+      target={target}
+      rel={relFor(target, item.rel)}
+      data-variant={oneOf(item.variant, BUTTON_VARIANTS, "primary")}
+      data-size={oneOf(item.size, BUTTON_SIZES, "md")}
+    >
+      {label}
+    </a>
+  );
+}
+
+/** A single button the author placed in their prose. */
+function ButtonLinkView({ node }: { node: RichTextNode }): ReactNode {
+  const button = <ButtonView item={node} />;
+  return (
+    <p
+      className="nextly-rich-text-buttons"
+      data-align={oneOf(node.alignment, BUTTON_ALIGNMENTS, "left")}
+    >
+      {button}
+    </p>
+  );
+}
+
+/**
+ * Several buttons offered together.
+ *
+ * One refused button leaves the others: a group is a set of alternatives, and
+ * dropping the whole row because one destination was unusable takes away
+ * choices that were fine.
+ */
+function ButtonGroupView({ node }: { node: RichTextNode }): ReactNode {
+  if (!Array.isArray(node.buttons)) return null;
+  const items = node.buttons.filter(
+    (entry): entry is Record<string, unknown> =>
+      entry !== null && typeof entry === "object"
+  );
+  if (items.length === 0) return null;
+  return (
+    <p
+      className="nextly-rich-text-buttons"
+      data-align={oneOf(node.alignment, BUTTON_ALIGNMENTS, "left")}
+    >
+      {items.map((item, i) => (
+        <ButtonView key={i} item={item} />
+      ))}
+    </p>
+  );
 }
 
 /**
@@ -196,47 +449,63 @@ function TableCellView({ node }: { node: RichTextNode }): ReactNode {
  * lookup makes "which types does this renderer know" answerable by reading one
  * list, where a chain of `if`s hides it in control flow.
  */
-const NODE_VIEWS: Readonly<Record<string, (node: RichTextNode) => ReactNode>> =
-  {
-    heading: node => <HeadingView node={node} />,
-    // `open` is serialized by the editor, default included, so a section the
-    // author left expanded publishes expanded.
-    "collapsible-container": node => (
-      <details open={node.open === true}>{children(node.children)}</details>
-    ),
-    link: node => <LinkView node={node} />,
-    autolink: node => <LinkView node={node} />,
-    list: node => {
-      if (node.listType !== "number") return <ul>{children(node.children)}</ul>;
-      // A list imported from `<ol start="5">` keeps its first number. Dropped,
-      // the published list silently restarts at 1 and the prose around it —
-      // "step 5" — stops matching. Only a positive integer is forwarded;
-      // anything else is a value the attribute could not carry.
-      const start =
-        typeof node.start === "number" &&
-        Number.isInteger(node.start) &&
-        node.start > 0
-          ? node.start
-          : undefined;
-      return <ol start={start}>{children(node.children)}</ol>;
-    },
-    linebreak: () => <br />,
-    horizontalrule: () => <hr />,
-    code: node => (
-      <pre>
-        <code>{children(node.children)}</code>
-      </pre>
-    ),
-    // `tbody` rather than bare rows: a browser inserts one anyway, and a React
-    // tree that omits it does not match the DOM that results.
-    table: node => (
-      <table>
-        <tbody>{children(node.children)}</tbody>
-      </table>
-    ),
-    tablecell: node => <TableCellView node={node} />,
-    "code-highlight": node => <CodeTokenView node={node} />,
-  };
+const NODE_VIEWS: Readonly<
+  Record<
+    string,
+    (node: RichTextNode, policy: BlockHostPolicy | undefined) => ReactNode
+  >
+> = {
+  heading: (node, policy) => <HeadingView node={node} policy={policy} />,
+  // `open` is serialized by the editor, default included, so a section the
+  // author left expanded publishes expanded.
+  "collapsible-container": (node, policy) => (
+    <details open={node.open === true}>
+      {children(node.children, policy)}
+    </details>
+  ),
+  link: (node, policy) => <LinkView node={node} policy={policy} />,
+  autolink: (node, policy) => <LinkView node={node} policy={policy} />,
+  list: (node, policy) => {
+    if (node.listType !== "number")
+      return <ul>{children(node.children, policy)}</ul>;
+    // A list imported from `<ol start="5">` keeps its first number. Dropped,
+    // the published list silently restarts at 1 and the prose around it —
+    // "step 5" — stops matching. Only a positive integer is forwarded;
+    // anything else is a value the attribute could not carry.
+    const start =
+      typeof node.start === "number" &&
+      Number.isInteger(node.start) &&
+      node.start > 0
+        ? node.start
+        : undefined;
+    return <ol start={start}>{children(node.children, policy)}</ol>;
+  },
+  linebreak: () => <br />,
+  horizontalrule: () => <hr />,
+  code: (node, policy) => (
+    <pre>
+      <code>{children(node.children, policy)}</code>
+    </pre>
+  ),
+  // `tbody` rather than bare rows: a browser inserts one anyway, and a React
+  // tree that omits it does not match the DOM that results.
+  table: (node, policy) => (
+    <table>
+      <tbody>{children(node.children, policy)}</tbody>
+    </table>
+  ),
+  tablecell: (node, policy) => <TableCellView node={node} policy={policy} />,
+  "code-highlight": node => <CodeTokenView node={node} />,
+  // The MEDIA leaves. Each keeps its content in its OWN fields rather than in
+  // `children`, which is why the unknown-node fallback below cannot draw them:
+  // it descends into children, finds none, and renders nothing at all. An
+  // author who placed an image in their prose saw it in the editor and lost it
+  // on the page, with nothing anywhere reporting the loss.
+  image: (node, policy) => <ImageView node={node} policy={policy} />,
+  gallery: (node, policy) => <GalleryView node={node} policy={policy} />,
+  "button-link": node => <ButtonLinkView node={node} />,
+  "button-group": node => <ButtonGroupView node={node} />,
+};
 
 /**
  * One syntax-highlighted token inside a code block.
@@ -252,19 +521,33 @@ function CodeTokenView({ node }: { node: RichTextNode }): ReactNode {
   return <span className={className}>{text}</span>;
 }
 
-function RichTextNodeView({ node }: { node: RichTextNode }): ReactNode {
+function RichTextNodeView({
+  node,
+  policy,
+}: {
+  node: RichTextNode;
+  policy: BlockHostPolicy | undefined;
+}): ReactNode {
   // A stored document can hold anything JSON can express, including a null in a
   // `children` array. Reading `.text` off that throws, and it would throw during
   // render of a published page. The type says this cannot happen; the storage
   // does not.
   if (!isRichTextNode(node)) return null;
 
-  // Before the generic text branch: a code token carries `text` too, and would
-  // otherwise return here having lost the type that decides its class.
-  if (node.type === "code-highlight") return <CodeTokenView node={node} />;
-
-  if (typeof node.text === "string") return formatted(node.text, node.format);
-
+  // TYPE FIRST, then the generic text branch.
+  //
+  // `text` is not a text node's private field: a code token carries one, and so
+  // does a button, whose label it holds. Asked the other way round, any node
+  // with a `text` field returns as bare prose having lost the type that decides
+  // what it IS — a button published as the stray words "Buy now" in the middle
+  // of an article, and nothing anywhere reporting it.
+  //
+  // Ordering rather than a guard per type. The same collision was met once
+  // before and answered with a `node.type === "code-highlight"` line in front of
+  // the branch, which fixes the node that was noticed and leaves the next one
+  // to be found the same way. A type this file knows is dispatched on its type;
+  // only a node no table claims falls through to be read as text.
+  //
   // `Object.hasOwn` before either lookup, because `node.type` is a stored string
   // and these tables inherit from `Object.prototype`. A node typed
   // `"constructor"` or `"toString"` would otherwise resolve to an inherited
@@ -272,21 +555,40 @@ function RichTextNodeView({ node }: { node: RichTextNode }): ReactNode {
   // instead of taking the unknown-node fallback that exists for exactly this.
   if (Object.hasOwn(SIMPLE_ELEMENTS, node.type)) {
     const Element = SIMPLE_ELEMENTS[node.type] as "p";
-    return <Element>{children(node.children)}</Element>;
+    return <Element>{children(node.children, policy)}</Element>;
   }
 
   if (Object.hasOwn(NODE_VIEWS, node.type)) {
     const view = NODE_VIEWS[node.type];
-    if (view !== undefined) return view(node);
+    if (view !== undefined) return view(node, policy);
   }
 
+  if (typeof node.text === "string") return formatted(node.text, node.format);
+
   // Unknown node: keep the words, lose the wrapper. See the module docblock.
-  return <>{children(node.children)}</>;
+  return <>{children(node.children, policy)}</>;
 }
 
 export interface RichTextProps {
   /** The stored value. Anything that is not rich text renders nothing. */
   value: unknown;
+  /**
+   * Site-operator decisions the media inside this value enforces.
+   *
+   * Passed as a PROP rather than read from a React context, because this entry
+   * renders on the server: a context would make every page drawing rich text a
+   * client component, which is a cost out of all proportion to reading one
+   * optional object. It is the same way a block receives it.
+   *
+   * ABSENT MEANS UNASKED, not allowed-nothing — the semantics
+   * {@link BlockHostPolicy} states for `remotePatterns` itself. A caller that
+   * passes nothing gets what it had before media rendered at all, rather than a
+   * page whose images silently disappear the day it upgrades. The scheme filter
+   * every stored URL crosses is NOT part of this bargain: it applies whether or
+   * not a policy was supplied, because a `javascript:` href is not a site
+   * operator's decision to make.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /**
@@ -298,7 +600,7 @@ export interface RichTextProps {
  * one place instead of one at every call site, and it means a prop holding the
  * wrong thing renders nothing rather than throwing on a live page.
  */
-export function RichText({ value }: RichTextProps): ReactNode {
+export function RichText({ value, hostPolicy }: RichTextProps): ReactNode {
   if (!isRichTextValue(value)) return null;
-  return <>{children(value.root.children)}</>;
+  return <>{children(value.root.children, hostPolicy)}</>;
 }
