@@ -115,18 +115,48 @@ export interface BaseRegistryRecord {
  * @typeParam TMigrationStatus - The migration status union type for this domain
  */
 /**
+ * A value as a string that does not depend on how its keys were ordered.
+ *
+ * Postgres holds these columns as `jsonb`, which normalises key order rather
+ * than preserving what was written, so the row read back can spell the same
+ * value differently from the config that wrote it. Compared as plain JSON, such
+ * a resource re-syncs on every startup — on that adapter only, with every
+ * instrument reporting the write as legitimate work.
+ *
+ * Arrays keep their order. Order is part of an array's value, and sorting one
+ * here would stop a genuine reordering from being detected at all.
+ *
+ * Functions are dropped, as `JSON.stringify` always dropped them. That is what
+ * makes a code-first `preview.url` compare equal to the stored row it could
+ * never have been written into.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(withSortedKeys(value));
+}
+
+/** The same value with every object's keys in a fixed order. */
+function withSortedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withSortedKeys);
+  if (value === null || typeof value !== "object") return value;
+
+  const source = value as Record<string, unknown>;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(source).sort()) {
+    sorted[key] = withSortedKeys(source[key]);
+  }
+  return sorted;
+}
+
+/**
  * Whether two config values are the same as far as storage is concerned.
  *
  * `?? null` on both sides because a column holding no value arrives as `null`
  * while a config declaring none has `undefined`: they mean the same thing, and
  * a comparison telling them apart would report a change on every boot — a write
  * per startup, per resource, that nothing downstream would report as spurious.
- *
- * A stable string compare over normalized config, so what it detects is a real
- * change rather than a re-serialization.
  */
 function sameStoredValue(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return canonicalJson(a ?? null) === canonicalJson(b ?? null);
 }
 
 /**
@@ -527,7 +557,10 @@ export abstract class BaseRegistryService<
     if (!codeAdmin || !existingAdmin) {
       return true;
     }
-    return JSON.stringify(codeAdmin) !== JSON.stringify(existingAdmin);
+    // Canonical for the reason `sameStoredValue` is: a `jsonb` column hands
+    // back its own key order, and an admin block that compared unequal on that
+    // alone would re-sync every resource on every boot.
+    return canonicalJson(codeAdmin) !== canonicalJson(existingAdmin);
   }
 
   /**

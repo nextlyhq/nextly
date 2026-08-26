@@ -193,6 +193,39 @@ describe("SingleForm offers the preview pane", () => {
     expect(lastPaneProps().label).toBe("Landing preview");
   });
 
+  it("names the pane's OPENER with the same word, not a hardcoded one", () => {
+    /*
+     * The pane and the button that opens it are one thing to an author, so they
+     * cannot be named separately: renaming the pane while its opener still said
+     * "Show preview" left the declared label reachable only after clicking a
+     * control that disagreed with it.
+     *
+     * The header takes ONE label and gives it to both — the open-in-a-tab action
+     * and this toggle — rather than growing a second naming prop that could
+     * drift from the first.
+     */
+    renderForm({
+      schema: {
+        ...(schema as unknown as Record<string, unknown>),
+        admin: { preview: { label: "Landing preview" } },
+      } as never,
+    });
+
+    expect(lastHeaderProps().previewLabel).toBe("Landing preview");
+  });
+
+  it("hands the header NO label when the Single declares none", () => {
+    /*
+     * The control, and the reason the declared value is passed rather than the
+     * defaulted one: absent is what lets each control apply its own default —
+     * "Preview" as a button's name, "preview" as a noun inside "Show preview" —
+     * so an undeclared Single keeps the wording it has today.
+     */
+    renderForm();
+
+    expect(lastHeaderProps().previewLabel).toBeUndefined();
+  });
+
   it("falls back to Preview when the Single names none", () => {
     // The control: the label above comes from the declaration rather than from
     // a rename that happens to match, and a Single without one is unaffected.

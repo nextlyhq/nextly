@@ -779,6 +779,48 @@ describe("SingleRegistryService", () => {
       expect("fields" in updateData).toBe(false);
     });
 
+    it("CLEARS metadata the config dropped, when fields changed in the same sync", async () => {
+      /*
+       * The schema branch writes these three too, and it is selected whenever a
+       * field, the status flag or localization changed — so a config that
+       * removed its admin block WHILE editing a field never reaches the
+       * metadata branch that would clear it. Sending `undefined` there means
+       * "leave the column alone" to `updateSingle`, which leaves the editor
+       * showing a preview label nothing declares any more.
+       *
+       * Removal is the case that needs it: a block that still exists is written
+       * either way, so only an absent one can be stranded.
+       */
+      ctx.adapter.selectOne.mockImplementation(async (table: string) => {
+        if (table !== "dynamic_singles") return null;
+        return dbRow({
+          schema_hash: "old-hash",
+          admin: JSON.stringify({ preview: { label: "Landing preview" } }),
+          description: "An older description",
+        });
+      });
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      const result = await ctx.service.syncCodeFirstSingles([
+        {
+          slug: "site-settings",
+          label: "Site Settings",
+          // Changed, so the SCHEMA branch is the one selected.
+          fields: [{ name: "siteName", type: "text" }],
+        },
+      ]);
+
+      expect(result.updated).toEqual(["site-settings"]);
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      // Explicit NULL, not absent: `updateSingle` reads an absent key as "leave
+      // unchanged", which is exactly what stranded the old value.
+      expect(updateData.admin).toBeNull();
+      expect(updateData.description).toBeNull();
+    });
+
     it("leaves a single unchanged when its preview URL is a FUNCTION", async () => {
       /*
        * The control on the case above, and the one that stops the fix costing a

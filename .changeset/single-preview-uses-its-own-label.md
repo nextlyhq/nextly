@@ -55,3 +55,21 @@ They are written by their own branch rather than by widening the schema one,
 which would have flagged a migration for an edit that moves no column. The
 collection registry already worked this way; the two now share one predicate for
 the schema question instead of keeping two copies of it in step by hand.
+
+The button that opens the pane is named by the same word. Renaming the pane
+while its opener still said "Show preview" left the declared label reachable
+only after clicking a control that disagreed with it, so the header takes one
+label and gives it to both rather than growing a second naming prop.
+
+Two ways the stored copy could go stale are closed with it. A config that
+dropped its admin block or description while ALSO changing a field took the
+schema path, which sent `undefined` — read as "leave the column alone" — and
+stranded the old value. And the comparison that decides whether to write is now
+insensitive to key order: Postgres holds these columns as `jsonb`, which
+normalises the order it was given, so a plain JSON compare re-synced every
+resource on every startup on that adapter alone.
+
+`ApiSingle.admin.preview` also carries `openInNewTab`, which the collection side
+has always read. It is a boolean, so unlike the `url` beside it, it survives
+being stored and is returned — the type said otherwise, and a caller with a
+stored value could not reach it.

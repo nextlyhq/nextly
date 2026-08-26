@@ -113,7 +113,15 @@ export interface EntrySystemHeaderProps {
   isPreviewAvailable?: boolean;
   /** Opens the preview using the editor's own session. May be asynchronous. */
   onPreview?: () => void | Promise<void>;
-  /** Label for the preview action. Defaults to "Preview". */
+  /**
+   * What this entry's preview is called, where it is not called "Preview".
+   *
+   * Names BOTH controls below — the open-in-a-tab action and the pane toggle —
+   * because they are one thing to an author, and a second prop for the second
+   * control is a second thing to keep in step. Absent rather than defaulted, so
+   * each control can apply the default its own sentence needs: "Preview" as a
+   * button's name, "preview" as a noun inside "Show preview".
+   */
   previewLabel?: string;
   /**
    * Opens and closes the preview PANE, which is a different action from opening
@@ -289,6 +297,13 @@ export function EntrySystemHeader({
     getLocale,
   } = useLocalization();
   const defaultLocaleLabel = getLocale(defaultLocale)?.label ?? defaultLocale;
+  /*
+   * The pane toggle reads its label into a sentence — "Show X" — so its default
+   * is the lowercase noun, where `PreviewActions` defaults to "Preview" as a
+   * button's name. Two defaults for one value, which is why the prop carries
+   * neither and each control states the one its own sentence needs.
+   */
+  const previewPaneNoun = previewLabel ?? "preview";
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which both consumers below
   // treat as "nothing to report" rather than as zero progress.
@@ -525,11 +540,17 @@ export function EntrySystemHeader({
               onClick={onTogglePreviewPane}
               disabled={isSubmitting}
               aria-pressed={previewPaneOpen}
-              title={previewPaneOpen ? "Hide the preview" : "Show the preview"}
+              title={
+                previewPaneOpen
+                  ? `Hide the ${previewPaneNoun}`
+                  : `Show the ${previewPaneNoun}`
+              }
             >
               <PanelRight className="h-4 w-4" aria-hidden="true" />
               <ToolbarLabel priority="secondary">
-                {previewPaneOpen ? "Hide preview" : "Show preview"}
+                {previewPaneOpen
+                  ? `Hide ${previewPaneNoun}`
+                  : `Show ${previewPaneNoun}`}
               </ToolbarLabel>
             </Button>
           )}
