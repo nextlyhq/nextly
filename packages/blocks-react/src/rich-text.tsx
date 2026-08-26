@@ -344,12 +344,29 @@ function GalleryView({
     );
   if (images.length === 0) return null;
 
-  // Read as a STRING because the count reaches CSS as a data attribute, and a
-  // stored `3` and a stored `"3"` are the same gallery to an author.
+  // Read as a STRING because a stored `3` and a stored `"3"` are the same
+  // gallery to an author, and the value reaches an attribute either way.
   const columns = oneOf(String(node.columns), GALLERY_COLUMNS, "3");
+  // The grid is written INLINE rather than left to the attribute alone. This
+  // package ships no stylesheet — a host styles the emitted classes, as the
+  // blog template does for code tokens — so a `data-columns` nobody has written
+  // a rule for makes an author's choice of two, three or four do nothing at
+  // all, and the list draws as one bulleted column. The count is structural
+  // rather than theming: it is what the author selected, not how the site wants
+  // galleries to look, so the renderer owes it. The attribute stays beside it so
+  // a host can still target the choice, and `textTransform` above sets the same
+  // precedent for a property this file must guarantee.
+  const layout: CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+  };
   return (
     <figure className="nextly-rich-text-gallery">
-      <ul className="nextly-rich-text-gallery-items" data-columns={columns}>
+      <ul
+        className="nextly-rich-text-gallery-items"
+        data-columns={columns}
+        style={layout}
+      >
         {images.map((image, i) => (
           <li key={i}>
             <img
@@ -366,10 +383,31 @@ function GalleryView({
   );
 }
 
-/** The variants and sizes the editor offers. */
-const BUTTON_VARIANTS = ["primary", "secondary", "outline", "ghost"] as const;
+/**
+ * The button vocabularies, and the DEFAULT each falls back to.
+ *
+ * Every value here is the editor's, not a set invented to look reasonable. A
+ * button serialises `variant: "filled"` by default and offers only `"outline"`
+ * beside it, so a renderer allowlist of `primary | secondary | outline | ghost`
+ * rewrites every default button to `primary` — the author picks an appearance
+ * and the page draws a different one, with the value having passed a check that
+ * looked like validation.
+ *
+ * The fallbacks are the editor's defaults for the same reason: a node stored
+ * before a field existed carries nothing there, and answering `left` where the
+ * editor answers `center` moves a button an author never touched.
+ *
+ * `richTextValueVocabulariesAgree` in the admin's conformance test is what
+ * holds these to the editor's own types. They cannot be imported — this package
+ * may not reach the admin — so they are restated and CHECKED rather than
+ * restated and hoped for.
+ */
+const BUTTON_VARIANTS = ["filled", "outline"] as const;
 const BUTTON_SIZES = ["sm", "md", "lg"] as const;
 const BUTTON_ALIGNMENTS = ["left", "center", "right"] as const;
+const DEFAULT_VARIANT = "filled";
+const DEFAULT_SIZE = "md";
+const DEFAULT_ALIGNMENT = "center";
 
 /**
  * One button, as the ANCHOR it is.
@@ -395,8 +433,8 @@ function ButtonView({ item }: { item: Record<string, unknown> }): ReactNode {
       href={href}
       target={target}
       rel={relFor(target, item.rel)}
-      data-variant={oneOf(item.variant, BUTTON_VARIANTS, "primary")}
-      data-size={oneOf(item.size, BUTTON_SIZES, "md")}
+      data-variant={oneOf(item.variant, BUTTON_VARIANTS, DEFAULT_VARIANT)}
+      data-size={oneOf(item.size, BUTTON_SIZES, DEFAULT_SIZE)}
     >
       {label}
     </a>
@@ -409,7 +447,7 @@ function ButtonLinkView({ node }: { node: RichTextNode }): ReactNode {
   return (
     <p
       className="nextly-rich-text-buttons"
-      data-align={oneOf(node.alignment, BUTTON_ALIGNMENTS, "left")}
+      data-align={oneOf(node.alignment, BUTTON_ALIGNMENTS, DEFAULT_ALIGNMENT)}
     >
       {button}
     </p>
@@ -433,7 +471,7 @@ function ButtonGroupView({ node }: { node: RichTextNode }): ReactNode {
   return (
     <p
       className="nextly-rich-text-buttons"
-      data-align={oneOf(node.alignment, BUTTON_ALIGNMENTS, "left")}
+      data-align={oneOf(node.alignment, BUTTON_ALIGNMENTS, DEFAULT_ALIGNMENT)}
     >
       {items.map((item, i) => (
         <ButtonView key={i} item={item} />

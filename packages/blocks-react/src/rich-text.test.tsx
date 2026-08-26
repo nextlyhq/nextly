@@ -733,6 +733,89 @@ describe("rich-text media leaves", () => {
     expect([...links].map(el => el.textContent)).toEqual(["Alpha", "Beta"]);
   });
 
+  it("keeps the variant the editor actually serialises", () => {
+    /*
+     * The editor's vocabulary is `"filled" | "outline"` and a default button
+     * serialises `"filled"`. A renderer allowlist that omits it rewrites every
+     * default button to something else, and the value has PASSED a check on the
+     * way — so the page draws an appearance the author did not choose and
+     * nothing reports it.
+     */
+    const value = doc([
+      {
+        type: "button-link",
+        version: 1,
+        url: "https://example.com/buy",
+        text: "Buy",
+        variant: "filled",
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    expect(container.querySelector("a")?.getAttribute("data-variant")).toBe(
+      "filled"
+    );
+  });
+
+  it("falls back to the editor's OWN defaults, not to invented ones", () => {
+    // A node stored before a field existed carries nothing there. Answering
+    // `left` where the editor answers `center` moves a button an author never
+    // touched, which is a change of appearance dressed as a default.
+    const value = doc([
+      {
+        type: "button-link",
+        version: 1,
+        url: "https://example.com/buy",
+        text: "Buy",
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    expect(container.querySelector("a")?.getAttribute("data-variant")).toBe(
+      "filled"
+    );
+    expect(container.querySelector("a")?.getAttribute("data-size")).toBe("md");
+    expect(container.querySelector("p")?.getAttribute("data-align")).toBe(
+      "center"
+    );
+  });
+
+  it("lays the gallery out in the columns the author chose", () => {
+    /*
+     * The count reached the page as a data attribute and nothing else, and this
+     * package ships no stylesheet — so a host that had written no rule for it
+     * drew every gallery as one bulleted column whatever the author picked. The
+     * count is structural rather than theming: it is the author's choice, not
+     * the site's taste, so the renderer owes it.
+     *
+     * Population first: two columns and four must produce DIFFERENT layouts, or
+     * an assertion on one of them passes against a renderer that ignores the
+     * value entirely.
+     */
+    const gallery = (columns: number) =>
+      doc([
+        {
+          type: "gallery",
+          version: 1,
+          images: [{ src: "https://cdn.example.com/a.jpg", alt: "A" }],
+          columns,
+        },
+      ] as unknown as RichTextValue["root"]["children"]);
+
+    const two = render(<RichText value={gallery(2)} />);
+    const twoStyle =
+      two.container.querySelector("ul")?.getAttribute("style") ?? "";
+    cleanup();
+    const four = render(<RichText value={gallery(4)} />);
+    const fourStyle =
+      four.container.querySelector("ul")?.getAttribute("style") ?? "";
+
+    expect(twoStyle).toContain("grid");
+    expect(twoStyle).not.toBe(fourStyle);
+    expect(twoStyle).toContain("repeat(2");
+    expect(fourStyle).toContain("repeat(4");
+  });
+
   it("adds rel protection to a button opening a new tab", () => {
     // The same bargain a link makes: `target="_blank"` without `rel` hands the
     // opened page a handle on this one.
