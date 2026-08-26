@@ -68,6 +68,18 @@ export interface WrittenDocument {
    * would describe a document that cannot exist, and its rows could never be
    * reconciled against anything — the unaddressable state the sweep cannot
    * reach.
+   *
+   * NOT `status === true`. The draft/publish split resolves from five
+   * conditions together: `status: true`, versioning resolving `drafts.enabled`
+   * to true, the collection being non-localized, every reachable component
+   * schema resolving and being non-localized, and no reachable field being a
+   * password. A caller that reads `status` alone will enumerate a draft subject
+   * for a collection that stores no draft.
+   *
+   * One consequence is worth stating because it bounds the cost of this whole
+   * approach: **drafts and localization are mutually exclusive**, so a real
+   * collection has at most one of `locales` and `variants` above one. The
+   * product below is a product of at most one multiplying dimension, not two.
    */
   hasDrafts: boolean;
 }

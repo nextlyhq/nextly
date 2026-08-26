@@ -111,9 +111,18 @@ describe("the full product", () => {
   it("enumerates every field, locale and variant together", () => {
     // The dimensions multiply rather than compose in sequence, which is the
     // property a nested loop can get wrong by reusing the inner list. Two
-    // fields with different localization on a two-locale drafting site is the
-    // smallest fixture where a wrong nesting produces a wrong COUNT rather than
-    // a wrong order.
+    // fields with different localization is the smallest fixture where a wrong
+    // nesting produces a wrong COUNT rather than a wrong order.
+    //
+    // This fixture combines locales AND drafts, which core does not currently
+    // permit together: the draft/publish split requires the collection to be
+    // non-localized, so a real collection has at most one of the two dimensions
+    // above one. Stated rather than left to be assumed, because a reader would
+    // otherwise take this case as evidence about a configuration that can
+    // occur. It is kept because the enumeration must not depend on that
+    // constraint holding — a function that is only correct while a rule
+    // elsewhere is enforced fails silently the day the rule is relaxed, and
+    // nothing here would notice.
     const subjects = classUsageSubjectsFor({
       ...base,
       fields: [localized, { name: "sidebar", localized: false }],
