@@ -2557,15 +2557,17 @@ function ColourPicker({
    */
   onClosed: (outcome: PickerClose) => void;
   /**
-   * Whether an interaction outside the popover writes THIS field's value
-   * itself.
+   * Whether the control being PRESSED outside the popover writes THIS field's
+   * value itself.
    *
    * Asked before the dismissal is turned into a write, so a control that both
    * closes this picker and commits the same value does not produce two edits
-   * for one intent. `onInteractOutside` is the single callback Radix fires for
-   * EVERY cause it dismisses on — pointer, focus and the rest — which is why
-   * the question is asked here rather than by hooking the causes one at a time
-   * and missing whichever is added next.
+   * for one intent — the author would otherwise undo the reset and get back the
+   * colour they pressed it to be rid of.
+   *
+   * The target is a press rather than any interaction, because Radix dismisses
+   * on focus as well and a focused button has not written anything. See where
+   * this is bound.
    */
   supersededBy: (target: EventTarget | null) => boolean;
   onToken: (identity: string) => void;
@@ -2604,7 +2606,23 @@ function ColourPicker({
       </PopoverTrigger>
       <PopoverContent
         className="nx-style-inspector__picker"
-        onInteractOutside={event => {
+        /*
+         * A PRESS, not any dismissal whose target happens to be such a control.
+         *
+         * `onInteractOutside` also fires when focus merely LEAVES the popover —
+         * a keyboard author tabbing out lands on the Reset beside this control
+         * and dismisses it without activating anything. Read there, the gesture
+         * they were composing is discarded by a button they never pressed, and
+         * tabbing onward loses it silently.
+         *
+         * The question is not which cause dismissed the popover but whether a
+         * control is about to WRITE, and only a pointer press implies that: the
+         * press is followed by the click that runs the handler. Focus is not,
+         * so a focus dismissal falls through to the ordinary close and the
+         * gesture is committed — which is what leaving a control does
+         * everywhere else in this panel, the text fields included.
+         */
+        onPointerDownOutside={event => {
           superseded.current = supersededBy(event.target);
         }}
       >

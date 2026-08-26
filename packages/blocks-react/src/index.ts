@@ -77,11 +77,12 @@ export type {
  * `previewContainer`, and each skips only `undefined` — so a stored `null`
  * survives and means something.
  *
- * Measured before this was exported: a caller re-implementing the rule got it
- * wrong three times in one PR — the precedence inverted, then the fallthrough,
- * then the stated `null` — each time by reading it carefully rather than
- * calling it. A parallel implementation of a reconciliation is a second answer
- * that agrees until the day it does not.
+ * A parallel implementation of a reconciliation is a second answer that agrees
+ * until the day it does not, and this rule offers three separate ways to
+ * disagree — an inverted precedence, a wrong fallthrough, and a stated `null`
+ * discarded by a nullish coalesce. None of them is visible from the inputs, so
+ * a caller that reads the rule carefully and rewrites it is no safer than one
+ * that guesses.
  */
 export { sharedStyleInputs, type ReconciledStyleInputs } from "./page-renderer";
 

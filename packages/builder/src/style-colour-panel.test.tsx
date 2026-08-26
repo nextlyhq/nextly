@@ -1109,6 +1109,34 @@ describe("a Reset beside a picker mid-gesture", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a gesture when Reset is only FOCUSED, never pressed", async () => {
+    /*
+     * Radix dismisses on focus leaving the popover as well as on a press
+     * outside it. A keyboard author tabbing out of the picker lands on the
+     * Reset beside this very control — so a supersede decided from "the
+     * dismissal's target is a marked control" discards the gesture because of a
+     * button nobody activated, and tabbing onward loses it with nothing shown.
+     *
+     * Leaving a control is a COMMIT everywhere else in this panel; the text
+     * fields write on blur. The gesture is therefore written here, and the
+     * Reset writes nothing because it never ran.
+     */
+    const editor = mountWithResets([{ property: "color" }]);
+    await dragTo("#ff0000");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    // Focus alone: no pointer press, no click, so `onReset` never runs. Moved
+    // with `.focus()` rather than a synthetic event, because Radix listens for
+    // `focusin` on the document and decides from `document.activeElement` —
+    // dispatched at the button, the listener sees focus still inside the
+    // popover and dismisses nothing.
+    resetFor("Color").focus();
+    await settle();
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
+  });
+
   it("keeps a gesture ANOTHER control's Reset does not replace", async () => {
     /*
      * The supersede is scoped to the field whose value the press writes. A

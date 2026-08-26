@@ -450,12 +450,12 @@ export interface CanvasPreview {
  * function `PageRenderer` itself reconciles with, so this reads the answer the
  * render will use instead of a second one that happens to agree.
  *
- * That distinction is not theoretical. A parallel implementation of this rule
- * was wrong three times in one pull request — the precedence inverted, then the
- * fallthrough, then a stated `null` that the renderer keeps and a nullish
- * coalesce discarded — and each time it was wrong after being read carefully.
- * The rule has more in it than it looks: the site tier wins for `breakpoints`,
- * the route wins for `previewContainer`, and both skip only `undefined`.
+ * That distinction is not theoretical, because the rule has more in it than it
+ * looks. The site tier wins for `breakpoints`, the route wins for
+ * `previewContainer`, and both skip only `undefined` — so a stated `null`
+ * survives, where a nullish coalesce would discard it. Three separate ways to
+ * be wrong, none of them visible from the inputs, and each one produces a
+ * canvas that compiles against a different set of tiers than the page does.
  *
  * `undefined` still means exactly what it did: neither binding site stated a
  * set, which is `siteStyles={false}` beside a stored artifact carrying no style

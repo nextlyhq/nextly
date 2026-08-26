@@ -890,23 +890,38 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * where the field in front of them holds nothing, because the value lives
      * on a different node.
      *
-     * Measured while break-verifying: this case does NOT distinguish the id
-     * guard on its own. A subject naming no ancestors has an unrelated node's
-     * declaration filtered by `styleOrigin` before the guard is reached, so the
-     * badge is empty either way. It is kept because it pins the OUTCOME, and it
-     * would fail if that upstream filtering ever changed — but the guard itself
-     * is belt-and-braces here rather than load-bearing, and this comment says
-     * so instead of leaving the case reading as coverage it does not give.
+     * The fixture has to REACH the guard, and three things are needed for that.
+     *
+     * The subject must NAME the ancestor, because `styleOrigin` only lets an
+     * enclosing node's rule through `reachesViaAncestor` — with no ancestors
+     * listed, an unrelated node's declaration is filtered upstream and the
+     * badge is empty whether or not the guard exists.
+     *
+     * That entry must carry a DESCENDANT selector, because a bare rule on
+     * another node reaches nothing here; `reachesViaAncestor` returns false for
+     * `descendant === undefined`.
+     *
+     * And the query must ask at the SAME descendant, or `inheritedBadge`'s
+     * descendant comparison rejects the entry first and the id check is again
+     * never the reason. With all three, the only thing standing between this
+     * trace and an `inherited` badge is the id.
      */
     const badge = badgeFor(
       query(
         [
           entry({
             origin: { kind: "node", id: "parent" },
+            descendant: " a",
             breakpoint: "tablet",
           }),
         ],
         {
+          subject: {
+            nodeId: "n1",
+            classIds: ["c1"],
+            ancestors: [{ nodeId: "parent" }],
+          },
+          descendant: " a",
           breakpoint: "mobile",
           liveBreakpoints: ["tablet", "mobile"],
         }
