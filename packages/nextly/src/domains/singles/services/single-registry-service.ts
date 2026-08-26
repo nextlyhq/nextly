@@ -808,9 +808,17 @@ export class SingleRegistryService extends BaseRegistryService<
             config.slug,
             {
               label: config.label,
-              description: config.description,
+              // Explicit null where the config no longer declares one, for the
+              // reason `revalidate` and `webhooks` below already do it:
+              // `updateSingle` reads `undefined` as "leave unchanged", so a
+              // config that dropped its description or its admin block while
+              // ALSO changing a field selects this branch and would strand the
+              // old value — the editor keeps showing a preview label nothing
+              // declares any more. The metadata branch cannot catch that case,
+              // because this one was selected instead.
+              description: config.description ?? null,
               fields: config.fields,
-              admin: config.admin,
+              admin: config.admin ?? null,
               configPath: config.configPath,
               schemaHash,
               locked: true,

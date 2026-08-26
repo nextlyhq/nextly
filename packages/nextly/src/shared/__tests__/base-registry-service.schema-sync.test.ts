@@ -116,6 +116,45 @@ describe("BaseRegistryService.schemaSyncNeeded", () => {
     expect(probe.ask(declared, stored, false)).toBe(false);
   });
 
+  it("reads two orderings of the same object as the same value", () => {
+    /*
+     * Postgres stores these columns as `jsonb`, which does not preserve the key
+     * order it was given — it normalises them — so the row read back can spell
+     * the same value differently from the config that wrote it. A plain
+     * `JSON.stringify` compare would then report a change on every startup, for
+     * every resource, on that adapter only: a write per boot, and `updated_at`
+     * churning, with every instrument reporting the sync as legitimate work.
+     *
+     * The comparison is therefore over a canonical form. Arrays keep their
+     * order, because order is part of an array's value.
+     */
+    const declared: SchemaSyncSubject = {
+      status: true,
+      localized: false,
+      versions: { drafts: true, max: 10, nested: { a: 1, b: 2 } },
+    };
+    const storedDifferentOrder: SchemaSyncSubject = {
+      status: true,
+      localized: false,
+      versions: { nested: { b: 2, a: 1 }, max: 10, drafts: true },
+    };
+
+    expect(probe.ask(declared, storedDifferentOrder, false)).toBe(false);
+  });
+
+  it("still sees a REORDERED ARRAY as a change", () => {
+    // The control on the case above. Canonicalising keys must not extend to
+    // sorting array members: `[a, b]` and `[b, a]` are different values, and a
+    // comparison that flattened that would stop detecting a real edit.
+    expect(
+      probe.ask(
+        { ...same, versions: { order: ["a", "b"] } },
+        { ...same, versions: { order: ["b", "a"] } },
+        false
+      )
+    ).toBe(true);
+  });
+
   it("does not consult naming, which moves no column", () => {
     /*
      * The separating property against the defect this whole change came from.

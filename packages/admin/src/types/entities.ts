@@ -241,16 +241,30 @@ export interface SingleAdminOptions {
   /** Description text displayed below the Single title */
   description?: string;
   /**
-   * What this Single's preview is called.
+   * This Single's preview, as much of it as SURVIVES being stored.
    *
-   * Only the label. The declaration's `url` is a FUNCTION and cannot survive
-   * being stored as JSON, so it never reaches the browser and nothing here
-   * should imply it does — resolving an address is the server's job, and the
-   * admin asks for one rather than building it.
+   * The declaration's `url` is a FUNCTION, so it never reaches the browser and
+   * nothing here should imply it does — resolving an address is the server's
+   * job, and the admin asks for one rather than building it. `breakpoints` is
+   * absent for the same reason in its function form, and because the resolved
+   * list travels on the mint response instead of on a schema.
+   *
+   * What remains is the JSON-shaped part, listed rather than derived from the
+   * core config type: `Omit<SinglePreviewConfig, "url">` would keep
+   * `breakpoints` and so promise a field this payload never carries.
    */
   preview?: {
     /** Custom label for the preview button and pane. @default "Preview" */
     label?: string;
+
+    /**
+     * Whether the preview opens in a new browser tab. @default true
+     *
+     * A boolean, so unlike `url` it is stored and returned. The collection side
+     * has always read it; omitting it here made the type disagree with the
+     * payload, and a caller with a stored value could not reach it.
+     */
+    openInNewTab?: boolean;
   };
 }
 
