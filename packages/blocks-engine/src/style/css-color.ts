@@ -86,6 +86,17 @@ const COLOR_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
+ * A null byte, BUILT rather than written as a regular expression.
+ *
+ * A pattern for it needs `no-control-regex` suppressed, and a suppression is not
+ * available: the convention forbids silencing a lint rule, and the rule is right
+ * — a control character written into source is one an editor or a formatter can
+ * strip, leaving a check that reads as present and matches nothing.
+ * Constructing the character keeps the behaviour and needs no pattern.
+ */
+const NUL = String.fromCharCode(0);
+
+/**
  * Control characters and runs of whitespace flattened out of a CSS value.
  *
  * Exported for the same reason as {@link hasCssInjection}: the CMS normalizes a
@@ -95,21 +106,11 @@ const COLOR_PATTERNS: readonly RegExp[] = [
  */
 export function normalizeCssValue(value: string): string {
   return value
-    .replace(NULL_BYTE, "")
+    .replaceAll(NUL, "")
     .replace(/[\t\n\r]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
-
-/**
- * A null byte, which truncates the value in a downstream consumer.
- *
- * Asked of the ORIGINAL rather than of the normalized text, because normalizing
- * strips it — a pattern for it in the list above could never match, and the
- * check would read as present while testing nothing.
- */
-// eslint-disable-next-line no-control-regex
-const NULL_BYTE = /\x00/g;
 
 /**
  * Whether a CSS value carries a shape that must never reach a stylesheet.
@@ -119,11 +120,10 @@ const NULL_BYTE = /\x00/g;
  */
 export function hasCssInjection(value: string): boolean {
   if (typeof value !== "string") return true;
-  // Asked with `includes` of the ORIGINAL, for the two reasons the doc on
-  // NULL_BYTE gives: `normalize` strips the byte, so a pattern for it could
-  // never match, and that pattern is global — `test` on a global regex
-  // resumes from the `lastIndex` its previous use left behind.
-  if (value.includes("\u0000")) return true;
+  // Asked of the ORIGINAL value: normalizing strips the byte, so a check on
+  // the flattened text could never see one and would read as present while
+  // matching nothing.
+  if (value.includes(NUL)) return true;
   const flattened = normalizeCssValue(value);
   return CSS_INJECTION_PATTERNS.some(pattern => pattern.test(flattened));
 }

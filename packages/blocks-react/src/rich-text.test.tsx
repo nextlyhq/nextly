@@ -1408,3 +1408,143 @@ describe("rich-text block leaves nested inside an inline wrapper", () => {
     expect(host.querySelector("p > a")?.textContent).toBe("read this");
   });
 });
+
+describe("rich-text interactive nesting", () => {
+  const reparse = (html: string): HTMLElement => {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    return host;
+  };
+
+  it("does not wrap a button in a second anchor", () => {
+    /*
+     * An `<a>` may not contain another `<a>`, and the parser does not simply
+     * object: it closes the outer anchor at the inner one, lifts the row out,
+     * and inserts a DUPLICATE empty anchor inside it. That anchor is focusable
+     * and has no accessible name, so it is reachable by keyboard and announced
+     * as nothing.
+     */
+    const value = doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "link",
+            url: "https://example.com",
+            children: [
+              {
+                type: "button-link",
+                version: 1,
+                url: "https://example.com/buy",
+                text: "Buy",
+              },
+            ],
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const host = reparse(renderToStaticMarkup(<RichText value={value} />));
+    const anchors = Array.from(host.querySelectorAll("a"));
+
+    // Exactly one anchor, and it is the button — the population before the
+    // property, since zero anchors would also satisfy "no duplicate".
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0]?.textContent).toBe("Buy");
+    expect(anchors.filter(a => a.textContent === "")).toHaveLength(0);
+  });
+
+  it("keeps the anchor around ordinary linked prose", () => {
+    // The control. A rule that dropped every wrapper would pass the assertions
+    // above and take real links off the page.
+    const value = doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "link",
+            url: "https://example.com",
+            children: [{ type: "text", text: "go" }],
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const host = reparse(renderToStaticMarkup(<RichText value={value} />));
+    expect(host.querySelector("p > a")?.textContent).toBe("go");
+  });
+});
+
+describe("rich-text phrasing-only containers", () => {
+  const IMAGE = {
+    type: "image",
+    version: 1,
+    src: "https://cdn.example.com/a.jpg",
+    altText: "A",
+  };
+
+  it("keeps a heading's words and puts the media after it", () => {
+    // `h1`-`h6` take phrasing content. The tag cannot be swapped for a `div` the
+    // way a paragraph's can: it is what puts the text in the document outline
+    // and what a search engine reads, so the heading keeps its tag and the
+    // media follows it in the flow where the author placed it.
+    const value = doc([
+      {
+        type: "heading",
+        tag: "h2",
+        children: [{ type: "text", text: "Title" }, IMAGE],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+    expect(html).toContain("<h2>Title</h2>");
+    expect(html).not.toContain("<h2>Title<figure");
+    expect(html).toContain("<figure");
+  });
+
+  it("moves media out of a disclosure label into its body", () => {
+    // `summary` takes phrasing content or a single heading, and it must be the
+    // FIRST child of its `details` — so it cannot be replaced without removing
+    // the disclosure. After it is the only place inside a `details` the media
+    // can legally go.
+    const value = doc([
+      {
+        type: "collapsible-container",
+        children: [
+          {
+            type: "collapsible-title",
+            children: [{ type: "text", text: "More" }, IMAGE],
+          },
+          {
+            type: "collapsible-content",
+            children: [
+              { type: "paragraph", children: [{ type: "text", text: "body" }] },
+            ],
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+    expect(html).toContain("<summary>More</summary>");
+    expect(html).not.toContain("<summary>More<figure");
+    // Still a working disclosure: the summary is the first child of `details`.
+    expect(html).toContain("<details><summary>");
+    expect(html).toContain("<figure");
+  });
+
+  it("leaves a heading of plain words exactly as it was", () => {
+    // The control on the other side: a rule that split every heading would pass
+    // both assertions above while restructuring documents that were fine.
+    const value = doc([
+      {
+        type: "heading",
+        tag: "h2",
+        children: [{ type: "text", text: "Plain" }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+    expect(renderToStaticMarkup(<RichText value={value} />)).toBe(
+      "<h2>Plain</h2>"
+    );
+  });
+});

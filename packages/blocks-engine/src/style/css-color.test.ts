@@ -119,6 +119,15 @@ describe("hasCssInjection", () => {
     expect(hasCssInjection(value)).toBe(true);
   });
 
+  it("catches a null byte, which no colour syntax would reach", () => {
+    // The guard's own case. `cssColor` refuses this through the anchored colour
+    // patterns whether or not the check is there — measured — so only asking
+    // `hasCssInjection` directly covers it. It matters on the CMS's path, where
+    // this is asked of a whole declaration string and a truncating byte inside
+    // one is not narrowed by any colour syntax first.
+    expect(hasCssInjection(`color:re${NUL}d`)).toBe(true);
+  });
+
   it("stays silent on an ordinary value", () => {
     // The negative half. Without it, a guard that answered `true` to everything
     // would satisfy every assertion above.

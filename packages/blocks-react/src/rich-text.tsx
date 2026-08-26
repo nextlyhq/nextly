@@ -144,7 +144,6 @@ const SIMPLE_ELEMENTS: Readonly<
   paragraph: "p",
   quote: "blockquote",
   listitem: "li",
-  "collapsible-title": "summary",
   "collapsible-content": "div",
   tablerow: "tr",
 };
@@ -191,6 +190,31 @@ const BLOCK_LEVEL_NODES = [
   "button-group",
 ] as const;
 
+/**
+ * Types this renderer draws as their OWN interactive element.
+ *
+ * An `<a>` may not contain another `<a>`, and the parser does not merely object:
+ * it closes the outer anchor at the inner one, lifts the content out, and
+ * inserts a DUPLICATE empty anchor inside — measured, so a link applied across a
+ * button produced markup with two anchors React never rendered.
+ */
+const INTERACTIVE_NODES: ReadonlySet<string> = new Set([
+  "link",
+  "autolink",
+  "button-link",
+  "button-group",
+]);
+
+/** Whether anything drawn inside a container is itself interactive. */
+function holdsInteractive(nodes: readonly RichTextNode[] | undefined): boolean {
+  if (!Array.isArray(nodes)) return false;
+  return nodes.some(child => {
+    if (!isRichTextNode(child)) return false;
+    if (INTERACTIVE_NODES.has(child.type)) return true;
+    return holdsInteractive(child.children);
+  });
+}
+
 const BLOCK_LEVEL: ReadonlySet<string> = new Set(BLOCK_LEVEL_NODES);
 
 /**
@@ -223,6 +247,52 @@ function holdsBlockContent(
 /** Heading levels Lexical serializes; anything else is a document from a version this does not know. */
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 
+/**
+ * A container that may hold only phrasing content, with the rest moved AFTER it.
+ *
+ * `h1`-`h6` take phrasing content, and `summary` takes phrasing content or a
+ * single heading — so a decorator inserted with the caret in a heading or in a
+ * disclosure label puts a `<figure>` or a button row somewhere neither may go.
+ *
+ * Unlike a paragraph, the element cannot simply be swapped for a `div`. The tag
+ * IS the meaning here: an `h2` is what puts the text in the document outline and
+ * what a search engine reads, and `summary` is what makes a `details` operable
+ * at all — it has to be the first child, so replacing it removes the disclosure.
+ *
+ * So the container keeps its tag and its phrasing children, and anything block
+ * follows it as a SIBLING. That lands correctly in both cases: after a heading
+ * the media sits in the flow where the author put it, and after a `summary` it
+ * becomes part of the disclosure's body, which is the only place inside a
+ * `details` it can legally go.
+ *
+ * A child is moved WHOLE when it merely contains block content — a link around
+ * an image leaves the heading entirely rather than being taken apart. Splitting
+ * one node across the boundary would need the renderer to rebuild the author's
+ * markup, and a heading keeping its words is the property worth protecting.
+ */
+function PhrasingOnly({
+  tag: Tag,
+  node,
+  policy,
+}: {
+  tag: "h1" | "summary";
+  node: RichTextNode;
+  policy: BlockHostPolicy | undefined;
+}): ReactNode {
+  const kids = Array.isArray(node.children) ? node.children : [];
+  if (!holdsBlockContent(kids)) return <Tag>{children(kids, policy)}</Tag>;
+  // Asked per child through the same walk the container was judged by, so
+  // "what counts as block" has one answer rather than two that can drift.
+  const keeps = kids.filter(child => !holdsBlockContent([child]));
+  const moves = kids.filter(child => holdsBlockContent([child]));
+  return (
+    <>
+      <Tag>{children(keeps, policy)}</Tag>
+      {children(moves, policy)}
+    </>
+  );
+}
+
 function HeadingView({
   node,
   policy,
@@ -238,7 +308,7 @@ function HeadingView({
       ? node.tag
       : "h2";
   const Heading = tag as "h1";
-  return <Heading>{children(node.children, policy)}</Heading>;
+  return <PhrasingOnly tag={Heading} node={node} policy={policy} />;
 }
 
 function LinkView({
@@ -256,7 +326,13 @@ function LinkView({
   // announced as a link by a screen reader and goes nowhere when followed, and
   // that is also the right answer for a destination this refuses: the author's
   // words survive, the navigation does not.
-  if (href === undefined) return <>{children(node.children, policy)}</>;
+  // A link around something ALREADY interactive renders as its children alone.
+  // The buttons inside it navigate on their own, so nothing is lost but the
+  // wrapper the parser was going to take apart anyway — and taking it apart is
+  // not a tidy failure: it leaves a second, empty anchor in the middle of the
+  // row, which is focusable and announced with no name.
+  if (href === undefined || holdsInteractive(node.children))
+    return <>{children(node.children, policy)}</>;
 
   // Only `_blank` is honoured. It is the one target the editor writes, and it
   // is the one that needs the `rel` below; passing an arbitrary stored string
@@ -805,6 +881,12 @@ const NODE_VIEWS: Readonly<
       {children(node.children, policy)}
     </details>
   ),
+  // A `summary` is phrasing-only and cannot be swapped for a `div` — it has to
+  // be the first child of its `details` or the disclosure stops working — so it
+  // takes the same treatment as a heading rather than the paragraph's.
+  "collapsible-title": (node, policy) => (
+    <PhrasingOnly tag="summary" node={node} policy={policy} />
+  ),
   link: (node, policy) => <LinkView node={node} policy={policy} />,
   autolink: (node, policy) => <LinkView node={node} policy={policy} />,
   list: (node, policy) => {
@@ -897,9 +979,11 @@ function RichTextNodeView({
   // instead of taking the unknown-node fallback that exists for exactly this.
   if (Object.hasOwn(SIMPLE_ELEMENTS, node.type)) {
     const declared = SIMPLE_ELEMENTS[node.type] as "p";
-    // Only `p` is narrowed, because only `p` is barred from holding block
-    // content. `li`, `blockquote`, `summary` and `div` all take flow content, so
-    // a figure or a grid inside one of them is valid exactly as it stands.
+    // Only `p` is narrowed HERE. `li`, `blockquote` and `div` take flow content,
+    // so a figure or a grid inside one of them is valid as it stands. The other
+    // phrasing-only containers — headings and `summary` — cannot be swapped for
+    // a `div` without losing what their tag means, so they are handled by
+    // {@link PhrasingOnly} instead of by this table.
     const Element =
       declared === "p" && holdsBlockContent(node.children) ? "div" : declared;
     return <Element>{children(node.children, policy)}</Element>;
