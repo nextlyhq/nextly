@@ -27,7 +27,6 @@ import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 // PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
-import type { AuthorableFieldConfig } from "../../../collections/fields/types/plugin-field";
 import { toDbError } from "../../../database/errors";
 // The public CollectionServiceResult shape is preserved because the legacy
 // CollectionEntryService facade and CollectionBulkService still consume it;
@@ -65,6 +64,7 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
+import type { AddressableField } from "../../../shared/addressable-fields";
 import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
@@ -2070,7 +2070,7 @@ export class CollectionMutationService extends BaseService {
     // single component declared inside such a group stores its value at the
     // enclosing level, so without flattening the lookup would miss it and treat
     // it as a scalar, replacing rather than merging a nested component patch.
-    const byName = new Map<string, AuthorableFieldConfig>();
+    const byName = new Map<string, AddressableField>();
     for (const f of addressableFields(fields)) {
       const name = (f as { name?: unknown }).name;
       if (typeof name === "string") byName.set(name, f);

@@ -138,7 +138,22 @@ export type { FieldConfig } from "nextly";
  * @experimental
  */
 export { addressableFields } from "nextly";
-export type { AddressableFieldsOptions } from "nextly";
+
+/**
+ * What a caller passes to control the walk, and what it emits.
+ *
+ * `descendInto` chooses which unnamed containers are transparent, and the
+ * choice has to be made during the walk: the result holds the flattened
+ * children themselves, so a field reached through one container is the same
+ * object as the same field reached through another.
+ *
+ * @experimental
+ */
+export type {
+  AddressableFieldsOptions,
+  AddressableField,
+  UnvalidatedAddressableField,
+} from "nextly";
 
 /**
  * Declaring a field of a type the plugin itself contributes. The built-in

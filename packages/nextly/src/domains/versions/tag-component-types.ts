@@ -17,8 +17,8 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
-import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
 import { NextlyError } from "../../errors";
+import type { AddressableField } from "../../shared/addressable-fields";
 import { addressableFields } from "../../shared/addressable-fields";
 import { storageTypeToken } from "../../shared/lib/plugin-storage";
 import {
@@ -41,7 +41,7 @@ export type ComponentFieldResolver = (
 ) => FieldConfig[] | undefined;
 
 /** The component slug a field names, when it names exactly one. */
-function singleComponentSlug(field: AuthorableFieldConfig): string | undefined {
+function singleComponentSlug(field: AddressableField): string | undefined {
   // Only the single-component shape. A dynamic zone declares `components` and
   // already stores a type per row, chosen by the editor rather than implied.
   const slug = (field as { component?: unknown }).component;
@@ -49,7 +49,7 @@ function singleComponentSlug(field: AuthorableFieldConfig): string | undefined {
 }
 
 /** The component slugs a dynamic zone allows, when the field is one. */
-function dynamicZoneSlugs(field: AuthorableFieldConfig): string[] | undefined {
+function dynamicZoneSlugs(field: AddressableField): string[] | undefined {
   const many = (field as { components?: unknown }).components;
   if (!Array.isArray(many)) return undefined;
   return many.filter((slug): slug is string => typeof slug === "string");

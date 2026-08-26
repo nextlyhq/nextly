@@ -7,6 +7,7 @@ import type {
   PluginDataFieldConfig,
 } from "../collections/fields/types/plugin-field";
 
+import type { AddressableField } from "./addressable-fields";
 import { addressableFields } from "./addressable-fields";
 
 // What the walk gives BACK, at the type level. The runtime tests cover which
@@ -43,14 +44,16 @@ const _fromMixed = addressableFields(mixed);
 const _fromNarrow = addressableFields(narrow);
 const _fromUnknown = addressableFields(unvalidated);
 
-// Every caller is told the same thing, and it is the widest a field can be.
-// Narrower would be convenient and false: a built-in list whose group contains
-// a contributed child returns that child.
-assertType<Exact<typeof _fromBuiltIn, AuthorableFieldConfig[]>>(true);
-assertType<Exact<typeof _fromContributed, AuthorableFieldConfig[]>>(true);
-assertType<Exact<typeof _fromMixed, AuthorableFieldConfig[]>>(true);
-assertType<Exact<typeof _fromNarrow, AuthorableFieldConfig[]>>(true);
-assertType<Exact<typeof _fromUnknown, AuthorableFieldConfig[]>>(true);
+// Every caller is told the same thing: an entry that is addressable, which is
+// a valid field when the caller had one and otherwise only known to be named.
+// Narrower would be convenient and false — a built-in list whose group contains
+// a contributed child returns that child, and an unvalidated list can carry an
+// entry with no `type` at all.
+assertType<Exact<typeof _fromBuiltIn, AddressableField[]>>(true);
+assertType<Exact<typeof _fromContributed, AddressableField[]>>(true);
+assertType<Exact<typeof _fromMixed, AddressableField[]>>(true);
+assertType<Exact<typeof _fromNarrow, AddressableField[]>>(true);
+assertType<Exact<typeof _fromUnknown, AddressableField[]>>(true);
 
 // The property that matters, and the one three earlier signatures broke: a
 // contributed field is RECOVERABLE from the result. `never` here is the defect
@@ -67,3 +70,24 @@ assertType<
 assertType<
   Exact<Extract<(typeof _fromMixed)[number], FieldConfig>, FieldConfig>
 >(true);
+
+// An entry that is merely NAMED must not be presentable as a valid field
+// config. This API runs before validation on some paths, and `{ name: "title" }`
+// with no `type` reaches it — calling that an `AuthorableFieldConfig` would tell
+// a caller the discriminant is there when it is not.
+//
+// Asserted by EVALUATING assignability rather than with `@ts-expect-error`,
+// which suppresses whatever error happens to land on the next line: a typo or
+// an unrelated failure would satisfy the directive and the property would go
+// unchecked while reading as covered.
+type AssignableTo<A, B> = [A] extends [B] ? true : false;
+
+assertType<Exact<AssignableTo<AddressableField, AuthorableFieldConfig>, false>>(
+  true
+);
+
+// The control, so "not assignable" is not satisfied by a type assignable to
+// nothing: the valid arm still is.
+assertType<Exact<AssignableTo<AuthorableFieldConfig, AddressableField>, true>>(
+  true
+);

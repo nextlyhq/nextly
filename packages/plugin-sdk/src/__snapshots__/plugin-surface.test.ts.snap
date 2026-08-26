@@ -146,6 +146,7 @@ exports[`plugin-sdk public export surface > \`./routing\` surface is unchanged 1
 exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1`] = `
 [
   "Action (type)",
+  "AddressableField (type)",
   "AddressableFieldsOptions (type)",
   "AuthEventName (type)",
   "AuthEvents (value)",
@@ -248,6 +249,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "Secret (value)",
   "SerializedFieldConfig (type)",
   "ServiceOpts (type)",
+  "UnvalidatedAddressableField (type)",
   "ValidateFieldValuesOptions (type)",
   "ValidationIssue (type)",
   "addressableFields (value)",

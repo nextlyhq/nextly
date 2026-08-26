@@ -30,6 +30,39 @@
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 
 /**
+ * An entry that carries a name and nothing else this walk can vouch for.
+ *
+ * The walk runs on author-written config, and on some paths before validation
+ * has seen it, so `{ name: "title" }` with no `type` reaches it and is
+ * addressable — it names a place a value is stored. Calling that an
+ * `AuthorableFieldConfig` would tell a caller the discriminant is present when
+ * it may not be.
+ */
+export interface UnvalidatedAddressableField {
+  name: string;
+  /**
+   * Declared rather than left to the index signature, because it is the
+   * property every caller reaches for first — and because a target typed
+   * `{ type?: unknown }` rejects an object that shares no declared property
+   * with it, however permissive its index signature.
+   */
+  type?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * What the walk emits: a valid field when the caller had one, and otherwise
+ * something that is merely addressable.
+ *
+ * A union rather than the weaker arm alone, so a caller can still recover the
+ * type it put in — `Extract<AddressableField, PluginDataFieldConfig>` is that
+ * plugin's field, not `never`.
+ */
+export type AddressableField =
+  | AuthorableFieldConfig
+  | UnvalidatedAddressableField;
+
+/**
  * The fields stored at this level, in the order they are declared.
  *
  * A group with no name exists to lay fields out: its children are stored at the
@@ -91,10 +124,9 @@ export interface AddressableFieldsOptions {
  * What an unnamed field contributes to the level it sits in: its children when
  * it is a transparent container, or nothing.
  *
- * Separate from the walk because it answers a different question — the walk
- * decides ORDER and termination, this decides TRANSPARENCY — and reading both
- * in one loop is what the complexity gate objected to. It is also the shape a
- * caller's own rule takes, so the two now line up.
+ * Separate from the walk because it answers a different question: the walk
+ * decides order and termination, this decides transparency. It is also the
+ * shape a caller's own rule takes, so the two line up.
  */
 function childrenToFlatten(
   field: object,
@@ -115,8 +147,8 @@ function addressableName(field: object): string | null {
 export function addressableFields(
   fields: unknown,
   options?: AddressableFieldsOptions
-): AuthorableFieldConfig[] {
-  const out: AuthorableFieldConfig[] = [];
+): AddressableField[] {
+  const out: AddressableField[] = [];
   if (!Array.isArray(fields)) return out;
   const descendInto = options?.descendInto;
 
@@ -134,7 +166,7 @@ export function addressableFields(
     if (typeof field !== "object" || field === null) continue;
 
     if (addressableName(field) !== null) {
-      out.push(field as AuthorableFieldConfig);
+      out.push(field as AddressableField);
       continue;
     }
 
