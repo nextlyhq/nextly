@@ -41,6 +41,25 @@ const NARROW_WIDTH = TIER_BOUND - 40;
 const OVERFLOW_WIDTH = 800;
 
 /**
+ * A width ABOVE the tier's bound, which is where the base rules apply.
+ *
+ * The one an author reaches for most and the one that used to be unreachable:
+ * with the request treated as a ceiling, a region narrower than the bound
+ * capped the box below it and the narrow tier applied instead.
+ */
+const BASE_WIDTH = 800;
+
+/**
+ * A region too NARROW to honour that width, which is the ordinary editor.
+ *
+ * Deliberately below the tier bound as well as below {@link BASE_WIDTH}, so a
+ * canvas that capped the request would land in the narrow tier rather than
+ * merely somewhere smaller — the two outcomes are different colours, and only
+ * one of them is the defect.
+ */
+const CRAMPED_WIDTH = 400;
+
+/**
  * Two colours that cannot be confused for one another, or for a default.
  *
  * A test asserting a computed colour needs values no stylesheet elsewhere
@@ -163,6 +182,27 @@ export function BuilderCanvasPreviewHarness() {
         onClick={() => setRegion(OVERFLOW_WIDTH)}
       >
         overflow
+      </button>
+      {/*
+        A region that CANNOT honour a base-tier width, which is the state the
+        scaling exists for and the one no unit test can decide: the box is laid
+        out wider than the space it has and painted down into it, so what the
+        container queries resolve against is the tier that was asked for rather
+        than the tier the region implies.
+      */}
+      <button
+        type="button"
+        data-testid="go-cramped"
+        onClick={() => setRegion(CRAMPED_WIDTH)}
+      >
+        cramped
+      </button>
+      <button
+        type="button"
+        data-testid="go-base"
+        onClick={() => setWidth(BASE_WIDTH)}
+      >
+        base
       </button>
       {/*
         What the box actually MEASURED, reported so the spec can wait on the

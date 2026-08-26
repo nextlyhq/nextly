@@ -17,9 +17,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { SQUARE_CORNERS } from "./border-radii";
 import {
   canvasContentPoint,
   canvasContentRect,
+  clippedByAncestor,
   frameInsetOf,
   canvasRootFrom,
   hasScrollbarGutter,
@@ -175,6 +177,124 @@ describe("canvasContentRect", () => {
     expect(canvasContentRect(scrolledChild, scrolled)).toEqual(
       canvasContentRect(restingChild, unscrolled)
     );
+  });
+});
+
+describe("a canvas that is PAINTED smaller than it is laid out", () => {
+  /*
+   * The editor scales the canvas so a tier wider than the region stays
+   * editable. A transform is paint-time, so the root keeps its requested width
+   * to layout — which is what keeps the container queries resolving at the tier
+   * the author asked for — while every client rectangle comes back in painted
+   * pixels.
+   *
+   * A canvas laid out at 1280 and painted at 912 is the measured case: a 1280px
+   * tier inside the ~912px the canvas region gets on the supported 1280px
+   * shell.
+   */
+  const SCALE = 912 / 1280;
+
+  /** A root whose LAYOUT size differs from the rectangle it paints. */
+  function scaledRoot(
+    painted: { x: number; y: number; width: number; height: number },
+    laidOut: { width: number; height: number },
+    scroll: { left: number; top: number } = { left: 0, top: 0 }
+  ) {
+    const root = canvasRoot(painted, scroll);
+    Object.defineProperty(root, "offsetWidth", { value: laidOut.width });
+    Object.defineProperty(root, "offsetHeight", { value: laidOut.height });
+    return root;
+  }
+
+  it("reports a child in CONTENT pixels, not painted ones", () => {
+    const root = scaledRoot(
+      { x: 100, y: 50, width: 912, height: 570 },
+      { width: 1280, height: 800 }
+    );
+    // A block that sits 200 content pixels into the canvas and is 400 content
+    // pixels wide paints at 0.7125 of each.
+    const child = box({
+      x: 100 + 200 * SCALE,
+      y: 50 + 300 * SCALE,
+      width: 400 * SCALE,
+      height: 100 * SCALE,
+    });
+
+    expect(canvasContentRect(child, root)).toEqual({
+      x: 200,
+      y: 300,
+      width: 400,
+      height: 100,
+    });
+  });
+
+  it("does NOT divide the scroll offset by the scale", () => {
+    /*
+     * The subtle half, and the one that reads as correct while drifting. A
+     * scroll offset counts the root's own laid-out content, which a transform
+     * never touches, so it is already in content pixels — divided along with
+     * the client delta it shrinks by the zoom, and the whole overlay slides
+     * further out the further the author scrolls.
+     *
+     * The separating property is a NON-ZERO scroll with a scale that is not 1:
+     * either alone leaves the two implementations agreeing.
+     */
+    const root = scaledRoot(
+      { x: 0, y: 0, width: 912, height: 570 },
+      { width: 1280, height: 800 },
+      { left: 0, top: 250 }
+    );
+    const child = box({
+      x: 0,
+      y: 300 * SCALE,
+      width: 912,
+      height: 100 * SCALE,
+    });
+
+    // 300 content pixels below the root's top edge, plus the 250 already
+    // scrolled past — not 300 + 250 * SCALE, and not (300 + 250) * SCALE.
+    expect(canvasContentRect(child, root).y).toBe(550);
+  });
+
+  it("keeps the pointer in the same space as the rectangles", () => {
+    // The pairing this module exists to hold. Asserted against a measured
+    // rectangle rather than against literals, because the fault is the two
+    // disagreeing and two literal assertions would both pass while they did.
+    const root = scaledRoot(
+      { x: 100, y: 50, width: 912, height: 570 },
+      { width: 1280, height: 800 },
+      { left: 0, top: 250 }
+    );
+    const child = box({
+      x: 100 + 200 * SCALE,
+      y: 50 + 300 * SCALE,
+      width: 400 * SCALE,
+      height: 100 * SCALE,
+    });
+    const rect = canvasContentRect(child, root);
+
+    // A pointer on the child's top-left corner, in viewport coordinates.
+    expect(
+      canvasContentPoint(100 + 200 * SCALE, 50 + 300 * SCALE, root)
+    ).toEqual({ x: rect.x, y: rect.y });
+  });
+
+  it("is the IDENTITY when nothing has been laid out", () => {
+    /*
+     * jsdom lays nothing out, so `offsetWidth` is 0 and a ratio taken from it
+     * would be `NaN` or `Infinity` — which would not fail loudly, it would
+     * place every overlay at a nonsense coordinate. Unmeasurable means unscaled
+     * here, which is what every caller assumed before there was a scale.
+     */
+    const root = canvasRoot({ x: 100, y: 50, width: 400, height: 800 });
+    const child = box({ x: 140, y: 150, width: 200, height: 60 });
+
+    expect(canvasContentRect(child, root)).toEqual({
+      x: 40,
+      y: 100,
+      width: 200,
+      height: 60,
+    });
   });
 });
 
@@ -372,4 +492,125 @@ describe("whether overflow clips at all", () => {
       expect(overflowApplies(display)).toBe(true);
     }
   );
+});
+
+describe("a clipping ancestor inside a canvas that is PAINTED smaller", () => {
+  /*
+   * The two readings this comparison makes live on opposite sides of the
+   * canvas's own scale: an element's rectangle comes from
+   * `getBoundingClientRect` and is post-scale, while a computed border width is
+   * unscaled CSS pixels. `renderedScale` stops BELOW the root on purpose — the
+   * overlay is drawn through the root's scale already — so the root's own scale
+   * reaches one reading and not the other unless it is composed back in.
+   *
+   * The failure is silent in the worst way: a child flush against the real
+   * padding edge is classified as CLIPPED, and a clipped block has every
+   * spacing band suppressed. The overlay stops drawing rather than drawing
+   * something wrong.
+   */
+  /** An `overflow: hidden` ancestor with a border, at a painted rectangle. */
+  function clipper(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) {
+    const element = box(rect);
+    Object.defineProperty(element, "ownerDocument", {
+      value: document,
+      configurable: true,
+    });
+    // A real border, or the inset is zero and the case cannot discriminate:
+    // both a composed and an uncomposed scale multiply nothing by anything.
+    element.setAttribute(
+      "style",
+      "overflow:hidden;border-style:solid;border-width:20px"
+    );
+    return element;
+  }
+
+  it("insets by the border as PAINTED, not as authored", () => {
+    /*
+     * A canvas laid out at 800 and painted at 400 is scaled by a half, so a
+     * 20px border paints 10px. The child sits flush against the real padding
+     * edge — 10 painted pixels inside the ancestor — and is not cut.
+     *
+     * Uncomposed, the inset is computed as the authored 20 and the child reads
+     * as four slack-widths outside it.
+     */
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    Object.defineProperty(root, "offsetWidth", { value: 800 });
+    Object.defineProperty(root, "offsetHeight", { value: 800 });
+
+    const ancestor = clipper({ x: 0, y: 0, width: 400, height: 400 });
+    root.append(ancestor);
+    const child = box({ x: 10, y: 10, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
+  });
+
+  it("measures a root built by ANOTHER realm's constructor", () => {
+    /*
+     * The canvas can be portalled into a same-origin iframe, and each document
+     * has its own `HTMLElement`. An ambient `instanceof HTMLElement` is false
+     * for an ordinary div from that other realm, so a scaled canvas would be
+     * treated as unscaled — substituting the identity precisely where the
+     * composition is needed, and reintroducing the defect above only for the
+     * surface that is hardest to notice it on.
+     *
+     * The separating property is that the element IS its own realm's
+     * `HTMLElement` while not being this one's, which is exactly what a plain
+     * `instanceof` cannot see.
+     */
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    expect(inner).not.toBeNull();
+    if (inner === null) return;
+
+    const foreign = inner.createElement("div");
+    // The precondition the case rests on: a real element, from a real window,
+    // that this realm's constructor does not claim.
+    expect(foreign instanceof HTMLElement).toBe(false);
+    expect(
+      foreign instanceof
+        (inner.defaultView as Window & typeof globalThis).HTMLElement
+    ).toBe(true);
+
+    foreign.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 400, height: 400, top: 0, left: 0 }) as DOMRect;
+    Object.defineProperty(foreign, "offsetWidth", { value: 800 });
+    Object.defineProperty(foreign, "offsetHeight", { value: 800 });
+
+    const ancestor = clipper({ x: 0, y: 0, width: 400, height: 400 });
+    foreign.append(ancestor);
+    const child = box({ x: 10, y: 10, width: 100, height: 100 });
+    ancestor.append(child);
+
+    // The same flush-against-the-padding-edge child as above. Read through the
+    // ambient constructor alone, the scale is 1 and this reads as clipped.
+    expect(clippedByAncestor(child, foreign, SQUARE_CORNERS)).toBe(false);
+
+    frame.remove();
+  });
+
+  it("still reports a child that IS cut", () => {
+    /*
+     * The control, and it has to come out the other way or the case above says
+     * only that the function returns false. A child well outside the ancestor
+     * is clipped at any scale, so a version that composed the scale wrongly in
+     * the other direction — or one that always answered false — fails here.
+     */
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    Object.defineProperty(root, "offsetWidth", { value: 800 });
+    Object.defineProperty(root, "offsetHeight", { value: 800 });
+
+    const ancestor = clipper({ x: 0, y: 0, width: 400, height: 400 });
+    root.append(ancestor);
+    const child = box({ x: -200, y: 10, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+  });
 });

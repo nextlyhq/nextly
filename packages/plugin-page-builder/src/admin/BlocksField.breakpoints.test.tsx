@@ -356,6 +356,80 @@ describe("a width the site stops offering", () => {
     expect(box().width).toBeUndefined();
   });
 
+  it("FOLLOWS the base width when the widest bound is edited", () => {
+    /*
+     * A width identifies an option only until the site's bounds move. Editing
+     * the widest breakpoint changes the width the unconditional tier applies
+     * FROM, so the number the author's choice produced is suddenly nobody's.
+     *
+     * Reconciled by number, that reads as a deleted tier and releases the
+     * canvas — which, in a region narrower than the new bound, drops the editor
+     * straight back into the bounded tier while the option they chose still
+     * exists and still reads as selected. Every edit after that lands in a tier
+     * they did not pick.
+     *
+     * Stored as the TIER, the width simply follows.
+     */
+    const view = openEditor();
+    choose(992);
+    expect(box().width).toBe(992);
+
+    // The site's widest tier widens: base now applies from 1201 rather than 992.
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1200 }],
+          container: [],
+        },
+      },
+    };
+    view.rerender();
+
+    expect(box().width).toBe(1201);
+  });
+
+  it("KEEPS the unconditional tier's width, which is no tier's BOUND", () => {
+    /*
+     * The width that reaches the base tier is one PAST the widest bound, so it
+     * is not among the bounded tiers — and a reconciliation that compares
+     * against those alone clears it on the very next render.
+     *
+     * Measured before this case existed: choosing the unconditional tier set
+     * the width, the effect below cleared it, and the canvas returned to
+     * filling the region. Nothing failed. The one option that reaches the tier
+     * an author most often edits responded to the press and did nothing, which
+     * is indistinguishable from the option not working at all.
+     *
+     * The rerender is what makes it a test of the RECONCILIATION rather than of
+     * the setter: the clearing happens in an effect, so a case asserting
+     * immediately after the press passes whether or not it exists.
+     */
+    const view = openEditor();
+
+    choose(992);
+    view.rerender();
+
+    expect(box().width).toBe(992);
+  });
+
+  it("EDITS the base tier at that width, which is the point of offering it", () => {
+    /*
+     * The width surviving is necessary and not sufficient: a number that
+     * survived but resolved to a bounded tier would satisfy the case above
+     * while leaving base exactly as unreachable as it was.
+     *
+     * Measured through the box, because the canvas is scaled rather than capped
+     * — the layout width is the requested one, so what the container queries
+     * resolve against is 992 even where the region is narrower.
+     */
+    openEditor();
+
+    choose(992);
+    measure(992);
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+  });
+
   it("KEEPS a width the site still offers", () => {
     /*
      * The control. Without it, a version that released on every breakpoint
@@ -454,11 +528,19 @@ describe("going to the tier a value came from", () => {
     expect(box().width).toBe(991);
   });
 
-  it("RELEASES the canvas for a tier the compiler emits no bound for", () => {
+  it("SIZES the canvas for the unconditional tier too, not releases it", () => {
     /*
-     * The control, and the honest answer for the unconditional tier: there is
-     * no width that puts it on screen, so the box goes back to the region
-     * rather than being pinned to a number nothing responds to.
+     * It used to release the canvas here, on the reasoning that no width puts
+     * the unconditional tier on screen. There is one: the width it applies
+     * FROM, one past the widest bound.
+     *
+     * Releasing sends the box back to the region — and wherever the region is
+     * narrower than the widest bound, which is the ordinary case, the tier that
+     * then applies is the one the author was jumping AWAY from. The control
+     * would look like it had worked and land on the wrong tier.
+     *
+     * A jump and a choice are the same act reached two ways, so this has to
+     * agree with what pressing the option in the switcher sets.
      */
     openEditor();
     const jump = seen.inspector?.onJumpToBreakpoint as
@@ -471,6 +553,29 @@ describe("going to the tier a value came from", () => {
 
     React.act(() => {
       jump?.("base");
+    });
+
+    expect(box().width).toBe(992);
+  });
+
+  it("RELEASES the canvas for a tier that is genuinely unreachable", () => {
+    /*
+     * The control, and the case the old reasoning was right about. A tier the
+     * compiler emits no bound for — one the site does not define at all here —
+     * has no width that shows it, so the box goes back to the region rather
+     * than being pinned to a number nothing responds to.
+     */
+    openEditor();
+    const jump = seen.inspector?.onJumpToBreakpoint as
+      | ((breakpoint: string) => void)
+      | undefined;
+    React.act(() => {
+      jump?.("tablet");
+    });
+    expect(box().width).toBe(991);
+
+    React.act(() => {
+      jump?.("no-such-tier");
     });
 
     expect(box().width).toBeUndefined();

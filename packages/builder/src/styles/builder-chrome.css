@@ -795,6 +795,12 @@
    *
    * `min-height` rather than `height` so a page taller than the region still
    * scrolls instead of being clipped to it.
+   *
+   * Needs no compensation for a scaled canvas. The canvas shrinks with `zoom`,
+   * which participates in layout, so a percentage here resolves against the
+   * region as it always did and the scaled box still fills it — measured at
+   * 400px painted into a 400px region. A paint-time transform would not: the
+   * root would be exactly as tall as the region and paint shorter than it.
    */
   min-height: 100%;
 

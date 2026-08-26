@@ -215,12 +215,72 @@ export function offeredTiers(
  *
  * @experimental
  */
+/**
+ * The narrowest canvas width at which the UNCONDITIONAL tier applies.
+ *
+ * One past the widest bound, because a bounded tier applies at `width <= bound`
+ * — so the first width no bounded tier claims is `bound + 1`, and that is where
+ * the base rules are what an author is editing.
+ *
+ * Derived rather than chosen. A conventional desktop number would be a width
+ * the site never declared, and the canvas would then simulate a viewport
+ * nothing in the document mentions; one past the widest bound is the only width
+ * the site's own tiers imply. It is also the SMALLEST such width, which matters
+ * because the canvas is scaled to fit: every pixel past it costs the author
+ * legibility for nothing.
+ *
+ * `undefined` when the site bounds no viewport tier at all. Base already
+ * applies at every width there, so there is no width to go to — and offering
+ * one would size the canvas to a bound the site never declared, which is what
+ * the switcher's own tier list refuses to do.
+ */
+export function baseWidth(set: BreakpointSet | undefined): number | undefined {
+  const widest = offeredTiers(set)[0];
+  return widest === undefined ? undefined : widest.maxWidth + 1;
+}
+
+/**
+ * Every tier the breakpoint control can put the canvas at, widest first.
+ *
+ * The bounded tiers AND the unconditional one, which is offered at the width it
+ * applies from. Published as one list because two places need the same answer
+ * and they are not the same code: the control builds its options from it, and
+ * the host clears a requested width that is not on it — a canvas pinned to a
+ * bound the stylesheet no longer has, after an author deletes the tier they
+ * selected, has no control on screen to release it.
+ *
+ * Measured: those two DID disagree. The host compared against the bounded tiers
+ * alone while the control had begun offering the unconditional one, so choosing
+ * base set a width the host cleared on the very next render — the canvas
+ * returned to filling the region, and base stayed uneditable exactly where it
+ * had been. Nothing failed; the option simply did nothing.
+ */
+export function selectableTiers(
+  set: BreakpointSet | undefined
+): Array<{ id: BreakpointId; maxWidth: number; unconditional?: boolean }> {
+  const base = baseWidth(set);
+  return [
+    ...(base === undefined
+      ? []
+      : [{ id: BASE_BREAKPOINT, maxWidth: base, unconditional: true }]),
+    ...offeredTiers(set),
+  ];
+}
+
 export function widthForBreakpoint(
   set: BreakpointSet | undefined,
   id: BreakpointId
 ): number | undefined {
   /*
-   * Read from {@link offeredTiers}, not from the contexts directly.
+   * Read from {@link selectableTiers}, not from the contexts directly.
+   *
+   * The SELECTABLE list rather than the bounded one, because a jump and a
+   * choice are the same act reached two ways: the switcher offers the
+   * unconditional tier at the width it applies from, and a control whose value
+   * came from that tier has to send the canvas to the same place. Answering
+   * from the bounded tiers alone returned `undefined` for base and released the
+   * canvas to the region — which, wherever the region is narrower than the
+   * widest bound, lands on the tier the author was jumping AWAY from.
    *
    * Two ids can carry the same bound, and only one of them is what a canvas at
    * that width is showing: the compiler emits both into one at-rule and the
@@ -230,8 +290,10 @@ export function widthForBreakpoint(
    * the disagreement between the control and the write that collapsing the
    * choice exists to remove.
    *
-   * `undefined` for an id that is not offered is the honest answer: there is no
-   * width that puts that tier on screen, because another tier owns it.
+   * `undefined` for an id that is not selectable is still the honest answer:
+   * there is no width that puts that tier on screen, because another tier owns
+   * the bound — or, for a site that bounds nothing, because base already
+   * applies at every width and the region is where it belongs.
    */
-  return offeredTiers(set).find(tier => tier.id === id)?.maxWidth;
+  return selectableTiers(set).find(tier => tier.id === id)?.maxWidth;
 }
