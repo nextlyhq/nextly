@@ -2173,3 +2173,40 @@ describe("rich-text an updated node matches a fresh one", () => {
     expect(view.container.querySelector("span")).toBe(first);
   });
 });
+
+describe("rich-text a decoration that adds a second line", () => {
+  const mk = (style: string, format: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style, format }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("keeps the wrapper AND the declaration when they draw different lines", () => {
+    // A decoration accumulates rather than replacing an ancestor's, so a
+    // strike and an authored underline are both wanted. Dropping either loses
+    // something the author wrote.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk(
+          "text-decoration: underline wavy red",
+          TEXT_FORMAT.STRIKETHROUGH
+        )}
+      />
+    );
+    expect(html).toContain("<s>");
+    expect(html).toContain("text-decoration:underline wavy red");
+  });
+
+  it("drops the wrapper when they draw the SAME line", () => {
+    // The other branch, unchanged: same line means the two would double up.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk("text-decoration: underline wavy red", TEXT_FORMAT.UNDERLINE)}
+      />
+    );
+    expect(html).not.toContain("<u>");
+    expect(html).toContain("text-decoration:underline wavy red");
+  });
+});

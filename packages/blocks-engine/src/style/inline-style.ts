@@ -101,6 +101,8 @@ const ALLOWED: ReadonlySet<string> = new Set(INLINE_STYLE_PROPERTIES);
 const FORMAT_ASSERTS: readonly {
   flag: (typeof TEXT_FORMAT)[keyof typeof TEXT_FORMAT];
   properties: readonly string[];
+  /** The line this bit draws, for the decoration formats only. */
+  line?: string;
   keeps: (value: string) => boolean;
 }[] = [
   {
@@ -120,12 +122,17 @@ const FORMAT_ASSERTS: readonly {
   {
     flag: TEXT_FORMAT.UNDERLINE,
     properties: ["text-decoration", "text-decoration-line"],
-    keeps: value => hasLine(value, "underline"),
+    line: "underline",
+    // A decoration ADDS. It cannot cancel the wrapper's, so the only value that
+    // conflicts is one drawing no line at all — which is inert rather than
+    // contradictory, and is dropped so an inert declaration stays off the page.
+    keeps: drawsALine,
   },
   {
     flag: TEXT_FORMAT.STRIKETHROUGH,
     properties: ["text-decoration", "text-decoration-line"],
-    keeps: value => hasLine(value, "line-through"),
+    line: "line-through",
+    keeps: drawsALine,
   },
   {
     flag: TEXT_FORMAT.SUBSCRIPT,
@@ -140,16 +147,38 @@ const FORMAT_ASSERTS: readonly {
 ];
 
 /**
- * Whether a `text-decoration` value still draws one particular line.
+ * Whether a `text-decoration` value draws one particular line.
  *
- * The shorthand REPLACES the line list, so `text-decoration: underline` beside a
- * `STRIKETHROUGH` bit removes the strike even though it looks like it is only
- * adding an underline. Read as tokens for that reason: what matters is whether
- * the line this bit asserts is still among them.
+ * Read as TOKENS rather than as text mentioning a line: `underlinexyz` contains
+ * the word and draws nothing, and a browser discards the declaration.
  */
 function hasLine(value: string, line: string): boolean {
   return value.split(/\s+/).includes(line);
 }
+
+/**
+ * Whether a decoration value draws any line at all.
+ *
+ * The conflict question for a decoration, and it is a different question from
+ * {@link hasLine}. A decoration on a descendant ACCUMULATES with an ancestor's
+ * rather than replacing it, and a descendant cannot remove one — so a
+ * `line-through` beside an `UNDERLINE` bit is not a contradiction, it is a
+ * second line, and dropping it loses a decoration the author wrote.
+ *
+ * What is left with nothing to say is `none`: it cannot cancel the wrapper and
+ * adds nothing of its own, so it is dropped rather than published inert.
+ */
+function drawsALine(value: string): boolean {
+  return value.split(/\s+/).some(token => DECORATION_LINES.has(token));
+}
+
+/** The line keywords a `text-decoration` can draw. */
+const DECORATION_LINES: ReadonlySet<string> = new Set([
+  "underline",
+  "overline",
+  "line-through",
+  "blink",
+]);
 
 /**
  * The format bits whose LINE the style already draws.
@@ -180,9 +209,16 @@ export function formatsDrawnByStyle(
     // Only the decoration entries: they are the ones that accumulate.
     if (!entry.properties.includes("text-decoration")) continue;
     if (!hasFormat(format, entry.flag)) continue;
+    // The LINE this bit draws, not merely "draws something": a `line-through`
+    // beside an UNDERLINE bit adds a second line and the `<u>` must stay, where
+    // an `underline` beside it makes the `<u>` the one that would double up.
     const asserted = entry.properties.some(property => {
       const written = declared.get(property);
-      return written !== undefined && entry.keeps(written);
+      return (
+        written !== undefined &&
+        entry.line !== undefined &&
+        hasLine(written, entry.line)
+      );
     });
     if (asserted) drawn |= entry.flag;
   }
@@ -238,8 +274,15 @@ const COLOR_VALUED: ReadonlySet<string> = new Set([
  * an inline style barely needs: it already outranks every stylesheet rule that
  * is not itself `!important`. Refusing would drop the colour entirely.
  */
+const PRIORITY = /\s*!\s*important\s*$/i;
+
 function withoutPriority(declared: string): string {
-  return declared.replace(/\s*!\s*important\s*$/i, "").trim();
+  return declared.replace(PRIORITY, "").trim();
+}
+
+/** Whether a declaration was written `!important`. */
+function isImportant(declared: string): boolean {
+  return PRIORITY.test(declared);
 }
 
 /**
@@ -323,7 +366,7 @@ function splitDeclarations(list: string): string[] {
 function usableDeclaration(
   text: string,
   format: number | undefined
-): readonly [string, string] | undefined {
+): { property: string; value: string; important: boolean } | undefined {
   // `indexOf` rather than `split`, because a value may contain a colon of its
   // own — `background-color: rgb(0 0 0 / 50%)` does not, but a `font-family`
   // naming a source with one would, and splitting would truncate it.
@@ -331,7 +374,8 @@ function usableDeclaration(
   if (colon === -1) return undefined;
 
   const property = text.slice(0, colon).trim().toLowerCase();
-  const declared = withoutPriority(text.slice(colon + 1).trim());
+  const written = text.slice(colon + 1).trim();
+  const declared = withoutPriority(written);
   if (declared === "" || !ALLOWED.has(property)) return undefined;
   // See {@link FORMAT_ASSERTS}: only a value that stops asserting what the bit
   // asserts is dropped, so one that reinforces it survives.
@@ -367,7 +411,7 @@ function usableDeclaration(
   // reaches a `style` attribute, where a `;` ends the declaration and starts
   // another, and a `url()` fetches.
   if (hasCssInjection(declared)) return undefined;
-  return [property, declared];
+  return { property, value: declared, important: isImportant(written) };
 }
 
 export function readInlineStyle(
@@ -380,9 +424,22 @@ export function readInlineStyle(
   const normalized = normalizeCssValue(value);
   if (normalized === "") return kept;
 
+  const important = new Set<string>();
   for (const declaration of splitDeclarations(normalized)) {
     const usable = usableDeclaration(declaration.trim(), format);
     if (usable === undefined) continue;
+    /*
+     * PRIORITY decides the winner before position does. `color: red !important;
+     * color: blue` renders RED — the cascade prefers the important declaration
+     * whatever follows it — so resolving on position alone published blue.
+     *
+     * The priority is remembered here and stripped from the VALUE, because the
+     * two are needed at different moments: the cascade needs it now, and the
+     * emitted declaration must not carry it, since React sets a style property
+     * through `CSSStyleDeclaration` and that rejects an embedded priority.
+     */
+    if (important.has(usable.property) && !usable.important) continue;
+    if (usable.important) important.add(usable.property);
     // DELETED before it is set again, because `Map.set` on an existing key
     // replaces the value and leaves the key where it first appeared. The later
     // declaration would then be emitted in the earlier one's POSITION, and
@@ -390,8 +447,8 @@ export function readInlineStyle(
     // so a winner emitted ahead of that shorthand loses to it. Keeping the
     // winner's own place is what makes the emitted text cascade the way the
     // stored text did.
-    kept.delete(usable[0]);
-    kept.set(usable[0], usable[1]);
+    kept.delete(usable.property);
+    kept.set(usable.property, usable.value);
   }
   return kept;
 }

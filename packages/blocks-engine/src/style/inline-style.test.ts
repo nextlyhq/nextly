@@ -193,6 +193,40 @@ describe("a declaration carrying !important", () => {
     expect(read("color: red ! important ")["color"]).toBe("red");
   });
 
+  it("lets an important declaration beat a later plain one", () => {
+    /*
+     * `color: red !important; color: blue` renders RED. The cascade prefers the
+     * important declaration whatever follows it, so resolving the repeat on
+     * POSITION alone published blue — the browser's answer and ours disagreeing
+     * on a document neither of us wrote.
+     *
+     * The priority has to be read BEFORE it is stripped, which is the whole
+     * shape of the bug: stripping first made the two declarations look alike.
+     */
+    expect(read("color: red !important; color: blue")["color"]).toBe("red");
+  });
+
+  it("still lets a later important declaration win", () => {
+    // Two controls in one: priority does not simply freeze the first value, and
+    // between two important declarations position decides again.
+    expect(read("color: red; color: blue !important")["color"]).toBe("blue");
+    expect(read("color: red !important; color: blue !important")["color"]).toBe(
+      "blue"
+    );
+  });
+
+  it("gives the same answer however many times it is asked", () => {
+    // The priority pattern is shared across calls. It carries no `g`, so it
+    // holds no `lastIndex` — but a global flag on a shared regex has already
+    // produced a call-order-dependent guard in this package once, and the cost
+    // of asserting it is three lines.
+    const value = "color: red !important; color: blue";
+    expect(read(value)["color"]).toBe("red");
+    expect(read(value)["color"]).toBe("red");
+    expect(read("color: blue")["color"]).toBe("blue");
+    expect(read(value)["color"]).toBe("red");
+  });
+
   it("does not take the rest of the declaration list with it", () => {
     expect(read("color: red !important; font-size: 16px")).toEqual({
       color: "red",
@@ -282,34 +316,36 @@ describe("a format bit and a style that contradict it", () => {
     }
   );
 
-  it("drops a shorthand that replaces the line the bit asserts", () => {
-    // `text-decoration` REPLACES the line list, so `underline` beside a
-    // STRIKETHROUGH bit removes the strike while looking like it only adds an
-    // underline. Read as tokens, not as a string that mentions a decoration.
-    expect(
-      Object.keys(read("text-decoration: underline", TEXT_FORMAT.STRIKETHROUGH))
-    ).not.toContain("text-decoration");
-    // And the same value beside UNDERLINE is a reinforcement, not a conflict.
-    expect(
-      read("text-decoration: underline", TEXT_FORMAT.UNDERLINE)[
-        "text-decoration"
-      ]
-    ).toBe("underline");
-  });
-
-  it("reads the decoration as TOKENS, not as text that mentions one", () => {
+  it("keeps a decoration that adds a line the bit does not draw", () => {
     /*
-     * `underlinexyz` CONTAINS the word `underline` and asserts nothing — it is
-     * not a decoration line, so a browser discards the declaration and the
-     * `<u>` underlines on its own. A substring check keeps it and lets an
-     * unusable value sit on the page instead.
+     * This asserted the opposite and was wrong, so the correction is worth
+     * stating: a decoration on a descendant ACCUMULATES with an ancestor's
+     * rather than replacing it, and a descendant cannot remove one. So
+     * `underline` beside a STRIKETHROUGH bit does not take the strike away —
+     * the `<s>` still draws it — and dropping the declaration threw away an
+     * underline the author wrote.
      *
-     * This case exists because break-verifying the token split changed NOTHING:
-     * every other fixture answers the same either way, so the suite could not
-     * tell a tokeniser from a `String.includes`.
+     * The shorthand replaces the line list WITHIN its own element. It does not
+     * reach the wrapper's.
      */
     expect(
-      Object.keys(read("text-decoration: underlinexyz", TEXT_FORMAT.UNDERLINE))
+      read("text-decoration: underline wavy red", TEXT_FORMAT.STRIKETHROUGH)[
+        "text-decoration"
+      ]
+    ).toBe("underline wavy red");
+    expect(
+      read("text-decoration: line-through", TEXT_FORMAT.UNDERLINE)[
+        "text-decoration"
+      ]
+    ).toBe("line-through");
+  });
+
+  it("drops a decoration that draws no line, since it cannot cancel one", () => {
+    // `none` is the only decoration value with nothing to say: it cannot remove
+    // the wrapper's line and adds none of its own, so publishing it would put
+    // an inert declaration on the page.
+    expect(
+      Object.keys(read("text-decoration: none", TEXT_FORMAT.UNDERLINE))
     ).not.toContain("text-decoration");
   });
 
