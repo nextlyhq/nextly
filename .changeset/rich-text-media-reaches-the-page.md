@@ -50,6 +50,6 @@ the image it cannot fetch and keeps the rest; a group drops the button whose
 destination was refused and keeps its siblings.
 
 Video is not yet drawn, and a check now says so out loud rather than leaving it
-silent: `scripts/rich-text-renderer-covers-the-editor.test.mjs` reads the node
-types the editor registers and the types the renderer draws, and fails on any
+silent: a conformance test beside the editor's own node registration reads the node
+types it registers and the types the renderer draws, and fails on any
 that is neither drawn nor declared with a reason.

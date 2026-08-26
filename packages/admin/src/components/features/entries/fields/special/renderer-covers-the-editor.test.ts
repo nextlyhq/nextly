@@ -195,19 +195,40 @@ describe("richTextValueVocabulariesAgree", () => {
   });
 
   it.each([
-    ["ButtonLinkVariant", "BUTTON_VARIANTS"],
-    ["ButtonLinkSize", "BUTTON_SIZES"],
-    ["ButtonAlignment", "BUTTON_ALIGNMENTS"],
-  ])("the renderer's %s allowlist is the editor's own", (type, constant) => {
-    /*
-     * The renderer restates these because it may not import this package. A
-     * restatement that drifts does not fail loudly: the value passes `oneOf`,
-     * takes the fallback, and the page draws an appearance the author never
-     * chose — which is exactly what a `primary | secondary | outline | ghost`
-     * list did to every default `filled` button.
-     */
-    expect([...constMembers(renderer, constant)].sort()).toEqual(
-      [...unionMembers(buttonSource, type)].sort()
-    );
-  });
+    ["ButtonLinkVariant", "BUTTON_VARIANTS", ["ButtonLinkNode.tsx"]],
+    ["ButtonLinkSize", "BUTTON_SIZES", ["ButtonLinkNode.tsx"]],
+    // BOTH files, because both DECLARE this union independently and both
+    // serialise it. Read from one only, a group vocabulary that gained a value
+    // the single-button type never did would leave this green while the
+    // renderer quietly fell back to `center` for every node carrying it.
+    [
+      "ButtonAlignment",
+      "BUTTON_ALIGNMENTS",
+      ["ButtonLinkNode.tsx", "ButtonGroupNode.tsx"],
+    ],
+  ])(
+    "the renderer's %s allowlist is the editor's own",
+    (type, constant, files) => {
+      /*
+       * The renderer restates these because it may not import this package. A
+       * restatement that drifts does not fail loudly: the value passes `oneOf`,
+       * takes the fallback, and the page draws an appearance the author never
+       * chose — which is exactly what a `primary | secondary | outline | ghost`
+       * list did to every default `filled` button.
+       */
+      // Every declaring file's members, unioned: a value either file offers is
+      // one the renderer can be handed.
+      const declared = new Set(
+        files.flatMap(file =>
+          unionMembers(readFileSync(join(HERE, file), "utf8"), type)
+        )
+      );
+      // The population, per pair rather than once: a file that stopped
+      // declaring this union yields an empty set, and two empty sets agree.
+      expect(declared.size).toBeGreaterThan(1);
+      expect([...constMembers(renderer, constant)].sort()).toEqual(
+        [...declared].sort()
+      );
+    }
+  );
 });

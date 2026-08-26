@@ -1,7 +1,6 @@
 import {
   codeTokenClass,
   hasFormat,
-  isFetchableUrl,
   isRichTextNode,
   isRichTextValue,
   TEXT_FORMAT,
@@ -9,7 +8,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { CSSProperties, ReactNode } from "react";
 
-import { oneOf, relFor, text, url } from "./blocks/props";
+import { fetchableUrl, oneOf, relFor, text, url } from "./blocks/props";
 import type { BlockHostPolicy } from "./context";
 
 /**
@@ -213,31 +212,6 @@ function TableCellView({
 }
 
 /**
- * A stored image source this page is willing to write into an `<img>`.
- *
- * TWO filters, both asked, in the order the blocks ask them. `url()` refuses a
- * scheme that could execute and applies whether or not an operator configured
- * anything; `remotePatterns` is the site's own list of hosts it will fetch
- * from, and an ABSENT list means unasked rather than allowed-nothing — the
- * semantics `BlockHostPolicy` states for the field, and the reason an existing
- * site does not lose its images the day this starts rendering them.
- *
- * `undefined` where either refuses, so a caller can decide what to draw instead
- * of an image element pointing nowhere.
- */
-function mediaSource(
-  value: unknown,
-  policy: BlockHostPolicy | undefined
-): string | undefined {
-  const src = url(value);
-  if (src === undefined) return undefined;
-  const patterns = policy?.remotePatterns;
-  if (patterns !== undefined && !isFetchableUrl(src, patterns))
-    return undefined;
-  return src;
-}
-
-/**
  * Dimensions, when the editor recorded usable ones.
  *
  * BOTH or NEITHER. A lone `width` on an `<img>` makes a browser compute the
@@ -267,7 +241,12 @@ function boxOf(
 function usableEdge(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   if (value <= 0 || value > MAX_IMAGE_EDGE) return undefined;
-  return Math.round(value);
+  // Rounded FIRST, then judged again. A positive edge below a half is inside
+  // the range above and rounds to zero, so returning the rounded value straight
+  // away reinstates the collapsed image the range check exists to refuse — one
+  // step later, where the earlier check can no longer see it.
+  const edge = Math.round(value);
+  return edge <= 0 ? undefined : edge;
 }
 
 /** The largest edge an `<img>` is given a reserved box for. */
@@ -327,8 +306,13 @@ function CaptionView({ value }: { value: unknown }): ReactNode {
  *
  * A plain `<img>` rather than `next/image`, and that is the package boundary
  * rather than an oversight: this entry's layering test forbids importing
- * `next/*`, so the root renderer works in any React host. A Next.js app that
- * wants optimisation reaches this file through the `/next` subpath's helpers.
+ * `next/*`, so the root renderer works in any React host.
+ *
+ * There is no optimised route through this renderer today, and saying otherwise
+ * sends a Next.js reader looking for a seam that does not exist: `next.ts` does
+ * not import `RichText` and does not replace this element. Optimising it means
+ * giving that subpath its own rich-text entry, which is a change to what this
+ * package exports rather than a detail of this function.
  */
 function ImageView({
   node,
@@ -337,7 +321,7 @@ function ImageView({
   node: RichTextNode;
   policy: BlockHostPolicy | undefined;
 }): ReactNode {
-  const src = mediaSource(node.src, policy);
+  const src = fetchableUrl(node.src, policy?.remotePatterns);
   if (src === undefined) return null;
   return (
     <figure className="nextly-rich-text-image">
@@ -375,7 +359,7 @@ function GalleryView({
     .map(entry => {
       if (entry === null || typeof entry !== "object") return undefined;
       const item: Readonly<Record<string, unknown>> = entry;
-      const src = mediaSource(item.src, policy);
+      const src = fetchableUrl(item.src, policy?.remotePatterns);
       // The WHOLE entry travels on, not a `{ src, alt }` reduction of it. The
       // shared element below reads the title and the dimensions off it, and a
       // projection that kept two fields is what dropped them here before.
@@ -404,6 +388,21 @@ function GalleryView({
   const layout: CSSProperties = {
     display: "grid",
     gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+    // The list's own presentation, reset here for the same reason the columns
+    // are set here: a `<ul>` in a grid still carries markers, padding and
+    // margins from the browser, so a host with no rule for this class publishes
+    // the gallery as a bulleted, indented list. The list SEMANTICS stay — a
+    // screen reader announces the count, which is the one fact about a gallery
+    // a non-visual reader most needs.
+    // The LONGHAND. `list-style` is a shorthand, and a shorthand is the one
+    // form a test cannot observe here — jsdom's CSS parser drops it from the
+    // serialised style, so asserting it would be asserting something unreadable
+    // whether or not it was applied. The marker is the only part being removed
+    // anyway.
+    listStyleType: "none",
+    padding: 0,
+    margin: 0,
+    gap: "0.5rem",
   };
   return (
     <figure className="nextly-rich-text-gallery">
@@ -448,6 +447,13 @@ const BUTTON_ALIGNMENTS = ["left", "center", "right"] as const;
 const DEFAULT_VARIANT = "filled";
 const DEFAULT_SIZE = "md";
 const DEFAULT_ALIGNMENT = "center";
+
+/** Where a row's contents sit, per alignment the editor records. */
+const FLEX_ALIGN: Readonly<Record<string, string>> = {
+  left: "flex-start",
+  center: "center",
+  right: "flex-end",
+};
 
 /** Padding and text size per size the editor offers. */
 const BUTTON_METRICS: Readonly<
@@ -576,15 +582,15 @@ function ButtonRow({
       // for the reason the size above is owed: left to a stylesheet, a button
       // the author centred publishes against the margin.
       style={{
-        textAlign: align,
         display: "flex",
+        // WRAPPING, because the editor wraps: its preview uses `flex-wrap` and
+        // `exportDOM` sets `flexWrap` explicitly. Without it a group wider than
+        // its column overflows rather than moving to a second line, so a long
+        // pair of labels — or any group on a narrow screen — publishes
+        // differently from what the author was shown.
+        flexWrap: "wrap",
         gap: "0.75rem",
-        justifyContent:
-          align === "left"
-            ? "flex-start"
-            : align === "right"
-              ? "flex-end"
-              : "center",
+        justifyContent: FLEX_ALIGN[align] ?? "center",
       }}
     >
       {usable.map((item, i) => (

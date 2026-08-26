@@ -23,13 +23,13 @@
  *
  * @module blocks/embed
  */
-import { defineBlock, isFetchableUrl } from "@nextlyhq/blocks-engine";
+import { defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { MEDIA } from "./categories";
-import { flag, isTrustedOrigin, text, url } from "./props";
+import { fetchableUrl, flag, isTrustedOrigin, text, url } from "./props";
 
 /**
  * What an embedded document may do.
@@ -62,8 +62,7 @@ export function renderEmbed({
   // sees the element this returns, not the URL chosen to build it. An unlisted
   // host renders nothing at all rather than an empty frame, for the same reason
   // as above — a frame with no usable source is worse than no frame.
-  const patterns = hostPolicy?.remotePatterns;
-  if (patterns !== undefined && !isFetchableUrl(src, patterns)) return null;
+  if (fetchableUrl(src, hostPolicy?.remotePatterns) === undefined) return null;
 
   const title = text(props.title, "Embedded content");
   // Keeping its own origin is the host's decision about this URL, not the page

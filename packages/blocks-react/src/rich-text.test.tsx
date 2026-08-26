@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { TEXT_FORMAT, type RichTextValue } from "@nextlyhq/blocks-engine";
 import { render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -950,6 +951,74 @@ describe("rich-text media leaves", () => {
     expect(
       plain.container.querySelector("a")?.getAttribute("style") ?? ""
     ).not.toContain("var(--nx-");
+  });
+
+  it("drops an edge that ROUNDS to zero, not only one stored as zero", () => {
+    /*
+     * A positive fraction below a half clears the range check and then rounds to
+     * zero, so returning the rounded value reinstates the collapsed image one
+     * step after the check that refuses it. The stored-zero test beside this one
+     * is answered by the range and never reaches the rounding.
+     */
+    const { container } = render(
+      <RichText value={image({ width: 0.4, height: 600 })} />
+    );
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute("width")).toBeNull();
+    expect(img?.getAttribute("height")).toBeNull();
+  });
+
+  it("resets the gallery list's own presentation", () => {
+    // A `<ul>` in a grid still carries markers, padding and margins from the
+    // browser, so a host with no rule for this class publishes the gallery as a
+    // bulleted, indented list — the grid arriving on top of a bulleted list
+    // rather than instead of one.
+    const value = doc([
+      {
+        type: "gallery",
+        version: 1,
+        images: [{ src: "https://cdn.example.com/a.jpg", alt: "A" }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    /*
+     * Asserted against the MARKUP this package emits, not against a jsdom
+     * element. jsdom's CSS implementation drops every list-style property, so
+     * reading the style attribute back from a rendered node cannot see this one
+     * whether or not it was applied — the probe would confirm nothing and read
+     * as coverage. `renderToStaticMarkup` is also what a published page is: this
+     * entry renders on the server.
+     */
+    const html = renderToStaticMarkup(<RichText value={value} />);
+    expect(html).toContain("list-style-type:none");
+    expect(html).toContain("padding:0");
+    // The SEMANTICS stay: a screen reader still announces the count.
+    const { container } = render(<RichText value={value} />);
+    expect(container.querySelectorAll("li").length).toBe(1);
+  });
+
+  it("lets a button row wrap, as the editor's own export does", () => {
+    // Without it a group wider than its column overflows rather than moving to
+    // a second line, so a long pair of labels publishes differently from what
+    // the author was shown.
+    const value = doc([
+      {
+        type: "button-group",
+        version: 1,
+        buttons: [
+          { url: "https://example.com/a", text: "Alpha" },
+          { url: "https://example.com/b", text: "Beta" },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    const style =
+      container
+        .querySelector("p.nextly-rich-text-buttons")
+        ?.getAttribute("style") ?? "";
+    expect(style).toContain("flex-wrap: wrap");
   });
 
   it("adds rel protection to a button opening a new tab", () => {

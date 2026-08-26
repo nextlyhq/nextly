@@ -12,13 +12,13 @@
  *
  * @module blocks/image
  */
-import { defineBlock, isFetchableUrl } from "@nextlyhq/blocks-engine";
+import { defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { MEDIA } from "./categories";
-import { flag, isAuthoredText, oneOf, text, url } from "./props";
+import { fetchableUrl, flag, isAuthoredText, oneOf, text, url } from "./props";
 
 /** How the browser should schedule the image. */
 export const IMAGE_LOADING = ["lazy", "eager"] as const;
@@ -68,13 +68,8 @@ export async function renderImage({
   // renders the first candidate actually allowed, which is what a fallback is
   // for and what the link-preview path does with the same pair.
   const patterns = hostPolicy?.remotePatterns;
-  const fetchable = (value: unknown): string | undefined => {
-    const safe = url(value);
-    if (safe === undefined) return undefined;
-    return patterns === undefined || isFetchableUrl(safe, patterns)
-      ? safe
-      : undefined;
-  };
+  const fetchable = (value: unknown): string | undefined =>
+    fetchableUrl(value, patterns);
 
   // A record whose url either filter refused is dropped WHOLE, not just for its
   // url. Its alt text and intrinsic size describe the asset that was refused, so
