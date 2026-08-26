@@ -18,6 +18,19 @@ const HARNESS_SOURCE = "e2e-canvas-preview-harness";
 const TIER_BOUND = 600;
 
 /**
+ * A region WIDER than the bound, for the case that separates the two compiles.
+ *
+ * The canvas normally fills its region, so a narrow window means a narrow box
+ * and an `@media` implementation and a `@container` one agree. They disagree
+ * only when the window is BELOW the bound and the box is ABOVE it: the media
+ * query asks the window and applies the narrow tier, while a container query
+ * asked of this box does not. Nothing else in the fixture produces that state,
+ * because `preview.width` is a ceiling within the region and can only ever make
+ * the box narrower than the space available.
+ */
+const OVERFLOW_WIDTH = 800;
+
+/**
  * Two colours that cannot be confused for one another, or for a default.
  *
  * A test asserting a computed colour needs values no stylesheet elsewhere
@@ -82,6 +95,7 @@ export function BuilderCanvasPreviewHarness() {
   const editor = useEditorState({ initialDocument });
   const [width, setWidth] = useState<number | undefined>(undefined);
   const [measured, setMeasured] = useState<number | undefined>(undefined);
+  const [region, setRegion] = useState<number | undefined>(undefined);
 
   const container = useMemo(
     () => previewContainerFor("e2e-canvas-preview"),
@@ -102,7 +116,13 @@ export function BuilderCanvasPreviewHarness() {
   );
 
   return (
-    <div data-testid="canvas-preview-harness" style={{ height: "100vh" }}>
+    <div
+      data-testid="canvas-preview-harness"
+      style={{
+        height: "100vh",
+        ...(region === undefined ? {} : { width: `${region}px` }),
+      }}
+    >
       {/*
         The width is SET, never typed as a pixel value the test computes: the
         two buttons name the states the fixture is about, so a spec cannot
@@ -122,6 +142,17 @@ export function BuilderCanvasPreviewHarness() {
         onClick={() => setWidth(undefined)}
       >
         wide
+      </button>
+      {/*
+        Widens the REGION past the viewport, which is the only state in which a
+        container compile and a media compile give opposite answers.
+      */}
+      <button
+        type="button"
+        data-testid="go-overflow"
+        onClick={() => setRegion(OVERFLOW_WIDTH)}
+      >
+        overflow
       </button>
       {/*
         What the box actually MEASURED, reported so the spec can wait on the

@@ -78,20 +78,35 @@ test.describe("the canvas preview compile", () => {
   test("answers to the BOX rather than to the window", async ({ page }) => {
     /*
      * The property that separates a container compile from a published one, and
-     * the one no unit test can reach. The window is made narrower than the tier
-     * bound while the box stays unconstrained: under `@media` the narrow rule
-     * would now apply, and under `@container` against a box wider than the
-     * bound it must not.
+     * the only case in which the two give OPPOSITE answers.
      *
-     * The viewport is set below the fixture's 600px bound and the canvas fills
-     * the page, so this also pins that the box is measured rather than assumed
-     * — a canvas reporting its requested width would read as unbounded here.
+     * The viewport is set BELOW the fixture's 600px bound and the region is
+     * then widened past it, so the box is 800px inside a 500px window:
+     *
+     *   `@media (max-width: 600px)`      asks the window, 500 -> MATCHES  -> red
+     *   `@container … (max-width: 600px)` asks the box,    800 -> no match -> blue
+     *
+     * A window wider than the bound would not discriminate: neither
+     * implementation applies the narrow tier there, so the case would stay green
+     * against the exact regression it names.
      */
-    await page.setViewportSize({ width: 900, height: 800 });
+    await page.setViewportSize({ width: 500, height: 800 });
     await page.goto(ROUTE);
     const subject = page.locator(SUBJECT).first();
     await expect(subject).toBeVisible();
-    await expect(page.getByTestId("measured")).not.toHaveText("");
+
+    await page.getByTestId("go-overflow").click();
+
+    /*
+     * Waited on the canvas having MEASURED a box wider than the bound, so the
+     * assertion cannot run against the region before it widened — which would
+     * be the narrow state, and would pass for the wrong reason.
+     */
+    await expect
+      .poll(async () =>
+        Number(await page.getByTestId("measured").textContent())
+      )
+      .toBeGreaterThan(600);
 
     await expect(subject).toHaveCSS("color", WIDE);
   });
