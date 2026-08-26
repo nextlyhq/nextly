@@ -12,7 +12,6 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UI } from "@admin/constants/ui";
-
 import type { PreviewViewport } from "@admin/services/previewLinkApi";
 
 import type { PreviewFit } from "../previewFrameFit";
@@ -277,11 +276,20 @@ describe("PreviewViewportControl — the width box", () => {
     box.focus();
 
     fireEvent.change(box, { target: { value: "768" } });
+    /*
+     * The pause is what makes this the real case rather than a formality. It
+     * COMMITS 768 — which is a named tier — so the match is live while the
+     * author is still in the box. Without the pause nothing is committed at
+     * all and the assertion below would hold whatever the rule was.
+     */
+    stopTyping();
+    expect(ui.committed()).toBe("768");
 
     expect(ui.box()).toBe(box);
     expect(document.activeElement).toBe(box);
 
     fireEvent.change(box, { target: { value: "7680" } });
+    stopTyping();
 
     expect(ui.box()).toBe(box);
     expect(ui.committed()).toBe("7680");

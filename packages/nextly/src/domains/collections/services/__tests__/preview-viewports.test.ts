@@ -86,35 +86,51 @@ describe("resolvePreviewViewports", () => {
     ).resolves.toEqual([{ label: "Real", width: 768 }]);
   });
 
-  it("rounds a fractional width, because a viewport is whole pixels", async () => {
+  it("offers a fractional width EXACTLY as declared", async () => {
+    /*
+     * The width has to match the rule the preset is named after. A site's
+     * breakpoints reach here verbatim and the compiler emits
+     * `@media (max-width: 767.6px)`, so rounding to 768 would sit the frame one
+     * tier outside the very rule the option claims to preview — and would
+     * collapse two breakpoints a fraction of a pixel apart into one option.
+     */
     await expect(
       resolvePreviewViewports([{ label: "Odd", width: 767.6 }])
-    ).resolves.toEqual([{ label: "Odd", width: 768 }]);
+    ).resolves.toEqual([{ label: "Odd", width: 767.6 }]);
   });
 
-  it("drops a width that ROUNDS to zero, not merely one declared as zero", async () => {
+  it("keeps two breakpoints that differ by a fraction of a pixel", async () => {
+    // The consequence of the case above, stated separately: rounded, these are
+    // one width, and the deduplication below would drop the second.
+    await expect(
+      resolvePreviewViewports([
+        { label: "Narrow tablet", width: 767.6 },
+        { label: "Wide tablet", width: 767.9 },
+      ])
+    ).resolves.toEqual([
+      { label: "Narrow tablet", width: 767.6 },
+      { label: "Wide tablet", width: 767.9 },
+    ]);
+  });
+
+  it("keeps a sub-pixel width, because the site may really break there", async () => {
     /*
-     * The check has to run on the rounded value, because rounding is what makes
-     * a row unusable here: `0.4` is a positive finite number and passes every
-     * test asked of the declared value, then becomes `0`. Offered, it is a named
-     * option reading "0px" that does not preview 0px — `previewFrameFit` reads
-     * zero as no request at all and fills the pane — so the one preset an author
-     * can prove is broken is the one that looks like it works.
+     * This replaces a rule that dropped anything rounding to zero. That rule
+     * existed only because rounding could turn a positive width into `0` — an
+     * option reading "0px" that previewed the full pane instead. Nothing rounds
+     * now, so a declared `0.4` is offered as `0.4` and previews `0.4`: useless
+     * to look at, and exactly what the site declared. The engine's own bound
+     * accepts it too, so refusing it here would disagree with the sheet.
      */
     await expect(
       resolvePreviewViewports([
         { label: "Sliver", width: 0.4 },
         { label: "Real", width: 768 },
       ])
-    ).resolves.toEqual([{ label: "Real", width: 768 }]);
-  });
-
-  it("keeps a width that rounds UP to one pixel", async () => {
-    // The control on the case above: rejecting the rounded value must not
-    // reject everything below a pixel, only what rounds away to nothing.
-    await expect(
-      resolvePreviewViewports([{ label: "Hair", width: 0.6 }])
-    ).resolves.toEqual([{ label: "Hair", width: 1 }]);
+    ).resolves.toEqual([
+      { label: "Sliver", width: 0.4 },
+      { label: "Real", width: 768 },
+    ]);
   });
 
   it("keeps the FIRST of two rows at the same width", async () => {

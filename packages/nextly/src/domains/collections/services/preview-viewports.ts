@@ -98,19 +98,21 @@ export async function resolvePreviewViewports(
   for (const candidate of raw) {
     if (!usableViewport(candidate)) continue;
 
-    // Whole pixels: a viewport is a device width, and a fractional one would
-    // render as `767.6px` in a control that has to read as a number.
-    const width = Math.round(candidate.width);
-
     /*
-     * Checked AFTER rounding, because rounding is what makes a row unusable:
-     * `0.4` is positive and finite, so it satisfies every test asked of the
-     * declared value, and then becomes `0`. Offered, it is an option reading
-     * "0px" that does not preview 0px — `previewFrameFit` reads zero as no
-     * request at all and fills the pane — so the broken preset is the one that
-     * looks like it works.
+     * The width is offered EXACTLY as declared, fractions included.
+     *
+     * A site's breakpoints reach here verbatim: `breakpointContexts` copies
+     * `maxWidth` from the definition and the compiler emits
+     * `@media (max-width: 767.6px)` for it. Rounding to 768 would sit the frame
+     * one tier OUTSIDE the rule the preset is named after — the precise failure
+     * declared widths exist to prevent — and would collapse two breakpoints a
+     * third of a pixel apart into one option.
+     *
+     * Rounding was here for the control's sake, so a preset would not read
+     * `767.6px`. That is a display concern, and it was answered by changing the
+     * number the frame is sized to, which is the one thing that has to be true.
      */
-    if (width <= 0) continue;
+    const width = candidate.width;
 
     // Two names for one width are indistinguishable once chosen — the frame is
     // the same size either way — so the first declared wins and the rest are
