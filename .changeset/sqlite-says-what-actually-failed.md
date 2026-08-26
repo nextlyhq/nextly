@@ -1,5 +1,4 @@
 ---
-
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-postgres": patch
@@ -25,6 +24,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
+---
 
 On SQLite, a failed database write is now reported as what actually went wrong,
 instead of occasionally being reported as a timeout.
