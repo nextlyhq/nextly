@@ -30,7 +30,7 @@ function documentStore(items: unknown[], pages = 1) {
   const store: ClassUsageDocumentStore = {
     find: async args => {
       calls.push(
-        `find:page=${args.page}:sort=${args.sort}:locale=${args.locale}`
+        `find:page=${args.page}:sort=${args.sort}:locale=${args.locale}:variant=${args.variant}`
       );
       return { items, meta: { hasNext: args.page < pages } };
     },
@@ -43,20 +43,31 @@ function documentStore(items: unknown[], pages = 1) {
   return { store, calls };
 }
 
-/** An index store holding fixed rows and recording every write. */
+/**
+ * An index store holding fixed rows and recording every write.
+ *
+ * `find` honours EVERY predicate it is handed rather than the one the cases
+ * happen to care about. A fake that filters on a subset answers for rows the
+ * real query would exclude, so a subject dimension the code fails to bind is
+ * invisible — the fake supplies the filtering the code omitted.
+ *
+ * `create` records the variant for the mirror-image reason: a row is filed
+ * under a subject, and a recorder that keeps only the class cannot tell a row
+ * filed under the requested variant from one filed under a hardcoded value.
+ */
 function indexStore(rows: Record<string, unknown>[] = []) {
   const calls: string[] = [];
   const store: ClassUsageIndexStore = {
     find: async args => {
-      const key = args.where.entityKey?.equals;
-      return {
-        items: rows.filter(r => r.entityKey === key),
-        meta: { hasNext: false },
-      };
+      const matches = (row: Record<string, unknown>) =>
+        Object.entries(args.where).every(
+          ([column, predicate]) => row[column] === predicate.equals
+        );
+      return { items: rows.filter(matches), meta: { hasNext: false } };
     },
     create: async args => {
       calls.push(
-        `create:${String(args.data.entityKey)}:${String(args.data.classId)}`
+        `create:${String(args.data.variant)}:${String(args.data.entityKey)}:${String(args.data.classId)}`
       );
       return {};
     },
@@ -92,7 +103,10 @@ describe("rebuilding the class-usage index", () => {
       undetermined: 0,
       orphansRemoved: 0,
     });
-    expect(index.calls).toEqual(["create:page-1:hero", "create:page-2:card"]);
+    expect(index.calls).toEqual([
+      "create:published:page-1:hero",
+      "create:published:page-2:card",
+    ]);
   });
 
   it("orders by id, which the writes it makes cannot move", async () => {
@@ -114,7 +128,9 @@ describe("rebuilding the class-usage index", () => {
       variant: "published",
     });
 
-    expect(docs.calls).toEqual(["find:page=1:sort=id:locale="]);
+    expect(docs.calls).toEqual([
+      "find:page=1:sort=id:locale=:variant=published",
+    ]);
   });
 
   it("scans a document already in agreement WITHOUT repairing it", async () => {
@@ -179,6 +195,9 @@ describe("rebuilding the class-usage index", () => {
       index: indexStore().store,
       collection: "pages",
       field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
+      variant: "published",
       limits: { ...DEFAULT_LIMITS, maxNodes: 5 },
     });
 
@@ -217,7 +236,7 @@ describe("rebuilding the class-usage index", () => {
       undetermined: 0,
       orphansRemoved: 0,
     });
-    expect(index.calls).toEqual(["create:page-1:hero"]);
+    expect(index.calls).toEqual(["create:published:page-1:hero"]);
   });
 
   it("refuses to report a pass whose walk it could not finish", async () => {
@@ -265,8 +284,82 @@ describe("the locale a rebuild reads under", () => {
       variant: "published",
     });
 
-    expect(docs.calls).toEqual(["find:page=1:sort=id:locale=fr"]);
-    expect(index.calls).toEqual(["create:page-1:hero"]);
+    expect(docs.calls).toEqual([
+      "find:page=1:sort=id:locale=fr:variant=published",
+    ]);
+    expect(index.calls).toEqual(["create:published:page-1:hero"]);
+  });
+});
+
+describe("the variant a rebuild reads under", () => {
+  it("asks the document store for the SAME variant the rows are filed under", async () => {
+    // A collection with drafts holds two documents under one id. The subject
+    // records which one a row describes, so the query has to be the one that
+    // was asked for — otherwise the rows are labelled `draft` and hold the
+    // published document's classes.
+    const docs = documentStore([
+      { id: "page-1", content: documentUsing("hero") },
+    ]);
+
+    await rebuildClassUsageIndex({
+      documents: docs.store,
+      index: indexStore().store,
+      collection: "pages",
+      field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
+      variant: "draft",
+    });
+
+    expect(docs.calls).toEqual(["find:page=1:sort=id:locale=:variant=draft"]);
+  });
+
+  it("indexes DIFFERENT classes for the two variants of one document", async () => {
+    // The assertion above names how the variant travels; this one names what
+    // it is for, and survives a change to how it is threaded. A store that is
+    // never told which variant to read answers both passes from the same
+    // document, so the two runs produce identical rows — a class only the
+    // draft applies is then absent from the index, and reads as safe to delete
+    // while a pending draft still uses it.
+    //
+    // The fixture decides what "different" means, but only the production code
+    // consulting the variant can obtain it: an implementation that drops the
+    // variant gets `published` for both and the two row sets match.
+    const byVariant: Record<string, unknown[]> = {
+      published: [{ id: "page-1", content: documentUsing("hero") }],
+      draft: [{ id: "page-1", content: documentUsing("hero", "promo") }],
+    };
+    const documents: ClassUsageDocumentStore = {
+      find: async args => ({
+        items: byVariant[args.variant] ?? [],
+        meta: { hasNext: false },
+      }),
+      exists: async () => true,
+    };
+
+    const rowsFor = async (variant: "published" | "draft") => {
+      const index = indexStore();
+      await rebuildClassUsageIndex({
+        documents,
+        index: index.store,
+        collection: "pages",
+        field: "content",
+        // Not localized, which is what the empty string means here.
+        locale: "",
+        variant,
+      });
+      return index.calls;
+    };
+
+    const published = await rowsFor("published");
+    const draft = await rowsFor("draft");
+
+    expect(published).toEqual(["create:published:page-1:hero"]);
+    expect(draft).toEqual([
+      "create:draft:page-1:hero",
+      "create:draft:page-1:promo",
+    ]);
+    expect(draft).not.toEqual(published);
   });
 });
 

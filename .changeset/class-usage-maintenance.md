@@ -35,6 +35,13 @@ alongside the locale, and a rebuild of one variant leaves the other's rows untou
 Counting both is deliberate - deleting a class an unpublished draft applies breaks that
 draft the moment it is published.
 
+The variant selects the DOCUMENT that is read as well as labelling the rows it files, and
+both dimensions are required on the store contract for the same reason: a store that cannot
+be told which one to read answers both passes identically, which records the published
+classes as the draft's and omits the ones only the draft applies. It is a closed set rather
+than free text, because a value outside it produces rows that no query built from a real
+subject can select - neither to reconcile nor to sweep.
+
 Two limits are worth stating, because "the index is recoverable" is wider than what this
 rebuilds. It repairs one collection's field at a time, so rows whose subject names a
 collection that no longer exists - or whose columns were corrupted by a restore or a

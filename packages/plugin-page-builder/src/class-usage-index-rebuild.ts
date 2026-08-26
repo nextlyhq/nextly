@@ -42,6 +42,7 @@ import {
   maintainClassUsage,
   type ClassUsageIndexStore,
 } from "./class-usage-maintenance";
+import type { ClassUsageVariant } from "./collections/class-usage-index";
 import { walkPages } from "./paged-walk";
 
 /** How many documents one query asks for. */
@@ -81,6 +82,23 @@ export interface ClassUsageDocumentStore {
      * still renders.
      */
     locale: string;
+    /**
+     * Which of the document's two stored forms to read.
+     *
+     * On the contract rather than left to the store to decide, because a store
+     * that cannot be told is a store that answers both passes the same way.
+     * Rows are filed under the variant the caller asked for, so an
+     * implementation reading live content during the draft pass records the
+     * published classes as the draft's and omits the ones only the draft
+     * applies — which makes a class a pending draft still uses read as safe to
+     * delete.
+     *
+     * A store may legitimately serve a collection that has no drafts, where
+     * both variants resolve to the same document. That is a fact about the
+     * collection, and the difference is that it is then answered rather than
+     * never asked.
+     */
+    variant: ClassUsageVariant;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
   /**
    * Whether one document still exists, asked by id.
@@ -96,6 +114,14 @@ export interface ClassUsageDocumentStore {
    * and permits deleting a class that document renders. The read costs one
    * query per suspected orphan, which is proportional to the damage rather
    * than to the site.
+   *
+   * Takes no variant, unlike `find`, and that asymmetry is deliberate. This
+   * asks whether the document exists AT ALL, because answering `true` is what
+   * keeps its rows. A document that exists only as an unpublished draft is
+   * absent from the published pass's walk, and scoping this question to the
+   * published variant would answer `false` and sweep rows the draft justifies —
+   * turning a check that exists to fail towards keeping rows into one that
+   * deletes them.
    */
   exists(args: { collection: string; id: string }): Promise<boolean>;
 }
@@ -156,7 +182,7 @@ async function rebuildOnePage(
     collection: string;
     field: string;
     locale: string;
-    variant: string;
+    variant: ClassUsageVariant;
     limits?: DocumentLimits;
   },
   visited: Set<string>
@@ -248,8 +274,12 @@ export async function rebuildClassUsageIndex(args: {
    * shared subject, rebuilding either would have removed the rows the other
    * justifies — and a class the published page still renders would read as
    * unused because a draft had dropped it.
+   *
+   * Reaches the DOCUMENT QUERY as well as the rows it files. A variant that
+   * only labelled the rows would let one store answer both passes identically,
+   * recording one form's classes under the other's name.
    */
-  variant: string;
+  variant: ClassUsageVariant;
   /**
    * The bounds the documents are rendered under, when not the engine defaults.
    *
@@ -277,9 +307,12 @@ export async function rebuildClassUsageIndex(args: {
         limit: PAGE_SIZE,
         page,
         sort: "id",
-        // The SAME locale the rows are filed under. Reading one locale and
-        // filing it as another is the whole of the defect this closes.
+        // The SAME locale and variant the rows are filed under. Reading one
+        // and filing it as another is the whole of the defect this closes, and
+        // it is the same defect in both dimensions: the subject records what
+        // was asked for, so the query has to be what was asked for too.
         locale: args.locale,
+        variant: args.variant,
       }),
     onPage: async items => {
       const tally = await rebuildOnePage(items, args, visited);

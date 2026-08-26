@@ -75,6 +75,7 @@ import {
   CLASS_USAGE_INDEX_SLUG,
   type ClassUsageRow,
   type ClassUsageScope,
+  type ClassUsageVariant,
 } from "./collections/class-usage-index";
 import { walkPages } from "./paged-walk";
 import { readStoredJson } from "./stored-json";
@@ -148,7 +149,6 @@ const ROW_STRING_COLUMNS = [
   "entity",
   "entityKey",
   "field",
-  "variant",
   "classId",
 ] as const;
 
@@ -178,6 +178,19 @@ function readScope(value: unknown): ClassUsageScope | null {
 }
 
 /**
+ * Whether a stored value is one of the two variants a row may carry.
+ *
+ * Checked against the set rather than accepted as any string, because `variant`
+ * partitions the index the way `scope` does: every query binds one value, so a
+ * row carrying anything else belongs to a family no real subject can name. It
+ * would be neither reconciled nor swept, and would count towards a class for
+ * ever.
+ */
+function readVariant(value: unknown): ClassUsageVariant | null {
+  return value === "published" || value === "draft" ? value : null;
+}
+
+/**
  * One stored row, or null when it cannot be read as one.
  *
  * Every column comes from the ROW. Stamping the expected subject onto whatever
@@ -203,9 +216,12 @@ function readStoredRow(item: unknown): StoredClassUsageRow | null {
   const locale = item.locale ?? "";
   if (typeof locale !== "string") return null;
 
+  const variant = readVariant(item.variant);
+  if (variant === null) return null;
+
   const parts = readStrings(item, ROW_STRING_COLUMNS);
   if (parts === null) return null;
-  const [id, entity, entityKey, field, variant, classId] = parts;
+  const [id, entity, entityKey, field, classId] = parts;
 
   return { id, scope, entity, entityKey, field, locale, variant, classId };
 }
@@ -393,7 +409,7 @@ export async function forgetAbsentDocuments(args: {
   entity: string;
   field: string;
   locale: string;
-  variant: string;
+  variant: ClassUsageVariant;
   /** Every `entityKey` the walk actually visited. */
   visited: ReadonlySet<string>;
   /**

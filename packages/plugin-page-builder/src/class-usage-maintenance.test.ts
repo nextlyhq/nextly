@@ -251,6 +251,50 @@ describe("a row written before the locale column existed", () => {
   });
 });
 
+describe("a row carrying a variant outside the two the index models", () => {
+  it("is SKIPPED rather than read as one of them", async () => {
+    // `variant` partitions the index the way `scope` does: every query binds
+    // one value, so a row carrying anything else belongs to a family no real
+    // subject can name. Reading it as a row for the requested variant would be
+    // worse than ignoring it — the reconciler would see a reference the
+    // document does not make and delete a row that describes something else.
+    //
+    // Skipped rather than deleted, for the reason an unreadable row is: nothing
+    // here knows enough about it to remove it.
+    const calls: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [
+          // Would be a valid row for this subject in every column but one.
+          { ...page, id: "r1", variant: "preview", classId: "hero" },
+        ],
+        meta: { hasNext: false },
+      }),
+      create: async args => {
+        calls.push(`create:${String(args.data.classId)}`);
+        return {};
+      },
+      delete: async args => {
+        calls.push(`delete:${args.id}`);
+        return {};
+      },
+    };
+
+    const report = await maintainClassUsage({
+      store,
+      subject: page,
+      document: documentUsing("hero"),
+    });
+
+    // `hero` is inserted BECAUSE the unreadable row was not counted as one,
+    // and `r1` is left alone. Had the row been read, this would be a no-op —
+    // which is what makes the insert the evidence rather than the absence of a
+    // delete.
+    expect(report).toEqual({ inserted: 1, removed: 0, undetermined: false });
+    expect(calls).toEqual(["create:hero"]);
+  });
+});
+
 describe("a subject whose rows span several pages", () => {
   it("collects every page before reconciling", async () => {
     // The paging bound is a runaway guard and its VALUE asserts nothing about
