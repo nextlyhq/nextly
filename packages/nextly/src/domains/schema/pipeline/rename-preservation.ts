@@ -19,6 +19,9 @@
  * @module domains/schema/pipeline/rename-preservation
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import { conversionForRename } from "./rename-conversion";
 import { leadingToken } from "./rename-detector-type-families";
 
 /**
@@ -57,23 +60,88 @@ export interface RenamePreservation {
 const PRESERVED: RenamePreservation = { preserved: true };
 
 /**
- * Whether a rename between these two types leaves the stored values alone.
+ * The precision and scale a decimal declaration carries, when it carries them.
  *
- * Answered from the type tokens only — precision and scale are deliberately
- * not read. `numeric(10,2) -> float8` loses exactness at every scale, and a
- * conversion that depends on the DATA (whether any row exceeds the target's
- * precision) is a question for a probe against the rows, not for a table of
- * type names. Saying "preserved" here on the strength of a scale that happens
- * to fit would be the same overreach this module exists to remove.
+ * `numeric(10,2)` -> `{ precision: 10, scale: 2 }`; a bare `numeric` -> null,
+ * which is the unconstrained form and cannot be narrowed by anything.
  */
-export function renamePreservation(
+function decimalModifiers(
+  rawType: string
+): { precision: number; scale: number } | null {
+  const match = /\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)/.exec(rawType);
+  if (!match) return null;
+  return { precision: Number(match[1]), scale: Number(match[2] ?? 0) };
+}
+
+/**
+ * Whether the second declaration can hold everything the first could.
+ *
+ * Both the integer part and the fractional part have to survive: widening the
+ * scale while shrinking the precision moves the decimal point and drops
+ * leading digits, which a comparison on either number alone calls safe.
+ */
+function decimalWidens(
+  from: { precision: number; scale: number },
+  to: { precision: number; scale: number }
+): boolean {
+  return (
+    to.scale >= from.scale &&
+    to.precision - to.scale >= from.precision - from.scale
+  );
+}
+
+/**
+ * Whether renaming between these types emits a statement that rewrites rows.
+ *
+ * Asked of `conversionForRename` rather than by testing the dialect here: it
+ * emits nothing at all on SQLite, and two places deciding which renames
+ * convert anything is two places that can disagree.
+ */
+function emitsTypeConversion(
+  fromType: string,
+  toType: string,
+  dialect: SupportedDialect
+): boolean {
+  return conversionForRename(
+    {
+      type: "rename_column",
+      tableName: "",
+      fromColumn: "",
+      toColumn: "",
+      fromType,
+      toType,
+    },
+    dialect
+  ).some(op => op.type === "change_column_type");
+}
+
+/**
+ * The answer when both sides reduce to the same type token.
+ *
+ * `numeric(10,2) -> numeric(5,1)` reads as one type by name and is a real
+ * conversion: the fraction is rounded, and a value too large for the new
+ * precision fails outright.
+ */
+function sameTokenPreservation(
+  token: string,
   fromType: string,
   toType: string
 ): RenamePreservation {
-  const from = leadingToken(fromType);
-  const to = leadingToken(toType);
-  if (!from || !to || from === to) return PRESERVED;
+  if (!EXACT_DECIMAL.has(token)) return PRESERVED;
 
+  const from = decimalModifiers(fromType);
+  const to = decimalModifiers(toType);
+  if (!from || !to || decimalWidens(from, to)) return PRESERVED;
+
+  return {
+    preserved: false,
+    reason:
+      "the new precision is narrower, so values are rounded and one too large for it fails the conversion",
+  };
+}
+
+/** The answer when the two sides are different type tokens. */
+function crossTokenPreservation(from: string, to: string): RenamePreservation {
   if (EXACT_DECIMAL.has(from) && BINARY_FLOAT.has(to)) {
     return {
       preserved: false,
@@ -90,8 +158,8 @@ export function renamePreservation(
     };
   }
 
+  // Widening between floats keeps every value; narrowing does not.
   if (BINARY_FLOAT.has(from) && BINARY_FLOAT.has(to)) {
-    // Widening keeps every value; narrowing does not.
     return SINGLE_PRECISION.has(to) && !SINGLE_PRECISION.has(from)
       ? {
           preserved: false,
@@ -101,4 +169,27 @@ export function renamePreservation(
   }
 
   return PRESERVED;
+}
+
+/**
+ * Whether a rename between these two types leaves the stored values alone.
+ *
+ * `dialect` because the answer is a property of the CONVERSION rather than of
+ * the type names: a rename that emits no conversion cannot rewrite a row,
+ * whatever the two types are called.
+ */
+export function renamePreservation(
+  fromType: string,
+  toType: string,
+  dialect: SupportedDialect
+): RenamePreservation {
+  if (!emitsTypeConversion(fromType, toType, dialect)) return PRESERVED;
+
+  const from = leadingToken(fromType);
+  const to = leadingToken(toType);
+  if (!from || !to) return PRESERVED;
+
+  return from === to
+    ? sameTokenPreservation(from, fromType, toType)
+    : crossTokenPreservation(from, to);
 }

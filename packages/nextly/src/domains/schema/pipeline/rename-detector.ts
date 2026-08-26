@@ -64,7 +64,7 @@ export class RegexRenameDetector implements RenameDetector {
           // Asked whatever the compatibility answer was: an incompatible pair
           // is offered as drop_and_add and never claims preservation, so the
           // two questions stay independent rather than one gating the other.
-          const preservation = renamePreservation(fromType, toType);
+          const preservation = renamePreservation(fromType, toType, dialect);
           candidates.push({
             tableName,
             fromColumn: drop.columnName,
