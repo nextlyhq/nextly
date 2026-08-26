@@ -124,13 +124,28 @@ describe("renamePreservation - an exact decimal narrowed against itself", () => 
     ).toBe(false);
   });
 
-  it("leaves an unconstrained decimal alone", () => {
-    // A bare `numeric` has no precision to narrow.
-    expect(
-      renamePreservation("numeric", "numeric(5,1)", "postgresql").preserved
-    ).toBe(true);
+  it("preserves a bounded decimal widened into an unconstrained one", () => {
+    // A bare `numeric` has room for anything `numeric(5,1)` held.
     expect(
       renamePreservation("numeric(5,1)", "numeric", "postgresql").preserved
+    ).toBe(true);
+  });
+
+  it("does NOT preserve an unconstrained decimal narrowed into a bounded one", () => {
+    // The other direction of the same pair, and the opposite answer: a bare
+    // `numeric` is the widest decimal there is, so constraining it rounds
+    // every value to the new scale and fails on any too large for the new
+    // precision.
+    const answer = renamePreservation("numeric", "numeric(5,1)", "postgresql");
+    expect(answer.preserved).toBe(false);
+    expect(answer.reason).toContain("set no limit");
+  });
+
+  it("preserves a rename between two unconstrained decimals", () => {
+    // Answered before the declarations are compared at all: the two spellings
+    // normalise to one type, so the rename emits no conversion to rewrite.
+    expect(
+      renamePreservation("numeric", "decimal", "postgresql").preserved
     ).toBe(true);
   });
 });

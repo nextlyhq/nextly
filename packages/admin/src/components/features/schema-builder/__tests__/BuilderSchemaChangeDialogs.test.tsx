@@ -35,6 +35,7 @@ function confirmationOf(
 ): SchemaChangeConfirmation {
   return {
     preview: p,
+    previewId: 1,
     isOpen: true,
     isApplying: false,
     request: vi.fn(),

@@ -63,6 +63,7 @@ function confirmationStub(
 ): SchemaChangeConfirmation {
   return {
     preview: pending,
+    previewId: pending === null ? 0 : 1,
     isOpen: pending !== null,
     isApplying: false,
     request: vi.fn(),

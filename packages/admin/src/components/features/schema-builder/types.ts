@@ -497,6 +497,17 @@ export interface SchemaChangeConfirmation {
   isOpen: boolean;
   /** True from the moment the user confirms until the apply settles. */
   isApplying: boolean;
+  /**
+   * Which preview this is, counting from the first.
+   *
+   * The dialog carries the author's unsaved answers — which rename to apply,
+   * what default to give a column going NOT NULL — and dismissing a preview
+   * keeps it mounted so a retry re-opens those answers. A DIFFERENT preview
+   * arriving must not inherit them: it describes other columns, and an answer
+   * about one is not an answer about another. Rendering the dialog under this
+   * key gives each preview its own instance.
+   */
+  previewId: number;
   /** Put a previewed change in front of the user. */
   request: (preview: SchemaPreviewResponse) => void;
   /** Dismiss without applying. The preview is kept, so a retry re-opens it. */

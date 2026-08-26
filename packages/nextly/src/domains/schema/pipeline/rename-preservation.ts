@@ -60,30 +60,44 @@ export interface RenamePreservation {
 const PRESERVED: RenamePreservation = { preserved: true };
 
 /**
- * The precision and scale a decimal declaration carries, when it carries them.
+ * What a decimal declaration says it can hold.
  *
- * `numeric(10,2)` -> `{ precision: 10, scale: 2 }`; a bare `numeric` -> null,
- * which is the unconstrained form and cannot be narrowed by anything.
+ * A declaration is either bounded — `numeric(10,2)` — or unbounded, which is
+ * what a bare `numeric` is: PostgreSQL lets it hold any value up to the
+ * implementation limit. Those are the only two, and they are kept apart
+ * because they behave OPPOSITELY at the two ends of a conversion. An earlier
+ * shape returned `null` for the unbounded case, which read as "nothing to
+ * compare" and so answered `preserved` in both directions — hiding that an
+ * unbounded source narrowing into a bounded target is the one combination
+ * that can round or overflow.
  */
-function decimalModifiers(
-  rawType: string
-): { precision: number; scale: number } | null {
+type DecimalRange =
+  | { bounded: false }
+  | { bounded: true; precision: number; scale: number };
+
+function decimalRange(rawType: string): DecimalRange {
   const match = /\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)/.exec(rawType);
-  if (!match) return null;
-  return { precision: Number(match[1]), scale: Number(match[2] ?? 0) };
+  if (!match) return { bounded: false };
+  return {
+    bounded: true,
+    precision: Number(match[1]),
+    scale: Number(match[2] ?? 0),
+  };
 }
 
 /**
  * Whether the second declaration can hold everything the first could.
  *
- * Both the integer part and the fractional part have to survive: widening the
- * scale while shrinking the precision moves the decimal point and drops
- * leading digits, which a comparison on either number alone calls safe.
+ * Between two bounded declarations both the integer part and the fractional
+ * part have to survive: widening the scale while shrinking the precision moves
+ * the decimal point and drops leading digits, which a comparison on either
+ * number alone calls safe.
  */
-function decimalWidens(
-  from: { precision: number; scale: number },
-  to: { precision: number; scale: number }
-): boolean {
+function decimalHolds(from: DecimalRange, to: DecimalRange): boolean {
+  // Nothing a decimal can carry is too large for an unbounded target.
+  if (!to.bounded) return true;
+  // An unbounded source can carry values no bounded target has room for.
+  if (!from.bounded) return false;
   return (
     to.scale >= from.scale &&
     to.precision - to.scale >= from.precision - from.scale
@@ -129,14 +143,15 @@ function sameTokenPreservation(
 ): RenamePreservation {
   if (!EXACT_DECIMAL.has(token)) return PRESERVED;
 
-  const from = decimalModifiers(fromType);
-  const to = decimalModifiers(toType);
-  if (!from || !to || decimalWidens(from, to)) return PRESERVED;
+  const from = decimalRange(fromType);
+  const to = decimalRange(toType);
+  if (decimalHolds(from, to)) return PRESERVED;
 
   return {
     preserved: false,
-    reason:
-      "the new precision is narrower, so values are rounded and one too large for it fails the conversion",
+    reason: from.bounded
+      ? "the new precision is narrower, so values are rounded and one too large for it fails the conversion"
+      : "the old declaration set no limit, so values are rounded to the new scale and one too large for its precision fails the conversion",
   };
 }
 

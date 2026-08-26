@@ -45,6 +45,24 @@ export class PromptCancelledError extends Error {
   }
 }
 
+/**
+ * What the operator is told before answering.
+ *
+ * Both answers cost something once a conversion is involved, so the prompt
+ * names both costs rather than only the one that follows from declining.
+ * Accepting a value-changing rename rewrites the stored values; declining it
+ * drops the column and loses all of them, which is why the suggested answer
+ * stays `rename` — it is the smaller loss, not a safe one.
+ */
+function renamePromptMessage(c: RenameCandidate): string {
+  const move = `${c.tableName}.${c.fromColumn} → ${c.tableName}.${c.toColumn}`;
+  if (c.preservesValues) {
+    return `Detected possible rename: ${move}. Apply as rename? (declining will treat as DROP + ADD, losing data)`;
+  }
+  const effect = c.valueChangeReason ?? "the stored values change";
+  return `Detected possible rename: ${move} (${c.fromType} → ${c.toType}). This rename CHANGES the stored values: ${effect}. Apply as rename? (declining will treat as DROP + ADD, losing every value instead)`;
+}
+
 export async function promptRenames(
   candidates: RenameCandidate[],
   opts: PromptRenamesOptions = {}
@@ -52,11 +70,17 @@ export async function promptRenames(
   const decisions: RenameDecision[] = [];
   for (const c of candidates) {
     if (opts.nonInteractive) {
-      decisions.push({ candidate: c, accepted: opts.autoAccept === true });
+      const accepted = opts.autoAccept === true;
+      if (accepted && !c.preservesValues) {
+        p.log.warn(
+          `Accepted rename ${c.tableName}.${c.fromColumn} → ${c.toColumn} changes the stored values: ${c.valueChangeReason ?? "the stored values change"}`
+        );
+      }
+      decisions.push({ candidate: c, accepted });
       continue;
     }
     const answer = await p.confirm({
-      message: `Detected possible rename: ${c.tableName}.${c.fromColumn} → ${c.tableName}.${c.toColumn}. Apply as rename? (declining will treat as DROP + ADD, losing data)`,
+      message: renamePromptMessage(c),
       initialValue: c.defaultSuggestion === "rename",
     });
     if (p.isCancel(answer)) {
