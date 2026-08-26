@@ -38,6 +38,7 @@ import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import { isPlainRecord } from "@nextlyhq/blocks-engine";
 
 import {
+  forgetAbsentDocuments,
   maintainClassUsage,
   type ClassUsageIndexStore,
 } from "./class-usage-maintenance";
@@ -69,6 +70,17 @@ export interface ClassUsageDocumentStore {
     limit: number;
     page: number;
     sort: string;
+    /**
+     * Which locale's values to resolve, when the field is localized.
+     *
+     * Required on the contract rather than optional, because omitting it is not
+     * neutral: the read resolves the DEFAULT locale and the rows are then filed
+     * under whichever locale was asked for. That records one translation's
+     * classes as another's, and removes the rows for classes only the real
+     * translation uses — the under-count that permits deleting a class a page
+     * still renders.
+     */
+    locale: string;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
 }
 
@@ -78,6 +90,14 @@ export interface ClassUsageRebuildReport {
   scanned: number;
   /** Documents whose rows disagreed with them and were rewritten. */
   repaired: number;
+  /**
+   * Rows dropped because the document they described no longer exists.
+   *
+   * Counted apart from `repaired`, which is about documents this walk SAW. A
+   * document deleted through a path that bypassed maintenance is never seen,
+   * and its surviving rows are the damage a rebuild exists to repair.
+   */
+  orphansRemoved: number;
   /**
    * Documents that could not be read whole, and whose count is therefore not
    * trustworthy.
@@ -121,7 +141,8 @@ async function rebuildOnePage(
     field: string;
     locale?: string;
     limits?: DocumentLimits;
-  }
+  },
+  visited: Set<string>
 ): Promise<PageTally> {
   let scanned = 0;
   let repaired = 0;
@@ -130,6 +151,7 @@ async function rebuildOnePage(
   for (const item of items) {
     if (!isStoredDocument(item)) continue;
     scanned += 1;
+    visited.add(item.id);
 
     const report = await maintainClassUsage({
       store: args.index,
@@ -191,6 +213,10 @@ export async function rebuildClassUsageIndex(args: {
   let scanned = 0;
   let repaired = 0;
   let undetermined = 0;
+  // Collected during the SAME walk that reconciles, rather than by reading the
+  // documents again. Two reads would let a document created between them be
+  // read as absent, and lose rows it should keep.
+  const visited = new Set<string>();
 
   await walkPages({
     maxPages: MAX_PAGES,
@@ -201,14 +227,29 @@ export async function rebuildClassUsageIndex(args: {
         limit: PAGE_SIZE,
         page,
         sort: "id",
+        // The SAME locale the rows are filed under. Reading one locale and
+        // filing it as another is the whole of the defect this closes.
+        locale: args.locale ?? "",
       }),
     onPage: async items => {
-      const tally = await rebuildOnePage(items, args);
+      const tally = await rebuildOnePage(items, args, visited);
       scanned += tally.scanned;
       repaired += tally.repaired;
       undetermined += tally.undetermined;
     },
   });
 
-  return { scanned, repaired, undetermined };
+  // AFTER the walk, and only after it completed: the sweep decides absence from
+  // the set of documents actually seen, so running it against a partial walk
+  // would delete the rows of every document the walk had not reached yet.
+  const { removed } = await forgetAbsentDocuments({
+    store: args.index,
+    scope: "collection",
+    entity: args.collection,
+    field: args.field,
+    locale: args.locale ?? "",
+    visited,
+  });
+
+  return { scanned, repaired, undetermined, orphansRemoved: removed };
 }

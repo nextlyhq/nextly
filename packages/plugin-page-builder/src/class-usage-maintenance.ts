@@ -71,6 +71,7 @@ import {
   type ClassUsageRow,
   type ClassUsageScope,
 } from "./collections/class-usage-index";
+import { walkPages } from "./paged-walk";
 import { readStoredJson } from "./stored-json";
 
 /**
@@ -186,43 +187,34 @@ async function storedRowsWhere(
   describe: string
 ): Promise<StoredClassUsageRow[]> {
   const rows: StoredClassUsageRow[] = [];
-  // Bounded by PAGES REQUESTED rather than by rows collected: a store answering
-  // `hasNext` forever with an empty page never grows `rows`, so a row-count
-  // bound would spin without end. Termination has to depend on a counter the
-  // store cannot hold still.
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const result = await store.find({
-      collection: CLASS_USAGE_INDEX_SLUG,
-      where,
-      limit: PAGE_SIZE,
-      page,
-      // Ordered by a column these writes cannot move. Offset paging reads
-      // position N of an ordered set, so ordering by anything this maintenance
-      // rewrites would reshuffle rows between queries and skip some.
-      sort: "id",
-    });
-    for (const item of result.items) {
-      const row = readStoredRow(item);
-      if (row === null) continue;
-      // Validated HERE rather than by each consumer. Every path that reads rows
-      // goes on to delete some of them, and a row outside the requested
-      // predicates is another document's — the misbound-query failure. Guarding
-      // at the source covers reconciliation, the per-subject forget and the
-      // removed-field sweep at once; guarding per consumer covered the first
-      // and missed the two added after it.
-      assertRowMatches(row, where, describe);
-      rows.push(row);
-    }
-    if (!result.meta.hasNext) return rows;
-  }
-  // More rows than the document could have produced under the bounds it was
-  // read with. Reported rather than absorbed: a partial row set reconciled
-  // against reads every unread row as a reference the document has dropped.
-  throw new Error(
-    `Class-usage index still reported more rows after ${MAX_PAGES} pages of ` +
-      `${PAGE_SIZE} for ${describe}, ` +
-      `which is more than any document can reference — the store's paging is wrong.`
-  );
+  await walkPages({
+    maxPages: MAX_PAGES,
+    describe,
+    fetchPage: page =>
+      store.find({
+        collection: CLASS_USAGE_INDEX_SLUG,
+        where,
+        limit: PAGE_SIZE,
+        page,
+        // Ordered by a column these writes cannot move. Offset paging reads
+        // position N of an ordered set, so ordering by anything this
+        // maintenance rewrites would reshuffle rows between queries and skip
+        // some — and a skipped row reads as a reference the document dropped.
+        sort: "id",
+      }),
+    onPage: items => {
+      for (const item of items) {
+        const row = readStoredRow(item);
+        if (row === null) continue;
+        // Validated HERE rather than by each consumer. Every path that reads
+        // rows goes on to delete some of them, and a row outside the requested
+        // predicates is another document's.
+        assertRowMatches(row, where, describe);
+        rows.push(row);
+      }
+    },
+  });
+  return rows;
 }
 
 /**
@@ -336,4 +328,51 @@ export async function maintainClassUsage(args: {
     removed: remove.length,
     undetermined: !derivation.complete,
   };
+}
+
+/**
+ * Drop rows belonging to documents that no longer exist.
+ *
+ * A walk over live documents can only reconcile the ones it finds. A document
+ * deleted through a path that did not maintain the index — a direct database
+ * edit, a restore, a bulk operation — never appears in that walk, so its rows
+ * survive a rebuild that reports success. The class it referenced then reads as
+ * used by a document nobody can open, and can never be deleted.
+ *
+ * Answerable only by comparing the index against the set of documents actually
+ * seen, which is why the caller supplies that set rather than this reading it
+ * again: the two must be the same walk, or a document created between them is
+ * read as absent and loses rows it should keep.
+ *
+ * Scoped to one entity, field and locale, so a rebuild of one blocks field
+ * cannot remove rows belonging to another.
+ */
+export async function forgetAbsentDocuments(args: {
+  store: ClassUsageIndexStore;
+  scope: ClassUsageScope;
+  entity: string;
+  field: string;
+  locale: string;
+  /** Every `entityKey` the walk actually visited. */
+  visited: ReadonlySet<string>;
+}): Promise<{ removed: number }> {
+  const where = {
+    scope: { equals: args.scope },
+    entity: { equals: args.entity },
+    field: { equals: args.field },
+    locale: { equals: args.locale },
+  };
+  const rows = await storedRowsWhere(
+    args.store,
+    where,
+    `${args.scope}:${args.entity}:*:${args.field}`
+  );
+
+  let removed = 0;
+  for (const row of rows) {
+    if (args.visited.has(row.entityKey)) continue;
+    await args.store.delete({ collection: CLASS_USAGE_INDEX_SLUG, id: row.id });
+    removed += 1;
+  }
+  return { removed };
 }

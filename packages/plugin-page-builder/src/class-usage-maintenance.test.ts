@@ -170,7 +170,7 @@ describe("maintaining one subject's rows", () => {
         subject: page,
         document: documentUsing("hero"),
       })
-    ).rejects.toThrow(/still reported more rows after \d+ pages/);
+    ).rejects.toThrow(/stopped after \d+ pages/);
   });
 
   it("passes a stored row's OWN subject through, so a foreign row is refused", async () => {

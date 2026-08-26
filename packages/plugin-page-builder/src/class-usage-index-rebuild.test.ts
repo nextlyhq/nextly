@@ -29,7 +29,9 @@ function documentStore(items: unknown[], pages = 1) {
   const calls: string[] = [];
   const store: ClassUsageDocumentStore = {
     find: async args => {
-      calls.push(`find:page=${args.page}:sort=${args.sort}`);
+      calls.push(
+        `find:page=${args.page}:sort=${args.sort}:locale=${args.locale}`
+      );
       return { items, meta: { hasNext: args.page < pages } };
     },
   };
@@ -76,7 +78,12 @@ describe("rebuilding the class-usage index", () => {
       field: "content",
     });
 
-    expect(report).toEqual({ scanned: 2, repaired: 2, undetermined: 0 });
+    expect(report).toEqual({
+      scanned: 2,
+      repaired: 2,
+      undetermined: 0,
+      orphansRemoved: 0,
+    });
     expect(index.calls).toEqual(["create:page-1:hero", "create:page-2:card"]);
   });
 
@@ -96,7 +103,7 @@ describe("rebuilding the class-usage index", () => {
       field: "content",
     });
 
-    expect(docs.calls).toEqual(["find:page=1:sort=id"]);
+    expect(docs.calls).toEqual(["find:page=1:sort=id:locale="]);
   });
 
   it("scans a document already in agreement WITHOUT repairing it", async () => {
@@ -125,7 +132,12 @@ describe("rebuilding the class-usage index", () => {
       field: "content",
     });
 
-    expect(report).toEqual({ scanned: 1, repaired: 0, undetermined: 0 });
+    expect(report).toEqual({
+      scanned: 1,
+      repaired: 0,
+      undetermined: 0,
+      orphansRemoved: 0,
+    });
     expect(index.calls).toEqual([]);
   });
 
@@ -155,7 +167,12 @@ describe("rebuilding the class-usage index", () => {
       limits: { ...DEFAULT_LIMITS, maxNodes: 5 },
     });
 
-    expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 1 });
+    expect(report).toEqual({
+      scanned: 1,
+      repaired: 1,
+      undetermined: 1,
+      orphansRemoved: 0,
+    });
   });
 
   it("skips an item it cannot read an id out of, rather than failing the walk", async () => {
@@ -176,7 +193,12 @@ describe("rebuilding the class-usage index", () => {
       field: "content",
     });
 
-    expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
+    expect(report).toEqual({
+      scanned: 1,
+      repaired: 1,
+      undetermined: 0,
+      orphansRemoved: 0,
+    });
     expect(index.calls).toEqual(["create:page-1:hero"]);
   });
 
@@ -197,5 +219,95 @@ describe("rebuilding the class-usage index", () => {
         field: "content",
       })
     ).rejects.toThrow(/stopped after \d+ pages/);
+  });
+});
+
+describe("the locale a rebuild reads under", () => {
+  it("asks the document store for the SAME locale the rows are filed under", async () => {
+    // The Direct API resolves a localized field from the query's locale. Filing
+    // rows under one locale while reading another records one translation's
+    // classes as another's — and removes the rows for classes only the real
+    // translation uses, which is the under-count that permits deleting a class
+    // a page still renders.
+    const docs = documentStore([
+      { id: "page-1", content: documentUsing("hero") },
+    ]);
+    const index = indexStore();
+
+    await rebuildClassUsageIndex({
+      documents: docs.store,
+      index: index.store,
+      collection: "pages",
+      field: "content",
+      locale: "fr",
+    });
+
+    expect(docs.calls).toEqual(["find:page=1:sort=id:locale=fr"]);
+    expect(index.calls).toEqual(["create:page-1:hero"]);
+  });
+});
+
+describe("rows whose document no longer exists", () => {
+  it("removes them, and counts them apart from repairs", async () => {
+    // A document deleted through a path that bypassed maintenance never appears
+    // in the walk, so its rows survive a rebuild that reports success. The
+    // class it referenced then reads as used by a document nobody can open.
+    const docs = documentStore([
+      { id: "page-1", content: documentUsing("hero") },
+    ]);
+    const rows = [
+      {
+        id: "r1",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "page-1",
+        field: "content",
+        locale: "",
+        classId: "hero",
+      },
+      {
+        id: "r9",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "deleted-page",
+        field: "content",
+        locale: "",
+        classId: "ghost",
+      },
+    ];
+    const calls: string[] = [];
+    const index: ClassUsageIndexStore = {
+      find: async args => {
+        const key = args.where.entityKey?.equals;
+        // The sweep asks WITHOUT an entityKey; maintenance asks with one.
+        return {
+          items:
+            key === undefined ? rows : rows.filter(r => r.entityKey === key),
+          meta: { hasNext: false },
+        };
+      },
+      create: async () => ({}),
+      delete: async args => {
+        calls.push(`delete:${args.id}`);
+        return {};
+      },
+    };
+
+    const report = await rebuildClassUsageIndex({
+      documents: docs.store,
+      index,
+      collection: "pages",
+      field: "content",
+    });
+
+    // `page-1` was seen and agreed, so nothing was repaired. `deleted-page` was
+    // never seen, so its row went.
+    expect(report).toEqual({
+      scanned: 1,
+      repaired: 0,
+      undetermined: 0,
+      orphansRemoved: 1,
+    });
+    expect(calls).toEqual(["delete:r9"]);
   });
 });

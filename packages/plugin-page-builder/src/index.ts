@@ -79,6 +79,12 @@ export type { SiteStyleReader } from "./site-style-storage";
 export { classUsageOf } from "./class-usage";
 export type { ClassUsage } from "./class-usage";
 export { rebuildClassUsage } from "./class-usage-rebuild";
+export {
+  rebuildClassUsageIndex,
+  type ClassUsageDocumentStore,
+  type ClassUsageRebuildReport,
+} from "./class-usage-index-rebuild";
+export type { ClassUsageIndexStore } from "./class-usage-maintenance";
 export type { PageUsageStore, RebuildReport } from "./class-usage-rebuild";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
