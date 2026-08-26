@@ -42,6 +42,7 @@ import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
+import { predecessorOf, sameLocaleVersions } from "./version-pairing";
 import { VersionCompareDialog } from "./VersionCompareDialog";
 import { versionsHref } from "./VersionComparePage";
 import { VersionLabelDialog } from "./VersionLabelDialog";
@@ -284,24 +285,18 @@ export function VersionHistorySheet({
   // "current" and "previous" targets are drawn only from versions sharing the
   // selected row's locale. "Previous" is the next-older row in that set, not
   // `selected - 1`, since retention can leave gaps in the numbering.
-  const selectedLocale =
-    selected === null
-      ? null
-      : (versions.find(v => v.versionNo === selected)?.locale ?? null);
-  const sameLocaleVersions =
-    selected === null
-      ? []
-      : versions.filter(
-          v => v.versionNo !== null && (v.locale ?? null) === selectedLocale
-        );
-  const latestVersionNo = sameLocaleVersions[0]?.versionNo ?? null;
-  const sameLocaleIndex = sameLocaleVersions.findIndex(
-    v => v.versionNo === selected
-  );
+  const localeVersions =
+    selected === null ? [] : sameLocaleVersions(versions, selected);
+  const latestVersionNo = localeVersions[0]?.versionNo ?? null;
+  // The comparison page's rail asks this same question, so it is answered in
+  // one place. Passing `false` for "more pages exist" is deliberate here: this
+  // panel pages forward on its own below until the previous target resolves or
+  // the history runs out, so by the time this is read an absent predecessor
+  // means there is none rather than that none has loaded.
+  const previousTarget =
+    selected === null ? null : predecessorOf(versions, selected, false);
   const previousVersionNo =
-    sameLocaleIndex >= 0
-      ? (sameLocaleVersions[sameLocaleIndex + 1]?.versionNo ?? null)
-      : null;
+    previousTarget?.kind === "version" ? previousTarget.versionNo : null;
   // The previewed version must still be in the refreshed list. Retention can
   // prune it out from under the preview (a save in another tab, then a focus
   // refetch), and comparing a version that no longer exists would request a diff
@@ -603,22 +598,26 @@ export function VersionHistorySheet({
                 stays for a quick look without leaving the document; this is
                 for reading a change properly, and its address names the pair
                 so it can be shared. */}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                navigateTo(
-                  versionsHref(
-                    scope,
-                    previousVersionNo === null
-                      ? undefined
-                      : { from: previousVersionNo, to: selected }
+            {/* Only offered once the pair it would open is known. Omitting the
+                pair does not open "this version with nothing"; the destination
+                reads an absent pair as the two NEWEST versions, so the control
+                would silently show a comparison the reader did not ask for. */}
+            {canComparePrevious && previousVersionNo !== null ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  navigateTo(
+                    versionsHref(scope, {
+                      from: previousVersionNo,
+                      to: selected,
+                    })
                   )
-                )
-              }
-            >
-              Open full comparison
-            </Button>
+                }
+              >
+                Open full comparison
+              </Button>
+            ) : null}
             {canComparePrevious && previousVersionNo !== null ? (
               <Button
                 variant="outline"

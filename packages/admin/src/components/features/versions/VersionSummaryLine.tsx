@@ -17,6 +17,8 @@
 import { useVersionDiff } from "@admin/hooks/queries/useVersions";
 import type { VersionScope } from "@admin/services/versionApi";
 
+import type { Predecessor } from "./version-pairing";
+
 /** How many field names are listed before the rest are counted instead. */
 const NAMED_FIELDS = 3;
 
@@ -25,11 +27,15 @@ export interface VersionSummaryLineProps {
   /** The version being summarised. */
   versionNo: number;
   /**
-   * The version it is compared against — the next-older one in the same locale.
-   * Null for the oldest version, which has nothing to be compared with and is
-   * described as the first record rather than as a change.
+   * What this version is compared against — the next-older one in the same
+   * locale, or why there is none.
+   *
+   * Three states rather than a nullable number, because "there is nothing
+   * older" and "nothing older has loaded yet" read identically to a consumer
+   * and point a reader in opposite directions: one is a fact about the
+   * document, the other is a fact about the scroll position.
    */
-  previousVersionNo: number | null;
+  previous: Predecessor;
   /**
    * Whether to fetch. A long history would otherwise issue one comparison
    * request per row on mount, so a caller fetches only for the rows a reader
@@ -46,24 +52,30 @@ function changedLabels(fields: readonly { label?: string; name: string }[]) {
 export function VersionSummaryLine({
   scope,
   versionNo,
-  previousVersionNo,
+  previous,
   enabled = true,
 }: VersionSummaryLineProps) {
+  const from = previous.kind === "version" ? previous.versionNo : null;
   const diff = useVersionDiff({
     scope,
-    from: previousVersionNo,
+    from,
     to: versionNo,
     modifiedOnly: true,
-    enabled: enabled && previousVersionNo !== null,
+    enabled: enabled && from !== null,
   });
 
-  if (previousVersionNo === null) {
+  if (previous.kind === "first") {
     return (
       <span className="text-xs text-muted-foreground">
         The first recorded version
       </span>
     );
   }
+
+  // Nothing older has loaded, which is not the same as nothing older existing.
+  // Silence is the honest answer: claiming this is the first recorded version
+  // would be a statement about the document made from the scroll position.
+  if (previous.kind === "unknown") return null;
 
   // Silent while unknown rather than guessing. A row that says "1 field
   // changed" and then corrects itself is worse than a row that says nothing

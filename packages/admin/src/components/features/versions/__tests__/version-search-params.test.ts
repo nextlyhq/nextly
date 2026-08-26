@@ -35,14 +35,18 @@ describe("readVersionParam", () => {
 });
 
 describe("resolvePair", () => {
+  /** A history of one locale, newest first. */
+  const rows = (...numbers: number[]) =>
+    numbers.map(versionNo => ({ versionNo, locale: null }));
+
   it("takes the pair the URL names", () => {
-    expect(resolvePair([9, 8, 7], 7, 9)).toEqual({ from: 7, to: 9 });
+    expect(resolvePair(rows(9, 8, 7), 7, 9, false)).toEqual({ from: 7, to: 9 });
   });
 
   it("defaults to the two newest versions when the URL names none", () => {
     // Arriving without a pair is the ordinary case, and the most recent change
     // is what that reader came for.
-    expect(resolvePair([9, 8, 7], undefined, undefined)).toEqual({
+    expect(resolvePair(rows(9, 8, 7), undefined, undefined, false)).toEqual({
       from: 8,
       to: 9,
     });
@@ -52,16 +56,48 @@ describe("resolvePair", () => {
     // History is paginated. Refusing an older pair because it has not been
     // fetched yet would break exactly the shared link this supports; the
     // request that follows is what decides whether those versions exist.
-    expect(resolvePair([9, 8], 2, 3)).toEqual({ from: 2, to: 3 });
+    expect(resolvePair(rows(9, 8), 2, 3, true)).toEqual({ from: 2, to: 3 });
   });
 
   it("refuses when only one half is named, rather than inventing the other", () => {
-    expect(resolvePair([9, 8], 5, undefined)).toEqual({ from: 8, to: 9 });
-    expect(resolvePair([9, 8], undefined, 5)).toEqual({ from: 8, to: 9 });
+    expect(resolvePair(rows(9, 8), 5, undefined, false)).toEqual({
+      from: 8,
+      to: 9,
+    });
+    expect(resolvePair(rows(9, 8), undefined, 5, false)).toEqual({
+      from: 8,
+      to: 9,
+    });
   });
 
   it("has nothing to compare with a single version", () => {
-    expect(resolvePair([1], undefined, undefined)).toBeNull();
-    expect(resolvePair([], undefined, undefined)).toBeNull();
+    expect(resolvePair(rows(1), undefined, undefined, false)).toBeNull();
+    expect(resolvePair([], undefined, undefined, false)).toBeNull();
+  });
+
+  it("MUST NOT default to a pair spanning two locales", () => {
+    // The server rejects a cross-locale pair outright, so defaulting to the two
+    // newest ROWS renders an API error on a page opened with no parameters —
+    // which is how every reader arrives from the history panel.
+    const interleaved = [
+      { versionNo: 5, locale: "en" },
+      { versionNo: 4, locale: "fr" },
+      { versionNo: 3, locale: "en" },
+    ];
+    expect(resolvePair(interleaved, undefined, undefined, false)).toEqual({
+      from: 3,
+      to: 5,
+    });
+  });
+
+  it("refuses a default when the newest version's predecessor has not loaded", () => {
+    // Its locale has one loaded row and more pages exist, so whether anything
+    // older exists is not yet known. Guessing the row below is what produced a
+    // cross-locale pair.
+    const interleaved = [
+      { versionNo: 5, locale: "en" },
+      { versionNo: 4, locale: "fr" },
+    ];
+    expect(resolvePair(interleaved, undefined, undefined, true)).toBeNull();
   });
 });

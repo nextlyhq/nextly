@@ -43,7 +43,7 @@ const PAGE_SIZE = 25;
  * only on the slug would let a client that fetched before the recreation
  * re-render those cached pages without asking again.
  */
-function scopeKey(scope: VersionScope): readonly string[] {
+export function scopeKey(scope: VersionScope): readonly string[] {
   return scope.kind === "single"
     ? ["single", scope.slug, scope.documentId]
     : ["collection", scope.slug, scope.entryId];

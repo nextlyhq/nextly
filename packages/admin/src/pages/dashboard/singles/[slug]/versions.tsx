@@ -46,6 +46,10 @@ export default function SingleVersionsPage({
     <VersionComparePage
       scope={{ kind: "single", slug, documentId: String(documentId) }}
       documentHref={buildRoute(ROUTES.SINGLE_EDIT, { slug })}
+      // Reaching this page needs `read-${slug}`; the single's own editor needs
+      // `update-${slug}`. The singles index carries no per-document permission,
+      // so it is reachable by anyone who could open this history.
+      readOnlyHref={ROUTES.SINGLES}
       from={readVersionParam(searchParams?.from)}
       to={readVersionParam(searchParams?.to)}
     />

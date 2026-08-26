@@ -9,6 +9,8 @@
  * @module components/features/versions/version-search-params
  */
 
+import { defaultPair, type PairableVersion } from "./version-pairing";
+
 /**
  * One numeric search parameter, or undefined for anything that is not a version
  * number. A repeated parameter takes its first value, matching how a browser
@@ -42,12 +44,15 @@ export function readVersionParam(
  * whether the versions exist.
  */
 export function resolvePair(
-  versionNumbers: readonly number[],
+  versions: readonly PairableVersion[],
   from: number | undefined,
-  to: number | undefined
+  to: number | undefined,
+  hasMore: boolean
 ): { from: number; to: number } | null {
   if (from !== undefined && to !== undefined) return { from, to };
-  const [newest, previous] = versionNumbers;
-  if (newest === undefined || previous === undefined) return null;
-  return { from: previous, to: newest };
+  // The default pair is derived rather than read off the top of the list: on a
+  // localized document the two newest rows are routinely different languages,
+  // and the server rejects a cross-locale pair — so a page opened with no
+  // parameters would render an API error instead of the most recent change.
+  return defaultPair(versions, hasMore);
 }

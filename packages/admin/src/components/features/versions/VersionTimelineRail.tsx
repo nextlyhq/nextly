@@ -14,6 +14,7 @@ import { Badge, Button, Skeleton } from "@admin/components/ui";
 import { formatDateTime } from "@admin/lib/dates/format";
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
+import { predecessorOf, type Predecessor } from "./version-pairing";
 import { VersionSummaryLine } from "./VersionSummaryLine";
 
 /** How many rows fetch their summary. Beyond this a reader has to scroll. */
@@ -26,6 +27,13 @@ export interface VersionTimelineRailProps {
   selected: number | null;
   onSelect: (versionNo: number) => void;
   isLoading?: boolean;
+  /**
+   * Whether the history could not be read. The pane beside this one reports the
+   * failure; without this the rail would answer the same empty list with "No
+   * versions yet", which is a claim about the document rather than about the
+   * request.
+   */
+  isError?: boolean;
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
   onLoadMore?: () => void;
@@ -74,14 +82,14 @@ function RowHeading({ version }: { version: VersionMeta }) {
 function TimelineRow({
   scope,
   version,
-  previousVersionNo,
+  previous,
   active,
   summarised,
   onSelect,
 }: {
   scope: VersionScope;
   version: VersionMeta;
-  previousVersionNo: number | null;
+  previous: Predecessor;
   active: boolean;
   summarised: boolean;
   onSelect: (versionNo: number) => void;
@@ -111,7 +119,7 @@ function TimelineRow({
             <VersionSummaryLine
               scope={scope}
               versionNo={versionNo}
-              previousVersionNo={previousVersionNo}
+              previous={previous}
               enabled={summarised}
             />
           )}
@@ -127,11 +135,18 @@ export function VersionTimelineRail({
   selected,
   onSelect,
   isLoading = false,
+  isError = false,
   hasNextPage = false,
   isFetchingNextPage = false,
   onLoadMore,
 }: VersionTimelineRailProps) {
   if (isLoading) return <RailSkeleton />;
+
+  // A failed read leaves the list empty exactly as an empty history does, and
+  // the two must not render alike: telling someone to save their first version
+  // beside a pane reporting that history could not be loaded is advice that
+  // would destroy nothing but would leave them believing their history is gone.
+  if (isError) return null;
 
   if (versions.length === 0) {
     return (
@@ -154,9 +169,16 @@ export function VersionTimelineRail({
             key={version.id}
             scope={scope}
             version={version}
-            // The next row down is the version before this one, which is what
-            // this row's summary describes and what choosing it compares against.
-            previousVersionNo={versions[index + 1]?.versionNo ?? null}
+            // Derived rather than read off the next row down: that row is the
+            // version before this one only when both are in the same locale,
+            // and at the bottom of a loaded page there may simply be no answer
+            // yet. Both consumers — this row's summary and selecting it — read
+            // the same result.
+            previous={predecessorOf(
+              versions,
+              version.versionNo ?? -1,
+              hasNextPage
+            )}
             active={
               version.versionNo !== null && version.versionNo === selected
             }
