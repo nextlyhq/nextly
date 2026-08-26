@@ -206,6 +206,22 @@ function git(cwd, args) {
  * failure this module exists to prevent is precisely someone not remembering to
  * look.
  */
+/**
+ * Why the filter list must not be trusted, or null when it can be.
+ *
+ * Separated from printing it so the decision is assertable rather than only
+ * demonstrable — the exit status is what a hook acts on, and a hook is not a
+ * thing a unit test can observe.
+ */
+export function filtersRefusal(unreadable) {
+  if (unreadable.length === 0) return null;
+  return (
+    "gate-scope: no readable manifest for " +
+    unreadable.join(", ") +
+    " — refusing to report a scope that would silently omit it."
+  );
+}
+
 export function filterArguments(filters) {
   return filters.map(name => `--filter=${name}`).join("\n");
 }
@@ -244,12 +260,24 @@ function main() {
   const { filters, unreadable } = packageFilters(dirs, manifestReader(cwd));
 
   if (emitFilters) {
-    // Only the filters, so a caller can splice them into a command. An
-    // unreadable directory is deliberately silent here: it names no package to
-    // filter on, and printing prose into a command substitution would be worse
-    // than saying nothing.
+    // Only the filters on stdout, so a caller can splice them into a command.
+    //
+    // An unreadable directory FAILS rather than being skipped. It emits no
+    // filter — there is no package name to give — so a hook consuming this
+    // would see an empty value and run nothing, and a change that DELETES a
+    // workspace manifest would pass its gate having tested nothing at all.
+    // That is the silent under-scoping this whole module exists to remove,
+    // reappearing in the one mode written to be consumed rather than read.
+    //
+    // The reason goes to stderr so it reaches a person without polluting the
+    // command substitution the filters are read into.
     const line = filterArguments(filters);
     if (line) console.log(line);
+    const refusal = filtersRefusal(unreadable);
+    if (refusal !== null) {
+      console.error(refusal);
+      process.exitCode = 1;
+    }
     return;
   }
 

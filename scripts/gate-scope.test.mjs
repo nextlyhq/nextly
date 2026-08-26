@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   changedPackageDirs,
   filterArguments,
+  filtersRefusal,
   workspaceDirsOf,
   workspaceGlobs,
   packageFilters,
@@ -209,5 +210,26 @@ describe("the machine-readable form a hook consumes", () => {
     // Emitting a placeholder would turn "nothing changed" into a whole-repo
     // sweep, which is the version of this nobody would keep enabled.
     expect(filterArguments([])).toBe("");
+  });
+});
+
+describe("refusing a scope that would silently omit a workspace", () => {
+  it("REFUSES when a manifest cannot be read", () => {
+    // The consumed mode emits no filter for such a directory — there is no
+    // package name to give — so a hook reading it would see an empty value and
+    // run nothing. A change that DELETES a workspace manifest would then pass
+    // its gate having tested nothing at all, which is the silent
+    // under-scoping this module exists to remove, reappearing in the one mode
+    // written to be consumed rather than read.
+    const refusal = filtersRefusal(["packages/prettier-config"]);
+
+    expect(refusal).toContain("packages/prettier-config");
+    expect(refusal).toContain("refusing");
+  });
+
+  it("does NOT refuse when every manifest was readable", () => {
+    // The control: a refusal that always fired would block every push and be
+    // disabled within the day.
+    expect(filtersRefusal([])).toBeNull();
   });
 });
