@@ -102,6 +102,16 @@ export async function resolvePreviewViewports(
     // render as `767.6px` in a control that has to read as a number.
     const width = Math.round(candidate.width);
 
+    /*
+     * Checked AFTER rounding, because rounding is what makes a row unusable:
+     * `0.4` is positive and finite, so it satisfies every test asked of the
+     * declared value, and then becomes `0`. Offered, it is an option reading
+     * "0px" that does not preview 0px — `previewFrameFit` reads zero as no
+     * request at all and fills the pane — so the broken preset is the one that
+     * looks like it works.
+     */
+    if (width <= 0) continue;
+
     // Two names for one width are indistinguishable once chosen — the frame is
     // the same size either way — so the first declared wins and the rest are
     // dropped rather than crowding the list.

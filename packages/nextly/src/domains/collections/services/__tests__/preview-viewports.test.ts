@@ -92,6 +92,31 @@ describe("resolvePreviewViewports", () => {
     ).resolves.toEqual([{ label: "Odd", width: 768 }]);
   });
 
+  it("drops a width that ROUNDS to zero, not merely one declared as zero", async () => {
+    /*
+     * The check has to run on the rounded value, because rounding is what makes
+     * a row unusable here: `0.4` is a positive finite number and passes every
+     * test asked of the declared value, then becomes `0`. Offered, it is a named
+     * option reading "0px" that does not preview 0px — `previewFrameFit` reads
+     * zero as no request at all and fills the pane — so the one preset an author
+     * can prove is broken is the one that looks like it works.
+     */
+    await expect(
+      resolvePreviewViewports([
+        { label: "Sliver", width: 0.4 },
+        { label: "Real", width: 768 },
+      ])
+    ).resolves.toEqual([{ label: "Real", width: 768 }]);
+  });
+
+  it("keeps a width that rounds UP to one pixel", async () => {
+    // The control on the case above: rejecting the rounded value must not
+    // reject everything below a pixel, only what rounds away to nothing.
+    await expect(
+      resolvePreviewViewports([{ label: "Hair", width: 0.6 }])
+    ).resolves.toEqual([{ label: "Hair", width: 1 }]);
+  });
+
   it("keeps the FIRST of two rows at the same width", async () => {
     /*
      * Two names for one width are indistinguishable once chosen — the frame is

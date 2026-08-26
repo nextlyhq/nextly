@@ -87,19 +87,20 @@ describe("where a page previews", () => {
   });
 
   it("declares one once the host supplies a path", () => {
-    const preview = pagesCollection("/{slug}").admin?.preview;
+    const preview = pagesCollection({ previewPath: "/{slug}" }).admin?.preview;
 
     expect(typeof preview?.url).toBe("function");
   });
 
   it("serves a host that mounted its pages at the root", () => {
-    const url = pagesCollection("/{slug}").admin?.preview?.url;
+    const url = pagesCollection({ previewPath: "/{slug}" }).admin?.preview?.url;
 
     expect(url?.({ slug: "about" })).toBe("/about");
   });
 
   it("serves a host that mounted its pages under a prefix", () => {
-    const url = pagesCollection("/blocks/{slug}").admin?.preview?.url;
+    const url = pagesCollection({ previewPath: "/blocks/{slug}" }).admin
+      ?.preview?.url;
 
     expect(url?.({ slug: "about" })).toBe("/blocks/about");
   });
@@ -108,13 +109,42 @@ describe("where a page previews", () => {
   // one. `null` is how the resolver is told that rather than building a URL with
   // a hole in it.
   it("declines an entry whose slug is not filled in yet", () => {
-    const url = pagesCollection("/{slug}").admin?.preview?.url;
+    const url = pagesCollection({ previewPath: "/{slug}" }).admin?.preview?.url;
 
     expect(url?.({})).toBeNull();
   });
 
+  it("carries a viewport declaration onto the preview it declares", () => {
+    /*
+     * The gap this closes: the helper that reads a site's breakpoints existed
+     * and was exported, but nothing in the standard `pageBuilder()` flow could
+     * hand it to this collection — so the primary page-builder workflow offered
+     * no presets while the feature read as shipped.
+     */
+    const declared = [{ label: "Tablet", width: 1024 }];
+    const preview = pagesCollection({
+      previewPath: "/{slug}",
+      breakpoints: declared,
+    }).admin?.preview;
+
+    expect(preview?.breakpoints).toBe(declared);
+  });
+
+  it("has NO breakpoints key when none was supplied", () => {
+    /*
+     * Absent rather than `undefined`, because `resolvePreviewViewports` reads
+     * an absent declaration as "offer nothing" — and a key present but empty is
+     * how a declaration that failed would look if this ever started catching
+     * one.
+     */
+    const preview = pagesCollection({ previewPath: "/{slug}" }).admin?.preview;
+
+    expect(preview).not.toBeUndefined();
+    expect("breakpoints" in (preview as object)).toBe(false);
+  });
+
   it("escapes a slug that would otherwise change the path", () => {
-    const url = pagesCollection("/{slug}").admin?.preview?.url;
+    const url = pagesCollection({ previewPath: "/{slug}" }).admin?.preview?.url;
 
     expect(url?.({ slug: "a/b" })).toBe("/a%2Fb");
   });

@@ -88,6 +88,35 @@ describe("siteStyleViewports", () => {
     ).toEqual([{ label: "Tablet", width: 1024 }]);
   });
 
+  it("names a duplicated id after the definition the COMPILER kept", () => {
+    /*
+     * Two definitions can claim one id — config defaults do not pass through
+     * the stored-breakpoint check, so nothing upstream refuses them — and the
+     * two sides then disagree about which one is real. `breakpointContexts`
+     * sorts width-descending and keeps the first claim, so the WIDEST survives;
+     * a plain `new Map(...)` over the raw array keeps the LAST label. Between
+     * them they produce a preset carrying one tier's name at another's width,
+     * which is worse than either alone: the author reads a label they wrote and
+     * gets a frame the compiled sheet has no rule for at that name.
+     *
+     * Joined on the surviving definition instead, so the name and the number
+     * come from one row or the row is not offered.
+     */
+    const offered = siteStyleViewports(
+      set([
+        { id: "tablet", label: "Wide tablet", maxWidth: 1024 },
+        { id: "tablet", label: "Narrow tablet", maxWidth: 640 },
+      ])
+    );
+
+    expect(offered).toEqual([{ label: "Wide tablet", width: 1024 }]);
+    // Stated separately: a pairing test that only checked membership would pass
+    // on the mismatched result, which contains both of these strings.
+    expect(offered.find(v => v.width === 1024)?.label).not.toBe(
+      "Narrow tablet"
+    );
+  });
+
   it("joins the label to the width by ID, not by position", () => {
     /*
      * The separating property. The label comes from the STORED definition and

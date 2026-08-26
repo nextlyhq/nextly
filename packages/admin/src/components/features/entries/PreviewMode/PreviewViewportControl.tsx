@@ -89,21 +89,6 @@ export function PreviewViewportControl({
   const widthInputId = useId();
 
   /*
-   * Which option is selected is DERIVED from the width, not stored beside it.
-   * A separate selection would let the two disagree — typing a custom width
-   * that happens to equal a named one would leave "Custom" showing while the
-   * frame is at the named viewport, and the author would have no way to tell
-   * which of the two the control thinks it is on.
-   */
-  const named = viewports.find(v => v.width === requestedWidth);
-  const selection =
-    requestedWidth === null
-      ? RESPONSIVE
-      : named !== undefined
-        ? String(named.width)
-        : CUSTOM;
-
-  /*
    * What the box SAYS, held separately from the width the frame is at.
    *
    * They are different facts. Clearing the box to retype it leaves text that
@@ -153,6 +138,35 @@ export function PreviewViewportControl({
     if (draft === null || settledDraft !== draft) return;
     commitWidth(settledDraft);
   }, [draft, settledDraft, commitWidth]);
+
+  /*
+   * Which option is selected is DERIVED from the width, not stored beside it.
+   * A separate selection would let the two disagree — typing a custom width
+   * that happens to equal a named one would leave "Custom" showing while the
+   * frame is at the named viewport, and the author would have no way to tell
+   * which of the two the control thinks it is on.
+   *
+   * Except while the box is being typed into, where the match is deliberately
+   * not resolved. A named match is what REMOVES the custom box, so resolving
+   * one mid-edit reopens the unmount this control already had to fix: typing
+   * `7680` passes through `768`, and if that is a named tier the field
+   * disappears under the author on the third keystroke — and the dropdown flips
+   * to "Tablet" while they are still typing into a box labelled Custom.
+   *
+   * The draft ends on blur or on a choice from the list, and the match resolves
+   * then, so a typed width that equals a named tier still gives way to it one
+   * moment later — when the author has finished saying so.
+   */
+  const named =
+    draft === null
+      ? viewports.find(v => v.width === requestedWidth)
+      : undefined;
+  const selection =
+    requestedWidth === null
+      ? RESPONSIVE
+      : named !== undefined
+        ? String(named.width)
+        : CUSTOM;
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-1.5">

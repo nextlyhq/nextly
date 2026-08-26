@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UI } from "@admin/constants/ui";
 
+import type { PreviewViewport } from "@admin/services/previewLinkApi";
+
 import type { PreviewFit } from "../previewFrameFit";
 import { PreviewViewportControl } from "../PreviewViewportControl";
 
@@ -24,7 +26,10 @@ import { PreviewViewportControl } from "../PreviewViewportControl";
  * calls without feeding the value back cannot reproduce it — the control would
  * pass while the shipped tree still unmounted the field.
  */
-function renderControl(initial: number | null = 1280) {
+function renderControl(
+  initial: number | null = 1280,
+  viewports: readonly PreviewViewport[] = []
+) {
   function Harness() {
     const [requestedWidth, setRequestedWidth] = useState<number | null>(
       initial
@@ -39,6 +44,7 @@ function renderControl(initial: number | null = 1280) {
           requestedWidth={requestedWidth}
           onRequestWidth={setRequestedWidth}
           fit={fit}
+          viewports={viewports}
         />
         <output data-testid="committed">{String(requestedWidth)}</output>
       </>
@@ -252,6 +258,50 @@ describe("PreviewViewportControl — the width box", () => {
     fireEvent.change(box, { target: { value: "" } });
     stopTyping();
     expect(ui.committed()).toBe("1280");
+  });
+
+  it("stays mounted while typing PAST a width a named viewport also has", () => {
+    /*
+     * The same unmount, reached by a different door, and only reachable once the
+     * control offers named viewports. The box is shown when the committed width
+     * matches no named one — so typing `7680` passes through `768`, which IS a
+     * named tier, and the field would vanish on the third keystroke.
+     *
+     * An edit in progress therefore keeps the box regardless of what the number
+     * currently matches. Selection follows the same rule, or the dropdown would
+     * flip to "Tablet" while the author is still typing into a box labelled
+     * Custom.
+     */
+    const ui = renderControl(1280, [{ label: "Tablet", width: 768 }]);
+    const box = ui.box() as HTMLInputElement;
+    box.focus();
+
+    fireEvent.change(box, { target: { value: "768" } });
+
+    expect(ui.box()).toBe(box);
+    expect(document.activeElement).toBe(box);
+
+    fireEvent.change(box, { target: { value: "7680" } });
+
+    expect(ui.box()).toBe(box);
+    expect(ui.committed()).toBe("7680");
+  });
+
+  it("hands a typed width back to its named viewport once the edit ends", () => {
+    /*
+     * The control on the case above. Keeping the box open during an edit must
+     * not mean the control never recognises a named width — on blur the draft
+     * clears, `768` resolves to Tablet, and the box gives way to the named
+     * option it is the same width as.
+     */
+    const ui = renderControl(1280, [{ label: "Tablet", width: 768 }]);
+    const box = ui.box() as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "768" } });
+    fireEvent.blur(box);
+
+    expect(ui.box()).toBeNull();
+    expect(ui.committed()).toBe("768");
   });
 
   it("snaps back to the committed width when the edit is abandoned", () => {

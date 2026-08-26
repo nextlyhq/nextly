@@ -67,3 +67,28 @@ its stylesheet never uses.
 A malformed row is dropped rather than failing the list, and a declaration that
 throws costs its presets rather than the preview — these are a convenience on
 top of a credential handout, and losing the link is the worse outcome.
+
+The page builder's own `pages` collection offers them too. The helper that reads
+a site's breakpoints was exported but nothing in the standard
+`pageBuilder({ pagePreviewPath })` flow could hand it to that collection, so the
+presets reached only collections a host had composed by hand — not the primary
+page-builder workflow. It is now the default, since a page-builder site's
+breakpoints are the widths its stylesheet changes at. Pass
+`pagePreviewBreakpoints` to override it, or `false` to offer none.
+
+`pagesCollection` takes one options object instead of two positional arguments,
+which is what those two said to do as soon as a third arrived. Call
+`pagesCollection({ previewPath, limits })` in place of
+`pagesCollection(previewPath, limits)`.
+
+A Single can declare `breakpoints` as well. The mint path already resolved
+whatever a preview declaration carried without knowing which kind of document it
+came from, but `SinglePreviewConfig` listed only `url`, `openInNewTab` and
+`label` — so the feature was reachable from no Single at all.
+
+Two viewports that could mislead are now dropped rather than offered. A declared
+width below half a pixel rounded to `0`, producing a named "0px" option that
+previewed the full pane instead. And where two breakpoint definitions claim one
+id, the label and the width could come from different rows — the compiler keeps
+the widest, a lookup by id alone kept the last — putting one tier's name on
+another's width. Both sides are now read from the definition that survived.

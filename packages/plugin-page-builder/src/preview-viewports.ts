@@ -48,15 +48,41 @@ export function siteStyleViewports(
 
   /*
    * The label comes from the stored definition and the width from the reader,
-   * joined by id. `BreakpointContext` carries no label — it is the compiler's
-   * view — so this is the one place the two have to be brought together, and
-   * the id is what makes that a lookup rather than a guess about order.
+   * joined on BOTH, because the id alone does not identify a definition.
+   *
+   * Two definitions can claim one id — config defaults never pass through
+   * `checkStoredBreakpoints`, so nothing upstream refuses them — and the two
+   * sides then pick different ones: `breakpointContexts` sorts width-descending
+   * and keeps the first claim, while a map built over the raw array keeps the
+   * last. The result is a preset carrying one tier's name at another's width,
+   * which is worse than dropping either: the author reads a label they wrote
+   * and gets a frame the compiled sheet has no rule for under that name.
+   *
+   * `BreakpointContext` carries no label — it is the compiler's view — so this
+   * is the one place the two have to be brought together. Keying on the width
+   * as well makes it a lookup for the definition that SURVIVED rather than a
+   * second guess at which one that was: `breakpointContexts` copies `maxWidth`
+   * from the definition verbatim, so the pair identifies it exactly, and no
+   * duplicate policy is restated here to drift out of step with the compiler's.
    */
-  const labels = new Map(breakpoints.viewport.map(def => [def.id, def.label]));
+  const labels = new Map(
+    breakpoints.viewport.map(def => [labelKey(def.id, def.maxWidth), def.label])
+  );
 
   return breakpointContexts(breakpoints)
     .map(context => offerableViewport(context, labels))
     .filter((viewport): viewport is PreviewViewport => viewport !== null);
+}
+
+/**
+ * The key that identifies ONE breakpoint definition.
+ *
+ * A NUL separator, because ids come from stored data: with a printable joiner,
+ * an id containing it could be made to collide with a different id-and-width
+ * pair, which is the same mispairing this key exists to prevent.
+ */
+function labelKey(id: string, maxWidth: number | undefined): string {
+  return `${id}\u0000${String(maxWidth)}`;
 }
 
 /**
@@ -78,7 +104,7 @@ function offerableViewport(
 
   // An id with no stored label cannot be named to an author, and a control
   // showing a raw id is worse than one option fewer.
-  const label = labels.get(context.id);
+  const label = labels.get(labelKey(context.id, context.maxWidth));
   if (label === undefined || label.trim() === "") return null;
 
   return { label, width: context.maxWidth };
