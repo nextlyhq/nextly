@@ -24,11 +24,23 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { previewRevisionOf } from "@admin/components/features/entries/PreviewMode/previewRevision";
+import { previewLabel } from "@admin/hooks/useEntryPreview";
 import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
+import type { SingleAdminOptions } from "@admin/types/entities";
 
 import type { SinglePreviewLink } from "./useSinglePreviewLink";
 
 export interface SinglePreviewPaneInput {
+  /**
+   * The Single's admin block, for the word it calls its preview by.
+   *
+   * Taken here rather than read at the call site: this hook already assembles
+   * every prop the pane receives, and one more optional chain in the form was
+   * enough to trip the complexity gate — which is the gate doing its job, since
+   * the label belongs with the rest of the pane's inputs rather than beside
+   * them.
+   */
+  admin?: SingleAdminOptions;
   /** The shareable-link decision, which already resolved the language. */
   link: SinglePreviewLink;
   /** The Single as last read, which the revision derives from. */
@@ -40,6 +52,8 @@ export interface SinglePreviewPaneInput {
 }
 
 export interface SinglePreviewPane {
+  /** What to call the preview, defaulted where the Single names none. */
+  label: string;
   /** Whether the pane should render. */
   open: boolean;
   /** Close it. */
@@ -66,6 +80,7 @@ export function useSinglePreviewPane({
   document,
   savedCount,
   inTranslationMode,
+  admin,
 }: SinglePreviewPaneInput): SinglePreviewPane {
   const [open, setOpen] = useState(false);
 
@@ -98,6 +113,7 @@ export function useSinglePreviewPane({
   const onToggle = useCallback(() => setOpen(o => !o), []);
 
   return {
+    label: previewLabel(admin?.preview),
     // Both halves: a pane left open when the language stops resolving must
     // close rather than go on rendering a credential nothing would re-mint.
     open: open && canOffer,

@@ -78,6 +78,7 @@ import {
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import { cn } from "@admin/lib/utils";
+import type { SingleAdminOptions } from "@admin/types/entities";
 
 import { relaxIdentityRequired } from "./identity-fields";
 import { useSinglePreviewLink } from "./useSinglePreviewLink";
@@ -95,12 +96,13 @@ export interface SingleSchema {
   label: string;
   description?: string;
   fields: FieldConfig[];
-  admin?: {
-    group?: string;
-    icon?: string;
-    hidden?: boolean;
-    description?: string;
-  };
+  /*
+   * The shared declaration rather than an inline copy. This one had drifted
+   * already — it was missing `order` and `sidebarGroup`, which the server
+   * sends — and a second shape for one payload is how a field the server
+   * provides stays invisible to the editor that wants it.
+   */
+  admin?: SingleAdminOptions;
   /**
    * Whether this Single has the Draft/Published lifecycle enabled. When
    * true, the system header splits into Save Draft + Update buttons and the
@@ -548,6 +550,7 @@ export function SingleForm({
     document,
     savedCount,
     inTranslationMode: translationMode.source !== undefined,
+    admin: schema.admin,
   });
 
   const localeCtx = useEntryLocaleContext({
@@ -644,7 +647,7 @@ export function SingleForm({
               open={previewPane.open}
               onClose={previewPane.onClose}
               scope={previewPane.scope}
-              label="Preview"
+              label={previewPane.label}
               revision={previewPane.revision}
             >
               {/* Renders its child alone when there is no source — see the module. */}
