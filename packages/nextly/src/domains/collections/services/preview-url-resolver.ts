@@ -85,8 +85,12 @@ export type PreviewUrlResolution =
    * — which is a definite statement that there is no address yet. This one is
    * the declaration FAILING, and a caught throw does not say whether the fault
    * is in the declaration or in a value on this document that it did not
-   * expect: `entry.slug.toUpperCase()` raises the same error on a broken
-   * declaration and on an empty slug.
+   * expect: `entry.slug.toUpperCase()` raises the same `TypeError` on a
+   * declaration reading the wrong field name as it does on a document whose
+   * `slug` was never filled in. (Note what the example is NOT — an EMPTY slug
+   * does not throw, since `"".toUpperCase()` is `""`. The data-dependent case
+   * is a MISSING value, not a blank one, and getting that wrong makes the
+   * whole distinction sound hypothetical when it is not.)
    *
    * So a caller may say the declaration failed. It may not say which document
    * that is true for.
