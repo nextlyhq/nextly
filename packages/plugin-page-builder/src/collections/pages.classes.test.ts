@@ -29,7 +29,7 @@ function runBeforeChange(
   limits?: DocumentLimits
 ): unknown {
   const hooks = (
-    pagesCollection(undefined, limits) as unknown as {
+    pagesCollection({ limits }) as unknown as {
       hooks?: { beforeChange?: ((context: unknown) => unknown)[] };
     }
   ).hooks;

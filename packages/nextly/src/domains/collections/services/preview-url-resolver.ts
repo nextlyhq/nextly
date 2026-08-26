@@ -31,11 +31,29 @@
  * stored). Both are optional here because this type is the union the resolver
  * sees, not either authoring surface.
  */
+import type { PreviewViewportsDeclaration } from "./preview-viewports";
+
 export interface PreviewDeclaration {
   /** Code-first: computes the URL from the entry, or declines by returning null. */
   url?: (entry: Record<string, unknown>) => string | null;
   /** UI-created: a path with `{fieldName}` placeholders. */
   urlTemplate?: string;
+  /**
+   * The viewport widths this preview offers, as a list or as a function of
+   * whatever state holds them.
+   *
+   * Declared rather than inferred, for the reason the URL is: nothing here can
+   * know the widths a site's CSS actually breaks at. A page may be built with
+   * the page builder, with Tailwind, or with hand-written media queries, and
+   * only the first is data this system holds — so a shipped phone/tablet/desktop
+   * list would be a claim about somebody else's stylesheet.
+   *
+   * The function form exists because a site's breakpoints are stored data an
+   * author edits: a value captured at boot goes stale, and this is evaluated per
+   * mint on the server where the current one is readable. Neither form reaches
+   * the browser; the resolved list does.
+   */
+  breakpoints?: PreviewViewportsDeclaration;
 }
 
 /**

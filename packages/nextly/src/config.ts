@@ -23,6 +23,10 @@ export {
   type HttpMethod,
   type HookHandler,
 } from "./collections/config/define-collection";
+export type {
+  PreviewViewport,
+  PreviewViewportsDeclaration,
+} from "./domains/collections/services/preview-viewports";
 
 // The context a FIELD-level hook is handed. `FieldHooks` is already public
 // through the field types below, so the handler it is declared with is too.

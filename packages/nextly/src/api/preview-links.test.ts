@@ -1200,6 +1200,7 @@ describe("mintPreviewLink", () => {
       "expiresAt",
       "token",
       "url",
+      "viewports",
     ]);
     // The token is a credential, not an address: it carries no host of its own,
     // and the `url` beside it is what puts one in front.
@@ -1212,6 +1213,52 @@ describe("mintPreviewLink", () => {
      * pane nothing.
      */
     expect(item.embeddable).toBe(false);
+    /*
+     * Asserted as a VALUE for the same reason `embeddable` is. This fixture
+     * declares no viewports, and the honest answer is an EMPTY list rather than
+     * an absent key — a caller reading `undefined` has to guess whether the
+     * collection declared none or the server forgot to answer.
+     */
+    expect(item.viewports).toEqual([]);
+  });
+
+  it("offers the viewports a collection DECLARES", async () => {
+    previewDeclaration.mockResolvedValue({
+      url: () => "/p",
+      breakpoints: [
+        { label: "Phone", width: 390 },
+        { label: "Desktop", width: 1280 },
+      ],
+    });
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect((body.item as Record<string, unknown>).viewports).toEqual([
+      { label: "Phone", width: 390 },
+      { label: "Desktop", width: 1280 },
+    ]);
+  });
+
+  it("EVALUATES a function declaration, so stored breakpoints stay current", async () => {
+    /*
+     * The property that lets a plugin supply a site's own breakpoints without
+     * the admin depending on it: the function runs here, on the server, and only
+     * its result crosses to the browser.
+     */
+    previewDeclaration.mockResolvedValue({
+      url: () => "/p",
+      breakpoints: () => [{ label: "Wide", width: 1440 }],
+    });
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+
+    expect((body.item as Record<string, unknown>).viewports).toEqual([
+      { label: "Wide", width: 1440 },
+    ]);
   });
 
   it("says the session reaches a frame when the site shares the admin's host", async () => {

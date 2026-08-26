@@ -34,6 +34,7 @@ import type { ApiError } from "@admin/lib/api/parseApiError";
 import {
   previewLinkApi,
   type PreviewLinkRequest,
+  type PreviewViewport,
 } from "@admin/services/previewLinkApi";
 
 /**
@@ -214,6 +215,8 @@ export type PreviewOutcome =
        * cookie it cannot see.
        */
       embeddable: boolean;
+      /** The viewports this preview offers, resolved by the server. */
+      viewports: PreviewViewport[];
     }
   | { kind: "report"; reason: PreviewUnavailableReason };
 
@@ -356,6 +359,7 @@ export async function mintSelfPreview(
       url: link.url,
       expiresAt: link.expiresAt,
       embeddable: link.embeddable,
+      viewports: link.viewports,
     };
   } catch (error) {
     return { kind: "report", reason: reasonForRefusal(error) };

@@ -40,6 +40,7 @@ import {
   type PreviewUnavailableReason,
   type SelfPreviewScope,
 } from "@admin/hooks/useEntryPreview";
+import type { PreviewViewport } from "@admin/services/previewLinkApi";
 
 import {
   previewScopeKey,
@@ -79,6 +80,13 @@ export interface PreviewFrameState {
   /** The URL to render, or null while there is nothing to show. */
   url: string | null;
   /**
+   * The viewports this preview offers, as the server resolved them.
+   *
+   * Carried on the frame's state rather than fetched beside it: they arrive
+   * with the mint, so a second source would be a second read of one answer.
+   */
+  viewports: PreviewViewport[];
+  /**
    * Changes on every reload, and is the frame's React key.
    *
    * A key rather than a query parameter appended to the URL: the site sees the
@@ -113,6 +121,10 @@ export function usePreviewFrame({
 }): UsePreviewFrameResult {
   const [state, setState] = useState<PreviewFrameState>({
     url: null,
+    // Nothing has been minted, so nothing is on offer. Empty rather than a
+    // remembered list: a control showing options before the first answer would
+    // be offering widths for a preview that may never open.
+    viewports: [],
     reloadKey: 0,
     isLoading: false,
     reason: null,
@@ -183,6 +195,10 @@ export function usePreviewFrame({
       expiresAt.current = 0;
       setState(prev => ({
         url: null,
+        // Cleared rather than carried over. A refused mint has no preview to
+        // size, and leaving the previous list would offer widths for a frame
+        // that is no longer on screen.
+        viewports: [],
         reloadKey: prev.reloadKey,
         isLoading: false,
         reason: outcome.reason,
@@ -217,6 +233,7 @@ export function usePreviewFrame({
 
     setState(prev => ({
       url: outcome.url,
+      viewports: outcome.viewports,
       reloadKey: prev.reloadKey + 1,
       isLoading: false,
       reason: null,

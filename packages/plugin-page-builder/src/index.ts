@@ -84,6 +84,10 @@ export { pagesCollection } from "./collections/pages";
 export { resolveSiteStyle, siteBreakpoints, siteSheet } from "./site-style";
 export type { SiteStyleData } from "./site-style";
 export { SITE_STYLE_SLUG, loadSiteStyle } from "./site-style-storage";
+export {
+  previewViewportsFromSiteStyle,
+  siteStyleViewports,
+} from "./preview-viewports";
 export type { SiteStyleReader } from "./site-style-storage";
 
 // The class-usage record and the walk that repairs it. Both are public because
