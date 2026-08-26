@@ -90,10 +90,15 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the
 // attribute must not hard-code its spelling, or the renderer and the editor hold
 // two copies of one string and the editor breaks silently when it moves.
+//
+// `SLOTS_ATTRIBUTE` is public for the same reason: an editor looking for a
+// container to draw an affordance on asks this attribute rather than keeping
+// its own copy of the string the renderer emits.
 export {
   EDITOR_NAMESPACE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
+  SLOTS_ATTRIBUTE,
 } from "./block-boundary";
 // The render-safe attribute rule, public so an editor asks it instead of
 // keeping a second copy that would accept names the renderer drops.

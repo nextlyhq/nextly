@@ -150,6 +150,7 @@ export {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   offeredTiers,
+  selectableTiers,
   widthForBreakpoint,
 } from "./canvas-width";
 

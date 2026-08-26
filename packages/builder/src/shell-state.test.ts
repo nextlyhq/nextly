@@ -144,6 +144,10 @@ describe("preferences round-trip", () => {
     layouts: {
       "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
     },
+    // Non-default like its neighbours above, so the round trip below actually
+    // exercises this field rather than passing on the strength of a default
+    // that both the write and a no-op read would agree on.
+    showEmptyElements: false,
   };
 
   it("restores what was written", () => {
@@ -193,6 +197,9 @@ describe("preferences round-trip", () => {
       leftPanel: "layers",
       leftPinned: DEFAULT_PREFERENCES.leftPinned,
       layouts: { "canvas,inspector": { canvas: 70, inspector: 30 } },
+      // Absent from the stored JSON above, so it falls back the same way
+      // `leftPinned` does here rather than surfacing as `undefined`.
+      showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
     });
   });
 
@@ -215,5 +222,45 @@ describe("preferences round-trip", () => {
       );
       expect(readPreferences(store).layouts).toEqual({});
     }
+  });
+});
+
+describe("the show-empty-elements preference", () => {
+  it("defaults to showing them", () => {
+    const store = { read: () => null, write: () => undefined };
+    expect(readPreferences(store).showEmptyElements).toBe(true);
+  });
+
+  it("reads a stored false", () => {
+    const store = {
+      read: () => JSON.stringify({ showEmptyElements: false }),
+      write: () => undefined,
+    };
+    expect(readPreferences(store).showEmptyElements).toBe(false);
+  });
+
+  it("falls back to the default for a non-boolean", () => {
+    // A stored value can arrive from a hand-edited localStorage entry or an
+    // older shape. Anything that is not a boolean says nothing about intent.
+    const store = {
+      read: () => JSON.stringify({ showEmptyElements: "no" }),
+      write: () => undefined,
+    };
+    expect(readPreferences(store).showEmptyElements).toBe(true);
+  });
+
+  it("round-trips through a write", () => {
+    let written = "";
+    const store = {
+      read: () => written,
+      write: (v: string) => {
+        written = v;
+      },
+    };
+    writePreferences(store, {
+      ...DEFAULT_PREFERENCES,
+      showEmptyElements: false,
+    });
+    expect(readPreferences(store).showEmptyElements).toBe(false);
   });
 });
