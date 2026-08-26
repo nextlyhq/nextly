@@ -26,7 +26,12 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The page builder can now rebuild the class-usage index from the documents it describes.
+The page builder can now rebuild a COLLECTION's class-usage rows from its documents.
+
+Scoped to collections deliberately: the index models single subjects too, and a plugin has
+no supported way to read a Single's document - the one readable path creates the row when
+it is absent, so a sweep over Singles would materialise every Single in the app while
+appearing to work. Singles gain a rebuild when that reader does.
 
 The index is a CACHE of something derivable, and that is the only reason it is allowed to
 exist: the answer is always recoverable by walking the documents again. This is that walk.
@@ -39,6 +44,11 @@ It walks ordered by `id` rather than by anything it can change. Offset paging re
 N of an ordered set, so ordering by a mutable key while writing during the walk reshuffles
 rows between queries and skips some - and `updatedAt`, the obvious ordering for a
 maintenance pass, is exactly the key each write moves.
+
+Rows whose document no longer exists are swept: a document deleted through a path that
+bypassed maintenance never appears in the walk, so its rows would otherwise survive a
+rebuild that reported success. The sweep runs only after the walk completes, since against a
+partial one it would delete the rows of every document not yet reached.
 
 It stops at the first failure. Swallowing one and continuing would report a completed
 rebuild that repaired nothing, which is the report that stops anyone looking. Stopping is
