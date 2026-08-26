@@ -37,11 +37,13 @@ import {
   useVersions,
 } from "@admin/hooks/queries/useVersions";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { VersionCompareDialog } from "./VersionCompareDialog";
+import { versionsHref } from "./VersionComparePage";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionLocaleFilter } from "./VersionLocaleFilter";
 import { VersionRow } from "./VersionRow";
@@ -597,6 +599,26 @@ export function VersionHistorySheet({
             </Button>
             {/* Compare is offered from the preview, where a version is already
                   chosen: against the one before it, and against the current. */}
+            {/* The full comparison, on a page of its own. The dialog below
+                stays for a quick look without leaving the document; this is
+                for reading a change properly, and its address names the pair
+                so it can be shared. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                navigateTo(
+                  versionsHref(
+                    scope,
+                    previousVersionNo === null
+                      ? undefined
+                      : { from: previousVersionNo, to: selected }
+                  )
+                )
+              }
+            >
+              Open full comparison
+            </Button>
             {canComparePrevious && previousVersionNo !== null ? (
               <Button
                 variant="outline"
