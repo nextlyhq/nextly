@@ -6,16 +6,23 @@
  * reach it by importing core's file layout — or write the walk again, which is
  * what happened.
  *
- * This descends any unnamed field carrying an array of `fields`. That is
- * deliberate and is what core's five call sites expect: a field is addressable
- * here if its value is stored at this level, and an unnamed container stores
- * its children at the level it sits in whatever its `type` says.
+ * By default it descends any unnamed field carrying an array of `fields`, which
+ * is what core's five call sites expect: a field is addressable here if its
+ * value is stored at this level, and an unnamed container stores its children
+ * at the level it sits in whatever its `type` says.
  *
- * A caller that must NOT descend some of those — an index keyed per stored row,
- * for instance, where descending an unnamed repeater would file rows per row
- * that no rebuild can reconcile — filters the result rather than walking again.
- * Filtering is visible; a second traversal is a second answer to this question,
- * and the two drift silently because both look correct.
+ * A caller that must NOT descend some of those says so with `descendInto`,
+ * rather than filtering afterwards. Filtering afterwards cannot work and it is
+ * worth being precise about why: the result carries the flattened children
+ * themselves, so a child reached through an unnamed REPEATER — whose values are
+ * stored per row — is the same object as the same child reached through an
+ * unnamed group. Ancestry is gone by the time a filter could read it. An index
+ * keyed per stored row must exclude the first and include the second, and no
+ * predicate over the returned list can tell them apart.
+ *
+ * Deciding it during the walk keeps one traversal answering one question, with
+ * the caller's narrower rule as an input to it rather than as a second walk
+ * that drifts.
  *
  * @module shared/addressable-fields
  */
@@ -68,15 +75,56 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
  * cast (`component`, `components`, `name`), so none was relying on the narrow
  * union for anything the checker was enforcing.
  */
-export function addressableFields(fields: unknown): AuthorableFieldConfig[] {
+export interface AddressableFieldsOptions {
+  /**
+   * Whether this unnamed container's children are stored at ITS level, and so
+   * should be flattened into the result.
+   *
+   * Only ever asked about a field with no name and an array of `fields` — a
+   * named one stores its children under itself and is never descended. Default:
+   * every such container is transparent, which is what core's callers expect.
+   */
+  descendInto?: (container: AuthorableFieldConfig) => boolean;
+}
+
+/**
+ * What an unnamed field contributes to the level it sits in: its children when
+ * it is a transparent container, or nothing.
+ *
+ * Separate from the walk because it answers a different question — the walk
+ * decides ORDER and termination, this decides TRANSPARENCY — and reading both
+ * in one loop is what the complexity gate objected to. It is also the shape a
+ * caller's own rule takes, so the two now line up.
+ */
+function childrenToFlatten(
+  field: object,
+  descendInto: AddressableFieldsOptions["descendInto"]
+): readonly unknown[] | null {
+  const children = (field as { fields?: unknown }).fields;
+  if (!Array.isArray(children)) return null;
+  if (descendInto && !descendInto(field as AuthorableFieldConfig)) return null;
+  return children;
+}
+
+/** The name a field is addressed by, or null when it has none. */
+function addressableName(field: object): string | null {
+  const name = (field as { name?: unknown }).name;
+  return typeof name === "string" && name.length > 0 ? name : null;
+}
+
+export function addressableFields(
+  fields: unknown,
+  options?: AddressableFieldsOptions
+): AuthorableFieldConfig[] {
   const out: AuthorableFieldConfig[] = [];
   if (!Array.isArray(fields)) return out;
+  const descendInto = options?.descendInto;
 
   // Reversed so that popping yields declaration order.
   const pending: unknown[] = [];
   for (let i = fields.length - 1; i >= 0; i--) pending.push(fields[i]);
 
-  // Only unnamed groups are descended into, so only they can close a cycle.
+  // Only unnamed containers are descended into, so only they can close a cycle.
   // Marking named fields too would wrongly collapse a config that legitimately
   // reuses one field object at two levels.
   const descended = new WeakSet<object>();
@@ -85,8 +133,7 @@ export function addressableFields(fields: unknown): AuthorableFieldConfig[] {
     const field = pending.pop();
     if (typeof field !== "object" || field === null) continue;
 
-    const name = (field as { name?: unknown }).name;
-    if (typeof name === "string" && name.length > 0) {
+    if (addressableName(field) !== null) {
       out.push(field as AuthorableFieldConfig);
       continue;
     }
@@ -94,8 +141,8 @@ export function addressableFields(fields: unknown): AuthorableFieldConfig[] {
     if (descended.has(field)) continue;
     descended.add(field);
 
-    const children = (field as { fields?: unknown }).fields;
-    if (!Array.isArray(children)) continue;
+    const children = childrenToFlatten(field, descendInto);
+    if (children === null) continue;
     for (let i = children.length - 1; i >= 0; i--) pending.push(children[i]);
   }
 

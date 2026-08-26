@@ -138,6 +138,7 @@ export type { FieldConfig } from "nextly";
  * @experimental
  */
 export { addressableFields } from "nextly";
+export type { AddressableFieldsOptions } from "nextly";
 
 /**
  * Declaring a field of a type the plugin itself contributes. The built-in

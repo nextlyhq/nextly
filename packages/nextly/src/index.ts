@@ -583,6 +583,7 @@ export type {
 // reaching into core's file layout, and a second copy of this walk is a second
 // answer to one question.
 export { addressableFields } from "./shared/addressable-fields";
+export type { AddressableFieldsOptions } from "./shared/addressable-fields";
 
 // What a form answers a visitor who reaches it. Exported because the plugin
 // that contributes the forms collection refuses submissions too, and a second

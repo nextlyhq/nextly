@@ -141,3 +141,52 @@ describe("addressableFields - input an author can actually write", () => {
     expect(addressableFields("fields")).toEqual([]);
   });
 });
+
+describe("addressableFields - a caller that must not descend everything", () => {
+  // The page-builder's index is keyed per stored row. A blocks field inside an
+  // unnamed GROUP is stored at the enclosing level and must be indexed; the
+  // same field inside an unnamed REPEATER is stored per row, and indexing it
+  // files rows no rebuild can reconcile or sweep.
+  const child = f({ name: "content", type: "blocks" });
+  const viaGroup = f({ type: "group", fields: [child] });
+  const viaRepeater = f({ type: "repeater", fields: [child] });
+
+  it("cannot be done by filtering the result, which is why the option exists", () => {
+    // Both walks return the SAME OBJECT. Ancestry is gone by the time any
+    // predicate over the returned list could read it.
+    expect(addressableFields([viaGroup])[0]).toBe(child);
+    expect(addressableFields([viaRepeater])[0]).toBe(child);
+  });
+
+  it("descends only the containers the caller calls transparent", () => {
+    const onlyGroups = {
+      descendInto: (c: { type?: unknown }) => c.type === "group",
+    };
+    expect(namesOf(addressableFields([viaGroup], onlyGroups))).toEqual([
+      "content",
+    ]);
+    expect(addressableFields([viaRepeater], onlyGroups)).toEqual([]);
+  });
+
+  it("descends everything unnamed when no rule is given", () => {
+    // The control, and core's five call sites depend on it: adding the option
+    // must not narrow the default.
+    expect(namesOf(addressableFields([viaRepeater]))).toEqual(["content"]);
+  });
+
+  it("never asks about a NAMED container", () => {
+    // A named group stores its children under itself and is emitted whole, so
+    // the caller is never consulted about it — a predicate that said yes could
+    // not make it transparent.
+    const asked: unknown[] = [];
+    const named = f({ name: "meta", type: "group", fields: [child] });
+    const out = addressableFields([named], {
+      descendInto: c => {
+        asked.push(c);
+        return true;
+      },
+    });
+    expect(namesOf(out)).toEqual(["meta"]);
+    expect(asked).toEqual([]);
+  });
+});

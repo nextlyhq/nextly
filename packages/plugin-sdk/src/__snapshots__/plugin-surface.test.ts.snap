@@ -146,6 +146,7 @@ exports[`plugin-sdk public export surface > \`./routing\` surface is unchanged 1
 exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1`] = `
 [
   "Action (type)",
+  "AddressableFieldsOptions (type)",
   "AuthEventName (type)",
   "AuthEvents (value)",
   "AuthHookName (type)",
