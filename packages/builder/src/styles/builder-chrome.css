@@ -1800,6 +1800,13 @@
   pointer-events: none;
 }
 
+/*
+ * The button itself: transparent at rest, so it does not double up on the
+ * dashed `[data-nx-slots]:empty` box already drawn under it, and picking up
+ * colour only on hover and focus — where the two states share a treatment
+ * because both are ways of saying "this is interactive", pointer and keyboard
+ * alike.
+ */
 .nx-empty-container-appenders__button {
   position: absolute;
   display: flex;

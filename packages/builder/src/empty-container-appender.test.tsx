@@ -31,14 +31,24 @@ afterEach(() => {
   cleanup();
 });
 
+// Two container TYPES, not just two nodes of one type — `core/card` exists so
+// the cardinality tests below can name each control by a distinct accessible
+// name rather than by an assumption about array or DOM order.
 const slots = {
   slotsOf: (type: string) =>
-    type === "core/box" ? (["children"] as const) : undefined,
+    type === "core/box" || type === "core/card"
+      ? (["children"] as const)
+      : undefined,
 };
 
+// No cast: `LabelledBlock` asks for nothing beyond `editor?.label`, so this
+// honest, minimal fixture satisfies `BlockLookup` on its own.
 const blocks = {
-  get: (type: string) =>
-    type === "core/box" ? ({ editor: { label: "Box" } } as never) : undefined,
+  get: (type: string) => {
+    if (type === "core/box") return { editor: { label: "Box" } };
+    if (type === "core/card") return { editor: { label: "Card" } };
+    return undefined;
+  },
 };
 
 function doc(nodes: BlockDocument["nodes"]): BlockDocument {
@@ -121,5 +131,76 @@ describe("the empty-container appender", () => {
       />
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it("gives two sibling empty containers their own control, reporting its own id", () => {
+    // Cardinality, not just presence: a filled container sits BETWEEN the two
+    // empty ones, so an implementation that stopped at the first match would
+    // still show a control here — just one short of the right count. Asserting
+    // the count alone would also pass an implementation offering two controls
+    // for the SAME node, which is why each press is checked against its own id
+    // below rather than trusting the count on its own.
+    const emptyCard = {
+      id: "card-1",
+      type: "core/card",
+      version: 1,
+      props: {},
+    };
+    const onAppend = vi.fn();
+    render(
+      <EmptyContainerAppenders
+        document={doc([emptyBox, filledBox, emptyCard])}
+        slots={slots}
+        blocks={blocks}
+        onAppend={onAppend}
+      />
+    );
+
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: /Box/ }));
+    expect(onAppend).toHaveBeenLastCalledWith("box-1");
+    fireEvent.click(screen.getByRole("button", { name: /Card/ }));
+    expect(onAppend).toHaveBeenLastCalledWith("card-1");
+  });
+
+  it("finds a container nested inside another container's populated slot", () => {
+    // The specific claim `emptyContainersIn`'s use of `walkNodes` is for: it
+    // descends into every slot of every node regardless of whether that node
+    // itself offers a control, so a still-empty container sitting AFTER a
+    // filled sibling, inside another container's own slot, is still found.
+    const nestedEmptyCard = {
+      id: "card-2",
+      type: "core/card",
+      version: 1,
+      props: {},
+    };
+    const outerBoxWithPopulatedSlot = {
+      id: "box-3",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: {
+        children: [
+          { id: "h2", type: "core/heading", version: 1, props: {} },
+          nestedEmptyCard,
+        ],
+      },
+    };
+    const onAppend = vi.fn();
+    render(
+      <EmptyContainerAppenders
+        document={doc([outerBoxWithPopulatedSlot])}
+        slots={slots}
+        blocks={blocks}
+        onAppend={onAppend}
+      />
+    );
+
+    // The outer box already has children, so IT offers nothing; only the
+    // nested card, which has none of its own, does — one control, not zero.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: /Card/ }));
+    expect(onAppend).toHaveBeenCalledWith("card-2");
   });
 });

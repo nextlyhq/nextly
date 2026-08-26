@@ -64,11 +64,7 @@
  * @module empty-container-appender
  */
 
-import {
-  walkNodes,
-  type AnyBlockDefinition,
-  type BlockDocument,
-} from "@nextlyhq/blocks-engine";
+import { walkNodes, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { Plus } from "lucide-react";
 import {
   useCallback,
@@ -87,15 +83,34 @@ import { canvasContentRect, canvasRootFrom } from "./geometry-dom";
 import type { SlotSource } from "./inserter";
 
 /**
- * Resolves a block type to its definition.
+ * The one property this component ever reads off a block's definition.
  *
- * Named apart from `AnyBlockDefinition` because it is the SHAPE this component
- * needs, not the registry's own interface: a caller may hand it the live
+ * A block's full definition (`AnyBlockDefinition` in `@nextlyhq/blocks-engine`)
+ * requires `name`, `version`, `description`, `example`, `render` and more —
+ * none of which `nameOf` below touches. Narrowed to just the field actually
+ * read, so a fixture standing in for one is an honest, minimal object rather
+ * than a full definition wearing a cast to get past the compiler.
+ *
+ * Still satisfied by the real thing with no adapter: `AnyBlockDefinition`'s
+ * own `editor` field is `BlockEditorMeta`, which carries more than this needs
+ * but remains structurally assignable to it, so the live registry's
+ * `getBlock` — returning `AnyBlockDefinition | undefined` — is a valid
+ * `BlockLookup["get"]` as it stands.
+ */
+interface LabelledBlock {
+  readonly editor?: { readonly label?: string };
+}
+
+/**
+ * Resolves a block type to (at most) the one property this component reads.
+ *
+ * Named apart from `AnyBlockDefinition` — the registry's own interface — for
+ * the same reason `LabelledBlock` is narrowed: a caller may hand this the live
  * registry (`{ get: getBlock }`) or a plain fixture with nothing registered,
- * and both satisfy this with no adapter in between.
+ * and both satisfy it with no adapter in between.
  */
 interface BlockLookup {
-  get(type: string): AnyBlockDefinition | undefined;
+  get(type: string): LabelledBlock | undefined;
 }
 
 /** One container this component offers a control for, and its accessible name. */
