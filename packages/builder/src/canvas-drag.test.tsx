@@ -304,6 +304,66 @@ describe("useCanvasDrag", () => {
     expect(indicator(container)).not.toBeNull();
   });
 
+  it("advances the target when the page SCROLLS under a still pointer", () => {
+    /*
+     * What autoscroll does: the pointer rests in the edge band and the content
+     * travels beneath it. The drag re-aims every frame from the same client
+     * coordinates, so the only thing that moves is the canvas's own rectangle.
+     *
+     * The target-switch rule needs a coordinate that MOVES in that situation,
+     * or a rival target's distance from its anchor stays zero however far the
+     * page travels — the committed target never advances and the indicator
+     * stays on a position that has scrolled off screen. It also needs one that
+     * is not divided by the canvas scale, or the threshold asks for less hand
+     * movement the further the canvas is zoomed out. Painted coordinates are
+     * the only space that is both.
+     *
+     * Driven by moving the ROOT's rectangle rather than by running the
+     * autoscroll frame: jsdom lays nothing out, so the pump has no scroller to
+     * move and no rectangle to re-read. Moving the rectangle under a fixed
+     * pointer is precisely what a scroll does to the numbers this reads.
+     */
+    const { container, root } = renderThree();
+
+    // The root starts at the origin; blocks a/b/c stack at y 0, 100, 200.
+    press(root, blockElement(container, "a"), 200, 50);
+    moveTo(root, 200, 250);
+    expect(indicator(container)).not.toBeNull();
+    const before = indicator(container)?.getAttribute("style") ?? "";
+
+    /*
+     * The page scrolls: everything moves UP, so the root's rectangle starts
+     * higher while the pointer has not moved at all.
+     *
+     * TWICE, because the rule anchors on the move where the candidate first
+     * differs and then measures travel FROM that anchor — one step sets the
+     * anchor and cannot also have travelled from it. Autoscroll is many small
+     * frames, so two is the smallest faithful model of it rather than a
+     * concession.
+     */
+    const scrollTo = (offset: number): void => {
+      root.getBoundingClientRect = () =>
+        ({
+          x: 0,
+          y: -offset,
+          width: 400,
+          height: 1000,
+          top: -offset,
+          left: 0,
+        }) as DOMRect;
+      moveTo(root, 200, 250);
+    };
+    scrollTo(200);
+    scrollTo(400);
+
+    const after = indicator(container)?.getAttribute("style") ?? "";
+    expect(after).not.toBe("");
+    // The line has moved, because a different position is now under the
+    // pointer. Read from the drawn indicator rather than from internal state:
+    // what an author sees is the thing this rule exists to keep honest.
+    expect(after).not.toBe(before);
+  });
+
   it("commits a move to the position the line was drawn at", () => {
     const { container, root } = renderThree();
 

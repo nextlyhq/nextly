@@ -17,9 +17,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { SQUARE_CORNERS } from "./border-radii";
 import {
   canvasContentPoint,
   canvasContentRect,
+  clippedByAncestor,
   frameInsetOf,
   canvasRootFrom,
   hasScrollbarGutter,
@@ -490,4 +492,80 @@ describe("whether overflow clips at all", () => {
       expect(overflowApplies(display)).toBe(true);
     }
   );
+});
+
+describe("a clipping ancestor inside a canvas that is PAINTED smaller", () => {
+  /*
+   * The two readings this comparison makes live on opposite sides of the
+   * canvas's own scale: an element's rectangle comes from
+   * `getBoundingClientRect` and is post-scale, while a computed border width is
+   * unscaled CSS pixels. `renderedScale` stops BELOW the root on purpose — the
+   * overlay is drawn through the root's scale already — so the root's own scale
+   * reaches one reading and not the other unless it is composed back in.
+   *
+   * The failure is silent in the worst way: a child flush against the real
+   * padding edge is classified as CLIPPED, and a clipped block has every
+   * spacing band suppressed. The overlay stops drawing rather than drawing
+   * something wrong.
+   */
+  /** An `overflow: hidden` ancestor with a border, at a painted rectangle. */
+  function clipper(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) {
+    const element = box(rect);
+    Object.defineProperty(element, "ownerDocument", {
+      value: document,
+      configurable: true,
+    });
+    // A real border, or the inset is zero and the case cannot discriminate:
+    // both a composed and an uncomposed scale multiply nothing by anything.
+    element.setAttribute(
+      "style",
+      "overflow:hidden;border-style:solid;border-width:20px"
+    );
+    return element;
+  }
+
+  it("insets by the border as PAINTED, not as authored", () => {
+    /*
+     * A canvas laid out at 800 and painted at 400 is scaled by a half, so a
+     * 20px border paints 10px. The child sits flush against the real padding
+     * edge — 10 painted pixels inside the ancestor — and is not cut.
+     *
+     * Uncomposed, the inset is computed as the authored 20 and the child reads
+     * as four slack-widths outside it.
+     */
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    Object.defineProperty(root, "offsetWidth", { value: 800 });
+    Object.defineProperty(root, "offsetHeight", { value: 800 });
+
+    const ancestor = clipper({ x: 0, y: 0, width: 400, height: 400 });
+    root.append(ancestor);
+    const child = box({ x: 10, y: 10, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
+  });
+
+  it("still reports a child that IS cut", () => {
+    /*
+     * The control, and it has to come out the other way or the case above says
+     * only that the function returns false. A child well outside the ancestor
+     * is clipped at any scale, so a version that composed the scale wrongly in
+     * the other direction — or one that always answered false — fails here.
+     */
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    Object.defineProperty(root, "offsetWidth", { value: 800 });
+    Object.defineProperty(root, "offsetHeight", { value: 800 });
+
+    const ancestor = clipper({ x: 0, y: 0, width: 400, height: 400 });
+    root.append(ancestor);
+    const child = box({ x: -200, y: 10, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+  });
 });

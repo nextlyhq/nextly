@@ -61,6 +61,7 @@ import type { EditorState } from "./editor-state";
 import type { Point, Rect } from "./geometry";
 import {
   canvasContentPoint,
+  canvasPaintedPoint,
   canvasContentRect,
   containerEdges,
   scrollableAncestor,
@@ -347,16 +348,27 @@ export function useCanvasDrag({
         drag.switchState,
         candidate === null ? null : candidate.id,
         /*
-         * CLIENT pixels, for the reason the activation threshold uses them: the
-         * hysteresis is how far a hand must move to overrule a committed
-         * target. The rule needs one space used consistently and does not care
-         * which, and it stores its own anchor in whatever it is given.
+         * PAINTED pixels relative to the canvas, which is the only space that
+         * answers both halves of this rule.
+         *
+         * The threshold is how far a HAND must move to overrule a committed
+         * target, so it cannot be measured in canvas coordinates: those are
+         * divided by the scale, and the hysteresis would loosen as the canvas
+         * zoomed out. But it cannot be measured in client coordinates either —
+         * autoscroll moves the page under a STATIONARY pointer, so the distance
+         * from the anchor would stay zero however far the page travelled, and
+         * the committed target would never advance off a position that has
+         * scrolled away.
+         *
+         * Painted coordinates are undivided, so the threshold stays about the
+         * hand, and they move with the scroll because the root's own rectangle
+         * does.
          *
          * Read from the GESTURE rather than from an event, because this is
          * shared with the autoscroll frame, which has no event of its own — and
          * both callers keep these current before they aim.
          */
-        { x: drag.clientX, y: drag.clientY },
+        canvasPaintedPoint(drag.clientX, drag.clientY, drag.root),
         switchPx
       );
 

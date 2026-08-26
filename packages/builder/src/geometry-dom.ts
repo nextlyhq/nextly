@@ -138,6 +138,37 @@ export function canvasContentPoint(
 }
 
 /**
+ * A viewport point relative to the canvas's PAINTED top-left corner.
+ *
+ * A third space, and it exists because the other two each lose one of the two
+ * things a drag's hysteresis has to see.
+ *
+ * CLIENT coordinates are hand-scale — 8px of them is 8px of real movement,
+ * whatever the canvas is painted at — but they do not move when the page
+ * scrolls under a stationary pointer, which is exactly what autoscroll does.
+ * Measured there, a rival target's distance from its anchor stays zero however
+ * far the page travels, so the committed target never advances and the
+ * indicator stays on a position that has scrolled off screen.
+ *
+ * CANVAS CONTENT coordinates move with the scroll but are divided by the canvas
+ * scale, so the same threshold asks for less hand movement the further the
+ * canvas is zoomed out.
+ *
+ * This one moves with the scroll — the root's own painted rectangle travels —
+ * and is not divided, so a threshold in it stays a threshold about the hand.
+ * It is NOT interchangeable with {@link canvasContentRect}: nothing may be
+ * drawn from it, because it does not survive a scroll.
+ */
+export function canvasPaintedPoint(
+  clientX: number,
+  clientY: number,
+  root: HTMLElement
+): Point {
+  const rootBox = root.getBoundingClientRect();
+  return { x: clientX - rootBox.x, y: clientY - rootBox.y };
+}
+
+/**
  * The nearest ancestor that actually scrolls, or `null` when nothing does.
  *
  * The canvas root is NOT it. That element carries the drag handlers and sizes
@@ -856,7 +887,41 @@ function cutByAncestor(
    * visibly cuts — measured, the real padding edge sat at 40 while this
    * arithmetic answered 20 and a child at exactly 20 was let through.
    */
-  const scale = renderedScale(node, root);
+  /*
+   * Composed with the ROOT's own painted scale, which `renderedScale` stops
+   * below on purpose.
+   *
+   * That exclusion is right for the overlay, which is a child of the root and
+   * is drawn through the root's scale already. It is wrong here, because the
+   * two readings this compares live on opposite sides of it: `outer` comes from
+   * `getBoundingClientRect` and is post-zoom, while a computed border width is
+   * unscaled CSS pixels. Left uncomposed, the canvas's own scale is applied to
+   * one and not the other.
+   *
+   * Measured at a canvas painted to half size: a 20px border renders 10px, the
+   * inset is computed as 20, and a child sitting flush against the real padding
+   * edge is classified as clipped — which suppresses every spacing band on it,
+   * so the symptom is an overlay that silently stops drawing rather than one
+   * that draws wrongly.
+   */
+  const painted =
+    root instanceof HTMLElement
+      ? paintedScale(root, root.getBoundingClientRect())
+      : // Identity for a root with no layout box of its own to compare against.
+        // `offsetWidth` is an HTML property; an SVG or foreign root cannot be
+        // asked how much smaller it is painted, and answering 1 leaves the
+        // arithmetic exactly as it was before there was a canvas scale.
+        { x: 1, y: 1 };
+  const own = renderedScale(node, root);
+  const scale: RenderedScale = {
+    ...own,
+    x: own.x * painted.x,
+    y: own.y * painted.y,
+    ancestor: {
+      x: own.ancestor.x * painted.x,
+      y: own.ancestor.y * painted.y,
+    },
+  };
   /*
    * A clipping ancestor that is not axis-aligned is DECLINED rather than
    * measured, because neither reading survives its transform: `a` and `d` are
