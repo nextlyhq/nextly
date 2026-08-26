@@ -328,12 +328,54 @@ const INTERACTIVE_NODES: ReadonlySet<string> = new Set([
 
 /** Whether anything drawn inside a container is itself interactive. */
 function holdsInteractive(nodes: readonly RichTextNode[] | undefined): boolean {
+  return anyDescendant(nodes, node => INTERACTIVE_NODES.has(node.type));
+}
+
+/**
+ * Whether any node in this subtree satisfies a test.
+ *
+ * ITERATIVE, with an explicit stack, and that is load-bearing rather than a
+ * style choice. Nesting here is bounded by what an editor or an import
+ * produced, not by anything the document limits enforce: those count BLOCK
+ * nodes, and this is the tree inside one prop. A value far below the byte cap
+ * can nest thousands of levels deep, and a recursive scan over it exhausts the
+ * call stack — which throws while rendering rather than returning an answer,
+ * taking the whole page route down instead of degrading to a placeholder.
+ *
+ * Measured on this renderer: about five thousand nested containers that neither
+ * scan short-circuits on is enough. The engine's own plain-text walk is
+ * iterative for exactly this reason and says so; these scans are reached from
+ * the same values and had not followed.
+ *
+ * A node that MATCHES ends the walk, and a node whose children are not an array
+ * simply contributes none — both preserve what the recursive form answered.
+ */
+function anyDescendant(
+  nodes: readonly RichTextNode[] | undefined,
+  matches: (node: RichTextNode) => boolean
+): boolean {
+  // Array-checked for the reason {@link children} gives: this is stored JSON.
   if (!Array.isArray(nodes)) return false;
-  return nodes.some(child => {
-    if (!isRichTextNode(child)) return false;
-    if (INTERACTIVE_NODES.has(child.type)) return true;
-    return holdsInteractive(child.children);
-  });
+  const stack: RichTextNode[] = [];
+  pushAll(stack, nodes);
+  while (stack.length > 0) {
+    const child = stack.pop();
+    if (child === undefined || !isRichTextNode(child)) continue;
+    if (matches(child)) return true;
+    if (Array.isArray(child.children)) pushAll(stack, child.children);
+  }
+  return false;
+}
+
+/**
+ * Pushes nodes onto a walk stack.
+ *
+ * One at a time rather than by spreading, because a spread passes every element
+ * as an argument and a stored array large enough would exceed the call's own
+ * argument limit — trading one stack overflow for another.
+ */
+function pushAll(stack: RichTextNode[], nodes: readonly RichTextNode[]): void {
+  for (const node of nodes) if (node !== undefined) stack.push(node);
 }
 
 const BLOCK_LEVEL: ReadonlySet<string> = new Set(BLOCK_LEVEL_NODES);
@@ -350,19 +392,12 @@ const BLOCK_LEVEL: ReadonlySet<string> = new Set(BLOCK_LEVEL_NODES);
  * children land in whatever encloses IT.
  *
  * A block node ends the walk instead of being descended into, because it has
- * already answered the question. The recursion is therefore bounded by the
- * document's own depth, which the renderer walks anyway.
+ * already answered the question.
  */
 function holdsBlockContent(
   nodes: readonly RichTextNode[] | undefined
 ): boolean {
-  // Array-checked for the reason {@link children} gives: this is stored JSON.
-  if (!Array.isArray(nodes)) return false;
-  return nodes.some(child => {
-    if (!isRichTextNode(child)) return false;
-    if (BLOCK_LEVEL.has(child.type)) return true;
-    return holdsBlockContent(child.children);
-  });
+  return anyDescendant(nodes, node => BLOCK_LEVEL.has(node.type));
 }
 
 /** Heading levels Lexical serializes; anything else is a document from a version this does not know. */

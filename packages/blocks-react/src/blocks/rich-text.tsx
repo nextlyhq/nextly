@@ -42,41 +42,25 @@ export interface RichTextBlockProps {
 }
 
 /**
- * Freezes a value and everything inside it, returning the same value.
- *
- * `Object.freeze` is one level deep, so freezing a tree's root leaves every
- * node under it writable — which is the opposite of useful for a default whose
- * whole risk lives in its children.
- */
-function deepFreeze<T>(value: T): T {
-  if (typeof value === "object" && value !== null) {
-    for (const inner of Object.values(value)) deepFreeze(inner);
-    Object.freeze(value);
-  }
-  return value;
-}
-
-/**
- * What a newly inserted block holds.
+ * This block's EMPTY value, in the same sense `core/text` holds `""`.
  *
  * One empty paragraph rather than no children, because that is what an editor
  * hands back for an empty passage and because a root with nothing in it renders
- * to nothing at all — leaving an author a block they can see in the layers
- * panel and cannot put a caret into on the canvas.
+ * to nothing at all.
  *
- * FROZEN, and deeply, because the inserter spreads `defaultProps` one level
- * deep: every node inserted from this definition would otherwise share this
- * exact object, and one in-place edit would rewrite the passage of every other
- * block inserted from it. Nothing here mutates a stored value — a commit builds
- * a fresh tree — so the freeze guards a mistake rather than a current path, and
- * it fails at the moment of the mistake instead of quietly later.
+ * It is not what a newly inserted block holds. The palette overlays a
+ * definition's `example` on top of its defaults, and this block declares one —
+ * so an inserted passage carries the worked instance, exactly as inserting
+ * `core/text` yields its example sentence rather than an empty string. Nothing
+ * is shared between insertions either way: each one deep-clones the props it
+ * was given.
  */
-const EMPTY_PASSAGE: RichTextValue = deepFreeze({
+const EMPTY_PASSAGE: RichTextValue = {
   root: {
     type: "root" as const,
     children: [{ type: "paragraph", children: [] }],
   },
-});
+};
 
 export function renderRichText({
   props,

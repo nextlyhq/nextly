@@ -138,25 +138,29 @@ describe("core/rich-text", () => {
     });
   });
 
-  describe("what a newly inserted block holds", () => {
-    it("starts with a paragraph an author can put a caret into", () => {
-      // An empty root renders to nothing, and a block with no element on the
-      // canvas cannot be double-clicked into existence.
+  describe("the block's empty value", () => {
+    it("is one empty paragraph, not an empty root", () => {
+      // A root with no children renders to nothing at all, leaving no line for
+      // a caret. This is the block's `""`, in the sense `core/text` holds one.
       const content = richText.defaultProps?.content;
+
       expect(content?.root.children).toHaveLength(1);
       expect(content?.root.children[0]?.type).toBe("paragraph");
     });
 
-    it("cannot be edited in place, at any depth", () => {
-      // The inserter spreads `defaultProps` ONE level deep, so every node
-      // inserted from this definition holds this same object. A one-level
-      // freeze would leave the paragraph inside it writable, and rewriting it
-      // would rewrite the starting passage of every block inserted afterwards.
-      const content = richText.defaultProps?.content;
-      expect(Object.isFrozen(content)).toBe(true);
-      expect(Object.isFrozen(content?.root)).toBe(true);
-      expect(Object.isFrozen(content?.root.children)).toBe(true);
-      expect(Object.isFrozen(content?.root.children[0])).toBe(true);
+    it("is NOT what an inserted block carries, because the example overlays it", () => {
+      /*
+       * The palette spreads `example.props` over the defaults, so a block
+       * declaring an example never inserts its empty value — the same reason
+       * inserting `core/text` yields its example sentence rather than "".
+       *
+       * Asserted because the two are easy to confuse, and confusing them is how
+       * a block ends up documented as inserting something it does not.
+       */
+      const inserted = richText.example.props as RichTextBlockProps;
+
+      expect(inserted.content).not.toEqual(richText.defaultProps?.content);
+      expect(JSON.stringify(inserted.content)).toContain("A passage");
     });
   });
 

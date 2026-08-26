@@ -2210,3 +2210,44 @@ describe("rich-text a decoration that adds a second line", () => {
     expect(html).toContain("text-decoration:underline wavy red");
   });
 });
+
+describe("a passage nested far deeper than any document limit", () => {
+  /**
+   * Containers that neither scan stops at.
+   *
+   * The type matters: nesting LINKS proves nothing, because the interactive
+   * scan matches the first one and returns without descending — a probe built
+   * that way renders one anchor at any depth and reports success it never
+   * earned. An unknown container is neither interactive nor block, so both
+   * scans walk every level of it.
+   *
+   * Built with a loop rather than by recursion, so the fixture itself cannot be
+   * what exhausts the stack.
+   */
+  function nested(levels: number): RichTextValue {
+    let node: RichTextValue["root"]["children"][number] = {
+      type: "text",
+      text: "MARKER",
+    };
+    for (let i = 0; i < levels; i++)
+      node = { type: "wrapper", children: [node] };
+    return doc([{ type: "paragraph", children: [node] }]);
+  }
+
+  it("renders instead of exhausting the call stack", () => {
+    /*
+     * The document limits count BLOCK nodes and cap total bytes; neither bounds
+     * the tree inside one prop. Measured on this renderer, five thousand such
+     * levels is roughly a fifth of a megabyte — far below the cap — and threw
+     * `RangeError: Maximum call stack size exceeded` while the scans recursed.
+     *
+     * A throw here is not one bad passage rendering as a placeholder. It escapes
+     * the render and takes the page route with it, so a visitor gets nothing.
+     */
+    const html = renderToStaticMarkup(<RichText value={nested(5000)} />);
+
+    // Asserted on the OUTPUT rather than on the absence of a throw: a scan that
+    // silently stopped descending would also not throw, and would be wrong.
+    expect(html).toContain("MARKER");
+  });
+});
