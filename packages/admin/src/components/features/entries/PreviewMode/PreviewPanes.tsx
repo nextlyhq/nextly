@@ -40,21 +40,17 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@admin/components/ui";
 import type {
   PreviewDocumentNoun,
   SelfPreviewScope,
 } from "@admin/hooks/useEntryPreview";
 
 import { PreviewFrame } from "./PreviewFrame";
+import { PreviewSplit } from "./PreviewSplit";
 import { usePreviewFrame, type UsePreviewFrameResult } from "./usePreviewFrame";
 
 export interface PreviewPanesProps {
-  /** Whether the pane is open. Closed renders `children` untouched. */
+  /** Whether the preview side is shown. Closed, the editor renders untouched. */
   open: boolean;
   /** Close the pane. Rendered by this component, so it cannot be forgotten. */
   onClose: () => void;
@@ -89,64 +85,58 @@ export interface PreviewPanesProps {
   children: ReactNode;
 }
 
-export function PreviewPanes({ open, children, ...rest }: PreviewPanesProps) {
-  if (!open) return <>{children}</>;
-  return <ActivePreviewPanes {...rest}>{children}</ActivePreviewPanes>;
-}
-
-/**
- * A separate component so the chrome request and the mint run only while the
- * pane is open — the same split `TranslationPanes` and `BlocksField` both make.
- * Calling either from the wrapper would release the page frame for every entry
- * whether or not anyone asked, and mint a credential for a pane nobody opened.
- */
-function ActivePreviewPanes({
+export function PreviewPanes({
+  open,
   onClose,
   scope,
   label,
   revision,
   children,
-}: Omit<PreviewPanesProps, "open">) {
+}: PreviewPanesProps) {
   /*
-   * `pageFrame` alone. The rail, the sidebars and the header stay: this is a
-   * pane beside the editor, not a surface that took the window, and an author
-   * who can still see the navigation has not been stranded by it.
+   * ONE component in both states, and the editor at ONE position in the tree.
    *
-   * `canExit` is nonetheless true and honest — the frame renders its own close
-   * control — so the claim stays correct if this ever asks for the rail too.
+   * This used to return `children` alone when closed and a different component
+   * when open, which put the editor under a different element type at a
+   * different depth — so React unmounted and remounted the whole editor on
+   * every toggle. Anything a field held that had not reached the form went with
+   * it, silently: a field that keeps a temporarily invalid value locally,
+   * precisely so it does not publish nonsense to the form, loses that value the
+   * moment someone clicks Preview.
+   *
+   * Nothing about what a closed pane COSTS has changed, and each half is now
+   * expressed directly rather than as a side effect of not rendering:
    */
-  useSuppressAdminChrome({ layers: ["pageFrame"], canExit: true });
+  useSuppressAdminChrome({
+    /*
+     * No layers while closed, which registers nothing — `ChromeSuppression`
+     * treats an empty list as no request — so a closed pane still leaves the
+     * page measure exactly as it found it.
+     *
+     * `canExit` stays true and honest either way: the frame renders its own
+     * close control, so the claim remains correct while it is open and is not
+     * read at all while it is not.
+     */
+    layers: open ? ["pageFrame"] : [],
+    canExit: true,
+  });
 
-  const frame = usePreviewFrame({ scope, active: true });
+  /*
+   * `active` is what stops a closed pane costing anything: no credential is
+   * minted, no audit row is written, no renewal timer is scheduled.
+   *
+   * It carries what the MOUNTING used to say. While this component existed
+   * only when the pane was open, `true` was the same statement; it stays
+   * mounted now so the editor beside it is not torn down, and the flag is what
+   * keeps a closed pane silent.
+   */
+  const frame = usePreviewFrame({ scope, active: open });
 
   return (
-    <ResizablePanelGroup
-      orientation="horizontal"
-      className="min-h-0 flex-1"
-      // Percentage STRINGS: this library reads a bare number as pixels, so
-      // `defaultSize={55}` would be a 55-pixel pane rather than 55 percent.
-    >
-      <ResizablePanel id="entry-editor" minSize="35%" defaultSize="55%">
-        {/*
-         * `@container/content` is declared HERE, and it is what stops the
-         * editor laying itself out against the page while rendering into half
-         * of it. The dashboard's `<main>` carries that container and stays
-         * full-page width, so without this every `@4xl/content:` query inside
-         * the form measures the window: the document rail is placed beside a
-         * column that no longer has room for it and overflows the pane.
-         */}
-        <div className="@container/content h-full overflow-y-auto">
-          {/* The pane stands in for `PageContainer`, so it owes the same
-              horizontal inset — and stops owing it where the editor's own
-              columns go edge-to-edge. On an INNER element because a container
-              cannot query itself. */}
-          <div className="px-4 @sm/content:px-6 @2xl/content:px-8 @4xl/content:px-0">
-            {children}
-          </div>
-        </div>
-      </ResizablePanel>
-      <ResizableHandle withGrip />
-      <ResizablePanel id="entry-preview" minSize="25%">
+    <PreviewSplit
+      open={open}
+      label={label}
+      preview={
         <PreviewFrameOnSave
           frame={frame}
           revision={revision}
@@ -156,8 +146,10 @@ function ActivePreviewPanes({
           // to "which kind of document is this" would be one answer too many.
           noun={scope.single === undefined ? "entry" : "single"}
         />
-      </ResizablePanel>
-    </ResizablePanelGroup>
+      }
+    >
+      {children}
+    </PreviewSplit>
   );
 }
 

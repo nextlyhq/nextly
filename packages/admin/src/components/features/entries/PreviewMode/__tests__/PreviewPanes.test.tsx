@@ -7,10 +7,13 @@
  * it releases the page MEASURE without taking the admin's navigation. Both are
  * assertions about what did NOT happen, so each carries a control.
  */
+import { useEffect } from "react";
+
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const suppress = vi.hoisted(() => vi.fn());
+const frameArgs = vi.hoisted(() => vi.fn());
 /*
  * Typed WIDER than its initial value on purpose: two cases below drive the
  * frame's failure and loading states, and an inferred `url: string` /
@@ -45,7 +48,10 @@ vi.mock("@admin/components/layout/ChromeSuppression", () => ({
  */
 vi.mock("../usePreviewFrame", async importOriginal => ({
   ...(await importOriginal<typeof import("../usePreviewFrame")>()),
-  usePreviewFrame: () => frameState.current,
+  usePreviewFrame: (args: unknown) => {
+    frameArgs(args);
+    return frameState.current;
+  },
 }));
 
 import { PreviewPanes } from "../PreviewPanes";
@@ -73,26 +79,134 @@ beforeEach(() => {
 });
 
 describe("PreviewPanes when the pane is closed", () => {
-  it("renders the editor with no wrapper of its own", () => {
+  it("keeps a box on the OUTERMOST wrapper and none on the rest", () => {
+    /*
+     * The wrapper elements EXIST while closed — that is what keeps the editor
+     * mounted across a toggle — so the property is about what they contribute
+     * to layout, and the two levels contribute differently.
+     *
+     * The outermost is a direct child of `.nx-page-shell`, whose `> *` rule
+     * places children in the content column. A boxless child gives that rule
+     * nothing to apply to and promotes ITS children into the grid, where they
+     * match no selector and auto-place from the gutter — so `display: contents`
+     * there mislays the ordinary closed editor while every wrapper still
+     * carries the expected class. `PageShell` warns about exactly this shape.
+     *
+     * Everything BELOW it is boxless, which is the same remedy that warning
+     * states: give the direct child a box, move the boxlessness inside it.
+     */
     const { container } = render(
       <PreviewPanes {...props} open={false}>
         <p data-testid="editor">editor</p>
       </PreviewPanes>
     );
 
-    // The child is the ROOT, so nothing was wrapped around it. A wrapper that
-    // merely had no styles would still show up here as a parent element.
-    expect(container.firstElementChild).toBe(screen.getByTestId("editor"));
+    const editor = screen.getByTestId("editor");
+    let node = editor.parentElement;
+    const wrappers: HTMLElement[] = [];
+    while (node !== null && node !== container) {
+      wrappers.push(node);
+      node = node.parentElement;
+    }
+
+    // Control: more than one wrapper, so "outermost" and "the rest" are
+    // different elements and the two assertions below cannot be the same one.
+    expect(wrappers.length).toBeGreaterThan(1);
+
+    const outermost = wrappers[wrappers.length - 1];
+    expect(outermost?.className ?? "").not.toContain("contents");
+    for (const wrapper of wrappers.slice(0, -1)) {
+      expect(wrapper.className).toContain("contents");
+    }
   });
 
-  it("asks for no chrome, so a closed pane costs the page nothing", () => {
+  it("suppresses no chrome layer, so a closed pane costs the page nothing", () => {
     render(
       <PreviewPanes {...props} open={false}>
         <p>editor</p>
       </PreviewPanes>
     );
 
-    expect(suppress).not.toHaveBeenCalled();
+    // The hook IS called now, because the component always renders — so the
+    // property is what it ASKS FOR. An empty layer list registers nothing;
+    // asserting the hook was never called would only pin the old mechanism.
+    expect(suppress).toHaveBeenCalledWith({ layers: [], canExit: true });
+  });
+
+  it("mints nothing, so no credential and no audit row for a pane nobody opened", () => {
+    render(
+      <PreviewPanes {...props} open={false}>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    // The frame hook is mocked here, so this pins the ARGUMENT that decides it
+    // rather than the mint itself: `active` false is what keeps it quiet, and
+    // it is the only thing standing between a closed pane and an audit row.
+    expect(frameArgs).toHaveBeenCalledWith(
+      expect.objectContaining({ active: false })
+    );
+  });
+});
+
+describe("toggling the preview", () => {
+  /**
+   * A child that reports every time it MOUNTS.
+   *
+   * The defect this covers is invisible in the rendered output — the editor
+   * looks identical after a remount, and only state that never reached the
+   * form is gone. Counting mounts is what makes it observable.
+   */
+  function MountCounter({ onMount }: { onMount: () => void }) {
+    useEffect(() => {
+      onMount();
+    }, [onMount]);
+    return <p data-testid="editor">editor</p>;
+  }
+
+  it("keeps the editor MOUNTED when the pane opens and closes", () => {
+    /*
+     * Returning `children` alone when closed and a wrapped tree when open put
+     * the editor under a different element type at a different depth, so React
+     * unmounted and remounted it on every toggle — discarding anything a field
+     * held that had not reached the form. A field keeping a temporarily invalid
+     * value locally, exactly so it does not publish nonsense, is the case that
+     * hurts: the work looks saved and vanishes on a click.
+     */
+    const onMount = vi.fn();
+    const { rerender } = render(
+      <PreviewPanes {...props} open={false}>
+        <MountCounter onMount={onMount} />
+      </PreviewPanes>
+    );
+    expect(onMount).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <PreviewPanes {...props} open>
+        <MountCounter onMount={onMount} />
+      </PreviewPanes>
+    );
+    expect(onMount).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <PreviewPanes {...props} open={false}>
+        <MountCounter onMount={onMount} />
+      </PreviewPanes>
+    );
+    expect(onMount).toHaveBeenCalledTimes(1);
+  });
+
+  it("DOES mount it once to begin with, so the count above is not stuck at zero", () => {
+    // The control: a counter that never fires would satisfy every assertion
+    // above while proving nothing.
+    const onMount = vi.fn();
+    render(
+      <PreviewPanes {...props} open={false}>
+        <MountCounter onMount={onMount} />
+      </PreviewPanes>
+    );
+
+    expect(onMount).toHaveBeenCalledTimes(1);
   });
 });
 
