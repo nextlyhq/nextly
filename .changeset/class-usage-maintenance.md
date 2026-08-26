@@ -26,33 +26,39 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The page builder can now bring a document's class-usage rows into agreement with the document.
+The page builder can now rebuild the class-usage index from the documents it describes.
 
-Given a document and the subject it belongs to, this derives the rows that document should
-have and applies only the difference. Reconciling rather than replacing matters because the
-table is read constantly: between a delete and a re-insert the document appears to reference
-NOTHING, so a usage count read in that window reports zero and a safe-delete check performed
-in it gets the one answer that permits the deletion.
+The index is a CACHE of something derivable, and that is the only reason it is allowed to
+exist: the answer is always recoverable by walking the documents again. This is that walk.
+Documents written before the index existed have no rows at all; a write that bypassed
+maintenance leaves rows that disagree with the document; and maintenance runs after the
+document commits, so a failure there leaves the document saved and its rows stale. None of
+those is visible from the rows themselves.
 
-Inserts are issued before removals for the same reason. Between the two statements the index
-reports the subject as referencing both what it did and what it now does - an over-count,
-which warns about a delete that was safe. The other order reports it as referencing neither.
+It walks ordered by `id` rather than by anything it can change. Offset paging reads position
+N of an ordered set, so ordering by a mutable key while writing during the walk reshuffles
+rows between queries and skips some - and `updatedAt`, the obvious ordering for a
+maintenance pass, is exactly the key each write moves.
 
-A document that cannot be read whole contributes its marker and nothing else. The prefix it
-managed to read is discarded rather than written, because reconciling against a prefix
-removes the rows for every reference past the bound.
+It stops at the first failure. Swallowing one and continuing would report a completed
+rebuild that repaired nothing, which is the report that stops anyone looking. Stopping is
+affordable because reconciliation is idempotent: a rerun writes the same rows.
 
-A deleted document's rows are dropped outright. Without that a deleted page's references
-outlive it, and a class it was the only user of never reaches zero - so an author is warned
-about documents that are gone and can never delete the class.
+`scanned` and `repaired` answer different questions, and `undetermined` is separate from
+both: a scanned document answered, and an undetermined one did not.
 
-Nothing calls this yet. It is written to run from a collection's `after*` hooks, which is
-forced rather than chosen: a row id does not exist until the insert has happened, so no
-pre-write phase can name the document it would be indexing. Those phases run POST-COMMIT, so
-a failure there cannot roll the document back and must not be raised as one - reporting a
-failed save for a save that succeeded is the most confusing direction a failure can take.
+Beneath it, maintenance brings one document's rows into agreement with it. Reconciling
+rather than replacing matters because the table is read constantly: between a delete and a
+re-insert the document appears to reference NOTHING, so a usage count read in that window
+reports zero and a safe-delete check performed in it gets the one answer that permits the
+deletion. Inserts are issued before removals for the same reason at a finer grain.
 
-There is NO repair path for a swallowed failure yet. The only exported rebuild rewrites the
-legacy per-page `usedClasses` column and never reads or writes `nx_pb_class_usage`, so a
-failed insert leaves the subject stale until its document is next saved. Do not wire the
-write path on the strength of a rebuild that has not been built.
+A document that cannot be read whole contributes one marker row and nothing else, whose
+class id is longer than the engine's cap so it cannot collide with a real reference. The
+prefix it managed to read is discarded, because reconciling against a prefix removes the
+rows for every reference past the bound.
+
+A rebuild is not subject to the race the write path will have: reconciliation is sound only
+when its caller visits a subject once at a time, and a rebuild does so by construction. That
+property has to be arranged by whatever wires this into writes, and is recorded where the
+diff is computed.

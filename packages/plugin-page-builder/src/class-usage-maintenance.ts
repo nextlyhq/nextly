@@ -123,100 +123,20 @@ const PAGE_SIZE = 200;
  * anything a host can change, and generous enough that reaching it means the
  * store's paging is broken rather than that the document is large. Its job is
  * to stop an endless loop, not to police row counts.
+ *
+ * Doubled because a subject can legitimately hold two full row sets at once.
+ * Inserts are issued before removals, so a removal that fails part way leaves
+ * the old set and the new one side by side until the next pass — and that pass
+ * is the one that would clear them. A bound sized for one set would refuse to
+ * read the very state it exists to repair.
  */
-const MAX_PAGES = Math.ceil((MAX_NODES * MAX_CLASSES_PER_NODE) / PAGE_SIZE) + 1;
+const MAX_PAGES =
+  Math.ceil((MAX_NODES * MAX_CLASSES_PER_NODE * 2) / PAGE_SIZE) + 1;
 
 /** Whether a stored value could be a block document at all. */
 export function looksLikeBlockDocument(value: unknown): boolean {
   const document = readStoredJson(value);
   return isPlainRecord(document) && Array.isArray(document.nodes);
-}
-
-/**
- * The fields of a written row that this write could have changed the classes of.
- *
- * A cheap, deliberately NON-authoritative filter. A global hook sees every write
- * in the application — logins, uploads, audit rows — and almost none of them can
- * hold a block tree; this rejects those in memory, without consulting the
- * configuration, so the common path costs one walk over the row's own keys.
- *
- * It names two things, and the second is not an afterthought. A field holding
- * something document-shaped is the obvious case. A field whose KEY is present
- * with no value is a field this write CLEARED — `null` and `undefined` are both
- * accepted values for a blocks field — and it has to be named for exactly the
- * reason the first case does: its old rows must go. A filter that recognised
- * only documents would leave a cleared field's references in place, so the
- * document would go on appearing to use every class it had before being
- * emptied, and none of them could ever be deleted.
- *
- * A key that is ABSENT is not a clear. It means this write said nothing about
- * that field, so the stored document stands and its rows are still correct.
- *
- * It is allowed to say yes about a field that is not a blocks field, because
- * the caller confirms against the declared field types before deriving. It must
- * not say no about one that is: a false negative silently stops maintaining a
- * real document, which is the under-count direction.
- */
-export function blockDocumentFields(data: unknown): string[] {
-  if (!isPlainRecord(data)) return [];
-  const found: string[] = [];
-  collectBlockDocumentFields(data, "", found);
-  return found;
-}
-
-/**
- * Walk one record, descending into the containers a blocks field can sit in.
- *
- * A `blocks()` field declared inside a `group` or a `repeater` is a supported
- * schema, not a malformed one — core accepts contributed field types in both.
- * The value seen at the top level is then the container, so a filter reading
- * only the outer keys finds no candidate and the nested field is never
- * maintained: classes added, removed or cleared inside it leave the index
- * stale, and a class only that field renders reads as unused.
- *
- * Paths are dotted, and a repeater's entries carry their index, so two nested
- * documents under one container are distinct subjects rather than one that
- * overwrites the other.
- */
-function collectBlockDocumentFields(
-  value: unknown,
-  prefix: string,
-  found: string[]
-): void {
-  if (Array.isArray(value)) {
-    value.forEach((entry, index) =>
-      collectBlockDocumentFields(entry, `${prefix}[${index}]`, found)
-    );
-    return;
-  }
-  if (!isPlainRecord(value)) return;
-  for (const key of Object.keys(value)) {
-    const path = prefix === "" ? key : `${prefix}.${key}`;
-    const child = value[key];
-    const verdict = classifyChild(child);
-    if (verdict === "candidate") found.push(path);
-    if (verdict === "container") collectBlockDocumentFields(child, path, found);
-  }
-}
-
-/** What one value under a key is, to a walk looking for blocks fields. */
-type ChildVerdict = "candidate" | "container" | "ignore";
-
-/**
- * Whether a value is a field to maintain, a container to descend into, or
- * neither.
- *
- * A block document is a CANDIDATE and never a container, even though it is
- * itself a record: descending into one would report its own internals — a
- * node's null prop, say — as fields of the document.
- */
-function classifyChild(child: unknown): ChildVerdict {
-  // A key present with no value is a CLEAR, and a clear is exactly what has to
-  // be maintained: its rows must go. An absent key never reaches here.
-  if (child === null || child === undefined) return "candidate";
-  if (looksLikeBlockDocument(child)) return "candidate";
-  if (Array.isArray(child) || isPlainRecord(child)) return "container";
-  return "ignore";
 }
 
 /** Whether a stored value is one of the two scopes a row may carry. */
@@ -416,73 +336,4 @@ export async function maintainClassUsage(args: {
     removed: remove.length,
     undetermined: !derivation.complete,
   };
-}
-
-/**
- * Drop every row describing a subject, for a document that no longer exists.
- *
- * Without this a deleted page's references outlive it, and a class it was the
- * only user of can never be deleted — the count never reaches zero and the
- * author is warned about documents that are gone.
- */
-export async function forgetClassUsage(args: {
-  store: ClassUsageIndexStore;
-  subject: ClassUsageSubject;
-}): Promise<{ removed: number }> {
-  const stored = await storedRowsFor(args.store, args.subject);
-  for (const row of stored) {
-    await args.store.delete({
-      collection: CLASS_USAGE_INDEX_SLUG,
-      id: row.id,
-    });
-  }
-  return { removed: stored.length };
-}
-
-/**
- * Drop rows for fields the document no longer has.
- *
- * The walk over a written row reports the paths that are THERE. It cannot
- * report one that has gone: a repeater shrinking from two entries to one
- * removes `sections[1].body` from the value entirely, so no candidate names it
- * and maintenance is never invoked for it. Its rows then survive the edit, and
- * a class only that entry applied goes on reading as used — for ever, because
- * nothing will ever visit that path again.
- *
- * Answerable only against the INDEX, which is the one place the departed path
- * still exists. Every row for the document is read and any whose field is not
- * among the paths present now is removed.
- *
- * Safe because the `after*` phases carry the whole stored row rather than the
- * caller's patch — `data: entry` is the record the database returned — so
- * "not present" means the document really does not have it, rather than that
- * this particular write did not mention it. A caller handing over a PARTIAL
- * document would delete the rows of every field it omitted.
- */
-export async function forgetRemovedFields(args: {
-  store: ClassUsageIndexStore;
-  /** The document, without the field and locale a subject also carries. */
-  document: Pick<ClassUsageSubject, "scope" | "entity" | "entityKey">;
-  /** Every blocks-field path the stored row holds now. */
-  presentFields: readonly string[];
-}): Promise<{ removed: number }> {
-  const { document } = args;
-  const rows = await storedRowsWhere(
-    args.store,
-    {
-      scope: { equals: document.scope },
-      entity: { equals: document.entity },
-      entityKey: { equals: document.entityKey },
-    },
-    `${document.scope}:${document.entity}:${document.entityKey}`
-  );
-
-  const present = new Set(args.presentFields);
-  let removed = 0;
-  for (const row of rows) {
-    if (present.has(row.field)) continue;
-    await args.store.delete({ collection: CLASS_USAGE_INDEX_SLUG, id: row.id });
-    removed += 1;
-  }
-  return { removed };
 }

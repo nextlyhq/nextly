@@ -130,7 +130,13 @@ export function classUsageIndexCollection() {
     fields: [
       text({ name: "scope", label: "Scope" }),
       text({ name: "entity", label: "Entity" }),
-      text({ name: "entityKey", label: "Entity key" }),
+      // Indexed because every maintenance pass filters on it, and it is the
+      // most selective column in that filter: `scope` has two values and
+      // `entity` has one per collection, while a row id is unique to its
+      // document. A composite index over the whole subject would be better and
+      // cannot be declared — a collection's `indexes` never reach the schema
+      // pipeline, which builds a table's indexes from its FIELDS.
+      text({ name: "entityKey", label: "Entity key", index: true }),
       text({ name: "field", label: "Field" }),
       text({ name: "locale", label: "Locale" }),
       // Indexed because this is the column the library filters on: the count
