@@ -32,6 +32,8 @@
 //   5. add_index operations (tables alphabetical) — AFTER column ops, so a
 //      new column exists before its index is created.
 
+import { renderedType } from "../sql-templates/create-table-body";
+
 import { indexKey, isManagedIndexName } from "./index-util";
 import { normalizeDefault } from "./normalize-default";
 import { normalizeType } from "./normalize-type";
@@ -205,7 +207,12 @@ function diffColumns(
         type: "drop_column",
         tableName,
         columnName: name,
-        columnType: prevC.type,
+        // The DECLARATION, not the bare token. PostgreSQL introspection keeps
+        // `numeric(10,2)` as `numeric` plus a separate modifier, so passing
+        // `type` alone hands the rename detector a column that describes
+        // itself as unbounded — and a narrowing conversion then reads as a
+        // rename between two identical types.
+        columnType: renderedType(prevC),
       });
       continue;
     }

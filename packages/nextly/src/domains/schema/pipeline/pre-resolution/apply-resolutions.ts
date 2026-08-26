@@ -25,6 +25,7 @@ import type {
   Operation,
   RenameColumnOp,
 } from "../diff/types";
+import { renderedType } from "../sql-templates/create-table-body";
 
 export interface RenameResolution {
   tableName: string;
@@ -81,7 +82,7 @@ export function applyResolutionsToOperations(
       fromColumn: r.fromColumn,
       toColumn: r.toColumn,
       fromType: dropOp.columnType,
-      toType: addOp.column.type,
+      toType: renderedType(addOp.column),
     });
   }
 

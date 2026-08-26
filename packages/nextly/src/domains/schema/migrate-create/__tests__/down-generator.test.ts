@@ -167,3 +167,54 @@ describe("buildInverseOperations", () => {
     expect(() => buildInverseOperations(ops, PREV)).toThrow(/ghost/);
   });
 });
+
+describe("buildInverseOperations - the type the inverse drop records", () => {
+  it("records the declaration when the size is a separate field", () => {
+    // The forward op adds a column whose spec came from introspection, so its
+    // size sits beside `type`. The inverse drop must describe the column the
+    // way it was declared, not as an unbounded one.
+    const ops: Operation[] = [
+      {
+        type: "add_column",
+        tableName: "dc_orders",
+        column: {
+          name: "amount",
+          type: "numeric",
+          nullable: true,
+          typeModifier: "10,2",
+        },
+      },
+    ];
+    expect(buildInverseOperations(ops, PREV)).toEqual([
+      {
+        type: "drop_column",
+        tableName: "dc_orders",
+        columnName: "amount",
+        columnType: "numeric(10,2)",
+      },
+    ]);
+  });
+
+  it("does not restate a size the type already spells out", () => {
+    const ops: Operation[] = [
+      {
+        type: "add_column",
+        tableName: "dc_orders",
+        column: {
+          name: "amount",
+          type: "numeric(10,2)",
+          nullable: true,
+          typeModifier: "10,2",
+        },
+      },
+    ];
+    expect(buildInverseOperations(ops, PREV)).toEqual([
+      {
+        type: "drop_column",
+        tableName: "dc_orders",
+        columnName: "amount",
+        columnType: "numeric(10,2)",
+      },
+    ]);
+  });
+});

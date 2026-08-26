@@ -126,7 +126,7 @@ const FAMILY_TABLES: Record<
 // "TEXT"                  -> "text"
 // "numeric(10,2)"         -> "numeric"
 // Returns null for empty or whitespace-only input.
-function leadingToken(rawType: string): string | null {
+export function leadingToken(rawType: string): string | null {
   const trimmed = rawType.trim().toLowerCase();
   if (trimmed.length === 0) return null;
   // Take the substring up to the first '(' or the first known modifier

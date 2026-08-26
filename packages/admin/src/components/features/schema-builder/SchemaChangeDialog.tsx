@@ -89,7 +89,11 @@ export function SchemaChangeDialog({
   >(() => {
     const out: Record<string, string | null> = {};
     for (const [key, group] of candidatesByDrop) {
-      const compatible = group.find(c => c.typesCompatible);
+      // A preserving rename before one that merely fits: pre-selecting a
+      // conversion that rewrites every row decides for the author.
+      const compatible =
+        group.find(c => c.typesCompatible && c.preservesValues) ??
+        group.find(c => c.typesCompatible);
       out[key] = compatible ? compatible.to : null;
     }
     return out;
@@ -272,14 +276,33 @@ export function SchemaChangeDialog({
                           Rename to <strong>{c.to}</strong>{" "}
                           <span className="text-muted-foreground">
                             ({c.fromType} &rarr; {c.toType}
-                            {c.typesCompatible
-                              ? "; data preserved"
-                              : "; incompatible types, not recommended"}
+                            {!c.typesCompatible
+                              ? "; incompatible types, not recommended"
+                              : c.preservesValues
+                                ? "; data preserved"
+                                : "; rows kept, values change"}
                             )
                           </span>
                         </span>
                       </label>
                     ))}
+                    {/* The reason sits under the option rather than inside its
+                        parenthetical: it is the sentence an author needs to
+                        decide, and a conversion that rewrites every row should
+                        not read as a footnote on a radio label. */}
+                    {group
+                      .filter(c => c.typesCompatible && !c.preservesValues)
+                      .map(c => (
+                        <p
+                          key={`${c.to}-why`}
+                          className="pl-6 text-xs text-muted-foreground"
+                        >
+                          <strong className="font-medium text-foreground">
+                            {c.to}:
+                          </strong>{" "}
+                          {c.valueChangeReason}
+                        </p>
+                      ))}
                     <label className="flex items-center gap-2 text-sm">
                       <input
                         type="radio"

@@ -333,17 +333,29 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       }> = remaining.map(c => ({
         value: `rename:${c.toColumn}`,
         label: `Rename ${c.fromColumn} -> ${c.toColumn}`,
-        hint: c.typesCompatible
-          ? `${c.fromType} -> ${c.toType} (data preserved)`
-          : `${c.fromType} -> ${c.toType} (incompatible types; not recommended)`,
+        // Three answers, not two. A compatible pair can still CONVERT its
+        // values — `numeric` to `float8` is the pair that made the difference
+        // matter — and calling that "data preserved" is the claim this hint
+        // used to make.
+        hint: !c.typesCompatible
+          ? `${c.fromType} -> ${c.toType} (incompatible types; not recommended)`
+          : c.preservesValues
+            ? `${c.fromType} -> ${c.toType} (data preserved)`
+            : `${c.fromType} -> ${c.toType} (rows kept, VALUES CHANGE: ${c.valueChangeReason})`,
       }));
       selectOptions.push({
         value: "drop_and_add",
         label: `Drop ${first.fromColumn} and add new column(s) (data lost)`,
       });
 
-      // Default: first compatible rename if any; otherwise drop_and_add.
-      const compatible = remaining.find(c => c.typesCompatible);
+      // Default to a rename that PRESERVES the values before one that merely
+      // fits: pre-selecting a conversion that rewrites every row is the
+      // decision being taken for the author, and it is the one they would
+      // most want to make themselves.
+      const preserving = remaining.find(
+        c => c.typesCompatible && c.preservesValues
+      );
+      const compatible = preserving ?? remaining.find(c => c.typesCompatible);
       const initialValue =
         compatible !== undefined
           ? `rename:${compatible.toColumn}`

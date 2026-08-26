@@ -51,13 +51,14 @@ export function BuilderSchemaChangeDialogs({
   entityName,
   onConfirm,
 }: Props) {
-  const { preview, isOpen, isApplying, setOpen } = confirmation;
+  const { preview, previewId, isOpen, isApplying, setOpen } = confirmation;
 
   if (!preview) return null;
 
   if (isSafeChange(preview)) {
     return (
       <SafeChangeConfirmDialog
+        key={previewId}
         open={isOpen}
         onOpenChange={setOpen}
         collectionName={entityName}
@@ -70,6 +71,7 @@ export function BuilderSchemaChangeDialogs({
 
   return (
     <SchemaChangeDialog
+      key={previewId}
       open={isOpen}
       onOpenChange={setOpen}
       collectionName={entityName}
