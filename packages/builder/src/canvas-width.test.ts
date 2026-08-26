@@ -257,6 +257,18 @@ describe("two tiers sharing one bound", () => {
     expect(editedBreakpointAtWidth(shared(), 991)).toBe("beta");
   });
 
+  it("resolves NO width for the tier that lost the bound", () => {
+    /*
+     * `offeredTiers` collapses the two to the one the browser paints, and
+     * `editedBreakpointAtWidth` writes there. A width lookup that still
+     * answered for the loser would let a host set that width believing it
+     * selected `alpha` while every edit lands in `beta` — the disagreement
+     * between the control and the write that collapsing exists to remove.
+     */
+    expect(widthForBreakpoint(shared(), "beta")).toBe(991);
+    expect(widthForBreakpoint(shared(), "alpha")).toBeUndefined();
+  });
+
   it("still separates tiers whose bounds DIFFER", () => {
     /*
      * The control. Without it, a collapse keyed on something other than the

@@ -32,6 +32,7 @@
 import {
   previewContainerName,
   type BlockDocument,
+  type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 import {
   NODE_ID_ATTRIBUTE,
@@ -43,6 +44,7 @@ import { cn } from "@nextlyhq/ui/utils";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { CanvasDragHandlers } from "./canvas-drag";
+import { offeredTiers } from "./canvas-width";
 import { selectionModeFor, type SelectionMode } from "./selection";
 
 /**
@@ -440,6 +442,27 @@ export interface CanvasPreview {
 }
 
 /**
+ * The breakpoints the compile will actually run against, or `undefined` when
+ * nothing will be compiled at all.
+ *
+ * The page tier's when it has one and the site sheet's otherwise, which is the
+ * same order the container itself is bound in — so this answers for the compile
+ * that will really happen rather than for the inputs a caller passed.
+ *
+ * `undefined` is the state where a caller has neither binding site:
+ * `siteStyles={false}` opts out of the shared sheet, and a stored artifact
+ * arrives with no style context.
+ */
+function compiledBreakpoints(
+  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  siteStyles: NonNullable<PageRendererProps["siteStyles"]>
+): BreakpointSet | undefined {
+  if (render?.styleContext !== undefined)
+    return render.styleContext.breakpoints;
+  return typeof siteStyles === "object" ? siteStyles.breakpoints : undefined;
+}
+
+/**
  * Whether this canvas is previewing at all, and under what name.
  *
  * Asked once, here, so the sheet, the box and the measurement cannot disagree
@@ -457,6 +480,15 @@ export interface CanvasPreview {
  * site tier's sheet — and a caller can legitimately have neither:
  * `siteStyles={false}` opts out of the shared sheet, and a stored artifact
  * arrives with no style context.
+ *
+ * NOTHING TO SIMULATE is the third. A preview compile rewrites every
+ * CONTAINER-axis rule to `@container nx-not-previewable (width < 0px)`, which
+ * matches nothing — the engine refusing a question a preview box cannot answer,
+ * and the right trade when there are viewport tiers to gain in exchange. With
+ * no emitted viewport tier the same price buys nothing: a container-only site
+ * would have every one of its breakpoints stop matching here while they keep
+ * working on the published page. Decided in the component rather than at one
+ * mount, so every consumer of this API keeps published mode for that set.
  */
 function activePreview(
   render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
@@ -465,9 +497,14 @@ function activePreview(
 ): CanvasPreview | undefined {
   const container = previewContainerName(preview?.container);
   if (preview === undefined || container === undefined) return undefined;
-  const bindable =
-    render?.styleContext !== undefined || typeof siteStyles === "object";
-  return bindable ? { ...preview, container } : undefined;
+  const breakpoints = compiledBreakpoints(render, siteStyles);
+  // Undefined here IS "nowhere to bind": the two binding sites are the only
+  // places a breakpoint set can come from, so their absence is one condition
+  // rather than two that have to be kept in step.
+  if (breakpoints === undefined) return undefined;
+  return offeredTiers(breakpoints).length === 0
+    ? undefined
+    : { ...preview, container };
 }
 
 /**

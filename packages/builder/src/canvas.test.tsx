@@ -437,6 +437,24 @@ describe("the gesture a click's modifiers meant", () => {
   });
 });
 
+/**
+ * A site sheet with one viewport tier, which is what makes a canvas previewable.
+ *
+ * A preview compile rewrites every container-axis rule to a query that matches
+ * nothing, so the canvas refuses to enter preview mode for a set with no
+ * viewport tier to simulate — the price would buy nothing. A fixture without
+ * one therefore exercises the published path however the preview props are set,
+ * which is a fine thing to test and is NOT what the cases below are about.
+ */
+const PREVIEWABLE = {
+  css: "",
+  classes: {},
+  breakpoints: {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  },
+} as never;
+
 describe("the preview box the canvas establishes", () => {
   /** A canvas with nothing selected, so only the box props vary. */
   function boxed(props: Record<string, unknown>) {
@@ -449,7 +467,7 @@ describe("the preview box the canvas establishes", () => {
             nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
           } as never
         }
-        siteStyles={{ css: "", classes: {} } as never}
+        siteStyles={PREVIEWABLE}
         {...props}
       />
     );
@@ -612,7 +630,7 @@ describe("what the canvas reports about the box it got", () => {
             nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
           } as never
         }
-        siteStyles={{ css: "", classes: {} } as never}
+        siteStyles={PREVIEWABLE}
         preview={{ container: "nx-preview-viewport", onMeasured }}
       />
     );
@@ -948,7 +966,7 @@ describe("what the canvas reports about the box it got", () => {
             nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
           } as never
         }
-        siteStyles={{ css: "", classes: {} } as never}
+        siteStyles={PREVIEWABLE}
         preview={{ container: "none", width: 991, onMeasured }}
       />
     );
@@ -992,7 +1010,7 @@ describe("what the canvas reports about the box it got", () => {
               nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
             } as never
           }
-          siteStyles={{ css: "", classes: {} } as never}
+          siteStyles={PREVIEWABLE}
           preview={{
             container: "nx-preview-viewport",
             onMeasured: (width: number | undefined) => onMeasured(width),
@@ -1024,7 +1042,7 @@ describe("what the canvas reports about the box it got", () => {
             nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
           } as never
         }
-        siteStyles={{ css: "", classes: {} } as never}
+        siteStyles={PREVIEWABLE}
         preview={{ container: "nx-preview-viewport", onMeasured: report }}
       />
     );
@@ -1079,6 +1097,50 @@ describe("what the canvas reports about the box it got", () => {
     expect(FakeResizeObserver.last).toBeUndefined();
   });
 
+  it("stays PUBLISHED for a set with no viewport tier to simulate", () => {
+    /*
+     * A preview compile rewrites every container-axis rule to
+     * `@container nx-not-previewable (width < 0px)`, which matches nothing.
+     * With viewport tiers to gain that is a fair trade; with none it costs a
+     * container-only site every breakpoint it has on the canvas while they keep
+     * working on the published page.
+     *
+     * Decided HERE rather than at one mount, so every consumer of this API gets
+     * it. The container name is valid and the sheet is bindable — the only
+     * thing missing is anything to simulate.
+     */
+    const onMeasured = vi.fn();
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={
+          {
+            css: "",
+            classes: {},
+            breakpoints: {
+              viewport: [],
+              container: [{ id: "narrow", label: "Narrow", maxWidth: 400 }],
+            },
+          } as never
+        }
+        preview={{ container: "nx-preview-viewport", width: 991, onMeasured }}
+      />
+    );
+
+    const style = (
+      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
+    )?.style;
+    expect(style?.containerName).toBe("");
+    expect(style?.maxWidth).toBe("");
+    expect(FakeResizeObserver.last).toBeUndefined();
+  });
+
   it("observes NOTHING when no reporter was given", () => {
     /*
      * The control. Without it, an implementation that observed unconditionally
@@ -1094,7 +1156,7 @@ describe("what the canvas reports about the box it got", () => {
             nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
           } as never
         }
-        siteStyles={{ css: "", classes: {} } as never}
+        siteStyles={PREVIEWABLE}
         preview={{ container: "nx-preview-viewport" }}
       />
     );

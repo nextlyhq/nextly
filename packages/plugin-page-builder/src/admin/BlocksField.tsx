@@ -841,18 +841,22 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     undefined
   );
 
-  const canvasPreviewContainer = useMemo(
-    () =>
-      offeredTiers(siteBreakpoints(canvasSiteStyle)).length === 0
-        ? undefined
-        : previewContainer,
-    [canvasSiteStyle, previewContainer]
-  );
-
-  const canvasRender = useMemo(
-    () => ({
+  const canvasRender = useMemo(() => {
+    /*
+     * ONE read of the site's breakpoints, feeding both the context and the
+     * decision about whether to preview at all.
+     *
+     * Two calls returned equal sets today and would stop the day `siteBreakpoints`
+     * normalises or defaults anything — and then preview eligibility would be
+     * answering from a different set than the canvas renders, which is the
+     * box/compile mismatch this whole seam exists to make unrepresentable. The
+     * docblock above already says this about the context's THREE readers; the
+     * eligibility question is a fourth.
+     */
+    const breakpoints = siteBreakpoints(canvasSiteStyle);
+    return {
       styleContext: {
-        breakpoints: siteBreakpoints(canvasSiteStyle),
+        breakpoints,
         /*
          * Carried on the SAME context the cascade and the inspector read, so
          * all three describe one compile. Supplied unconditionally rather than
@@ -862,16 +866,21 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
          * admin WINDOW instead — a wide window around a narrow canvas reports
          * the desktop tier live while the box paints the tablet one.
          */
-        ...(canvasPreviewContainer === undefined
-          ? {}
-          : { previewContainer: canvasPreviewContainer }),
+        ...(offeredTiers(breakpoints).length === 0 ? {} : { previewContainer }),
       },
       ...(remotePatterns === undefined
         ? {}
         : { hostPolicy: { remotePatterns } }),
-    }),
-    [canvasSiteStyle, remotePatterns, canvasPreviewContainer]
-  );
+    };
+  }, [canvasSiteStyle, remotePatterns, previewContainer]);
+
+  /*
+   * What the canvas is previewing under, read back from the ONE context that
+   * decided it rather than recomputed. The box and the inspector must be told
+   * the same thing the sheet was compiled with, and a second derivation here
+   * would be a second chance to answer differently.
+   */
+  const canvasPreviewContainer = canvasRender.styleContext.previewContainer;
 
   /*
    * Which tier an edit lands in, and which tiers the box is applying.

@@ -219,8 +219,19 @@ export function widthForBreakpoint(
   set: BreakpointSet | undefined,
   id: BreakpointId
 ): number | undefined {
-  const context = breakpointContexts(set).find(
-    candidate => candidate.axis !== "container" && candidate.id === id
-  );
-  return isUsableWidth(context?.maxWidth) ? context.maxWidth : undefined;
+  /*
+   * Read from {@link offeredTiers}, not from the contexts directly.
+   *
+   * Two ids can carry the same bound, and only one of them is what a canvas at
+   * that width is showing: the compiler emits both into one at-rule and the
+   * later declaration wins. Answering from the contexts would hand back the
+   * bound for the LOSING id too — so a caller sets that width believing it
+   * selected `alpha`, and every edit made there is written to `beta`, which is
+   * the disagreement between the control and the write that collapsing the
+   * choice exists to remove.
+   *
+   * `undefined` for an id that is not offered is the honest answer: there is no
+   * width that puts that tier on screen, because another tier owns it.
+   */
+  return offeredTiers(set).find(tier => tier.id === id)?.maxWidth;
 }
