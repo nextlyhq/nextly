@@ -100,6 +100,71 @@ describe("LanguagePanel", () => {
     publishState.mockReturnValue(PUBLISH_IDLE);
   });
 
+  describe("what the dots mean", () => {
+    /*
+     * The legend moved here from the header's language menu, which this step
+     * deletes. It is the ONE thing that menu carried which the panel did not
+     * duplicate, and without it the dots are decodable only by hovering — no
+     * help on a touch device and none at all to someone scanning.
+     *
+     * Asserted on the `<details>` element's OWN state rather than on
+     * visibility, deliberately. jsdom does not model `<details>`: a closed one
+     * keeps its content in the accessibility tree, so `queryByRole` finds the
+     * legend either way and a visibility assertion would pass whether the
+     * disclosure worked or not. The element's `open` property is the thing
+     * jsdom can actually answer for, and it is what a browser derives the
+     * hiding from.
+     */
+    function legend() {
+      return screen.getByText("What do these mean?").closest("details");
+    }
+
+    it("starts closed, so a narrow rail is not four rows heavier", () => {
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS });
+
+      expect(legend()).not.toBeNull();
+      expect(legend()?.open).toBe(false);
+    });
+
+    it("opens on the summary, and explains every state", async () => {
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.click(screen.getByText("What do these mean?"));
+
+      expect(legend()?.open).toBe(true);
+      const states = screen.getByRole("group", { name: /language states/i });
+      // The CANONICAL spellings from `translation-meta`, not capitalised
+      // copies: a legend with its own wording would be a second vocabulary for
+      // the states, which is the defect this step exists to remove. Case is a
+      // presentation concern and is handled in CSS.
+      for (const label of [
+        "published",
+        "translated",
+        "draft",
+        "not translated",
+      ]) {
+        expect(within(states).getByText(label)).toBeInTheDocument();
+      }
+    });
+
+    it("names every state the dots can encode, with none left undecodable", () => {
+      /*
+       * The separating property against a legend that drifts from the states in
+       * use. It is derived from the same `LANGUAGE_STATE_LABEL` the rows read,
+       * so a state added there without a legend entry would fail here rather
+       * than shipping a dot nothing explains.
+       */
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS });
+
+      const states = screen.getByRole("group", { name: /language states/i });
+      expect(within(states).getAllByText(/\S/)).toHaveLength(4);
+    });
+  });
+
   /** A site with more languages than a person can scan at a glance. */
   const MANY = {
     defaultLocale: "en",

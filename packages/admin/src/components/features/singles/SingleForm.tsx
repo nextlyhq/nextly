@@ -687,12 +687,13 @@ export function SingleForm({
                           isDirty={isDirty}
                           entry={entryLike}
                           collectionSlug={schema.slug}
-                          /* i18n: forward the active locale + switch handler so a localized single shows
-                   the primary header language switcher (the sidebar pills are unavailable when
-                   the rail is collapsed or on narrow layouts). The switcher self-hides when the
-                   single isn't localized / localization isn't configured. */
+                          /* The active language, which the header reads to decide
+                             which row's status its save buttons act on — a
+                             localized single's default row and its translations
+                             can be in different publish states. Switching
+                             language is the language panel's job, so no handler
+                             is forwarded here. */
                           locale={locale}
-                          onLocaleChange={onLocaleChange}
                           localized={schema.localized === true}
                           /* A Single has a draft lifecycle, so it has drafts worth
                    sharing. The control is offered whenever the Single carries

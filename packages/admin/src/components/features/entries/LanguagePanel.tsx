@@ -33,16 +33,14 @@ import { cn } from "@admin/lib/utils";
 import { CompletenessMeter } from "./CompletenessMeter";
 import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
 import { useEntryLocale } from "./EntryLocaleContext";
+import { StateDot } from "./LanguageStateDot";
+import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
 import {
   languageState,
   languageStateLabel,
-  LANGUAGE_STATE_LABEL,
-  StateDot,
-  type LanguageState,
-} from "./LanguageControl";
-import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
-import {
   translationCounts,
+  LANGUAGE_STATE_LABEL,
+  type LanguageState,
   type LocaleTranslationMeta,
   type TranslationCounts,
 } from "./translation-meta";
@@ -100,6 +98,55 @@ function matchesQuery(
   return (
     locale.label.toLowerCase().includes(query) ||
     locale.code.toLowerCase().includes(query)
+  );
+}
+
+/** The states a dot can encode, in the order a language moves through them. */
+const LEGEND_STATES: readonly LanguageState[] = [
+  "published",
+  "translated",
+  "draft",
+  "missing",
+];
+
+/**
+ * What the dots mean, on request.
+ *
+ * The dot encodes state by SHAPE, which is decodable once someone has been told
+ * the key and guessable by nobody. It previously lived in the header's language
+ * menu; that menu is gone, and this was the one thing in it the panel did not
+ * already carry.
+ *
+ * Closed by default because a ~320px rail cannot afford four permanent rows
+ * explaining four dots, and an author who has learned them never needs it
+ * again. `<details>` rather than a popover: it needs no positioning, works
+ * without JavaScript, and is keyboard-operable by construction.
+ *
+ * The labels are the CANONICAL ones from `translation-meta`. A legend with
+ * wording of its own would be a second vocabulary for the same states, which is
+ * the failure this panel exists to end; the capitalisation is CSS.
+ */
+function StateLegend() {
+  return (
+    <details className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+      <summary className="cursor-pointer select-none marker:content-none">
+        What do these mean?
+      </summary>
+      <div
+        role="group"
+        aria-label="Language states"
+        className="mt-2 flex flex-col gap-1"
+      >
+        {LEGEND_STATES.map(state => (
+          <span key={state} className="flex items-center gap-1.5">
+            <StateDot state={state} />
+            <span className="first-letter:uppercase">
+              {LANGUAGE_STATE_LABEL[state]}
+            </span>
+          </span>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -497,6 +544,7 @@ export function LanguagePanel({
         actionsDisabled={actionsDisabled}
         onSelect={onSelect}
       />
+      <StateLegend />
       <CopyFromLanguageDialog copy={copy} />
     </div>
   );

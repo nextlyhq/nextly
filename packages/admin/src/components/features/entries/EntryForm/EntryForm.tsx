@@ -817,7 +817,6 @@ export function EntryForm({
                             historyFields={getCollectionFields(collection)}
                             historyEnabled={historyEnabledFrom(collection)}
                             locale={locale}
-                            onLocaleChange={onLocaleChange}
                             localized={collection.localized === true}
                             isPreviewAvailable={canPreview}
                             {...(entryPreview.declaredLabel === undefined
