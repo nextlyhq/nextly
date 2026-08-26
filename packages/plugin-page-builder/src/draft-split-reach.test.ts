@@ -60,16 +60,14 @@ describe("reaching the draft-split question from a plugin", () => {
   });
 
   it("does not hand every ELIGIBLE caller the same verdict object", async () => {
-    // The eligible path returned a module-level constant by reference, so one
-    // caller mutating its verdict changed every later one — including the
-    // verdicts the schema and mutation paths read.
+    // A module-level constant returned by reference would let one caller
+    // mutating its verdict change every later one — including the verdicts the
+    // schema and mutation paths read.
     //
-    // The fixture has to be an ELIGIBLE collection, and the first version of
-    // this test got that wrong: `{ fields: [] }` takes an early return that
-    // builds a fresh literal on every call, so it could not have failed
-    // whether or not the constant was shared. A test that passes with and
-    // without the fix is worse than none, because the next reader takes the
-    // green as coverage.
+    // The fixture has to be an ELIGIBLE collection. An ineligible one such as
+    // `{ fields: [] }` takes an early return that builds a fresh literal on
+    // every call, so it holds whether or not the eligible verdict is shared and
+    // this assertion would pass without reaching the question.
     const enabled = { status: true, versions: true, fields: [] };
     const first = await collectionDraftSplit(enabled);
     const second = await collectionDraftSplit(enabled);
