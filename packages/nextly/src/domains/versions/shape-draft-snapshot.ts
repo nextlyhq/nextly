@@ -13,6 +13,19 @@
  * columns it deliberately holds back — a restore must not resubmit them, a read
  * carries them — are copied back afterwards.
  *
+ * ## Why the rehydration is part of the question, not a step callers add
+ *
+ * A snapshot stores dates as strings; an ordinary live read hands the afterRead
+ * hooks Drizzle-decoded `Date` objects. A caller that prunes without
+ * rehydrating therefore returns a document whose dates are the wrong TYPE, and
+ * a hook calling date methods fails only for a drafted document — which is
+ * exactly what was measured on Singles before this function did it
+ * (`draft-date-parity.integration.test.ts`).
+ *
+ * Leaving it to callers is what produced that: two of the three call sites
+ * remembered, one did not, and the one that did not was the one reached through
+ * an extracted helper whose name claims it shapes the document whole.
+ *
  * Pure and DI-free so the shaping can be tested directly, which is the half of
  * an overlay that has no database in it.
  *
@@ -20,10 +33,14 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
-import { SYSTEM_TIMESTAMP_KEYS } from "../../shared/lib/case-conversion";
+import {
+  SYSTEM_TIMESTAMP_KEYS,
+  rehydrateSystemTimestamps,
+} from "../../shared/lib/case-conversion";
 
 import { buildRestorePayload } from "./restore-snapshot";
 import type { ComponentSchemas } from "./restore-snapshot";
+import { rehydrateSnapshotDates } from "./tag-component-types";
 
 export interface ShapeDraftSnapshotInput {
   /** The snapshot as stored. */
@@ -37,9 +54,36 @@ export interface ShapeDraftSnapshotInput {
    *
    * A plugin-contributed collection gets no synthesized pair, so claiming they
    * exist would keep an obsolete snapshot key the current schema never declared.
+   *
+   * Deliberately a PARAMETER rather than something derived here: the callers
+   * answer it differently and both are argued. A Single asks whether the field
+   * is declared; a collection treats a non-plugin collection as always having
+   * the pair. Folding either rule in would silently change the other.
    */
   hasSlug: boolean;
   hasTitle: boolean;
+  /**
+   * Whether to restore the SYSTEM timestamps to `Date`.
+   *
+   * Not universal, and measured rather than assumed: a collection's live read
+   * hands back `Date` for `createdAt`/`updatedAt`, and a Single's hands back a
+   * STRING — a Single normalizes them on the way out. So rehydrating
+   * unconditionally fixes the drafted collection and breaks the drafted Single,
+   * which is what `draft-date-parity.integration.test.ts` caught when this was
+   * first written as an unconditional step.
+   *
+   * DECLARED date fields are not affected by this: both document types return
+   * those as `Date`, so they are always rehydrated.
+   */
+  rehydrateSystemTimestampsToDate: boolean;
+  /**
+   * Whether the document carries the lifecycle column.
+   *
+   * Defaults to `true`: reaching this at all normally means the draft/published
+   * split applied. The collection WRITE-response path shapes a draft for a
+   * collection that may not have it, so it passes the answer explicitly.
+   */
+  hasStatus?: boolean;
 }
 
 /**
@@ -49,9 +93,7 @@ export function shapeDraftSnapshot(
   input: ShapeDraftSnapshotInput
 ): Record<string, unknown> {
   const { payload } = buildRestorePayload(input.snapshot, input.fields, {
-    // Reaching this function at all means the draft/published split applied,
-    // which requires the lifecycle column.
-    hasStatus: true,
+    hasStatus: input.hasStatus ?? true,
     hasSlug: input.hasSlug,
     hasTitle: input.hasTitle,
     componentSchemas: input.componentSchemas,
@@ -70,6 +112,13 @@ export function shapeDraftSnapshot(
       payload[key] = input.snapshot[key];
     }
   }
+
+  // Rehydrate, so every caller returns the value shapes ITS OWN live read
+  // returns. See the module note: this is part of the question, not a step a
+  // caller is trusted to remember — but the system-timestamp half differs by
+  // document type, so it is declared rather than assumed.
+  if (input.rehydrateSystemTimestampsToDate) rehydrateSystemTimestamps(payload);
+  rehydrateSnapshotDates(payload, input.fields, input.componentSchemas ?? null);
 
   return payload;
 }
