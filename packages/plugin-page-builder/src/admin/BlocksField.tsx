@@ -35,6 +35,7 @@
 
 import {
   resolveSiteTokens,
+  getBlock,
   hasBlock,
   registerBlocks,
   registryNestingSource,
@@ -61,6 +62,7 @@ import {
   BuilderShell,
   Canvas,
   DropIndicator,
+  EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
   pageStyleTrace,
@@ -627,6 +629,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const drag = useCanvasDrag({ editor, slots, nesting });
 
   /*
+   * The empty-container appender's only read of a block's definition: its
+   * accessible label. `{ get: getBlock }` satisfies its `BlockLookup` with no
+   * adapter, because `getBlock` already returns `AnyBlockDefinition | undefined`
+   * and that type carries the one field the appender reads.
+   */
+  const blocks = useMemo(() => ({ get: getBlock }), []);
+
+  /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
    * may be typed into is the block's own declaration, read by the builder.
    */
@@ -1034,6 +1044,24 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   }, [editor.document, onCommit, onClose]);
 
   /*
+   * Opens the insert panel from the canvas itself, for the empty-container
+   * appender: pressing its "+" must select the container AND show the panel
+   * that fills it as one gesture, never two.
+   *
+   * A counter bumped on every press, not a boolean: `BuilderShell` reads this
+   * as "open it AGAIN", including when the author has since closed the panel
+   * by hand, and a value that repeated itself would look unchanged and do
+   * nothing the second time. Starts `undefined` rather than `0` so mounting
+   * the editor is not itself a press.
+   */
+  const [openInsertPanelToken, setOpenInsertPanelToken] = useState<
+    number | undefined
+  >(undefined);
+  const openInsertPanel = useCallback(() => {
+    setOpenInsertPanelToken(current => (current ?? 0) + 1);
+  }, []);
+
+  /*
    * The editor takes the window: the shell draws its own rail, panels, top bar
    * and bottom bar, so admin chrome around it is a second set of the same
    * furniture, and the canvas is the one surface whose purpose is the space it
@@ -1065,6 +1093,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             ? AVAILABLE_PANELS
             : AVAILABLE_PANELS_WITH_SETTINGS
         }
+        // Forces the insert panel open from the empty-container appender,
+        // which lives on the canvas below rather than beside the rail that
+        // normally opens a panel.
+        openInsertPanelToken={openInsertPanelToken}
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
@@ -1330,6 +1362,26 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   <SpacingOverlay
                     editor={editor}
                     hidden={drag.draggingId !== null}
+                  />
+                  {/*
+                  Suppressed during a drag for the same reason the toolbar and
+                  the bands are: the document is mid-change, so a control
+                  offering to fill a container names a shape that is about to
+                  be different.
+                */}
+                  <EmptyContainerAppenders
+                    document={editor.document}
+                    slots={slots}
+                    blocks={blocks}
+                    hidden={drag.draggingId !== null}
+                    onAppend={nodeId => {
+                      // Select first, then open. The inserter derives its
+                      // target from the selection, so selecting the container
+                      // is what makes the next insert land inside it — there
+                      // is no second targeting path to keep in step.
+                      editor.select(nodeId);
+                      openInsertPanel();
+                    }}
                   />
                 </>
               }
