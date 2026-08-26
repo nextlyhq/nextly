@@ -27,6 +27,7 @@ import { BuilderShell } from "./builder-shell";
 import { CommandPalette } from "./command-palette";
 import {
   DEFAULT_PREFERENCES,
+  EMPTY_ELEMENTS_ATTRIBUTE,
   fitsFullShell,
   MIN_SHELL_WIDTH,
   type PreferenceStore,
@@ -417,7 +418,7 @@ describe("preferences", () => {
     // not the property under test.
     const chrome = document.querySelector(".nx-builder-chrome");
     expect(chrome).not.toBeNull();
-    expect(chrome?.getAttribute("data-nx-empty-elements")).toBe("hidden");
+    expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
   });
 });
 

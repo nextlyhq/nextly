@@ -155,6 +155,19 @@ export interface ShellPreferences {
 }
 
 /**
+ * The DOM attribute the shell stamps on `.nx-builder-chrome` when
+ * {@link ShellPreferences.showEmptyElements} is off.
+ *
+ * `builder-chrome.css` has no module system, so it cannot import this and its
+ * selector spells the same string out literally. Exported so every reader of
+ * that spelling — the shell that writes it and the test that pins the
+ * stylesheet against it — takes it from one place: a rename here that missed
+ * the CSS would otherwise leave the selector matching nothing, silently, with
+ * no type error and no failed import to notice.
+ */
+export const EMPTY_ELEMENTS_ATTRIBUTE = "data-nx-empty-elements";
+
+/**
  * The identity of a panel arrangement, from the panels themselves.
  *
  * Sorted and joined rather than taken from `leftPanel`, so it is derived from

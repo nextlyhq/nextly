@@ -27,6 +27,7 @@ import * as React from "react";
 import { devWarnOnce } from "./dev-warn";
 import {
   DEFAULT_PREFERENCES,
+  EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
   fitsFullShell,
   LEFT_PANELS,
@@ -748,7 +749,7 @@ function ShellRegions({
       // silently stop applying anywhere the shell had not written one yet.
       {...(preferences.showEmptyElements
         ? {}
-        : { "data-nx-empty-elements": "hidden" })}
+        : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
       <header
         className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
