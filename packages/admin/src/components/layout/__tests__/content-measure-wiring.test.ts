@@ -42,23 +42,35 @@ const CONTENT_ROUTES = [
  */
 const SETTINGS_ROUTE = "pages/dashboard/settings/webhooks/create.tsx";
 
-const WIDTH_PROP = /<PageContainer\s[^>]*width=(\{[^}]*\}|"[^"]*")/g;
+/**
+ * Every opening `PageContainer` tag with its attributes, whatever they are.
+ *
+ * Deliberately not anchored on `width=`. A pattern that requires the prop in
+ * order to match cannot see a container that DROPPED it, and that is the
+ * change worth catching: no width is the unmeasured padded path, so a state
+ * that lost the prop reflows against the states that kept it, while the
+ * remaining matches keep any population assertion satisfied.
+ */
+const CONTAINER_TAG = /<PageContainer([^>]*)>/g;
 
-function widthsIn(relative: string): string[] {
+/** The attribute text of each `PageContainer` in a file, in source order. */
+function containersIn(relative: string): string[] {
   const source = readFileSync(join(SRC, relative), "utf8");
-  return [...source.matchAll(WIDTH_PROP)].map(m => m[1] as string);
+  return [...source.matchAll(CONTAINER_TAG)].map(m => m[1] as string);
 }
 
 describe("content routes read the shared measure", () => {
   for (const route of CONTENT_ROUTES) {
-    it(`${route} names no width of its own`, () => {
-      const widths = widthsIn(route);
+    it(`${route} measures every container from the shared constant`, () => {
+      const containers = containersIn(route);
       // The population assertion. Without it, a renamed file or a pattern that
-      // stopped matching yields an empty list, and "no literals" passes over a
-      // route the test never read.
-      expect(widths.length).toBeGreaterThan(0);
-      for (const w of widths) {
-        expect(w).toBe("{CONTENT_PAGE_MEASURE}");
+      // stopped matching yields an empty list, and the loop below passes over
+      // a route the test never read.
+      expect(containers.length).toBeGreaterThan(0);
+      for (const attrs of containers) {
+        // Asserted over EVERY container, so dropping the prop fails here
+        // rather than removing the tag from the scan.
+        expect(attrs).toContain("width={CONTENT_PAGE_MEASURE}");
       }
     });
   }
@@ -67,8 +79,8 @@ describe("content routes read the shared measure", () => {
     // If this ever comes back as the constant, either settings pages were swept
     // up by mistake or the scan has stopped seeing literals — and in the second
     // case every assertion above is passing on nothing.
-    const widths = widthsIn(SETTINGS_ROUTE);
-    expect(widths.length).toBeGreaterThan(0);
-    expect(widths).toContain('"form"');
+    const containers = containersIn(SETTINGS_ROUTE);
+    expect(containers.length).toBeGreaterThan(0);
+    expect(containers.some(a => a.includes('width="form"'))).toBe(true);
   });
 });
