@@ -195,7 +195,7 @@ async function rebuildOnePage(
     field: string;
     locale: string;
     variant: ClassUsageVariant;
-    limits?: DocumentLimits;
+    limits: DocumentLimits;
   },
   visited: Set<string>
 ): Promise<PageTally> {
@@ -293,14 +293,23 @@ export async function rebuildClassUsageIndex(args: {
    */
   variant: ClassUsageVariant;
   /**
-   * The bounds the documents are rendered under, when not the engine defaults.
+   * The bounds the documents are rendered under — the SAME value the plugin and
+   * the renderer are given.
    *
-   * The SAME value the plugin and the renderer are given. A rebuild deriving
-   * under different bounds than the renderer would record a class applied to a
-   * node the page draws as absent, and a usage-based delete reads that absence
-   * as "not used".
+   * Required rather than optional, because omitting it is not neutral and the
+   * disagreement is silent. An omitted value derives under the engine defaults
+   * while the host may have configured others, and the two directions fail
+   * differently: raised bounds mean a document the renderer draws whole is
+   * recorded as a marker instead of its classes, and lowered bounds mean
+   * classes on nodes the page never draws are counted as used.
+   *
+   * Making it required does not stop a caller passing bounds that differ from
+   * the renderer's, and nothing here can — only the caller knows what the
+   * renderer was given. What it does is force that to be a decision rather than
+   * an omission. Pass `DEFAULT_LIMITS` explicitly when the host configured
+   * none.
    */
-  limits?: DocumentLimits;
+  limits: DocumentLimits;
 }): Promise<ClassUsageRebuildReport> {
   let scanned = 0;
   let repaired = 0;

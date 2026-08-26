@@ -165,7 +165,7 @@ type PageVerdict = "undetermined" | "repaired" | "agreed";
 async function repairPage(
   item: StoredPage,
   collection: string,
-  args: { store: PageUsageStore; limits?: DocumentLimits }
+  args: { store: PageUsageStore; limits: DocumentLimits }
 ): Promise<PageVerdict> {
   const usage = classUsageOf(item.content, args.limits);
   if (!usage.complete) {
@@ -199,7 +199,7 @@ async function repairPage(
 async function scanOnePage(
   items: readonly unknown[],
   collection: string,
-  args: { store: PageUsageStore; limits?: DocumentLimits }
+  args: { store: PageUsageStore; limits: DocumentLimits }
 ): Promise<{ scanned: number; repaired: number; undetermined: number }> {
   let scanned = 0;
   let repaired = 0;
@@ -242,7 +242,7 @@ export async function rebuildClassUsage(args: {
    * list the hook then disagrees with, and the two would take turns correcting
    * each other on every save.
    */
-  limits?: DocumentLimits;
+  limits: DocumentLimits;
 }): Promise<RebuildReport> {
   const collection = args.collection ?? "pages";
   let scanned = 0;

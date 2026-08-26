@@ -38,6 +38,21 @@ export type {
   BlockNode,
   DocumentKind,
 } from "@nextlyhq/blocks-engine";
+
+// The bounds a rebuild derives under, for the same reason and by the same rule.
+// They are REQUIRED arguments on this package's rebuild entry points, so a host
+// running the engine defaults has to name a value — and the only correct value
+// lived in a package it has no guarantee of resolving. Without this the two
+// available moves are both wrong: take a direct dependency on the engine to
+// obtain one constant, or copy the numbers and let them drift silently away
+// from the bounds the renderer actually applies.
+//
+// Re-exported rather than redeclared. A second definition of these numbers is
+// the drift itself, and `public-limits-export.test.ts` asserts by REFERENCE
+// identity that this is the engine's own object rather than a copy that happens
+// to agree today.
+export { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+export type { DocumentLimits } from "@nextlyhq/blocks-engine";
 export {
   BLOCKS_FIELD_TYPE,
   BLOCKS_TYPE,

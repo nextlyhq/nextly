@@ -78,6 +78,19 @@ bypassed maintenance never appears in the walk, so its rows would otherwise surv
 rebuild that reported success. The sweep runs only after the walk completes, since against a
 partial one it would delete the rows of every document not yet reached.
 
+The bounds a rebuild derives under are REQUIRED rather than optional, on every entry point a
+caller invokes. Omitting them is not neutral: the derivation falls back to the engine
+defaults while the host may have configured others, and the two directions fail in opposite
+ways - raised bounds record a document the renderer draws whole as an undetermined marker
+instead of its classes, and lowered bounds count classes on nodes the page never draws.
+Passing the engine defaults explicitly is still available and is now a decision rather than
+an omission - and the page-builder package now RE-EXPORTS `DEFAULT_LIMITS` and its
+`DocumentLimits` type, so a host running the defaults has a value to name. It could not
+reach the engine by name: that is a dependency of this package rather than of the app, and
+the two moves left without it were both wrong - take a direct dependency on the engine to
+obtain one constant, or copy the numbers and let them drift away from the bounds the
+renderer applies.
+
 It stops at the first failure. Swallowing one and continuing would report a completed
 rebuild that repaired nothing, which is the report that stops anyone looking. Stopping is
 affordable because reconciliation is idempotent: a rerun writes the same rows.

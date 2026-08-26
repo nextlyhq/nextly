@@ -88,6 +88,7 @@ describe("rebuilding the class-usage index", () => {
     const index = indexStore();
 
     const report = await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents: docs.store,
       index: index.store,
       collection: "pages",
@@ -119,6 +120,7 @@ describe("rebuilding the class-usage index", () => {
     ]);
 
     await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents: docs.store,
       index: indexStore().store,
       collection: "pages",
@@ -154,6 +156,7 @@ describe("rebuilding the class-usage index", () => {
     ]);
 
     const report = await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents: docs.store,
       index: index.store,
       collection: "pages",
@@ -221,6 +224,7 @@ describe("rebuilding the class-usage index", () => {
     const index = indexStore();
 
     const report = await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents: docs.store,
       index: index.store,
       collection: "pages",
@@ -251,6 +255,7 @@ describe("rebuilding the class-usage index", () => {
 
     await expect(
       rebuildClassUsageIndex({
+        limits: DEFAULT_LIMITS,
         documents: endless,
         index: indexStore().store,
         collection: "pages",
@@ -276,6 +281,7 @@ describe("the locale a rebuild reads under", () => {
     const index = indexStore();
 
     await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents: docs.store,
       index: index.store,
       collection: "pages",
@@ -302,6 +308,7 @@ describe("the variant a rebuild reads under", () => {
     ]);
 
     await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents: docs.store,
       index: indexStore().store,
       collection: "pages",
@@ -340,6 +347,7 @@ describe("the variant a rebuild reads under", () => {
     const rowsFor = async (variant: "published" | "draft") => {
       const index = indexStore();
       await rebuildClassUsageIndex({
+        limits: DEFAULT_LIMITS,
         documents,
         index: index.store,
         collection: "pages",
@@ -412,6 +420,7 @@ describe("rows whose document no longer exists", () => {
     };
 
     const report = await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents: docs.store,
       index,
       collection: "pages",
@@ -474,6 +483,7 @@ describe("a document the walk missed but which still exists", () => {
     };
 
     const report = await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents,
       index,
       collection: "pages",
@@ -539,6 +549,7 @@ describe("a variant of a document that no longer exists", () => {
     };
 
     const report = await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents,
       index,
       collection: "pages",
@@ -617,6 +628,7 @@ describe("the coordinates an existence check is asked in", () => {
     };
 
     await rebuildClassUsageIndex({
+      limits: DEFAULT_LIMITS,
       documents,
       index,
       collection: "pages",
