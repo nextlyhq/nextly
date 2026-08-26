@@ -480,6 +480,7 @@ describe("the blocks entry", () => {
       "paragraph",
       "quote",
       "renderContainer",
+      "richText",
       "section",
       "spacer",
     ]);

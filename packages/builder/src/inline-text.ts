@@ -20,6 +20,7 @@
 import {
   findNode,
   getBlock,
+  RICH_TEXT_PROP_TYPE,
   type BlockDocument,
   type BlockNode,
   type PropSchema,
@@ -58,9 +59,23 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-/** Whether a schema opted this value into editing on the canvas. */
+/**
+ * Whether a schema opted this value into editing on the canvas AS PLAIN TEXT.
+ *
+ * The opt-in alone is not enough, because rich text opts in too and is edited
+ * by a different surface. Everything below this point reads a value with
+ * {@link asText} and writes a string back, so offering a rich value here would
+ * put an empty element under the caret and commit `""` over the author's
+ * passage the moment they clicked away — a value destroyed by the act of
+ * looking at it, with no error anywhere.
+ *
+ * Excluded by the prop's declared TYPE rather than by inspecting the stored
+ * value, so a rich prop that is currently empty, or holds something a migration
+ * left behind, is refused for the same reason as a full one. What a prop IS
+ * cannot be decided from what it happens to contain.
+ */
 function declaresInline(schema: PropSchema | undefined): boolean {
-  return schema?.inline === true;
+  return schema?.inline === true && schema.type !== RICH_TEXT_PROP_TYPE;
 }
 
 function targetFor(

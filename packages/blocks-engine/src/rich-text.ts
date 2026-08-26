@@ -41,6 +41,17 @@
  */
 
 /**
+ * The `type` a prop schema declares to say its value is rich text.
+ *
+ * Here rather than spelled at each end because two ends read it and they must
+ * mean the same string: the block library writes it into a schema, and an
+ * editor reads it to decide whether a value is a tree or a line of text. A
+ * mismatch is silent in the worst possible way — the editor treats a tree as
+ * text, reads no text out of it, and commits an empty string over the passage.
+ */
+export const RICH_TEXT_PROP_TYPE = "richText";
+
+/**
  * One node of stored rich text.
  *
  * `type` is the only field every node has. `children`, `text` and `format` are

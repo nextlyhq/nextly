@@ -526,6 +526,7 @@ export {
   hasFormat,
   isRichTextNode,
   isRichTextValue,
+  RICH_TEXT_PROP_TYPE,
   richTextToPlainText,
   TEXT_FORMAT,
   type RichTextNode,
