@@ -155,11 +155,19 @@ function getDynamicRequiredPermission(
   if (pattern === ROUTES.COLLECTION_ENTRY_API) {
     return slug ? `read-${slug}` : undefined;
   }
+  // Reading a document's history is a read of that document, and restoring
+  // from it goes through the ordinary update path with its own check.
+  if (pattern === ROUTES.COLLECTION_ENTRY_VERSIONS) {
+    return slug ? `read-${slug}` : undefined;
+  }
 
   if (pattern === ROUTES.SINGLE_EDIT) {
     return slug ? `update-${slug}` : undefined;
   }
   if (pattern === ROUTES.SINGLE_API) {
+    return slug ? `read-${slug}` : undefined;
+  }
+  if (pattern === ROUTES.SINGLE_VERSIONS) {
     return slug ? `read-${slug}` : undefined;
   }
 
