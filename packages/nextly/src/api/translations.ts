@@ -16,6 +16,11 @@
  * @since 1.0.0
  */
 
+import {
+  apiKeyScopeAllows,
+  type AuthenticatedScope,
+} from "../auth/authenticated-scope";
+import type { AuthContext } from "../auth/middleware";
 import { container } from "../di";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
 import {
@@ -91,10 +96,24 @@ function parseLimit(raw: string | null): number {
  * cap, and the per-row one keeps another author's titles out of the answer.
  */
 async function readableCollections(
-  userId: string
+  auth: AuthContext,
+  scope: AuthenticatedScope | undefined,
+  slugs: readonly string[]
 ): Promise<Set<string> | undefined> {
-  if (await isSuperAdmin(userId)) return undefined;
-  const pairs = await listEffectivePermissions(userId);
+  // An API KEY is judged on its own stamped grants, in both directions: a key
+  // without the grant is denied however privileged its owner, and a key with it
+  // is allowed however unprivileged. Asking the owner's RBAC here — which is
+  // what this did — let collections outside the key's reach consume the capped
+  // slots and put their slugs in `skippedCollections`, while the per-row checks
+  // correctly refused their rows. The coarse filter and the row checks have to
+  // come from ONE decision or they disagree about what exists.
+  if (scope?.actorType === "apiKey") {
+    return new Set(
+      slugs.filter(slug => apiKeyScopeAllows(scope, "read", slug) === true)
+    );
+  }
+  if (await isSuperAdmin(auth.userId)) return undefined;
+  const pairs = await listEffectivePermissions(auth.userId);
   return new Set(
     pairs.filter(p => p.endsWith(":read")).map(p => p.split(":")[0] ?? "")
   );
@@ -214,12 +233,13 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   // consume the alphabetically-first slots, pushing a readable collection into
   // `skippedCollections` — where its work is never queried AND its slug is
   // named back to someone with no right to know it exists.
-  const readable = await readableCollections(auth.userId);
-  const eligible = eligibleCollections(
-    await localizedCollections(),
-    state,
-    readable
+  const localized = await localizedCollections();
+  const readable = await readableCollections(
+    auth,
+    caller.authenticatedScope,
+    localized.map(c => c.slug)
   );
+  const eligible = eligibleCollections(localized, state, readable);
   const { queried, skippedCollections } = planWorklistFanOut(eligible);
   const bySlug = new Map(eligible.map(c => [c.slug, c]));
 
@@ -246,6 +266,15 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
         // Nothing here follows a relationship, and expanding them would turn
         // one list into a page of joins per row.
         depth: 0,
+        // The lifecycle scope is stated, because the default is not the one a
+        // worklist wants. Without it `resolveStatusFilter` applies the
+        // untrusted-read default of `published` to the PARENT table, so a
+        // document still in draft is absent from every state — including
+        // `missing`, which is precisely the document a translator needs before
+        // it is published. This widens what LIFECYCLE is visible, not who may
+        // see it: the caller's access context above is unchanged, and the admin
+        // entry list asks for the same scope for the same reason.
+        status: "all" as const,
       });
       const useAsTitle = bySlug.get(coll.slug)?.useAsTitle;
       // A refused or failed read contributes nothing rather than failing the
