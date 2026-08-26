@@ -1,11 +1,13 @@
 "use client";
 
 import {
+  Label,
   PortalProvider,
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
   ShortcutProvider,
+  Switch,
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -27,6 +29,7 @@ import * as React from "react";
 import { devWarnOnce } from "./dev-warn";
 import {
   DEFAULT_PREFERENCES,
+  EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
   fitsFullShell,
   LEFT_PANELS,
@@ -360,6 +363,13 @@ function usePreferences(store: PreferenceStore) {
 /**
  * Whether two preference records say the same thing.
  *
+ * EVERY field has to be compared here, because this is what the restore
+ * effect gates on: a field missing from this function reads as "unchanged"
+ * for any two records that differ only in it, so a stored non-default value
+ * for that field is silently dropped on mount whenever the rest of the record
+ * already matches the default — which a fresh session with nothing else
+ * customised does by construction.
+ *
  * The layout is compared by its entries rather than by identity: `readPreferences`
  * builds a fresh object every call, so identity is always false and the restore
  * effect would set state on every mount even when nothing changed.
@@ -368,7 +378,11 @@ function shallowEqualPreferences(
   a: ShellPreferences,
   b: ShellPreferences
 ): boolean {
-  if (a.leftPanel !== b.leftPanel || a.leftPinned !== b.leftPinned) {
+  if (
+    a.leftPanel !== b.leftPanel ||
+    a.leftPinned !== b.leftPinned ||
+    a.showEmptyElements !== b.showEmptyElements
+  ) {
     return false;
   }
   if (a.layouts === b.layouts) return true;
@@ -685,6 +699,10 @@ function ShellRegions({
   useRegionCycling(regionRefs, chromeRef, active);
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
+  // Pairs the header's visibility-toggle label with its switch. Generated
+  // rather than a literal so two shells mounted on one page — unlikely, but
+  // nothing here forbids it — cannot collide on the same id.
+  const emptyElementsToggleId = React.useId();
 
   /**
    * Whether the host can fill a panel. One predicate, so the rail's disabled
@@ -731,6 +749,13 @@ function ShellRegions({
         "nx-builder-chrome flex h-full w-full flex-col overflow-hidden",
         className
       )}
+      // Absent when empty containers are shown, which is the default. A state
+      // name rather than a boolean attribute so the shown case needs nothing
+      // written: a rule that depended on an attribute being present would
+      // silently stop applying anywhere the shell had not written one yet.
+      {...(preferences.showEmptyElements
+        ? {}
+        : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
       <header
         className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
@@ -753,6 +778,30 @@ function ShellRegions({
           </button>
         ) : null}
         <div className="flex min-w-0 flex-1 items-center gap-2">{topBar}</div>
+        {/*
+         * The only reachable control for `showEmptyElements` — before this it
+         * changed only by an author editing storage by hand. Lives on the
+         * shell's own chrome rather than inside a switched panel, because it
+         * has to stay visible whichever panel is open or closed, and because
+         * it is this component's own state rather than a slot a host fills.
+         *
+         * A labelled switch rather than an icon: the control governs a
+         * VISIBILITY affordance, and one an author cannot read at a glance
+         * would repeat the exact failure this feature exists to fix.
+         */}
+        <Label
+          htmlFor={emptyElementsToggleId}
+          className="text-[color:var(--nx-builder-text-muted)] shrink-0"
+        >
+          Show empty containers
+          <Switch
+            id={emptyElementsToggleId}
+            checked={preferences.showEmptyElements}
+            onCheckedChange={checked =>
+              update(current => ({ ...current, showEmptyElements: checked }))
+            }
+          />
+        </Label>
       </header>
 
       <div className="flex min-h-0 flex-1">

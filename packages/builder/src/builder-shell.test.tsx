@@ -27,6 +27,7 @@ import { BuilderShell } from "./builder-shell";
 import { CommandPalette } from "./command-palette";
 import {
   DEFAULT_PREFERENCES,
+  EMPTY_ELEMENTS_ATTRIBUTE,
   fitsFullShell,
   MIN_SHELL_WIDTH,
   type PreferenceStore,
@@ -397,6 +398,54 @@ describe("preferences", () => {
     );
 
     expect(screen.queryByText(/panel$/)).toBeNull();
+  });
+
+  it("restores a stored showEmptyElements even when every other field matches the default", () => {
+    // The restore-on-load effect gates on `shallowEqualPreferences`, which
+    // compares fields one at a time. A field that comparator does not name
+    // reads as "unchanged" for any two records differing only in it — so a
+    // fresh session, with no panel ever opened and no layout ever dragged,
+    // matches the default on every field THIS store record sets except this
+    // one, and is exactly the case where a missing clause drops it silently.
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, showEmptyElements: false })
+    );
+    stubContainerFits(true);
+    render(<BuilderShell onExit={vi.fn()} store={store} />);
+
+    // Queried rather than assumed present: a selector that matched nothing
+    // would make the attribute assertion below pass on `undefined`, which is
+    // not the property under test.
+    const chrome = document.querySelector(".nx-builder-chrome");
+    expect(chrome).not.toBeNull();
+    expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
+  });
+
+  it("offers a labelled control for showEmptyElements, reflecting its state", () => {
+    // By NAME and by role, the same way the exit button above is asserted —
+    // an unlabelled control for a visibility affordance would repeat the exact
+    // failure this feature exists to fix.
+    renderShell();
+
+    const toggle = screen.getByRole("switch", {
+      name: "Show empty containers",
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("writes showEmptyElements through the store when the control is toggled", () => {
+    const store = memoryStore();
+    stubContainerFits(true);
+    render(<BuilderShell onExit={vi.fn()} store={store} />);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show empty containers" })
+    );
+
+    expect(store.value).not.toBeNull();
+    expect(JSON.parse(store.value as string)).toMatchObject({
+      showEmptyElements: false,
+    });
   });
 });
 
