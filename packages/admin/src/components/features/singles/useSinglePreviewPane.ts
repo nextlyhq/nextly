@@ -24,7 +24,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { previewRevisionOf } from "@admin/components/features/entries/PreviewMode/previewRevision";
-import { previewLabel } from "@admin/hooks/useEntryPreview";
+import {
+  declaredPreviewLabel,
+  previewLabel,
+} from "@admin/hooks/useEntryPreview";
 import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
 import type { SingleAdminOptions } from "@admin/types/entities";
 
@@ -118,11 +121,11 @@ export function useSinglePreviewPane({
     if (!canOffer) setOpen(false);
   }, [canOffer]);
 
-  // Blank counts as undeclared, the same reading `previewLabel` gives it: a
-  // label of spaces is a field an author left empty, not a name for a pane.
-  const declared = admin?.preview?.label?.trim();
-  const declaredLabel =
-    declared === undefined || declared === "" ? undefined : declared;
+  // Read through the SAME normalizer `previewLabel` uses, so the pane's title
+  // and its opener cannot disagree about what counts as declared. Trimming here
+  // separately made a whitespace-only label absent for the button and present —
+  // as a blank title — for the pane.
+  const declaredLabel = declaredPreviewLabel(admin?.preview);
 
   const onClose = useCallback(() => setOpen(false), []);
   const onToggle = useCallback(() => setOpen(o => !o), []);
