@@ -154,6 +154,15 @@ export interface ClassUsageReconciliation {
 export function deriveClassUsageRows(
   subject: ClassUsageSubject,
   document: unknown,
+  /**
+   * Optional HERE, and required on every function that calls this one.
+   *
+   * The difference is whether omitting it is neutral. This derives from one
+   * document and nothing else reads the result, so an absent value meaning the
+   * engine defaults is the same answer the engine would give. A boundary
+   * function has a second reader — the renderer — and an omission there is a
+   * silent disagreement with it.
+   */
   limits?: DocumentLimits
 ): ClassUsageDerivation {
   const usage = classUsageOf(document, limits);

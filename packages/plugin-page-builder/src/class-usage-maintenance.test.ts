@@ -70,6 +70,7 @@ describe("maintaining one subject's rows", () => {
     const { store, calls } = recordingStore([]);
 
     const report = await maintainClassUsage({
+      limits: DEFAULT_LIMITS,
       store,
       subject: page,
       document: documentUsing("hero", "card"),
@@ -93,6 +94,7 @@ describe("maintaining one subject's rows", () => {
     ]);
 
     const report = await maintainClassUsage({
+      limits: DEFAULT_LIMITS,
       store,
       subject: page,
       document: documentUsing("hero", "card"),
@@ -113,6 +115,7 @@ describe("maintaining one subject's rows", () => {
     const { store, calls } = recordingStore([{ id: "r1", classId: "old" }]);
 
     await maintainClassUsage({
+      limits: DEFAULT_LIMITS,
       store,
       subject: page,
       document: documentUsing("new"),
@@ -169,6 +172,7 @@ describe("maintaining one subject's rows", () => {
 
     await expect(
       maintainClassUsage({
+        limits: DEFAULT_LIMITS,
         store,
         subject: page,
         document: documentUsing("hero"),
@@ -192,6 +196,7 @@ describe("maintaining one subject's rows", () => {
 
     await expect(
       maintainClassUsage({
+        limits: DEFAULT_LIMITS,
         store,
         subject: page,
         document: documentUsing("hero"),
@@ -241,6 +246,7 @@ describe("a row written before the locale column existed", () => {
     // needs no write at all. Were it discarded, the row would be invisible and
     // `hero` would be inserted a second time.
     const report = await maintainClassUsage({
+      limits: DEFAULT_LIMITS,
       store,
       subject: page,
       document: documentUsing("hero"),
@@ -281,6 +287,7 @@ describe("a row carrying a variant outside the two the index models", () => {
     };
 
     const report = await maintainClassUsage({
+      limits: DEFAULT_LIMITS,
       store,
       subject: page,
       document: documentUsing("hero"),
@@ -322,6 +329,7 @@ describe("a subject whose rows span several pages", () => {
     };
 
     const report = await maintainClassUsage({
+      limits: DEFAULT_LIMITS,
       store,
       subject: page,
       document: documentUsing("hero", "card"),

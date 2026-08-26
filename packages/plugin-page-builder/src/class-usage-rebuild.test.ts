@@ -12,6 +12,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+
 import { rebuildClassUsage, type PageUsageStore } from "./class-usage-rebuild";
 
 /** One node carrying the class ids given. */
@@ -60,7 +62,7 @@ describe("rebuildClassUsage", () => {
     // produces, so the absent case has to be repaired rather than skipped.
     const { store, writes } = storeOf([[page("a", ["hero", "card"])]]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes).toEqual([
         { id: "a", data: { usedClasses: ["card", "hero"] } },
@@ -76,7 +78,7 @@ describe("rebuildClassUsage", () => {
       [page("a", ["hero", "card"], ["card", "hero"])],
     ]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 1, repaired: 0, undetermined: 0 });
       expect(writes).toEqual([]);
     });
@@ -93,7 +95,7 @@ describe("rebuildClassUsage", () => {
       [page("a", ["hero", "card"], JSON.stringify(["card", "hero"]))],
     ]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 1, repaired: 0, undetermined: 0 });
       expect(writes).toEqual([]);
     });
@@ -113,7 +115,7 @@ describe("rebuildClassUsage", () => {
       ],
     ]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes).toEqual([{ id: "a", data: { usedClasses: ["hero"] } }]);
     });
@@ -122,7 +124,7 @@ describe("rebuildClassUsage", () => {
   it("repairs a record that disagrees with the document", () => {
     const { store, writes } = storeOf([[page("a", ["hero"], ["stale"])]]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes).toEqual([{ id: "a", data: { usedClasses: ["hero"] } }]);
     });
@@ -134,7 +136,7 @@ describe("rebuildClassUsage", () => {
     // lists here hold exactly one id.
     const { store, writes } = storeOf([[page("a", ["hero"], ["card"])]]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report.repaired).toBe(1);
       expect(writes).toEqual([{ id: "a", data: { usedClasses: ["hero"] } }]);
     });
@@ -153,10 +155,14 @@ describe("rebuildClassUsage", () => {
       // stopping the run at the first one.
       const { store, writes } = storeOf([[page("a", ["hero"], stored)]]);
 
-      return rebuildClassUsage({ store }).then(report => {
-        expect(report.repaired).toBe(1);
-        expect(writes).toEqual([{ id: "a", data: { usedClasses: ["hero"] } }]);
-      });
+      return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(
+        report => {
+          expect(report.repaired).toBe(1);
+          expect(writes).toEqual([
+            { id: "a", data: { usedClasses: ["hero"] } },
+          ]);
+        }
+      );
     }
   );
 
@@ -165,7 +171,7 @@ describe("rebuildClassUsage", () => {
     // this walk happened to read, discarding an edit made in between.
     const { store, writes } = storeOf([[page("a", ["hero"])]]);
 
-    return rebuildClassUsage({ store }).then(() => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(() => {
       expect(Object.keys(writes[0]?.data ?? {})).toEqual(["usedClasses"]);
     });
   });
@@ -180,7 +186,7 @@ describe("rebuildClassUsage", () => {
       [page("c", ["hero"])],
     ]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 3, repaired: 3, undetermined: 0 });
       expect(writes.map(write => write.id)).toEqual(["a", "b", "c"]);
       expect(queries).toEqual([
@@ -196,7 +202,7 @@ describe("rebuildClassUsage", () => {
     // both report zero repairs, and only the scan count separates them.
     const { store } = storeOf([[]]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 0, repaired: 0, undetermined: 0 });
     });
   });
@@ -209,7 +215,7 @@ describe("rebuildClassUsage", () => {
       [null, { content: {} }, page("b", ["hero"])],
     ]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes.map(write => write.id)).toEqual(["b"]);
     });
@@ -230,9 +236,9 @@ describe("rebuildClassUsage", () => {
       update: () => Promise.resolve({}),
     };
 
-    return expect(rebuildClassUsage({ store: endless })).rejects.toThrow(
-      /were not read/
-    );
+    return expect(
+      rebuildClassUsage({ store: endless, limits: DEFAULT_LIMITS })
+    ).rejects.toThrow(/were not read/);
   });
 
   it("reports normally when the store DOES report an end, so the refusal is not unconditional", () => {
@@ -240,7 +246,7 @@ describe("rebuildClassUsage", () => {
     // case above while never completing for anyone.
     const { store } = storeOf([[page("a", ["hero"])]]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
     });
   });
@@ -274,7 +280,7 @@ describe("rebuildClassUsage", () => {
     // above while repairing nothing for anyone.
     const { store, writes } = storeOf([[page("a", ["hero"])]]);
 
-    return rebuildClassUsage({ store }).then(report => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(report => {
       expect(report).toEqual({ scanned: 1, repaired: 1, undetermined: 0 });
       expect(writes).toHaveLength(1);
     });
@@ -292,7 +298,7 @@ describe("rebuildClassUsage", () => {
     // a draft nobody asked to publish.
     const { store, writes } = storeOf([[page("a", ["hero"])]]);
 
-    return rebuildClassUsage({ store }).then(() => {
+    return rebuildClassUsage({ store, limits: DEFAULT_LIMITS }).then(() => {
       expect(writes).toHaveLength(1);
       expect(Object.keys(writes[0]?.data ?? {})).toEqual(["usedClasses"]);
       expect(writes[0]?.id).toBe("a");
@@ -313,8 +319,8 @@ describe("rebuildClassUsage", () => {
       update: () => Promise.reject(new Error("connection lost")),
     };
 
-    return expect(rebuildClassUsage({ store: failing })).rejects.toThrow(
-      "connection lost"
-    );
+    return expect(
+      rebuildClassUsage({ store: failing, limits: DEFAULT_LIMITS })
+    ).rejects.toThrow("connection lost");
   });
 });
