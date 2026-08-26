@@ -1137,6 +1137,29 @@ describe("a Reset beside a picker mid-gesture", () => {
     expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
   });
 
+  it("keeps a gesture when the Reset is RIGHT-clicked, which runs nothing", async () => {
+    /*
+     * A secondary press opens a context menu and invokes no handler. Radix
+     * dismisses the popover on any `pointerdown` outside it, so reading that
+     * press as a supersede discards the colour an author was composing on
+     * behalf of a button that never ran — the gesture is gone and nothing
+     * replaced it, which is the worst of the three outcomes available.
+     *
+     * The gesture is therefore committed, exactly as it is when the dismissal
+     * lands anywhere else that writes nothing.
+     */
+    const editor = mountWithResets([{ property: "color" }]);
+    await dragTo("#ff0000");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    // Secondary button: no click follows, and `onReset` never runs.
+    fireEvent.pointerDown(resetFor("Color"), { button: 2 });
+    await settle();
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
+  });
+
   it("keeps a gesture ANOTHER control's Reset does not replace", async () => {
     /*
      * The supersede is scoped to the field whose value the press writes. A

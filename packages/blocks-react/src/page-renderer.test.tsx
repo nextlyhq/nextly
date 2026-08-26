@@ -25,7 +25,7 @@ import {
 
 import type { PageContext } from "./context";
 import { createStandaloneContext, defineBlock } from "./context";
-import { PageRenderer } from "./page-renderer";
+import { PageRenderer, withoutStatedNulls } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 import { resolvePageStyles, type PageStyles } from "./styles";
 
@@ -5938,5 +5938,60 @@ describe("which runtimes the contract warning is willing to speak in", () => {
       vi.unstubAllGlobals();
       warn.mockRestore();
     }
+  });
+});
+
+describe("a stated NULL among the reconciled inputs", () => {
+  /*
+   * `firstStated` keeps a stored `null` because it OUTRANKS a lower tier: a
+   * site stating null for a field is saying it has none, and that has to beat a
+   * route context which has some. So the reconciler's published type admits it,
+   * and every compile boundary has to deal with it — a compile context declares
+   * these slots as values rather than nullable ones, and a null spread into one
+   * was a lie no type was catching.
+   */
+  it("is dropped from the inputs a compile is given", () => {
+    /*
+     * `breakpoints` is deliberately absent from this: for that field alone,
+     * DROPPING is the wrong answer, because a missing set falls through to
+     * whatever the route context carries — which is exactly what a stated null
+     * exists to override. It is normalised to an empty set instead, and the
+     * canvas suite pins that behaviour end to end.
+     */
+    const stripped = withoutStatedNulls({
+      namedClasses: null,
+      blockBases: null,
+      tokenPrefix: null,
+      previewContainer: null,
+    });
+
+    expect(Object.keys(stripped)).toEqual([]);
+  });
+
+  it("KEEPS a value that was actually stated", () => {
+    /*
+     * The control, and it has to come out non-empty or the case above says only
+     * that this returns nothing. A helper that dropped everything would satisfy
+     * it while removing the whole reconciliation from every compile.
+     */
+    const kept = withoutStatedNulls({
+      namedClasses: [],
+      tokenPrefix: "nx",
+      previewContainer: "nx-preview-viewport",
+    });
+
+    expect(kept).toEqual({
+      namedClasses: [],
+      tokenPrefix: "nx",
+      previewContainer: "nx-preview-viewport",
+    });
+  });
+
+  it("does not confuse a stated null with an unstated field", () => {
+    // Both end up absent from a compile, and they are different statements —
+    // the distinction lives in what the reconciler REPORTS, which is why it
+    // keeps the null rather than normalising at source.
+    expect(withoutStatedNulls({ tokenPrefix: null })).toEqual({});
+    expect(withoutStatedNulls({})).toEqual({});
   });
 });

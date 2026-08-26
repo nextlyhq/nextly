@@ -28,7 +28,11 @@ import type {
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
-import { pruneRenderedPlaceholders, sharedStyleInputs } from "./page-renderer";
+import {
+  pruneRenderedPlaceholders,
+  sharedStyleInputs,
+  withoutStatedNulls,
+} from "./page-renderer";
 import { prepareDocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import { registeredBlocks } from "./resolver";
@@ -100,6 +104,21 @@ export function pageStyleTrace(
 ): PageStyleCascade | undefined {
   const shared = sharedStyleInputs(input.styleContext, input.site);
   /*
+   * A stated NULL is the site saying it defines no viewport tiers, which is an
+   * answer rather than an absence — `firstStated` keeps it, and it outranks a
+   * route context that has some. The compile context declares a set, so the
+   * null cannot be handed on as it stands; an empty set is the same statement
+   * in the shape the compiler declares and yields the same contexts.
+   *
+   * Not normalised inside the reconciler, which has to go on reporting what was
+   * stated: a caller asking which breakpoints a page compiles against needs to
+   * tell "the site said none" from "nobody said anything".
+   */
+  const stated =
+    shared.breakpoints === undefined
+      ? undefined
+      : (shared.breakpoints ?? { viewport: [], container: [] });
+  /*
    * The same construction the renderer uses, and for its reason: a route context
    * takes the shared inputs over the top, while a site tier alone can still
    * compile provided it named the breakpoints — the one field a compile cannot
@@ -107,12 +126,18 @@ export function pageStyleTrace(
    */
   const merged: StyleCompileContext | undefined =
     input.styleContext !== undefined
-      ? { ...input.styleContext, ...shared }
-      : shared.breakpoints === undefined
+      ? {
+          ...input.styleContext,
+          ...withoutStatedNulls(shared),
+          // Spread LAST, so the normalised set replaces the null the spread
+          // above would otherwise carry into a slot declared as a set.
+          breakpoints: stated ?? input.styleContext.breakpoints,
+        }
+      : stated === undefined
         ? undefined
         : {
-            ...shared,
-            breakpoints: shared.breakpoints,
+            ...withoutStatedNulls(shared),
+            breakpoints: stated,
             /*
              * The site's OWN predicate, copied exactly as the renderer's
              * site-only construction copies it. Dropped, a `url(...)` the site

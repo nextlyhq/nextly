@@ -7,6 +7,7 @@ import {
   type DocumentLimits,
   type SiteSheetInput,
   type StyleCompileContext,
+  type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
@@ -239,6 +240,20 @@ type ResolvedShared = {
  * What {@link sharedStyleInputs} RETURNS: the same inputs as a context patch,
  * with unstated keys absent rather than present and undefined.
  *
+ * Each value may be `null`, and that is not a nicety. `firstStated` skips only
+ * `undefined`, so a stored `null` is KEPT and means something: a site stating a
+ * null breakpoint set defines no viewport tiers, and that answer outranks a
+ * route context which has some — `canvas.test.tsx` pins it, because reading it
+ * as absent turns preview on for a canvas left on the unconditional tier.
+ * Published without the null, a consumer is told to check only for `undefined`
+ * and dereferences a value the renderer explicitly supports.
+ *
+ * Stated separately from {@link ResolvedShared} rather than by widening it,
+ * because that one describes what this module SPREADS into a compile context
+ * and those slots are declared non-null. The two differ, and the difference is
+ * a real gap rather than a modelling choice — see
+ * `finding:renderer-spreads-stated-nulls-into-non-null-slots`.
+ *
  * Named distinctly from the cache stamp's input projection in
  * `shared-style-inputs.ts`, which is a different type for a different job and
  * requires `breakpoints`. Under one name a caller writing
@@ -246,17 +261,84 @@ type ResolvedShared = {
  * compile, because the reconciler may legally resolve nothing — a published
  * type unusable with the function published beside it.
  */
-export type ReconciledStyleInputs = Partial<ResolvedShared>;
+export type ReconciledStyleInputs = Partial<{
+  [K in keyof ResolvedShared]: ResolvedShared[K] | null;
+}>;
+
+/**
+ * The reconciled inputs with every stated NULL dropped.
+ *
+ * `firstStated` keeps a stored `null` because it OUTRANKS a lower tier — a site
+ * stating null for a field is saying it has none, and that has to beat a route
+ * context which has some. That is a fact about the reconciliation, and it is
+ * settled by the time these reach a compile: what the compiler needs is the
+ * value, and "the site has none" is the absent key.
+ *
+ * A compile context declares these slots as values rather than nullable ones,
+ * so a null spread into one was a lie no type was catching. Dropping the key
+ * states the same thing in the shape the compiler declares.
+ *
+ * `breakpoints` is excluded and handled by {@link statedBreakpoints}, because
+ * absent means something different for it: a missing set falls through to
+ * whatever the route context carries, which is exactly what a stated null
+ * exists to override. Its "none" is an empty set rather than an absence.
+ */
+export function withoutStatedNulls(
+  shared: ReconciledStyleInputs
+): Partial<Omit<ResolvedShared, "breakpoints">> {
+  /*
+   * Written out field by field rather than filtered from `Object.entries`.
+   *
+   * A filter returns a record keyed by string, so handing it back as this type
+   * needs an assertion — and an assertion here would be the one thing that
+   * could hide the very mismatch this function exists to remove. Naming the
+   * fields makes the compiler check each one, and makes a field added to the
+   * reconciliation and forgotten here a build failure rather than a silent
+   * omission from every compile.
+   */
+  return {
+    ...(shared.namedClasses == null
+      ? {}
+      : { namedClasses: shared.namedClasses }),
+    ...(shared.blockBases == null ? {} : { blockBases: shared.blockBases }),
+    ...(shared.tokenPrefix == null ? {} : { tokenPrefix: shared.tokenPrefix }),
+    ...(shared.previewContainer == null
+      ? {}
+      : { previewContainer: shared.previewContainer }),
+  };
+}
+
+/**
+ * A stated set, or the empty one a stated NULL means.
+ *
+ * `firstStated` keeps a stored `null`, and it is an answer rather than an
+ * absence: the site defines no viewport tiers, and that outranks a route
+ * context which has some. A compile context declares `breakpoints` as a set,
+ * so the null cannot be handed on as it stands — an empty set is the same
+ * statement in the shape the compiler declares, and yields the same contexts.
+ *
+ * Normalised at the COMPILE boundary rather than inside the reconciler, which
+ * has to go on reporting what was stated: a surface asking which breakpoints a
+ * page compiles against needs to tell "the site said none" from "nobody said
+ * anything", and an empty set collapses those into one.
+ */
+function statedBreakpoints(
+  set: BreakpointSet | null | undefined
+): BreakpointSet | undefined {
+  if (set === undefined) return undefined;
+  return set ?? { viewport: [], container: [] };
+}
 
 /**
  * Resolve every shared input once, so the compiles cannot disagree.
  *
- * Exported at MODULE level and deliberately not from the package entry. A third
- * compile exists — the editor asks for the cascade behind the page so its
- * inspector can say where a value came from — and a context assembled
- * independently there is the same defect this function was written to prevent,
- * one caller further out: the trace would carry no named classes and report a
- * value from `.card` as coming from nowhere.
+ * PUBLISHED from the package entry, and it was not always. The reason it was
+ * withheld is the reason it is now out: a third compile exists — the editor
+ * asks for the cascade behind the page so its inspector can say where a value
+ * came from — and a context assembled independently there carries no named
+ * classes, so a value from `.card` reports as coming from nowhere. Withholding
+ * this left that assembly as the only option; publishing it makes asking the
+ * cheaper one.
  *
  * The defect this exists to prevent is not a wrong precedence — it is two
  * computations of one question. Each field therefore keeps the precedence it
@@ -576,14 +658,21 @@ export function PageRenderer({
   // uses to decide whether a site sheet can be built at all. A render that knows
   // them can compile both sheets; one that does not can compile neither, and
   // there the stored artifact is all there is.
+  const pageBreakpoints = statedBreakpoints(pageShared.breakpoints);
   const pageStyleContext: StyleCompileContext | undefined =
     styleContext !== undefined
-      ? { ...styleContext, ...pageShared }
-      : pageShared.breakpoints === undefined
+      ? {
+          ...styleContext,
+          ...withoutStatedNulls(pageShared),
+          // Resolved rather than spread, so the normalised set replaces the
+          // null the reconciler may legitimately have stated.
+          breakpoints: pageBreakpoints ?? styleContext.breakpoints,
+        }
+      : pageBreakpoints === undefined
         ? undefined
         : {
-            ...pageShared,
-            breakpoints: pageShared.breakpoints,
+            ...withoutStatedNulls(pageShared),
+            breakpoints: pageBreakpoints,
             // The site's own fetch predicate, handed to the reconciler rather
             // than reconciled here. `effectiveCompile` derives ONE predicate and
             // gives it to both compiles — but only from what the context it is
@@ -653,7 +742,8 @@ export function PageRenderer({
   // with no sheet. Two answers to "what are this site's breakpoints" is also how
   // the shared sheet and the page sheet come to disagree about which at-rules a
   // tier is emitted under, invisibly, since each sheet is consistent on its own.
-  const siteBreakpoints = siteStyles === false ? undefined : shared.breakpoints;
+  const siteBreakpoints =
+    siteStyles === false ? undefined : statedBreakpoints(shared.breakpoints);
   // A sheet by DEFAULT. Without one a block cannot reference a token at all —
   // a default reading `color.surface` would resolve on a route and resolve to
   // nothing here — which is why `core/card` shipped with no background.
@@ -669,10 +759,10 @@ export function PageRenderer({
           // given. Spreading `siteInput` alone would leave each consumer
           // computing its own answer, which is the defect this closes.
           breakpoints: siteBreakpoints,
-          ...(shared.blockBases === undefined
+          ...(shared.blockBases == null
             ? {}
             : { blockBases: shared.blockBases }),
-          ...(shared.tokenPrefix === undefined
+          ...(shared.tokenPrefix == null
             ? {}
             : { tokenPrefix: shared.tokenPrefix }),
           tokens: resolveSiteTokens(siteInput?.tokens),
@@ -691,7 +781,7 @@ export function PageRenderer({
           // context above was given. A shared tier compiled for the published
           // page beneath node styles compiled for a preview surface puts two
           // answers to one breakpoint in one document.
-          ...(shared.previewContainer === undefined
+          ...(shared.previewContainer == null
             ? {}
             : { previewContainer: shared.previewContainer }),
         });

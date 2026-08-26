@@ -2623,7 +2623,28 @@ function ColourPicker({
          * everywhere else in this panel, the text fields included.
          */
         onPointerDownOutside={event => {
-          superseded.current = supersededBy(event.target);
+          /*
+           * A PRIMARY press, because only that one can run the control.
+           *
+           * A right-click opens a context menu and invokes nothing, so reading
+           * it as a supersede discards the gesture an author was composing on
+           * behalf of a button that never ran — the colour is gone and nothing
+           * replaced it.
+           *
+           * This narrows the gap rather than closing it, and the remainder is
+           * stated rather than left to be discovered: a primary press that then
+           * DRAGS OFF the control and releases elsewhere fires no click either,
+           * and is still read here as a supersede. Closing that needs the write
+           * to confirm the discard instead of the press predicting it, which
+           * means either holding the draft until a later signal — the timer
+           * this module removed, whose cancellation cost a race — or routing
+           * the marked control's write back through this field, which the
+           * declaration exists precisely to avoid. Neither is worth an
+           * ambiguous gesture; a context menu is not ambiguous.
+           */
+          superseded.current =
+            event.detail.originalEvent.button === 0 &&
+            supersededBy(event.target);
         }}
       >
         {unrepresented ? (
