@@ -33,7 +33,14 @@ export interface TranslationCounts {
   translated: number;
   /** Of those, how many are published. */
   published: number;
-  /** Languages configured for the app. */
+  /**
+   * Languages that CAN be translated — every configured locale except the
+   * default, which is the source rather than a translation of itself. Not the
+   * number of languages configured, and not the number of rows a panel draws:
+   * a document with three languages has two translations, and a caller reading
+   * this as "how many languages exist" is off by one in the reassuring
+   * direction.
+   */
   total: number;
 }
 

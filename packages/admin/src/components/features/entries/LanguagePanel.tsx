@@ -194,8 +194,14 @@ function PanelHeader({
         Languages
       </span>
       <CompletenessMeter translated={counts.translated} total={counts.total} />
+      {/* The unit is stated, not left to the eyebrow above it. Every counter in
+          the admin reads "N of M <unit> translated", and this was the one that
+          did not: with three languages and two translatable fields the panel
+          said "0 of 2" about languages while translation mode said "0 of 2"
+          about fields, a few clicks apart. The numbers coincide exactly where a
+          person first meets them. */}
       <span className="text-xs tabular-nums text-muted-foreground">
-        {counts.translated} of {counts.total} translated
+        {counts.translated} of {counts.total} languages translated
       </span>
       <span className="flex-1" />
       {/* Filling the language being EDITED lives here rather than on its row.
