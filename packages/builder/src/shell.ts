@@ -276,7 +276,8 @@ export {
 } from "./inline-rich-text";
 export type { InlineRichTextTarget } from "./inline-rich-text";
 export { inlinePropKind } from "./inline-prop-kind";
-export { namedTarget } from "./inline-target";
+export { namedTarget, firstInlineProp } from "./inline-target";
+export type { FirstInlineProp } from "./inline-target";
 export type { InlinePropKind } from "./inline-prop-kind";
 /**
  * The first-run checklist: what an author has not done on this page yet.

@@ -140,8 +140,16 @@ export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
  * naming a Lexical type.
  *
  * ONE editor, moved between elements. `attach` releases whatever it held
- * before, so at most one passage is live at a time — which is both what
- * Lexical's own ecosystem supports and an honest model of a caret.
+ * before and hands back a SESSION, so at most one passage is live at a time —
+ * which is both what Lexical's own ecosystem supports and an honest model of a
+ * caret. A session that has been superseded reads as nothing and detaches as a
+ * no-op, so a consumer that lost the editor cannot read another's passage or
+ * tear down the live one.
+ *
+ * The element is made editable on attach and given back exactly as it arrived
+ * on detach — `setRootElement` neither sets `contentEditable` nor undoes the
+ * attribute and inline styles it writes, and a consumer should not have to
+ * know that.
  *
  * Its undo history is created at `attach` and given away at `detach`, so it
  * covers the open passage alone. A surface with its own history — the page
@@ -158,16 +166,17 @@ export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
  * @example
  * ```ts
  * const editor = await loadInlineRichTextEditor();
- * editor.attach(element, node.props.content);
- * editor.focus();
+ * const session = editor.attach(element, node.props.content);
+ * session.focus();
  * // ...the author types...
- * const next = editor.read();
- * editor.detach();
+ * const next = session.read();
+ * session.detach();
  * ```
  */
 export {
   loadInlineRichTextEditor,
   type InlineRichTextEditor,
+  type InlineRichTextSession,
 } from "@nextlyhq/admin";
 
 /**

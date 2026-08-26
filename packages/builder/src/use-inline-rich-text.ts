@@ -64,12 +64,16 @@ export interface UseInlineRichTextResult {
   cancel: () => void;
 }
 
-/** The four operations the facade hands over, as this module uses them. */
-interface LoadedEditor {
-  attach(element: HTMLElement, value: unknown): void;
-  detach(): void;
+/** One consumer's hold on the shared editor, as this module uses it. */
+interface EditorSession {
   focus(): void;
   read(): unknown;
+  detach(): void;
+}
+
+/** The facade's editor, as this module uses it. */
+interface LoadedEditor {
+  attach(element: HTMLElement, value: unknown): EditorSession;
 }
 
 /**
@@ -105,7 +109,7 @@ export function useInlineRichText(
 
   /** The live editor, the element it holds, and what to put back. */
   const mounted = useRef<{
-    editor: LoadedEditor;
+    session: EditorSession;
     element: HTMLElement;
     /** The markup React rendered, restored on the way out. */
     markup: string;
@@ -119,8 +123,10 @@ export function useInlineRichText(
     mounted.current = null;
     setEditing(null);
     if (live === null) return undefined;
-    const next = live.editor.read();
-    live.editor.detach();
+    // Read BEFORE detaching: a detached session answers nothing, deliberately,
+    // so that a superseded one cannot read the live passage.
+    const next = live.session.read();
+    live.session.detach();
     live.element.innerHTML = live.markup;
     live.element.removeAttribute(EDITING_ATTRIBUTE);
     return next;
@@ -190,23 +196,38 @@ export function useInlineRichText(
     );
     const value = targets.find(t => t.prop === editing.prop)?.value;
 
-    void load().then(live => {
-      // The author may have left before the chunk arrived. Attaching then would
-      // put a caret into a passage they are no longer editing.
-      if (cancelled) return;
-      live.attach(element, value);
-      element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
-      live.focus();
-      mounted.current = {
-        editor: live,
-        element,
-        markup,
-        // Taken AFTER the editor loaded the value, so it is the editor's own
-        // reading of an untouched passage — which is what makes an unchanged
-        // edit compare equal rather than differing by normalisation alone.
-        baseline: live.read(),
-      };
-    });
+    void load().then(
+      live => {
+        // The author may have left before the chunk arrived. Attaching then
+        // would put a caret into a passage they are no longer editing.
+        if (cancelled) return;
+        const session = live.attach(element, value);
+        element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
+        session.focus();
+        mounted.current = {
+          session,
+          element,
+          markup,
+          // Taken AFTER the editor loaded the value, so it is the editor's own
+          // reading of an untouched passage — which is what makes an unchanged
+          // edit compare equal rather than differing by normalisation alone.
+          baseline: session.read(),
+        };
+      },
+      () => {
+        /*
+         * The chunk did not arrive. Leaving `editing` set would show a passage
+         * marked as being edited with no editor behind it — and because the
+         * element then swallows the double-click that would retry, the author
+         * would be locked out of it for the rest of the session.
+         *
+         * Dropping the edit puts the gesture back in their hands. The loader
+         * discards its rejected promise, so the next double-click genuinely
+         * tries again rather than replaying the failure.
+         */
+        if (!cancelled) setEditing(null);
+      }
+    );
 
     /*
      * Stopped at the element rather than by teaching the canvas about editing.
@@ -236,6 +257,21 @@ export function useInlineRichText(
     element.addEventListener("dblclick", swallow);
     return () => {
       cancelled = true;
+      /*
+       * Give the element back on the way out, not only when the author leaves
+       * the passage. Unmounting the canvas — a navigation, a field removed,
+       * access revoked — removes the focused element without reliably firing
+       * `blur`, so nothing else would run: the editor would stay attached to a
+       * detached tree, holding its listeners and its state, until some later
+       * passage displaced it.
+       */
+      const live = mounted.current;
+      if (live !== null) {
+        mounted.current = null;
+        live.session.detach();
+        live.element.innerHTML = live.markup;
+        live.element.removeAttribute(EDITING_ATTRIBUTE);
+      }
       element.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("blur", onBlur);
       element.removeEventListener("pointerdown", swallow);

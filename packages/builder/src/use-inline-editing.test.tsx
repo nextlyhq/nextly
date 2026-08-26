@@ -31,6 +31,26 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+/** A block declaring its plain value BEFORE its passage. */
+function registerCaptionFirst(): void {
+  registerBlocks(
+    [
+      {
+        version: 1,
+        description: "A block.",
+        example: { props: {} },
+        render: () => null,
+        name: "acme/caption-first",
+        props: {
+          caption: { type: "text", inline: true },
+          content: { type: RICH_TEXT_PROP_TYPE, inline: true },
+        },
+      },
+    ] as never,
+    { source: "use-inline-editing-test" }
+  );
+}
+
 /** A block with a passage and a line of text, both editable on the canvas. */
 function registerArticle(): void {
   registerBlocks(
@@ -171,5 +191,142 @@ describe("a host that supplies no rich-text editor", () => {
 
     act(() => result.current.onDoubleClick(doubleClickOn("caption")));
     expect(result.current.editing?.prop).toBe("caption");
+  });
+});
+
+describe("the block's FIRST inline value", () => {
+  it("is the one it declared first, not the first the rich surface owns", () => {
+    /*
+     * A keyboard caller names no prop, so whatever this resolves to is the only
+     * value the author ever reaches that way. Asking the rich surface first and
+     * falling back answers with the rich prop whenever one exists — which is a
+     * different value the moment a block declares a line of text before its
+     * passage, and it silently changes the existing keyboard behaviour.
+     */
+    registerCaptionFirst();
+    // Painted, because the plain surface drops an edit whose element it cannot
+    // find — so an unpainted block would report "nothing opened" for a reason
+    // that has nothing to do with declaration order.
+    document.body.innerHTML = `
+      <div data-nx-node="b">
+        <span data-nx-prop="caption">A caption</span>
+        <div data-nx-prop="content"><p>A passage</p></div>
+      </div>`;
+    const nodes = [
+      {
+        id: "b",
+        type: "acme/caption-first",
+        version: 1,
+        props: {},
+      } as BlockNode,
+    ];
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "b",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result } = renderHook(() =>
+      useInlineEditing(state, pendingLoader())
+    );
+
+    act(() => {
+      result.current.begin("b");
+    });
+
+    expect(result.current.editing?.prop).toBe("caption");
+    expect(result.current.editingRich).toBeNull();
+  });
+});
+
+describe("two surfaces are never live at once", () => {
+  it("finishes a pending passage before opening a line of text", () => {
+    /*
+     * The passage's editor arrives asynchronously. Opening the caption while it
+     * is still loading used to leave BOTH marked as being edited — and when the
+     * chunk landed it focused the passage, which blurred the caption into a
+     * commit the author never asked for and moved the caret away from what they
+     * were typing.
+     */
+    const { result } = mount();
+
+    act(() => result.current.onDoubleClick(doubleClickOn("content")));
+    expect(result.current.editingRich).not.toBeNull();
+
+    act(() => result.current.onDoubleClick(doubleClickOn("caption")));
+
+    expect(result.current.editing?.prop).toBe("caption");
+    expect(result.current.editingRich).toBeNull();
+  });
+
+  it("finishes a line of text before opening a passage", () => {
+    // The same rule in the other direction, which a one-sided guard would miss.
+    const { result } = mount();
+
+    act(() => result.current.onDoubleClick(doubleClickOn("caption")));
+    expect(result.current.editing).not.toBeNull();
+
+    act(() => result.current.onDoubleClick(doubleClickOn("content")));
+
+    expect(result.current.editingRich?.prop).toBe("content");
+    expect(result.current.editing).toBeNull();
+  });
+});
+
+describe("when the editor's chunk never arrives", () => {
+  it("drops the edit rather than marking a passage nobody can type in", async () => {
+    /*
+     * A dropped connection, or a deployment swapping the asset out from under
+     * an open tab. Leaving `editing` set shows a passage as being edited with
+     * no editor behind it — and the element swallows the double-click that
+     * would retry, so the author is locked out of it for the rest of the
+     * session.
+     */
+    const failing = vi.fn(() => Promise.reject(new Error("chunk gone")));
+    registerArticle();
+    paint();
+    const { result } = renderHook(() =>
+      useInlineEditing(editorState(), failing)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    expect(failing).toHaveBeenCalled();
+    expect(result.current.editingRich).toBeNull();
+  });
+});
+
+describe("the canvas going away mid-edit", () => {
+  it("gives the element back instead of leaving the editor on a detached tree", async () => {
+    /*
+     * A navigation, a field removed, access revoked. Removing the focused
+     * element does not reliably fire `blur`, so nothing else runs — and there
+     * is only ONE editor, so one left attached to a tree nobody can see keeps
+     * its listeners and its state until some later passage displaces it.
+     *
+     * A fake session is what makes the teardown observable at all: the real one
+     * is behind a lazily loaded chunk, and a test that stubbed the loader with
+     * a pending promise could never see a detach because nothing ever attached.
+     */
+    const detach = vi.fn();
+    const session = { focus: vi.fn(), read: vi.fn(() => undefined), detach };
+    const load = vi.fn(() => Promise.resolve({ attach: vi.fn(() => session) }));
+
+    registerArticle();
+    paint();
+    const { result, unmount } = renderHook(() =>
+      useInlineEditing(editorState(), load)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    // The treatment is only meaningful once something is actually attached.
+    expect(load).toHaveBeenCalled();
+
+    unmount();
+
+    expect(detach).toHaveBeenCalled();
   });
 });

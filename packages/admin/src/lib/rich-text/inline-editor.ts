@@ -28,8 +28,8 @@
  * as plain text, silently.
  *
  * A consumer handed `createEditor` would have to import Lexical to call it,
- * which is the second declarer. Handed the four operations it actually needs,
- * it never names a Lexical type and cannot become one.
+ * which is the second declarer. Handed an
+ * attachment instead, it never names a Lexical type and cannot become one.
  *
  * ## Values cross this boundary as `unknown`
  *
@@ -42,28 +42,41 @@
  * @module lib/rich-text/inline-editor
  */
 
-/** The operations the page builder needs to edit a passage in place. */
-export interface InlineRichTextEditor {
-  /**
-   * Hand the editor to an element and load a value into it.
-   *
-   * Replaces whatever was attached before: the previous element is released
-   * first, so an author moving between passages never leaves two live.
-   *
-   * @param element - the element to edit inside
-   * @param value - the stored passage, or anything unusable for an empty one
-   */
-  attach(element: HTMLElement, value: unknown): void;
-  /** Release the current element, leaving the editor idle and reusable. */
-  detach(): void;
+/** One consumer's hold on the shared editor, for as long as it owns it. */
+export interface InlineRichTextSession {
   /** Put the caret in the attached element. */
   focus(): void;
   /**
    * The passage as it now stands, in the stored shape.
    *
-   * `unknown` for the reason the module records: the caller owns the type.
+   * `undefined` once this session has been superseded or detached, because the
+   * editor has moved and its state is another passage's. Answering with that
+   * state instead is how one block's words get written into another.
    */
   read(): unknown;
+  /**
+   * Release the element, if this session still owns it.
+   *
+   * A no-op once superseded, for the same reason `read` answers nothing: the
+   * root belongs to whoever attached last, and tearing it down from a stale
+   * session takes the live one's editor away.
+   */
+  detach(): void;
+}
+
+/** The one operation the page builder needs; everything else hangs off it. */
+export interface InlineRichTextEditor {
+  /**
+   * Hand the editor to an element and load a value into it.
+   *
+   * Supersedes any previous attachment: the element it held is released and
+   * restored first, so an author moving between passages never leaves two live.
+   *
+   * @param element - the element to edit inside
+   * @param value - the stored passage, or anything unusable for an empty one
+   * @returns the caller's hold on the editor for as long as it owns it
+   */
+  attach(element: HTMLElement, value: unknown): InlineRichTextSession;
 }
 
 /**
@@ -111,9 +124,18 @@ function loadable(value: unknown): string {
   )?.root?.children;
   // Optional chaining answers `undefined` for a primitive and for null alike,
   // so the three ways a value can fail to be a passage collapse into one test.
-  return Array.isArray(children) && children.length > 0
-    ? JSON.stringify(value)
-    : EMPTY_STATE;
+  if (!Array.isArray(children) || children.length === 0) return EMPTY_STATE;
+  // Serialization is not safe merely because the shape is. The value is stored
+  // JSON as far as the type says, but a caller can hand over a live object: a
+  // cycle throws, a `BigInt` throws, and a `toJSON` returning nothing yields
+  // `undefined`. Every one of those would otherwise surface as an exception
+  // thrown into the canvas while an author is trying to type.
+  try {
+    const json = JSON.stringify(value);
+    return json ?? EMPTY_STATE;
+  } catch {
+    return EMPTY_STATE;
+  }
 }
 
 /** The build in flight or already finished, so concurrent callers share one. */
@@ -128,8 +150,57 @@ let pending: Promise<InlineRichTextEditor> | null = null;
  * set rather than one set per caller.
  */
 export async function loadInlineRichTextEditor(): Promise<InlineRichTextEditor> {
-  pending ??= build();
+  pending ??= build().catch((error: unknown) => {
+    // A REJECTED promise must not be the cached one. The chunk request fails
+    // for reasons that pass — a dropped connection, a deployment swapping the
+    // asset out from under an open tab — and keeping the rejection would make
+    // every later attempt fail identically until the page was reloaded, with
+    // nothing on screen explaining why editing had stopped working.
+    pending = null;
+    throw error;
+  });
   return pending;
+}
+
+/**
+ * What the editor changes about an element it is given, and how to put it back.
+ *
+ * `setRootElement` mutates the root: it writes `data-lexical-editor` and three
+ * inline styles, and it does NOT set `contentEditable` — the editor expects an
+ * element that is already editable, so an element handed over without it takes
+ * no caret and no typing. It also does not undo any of this on release.
+ *
+ * The caller cannot be asked to know that. Whatever this module turns on, it
+ * turns off again, so an element comes back the way it arrived rather than
+ * keeping `white-space: pre-wrap` on a published canvas for the rest of the
+ * session.
+ */
+interface RootMarks {
+  readonly contentEditable: string | null;
+  readonly style: string | null;
+  readonly lexical: string | null;
+}
+
+function markRoot(element: HTMLElement): RootMarks {
+  const marks: RootMarks = {
+    contentEditable: element.getAttribute("contenteditable"),
+    style: element.getAttribute("style"),
+    lexical: element.getAttribute("data-lexical-editor"),
+  };
+  element.setAttribute("contenteditable", "true");
+  return marks;
+}
+
+/** Restores an attribute, removing it when it was absent to begin with. */
+function restore(element: HTMLElement, name: string, was: string | null): void {
+  if (was === null) element.removeAttribute(name);
+  else element.setAttribute(name, was);
+}
+
+function unmarkRoot(element: HTMLElement, marks: RootMarks): void {
+  restore(element, "contenteditable", marks.contentEditable);
+  restore(element, "style", marks.style);
+  restore(element, "data-lexical-editor", marks.lexical);
 }
 
 async function build(): Promise<InlineRichTextEditor> {
@@ -154,30 +225,34 @@ async function build(): Promise<InlineRichTextEditor> {
     },
   });
 
-  /*
-   * Torn down on the way out and rebuilt on the way in, which is what keeps the
-   * two undo stacks apart.
+  /**
+   * The attachment that currently owns the editor.
    *
-   * The canvas has its own history over document ops, and a finished edit
-   * writes exactly one of them. A history that persisted across passages would
-   * let an author undo their way backwards into a block they had already left,
-   * with the canvas's own stack disagreeing about what the last change was.
-   * Given away at each detach, the editor's history covers only the passage
-   * currently open, and the canvas owns everything larger.
+   * There is one editor, so there is one owner. Sessions compare against this
+   * rather than holding a flag of their own: a stale session must be able to
+   * tell that it was superseded, and only the shared value knows.
    */
+  let owner: object | null = null;
+
+  /** Undoes whatever the live attachment did, in the reverse order it did it. */
   let release: (() => void) | null = null;
 
-  const detach = (): void => {
+  const detachCurrent = (): void => {
     release?.();
     release = null;
-    editor.setRootElement(null);
+    owner = null;
   };
 
   return {
     attach(element, value) {
-      // Release first: attaching over a live element leaves the previous one
-      // with listeners for an editor that has moved on.
-      detach();
+      // Released first. Attaching over a live element leaves the previous one
+      // marked editable, styled by the editor and carrying listeners for an
+      // editor that has moved on.
+      detachCurrent();
+
+      const token = {};
+      owner = token;
+      const marks = markRoot(element);
       editor.setEditorState(editor.parseEditorState(loadable(value)));
       editor.setRootElement(element);
       const stopRichText = registerRichText(editor);
@@ -189,14 +264,24 @@ async function build(): Promise<InlineRichTextEditor> {
       release = () => {
         stopRichText();
         stopHistory();
+        editor.setRootElement(null);
+        unmarkRoot(element, marks);
       };
-    },
-    detach,
-    focus() {
-      editor.focus();
-    },
-    read() {
-      return editor.getEditorState().toJSON();
+
+      const owns = (): boolean => owner === token;
+      return {
+        focus() {
+          if (owns()) editor.focus();
+        },
+        read() {
+          // Nothing rather than another passage's state. A superseded session
+          // reading the live editor is how one block's words reach another.
+          return owns() ? editor.getEditorState().toJSON() : undefined;
+        },
+        detach() {
+          if (owns()) detachCurrent();
+        },
+      };
     },
   };
 }

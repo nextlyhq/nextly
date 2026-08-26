@@ -56,17 +56,72 @@ export function inlinePropsOfKind(
   nodeId: string,
   kind: InlinePropKind
 ): InlineProps | null {
-  const node = findNode(document.nodes, nodeId);
-  if (node === undefined || isLocked(node)) return null;
-  const definition = getBlock(node.type);
-  if (definition === undefined) return null;
-  const props = definition.props ?? {};
+  const found = editableNode(document, nodeId);
+  if (found === null) return null;
+  const { props } = found;
   return {
-    node,
+    node: found.node,
     entries: Object.keys(props)
       .filter(name => inlinePropKind(props[name]) === kind)
       .map(name => [name, props[name]] as const),
   };
+}
+
+/**
+ * The node and the prop schemas to ask about it, or `null` when it cannot be
+ * edited at all.
+ *
+ * The three refusals every question here shares — the node is gone, it is
+ * locked, its block is not registered — asked once. A lock in particular has to
+ * be honoured at every entry point or it is honoured at none, and that is the
+ * state where an author believes a block is protected and it is not.
+ */
+function editableNode(
+  document: BlockDocument,
+  nodeId: string
+): { node: BlockNode; props: Partial<Record<string, PropSchema>> } | null {
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined || isLocked(node)) return null;
+  const definition = getBlock(node.type);
+  if (definition === undefined) return null;
+  return { node, props: definition.props ?? {} };
+}
+
+/** A value editable on the canvas, and which surface edits it. */
+export interface FirstInlineProp {
+  readonly prop: string;
+  readonly kind: InlinePropKind;
+}
+
+/**
+ * The FIRST value on this node editable in place, of whichever kind, or `null`.
+ *
+ * In the order the block declared its props, and across both kinds together.
+ * Asking one surface and then the other instead answers with that surface's
+ * first, which is a different value whenever a block declares a passage after a
+ * line of text — and the caller that wants this is the keyboard, which has a
+ * selected block and no element, so the answer it gets is the only one an
+ * author sees.
+ *
+ * `null` for a node that is missing, locked or of an unregistered type, which
+ * is the same refusal {@link inlinePropsOfKind} makes and for the same reason.
+ *
+ * @param document - the document being edited
+ * @param nodeId - the node to ask about
+ * @returns the first editable value and its kind, or `null`
+ */
+export function firstInlineProp(
+  document: BlockDocument,
+  nodeId: string
+): FirstInlineProp | null {
+  const found = editableNode(document, nodeId);
+  if (found === null) return null;
+  const { props } = found;
+  for (const prop of Object.keys(props)) {
+    const kind = inlinePropKind(props[prop]);
+    if (kind !== null) return { prop, kind };
+  }
+  return null;
 }
 
 /**

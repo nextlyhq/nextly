@@ -67,6 +67,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "Grid (value)",
   "GridProps (type)",
   "InlineRichTextEditor (type)",
+  "InlineRichTextSession (type)",
   "Input (value)",
   "JsonObject (type)",
   "JsonValue (type)",

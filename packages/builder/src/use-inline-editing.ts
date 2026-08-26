@@ -27,7 +27,8 @@ import { getBlock, findNode } from "@nextlyhq/blocks-engine";
 import { useCallback } from "react";
 
 import type { EditorState } from "./editor-state";
-import { inlinePropKind } from "./inline-prop-kind";
+import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
+import { firstInlineProp } from "./inline-target";
 import {
   useInlineRichText,
   type InlineRichTextEditing,
@@ -93,18 +94,43 @@ export function useInlineEditing(
     [editor]
   );
 
-  const begin = useCallback(
-    (nodeId: string, prop?: string) => {
-      // Without a named prop the caller wants the block's first inline value,
-      // and only the surfaces know which that is. Rich is asked first and
-      // answers false when the block has no passage, so a block with only
-      // plain values is unaffected.
-      if (prop === undefined) return rich.begin(nodeId) || plain.begin(nodeId);
-      return kindOf(nodeId, prop) === "rich"
+  /**
+   * Open one surface, having finished whatever the other was doing.
+   *
+   * Both are asked to commit first, and each is a no-op when it holds nothing.
+   * Without it an author who starts a passage and then double-clicks a line of
+   * text before the editor's chunk arrives leaves BOTH surfaces live: the
+   * loader resolves, focuses the passage, and the focus it steals blurs the
+   * line of text into a commit the author never asked for — with the caret
+   * ending up somewhere they were not looking.
+   */
+  const openOn = useCallback(
+    (kind: InlinePropKind, nodeId: string, prop: string) => {
+      plain.commit();
+      rich.commit();
+      return kind === "rich"
         ? rich.begin(nodeId, prop)
         : plain.begin(nodeId, prop);
     },
-    [kindOf, plain, rich]
+    [plain, rich]
+  );
+
+  const begin = useCallback(
+    (nodeId: string, prop?: string) => {
+      if (prop === undefined) {
+        // The block's first inline value in DECLARATION order, across both
+        // kinds. Asking one surface and then the other answers with that
+        // surface's first instead, which is a different value whenever a block
+        // declares a passage after a line of text.
+        const first = firstInlineProp(editor.document, nodeId);
+        if (first === null) return false;
+        return openOn(first.kind, nodeId, first.prop);
+      }
+      const kind = kindOf(nodeId, prop);
+      if (kind === null) return false;
+      return openOn(kind, nodeId, prop);
+    },
+    [editor, kindOf, openOn]
   );
 
   const commit = useCallback(() => {
@@ -125,15 +151,17 @@ export function useInlineEditing(
       const found = markedAt(event.target);
       if (found === null) return;
       if (kindOf(found.nodeId, found.prop) === "rich") {
-        rich.begin(found.nodeId, found.prop);
+        openOn("rich", found.nodeId, found.prop);
         return;
       }
-      // Delegated rather than begun here, because the plain surface has to keep
-      // the element the gesture landed on: a value whose element cannot be
-      // found again from the document alone is still editable from a click.
+      // Finished for the same reason `openOn` does it, then delegated: the
+      // plain surface has to keep the element the gesture landed on, because a
+      // value whose element cannot be found again from the document alone is
+      // still editable from a click.
+      rich.commit();
       plain.onDoubleClick(event);
     },
-    [kindOf, plain, rich]
+    [kindOf, openOn, plain, rich]
   );
 
   return {
