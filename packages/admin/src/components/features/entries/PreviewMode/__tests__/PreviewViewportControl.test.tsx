@@ -7,9 +7,11 @@
  * control that only behaves while holding a valid width is a control that
  * misbehaves exactly while it is being used.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { UI } from "@admin/constants/ui";
 
 import type { PreviewFit } from "../previewFrameFit";
 import { PreviewViewportControl } from "../PreviewViewportControl";
@@ -49,7 +51,28 @@ function renderControl(initial: number | null = 1280) {
   };
 }
 
+/**
+ * The pause that ends an edit.
+ *
+ * A width is committed when the author stops typing, so a test that asserts
+ * what was committed has to say when that happened. Written out rather than
+ * hidden in a helper called `flush`, because the delay is the behaviour.
+ */
+function stopTyping() {
+  act(() => {
+    vi.advanceTimersByTime(UI.PREVIEW_WIDTH_DEBOUNCE_MS);
+  });
+}
+
 describe("PreviewViewportControl — the width box", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("KEEPS the box mounted and focused when it is cleared", () => {
     /*
      * The separating property. Clearing to retype used to commit `null`, which
@@ -97,6 +120,7 @@ describe("PreviewViewportControl — the width box", () => {
     const box = ui.box() as HTMLInputElement;
 
     fireEvent.change(box, { target: { value: "" } });
+    stopTyping();
     expect(ui.committed()).toBe("1280");
   });
 
@@ -107,7 +131,73 @@ describe("PreviewViewportControl — the width box", () => {
     const box = ui.box() as HTMLInputElement;
 
     fireEvent.change(box, { target: { value: "768" } });
+    stopTyping();
     expect(ui.committed()).toBe("768");
+  });
+
+  it("does not commit the PREFIXES typed on the way to a width", () => {
+    /*
+     * `768` arrives as `7`, then `76`, then `768`. Committing each one sized
+     * the frame to 7px and then 76px — a live iframe of the whole site, laid
+     * out twice at widths the author never asked for, which is the resize
+     * thrash the draft state was supposed to remove.
+     */
+    const ui = renderControl(1280);
+    const box = ui.box() as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "7" } });
+    fireEvent.change(box, { target: { value: "76" } });
+    fireEvent.change(box, { target: { value: "768" } });
+
+    // Still the width it started at: nothing has been committed yet.
+    expect(ui.committed()).toBe("1280");
+
+    stopTyping();
+    expect(ui.committed()).toBe("768");
+  });
+
+  it("takes the pending width when the edit ends at the BOX", () => {
+    /*
+     * Blur answers the question the pause was waiting on, so waiting it out
+     * afterwards would discard the width — an author who types one and clicks
+     * straight into the page means it.
+     */
+    const ui = renderControl(1280);
+    const box = ui.box() as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "390" } });
+    fireEvent.blur(box);
+
+    expect(ui.committed()).toBe("390");
+  });
+
+  it("refuses a width below one pixel", () => {
+    /*
+     * `min={1}` on a number input marks the field invalid; it does not clamp
+     * the value or stop the change event. Below a pixel the preview is not
+     * narrow, it is gone — an empty pane rather than a small one.
+     */
+    const ui = renderControl(1280);
+    const box = ui.box() as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "0.5" } });
+    stopTyping();
+    expect(ui.committed()).toBe("1280");
+
+    fireEvent.change(box, { target: { value: "1e-3" } });
+    stopTyping();
+    expect(ui.committed()).toBe("1280");
+  });
+
+  it("accepts exactly one pixel, which is the boundary", () => {
+    // The control on the case above: refusing below a pixel must not refuse the
+    // pixel itself, or the stated minimum would be unreachable.
+    const ui = renderControl(1280);
+    const box = ui.box() as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "1" } });
+    stopTyping();
+    expect(ui.committed()).toBe("1");
   });
 
   it("does not commit a zero or negative width", () => {
@@ -117,9 +207,11 @@ describe("PreviewViewportControl — the width box", () => {
     const box = ui.box() as HTMLInputElement;
 
     fireEvent.change(box, { target: { value: "0" } });
+    stopTyping();
     expect(ui.committed()).toBe("1280");
 
     fireEvent.change(box, { target: { value: "-5" } });
+    stopTyping();
     expect(ui.committed()).toBe("1280");
   });
 
@@ -138,9 +230,11 @@ describe("PreviewViewportControl — the width box", () => {
     const box = ui.box() as HTMLInputElement;
 
     fireEvent.change(box, { target: { value: "390.5" } });
+    stopTyping();
     expect(ui.committed()).toBe("390.5");
 
     fireEvent.change(box, { target: { value: "1e3" } });
+    stopTyping();
     expect(ui.committed()).toBe("1000");
   });
 
@@ -152,9 +246,11 @@ describe("PreviewViewportControl — the width box", () => {
     const box = ui.box() as HTMLInputElement;
 
     fireEvent.change(box, { target: { value: "abc" } });
+    stopTyping();
     expect(ui.committed()).toBe("1280");
 
     fireEvent.change(box, { target: { value: "" } });
+    stopTyping();
     expect(ui.committed()).toBe("1280");
   });
 

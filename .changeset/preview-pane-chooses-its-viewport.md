@@ -76,3 +76,11 @@ replaced the author's text with the truncated value.
 
 The pane measures itself before the browser paints rather than after, so a frame
 cannot be drawn at the wrong width on the way to the right one.
+
+The custom width is taken when you stop typing, not on every keystroke. The
+frame is a live iframe of the site, so each committed width re-lays-out a whole
+page — and clearing the box to type `768` emits `7`, `76`, `768`, collapsing the
+preview to 7px and then 76px on the way. Leaving the box commits immediately, so
+a width typed and clicked away from is not lost. Widths below one pixel are
+refused: the input's `min` marks the field invalid without clamping it, and
+below a pixel the preview is not narrow but absent.

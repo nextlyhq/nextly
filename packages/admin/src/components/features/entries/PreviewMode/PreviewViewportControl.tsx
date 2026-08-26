@@ -28,7 +28,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
+
+import { UI } from "@admin/constants/ui";
+import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 
 import type { PreviewFit } from "./previewFrameFit";
 
@@ -56,6 +59,17 @@ const CUSTOM = "custom";
  */
 const CUSTOM_SEED_WIDTH = 1280;
 
+/**
+ * The narrowest width a frame can be asked for.
+ *
+ * One pixel, because below it the preview is not small — it is gone, and an
+ * author who typed `0.5` sees an empty pane rather than a narrow one. The input
+ * carries this as its `min` attribute, which marks the field invalid without
+ * clamping or refusing the value, so the rule has to live where the width is
+ * committed as well. Both read this constant so they cannot disagree.
+ */
+const MIN_PREVIEW_WIDTH = 1;
+
 export function PreviewViewportControl({
   requestedWidth,
   onRequestWidth,
@@ -79,6 +93,41 @@ export function PreviewViewportControl({
    * masked by a draft nobody is typing.
    */
   const [draft, setDraft] = useState<string | null>(null);
+
+  /*
+   * The width is taken when the author STOPS typing, not per keystroke.
+   *
+   * The frame is a live iframe of the site, so each committed width re-lays-out
+   * a whole page. Clearing the box and typing `768` emits `7`, `76`, `768`, and
+   * committing each one collapsed the preview to 7px and then 76px on the way —
+   * the separate draft kept the FIELD from being torn away, but the frame still
+   * thrashed through widths the author never asked for.
+   */
+  const settledDraft = useDebouncedValue(draft, UI.PREVIEW_WIDTH_DEBOUNCE_MS);
+
+  const commitWidth = useCallback(
+    (text: string) => {
+      // Below one pixel is not a narrow preview, it is an absent one.
+      const next = Number(text);
+      if (Number.isFinite(next) && next >= MIN_PREVIEW_WIDTH) {
+        onRequestWidth(next);
+      }
+    },
+    [onRequestWidth]
+  );
+
+  useEffect(() => {
+    /*
+     * `settledDraft !== draft` means the pause has not happened yet; a null
+     * draft means no edit is in progress. The second guard is what stops a
+     * choice from the list being undone: selecting Responsive clears the draft,
+     * but the debounced copy still holds the old text for one delay, and
+     * committing it then would put the frame back at a width the author has
+     * just navigated away from.
+     */
+    if (draft === null || settledDraft !== draft) return;
+    commitWidth(settledDraft);
+  }, [draft, settledDraft, commitWidth]);
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-1.5">
@@ -115,36 +164,28 @@ export function PreviewViewportControl({
             id={widthInputId}
             type="number"
             inputMode="numeric"
-            min={1}
+            min={MIN_PREVIEW_WIDTH}
             className="h-7 w-20 text-xs"
             value={draft ?? String(requestedWidth)}
             onChange={event => {
-              const text = event.target.value;
-              setDraft(text);
-
               /*
-               * Commit only what a frame can be sized to. An empty or
-               * half-typed box is a state of the EDIT, not a viewport request,
-               * so the frame holds its last good width while the author types
-               * the next one — otherwise the preview flickers back to full
-               * width between two keystrokes. Zero and below are rejected here
-               * for the same reason `previewFrameFit` refuses them: it fills
-               * the pane instead, and committing one would leave this control
-               * and the frame describing different states.
-               *
-               * `Number`, not `parseInt`. A number input accepts and displays
-               * `390.5` and `1e3`, and `parseInt` reads those as `390` and `1`
-               * — sizing the frame to a width the box is not showing, and
-               * replacing the author's text with the truncated value on blur.
-               * A fractional width is a real one: CSS sizes to it and the
-               * site's media queries resolve against it.
+               * Records what was typed and nothing else. What a frame can be
+               * sized to is decided in `commitWidth`, once the typing stops:
+               * an empty or half-typed box is a state of the EDIT, not a
+               * viewport request.
                */
-              const next = Number(text);
-              if (Number.isFinite(next) && next > 0) onRequestWidth(next);
+              setDraft(event.target.value);
             }}
             onBlur={() => {
-              // Leaving the box ends the edit. A draft left behind would name a
-              // width the frame is not at.
+              /*
+               * Leaving the box ENDS the edit, so the pending width is taken
+               * now rather than waiting out a pause that has already been
+               * answered. Without this, typing a width and clicking straight
+               * into the page would discard it — the debounce would still be
+               * running when the draft was cleared.
+               */
+              if (draft !== null) commitWidth(draft);
+              // A draft left behind would name a width the frame is not at.
               setDraft(null);
             }}
           />
