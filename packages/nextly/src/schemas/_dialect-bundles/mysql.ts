@@ -78,3 +78,7 @@ export {
   nextlyReleasesMysql as nextlyReleases,
   nextlyReleaseMembersMysql as nextlyReleaseMembers,
 } from "../releases/mysql";
+
+// Background jobs; see the releases note above for why the bundle entry is
+// required and not merely tidy.
+export { nextlyJobsMysql as nextlyJobs } from "../jobs/mysql";
