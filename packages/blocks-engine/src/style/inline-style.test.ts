@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 
+import { TEXT_FORMAT } from "../rich-text";
+
 import {
   INLINE_STYLE_PROPERTIES,
   isInlineStyleProperty,
   readInlineStyle,
-  RICH_TEXT_FONT_FAMILIES,
-  RICH_TEXT_FONT_SIZES,
   sanitizeInlineStyle,
 } from "./inline-style";
 
-const read = (value: string): Record<string, string> =>
-  Object.fromEntries(readInlineStyle(value));
+const read = (value: string, format?: number): Record<string, string> =>
+  Object.fromEntries(readInlineStyle(value, format));
 
 describe("readInlineStyle", () => {
   it("reads the four properties the editor writes", () => {
@@ -28,14 +28,24 @@ describe("readInlineStyle", () => {
     });
   });
 
-  it.each(RICH_TEXT_FONT_FAMILIES)("keeps the family %s", family => {
-    // Every value the editor can PRODUCE must survive the reader. This is the
-    // direction that matters: a reader stricter than its own editor drops a
-    // choice the author made and shows them nothing to explain it.
-    expect(read(`font-family: ${family}`)["font-family"]).toBe(family);
-  });
+  it.each(["Courier New", "Times New Roman", "Georgia"])(
+    "keeps the family %s",
+    family => {
+      /*
+       * The SHAPE a real family has, not an enumeration of the toolbar's list.
+       * Restating that list here bought nothing — the reader accepts any safe
+       * family, so every member passed trivially — while making a new toolbar
+       * option fail CI in a package that renders it correctly. What is worth
+       * asserting is the property those values share and a bare keyword does
+       * not: a space in the middle.
+       */
+      expect(read(`font-family: ${family}`)["font-family"]).toBe(family);
+    }
+  );
 
-  it.each(RICH_TEXT_FONT_SIZES)("keeps the size %s", size => {
+  it.each(["10px", "24px", "72px"])("keeps the size %s", size => {
+    // A unit, for the same reason: `inherit` is legal for every property here
+    // and would pass on a reader that dropped anything measured.
     expect(read(`font-size: ${size}`)["font-size"]).toBe(size);
   });
 
@@ -122,6 +132,68 @@ describe("readInlineStyle", () => {
     for (const value of [undefined, null, 16, {}, [], ""]) {
       expect(readInlineStyle(value).size).toBe(0);
     }
+  });
+});
+
+describe("a format bit and a style that contradict it", () => {
+  it.each([
+    ["BOLD", TEXT_FORMAT.BOLD, "font-weight: normal", "font-weight"],
+    ["ITALIC", TEXT_FORMAT.ITALIC, "font-style: normal", "font-style"],
+    [
+      "UNDERLINE",
+      TEXT_FORMAT.UNDERLINE,
+      "text-decoration: none",
+      "text-decoration",
+    ],
+    [
+      "STRIKETHROUGH",
+      TEXT_FORMAT.STRIKETHROUGH,
+      "text-decoration-line: none",
+      "text-decoration-line",
+    ],
+    [
+      "SUBSCRIPT",
+      TEXT_FORMAT.SUBSCRIPT,
+      "vertical-align: baseline",
+      "vertical-align",
+    ],
+  ])(
+    "lets %s win over the style that would cancel it",
+    (_l, flag, style, property) => {
+      /*
+       * A paste from a word processor produces exactly this: the bit AND a
+       * declaration undoing it. Left to the markup, the answer depends on which
+       * is nested deeper — and the two surfaces nest them differently, so the
+       * same stored node would render bold on one and not on the other.
+       *
+       * The bit is an act, a button pressed on this selection. The style string
+       * is whatever the document arrived carrying.
+       */
+      expect(Object.keys(read(style, flag))).not.toContain(property);
+    }
+  );
+
+  it("drops only what the bit decided", () => {
+    // The control. A rule that dropped the whole style when any bit was set
+    // would satisfy every assertion above and take the author's colour with it.
+    expect(read("font-weight: normal; color: #fff", TEXT_FORMAT.BOLD)).toEqual({
+      color: "#fff",
+    });
+  });
+
+  it("keeps the same declaration when no bit claims it", () => {
+    // And the other control: without the bit, `font-weight` is an ordinary
+    // choice and must survive. Otherwise the rule is just a narrower allowlist.
+    expect(read("font-weight: normal")["font-weight"]).toBe("normal");
+  });
+
+  it("leaves font-size to the author under a subscript", () => {
+    // `<sub>` shrinks its text as a side effect of being a subscript. The
+    // POSITION is what makes it one, so that is what the bit owns; a size the
+    // author then chose is a choice, not a contradiction.
+    expect(read("font-size: 24px", TEXT_FORMAT.SUBSCRIPT)["font-size"]).toBe(
+      "24px"
+    );
   });
 });
 

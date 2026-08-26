@@ -1914,3 +1914,87 @@ describe("rich-text carries the editor's own font values to the page", () => {
     ).toContain(`font-size:${size}`);
   });
 });
+
+describe("rich-text a format bit beats a style that would cancel it", () => {
+  const node = (style: string, format: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style, format }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("keeps a bold run bold when the style says otherwise", () => {
+    // The style span sits INSIDE `<strong>` so an author's colour can beat
+    // `<mark>`, which means a `font-weight: normal` in there would cancel the
+    // bold by being nested deeper. The engine drops it instead, so the nesting
+    // no longer decides — and the CMS, which nests the other way round, reaches
+    // the same answer from the same reader.
+    const html = renderToStaticMarkup(
+      <RichText value={node("font-weight: normal", TEXT_FORMAT.BOLD)} />
+    );
+    expect(html).not.toContain("font-weight");
+    expect(html).toContain("<strong>");
+  });
+
+  it("still lets the author colour that same bold run", () => {
+    // The control: only the contradicted property goes.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={node("font-weight: normal; color: #ff0000", TEXT_FORMAT.BOLD)}
+      />
+    );
+    expect(html).toContain("color:#ff0000");
+    expect(html).not.toContain("font-weight");
+  });
+
+  it("reapplies a style whose declarations only changed order", () => {
+    /*
+     * React diffs a style object property by property. Two objects with the
+     * same keys and values in a different order produce no writes at all, so an
+     * already-mounted node would keep whichever shorthand won before — the
+     * cascade fix would hold on a fresh render and silently not on an update.
+     *
+     * The span is keyed on the declaration order for that reason, which forces
+     * a replacement rather than a diff.
+     */
+    const first = doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "text",
+            text: "Hi",
+            style: "text-decoration-color: green; text-decoration: underline",
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+    const second = doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "text",
+            text: "Hi",
+            style: "text-decoration: underline; text-decoration-color: green",
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container, rerender } = render(<RichText value={first} />);
+    const before = container.querySelector("span")?.getAttribute("style") ?? "";
+    rerender(<RichText value={second} />);
+    const after = container.querySelector("span")?.getAttribute("style") ?? "";
+
+    // The population: both renders produced a styled span at all.
+    expect(before).not.toBe("");
+    expect(after).not.toBe("");
+    // And the DOM followed the stored order rather than keeping the first.
+    expect(before).not.toBe(after);
+    expect(after.indexOf("text-decoration:")).toBeLessThan(
+      after.indexOf("text-decoration-color:")
+    );
+  });
+});

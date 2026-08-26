@@ -50,17 +50,7 @@ import { useToolbarState } from "./useToolbarState";
 // Constants
 // ============================================================
 
-/**
- * The font families this toolbar offers.
- *
- * EXPORTED because `blocks-engine` restates this vocabulary. It cannot import
- * this package — the dependency does not exist and must not — so the two lists
- * are held together by `renderer-covers-the-editor.test.ts`, which imports this
- * one and reads the engine's as source. A restatement that drifts is otherwise
- * silent: the author picks a face and the page drops it, with nothing anywhere
- * reporting the loss.
- */
-export const FONT_FAMILY_OPTIONS = [
+const FONT_FAMILY_OPTIONS = [
   { label: "Default", value: "" },
   { label: "Arial", value: "Arial" },
   { label: "Courier New", value: "Courier New" },
@@ -70,8 +60,7 @@ export const FONT_FAMILY_OPTIONS = [
   { label: "Verdana", value: "Verdana" },
 ];
 
-/** The font sizes this toolbar offers. See {@link FONT_FAMILY_OPTIONS}. */
-export const FONT_SIZE_OPTIONS = [
+const FONT_SIZE_OPTIONS = [
   "10px",
   "11px",
   "12px",

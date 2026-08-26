@@ -37,10 +37,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { RICH_TEXT_NODES } from "@admin/components/features/entries/fields/special/rich-text-kit";
-import {
-  FONT_FAMILY_OPTIONS,
-  FONT_SIZE_OPTIONS,
-} from "@admin/components/features/entries/fields/special/RichTextToolbar/RichTextToolbar";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -440,25 +436,21 @@ describe("richTextInlineStyleVocabulariesAgree", () => {
    */
   const engine = readFileSync(ENGINE_INLINE_STYLE, "utf8");
 
-  it("offers the editor's own families to the renderer", () => {
-    // The population first: two empty lists agree perfectly, and this parser
-    // has already been widened once for exactly that failure.
-    const restated = constMembers(engine, "RICH_TEXT_FONT_FAMILIES");
-    const offered = FONT_FAMILY_OPTIONS.map(option => option.value).filter(
-      value => value !== ""
-    );
-    expect(restated.length).toBeGreaterThan(1);
-    expect(offered.length).toBeGreaterThan(1);
-    expect([...restated].sort()).toEqual([...offered].sort());
-  });
-
-  it("offers the editor's own sizes to the renderer", () => {
-    const restated = constMembers(engine, "RICH_TEXT_FONT_SIZES");
-    expect(restated.length).toBeGreaterThan(1);
-    expect(FONT_SIZE_OPTIONS.length).toBeGreaterThan(1);
-    expect([...restated].sort()).toEqual([...FONT_SIZE_OPTIONS].sort());
-  });
-
+  /*
+   * The value-equality contract that used to sit here is GONE, deliberately.
+   * It compared the toolbar's font lists to a restatement in `blocks-engine`
+   * that nothing read: the reader accepts any safe family or size, so the
+   * restatement changed no behaviour and the check only meant that adding a
+   * toolbar option failed CI in a package which already rendered it correctly.
+   * Two lists to edit for one change is the parallel implementation this repo
+   * forbids, and the "conformance" was between two things neither of which
+   * decided anything.
+   *
+   * What survives is the contract that DOES decide: the properties those values
+   * are written under must be ones the reader keeps. The behavioural half — that
+   * a family with a space and a size with a unit survive — lives beside the
+   * reader and beside the renderer, where each can be observed.
+   */
   it("declares every property the toolbar can actually write", () => {
     /*
      * The other half, and the one a vocabulary check alone would miss: the

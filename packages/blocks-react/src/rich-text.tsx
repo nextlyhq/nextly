@@ -137,9 +137,12 @@ const REACT_STYLE_PROPERTY = {
  * string key, because React would silently ignore it and the page would differ
  * from the CMS's HTML for the same node.
  */
-function inlineStyle(value: unknown): CSSProperties {
+function inlineStyle(
+  value: unknown,
+  format: number | undefined
+): CSSProperties {
   const style: Record<string, string> = {};
-  for (const [property, declared] of readInlineStyle(value)) {
+  for (const [property, declared] of readInlineStyle(value, format)) {
     if (!Object.hasOwn(REACT_STYLE_PROPERTY, property)) continue;
     style[REACT_STYLE_PROPERTY[property as keyof typeof REACT_STYLE_PROPERTY]] =
       declared;
@@ -163,7 +166,10 @@ function formatted(
   // happened to be inner. Taking the first keeps that deterministic.
   const transform = CASE_TRANSFORM.find(entry => hasFormat(format, entry.flag));
   const declared: CSSProperties = {
-    ...inlineStyle(style),
+    // The FORMAT goes with it: a stored `font-weight: normal` beside a BOLD bit
+    // is a contradiction, and the engine resolves it by property rather than
+    // letting this file's nesting decide. See `FORMAT_OWNED` there.
+    ...inlineStyle(style, format),
     // LAST, so the format bit wins a disagreement. The bit is a button an
     // author pressed on this selection; a `text-transform` in the style string
     // is whatever a document happened to arrive carrying, and where they
@@ -186,7 +192,15 @@ function formatted(
     Object.keys(declared).length === 0 ? (
       text
     ) : (
-      <span style={declared}>{text}</span>
+      // KEYED on the declaration order, so a value that changes only the order
+      // of the same properties still reaches the DOM. React diffs a style
+      // object property by property: with identical keys and values it writes
+      // nothing, and the element keeps whichever shorthand won before — so a
+      // client preview would go on showing the previous cascade until something
+      // else remounted it.
+      <span key={Object.keys(declared).join("|")} style={declared}>
+        {text}
+      </span>
     );
   for (const { flag, wrap } of FORMAT_ELEMENTS) {
     if (hasFormat(format, flag)) out = wrap(out);

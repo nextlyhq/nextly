@@ -93,6 +93,6 @@ export function sanitizeCssColor(value: string): string | null {
  * `blocks-engine`, which all three already depend on. A second copy here is how
  * one surface starts publishing what another refuses.
  */
-export function sanitizeInlineStyle(value: string): string {
-  return sanitizeInlineStyleValue(value);
+export function sanitizeInlineStyle(value: string, format?: number): string {
+  return sanitizeInlineStyleValue(value, format);
 }

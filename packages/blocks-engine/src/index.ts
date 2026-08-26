@@ -383,8 +383,6 @@ export {
   INLINE_STYLE_PROPERTIES,
   isInlineStyleProperty,
   readInlineStyle,
-  RICH_TEXT_FONT_FAMILIES,
-  RICH_TEXT_FONT_SIZES,
   sanitizeInlineStyle,
 } from "./style/inline-style";
 export type {

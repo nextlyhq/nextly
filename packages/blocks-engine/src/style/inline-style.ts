@@ -24,6 +24,8 @@
  * @module style/inline-style
  */
 
+import { hasFormat, TEXT_FORMAT } from "../rich-text";
+
 import { hasCssInjection, normalizeCssValue } from "./css-color";
 
 /**
@@ -70,6 +72,56 @@ export const INLINE_STYLE_PROPERTIES = [
 const ALLOWED: ReadonlySet<string> = new Set(INLINE_STYLE_PROPERTIES);
 
 /**
+ * What each format bit already decides, and therefore what a style may not.
+ *
+ * A stored node can carry BOTH — `BOLD` with `font-weight: normal` is what a
+ * paste from a word processor looks like, and the two are a contradiction the
+ * document does not resolve. Whichever is written closer to the text wins, so
+ * the answer would otherwise be decided by markup nesting: the CMS puts the
+ * style outside the `<strong>` and keeps the bold, this package puts it inside
+ * so an author's colour can beat `<mark>`, and the same stored value would
+ * render bold on one surface and not on the other.
+ *
+ * Resolved here instead, once, by the PROPERTY rather than by the nesting. The
+ * format bit is an act — a button pressed on this selection — where the style
+ * string is whatever the document arrived carrying, so the bit wins and the
+ * declaration it contradicts is dropped.
+ *
+ * `font-size` is deliberately NOT owned by the subscript bits. `<sub>` shrinks
+ * its text as a side effect of being a subscript, and an author who then sets a
+ * size has chosen that size; the POSITION is what makes it a subscript, and
+ * that is `vertical-align`.
+ */
+const FORMAT_OWNED: readonly {
+  flag: (typeof TEXT_FORMAT)[keyof typeof TEXT_FORMAT];
+  properties: readonly string[];
+}[] = [
+  { flag: TEXT_FORMAT.BOLD, properties: ["font-weight"] },
+  { flag: TEXT_FORMAT.ITALIC, properties: ["font-style"] },
+  {
+    flag: TEXT_FORMAT.UNDERLINE,
+    properties: ["text-decoration", "text-decoration-line"],
+  },
+  {
+    flag: TEXT_FORMAT.STRIKETHROUGH,
+    properties: ["text-decoration", "text-decoration-line"],
+  },
+  { flag: TEXT_FORMAT.SUBSCRIPT, properties: ["vertical-align"] },
+  { flag: TEXT_FORMAT.SUPERSCRIPT, properties: ["vertical-align"] },
+];
+
+/** The properties an active format bit has already decided. */
+function ownedByFormat(format: number | undefined): ReadonlySet<string> {
+  const owned = new Set<string>();
+  if (format === undefined) return owned;
+  for (const entry of FORMAT_OWNED) {
+    if (!hasFormat(format, entry.flag)) continue;
+    for (const property of entry.properties) owned.add(property);
+  }
+  return owned;
+}
+
+/**
  * Whether a property name is one this format carries.
  *
  * Case- and space-insensitive, because the name arrives from stored text: a
@@ -92,9 +144,13 @@ export function isInlineStyleProperty(name: unknown): boolean {
  * style is not a request, it is what an old document happens to contain, and
  * one unreadable declaration must not take an author's colour with it.
  */
-export function readInlineStyle(value: unknown): ReadonlyMap<string, string> {
+export function readInlineStyle(
+  value: unknown,
+  format?: number
+): ReadonlyMap<string, string> {
   const kept = new Map<string, string>();
   if (typeof value !== "string" || value === "") return kept;
+  const owned = ownedByFormat(format);
 
   const normalized = normalizeCssValue(value);
   if (normalized === "") return kept;
@@ -112,6 +168,8 @@ export function readInlineStyle(value: unknown): ReadonlyMap<string, string> {
     const property = text.slice(0, colon).trim().toLowerCase();
     const declared = text.slice(colon + 1).trim();
     if (declared === "" || !ALLOWED.has(property)) continue;
+    // See {@link FORMAT_OWNED}: the bit is an act, the style is baggage.
+    if (owned.has(property)) continue;
     // The same guard the colours cross, and for the same reason: this string
     // reaches a `style` attribute, where a `;` ends the declaration and starts
     // another, and a `url()` fetches.
@@ -138,53 +196,8 @@ export function readInlineStyle(value: unknown): ReadonlyMap<string, string> {
  * one string agree on the day they are written; this one cannot disagree with
  * the map the renderer draws from, because it is that map.
  */
-export function sanitizeInlineStyle(value: unknown): string {
-  return [...readInlineStyle(value)]
+export function sanitizeInlineStyle(value: unknown, format?: number): string {
+  return [...readInlineStyle(value, format)]
     .map(([property, declared]) => `${property}:${declared}`)
     .join(";");
 }
-
-/**
- * The font families the editor's own toolbar offers.
- *
- * NOT enforced by the reader, and that is the decision rather than an
- * oversight: a document that arrived by import may legitimately carry a family
- * this list has never heard of, and refusing it would strip a face the CMS
- * publishes today. What the list is for is the opposite direction — holding the
- * reader to the editor, so a value an author CAN choose is never one the page
- * silently drops.
- *
- * Two checks together make that hold, and neither does it alone: the admin
- * compares this list to the toolbar's own options, because the editor's lists
- * live where this package cannot reach; and this package's own tests render
- * every member through {@link readInlineStyle}. The first says the list is the
- * editor's, the second says the reader keeps what is on it.
- */
-export const RICH_TEXT_FONT_FAMILIES = [
-  "Arial",
-  "Courier New",
-  "Georgia",
-  "Times New Roman",
-  "Trebuchet MS",
-  "Verdana",
-] as const;
-
-/** The font sizes that toolbar offers. See {@link RICH_TEXT_FONT_FAMILIES}. */
-export const RICH_TEXT_FONT_SIZES = [
-  "10px",
-  "11px",
-  "12px",
-  "13px",
-  "14px",
-  "15px",
-  "16px",
-  "17px",
-  "18px",
-  "20px",
-  "24px",
-  "30px",
-  "36px",
-  "48px",
-  "60px",
-  "72px",
-] as const;
