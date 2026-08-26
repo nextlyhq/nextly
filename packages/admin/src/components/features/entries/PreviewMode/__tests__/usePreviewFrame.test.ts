@@ -36,12 +36,24 @@ import { usePreviewFrame } from "../usePreviewFrame";
  */
 const ORIGIN = window.location.origin;
 
-/** A mint that expires the given number of milliseconds from now. */
-function expiringIn(ms: number, url = `${ORIGIN}/blog/post?preview=1`) {
+/**
+ * A mint that expires the given number of milliseconds from now.
+ *
+ * `embeddable` is stated rather than derived from the url, because it is what
+ * the SERVER answered and the pane has no other source for it. Deriving it here
+ * would reintroduce, in the test, the origin comparison this hook stopped
+ * making — and the test would then agree with a hook that went back to guessing.
+ */
+function expiringIn(
+  ms: number,
+  url = `${ORIGIN}/blog/post?preview=1`,
+  embeddable = true
+) {
   return {
     kind: "open" as const,
     url,
     expiresAt: new Date(Date.now() + ms).toISOString(),
+    embeddable,
   };
 }
 
@@ -232,16 +244,20 @@ describe("usePreviewFrame", () => {
   });
 });
 
-describe("a site served from another origin", () => {
+describe("a mint the server says cannot be framed", () => {
   it("blocks the frame but KEEPS the url, because the tab still works", async () => {
     /*
-     * The browser will not carry the preview cookie into a cross-origin frame,
-     * and the site answers a frame without one by serving the published page.
-     * Nothing about that is observable from the admin — the frame's document
-     * belongs to the site — so the pane declines rather than rendering
+     * The site answers a frame with no preview cookie by serving the published
+     * page, and nothing about that is observable from the admin — the frame's
+     * document belongs to the site. So the pane declines rather than rendering
      * something it cannot check.
+     *
+     * Whether the cookie survives framing is the SERVER's answer, because the
+     * attribute that decides it is set there. This hook's only job is to obey.
      */
-    mint.mockResolvedValue(expiringIn(15 * 60_000, "https://elsewhere.test/p"));
+    mint.mockResolvedValue(
+      expiringIn(15 * 60_000, "https://elsewhere.test/p", false)
+    );
 
     const { result } = renderHook(() => usePreviewFrame(args));
     await waitFor(() => expect(result.current.block).toBe("crossOrigin"));
@@ -252,9 +268,9 @@ describe("a site served from another origin", () => {
     expect(result.current.reason).toBeNull();
   });
 
-  it("does NOT block a same-origin site", async () => {
-    // The control: the refusal above is about the origin rather than about a
-    // gate that blocks everything.
+  it("does NOT block a mint the server says IS embeddable", async () => {
+    // The control: the refusal above follows the server's answer rather than
+    // being a gate that blocks everything.
     mint.mockResolvedValue(expiringIn(15 * 60_000));
 
     const { result } = renderHook(() => usePreviewFrame(args));
@@ -267,7 +283,9 @@ describe("a site served from another origin", () => {
     // Nothing is framed, so nothing needs a live credential — and renewing
     // would claim the shared cookie away from a pane that is using it.
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    mint.mockResolvedValue(expiringIn(90_000, "https://elsewhere.test/p"));
+    mint.mockResolvedValue(
+      expiringIn(90_000, "https://elsewhere.test/p", false)
+    );
 
     const { result } = renderHook(() => usePreviewFrame(args));
     await waitFor(() => expect(result.current.block).toBe("crossOrigin"));

@@ -205,6 +205,15 @@ export type PreviewOutcome =
        * something this call already learned.
        */
       expiresAt: string;
+      /**
+       * Whether the pane may frame this URL, or must offer a tab instead.
+       *
+       * Carried for the same reason `expiresAt` is: opening a tab has no use
+       * for it, and the mint is the only thing that knows. A surface that
+       * decides for itself would be guessing at a property of the preview
+       * cookie it cannot see.
+       */
+      embeddable: boolean;
     }
   | { kind: "report"; reason: PreviewUnavailableReason };
 
@@ -342,7 +351,12 @@ export async function mintSelfPreview(
     // missing, which is a thing an administrator can fix, so it is reported as
     // itself rather than as an opaque failure.
     if (link.url === null) return { kind: "report", reason: "noSiteUrl" };
-    return { kind: "open", url: link.url, expiresAt: link.expiresAt };
+    return {
+      kind: "open",
+      url: link.url,
+      expiresAt: link.expiresAt,
+      embeddable: link.embeddable,
+    };
   } catch (error) {
     return { kind: "report", reason: reasonForRefusal(error) };
   }

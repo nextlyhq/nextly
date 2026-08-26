@@ -46,7 +46,6 @@ import {
   watchPreviewSession,
   type PreviewSessionLock,
 } from "./previewSessionLock";
-import { currentAdminOrigin, isSameOriginPreview } from "./sameOriginPreview";
 
 /**
  * How close to expiry a refresh re-mints rather than reloads.
@@ -193,17 +192,18 @@ export function usePreviewFrame({
     }
 
     /*
-     * Judged HERE rather than when the pane opened, because this is the first
-     * point the answer is knowable: the site URL sits behind a `settings`
-     * permission that editors do not hold, so the admin learns where an entry
-     * previews only by asking, and only when someone asks for it.
+     * Read rather than decided. The question is whether the preview COOKIE
+     * survives being framed, and the attribute that settles it is set by the
+     * server — so the server answers, and this reads the answer.
      *
-     * A null admin origin (no document) counts as cross-origin. Erring toward
-     * the tab is the safe direction: the tab works everywhere the pane does.
+     * The admin used to compare its own origin against the URL. That was a
+     * second implementation of one question: correct only while the cookie kept
+     * the attribute it had, and wrong SILENTLY when it did not, because the
+     * failure is a frame that renders the published page under a draft caption.
+     * It was also stricter than the truth — it compared PORTS, which same-site
+     * ignores, so a contributor on :3000 could not frame a site on :3100.
      */
-    const adminOrigin = currentAdminOrigin();
-    const framable =
-      adminOrigin !== null && isSameOriginPreview(outcome.url, adminOrigin);
+    const framable = outcome.embeddable;
 
     expiresAt.current = Date.parse(outcome.expiresAt);
 

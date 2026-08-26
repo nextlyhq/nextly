@@ -4,6 +4,8 @@ import {
   type PreviewTokenScope,
 } from "../../auth/preview/preview-token";
 
+import { PREVIEW_COOKIE_SAME_SITE } from "./preview-frame-policy";
+
 /**
  * The route that turns a preview link into a draft-reading session, and the
  * reader that tells the rest of the request what that session may see.
@@ -232,17 +234,20 @@ export function createPreviewRoute(config: PreviewRouteConfig = {}): {
         status: 307,
         headers: { location },
       });
-      // `httpOnly` because nothing in the browser needs to read this, and
-      // `sameSite=lax` so the cookie survives following the link from an email
-      // or a chat client while staying off cross-site sub-requests. The cookie
-      // expires with the token rather than outliving it.
+      // `httpOnly` because nothing in the browser needs to read this. The
+      // `SameSite` attribute is read from the shared policy rather than written
+      // here: the mint tells the admin whether its pane can frame the site, and
+      // that answer is only correct for the policy this cookie actually
+      // carries. `Lax` keeps the cookie across following a shared link from an
+      // email or a chat client while staying off cross-site sub-requests. The
+      // cookie expires with the token rather than outliving it.
       response.headers.append(
         "set-cookie",
         [
           `${PREVIEW_SCOPE_COOKIE}=${encodeURIComponent(token)}`,
           "Path=/",
           "HttpOnly",
-          "SameSite=Lax",
+          `SameSite=${PREVIEW_COOKIE_SAME_SITE}`,
           "Secure",
           `Expires=${verified.expiresAt.toUTCString()}`,
         ].join("; ")

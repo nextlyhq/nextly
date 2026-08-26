@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PREVIEW_COOKIE_SAME_SITE } from "../preview-frame-policy";
 
 import {
   isSingleScope,
@@ -88,7 +89,15 @@ describe("the preview route", () => {
     const header = cookiesFrom(await route.GET(request(token))).header;
 
     expect(header).toContain("HttpOnly");
-    expect(header).toContain("SameSite=Lax");
+    /*
+     * Derived from the policy rather than repeating the literal. The mint tells
+     * the admin whether its pane can frame the site, and that answer is only
+     * correct for the attribute this cookie actually carries — a route that
+     * went back to writing its own would leave the two agreeing on the day it
+     * was changed and disagreeing forever after, with the pane confidently
+     * framing a site that renders the published page.
+     */
+    expect(header).toContain(`SameSite=${PREVIEW_COOKIE_SAME_SITE}`);
     expect(header).toContain("Secure");
     expect(header).toContain(`Expires=${expiresAt.toUTCString()}`);
   });
