@@ -355,7 +355,50 @@ describe("dispatchForms, what a form's own address answers", () => {
 
     const response = (await askFor([closed])) as Response;
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(closed);
+    expect(await response.json()).toEqual({
+      slug: "contact",
+      status: "closed",
+      closedMessage: "Applications closed on 31 March.",
+    });
+  });
+
+  it("returns the message and nothing else off the row", async () => {
+    // The stamp says the FORM was once public. It does not say that THIS slug
+    // was — a closed form can be renamed afterwards — nor that fields and
+    // settings added since ever were. Answering with the row would authorize
+    // all of that on the strength of a fact about none of it.
+    const closedWithMore = {
+      id: "f1",
+      slug: "contact",
+      status: "closed",
+      wentLiveAt: "2026-01-01T00:00:00Z",
+      closedMessage: "Applications closed on 31 March.",
+      fields: [{ name: "salary_expectation", type: "text" }],
+      settings: { webhookUrl: "https://internal.example/hook" },
+    };
+
+    const body = (await (
+      (await askFor([closedWithMore])) as Response
+    ).json()) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("fields");
+    expect(body).not.toHaveProperty("settings");
+    expect(body).not.toHaveProperty("id");
+  });
+
+  it("still answers a PUBLISHED form with its whole document", async () => {
+    // The control. "Discloses little" is satisfied by an endpoint that
+    // discloses nothing, and a client cannot render a live form without the
+    // fields it is made of.
+    const live = {
+      id: "f1",
+      slug: "contact",
+      status: "published",
+      fields: [{ name: "email", type: "text" }],
+      settings: { successMessage: "Thanks!" },
+    };
+
+    expect(await ((await askFor([live])) as Response).json()).toEqual(live);
   });
 
   it("answers a form created closed exactly as it answers an unused slug", async () => {

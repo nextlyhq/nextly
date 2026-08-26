@@ -119,6 +119,25 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
         });
       }
 
+      if (availability.kind === "closed") {
+        // Only what a visitor at this address needs. The author wrote the
+        // message FOR them; nothing else on the row is theirs. A published
+        // form must return its fields because a client renders them, and a
+        // closed one renders a sentence — so returning the row was disclosure
+        // the feature never needed.
+        //
+        // That also bounds what the publication stamp can be asked to prove.
+        // It says the FORM was once public: not that THIS slug was, since a
+        // closed form can be renamed afterwards, and not that the fields and
+        // settings added since ever were. Answering with the message alone
+        // makes both questions moot rather than answering them wrongly.
+        return respondDoc({
+          slug,
+          status: "closed",
+          closedMessage: availability.message,
+        });
+      }
+
       return respondDoc(doc as Record<string, unknown>);
     },
   },
