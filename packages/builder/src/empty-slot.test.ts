@@ -9,7 +9,11 @@ import { emptySlotOf } from "./empty-slot";
 
 const slots = {
   slotsOf: (type: string) =>
-    type === "core/box" ? (["children"] as const) : undefined,
+    type === "core/box"
+      ? (["children"] as const)
+      : type === "core/pair"
+        ? (["first", "second"] as const)
+        : undefined,
 };
 
 function box(children?: BlockNode[]): BlockNode {
@@ -19,6 +23,20 @@ function box(children?: BlockNode[]): BlockNode {
     version: 1,
     props: {},
     ...(children ? { slots: { children } } : {}),
+  };
+}
+
+/**
+ * A block declaring two ordered slots, so a case can pin WHICH declared slot
+ * counts as "first" rather than only whether some slot is empty.
+ */
+function pair(first: BlockNode[], second: BlockNode[]): BlockNode {
+  return {
+    id: "p1",
+    type: "core/pair",
+    version: 1,
+    props: {},
+    slots: { first, second },
   };
 }
 
@@ -51,5 +69,17 @@ describe("emptySlotOf", () => {
     // be known about declarations. Guessing would put a block inside an
     // element that has nowhere to hold it.
     expect(emptySlotOf(box(), undefined)).toBeNull();
+  });
+
+  it("stays null when the first slot holds a child, though the second is empty", () => {
+    // Only the first declared slot is ever inspected. A rule that checked
+    // every slot, or picked the LAST one, would answer "second" here.
+    expect(emptySlotOf(pair([leaf], []), slots)).toBeNull();
+  });
+
+  it("names the first slot when it is empty, though the second holds a child", () => {
+    // The mirror of the case above. Without both, a rule that answered null
+    // whenever ANY slot held a child would also pass the first one.
+    expect(emptySlotOf(pair([], [leaf]), slots)).toBe("first");
   });
 });
