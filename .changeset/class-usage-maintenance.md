@@ -84,7 +84,12 @@ defaults while the host may have configured others, and the two directions fail 
 ways - raised bounds record a document the renderer draws whole as an undetermined marker
 instead of its classes, and lowered bounds count classes on nodes the page never draws.
 Passing the engine defaults explicitly is still available and is now a decision rather than
-an omission.
+an omission - and the page-builder package now RE-EXPORTS `DEFAULT_LIMITS` and its
+`DocumentLimits` type, so a host running the defaults has a value to name. It could not
+reach the engine by name: that is a dependency of this package rather than of the app, and
+the two moves left without it were both wrong - take a direct dependency on the engine to
+obtain one constant, or copy the numbers and let them drift away from the bounds the
+renderer applies.
 
 It stops at the first failure. Swallowing one and continuing would report a completed
 rebuild that repaired nothing, which is the report that stops anyone looking. Stopping is
