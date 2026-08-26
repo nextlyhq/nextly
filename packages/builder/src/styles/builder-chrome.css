@@ -371,20 +371,25 @@
  * measurement collapsed an already-working `block`-authored empty container
  * from full width down to a few pixels.
  *
- * `!important`, because the author's own value does not reach this stylesheet
- * as an ordinary class: this repository's block-style compiler doubles its
- * page-scoping class on every rule it emits
- * (`.nx-pb-page.nx-pb-page .nx-pb-<hash>`) specifically so a page's authored
- * styles reliably outrank arbitrary host CSS — which also outranks an
- * ordinary override written here. That selector shape belongs to a different
- * package's compiler and can change without notice; racing it on specificity
- * would be a second, silent implementation of a question that package already
- * owns. `!important` wins regardless of a shape this stylesheet does not, and
- * should not have to, know.
+ * No important flag on `display`, checked rather than assumed. The compiled
+ * per-node rule that carries an author's `display` repeats the page-scoping
+ * class — `.nx-pb-page.nx-pb-page .nx-pb-<hash>`, three classes, specificity
+ * `(0,3,0)`. This selector is five: two classes (`.nx-builder-chrome`,
+ * `.nx-canvas`), the attribute selector inside `:not()`, `[data-nx-slots]`
+ * and `:empty` — `(0,5,0)`, which already outranks it. Verified with no
+ * important flag anywhere on the declaration: an author-chosen `inline`
+ * still computed to `block` at 44px, hit-testable across the full box. Left
+ * that way — that flag is worth reaching for only where ordinary specificity
+ * cannot do the job, and measured here, it can.
  *
- * The trade-off this accepts, rather than hides: for a container authored as
- * `inline`, the canvas shows a full-width rectangle where the published page
- * would show nothing at all, for as long as it stays empty. Bounded twice —
+ * The trade-off this accepts, rather than hides, is a FLOW change, not a
+ * visibility one. Every empty container already diverges from its published
+ * appearance — that is the entire feature this rule belongs to: a `block`
+ * one gains a 44px dashed box the visitor never sees. Forcing `display` on
+ * an `inline` one is the same act, not a new category of one, but it moves
+ * something a border and a background do not: an inline box sits IN a line;
+ * a block one breaks it. This is the one place the canvas deliberately lays
+ * an empty container out differently from how the page will. Bounded twice —
  * gone the instant a child is added, since this rule stops matching `:empty`
  * then; and absent entirely once the author asks to see the page as a
  * visitor will, since the guard above already suppresses this whole rule,
@@ -395,7 +400,7 @@
 .nx-builder-chrome:not([data-nx-empty-elements="hidden"])
   .nx-canvas
   [data-nx-slots]:empty {
-  display: block !important;
+  display: block;
   min-height: 2.75rem;
   border: 1px dashed var(--nx-border);
   border-radius: var(--radius-sm);
