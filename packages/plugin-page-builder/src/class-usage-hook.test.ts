@@ -60,8 +60,18 @@ function harness(
   };
 
   const api = {
-    find: vi.fn(async () => ({ docs: [], hasNextPage: false })),
-    findByID: vi.fn(async () => documentUsing("hero")),
+    // The REAL Direct API shapes. Fixtures that restate what the code assumes
+    // agree with the assumption rather than with the runtime: an earlier pair
+    // used the collection service's inner `{ docs, hasNextPage }` payload and a
+    // bare document, and every test passed while no index row was ever found
+    // and no classes were ever derived.
+    find: vi.fn(async () => ({ items: [], meta: { hasNext: false } })),
+    findByID: vi.fn(async (args: { draft?: boolean }) => ({
+      id: "p1",
+      title: "unrelated",
+      content: documentUsing("hero"),
+      ...(args.draft === true ? { _isWorkingDraft: true } : {}),
+    })),
     create: vi.fn(async () => ({})),
     delete: vi.fn(async () => ({})),
   };
@@ -217,5 +227,33 @@ describe("failure, on a write that has already committed", () => {
     expect(String((errors[0] as { message: string }).message)).toContain(
       "disagrees with the document"
     );
+  });
+});
+
+describe("a write inside a caller-owned transaction", () => {
+  it("is SKIPPED, because the hook runs before that transaction commits", async () => {
+    // Core binds `executor` onto the after-context only on the transactional
+    // path (`createEntryWrite`, reached from `createEntryInTransaction`), and
+    // it runs the hook while the caller's transaction is still open. The
+    // pooled Direct API cannot join that transaction: on a small pool it can
+    // stall on the connection the transaction holds, and otherwise it reads a
+    // database that does not yet contain this write. Deriving rows from that
+    // read records the document's previous classes and reports success.
+    const { fire, api } = harness();
+
+    await fire({ executor: {} });
+
+    expect(api.findByID).not.toHaveBeenCalled();
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it("still runs when no executor is bound, which is the ordinary path", async () => {
+    // The control. A guard that skipped everything would satisfy the case
+    // above while disabling maintenance entirely.
+    const { fire, api } = harness();
+
+    await fire();
+
+    expect(api.create).toHaveBeenCalled();
   });
 });

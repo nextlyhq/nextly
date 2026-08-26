@@ -177,6 +177,19 @@ function writeTargetOf(
   context: UnknownRecord,
   indexCollection: string
 ): { slug: string; nextly: ClassUsageDirectApi; documentId: string } | null {
+  // A hook running inside a CALLER-OWNED transaction is handed that
+  // transaction's executor, and it runs BEFORE the caller commits. Maintenance
+  // reaches the database through the pooled Direct API, which cannot join that
+  // transaction — so on a small pool it can stall waiting for the connection
+  // the transaction is holding, and on a large one it reads a database that
+  // does not yet contain the write it was called for.
+  //
+  // Deriving rows from that read would record the document's PREVIOUS classes,
+  // or none at all for a create, and then report success. Skipping is the only
+  // honest option available: there is no post-commit hook to defer to, and the
+  // rebuild is what repairs a subject a write bypassed.
+  if (context.executor !== undefined) return null;
+
   const slug = context.collection;
   if (typeof slug !== "string" || slug.length === 0) return null;
   // This plugin's own index table is written BY this hook. Reconciling it would
