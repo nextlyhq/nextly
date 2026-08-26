@@ -90,6 +90,10 @@ describe("dispatchForms, paginated lists (respondList)", () => {
 
 describe("dispatchForms, single-doc reads (respondDoc)", () => {
   it("getFormBySlug returns bare doc body", async () => {
+    // `published` is what makes this form public, and it is what decides how
+    // much of the row comes back: only a published form is answered with its
+    // whole document. A fixture with no status would be judged as never having
+    // been public, and this test would then be asserting the shape of a 404.
     const fakeForm = {
       id: "f1",
       slug: "contact",
