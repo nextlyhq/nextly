@@ -29,7 +29,10 @@
  * @module canvas
  */
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  previewContainerName,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import {
   NODE_ID_ATTRIBUTE,
   PageRenderer,
@@ -214,9 +217,28 @@ function useReportedInlineWidth(
   box: React.RefObject<HTMLElement | null>,
   report: ((width: number | undefined) => void) | undefined
 ): void {
+  /*
+   * The reporter is held in a ref, and the effect does NOT depend on it.
+   *
+   * A host writing `onMeasured={w => setWidth(w)}` inline hands a new function
+   * on every render. Depended on directly, every real measurement would update
+   * the parent, produce a new identity, tear the observer down — reporting
+   * `undefined` from the cleanup, as if the canvas had gone — and build a new
+   * one that immediately reports the real width again. The derived tier
+   * oscillates and the observer churn can sustain a render loop, on a host that
+   * did nothing wrong.
+   *
+   * So the effect keys on whether a reporter EXISTS, which is the only part of
+   * it that changes what the observer should do.
+   */
+  const latest = useRef(report);
+  useEffect(() => {
+    latest.current = report;
+  }, [report]);
+  const measuring = report !== undefined;
   useEffect(() => {
     const element = box.current;
-    if (element === null || report === undefined) return;
+    if (element === null || !measuring) return;
     // Guarded by CALLABILITY rather than presence: jsdom defines the global on
     // some setups without a working constructor, so a property test passes and
     // the construction throws.
@@ -224,7 +246,7 @@ function useReportedInlineWidth(
     const observer = new ResizeObserver(entries => {
       const entry = entries[0];
       if (entry === undefined) return;
-      report(inlineSizeOf(entry));
+      latest.current?.(inlineSizeOf(entry));
     });
     observer.observe(element);
     return () => {
@@ -242,9 +264,9 @@ function useReportedInlineWidth(
        * `undefined` is the honest report and the one the caller already
        * handles: nothing has been observed.
        */
-      report(undefined);
+      latest.current?.(undefined);
     };
-  }, [box, report]);
+  }, [box, measuring]);
 }
 
 /**
@@ -439,10 +461,30 @@ function usePreviewedInputs(
 ): {
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   sheet: NonNullable<PageRendererProps["siteStyles"]>;
+  /**
+   * The preview that is actually in force, or `undefined` when none is.
+   *
+   * A NAME the compiler refuses is not a preview. `previewContainerName` turns
+   * down an empty, reserved, malformed or oversized value, and the compile then
+   * falls back to published `@media` — so a box that went on constraining and
+   * measuring itself would resize without changing a single tier, and a caller
+   * deriving an edit target from the measurement would write to a breakpoint
+   * the canvas is not displaying. That is the same confident-wrong-answer the
+   * whole mechanism exists to remove, arrived at through the refusal path.
+   *
+   * Normalised HERE and nowhere else, so the sheet, the box and the measurement
+   * cannot disagree about whether this canvas is previewing at all.
+   */
+  active: CanvasPreview | undefined;
 } {
   return useMemo(() => {
-    if (preview === undefined) return { rendered: render, sheet: siteStyles };
+    const container = previewContainerName(preview?.container);
+    if (preview === undefined || container === undefined) {
+      return { rendered: render, sheet: siteStyles, active: undefined };
+    }
+    const active = { ...preview, container };
     return {
+      active,
       /*
        * `styleContext` absent is left alone: without it the renderer compiles
        * no per-node sheet, so there are no page rules for a container to
@@ -455,7 +497,7 @@ function usePreviewedInputs(
               ...render,
               styleContext: {
                 ...render.styleContext,
-                previewContainer: preview.container,
+                previewContainer: container,
               },
             },
       /*
@@ -466,7 +508,7 @@ function usePreviewedInputs(
        */
       sheet:
         typeof siteStyles === "object"
-          ? { ...siteStyles, previewContainer: preview.container }
+          ? { ...siteStyles, previewContainer: container }
           : siteStyles,
     };
   }, [render, siteStyles, preview]);
@@ -585,8 +627,6 @@ export function Canvas({
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
 
-  useReportedInlineWidth(root, preview?.onMeasured);
-
   /*
    * What to mark. The primary alone when a host has not adopted the set yet,
    * which keeps every existing caller correct without a change.
@@ -599,7 +639,13 @@ export function Canvas({
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
-  const { rendered, sheet } = usePreviewedInputs(render, siteStyles, preview);
+  const { rendered, sheet, active } = usePreviewedInputs(
+    render,
+    siteStyles,
+    preview
+  );
+
+  useReportedInlineWidth(root, active?.onMeasured);
 
   const page = useMemo(
     () => (
@@ -629,7 +675,7 @@ export function Canvas({
       // are positioned in this element's own content coordinates: a box inside
       // it would size the page while leaving the drop indicator and the
       // selection chrome measuring the region instead.
-      style={previewBoxStyle(preview)}
+      style={previewBoxStyle(active)}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and

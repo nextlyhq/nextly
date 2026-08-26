@@ -26,6 +26,7 @@ import {
   it,
   vi,
 } from "vitest";
+import * as React from "react";
 import { createElement } from "react";
 
 import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
@@ -924,6 +925,118 @@ describe("what the canvas reports about the box it got", () => {
 
     expect(sheet).toContain("@media (max-width: 991px)");
     expect(sheet).not.toContain("@container");
+  });
+
+  it("neither constrains nor measures when the NAME is refused", () => {
+    /*
+     * `previewContainerStyle` turns down a reserved name, so no query container
+     * exists and the sheet falls back to published `@media`. A box that went on
+     * narrowing and measuring itself would then resize without changing a
+     * single tier — and a caller deriving an edit target from the measurement
+     * would write to a breakpoint the canvas is not displaying.
+     *
+     * A refused name is therefore not a preview at all, for the width and the
+     * measurement as much as for the container.
+     */
+    const onMeasured = vi.fn();
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        preview={{ container: "none", width: 991, onMeasured }}
+      />
+    );
+
+    const style = (
+      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
+    )?.style;
+    expect(style?.containerName).toBe("");
+    expect(style?.maxWidth).toBe("");
+    expect(FakeResizeObserver.last).toBeUndefined();
+  });
+
+  it("does not report a removal when the CALLBACK identity changes", () => {
+    /*
+     * A host writing `onMeasured={w => setWidth(w)}` inline hands a new
+     * function every render. If the observer effect depended on it, each real
+     * measurement would update the parent, produce a new identity, tear the
+     * observer down — reporting `undefined` as if the canvas had gone — and
+     * rebuild it, so the derived tier oscillates and the churn can sustain a
+     * render loop, on a host that did nothing wrong.
+     *
+     * Asserted as "never called with undefined while mounted" rather than on a
+     * call count, because the count is allowed to grow: what must not happen is
+     * the false removal.
+     */
+    const onMeasured = vi.fn();
+    const view = measured(onMeasured);
+    FakeResizeObserver.last?.deliver({
+      contentBoxSize: [{ inlineSize: 900, blockSize: 500 }],
+    });
+
+    // A re-render with a BRAND NEW callback identity, which is what an inline
+    // arrow produces.
+    React.act(() => {
+      view.rerender(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={{ css: "", classes: {} } as never}
+          preview={{
+            container: "nx-preview-viewport",
+            onMeasured: (width: number | undefined) => onMeasured(width),
+          }}
+        />
+      );
+    });
+
+    expect(onMeasured).not.toHaveBeenCalledWith(undefined);
+  });
+
+  it("tells the CURRENT reporter about the removal, not the one it started with", () => {
+    /*
+     * The effect deliberately does not re-run when the callback identity
+     * changes, so the reporter captured when the observer was built can be
+     * stale by the time the canvas goes away. Notifying that one leaves the
+     * host that is actually listening holding the last real width, deriving a
+     * tier from a box that no longer exists — the same stale-measurement bug
+     * the removal notice was added to prevent, arrived at one layer down.
+     */
+    const first = vi.fn();
+    const second = vi.fn();
+    const tree = (report: (width: number | undefined) => void) => (
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        preview={{ container: "nx-preview-viewport", onMeasured: report }}
+      />
+    );
+
+    const view = render(tree(first));
+    React.act(() => {
+      view.rerender(tree(second));
+    });
+    view.unmount();
+
+    expect(second).toHaveBeenCalledWith(undefined);
+    expect(first).not.toHaveBeenCalledWith(undefined);
   });
 
   it("observes NOTHING when no reporter was given", () => {
