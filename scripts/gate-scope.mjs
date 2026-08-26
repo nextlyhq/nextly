@@ -198,8 +198,22 @@ function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
 }
 
+/**
+ * The filter arguments a task runner needs, one per line.
+ *
+ * Emitted on request so a hook can CONSUME the derivation rather than print it
+ * at someone. A scope that is only ever read by a human is advisory, and the
+ * failure this module exists to prevent is precisely someone not remembering to
+ * look.
+ */
+export function filterArguments(filters) {
+  return filters.map(name => `--filter=${name}`).join("\n");
+}
+
 function main() {
-  const base = process.argv[2] ?? "origin/main";
+  const args = process.argv.slice(2);
+  const emitFilters = args.includes("--filters");
+  const base = args.find(arg => !arg.startsWith("--")) ?? "origin/main";
   const cwd = process.cwd();
 
   // The MERGE BASE, and a two-dot diff against the WORKING TREE.
@@ -228,6 +242,17 @@ function main() {
   );
   const dirs = workspaceDirsOf(paths, globs);
   const { filters, unreadable } = packageFilters(dirs, manifestReader(cwd));
+
+  if (emitFilters) {
+    // Only the filters, so a caller can splice them into a command. An
+    // unreadable directory is deliberately silent here: it names no package to
+    // filter on, and printing prose into a command substitution would be worse
+    // than saying nothing.
+    const line = filterArguments(filters);
+    if (line) console.log(line);
+    return;
+  }
+
   console.log(report({ filters, unreadable, scripts: touchesScripts(paths) }));
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   changedPackageDirs,
+  filterArguments,
   workspaceDirsOf,
   workspaceGlobs,
   packageFilters,
@@ -193,5 +194,20 @@ describe("reading the workspace roots from pnpm-workspace.yaml", () => {
     // Must be EMPTY rather than defaulting to `packages/*`: a silent default
     // is how the mapper came to know one root and drop the other two.
     expect(workspaceGlobs("packages:\n")).toEqual([]);
+  });
+});
+
+describe("the machine-readable form a hook consumes", () => {
+  it("emits one flag per package", () => {
+    expect(
+      filterArguments(["@nextlyhq/plugin-sdk", "nextly"]).split("\n")
+    ).toEqual(["--filter=@nextlyhq/plugin-sdk", "--filter=nextly"]);
+  });
+
+  it("emits NOTHING when no package changed", () => {
+    // The caller tests for an empty string to decide whether to run at all.
+    // Emitting a placeholder would turn "nothing changed" into a whole-repo
+    // sweep, which is the version of this nobody would keep enabled.
+    expect(filterArguments([])).toBe("");
   });
 });
