@@ -72,7 +72,6 @@ import {
   type StoredClassUsageRow,
 } from "./class-usage-reconcile";
 import {
-  CLASS_USAGE_INDEX_SLUG,
   type ClassUsageRow,
   type ClassUsageScope,
   type ClassUsageVariant,
@@ -88,9 +87,18 @@ import { readStoredJson } from "./stored-json";
  * generated when this plugin is wired. The index collection is this plugin's
  * own to know.
  */
+/**
+ * The index, as everything above it sees it.
+ *
+ * No method names a collection. The store IS the index — it is constructed
+ * knowing which one, so nothing above it can point a write at the wrong table,
+ * and the plugin's `.rename()` support has exactly one place to be honoured.
+ * Naming the slug at every call site meant four literals inside this module
+ * alone, each of which would have kept writing to the declared name on an
+ * installation that renamed it.
+ */
 export interface ClassUsageIndexStore {
   find(args: {
-    collection: string;
     where: Record<string, { equals: string }>;
     limit: number;
     page: number;
@@ -105,11 +113,8 @@ export interface ClassUsageIndexStore {
      */
     sort: string;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
-  create(args: {
-    collection: string;
-    data: Record<string, unknown>;
-  }): Promise<unknown>;
-  delete(args: { collection: string; id: string }): Promise<unknown>;
+  create(args: { data: Record<string, unknown> }): Promise<unknown>;
+  delete(args: { id: string }): Promise<unknown>;
 }
 
 /** How many index rows one query asks for. */
@@ -247,7 +252,6 @@ async function storedRowsWhere(
     describe,
     fetchPage: page =>
       store.find({
-        collection: CLASS_USAGE_INDEX_SLUG,
         where,
         limit: PAGE_SIZE,
         page,
@@ -371,12 +375,11 @@ export async function maintainClassUsage(args: {
   // reports it as referencing neither, which permits one that was not.
   for (const row of insert) {
     await store.create({
-      collection: CLASS_USAGE_INDEX_SLUG,
       data: { ...row },
     });
   }
   for (const id of remove) {
-    await store.delete({ collection: CLASS_USAGE_INDEX_SLUG, id });
+    await store.delete({ id });
   }
 
   return {
@@ -456,7 +459,7 @@ export async function forgetAbsentDocuments(args: {
     }
     if (!gone) continue;
 
-    await args.store.delete({ collection: CLASS_USAGE_INDEX_SLUG, id: row.id });
+    await args.store.delete({ id: row.id });
     removed += 1;
   }
   return { removed };
