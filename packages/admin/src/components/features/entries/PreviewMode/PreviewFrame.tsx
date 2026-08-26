@@ -26,6 +26,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import { useRef } from "react";
 
 import { ExternalLink, Loader2, RefreshCw, X } from "@admin/components/icons";
 import {
@@ -33,6 +34,13 @@ import {
   type PreviewDocumentNoun,
 } from "@admin/hooks/useEntryPreview";
 
+import {
+  previewFrameFit,
+  previewFrameStyle,
+  type PreviewFit,
+} from "./previewFrameFit";
+import { PreviewViewportControl } from "./PreviewViewportControl";
+import { useMeasuredWidth } from "./useMeasuredWidth";
 import {
   PREVIEW_PANE_BLOCK_MESSAGES,
   type UsePreviewFrameResult,
@@ -50,6 +58,15 @@ export interface PreviewFrameProps extends UsePreviewFrameResult {
    * names a slug, which a Single always has and cannot be the problem with.
    */
   noun: PreviewDocumentNoun;
+  /**
+   * The viewport width the author asked for, or `null` to fill the pane.
+   *
+   * Held by the pane rather than here because choosing a width also WIDENS the
+   * split — the pane takes as much room as it is allowed before anything is
+   * scaled down — and the split is the pane's to move, not the frame's.
+   */
+  requestedWidth: number | null;
+  onRequestWidth: (width: number | null) => void;
 }
 
 export function PreviewFrame({
@@ -62,7 +79,24 @@ export function PreviewFrame({
   onClose,
   label,
   noun,
+  requestedWidth,
+  onRequestWidth,
 }: PreviewFrameProps) {
+  /*
+   * The area the frame is drawn into, measured rather than assumed. Its width
+   * is what decides whether a requested viewport fits, and it changes when the
+   * SPLIT moves — an event the window never reports, which is why this is a
+   * `ResizeObserver` on the box itself.
+   */
+  const viewport = useRef<HTMLDivElement>(null);
+  const available = useMeasuredWidth(viewport);
+  const fit = previewFrameFit(requestedWidth, available);
+
+  // A frame is on screen only in the last branch below. Offering a viewport
+  // control over a refusal message would be a control for something that is
+  // not there.
+  const showsFrame = reason === null && block === null && url !== null;
+
   return (
     <div className="flex h-full min-h-0 flex-col border-l border-border bg-muted/40">
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-3 py-2">
@@ -80,7 +114,14 @@ export function PreviewFrame({
           </span>
         )}
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-2">
+          {showsFrame && (
+            <PreviewViewportControl
+              requestedWidth={requestedWidth}
+              onRequestWidth={onRequestWidth}
+              fit={fit}
+            />
+          )}
           {isLoading && (
             <Loader2
               className="h-3.5 w-3.5 animate-spin text-muted-foreground"
@@ -131,37 +172,97 @@ export function PreviewFrame({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1">
-        {reason !== null ? (
-          /* The reason, not a generic failure. Each of these names something
-             the reader can act on, and the pane is the only place they will
-             see it — unlike the Preview button, which can raise a toast. */
-          <p className="p-6 text-sm text-muted-foreground">
-            {previewMessage(reason, noun)}
-          </p>
-        ) : block !== null ? (
-          /* Ahead of the `url === null` branch on purpose: a blocked pane HAS a
-             url — that is what makes the tab button beside this message the
-             remedy — so testing for a missing url first would render "Preparing
-             the preview…" forever over a pane that is not preparing anything. */
-          <p className="p-6 text-sm text-muted-foreground">
-            {PREVIEW_PANE_BLOCK_MESSAGES[block]}
-          </p>
-        ) : url === null ? (
-          <p className="p-6 text-sm text-muted-foreground">
-            Preparing the preview…
-          </p>
-        ) : (
-          <iframe
-            // Remounted rather than navigated: see `usePreviewFrame` on why a
-            // key beats appending a cache-buster the SITE would have to read.
-            key={reloadKey}
-            src={url}
-            title={`${label} preview`}
-            className="h-full w-full border-0 bg-background"
-          />
-        )}
+      {/* `overflow-hidden` because a frame wider than this box is drawn inside
+          it and scaled down: without clipping, the untransformed corners of a
+          scaled frame paint over the divider. Harmless while responsive, since
+          the frame is then exactly this size. */}
+      <div ref={viewport} className="min-h-0 flex-1 overflow-hidden">
+        <PreviewFrameBody
+          reason={reason}
+          block={block}
+          url={url}
+          reloadKey={reloadKey}
+          label={label}
+          noun={noun}
+          fit={fit}
+        />
       </div>
     </div>
+  );
+}
+
+/**
+ * What the frame's content area shows: one of three refusals, or the site.
+ *
+ * Split from the toolbar because they answer different questions and grow at
+ * different rates — the toolbar gained a viewport control, and carrying both in
+ * one component put it over the complexity gate. The ORDER of the branches is
+ * the load-bearing part and is preserved exactly, so this is a move rather than
+ * a rewrite.
+ */
+function PreviewFrameBody({
+  reason,
+  block,
+  url,
+  reloadKey,
+  label,
+  noun,
+  fit,
+}: {
+  reason: UsePreviewFrameResult["reason"];
+  block: UsePreviewFrameResult["block"];
+  url: string | null;
+  reloadKey: number;
+  label: string;
+  noun: PreviewDocumentNoun;
+  fit: PreviewFit;
+}) {
+  /* The reason, not a generic failure. Each of these names something the reader
+     can act on, and the pane is the only place they will see it — unlike the
+     Preview button, which can raise a toast. */
+  if (reason !== null) {
+    return (
+      <p className="p-6 text-sm text-muted-foreground">
+        {previewMessage(reason, noun)}
+      </p>
+    );
+  }
+
+  /* Ahead of the `url === null` branch on purpose: a blocked pane HAS a url —
+     that is what makes the tab button beside this message the remedy — so
+     testing for a missing url first would render "Preparing the preview…"
+     forever over a pane that is not preparing anything. */
+  if (block !== null) {
+    return (
+      <p className="p-6 text-sm text-muted-foreground">
+        {PREVIEW_PANE_BLOCK_MESSAGES[block]}
+      </p>
+    );
+  }
+
+  if (url === null) {
+    return (
+      <p className="p-6 text-sm text-muted-foreground">
+        Preparing the preview…
+      </p>
+    );
+  }
+
+  return (
+    <iframe
+      // Remounted rather than navigated: see `usePreviewFrame` on why a key
+      // beats appending a cache-buster the SITE would have to read.
+      key={reloadKey}
+      src={url}
+      title={`${label} preview`}
+      /*
+       * `h-full w-full` remains the base, and the derived style overrides it
+       * when a width was asked for. A responsive frame therefore needs no
+       * special case, and an unmeasured one fills the pane rather than flashing
+       * at a width nobody has confirmed.
+       */
+      className="h-full w-full border-0 bg-background"
+      style={previewFrameStyle(fit)}
+    />
   );
 }
