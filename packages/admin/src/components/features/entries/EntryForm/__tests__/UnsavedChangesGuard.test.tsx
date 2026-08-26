@@ -15,6 +15,18 @@ import {
   useLeaveWithoutWarning,
 } from "../UnsavedChangesGuard";
 
+/** Navigates to a NAMED destination, for tests that need two of them. */
+function GoTo({ path, label }: { path: string; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => window.history.pushState(null, "", path)}
+    >
+      {label}
+    </button>
+  );
+}
+
 /** Navigates the way the admin's own router does — by pushing history. */
 function GoElsewhere() {
   return (
@@ -142,6 +154,51 @@ describe("UnsavedChangesGuard", () => {
       await screen.findByRole("button", { name: /discard/i })
     );
     expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("still reports a refusal on the SECOND prompt, after a confirmed one", async () => {
+    // The guard stays mounted across a confirmed navigation — approving a
+    // dirty `?translate=` change keeps the same editor on screen — so whatever
+    // records "this close was confirmed" has to be spent by that close and not
+    // outlive it.
+    //
+    // It is easy to get wrong because the dialog is CONTROLLED: Radix reports
+    // the close the author caused but never reports the reopen, so a flag
+    // cleared on open is never cleared at all. The second "Keep Editing" then
+    // takes the confirmed path — no `cancelLeave`, no `onCancel`, and the
+    // dialog left on screen with no way out.
+    const onCancel = vi.fn();
+    render(
+      <UnsavedChangesGuard isDirty onCancel={onCancel}>
+        {/* Two DIFFERENT destinations. Pushing the same path twice is not a
+            second navigation, so the guard would never ask again and the test
+            would pass without exercising anything. */}
+        <GoTo path="/admin/first" label="first" />
+        <GoTo path="/admin/second" label="second" />
+      </UnsavedChangesGuard>
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "first" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /discard/i })
+    );
+    expect(onCancel).not.toHaveBeenCalled();
+
+    // Two deliberate windows sit between the attempts, and the second click has
+    // to clear BOTH or it is being ignored rather than answered:
+    //   - `confirmLeave` suppresses re-interception for 100ms, so the
+    //     navigation it just released is not caught by its own guard;
+    //   - the interceptor will not re-show the dialog within 500ms of the last
+    //     one (`lastDialogShownAt`), which stops a burst of pushes producing a
+    //     stack of prompts.
+    await new Promise(resolve => setTimeout(resolve, 600));
+
+    // Same mounted guard, a second attempt, refused this time.
+    await userEvent.click(screen.getByRole("button", { name: "second" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /keep editing/i })
+    );
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it("completes the navigation the author confirmed", async () => {

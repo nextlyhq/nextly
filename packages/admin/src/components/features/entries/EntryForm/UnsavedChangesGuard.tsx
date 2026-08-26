@@ -164,11 +164,19 @@ export function UnsavedChangesGuard({
   const confirmed = useRef(false);
 
   const handleOpenChange = (open: boolean): void => {
-    if (open) {
-      confirmed.current = false;
-      return;
-    }
-    if (confirmed.current) return;
+    if (open) return;
+    // Read and clear in the same breath, so the flag is spent by exactly the
+    // close it describes.
+    //
+    // Clearing it on OPEN instead does not work, and the reason is easy to miss:
+    // this dialog is controlled, so Radix reports a close the author caused but
+    // never reports the reopen, which `showDialog` does on its own. The flag
+    // would survive the first confirmed navigation — and on the NEXT prompt,
+    // "Keep Editing" would take the confirmed path, leaving `cancelLeave`
+    // uncalled and the dialog on screen with no way out.
+    const wasConfirmed = confirmed.current;
+    confirmed.current = false;
+    if (wasConfirmed) return;
     cancelLeave();
     onCancel?.();
   };
