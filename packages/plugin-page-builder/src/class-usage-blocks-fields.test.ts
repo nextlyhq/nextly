@@ -107,3 +107,68 @@ describe("two fields declared under one name", () => {
     expect(fields).toEqual([{ name: "content", localized: false }]);
   });
 });
+
+describe("a blocks field inside a group", () => {
+  it("is FOUND when the group is presentational (nameless)", () => {
+    // A group without a `name` stores nothing of its own — its children live at
+    // the parent path. So `item.content` resolves this exactly as it would a
+    // top-level declaration, and skipping it would leave the document's classes
+    // out of the index entirely: a class the page still renders would read as
+    // unused and could be deleted.
+    const fields = blocksFieldsOf([
+      { type: "text", name: "title" },
+      { type: "group", fields: [{ type: "blocks", name: "content" }] },
+    ]);
+
+    expect(fields).toEqual([{ name: "content", localized: false }]);
+  });
+
+  it("is NOT found when the group is named", () => {
+    // A named group nests its data under its own key, so the child is reachable
+    // only through a path neither this nor the rebuild resolves. Indexing it
+    // would file rows no rebuild could reconcile or sweep — the permanently
+    // stranded state.
+    //
+    // This is the control on the case above: without it, a walk that descended
+    // into EVERY group would satisfy that assertion just as well.
+    const fields = blocksFieldsOf([
+      {
+        type: "group",
+        name: "seo",
+        fields: [{ type: "blocks", name: "body" }],
+      },
+    ]);
+
+    expect(fields).toEqual([]);
+  });
+
+  it("descends through presentational groups nested in each other", () => {
+    const fields = blocksFieldsOf([
+      {
+        type: "group",
+        fields: [{ type: "group", fields: [{ type: "blocks", name: "deep" }] }],
+      },
+    ]);
+
+    expect(fields).toEqual([{ name: "deep", localized: false }]);
+  });
+
+  it("does not descend into a repeater", () => {
+    // A repeater's children are per-row, so there is no single parent path.
+    const fields = blocksFieldsOf([
+      { type: "repeater", fields: [{ type: "blocks", name: "row" }] },
+    ]);
+
+    expect(fields).toEqual([]);
+  });
+
+  it("terminates on a group that contains itself", () => {
+    // Configuration is author-supplied and can be cyclic. Without a bound this
+    // walk would spin, and the failure would be a hung save rather than a
+    // visible error.
+    const cyclic: Record<string, unknown> = { type: "group" };
+    cyclic.fields = [cyclic, { type: "blocks", name: "content" }];
+
+    expect(() => blocksFieldsOf([cyclic])).not.toThrow();
+  });
+});

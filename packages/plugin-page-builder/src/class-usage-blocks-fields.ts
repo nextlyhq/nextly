@@ -28,7 +28,40 @@
  * @module class-usage-blocks-fields
  */
 import type { BlocksFieldDescriptor } from "./class-usage-subjects";
-import { BLOCKS_TYPE } from "./fields/blocksField";
+import { isBlocksField } from "./fields/blocksHelper";
+
+/**
+ * A bound on how many field declarations one collection can contribute.
+ *
+ * Presentational groups nest, and the shape is author-supplied, so a cycle or a
+ * pathological depth would otherwise spin here. Sized so that reaching it means
+ * the configuration is wrong rather than large, and deliberately meaningless
+ * about how many fields a real collection has.
+ */
+const MAX_FIELDS_VISITED = 10_000;
+
+/**
+ * The children a NAMELESS group contributes to THIS level.
+ *
+ * A group without a `name` is presentational: it groups fields in the admin and
+ * stores nothing of its own, so its children live at the parent path. A blocks
+ * field inside one is reachable as `item[field]` exactly like a top-level
+ * declaration — so skipping it leaves that document's classes out of the index
+ * entirely, and a class it still renders reads as unused and can be deleted.
+ *
+ * A NAMED group is the opposite and stays excluded: it nests its data under its
+ * own key, so a child is reachable only through a path neither this nor the
+ * rebuild resolves. Same for a repeater, whose children are per-row. Descending
+ * into those would file rows no rebuild could reconcile or sweep.
+ */
+function presentationalChildren(value: unknown): readonly unknown[] | null {
+  if (typeof value !== "object" || value === null) return null;
+  const field = value as { type?: unknown; name?: unknown; fields?: unknown };
+  if (field.type !== "group") return null;
+  // A name is what makes a group store its own object. Absent, it is transparent.
+  if (field.name !== undefined) return null;
+  return Array.isArray(field.fields) ? field.fields : null;
+}
 
 /** Whether a configured field is one this index tracks. */
 function readBlocksField(value: unknown): BlocksFieldDescriptor | null {
@@ -38,7 +71,10 @@ function readBlocksField(value: unknown): BlocksFieldDescriptor | null {
     name?: unknown;
     localized?: unknown;
   };
-  if (field.type !== BLOCKS_TYPE) return null;
+  // The canonical guard rather than a second comparison against the type
+  // string. It answers this same question for every heterogeneous schema walk
+  // in this package, and two implementations of one question drift silently.
+  if (!isBlocksField(field)) return null;
   // A name is what the `field` column of every row holds, so a field without a
   // usable one has no addressable subject at all.
   if (typeof field.name !== "string" || field.name.length === 0) return null;
@@ -69,7 +105,21 @@ export function blocksFieldsOf(
   const found: BlocksFieldDescriptor[] = [];
   const seen = new Set<string>();
 
-  for (const field of fields) {
+  // Depth-first over a stack rather than recursion: the nesting is
+  // author-supplied, and a cycle must not take the process with it.
+  const pending: unknown[] = [...fields];
+  let visited = 0;
+
+  while (pending.length > 0 && visited < MAX_FIELDS_VISITED) {
+    visited += 1;
+    const field = pending.shift();
+
+    const children = presentationalChildren(field);
+    if (children !== null) {
+      pending.unshift(...children);
+      continue;
+    }
+
     const descriptor = readBlocksField(field);
     if (descriptor === null) continue;
     // A duplicate name is one subject, not two. Enumerating it twice would
