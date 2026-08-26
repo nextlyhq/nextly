@@ -28,18 +28,22 @@ const documentUsing = (...classes: string[]) => ({
 function recordingStore(stored: { id: string; classId: string }[] = []) {
   const calls: string[] = [];
   const store: ClassUsageIndexStore = {
-    // Stored rows are answered for whichever subject asks, which is enough
-    // here: each test drives one subject's removal at a time.
-    find: async () => ({
-      items: stored.map(row => ({
-        scope: "collection",
-        entity: "pages",
-        entityKey: "p1",
-        field: "content",
-        locale: "",
-        variant: "published",
-        ...row,
-      })),
+    // Rows are answered only for the subject that ASKS for them, read off the
+    // predicate. A fixture that served every subject the same rows would make
+    // one subject's reconciliation look like another's — and the assertions
+    // here are precisely about which subject did what.
+    find: async args => ({
+      items: (args.where.variant?.equals === "draft" ? stored : []).map(
+        row => ({
+          scope: "collection",
+          entity: "pages",
+          entityKey: "p1",
+          field: "content",
+          locale: "",
+          variant: "published",
+          ...row,
+        })
+      ),
       meta: { hasNext: false },
     }),
     create: async args => {
@@ -153,15 +157,19 @@ describe("enumerating the subjects one save owes", () => {
 });
 
 describe("a document that is not there in one locale or variant", () => {
-  it("reconciles that subject to ZERO rather than leaving its rows alone", async () => {
-    // The reader answers a DEFINITE absence: it names the document and the
-    // lifecycle state it asked for, and a read it could not perform raises
-    // instead of answering empty. So "no such variant" is knowledge.
+  it("leaves that subject's rows ALONE rather than reconciling against nothing", async () => {
+    // Absence cannot be made definite through any read available here: a list
+    // read applies `beforeOperation` and `beforeRead` regardless of
+    // `overrideAccess`, so a tenant scope or soft-delete filter withholds the
+    // row and the page comes back empty. Nothing distinguishes that from a
+    // document that is genuinely gone.
     //
-    // Leaving the rows is how a draft that was published or discarded keeps
-    // every class it once applied recorded forever, which blocks deleting a
-    // class the surviving document no longer uses.
-    const { store, calls } = recordingStore();
+    // The asymmetry decides it. Keeping a row that should have gone
+    // OVERCOUNTS: the UI warns, a deletion is refused, the next rebuild
+    // corrects it. Deleting one that should have stayed UNDERCOUNTS: the class
+    // reads as unused, safe-delete permits it, and the pages that render it
+    // lose it. Only one of those is recoverable.
+    const { store, calls } = recordingStore([{ id: "r1", classId: "old" }]);
 
     const report = await reconcileWrittenDocument({
       store,
@@ -177,37 +185,31 @@ describe("a document that is not there in one locale or variant", () => {
       limits: DEFAULT_LIMITS,
     });
 
-    // BOTH subjects were reconciled — the published one against its document,
-    // the absent draft against nothing.
-    expect(report).toMatchObject({ subjects: 2, reconciled: 2 });
-    expect(report.failures).toEqual([]);
-    // The published document's class was inserted. The draft subject had no
-    // stored rows in this fixture, so reconciling it to zero writes nothing —
-    // which is the correct no-op, not a skip.
-    expect(calls).toEqual(["create:hero"]);
+    expect(report).toMatchObject({ subjects: 2, reconciled: 1, absent: 1 });
+    // The stored row survives: nothing was deleted on the absent subject.
+    expect(calls).not.toContain("delete:r1");
   });
 
-  it("REMOVES the rows of a variant that has gone", async () => {
-    // The case the previous behaviour could not reach: a draft that was
-    // indexed and has since been published or discarded. Its stored rows have
-    // to go, or the classes it applied stay recorded against a document that
-    // no longer exists in that variant.
-    const { store, calls } = recordingStore([{ id: "r1", classId: "old" }]);
+  it("still reconciles the subjects that ARE present", async () => {
+    // The control: a walk that skipped everything on one absence would satisfy
+    // the case above while maintaining nothing.
+    const { store, calls } = recordingStore();
 
     await reconcileWrittenDocument({
       store,
-      read: async () => undefined,
+      read: async subject =>
+        subject.variant === "draft" ? undefined : documentUsing("hero"),
       collection: {
         slug: "pages",
         fields: [{ type: "blocks", name: "content" }],
-        hasDrafts: false,
+        hasDrafts: true,
       },
       documentId: "p1",
       locales: [],
       limits: DEFAULT_LIMITS,
     });
 
-    expect(calls).toContain("delete:r1");
+    expect(calls).toContain("create:hero");
   });
 });
 

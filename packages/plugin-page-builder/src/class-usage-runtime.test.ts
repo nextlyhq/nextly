@@ -37,6 +37,14 @@ const documentUsing = (...classes: string[]) => ({
 function recordingApi(overrides: Partial<ClassUsageDirectApi> = {}) {
   const calls: Record<string, unknown>[] = [];
   const api: ClassUsageDirectApi = {
+    findByID: async args => {
+      calls.push({ op: "findByID", ...args });
+      return {
+        id: "p1",
+        _isWorkingDraft: true,
+        content: documentUsing("hero"),
+      };
+    },
     find: async args => {
       calls.push({ op: "find", ...args });
       if (args.collection === "idx") {
@@ -76,20 +84,41 @@ const subject = (over: Partial<ClassUsageSubject> = {}): ClassUsageSubject => ({
 });
 
 describe("resolving a subject to its document", () => {
-  it("names the VARIANT through the lifecycle filter, not a draft flag", async () => {
-    // `findByID`'s `draft` option is documented as effective "only on a
-    // drafts-enabled, NON-LOCALIZED collection", and drafts and localization
-    // are not mutually exclusive — so on a localized collection it is inert and
-    // every draft subject would silently read the live row. `status` is
-    // authoritative and also constrains the localized companion's own
-    // `_status`, which is what makes a per-locale draft addressable.
+  it("reads a DRAFT through the detail path, which is the only sidecar-aware one", async () => {
+    // An already-published document keeps its main row at `published` and its
+    // pending edits in a sidecar. The list read filters the main table, so it
+    // returns nothing for such a document — and reading that as the draft's
+    // content records a pending draft as applying no classes at all. The
+    // overlay exists only on the by-id path.
     const { api, calls } = recordingApi();
-    const read = classUsageDocumentReader(api);
 
-    await read(subject({ variant: "published" }));
-    await read(subject({ variant: "draft" }));
+    await classUsageDocumentReader(api)(subject({ variant: "draft" }));
 
-    expect(calls.map(c => c.status)).toEqual(["published", "draft"]);
+    expect(calls[0]).toMatchObject({ op: "findByID", draft: true });
+  });
+
+  it("reads PUBLISHED through the lifecycle filter, which only the list read carries", async () => {
+    // The by-id path has no lifecycle parameter, so a published subject read
+    // that way would accept a document whose only row is a draft.
+    const { api, calls } = recordingApi();
+
+    await classUsageDocumentReader(api)(subject({ variant: "published" }));
+
+    expect(calls[0]).toMatchObject({ op: "find", status: "published" });
+  });
+
+  it("REFUSES a live row answered to a draft request", async () => {
+    // `draft: true` falls back to the live row when no pending draft exists.
+    // Accepting it files the published classes under a draft that is not there.
+    const { api } = recordingApi({
+      findByID: async () => ({ id: "p1", content: documentUsing("hero") }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "draft" })
+    );
+
+    expect(document).toBeUndefined();
   });
 
   it("sends NO locale for a shared field rather than the empty string", async () => {
@@ -141,16 +170,12 @@ describe("resolving a subject to its document", () => {
     expect(document).toEqual(documentUsing("hero"));
   });
 
-  it("answers nothing when the variant has no row", async () => {
-    // A DEFINITE absence: the query named the document and the lifecycle state,
-    // and a read it could not perform raises instead of answering empty.
+  it("answers nothing when the published row is absent", async () => {
     const { api } = recordingApi({
       find: async () => ({ items: [], meta: { hasNext: false } }),
     });
 
-    const document = await classUsageDocumentReader(api)(
-      subject({ variant: "draft" })
-    );
+    const document = await classUsageDocumentReader(api)(subject());
 
     expect(document).toBeUndefined();
   });

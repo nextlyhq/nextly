@@ -39,6 +39,16 @@ export interface ClassUsageDirectApi {
     depth?: number;
     overrideAccess?: boolean;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
+  findByID(args: {
+    collection: string;
+    id: string;
+    locale?: string;
+    fallbackLocale?: false | string;
+    draft?: boolean;
+    depth?: number;
+    disableErrors?: boolean;
+    overrideAccess?: boolean;
+  }): Promise<unknown>;
   create(args: {
     collection: string;
     data: Record<string, unknown>;
@@ -147,28 +157,70 @@ export function classUsageDocumentReader(
   nextly: ClassUsageDirectApi
 ): ClassUsageDocumentReader {
   return async (subject: ClassUsageSubject) => {
-    const page = await nextly.find({
-      collection: subject.entity,
-      where: { id: { equals: subject.entityKey } },
-      limit: 1,
-      // The LIFECYCLE filter, which is the authoritative way to name a variant
-      // and the only one that works everywhere. `findByID`'s `draft` flag is
-      // documented as effective "only on a drafts-enabled, NON-LOCALIZED
-      // collection", and drafts and localization are not mutually exclusive —
-      // so on a localized collection it is inert and every draft subject would
-      // silently read the live row. `status` also constrains the localized
-      // companion's own `_status`, which is what makes a per-locale draft
-      // addressable at all.
-      status: subject.variant,
-      ...localeOptions(subject),
-      // Rows derive from the stored blocks JSON. Populating relationships
-      // replaces ids with documents, changing the shape the derivation walks
-      // while adding reads a save does not need.
-      depth: 0,
-      ...AS_THE_SYSTEM,
-    });
-    return documentIn(page.items[0], subject);
+    const row =
+      subject.variant === "draft"
+        ? await readWorkingDraft(nextly, subject)
+        : await readPublished(nextly, subject);
+    return documentIn(row, subject);
   };
+}
+
+/**
+ * The pending working draft, which only the DETAIL read can produce.
+ *
+ * A document that is already published keeps its main row at `published` and
+ * its pending edits in a sidecar. The list read filters the main table, so it
+ * returns nothing for such a document — and reading "nothing" as the draft's
+ * content would record a pending draft as applying no classes at all.
+ *
+ * The overlay is implemented only on the by-id path (`includeWorkingDraft`,
+ * `collection-query-service.ts:2722`), so draft subjects go through it. The
+ * marker is what distinguishes an actual draft from the live row this call
+ * falls back to when no draft exists.
+ */
+async function readWorkingDraft(
+  nextly: ClassUsageDirectApi,
+  subject: ClassUsageSubject
+): Promise<unknown> {
+  const row = await nextly.findByID({
+    collection: subject.entity,
+    id: subject.entityKey,
+    draft: true,
+    ...localeOptions(subject),
+    depth: 0,
+    disableErrors: true,
+    ...AS_THE_SYSTEM,
+  });
+  if (typeof row !== "object" || row === null) return undefined;
+  // Without the marker this is the live row, not a draft. Answering it would
+  // file the published classes under a draft that does not exist.
+  return (row as Record<string, unknown>)._isWorkingDraft === true
+    ? row
+    : undefined;
+}
+
+/**
+ * The published row, read through the LIFECYCLE filter.
+ *
+ * The list read is used here because it is the only one that carries `status`,
+ * which is authoritative and also constrains a localized companion's own
+ * `_status`. The by-id path has no lifecycle parameter at all, so a published
+ * subject read that way would accept a document whose only row is a draft.
+ */
+async function readPublished(
+  nextly: ClassUsageDirectApi,
+  subject: ClassUsageSubject
+): Promise<unknown> {
+  const page = await nextly.find({
+    collection: subject.entity,
+    where: { id: { equals: subject.entityKey } },
+    limit: 1,
+    status: "published",
+    ...localeOptions(subject),
+    depth: 0,
+    ...AS_THE_SYSTEM,
+  });
+  return page.items[0];
 }
 
 /**
@@ -182,9 +234,7 @@ export function classUsageDocumentReader(
  * A real locale asks with FALLBACK OFF. Fallback is on by default, so a locale
  * with no translation resolves the field from its fallback chain — and filing
  * that document's classes under `subject.locale` gives a translation that does
- * not exist rows of its own. Every subject has to be derived from its own
- * stored translation or the per-locale model the reconciler and the rebuild
- * share stops being true.
+ * not exist rows of its own.
  */
 function localeOptions(subject: ClassUsageSubject): {
   locale?: string;
@@ -200,16 +250,7 @@ function localeOptions(subject: ClassUsageSubject): {
  * The row is the whole record; the document this subject is keyed by lives at
  * `record[field]`, which is where the rebuild reads it. Returning the record
  * instead derives NO rows at all — the derivation walks a top-level `nodes`
- * array and a record has none — so every class the document applies reads as
- * unused, which is the state that licences deleting one a page still renders.
- *
- * An absent row answers `undefined`, and that is a DEFINITE answer rather than
- * an unknown one: the query named this document and this lifecycle state, and
- * a read that could not be performed throws instead of answering empty. So the
- * subject reconciles to zero rows, which is what removes the rows of a draft
- * that has since been published or discarded. Leaving them would keep every
- * class that draft once applied recorded forever, blocking deletion of classes
- * the published document no longer uses.
+ * array and a record has none.
  */
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;

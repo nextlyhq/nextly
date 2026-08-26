@@ -178,17 +178,34 @@ async function reconcileOne(
   subject: ClassUsageSubject
 ): Promise<ClassUsageSubjectOutcome> {
   try {
-    // An absent document reconciles the subject to ZERO rather than being left
-    // alone. The reader answers a DEFINITE absence — it names the document and
-    // the lifecycle state it asked for, and a read it could not perform raises
-    // instead of answering empty — so "no such document in this variant and
-    // locale" is knowledge, not an unknown.
-    //
-    // Leaving those rows is how a draft that was published or discarded keeps
-    // every class it once applied recorded forever, which blocks deleting a
-    // class the surviving document no longer uses. The derivation answers no
-    // rows for an absent value, so this needs no branch of its own.
     const document = await args.read(subject);
+    // An absent document leaves this subject's rows ALONE.
+    //
+    // Absence cannot be made definite through any read available here. A list
+    // read applies `beforeOperation` and `beforeRead` regardless of
+    // `overrideAccess` — they settle the predicate before any seam touches it
+    // — so a tenant scope or a soft-delete filter withholds the row and the
+    // page comes back empty. Nothing distinguishes that from a document that
+    // is genuinely gone.
+    //
+    // The asymmetry decides it. Keeping a row that should have gone OVERCOUNTS
+    // a class: the UI warns, a deletion is refused, and the next rebuild
+    // corrects it. Deleting a row that should have stayed UNDERCOUNTS: the
+    // class reads as unused, the safe-delete check permits it, and the pages
+    // that render it lose it. One is a recoverable annoyance; the other is the
+    // data loss this index exists to prevent.
+    //
+    // Rows for a variant that has genuinely gone are removed by the rebuild's
+    // sweep, which walks the documents and can tell those apart.
+    if (document === undefined || document === null) {
+      return {
+        subject,
+        inserted: 0,
+        removed: 0,
+        undetermined: false,
+        absent: true,
+      };
+    }
 
     const report = await maintainClassUsage({
       store: args.store,

@@ -65,13 +65,23 @@ function harness(
     // used the collection service's inner `{ docs, hasNextPage }` payload and a
     // bare document, and every test passed while no index row was ever found
     // and no classes were ever derived.
-    find: vi.fn(async () => ({ items: [], meta: { hasNext: false } })),
+    find: vi.fn(async (a: { collection?: string }) =>
+      a.collection !== INDEX
+        ? {
+            items: [{ id: "p1", content: documentUsing("hero") }],
+            meta: { hasNext: false },
+          }
+        : { items: [], meta: { hasNext: false } }
+    ),
     findByID: vi.fn(async (args: { draft?: boolean }) => ({
       id: "p1",
       title: "unrelated",
       content: documentUsing("hero"),
       ...(args.draft === true ? { _isWorkingDraft: true } : {}),
     })),
+    // Both read shapes: drafts go through the detail path (the only
+    // sidecar-aware one), published through the list path (the only one
+    // carrying a lifecycle filter).
     create: vi.fn(async () => ({})),
     delete: vi.fn(async () => ({})),
   };
@@ -175,7 +185,12 @@ describe("the draft split it asks for", () => {
 
     await fire();
 
-    expect(api.findByID.mock.calls.map(c => c[0].draft)).toEqual([false, true]);
+    // The draft subject goes through the detail path; the published subject
+    // through the list path. One call each, to different readers.
+    expect(api.findByID).toHaveBeenCalledTimes(1);
+    expect(
+      api.find.mock.calls.filter(c => c[0].collection === "pages")
+    ).toHaveLength(1);
   });
 
   it("enumerates only the published variant when it does not", async () => {
@@ -187,7 +202,11 @@ describe("the draft split it asks for", () => {
 
     await fire();
 
-    expect(api.findByID.mock.calls.map(c => c[0].draft)).toEqual([false]);
+    // Published only: the list read is used, and the detail read is not.
+    expect(api.findByID).not.toHaveBeenCalled();
+    expect(
+      api.find.mock.calls.filter(c => c[0].collection === "pages")
+    ).toHaveLength(1);
   });
 });
 
@@ -231,9 +250,12 @@ describe("failure, on a write that has already committed", () => {
 
     await expect(fire()).rejects.toThrow(/1 of 2 subject\(s\)/);
 
-    // Both subjects were read, so the second was not skipped by the first
-    // failing.
-    expect(api.findByID).toHaveBeenCalledTimes(2);
+    // Both subjects were read — one through each path — so the second was not
+    // skipped by the first failing.
+    expect(api.findByID).toHaveBeenCalledTimes(1);
+    expect(
+      api.find.mock.calls.filter(c => c[0].collection === "pages")
+    ).toHaveLength(1);
     // And the detail reaches the logger, which the thrown summary cannot carry.
     expect(errors).toHaveLength(1);
   });
@@ -293,7 +315,6 @@ describe("a Single, which a wildcard registration also receives", () => {
       fire({ collection: "single:site-style" })
     ).resolves.toBeUndefined();
 
-    expect(api.findByID).not.toHaveBeenCalled();
     expect(api.create).not.toHaveBeenCalled();
     expect(errors).toEqual([]);
   });

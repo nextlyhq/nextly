@@ -45,8 +45,19 @@ A read that cannot be performed now RAISES instead of answering empty. Errors we
 for every unsuccessful result rather than for a missing row alone, so a failing read hook was
 indistinguishable from an absent document.
 
-Because absence is now a definite answer, a subject with no document reconciles to ZERO rather
-than being left alone. That is what removes the rows of a working draft that has since been
-published or discarded: leaving them kept every class that draft once applied recorded against
-a document that no longer exists in that variant, which blocks deleting a class the surviving
-document does not use.
+Each variant is read through the path that can answer for it. A DRAFT goes through the by-id
+read, because the pending working draft lives in a sidecar and only that path overlays it - an
+already-published document keeps its main row published, so a list read returns nothing for it
+and would record a pending draft as applying no classes at all. A PUBLISHED subject goes
+through the list read, because only that one carries the lifecycle filter; the by-id path has
+no lifecycle parameter, so it would accept a document whose only row is a draft.
+
+An absent document leaves that subject's rows ALONE. Absence cannot be made definite through
+any read available to a plugin: a list read applies `beforeOperation` and `beforeRead`
+regardless of access override, so a tenant scope or a soft-delete filter withholds the row and
+the page comes back empty, indistinguishable from a document that is gone. The asymmetry
+decides it - keeping a row that should have gone overcounts, so the UI warns, a deletion is
+refused, and the next rebuild corrects it; deleting one that should have stayed undercounts,
+so the class reads as unused, the safe-delete check permits it, and the pages that render it
+lose it. Only one of those is recoverable. Rows for a variant that has genuinely gone are
+removed by the rebuild's sweep, which walks the documents and can tell them apart.
