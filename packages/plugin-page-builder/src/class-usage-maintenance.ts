@@ -349,7 +349,7 @@ export async function maintainClassUsage(args: {
   store: ClassUsageIndexStore;
   subject: ClassUsageSubject;
   document: unknown;
-  limits?: DocumentLimits;
+  limits: DocumentLimits;
 }): Promise<ClassUsageMaintenanceReport> {
   const { store, subject } = args;
   const derivation = deriveClassUsageRows(subject, args.document, args.limits);
