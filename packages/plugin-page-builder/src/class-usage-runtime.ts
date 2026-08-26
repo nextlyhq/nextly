@@ -170,9 +170,10 @@ export function classUsageDocumentReader(
  * content would record a pending draft as applying no classes at all.
  *
  * The overlay is implemented only on the by-id path (`includeWorkingDraft`,
- * `collection-query-service.ts:2722`), so draft subjects go through it. The
- * marker is what distinguishes an actual draft from the live row this call
- * falls back to when no draft exists.
+ * `collection-query-service.ts:2722`), so draft subjects go through it. Three
+ * different rows come back through it — an overlaid draft, a never-published
+ * main row that is itself a draft, and the live row this falls back to when
+ * there is no draft at all — and `isDraftRow` is what tells them apart.
  */
 async function readWorkingDraft(
   nextly: ClassUsageDirectApi,
@@ -192,16 +193,39 @@ async function readWorkingDraft(
     // stale.
     //
     // Nothing is lost by dropping it: a document with no pending draft is a
-    // SUCCESSFUL read of the live row, which the marker check below refuses.
+    // SUCCESSFUL read of the live row, which the draft test below refuses.
     // Absence and failure were never the same answer here.
     ...AS_THE_SYSTEM,
   });
   if (typeof row !== "object" || row === null) return undefined;
-  // Without the marker this is the live row, not a draft. Answering it would
-  // file the published classes under a draft that does not exist.
-  return (row as Record<string, unknown>)._isWorkingDraft === true
-    ? row
-    : undefined;
+  return isDraftRow(row) ? row : undefined;
+}
+
+/**
+ * Whether a row read with `draft: true` is a draft at all.
+ *
+ * Two stored forms are drafts and only one of them is marked. A document that
+ * has been published and edited since keeps its main row at `published` and
+ * its pending edits in a sidecar; reading it overlays that sidecar and sets
+ * `_isWorkingDraft`, while leaving `status` at the live parent's value. There
+ * the marker is the only thing that names it.
+ *
+ * A document that has NEVER been published has no sidecar to overlay: its main
+ * row is itself the draft. Nothing is overlaid, so nothing sets the marker —
+ * `collection-query-service.ts:3378` sets it only when a draft was actually
+ * surfaced — and the row's own `status` is what says what it is. Requiring the
+ * marker refused exactly these documents, and the published read excludes them
+ * by definition, so a class used only on a page still being written was
+ * recorded under neither subject and a safe-delete check saw no usage for it.
+ *
+ * The live row this call falls back to fails both tests: it carries no marker
+ * and its status is `published`. The column is always there to be read, because
+ * a draft subject is enumerated only for a collection whose draft split
+ * resolved, and that requires `status: true`.
+ */
+function isDraftRow(row: object): boolean {
+  const record = row as Record<string, unknown>;
+  return record._isWorkingDraft === true || record.status === "draft";
 }
 
 /**

@@ -110,8 +110,14 @@ describe("resolving a subject to its document", () => {
   it("REFUSES a live row answered to a draft request", async () => {
     // `draft: true` falls back to the live row when no pending draft exists.
     // Accepting it files the published classes under a draft that is not there.
+    // The fixture carries the status a live row really has, so that refusing it
+    // has to be a decision about `published` rather than about a missing key.
     const { api } = recordingApi({
-      findByID: async () => ({ id: "p1", content: documentUsing("hero") }),
+      findByID: async () => ({
+        id: "p1",
+        status: "published",
+        content: documentUsing("hero"),
+      }),
     });
 
     const document = await classUsageDocumentReader(api)(
@@ -119,6 +125,27 @@ describe("resolving a subject to its document", () => {
     );
 
     expect(document).toBeUndefined();
+  });
+
+  it("reads a NEVER-PUBLISHED draft, whose main row carries no marker", async () => {
+    // Nothing was overlaid, so nothing set `_isWorkingDraft`: the main row is
+    // itself the draft and its own status says so. Requiring the marker read
+    // this document as absent while the published read excluded it by
+    // definition, so a class used only on a page still being written was
+    // recorded under neither subject and safe-delete reported no usage.
+    const { api } = recordingApi({
+      findByID: async () => ({
+        id: "p1",
+        status: "draft",
+        content: documentUsing("hero"),
+      }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "draft" })
+    );
+
+    expect(document).toEqual(documentUsing("hero"));
   });
 
   it("sends NO locale for a shared field rather than the empty string", async () => {

@@ -61,3 +61,13 @@ refused, and the next rebuild corrects it; deleting one that should have stayed 
 so the class reads as unused, the safe-delete check permits it, and the pages that render it
 lose it. Only one of those is recoverable. Rows for a variant that has genuinely gone are
 removed by the rebuild's sweep, which walks the documents and can tell them apart.
+
+A draft that has never been published records its classes. Two stored forms are drafts and
+only one of them is marked: a document published and edited since keeps its main row published
+and its pending edits in a sidecar, and reading it overlays that sidecar and marks the result,
+while a document that has never been published has no sidecar at all - its main row is itself
+the draft, nothing is overlaid, and nothing marks it. Requiring the mark refused exactly those
+documents, and the published read excludes them by definition, so a class used only on a page
+still being written was recorded under neither subject and the safe-delete check reported no
+usage for it. The row's own status now answers alongside the mark, and the live row a draft
+read falls back to still fails both tests.
