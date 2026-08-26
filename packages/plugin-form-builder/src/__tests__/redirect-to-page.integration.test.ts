@@ -977,6 +977,74 @@ describe("a target collection with the publish lifecycle", () => {
     expect(saved).toMatchObject({ item: { id: expect.any(String) } });
   });
 
+  it("lets the admin's whole-form save through when it did not move the target", async () => {
+    // The shipped save path, not a partial write. `FormBuilderView` spreads
+    // the entire `settings` object into every PATCH, so a rename carries the
+    // redirect it never touched. Judging that as a fresh choice made a form
+    // whose page was unpublished afterwards impossible to edit at all.
+    await bootWithDraftingPages();
+    const live = await page("published", "live-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("published", live),
+    })) as { item: { id: string } };
+
+    await current!.nextly.update({
+      collection: "pages",
+      id: live,
+      data: { status: "draft" },
+    });
+
+    const renamed = await current!.nextly.update({
+      collection: "forms",
+      id: created.item.id,
+      // Exactly what the admin sends: every field, settings included.
+      data: { ...formData("published", live), name: "Renamed" },
+    });
+    expect(renamed).toMatchObject({ item: { id: created.item.id } });
+  });
+
+  it("still refuses a whole-form save that MOVES the target to an unreachable page", async () => {
+    // The control for the test above. Without it, "unchanged targets pass"
+    // is satisfied just as well by a rule that stopped judging chosen targets
+    // altogether.
+    await bootWithDraftingPages();
+    const live = await page("published", "live-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("published", live),
+    })) as { item: { id: string } };
+
+    const draftTarget = await page("draft", "draft-page");
+    await expectRedirectRefusal(
+      current!.nextly.update({
+        collection: "forms",
+        id: created.item.id,
+        data: { ...formData("published", draftTarget), name: "Renamed" },
+      })
+    );
+  });
+
+  it("lets a whole-form save through when the unchanged target was deleted", async () => {
+    // Same exception, the harsher state: the page is gone rather than
+    // unpublished, and the author still has to be able to edit the form.
+    await bootWithDraftingPages();
+    const target = await page("draft", "draft-page");
+    const created = (await current!.nextly.create({
+      collection: "forms",
+      data: formData("draft", target),
+    })) as { item: { id: string } };
+
+    await current!.nextly.delete({ collection: "pages", id: target });
+
+    const renamed = await current!.nextly.update({
+      collection: "forms",
+      id: created.item.id,
+      data: { ...formData("draft", target), name: "Renamed" },
+    });
+    expect(renamed).toMatchObject({ item: { id: created.item.id } });
+  });
+
   it("refuses publishing a form whose stored target was deleted", async () => {
     // Stricter than the unpublished case refused above: every submission
     // resolves a deleted target to no redirect at all. Publishing is the

@@ -350,11 +350,20 @@ export function wouldStrandVisitors(
  * submissions.
  *
  * Distinct from {@link formAcceptsSubmissions}, which answers what the form
- * WILL be: this asks what the write itself does, which is what decides whether
- * an inherited target is any of its business.
+ * WILL be: this asks what the write CHANGES, which is what decides whether an
+ * inherited target is any of its business. A form that was already published
+ * is not made reachable again by an edit that merely restates its status.
  */
-function publishesForm(data: Record<string, unknown> | undefined): boolean {
-  return data?.status === "published";
+function publishesForm(
+  data: Record<string, unknown> | undefined,
+  originalData: Record<string, unknown> | undefined
+): boolean {
+  if (data?.status !== "published") return false;
+  // Already published before this write, so this write is not what makes the
+  // form reachable. The admin sends `status` on every save exactly as it sends
+  // `settings`, so reading the value alone treats every edit to a live form as
+  // the moment it went live.
+  return originalData?.status !== "published";
 }
 
 /**
@@ -373,12 +382,29 @@ function redirectReferenceForWrite(
   field: PickedDocumentField;
   chosen: boolean;
 } | null {
-  const chosen = assertRedirectTargetNamed(
+  const named = assertRedirectTargetNamed(
     context.data,
     context.operation,
     patterns
   );
-  if (chosen) return { ...chosen, chosen: true };
+  if (named) {
+    // NAMING a target is not CHOOSING one. The admin's save sends the whole
+    // `settings` object on every write — a rename carries the redirect it did
+    // not touch — so treating a mention as a choice made every unrelated save
+    // answer for a target the author never opened. Compared against what is
+    // stored: an unchanged reference is inherited, and only a write that moves
+    // it has chosen it.
+    const stored = storedRedirectReference(
+      context.originalData as Record<string, unknown> | undefined,
+      patterns
+    );
+    const unchanged =
+      stored !== null &&
+      stored.field === named.field &&
+      stored.reference.collection === named.reference.collection &&
+      stored.reference.id === named.reference.id;
+    return { ...named, chosen: !unchanged };
+  }
 
   // A write that REPLACES `settings` has answered the question: this form no
   // longer redirects to a page. Inheriting the old target there would refuse
@@ -471,7 +497,10 @@ export async function assertRedirectTargetUsable(
     // through while the milder one was refused.
     if (
       !chosen &&
-      !publishesForm(context.data as Record<string, unknown> | undefined)
+      !publishesForm(
+        context.data as Record<string, unknown> | undefined,
+        context.originalData as Record<string, unknown> | undefined
+      )
     ) {
       return;
     }
@@ -489,7 +518,10 @@ export async function assertRedirectTargetUsable(
   // answers for it whatever else it does.
   const judged =
     chosen ||
-    publishesForm(context.data as Record<string, unknown> | undefined);
+    publishesForm(
+      context.data as Record<string, unknown> | undefined,
+      context.originalData as Record<string, unknown> | undefined
+    );
 
   if (
     judged &&
