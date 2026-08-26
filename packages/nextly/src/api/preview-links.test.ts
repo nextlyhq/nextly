@@ -1159,10 +1159,84 @@ describe("mintPreviewLink", () => {
     // The canonical mutation envelope, so a direct-API caller reads `.item`.
     expect(Object.keys(body).sort()).toEqual(["item", "message"]);
     const item = body.item as Record<string, unknown>;
-    expect(Object.keys(item).sort()).toEqual(["expiresAt", "token", "url"]);
+    expect(Object.keys(item).sort()).toEqual([
+      "embeddable",
+      "expiresAt",
+      "token",
+      "url",
+    ]);
     // The token is a credential, not an address: it carries no host of its own,
     // and the `url` beside it is what puts one in front.
     expect(String(item.token)).not.toContain("http");
+    /*
+     * Asserted as a VALUE, not merely as a present key. This fixture mints from
+     * `http://x` for a site on `https://site.example` — a different host and a
+     * different scheme — so the honest answer is false, and a field that
+     * arrived `undefined` would satisfy a key-set assertion while telling the
+     * pane nothing.
+     */
+    expect(item.embeddable).toBe(false);
+  });
+
+  it("says the session reaches a frame when the site shares the admin's host", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "https://site.example" });
+
+    const body = await json(
+      await mintPreviewLink(
+        post(
+          { collection: "pages", entryId: "7" },
+          "https://site.example/api/nextly/preview-links"
+        )
+      )
+    );
+
+    expect((body.item as Record<string, unknown>).embeddable).toBe(true);
+  });
+
+  it("ignores the PORT, which same-site does too", async () => {
+    /*
+     * The case this answer exists to unlock, and the one the admin's own origin
+     * comparison refused: a contributor running the admin on :3000 against a
+     * site on :3100 is same-site, so the cookie reaches the frame and the pane
+     * can show it. Cookies are not port-scoped and neither is same-site.
+     */
+    getSettings.mockResolvedValue({ siteUrl: "http://localhost:3100" });
+
+    const body = await json(
+      await mintPreviewLink(
+        post(
+          { collection: "pages", entryId: "7" },
+          "http://localhost:3000/api/nextly/preview-links"
+        )
+      )
+    );
+
+    expect((body.item as Record<string, unknown>).embeddable).toBe(true);
+  });
+
+  it("takes the admin origin from the REQUEST, not from a header a caller sends", async () => {
+    /*
+     * The mint route is served by the admin, so its own URL names the admin's
+     * origin. A caller asserting a matching Origin must not be able to talk the
+     * server into calling a cross-site frame embeddable — it decides only
+     * whether a pane or a tab is offered, but an answer that moves with a
+     * caller-supplied header is not an answer.
+     */
+    getSettings.mockResolvedValue({ siteUrl: "https://site.example" });
+
+    const request = new Request("http://x/api/nextly/preview-links", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://site.example",
+        Referer: "https://site.example/admin",
+      },
+      body: JSON.stringify({ collection: "pages", entryId: "7" }),
+    });
+
+    const body = await json(await mintPreviewLink(request));
+
+    expect((body.item as Record<string, unknown>).embeddable).toBe(false);
   });
 
   it("refuses a ttl beyond the maximum rather than shortening it", async () => {

@@ -48,6 +48,7 @@ import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
+import { previewSessionReachesFrame } from "../runtime/preview/preview-frame-policy";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
@@ -425,6 +426,16 @@ async function respondWithPreviewLink(
    * forgot it would render under none at all.
    */
   minter: string,
+  /**
+   * The origin the admin is being served from, taken from THIS request rather
+   * than from anything the caller sent.
+   *
+   * The mint route is served by the admin, so its own URL names the admin's
+   * origin — no header to trust and nothing for a caller to assert. It decides
+   * only whether the pane is offered a frame or a new tab, so a wrong value
+   * costs a fallback rather than access to anything.
+   */
+  adminOrigin: string,
   ttlSeconds?: number
 ): Promise<Response> {
   const generation = await (
@@ -493,6 +504,17 @@ async function respondWithPreviewLink(
     token,
     url,
     expiresAt: expiresAt.toISOString(),
+    /*
+     * Answered HERE because this is where both halves are known: the site's
+     * address, and the policy the preview cookie is set with. The admin used to
+     * compare the two origins itself, which was a second implementation of a
+     * question the cookie already settles — correct only while nobody changed
+     * the cookie, and wrong silently when someone did.
+     *
+     * It says the SESSION reaches a frame, not that the frame will load: an
+     * application's own `frame-ancestors` is invisible from here.
+     */
+    embeddable: previewSessionReachesFrame(url, adminOrigin),
   });
 }
 
@@ -714,6 +736,7 @@ async function mintForSingle(
   return respondWithPreviewLink(
     { kind: "single", single, ...(locale === undefined ? {} : { locale }) },
     auth.userId,
+    new URL(req.url).origin,
     ttlSeconds
   );
 }
@@ -864,6 +887,7 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   return respondWithPreviewLink(
     { collection, entryId, ...(locale === undefined ? {} : { locale }) },
     auth.userId,
+    new URL(req.url).origin,
     ttlSeconds
   );
 });

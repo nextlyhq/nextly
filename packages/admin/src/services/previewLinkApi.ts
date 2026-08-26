@@ -61,6 +61,21 @@ export interface PreviewLink {
   url: string | null;
   /** ISO timestamp after which the link stops working. */
   expiresAt: string;
+  /**
+   * Whether a browser showing this admin will carry the preview session into a
+   * FRAME pointed at `url`.
+   *
+   * Answered by the server for the same reason `url` is: only it can see both
+   * halves. The site's address is one, and the attribute the preview cookie is
+   * set with is the other — and that attribute is what decides whether the
+   * session survives being framed. The browser comparing the two origins itself
+   * was a second implementation of a question the cookie already settles, right
+   * only while nobody changed the cookie.
+   *
+   * It says the SESSION reaches a frame, not that the frame will LOAD. An
+   * application's own `frame-ancestors` is invisible from the server.
+   */
+  embeddable: boolean;
 }
 
 export const previewLinkApi = {
