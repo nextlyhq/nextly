@@ -28,8 +28,14 @@
 
 A plugin can now ask whether a collection stores a working draft beside its published row.
 
-`schemaDraftSplit(collection)` was already how the framework itself answers that question; it
-was reachable from no public entry, so a plugin had two options and both were wrong. It could
+`collectionDraftSplit(collection)` answers it, and takes the collection AS AUTHORED - so
+`versions: true` and `versions: { drafts: true }` both work, rather than the resolved
+`{ drafts: { enabled } }` shape that only exists after config load and that nobody writes by
+hand. It is published through `@nextlyhq/plugin-sdk`, which is the surface a plugin may
+depend on.
+
+The framework already answered this question internally; it was reachable from no public
+entry, so a plugin had two options and both were wrong. It could
 guess from `status: true` - the obvious flag, and true for collections that store no draft at
 all - or it could reimplement the five conditions the split really resolves from: versioning
 resolving `drafts.enabled`, `status: true`, no reachable password field, every reachable

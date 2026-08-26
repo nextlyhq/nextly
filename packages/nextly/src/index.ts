@@ -561,16 +561,19 @@ export type { BatchOperationResult } from "./domains/collections/services/collec
 // The reason travels with the verdict rather than being reduced to a boolean,
 // so a caller can say WHY a collection it expected to draft does not.
 //
-// `schemaDraftSplit` rather than the lower-level predicate beside it: that one
-// takes an already-assembled input including resolved component schemas, which
-// is the work rather than the question. This takes the collection.
+// `collectionDraftSplit` takes the collection AS AUTHORED. The two functions
+// beside it do not: one wants component schemas already resolved, the other
+// wants `versions` in the `{ drafts: { enabled } }` shape that only exists
+// after config load. An author writes `versions: true`, and handing that to
+// either is rejected by the checker — or, from untyped code, silently answers
+// `false` for a collection whose drafts are on.
 //
 // Root entry, not `nextly/config`: this reaches the component registry through
 // the DI container, and `config` is a CLIENT entry — publishing it there would
 // pull the server graph into a browser bundle.
-export { schemaDraftSplit } from "./domains/versions/draft-split-eligibility";
+export { collectionDraftSplit } from "./domains/versions/draft-split-eligibility";
 export type {
-  SchemaEligibilityCollection,
+  AuthoredDraftSplitCollection,
   DraftSplitEligibility,
   DraftSplitDisabledReason,
 } from "./domains/versions/draft-split-eligibility";

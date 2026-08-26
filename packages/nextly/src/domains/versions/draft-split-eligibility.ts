@@ -25,8 +25,10 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import type { VersionsConfig } from "../../schemas/versions/types";
 import { hasPasswordField } from "../../shared/lib/password-fields";
 
+import { resolveVersionsConfig } from "./resolve-config";
 import type { ComponentSchemas } from "./restore-snapshot";
 import { resolveComponentSchemas } from "./restore-version";
 
@@ -132,7 +134,12 @@ export function evaluateDraftSplitEligibility(
       componentSlug: withPassword[0],
     };
   }
-  return ELIGIBLE;
+  // A FRESH object rather than the shared constant. Every eligible caller would
+  // otherwise hold the same reference, so one of them mutating its verdict
+  // would change every later eligible verdict for the lifetime of the process —
+  // including the ones the schema and mutation paths read. Cheap here because
+  // the object has three fields and this runs once per eligibility question.
+  return { ...ELIGIBLE };
 }
 
 /**
@@ -259,4 +266,48 @@ export async function schemaDraftsEnabled(
   collection: SchemaEligibilityCollection
 ): Promise<boolean> {
   return (await schemaDraftSplit(collection)).eligible;
+}
+
+/**
+ * A collection as its AUTHOR wrote it, before anything resolved the shorthand.
+ *
+ * This is what a plugin holds. `versions` accepts the authored forms — `true`,
+ * where drafts default on, and `{ drafts: true }` — rather than the resolved
+ * `{ drafts: { enabled } }` shape that only exists after config load.
+ */
+export interface AuthoredDraftSplitCollection {
+  status?: boolean;
+  versions?: boolean | VersionsConfig;
+  /** Top-level fields, in their ORIGINAL (un-enriched) form. */
+  fields: FieldConfig[];
+  /** Names the entity in the warning an unresolvable component emits. */
+  slug?: string;
+}
+
+/**
+ * Whether a collection stores a working draft beside its published row, asked
+ * of the collection a caller actually has.
+ *
+ * The public form of this question. `schemaDraftSplit` beside it takes
+ * `versions` already resolved, which is the shape config load produces and NOT
+ * the shape anybody writes: an author writes `versions: true` or
+ * `{ drafts: true }`, and handing either to the resolved form is rejected by
+ * the checker — or, from untyped code, silently answers `false` for a
+ * collection whose drafts are enabled, because nothing named `drafts.enabled`
+ * is there to read.
+ *
+ * The shorthand is expanded through `resolveVersionsConfig`, which is what
+ * config load itself uses. Expanding it here instead would be a second
+ * implementation of what `versions: true` means, and the two would agree until
+ * one of them changed.
+ */
+export async function collectionDraftSplit(
+  collection: AuthoredDraftSplitCollection
+): Promise<DraftSplitEligibility> {
+  return schemaDraftSplit({
+    status: collection.status,
+    versions: resolveVersionsConfig(collection.versions, collection.status),
+    fields: collection.fields,
+    slug: collection.slug,
+  });
 }
