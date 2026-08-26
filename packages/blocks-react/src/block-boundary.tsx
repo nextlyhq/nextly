@@ -211,15 +211,41 @@ function propMarker(
   };
 }
 
-// Merges several independently-gated field sources onto one element's props —
-// the author's allowed attributes, the modelled `cssId`, and now two
-// editor-only markers — so this boundary carries one conditional per source
-// rather than disorganized branching. Splitting the sources into separate
-// functions would move that count rather than remove it, and each split-out
-// piece would still need the same node and the same `nodeAttribute` gate in
-// scope. The parameter and branch counts here track how many things an
-// element can carry, not incidental complexity.
-// fallow-ignore-next-line complexity
+/**
+ * Applies the two editor-only markers to an element's attribute bag, in the
+ * order that keeps the node address last.
+ *
+ * Split out of `withNodeAttributes` so the two markers read as one small,
+ * obviously-total step: every branch here is gated on `nodeAttribute`, so
+ * this function's own count stays fixed regardless of how many editor
+ * markers exist, while the merge of author-set fields in `withNodeAttributes`
+ * is where that function's complexity actually comes from.
+ */
+function applyEditorMarkers(
+  extra: Record<string, string>,
+  node: BlockNode,
+  nodeAttribute: boolean,
+  declaresSlots: boolean
+): void {
+  // Before the node address rather than after it, so the two editor markers
+  // sit together and the "LAST, so it cannot be overwritten" reasoning below
+  // still describes the line it is attached to.
+  if (nodeAttribute && declaresSlots) extra[SLOTS_ATTRIBUTE] = "";
+  /*
+   * LAST, so it cannot be overwritten. This was written first, with a
+   * comment saying that made it safe — the opposite of what the code did:
+   * the author's loop in `withNodeAttributes` ran afterwards and assigning
+   * the same key simply replaced it. A document could therefore hand every
+   * block the same address, or one block another's, and the editor's
+   * hit-testing reads exactly this value to decide which block was clicked.
+   *
+   * It is the editor's address for a node, not a value the document may
+   * set, so the position enforces that rather than a note asking the loop
+   * above to.
+   */
+  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = node.id;
+}
+
 function withNodeAttributes(
   output: ReactNode,
   node: BlockNode,
@@ -283,22 +309,7 @@ function withNodeAttributes(
   // The modelled field wins over an attribute of the same name: `cssId` is what
   // the editor writes, and the attribute bag is the escape hatch beside it.
   if (cssId !== undefined) extra.id = cssId;
-  // Before the node address rather than after it, so the two editor markers sit
-  // together and the "LAST, so it cannot be overwritten" reasoning below still
-  // describes the line it is attached to.
-  if (nodeAttribute && declaresSlots) extra[SLOTS_ATTRIBUTE] = "";
-  /*
-   * LAST, so it cannot be overwritten. This was written first, with a comment
-   * saying that made it safe — the opposite of what the code did: the author's
-   * loop ran afterwards and assigning the same key simply replaced it. A
-   * document could therefore hand every block the same address, or one block
-   * another's, and the editor's hit-testing reads exactly this value to decide
-   * which block was clicked.
-   *
-   * It is the editor's address for a node, not a value the document may set, so
-   * the position enforces that rather than a note asking the loop above to.
-   */
-  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = node.id;
+  applyEditorMarkers(extra, node, nodeAttribute, declaresSlots);
 
   return Object.keys(extra).length > 0 ? cloneElement(output, extra) : output;
 }
