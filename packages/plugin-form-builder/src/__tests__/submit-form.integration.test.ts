@@ -246,3 +246,69 @@ describe("submitForm end-to-end", () => {
     expect(stored.items).toHaveLength(1);
   });
 });
+
+describe("what a form that is not taking submissions says", () => {
+  /** Boots a form in the given state and submits to it. */
+  async function submitTo(status: string, extra: Record<string, unknown> = {}) {
+    const fb = formBuilder({
+      spamProtection: { honeypot: false, recaptcha: { enabled: false } },
+    });
+    const probe = contextProbe("@test/fb-closed");
+    current = await createTestNextly({ plugins: [fb.plugin, probe.plugin] });
+
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status,
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        ...extra,
+      },
+    });
+
+    return submitForm(
+      { formSlug: "contact", data: { message: "hello" } },
+      { pluginContext: probe.get(), pluginConfig: fb.config }
+    );
+  }
+
+  it("relays the message the author wrote for a CLOSED form", async () => {
+    // The field existed, was stored, and was read by nothing: every
+    // non-published form answered with one fixed sentence, so the box in the
+    // admin changed nothing an author or a visitor could see.
+    const result = await submitTo("closed", {
+      closedMessage:
+        "Applications closed on 31 March. Try again in the autumn.",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(
+      "Applications closed on 31 March. Try again in the autumn."
+    );
+  });
+
+  it("falls back to the generic sentence when a closed form has no message", async () => {
+    // Blank is not an instruction. An author who cleared the box gets the
+    // default rather than an empty explanation.
+    const result = await submitTo("closed", { closedMessage: "   " });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(
+      "This form is not currently accepting submissions"
+    );
+  });
+
+  it("says nothing specific about a DRAFT", async () => {
+    // A draft has never been public. There is no author intent to relay, and
+    // nothing here should distinguish it from a form that does not exist.
+    const result = await submitTo("draft", {
+      closedMessage: "Applications closed on 31 March.",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(
+      "This form is not currently accepting submissions"
+    );
+  });
+});

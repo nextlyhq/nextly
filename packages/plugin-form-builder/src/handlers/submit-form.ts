@@ -133,6 +133,28 @@ export interface SubmitFormContext {
  * }
  * ```
  */
+/**
+ * What to tell someone whose submission a form will not take.
+ *
+ * A CLOSED form is one an author deliberately stopped, and the collection
+ * gives them a message to explain why — a deadline that passed, a role that is
+ * filled. It was stored and never read: this path answered every non-published
+ * form with one fixed sentence, so the box in the admin changed nothing an
+ * author or a visitor could see.
+ *
+ * A DRAFT gets the generic sentence. It has never been public, so there is no
+ * author intent to relay and nothing about it should confirm it exists.
+ */
+function closedFormMessage(form: FormDocument): string {
+  const generic = "This form is not currently accepting submissions";
+  if (form.status !== "closed") return generic;
+
+  const authored = (form as { closedMessage?: unknown }).closedMessage;
+  return typeof authored === "string" && authored.trim()
+    ? authored.trim()
+    : generic;
+}
+
 export async function submitForm(
   options: SubmitFormOptions,
   context: SubmitFormContext
@@ -164,7 +186,7 @@ export async function submitForm(
       });
       return {
         success: false,
-        error: "This form is not currently accepting submissions",
+        error: closedFormMessage(form),
       };
     }
 

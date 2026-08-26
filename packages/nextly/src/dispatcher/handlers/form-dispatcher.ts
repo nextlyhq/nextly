@@ -85,34 +85,40 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Form slug");
 
+      // Fetched by slug alone, then judged here. A status filter would answer
+      // 404 for a CLOSED form as readily as for one that never existed, and
+      // those are different answers: a visitor following a link to a closed
+      // form is owed the reason the author wrote.
       const result = await svc.collectionsHandler.listEntries({
         collectionName: "forms",
         limit: 1,
-        where: {
-          and: [
-            { slug: { equals: slug } },
-            { status: { equals: "published" } },
-          ],
-        },
+        where: { slug: { equals: slug } },
       });
       const paginated = unwrapServiceResult<PaginatedShape>(result, {
         scope: "forms-get-by-slug",
         slug,
       });
 
-      const docs = paginated.docs;
-      if (!docs || docs.length === 0) {
+      const doc = paginated.docs?.[0] as { status?: unknown } | undefined;
+
+      // A DRAFT has never been public, so its address answers exactly as an
+      // unused one does. Only a form that HAS been public explains itself:
+      // telling a caller who already holds the slug why it stopped accepting
+      // submissions discloses nothing they did not have, while answering the
+      // same way from the listing would let anyone enumerate slugs by probing.
+      // The listing above is unchanged and still shows published forms only.
+      if (!doc || (doc.status !== "published" && doc.status !== "closed")) {
         // §13.8: identifier (slug) belongs in logContext only.
         throw NextlyError.notFound({
           logContext: {
             entity: "form",
             slug,
-            reason: "not-found-or-unpublished",
+            reason: "not-found-or-never-published",
           },
         });
       }
 
-      return respondDoc(docs[0]);
+      return respondDoc(doc);
     },
   },
 
@@ -171,8 +177,7 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
       const form = forms[0] as FormRecord;
 
       // Validate required fields.
-      const errors: Array<{ path: string; code: string; message: string }> =
-        [];
+      const errors: Array<{ path: string; code: string; message: string }> = [];
       for (const field of form.fields || []) {
         const value = submissionData.data[field.name];
         if (

@@ -90,7 +90,12 @@ describe("dispatchForms, paginated lists (respondList)", () => {
 
 describe("dispatchForms, single-doc reads (respondDoc)", () => {
   it("getFormBySlug returns bare doc body", async () => {
-    const fakeForm = { id: "f1", slug: "contact", fields: [] };
+    const fakeForm = {
+      id: "f1",
+      slug: "contact",
+      status: "published",
+      fields: [],
+    };
     const handler: CollectionsHandlerLike = {
       listEntries: vi.fn().mockResolvedValue({
         success: true,
@@ -131,9 +136,7 @@ describe("dispatchForms, actions (respondAction)", () => {
     const fakeForm = {
       id: "f1",
       slug: "contact",
-      fields: [
-        { name: "email", label: "Email", type: "text", required: true },
-      ],
+      fields: [{ name: "email", label: "Email", type: "text", required: true }],
       settings: { successMessage: "Thanks for reaching out!" },
     };
     const fakeSubmission = { id: "s1" };
@@ -198,9 +201,7 @@ describe("dispatchForms('submitForm'), validation errors", () => {
     const fakeForm = {
       id: "f1",
       slug: "contact",
-      fields: [
-        { name: "email", label: "Email", type: "text", required: true },
-      ],
+      fields: [{ name: "email", label: "Email", type: "text", required: true }],
       settings: { successMessage: "Thanks!" },
     };
     const handler: CollectionsHandlerLike = {
@@ -295,5 +296,65 @@ describe("dispatchForms('submitForm'), validation errors", () => {
     // The dispatcher must short-circuit before any service calls.
     expect(handler.listEntries).not.toHaveBeenCalled();
     expect(handler.createEntry).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchForms, what a form's own address answers", () => {
+  const paginated = (docs: unknown[]) => ({
+    success: true,
+    statusCode: 200,
+    message: "ok",
+    data: {
+      docs,
+      totalDocs: docs.length,
+      limit: 1,
+      page: 1,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPrevPage: false,
+    },
+  });
+
+  const askFor = async (docs: unknown[]) => {
+    const handler: CollectionsHandlerLike = {
+      listEntries: vi.fn().mockResolvedValue(paginated(docs)),
+      createEntry: vi.fn(),
+    };
+    wireHandler(handler);
+    return dispatchForms(
+      makeContainer(handler),
+      "getFormBySlug",
+      { slug: "contact" },
+      undefined
+    );
+  };
+
+  it("answers a CLOSED form with the reason its author wrote", async () => {
+    // Someone following a link to a form that has stopped taking submissions
+    // is owed the explanation. They already hold the slug, so telling them
+    // discloses nothing they did not have.
+    const closed = {
+      id: "f1",
+      slug: "contact",
+      status: "closed",
+      closedMessage: "Applications closed on 31 March.",
+      fields: [],
+    };
+
+    const response = (await askFor([closed])) as Response;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(closed);
+  });
+
+  it("answers a DRAFT exactly as it answers a slug nobody used", async () => {
+    // A draft has never been public, so its address must not confirm it
+    // exists — otherwise the endpoint becomes a way to discover unreleased
+    // forms one guess at a time.
+    const draft = { id: "f1", slug: "contact", status: "draft", fields: [] };
+
+    await expect(askFor([draft])).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(askFor([])).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
