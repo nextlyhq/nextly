@@ -26,27 +26,33 @@
 "@nextlyhq/ui": patch
 ---
 
-Validation rules are now edited the same way everywhere, and a plugin's own
-field types finally get them.
+Validation rules are now edited the same way everywhere, and the form builder
+stops offering rules it cannot enforce.
 
 The schema builder and the form builder each drew their own validation editor.
 They had drifted: different labels, different help text, and different ideas
 about which rules a field even accepts. The form builder decided that by
 listing type names — text and textarea get length limits, number gets min and
-max — which meant a field type contributed by a plugin matched none of the
-names and was offered no validation at all. Both now ask the same question of
-the same place, so a plugin's field type is offered exactly what its storage
-entitles it to.
+max — so a field type it had not been written to know about matched none of the
+names. Both surfaces now ask the same question of the same place.
 
-Fields that exist only inside a form — URL, phone, time and hidden — were also
-being offered almost nothing, because they are not part of the core field list
-that answers this question. They store text, so they now get the rules text
-gets. A URL field with no pattern option was the most obvious casualty.
+Fields that exist only inside a form — URL, phone, time and hidden — were being
+offered almost nothing, because they are not part of the core field list that
+answers this question. They store text, so they are now understood as text. A
+URL field with no pattern option was the most obvious casualty.
 
-The form builder no longer offers a rule it cannot enforce. It previously
-described a set of rules that did not quite match what its own validator
-checks, and a limit that is stored but never applied is worse than no limit at
-all: the author believes the form is guarded when it is not.
+The form builder now offers each field type exactly the rules its own validator
+reads back for that type, which is narrower than it sounds and is the point. A
+date accepts minimum and maximum values, and the form's validator reads those
+from a different place — so offering them here would store a bound nothing
+consults. The same was true of length limits on email, phone and URL fields, a
+pattern on a textarea, and every rule on time and hidden fields. A limit that is
+stored but never applied is worse than no limit at all, because the author
+believes the form is guarded when it is not.
+
+The message shown when a value fails no longer says it describes the pattern.
+In a form it is used for required, length and format failures too, so copy
+written for one rule was appearing for others.
 
 Plugin authors can build the same editor into their own admin pages —
 `ValidationRulesEditor` is published through `@nextlyhq/plugin-sdk/admin`,

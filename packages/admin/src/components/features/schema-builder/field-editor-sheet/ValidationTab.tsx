@@ -35,6 +35,9 @@ export function ValidationTab({ field, readOnly = false, onChange }: Props) {
         field.type,
         pluginFieldTypeStorage(branding.plugins, field.type)
       )}
+      // Core applies this message to the pattern rule, so naming it here tells
+      // the author which failure they are writing copy for.
+      messageDescribes="pattern"
       value={validation}
       disabled={readOnly}
       onChange={next =>

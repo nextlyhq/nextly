@@ -44,7 +44,7 @@ import type {
   RadioFormField,
 } from "../../../types";
 import { isKnownFormField } from "../../../types";
-import { ENFORCED_VALIDATION_RULES } from "../../../utils/generate-schema";
+import { enforcedValidationRules } from "../../../utils/enforced-validation";
 
 import { ConditionalLogicEditor } from "./ConditionalLogicEditor";
 
@@ -480,18 +480,19 @@ function ValidationTab({
     () => field.validation ?? {},
     [field.validation]
   );
-  // What the type MEANS, narrowed to what this runtime actually enforces.
-  // Core offers a textarea `minRows`/`maxRows`; the schema generator has no
-  // clause for them, and a control storing a bound nothing reads is worse than
-  // no control — the author believes the rule is in force. Both halves are
-  // asked rather than restated, so neither can drift behind the other.
-  const allowed = useMemo(
-    () =>
-      validationRulesForFieldType(field.type).filter(rule =>
-        (ENFORCED_VALIDATION_RULES as readonly string[]).includes(rule)
-      ),
-    [field.type]
-  );
+  // What the type MEANS, narrowed to what this runtime enforces FOR THAT TYPE.
+  // Both halves are asked rather than restated, so neither can drift behind the
+  // other. The narrowing has to be per type: a single set of enforced rules
+  // only says a rule is honoured somewhere, which would offer `min`/`max` on a
+  // date whose schema reads its bounds from `field.min`/`field.max` and never
+  // consults `validation` — a control storing a bound nothing reads, which is
+  // worse than no control because the author believes the rule is in force.
+  const allowed = useMemo(() => {
+    const enforced = enforcedValidationRules(field.type);
+    return validationRulesForFieldType(field.type).filter(rule =>
+      enforced.includes(rule)
+    );
+  }, [field.type]);
 
   const applyRules = useCallback(
     (next: Partial<ValidationRuleValues>) => {
