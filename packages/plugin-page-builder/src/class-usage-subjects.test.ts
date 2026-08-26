@@ -114,15 +114,11 @@ describe("the full product", () => {
     // fields with different localization is the smallest fixture where a wrong
     // nesting produces a wrong COUNT rather than a wrong order.
     //
-    // This fixture combines locales AND drafts, which core does not currently
-    // permit together: the draft/publish split requires the collection to be
-    // non-localized, so a real collection has at most one of the two dimensions
-    // above one. Stated rather than left to be assumed, because a reader would
-    // otherwise take this case as evidence about a configuration that can
-    // occur. It is kept because the enumeration must not depend on that
-    // constraint holding — a function that is only correct while a rule
-    // elsewhere is enforced fails silently the day the rule is relaxed, and
-    // nothing here would notice.
+    // Locales AND drafts together is a REACHABLE configuration. The draft split
+    // does not ask whether a document is localized — a snapshot holds exactly
+    // one locale's values and the draft is keyed by that locale — so both
+    // dimensions can exceed one at once and this is the ordinary case rather
+    // than a defensive one.
     const subjects = classUsageSubjectsFor({
       ...base,
       fields: [localized, { name: "sidebar", localized: false }],
