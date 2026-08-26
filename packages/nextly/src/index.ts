@@ -578,6 +578,29 @@ export type {
   DraftSplitDisabledReason,
 } from "./domains/versions/draft-split-eligibility";
 
+// The same question asked of a collection the SCHEMA BUILDER created, whose
+// record is not authored config.
+//
+// A Builder collection lives in the dynamic registry, and that registry stores
+// `versions` already RESOLVED — `dynamic_collections.versions` holds a
+// `ResolvedVersionsConfig`. So the authored form above is the one shape it can
+// never take: the checker rejects it, and untyped code gets `false` for a
+// collection whose drafts are on, because nothing named `drafts.enabled` is
+// read. A caller holding a registry record needs this one.
+//
+// Two functions rather than one accepting either, because the two inputs
+// overlap in neither direction and a single function would have to GUESS which
+// it was handed. `versions: true` and `{ drafts: { enabled: true } }` are both
+// objects-or-booleans that a runtime check can misread, and guessing wrong
+// fails silently in the direction that disables drafts.
+//
+// Renamed at this boundary. `schemaDraftSplit` is named for the caller it was
+// written for — the schema-read path — and a public name has to say what it
+// TAKES, because that is the only thing a plugin author choosing between the
+// two can see.
+export { schemaDraftSplit as resolvedCollectionDraftSplit } from "./domains/versions/draft-split-eligibility";
+export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from "./domains/versions/draft-split-eligibility";
+
 // What a form answers a visitor who reaches it. Exported because the plugin
 // that contributes the forms collection refuses submissions too, and a second
 // implementation of this is how the four public paths came to disagree.
