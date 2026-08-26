@@ -261,6 +261,9 @@ export {
   operatorsForType,
   operatorTakesValue,
   ValidationNumberField,
+  ValidationRulesEditor,
+  drawsAnyValidationRule,
+  EDITABLE_VALIDATION_RULES,
 } from "./components/field-ui";
 export type {
   FieldTypePickerProps,
@@ -275,6 +278,8 @@ export type {
   ConditionSourceOption,
   ConditionValue,
   ValidationNumberFieldProps,
+  ValidationRulesEditorProps,
+  ValidationRuleValues,
 } from "./components/field-ui";
 
 // Error Fallback Components

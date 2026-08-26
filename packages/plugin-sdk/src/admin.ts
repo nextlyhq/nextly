@@ -290,6 +290,10 @@ export type {
  *   values, CSV/JSON import, and whole-batch duplicate reporting;
  *   `withOptionIds` seeds drag ids onto plain `{label,value}` data.
  * - `FieldDefaultValueInput` — a type-aware default-value input.
+ * - `ValidationRulesEditor` — the whole set of validation rules a field
+ *   accepts, drawn from an allowed list the caller ASKS core for rather than
+ *   deriving from type names. `drawsAnyValidationRule` answers whether it would
+ *   render anything, so a surface never restates which types have no options.
  * - `ValidationNumberField` — one numeric validation bound, owning the
  *   empty-means-unset coercion, the whole/non-negative constraint for bounds
  *   that count things, and its own id.
@@ -316,6 +320,9 @@ export {
   operatorsForType,
   operatorTakesValue,
   ValidationNumberField,
+  ValidationRulesEditor,
+  drawsAnyValidationRule,
+  EDITABLE_VALIDATION_RULES,
 } from "@nextlyhq/admin";
 
 /**
@@ -389,6 +396,8 @@ export type {
   ConditionSourceOption,
   ConditionValue,
   ValidationNumberFieldProps,
+  ValidationRulesEditorProps,
+  ValidationRuleValues,
 } from "@nextlyhq/admin";
 
 // The declarative `contributes.admin` contract types (the same ones exported

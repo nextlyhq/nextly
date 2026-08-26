@@ -116,3 +116,47 @@ describe("validationRulesForFieldType", () => {
     );
   });
 });
+
+describe("validationRulesForFieldType — surface-only types", () => {
+  // These are not in the canonical `FieldType` union — a collection cannot
+  // declare them — so the rules table is not keyed by them. They were falling
+  // through to the two rules true of any field, which left a form's URL field
+  // with no pattern control: the one rule a URL field most obviously wants.
+  it("gives url the rules of the text it stores as", () => {
+    const rules = validationRulesForFieldType("url");
+    expect(rules).toContain("pattern");
+    expect(rules).toContain("minLength");
+    expect(rules).toContain("maxLength");
+  });
+
+  it("gives phone the same", () => {
+    expect(validationRulesForFieldType("phone")).toContain("pattern");
+  });
+
+  it("gives time and hidden the same, since they store as text too", () => {
+    expect(validationRulesForFieldType("time")).toContain("pattern");
+    expect(validationRulesForFieldType("hidden")).toContain("pattern");
+  });
+
+  it("MUST NOT give file text rules — its storage is the surface's own blob", () => {
+    // The control for the four above: a map that answered for everything would
+    // hand a file upload a minimum character count.
+    const rules = validationRulesForFieldType("file");
+    expect(rules).not.toContain("pattern");
+    expect(rules).not.toContain("minLength");
+    expect(rules).toEqual(["required", "message"]);
+  });
+
+  it("still refuses to guess for a type nothing declares", () => {
+    expect(validationRulesForFieldType("totally-unknown")).toEqual([
+      "required",
+      "message",
+    ]);
+  });
+
+  it("does not let a surface type override a canonical one", () => {
+    // `text` is in the union, so it must be answered from the table rather
+    // than from the surface map, whatever that map happens to say.
+    expect(validationRulesForFieldType("text")).toContain("minLength");
+  });
+});

@@ -248,6 +248,33 @@ const FILE_SURFACE_ENTRY = {
   icon: "Paperclip",
 } as const satisfies FieldTypeCatalogEntry<"file">;
 
+/**
+ * What a surface-only type behaves as when its validation rules are asked for.
+ *
+ * The comment above already states this — url, phone, time and hidden store as
+ * text with validation semantics — but stating it in prose left
+ * `validationRulesForFieldType` unable to act on it, so every surface-only type
+ * fell through to the two rules true of any field. A form's URL field then
+ * offered no pattern, which is the one rule a URL field most obviously wants.
+ *
+ * Expressed as a storage primitive rather than as a rule list, so it rides the
+ * mapping plugin-contributed types already use: declare what you persist as,
+ * and inherit the rules of the built-in type that primitive behaves as. A
+ * second list of rules here would be a second answer to a question
+ * `FIELD_TYPE_VALIDATION_RULES` already owns.
+ *
+ * `file` is deliberately absent: its storage is the surface's own blob
+ * handling, not text, so it correctly takes only what is true of every field.
+ */
+const SURFACE_FIELD_TYPE_STORAGE: Readonly<
+  Partial<Record<string, FieldStoragePrimitive>>
+> = {
+  url: "text",
+  phone: "text",
+  time: "text",
+  hidden: "text",
+};
+
 const HIDDEN_SURFACE_ENTRY = {
   type: "hidden",
   label: "Hidden",
@@ -572,6 +599,14 @@ export function validationRulesForFieldType(
   if (pluginStorage) {
     return FIELD_TYPE_VALIDATION_RULES[
       STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginStorage]
+    ];
+  }
+  // A surface-only type is not in the canonical union, but it does say what it
+  // stores as, which is enough to answer through the same mapping.
+  const surfaceStorage = SURFACE_FIELD_TYPE_STORAGE[type];
+  if (surfaceStorage) {
+    return FIELD_TYPE_VALIDATION_RULES[
+      STORAGE_PRIMITIVE_AS_FIELD_TYPE[surfaceStorage]
     ];
   }
   // An unknown type with no declared primitive: offer only what is true of
