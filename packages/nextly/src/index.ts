@@ -547,6 +547,34 @@ export type {
 // shared service types above.
 export type { BatchOperationResult } from "./domains/collections/services/collection-types";
 
+// Whether a collection stores a working draft beside its published row.
+//
+// Exported because a plugin cannot answer it and cannot safely guess. The split
+// resolves from five conditions together — versioning resolving
+// `drafts.enabled`, `status: true`, no reachable password field, every
+// reachable component schema resolving, and no component carrying one — and
+// `status: true` alone, the obvious flag, is true for collections that store no
+// draft at all. A plugin keying data by published/draft therefore writes rows
+// against a document that does not exist, and nothing downstream can tell those
+// rows from real ones.
+//
+// The reason travels with the verdict rather than being reduced to a boolean,
+// so a caller can say WHY a collection it expected to draft does not.
+//
+// `schemaDraftSplit` rather than the lower-level predicate beside it: that one
+// takes an already-assembled input including resolved component schemas, which
+// is the work rather than the question. This takes the collection.
+//
+// Root entry, not `nextly/config`: this reaches the component registry through
+// the DI container, and `config` is a CLIENT entry — publishing it there would
+// pull the server graph into a browser bundle.
+export { schemaDraftSplit } from "./domains/versions/draft-split-eligibility";
+export type {
+  SchemaEligibilityCollection,
+  DraftSplitEligibility,
+  DraftSplitDisabledReason,
+} from "./domains/versions/draft-split-eligibility";
+
 // What a form answers a visitor who reaches it. Exported because the plugin
 // that contributes the forms collection refuses submissions too, and a second
 // implementation of this is how the four public paths came to disagree.
