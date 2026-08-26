@@ -30,7 +30,11 @@
  */
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE, PageRenderer } from "@nextlyhq/blocks-react";
+import {
+  NODE_ID_ATTRIBUTE,
+  PageRenderer,
+  previewContainerStyle,
+} from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { cn } from "@nextlyhq/ui/utils";
 import { useCallback, useEffect, useMemo, useRef } from "react";
@@ -179,6 +183,41 @@ export interface CanvasProps {
    */
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>;
   /**
+   * The width to constrain the page box to, in CSS pixels, or `undefined` to
+   * fill the region.
+   *
+   * A MAXIMUM rather than a fixed width, because the region may be narrower
+   * than the tier being asked for — a wide breakpoint inside a half-width
+   * editor pane cannot be honoured, and stretching the box past its region
+   * would put the page under the inspector instead.
+   */
+  previewWidth?: number;
+  /**
+   * The container name this box establishes, when the sheet was compiled as a
+   * preview.
+   *
+   * Passed through {@link previewContainerStyle}, which supplies the
+   * `container-type` alongside the name: a named container left at the default
+   * `normal` is not a size-query container, so every rule the preview compile
+   * emitted stays inactive while the sheet is valid and the name matches.
+   */
+  previewContainer?: string;
+  /**
+   * The box's MEASURED inline size, reported whenever it changes.
+   *
+   * Reported rather than derived from {@link previewWidth}, because those are
+   * different numbers and only one of them decides anything. The requested
+   * width is a ceiling; what the container queries resolve against is the width
+   * the box actually got. A caller that assumed the request was honoured would
+   * name a tier the box is not showing — the same confident-wrong-answer this
+   * whole preview mechanism exists to remove.
+   *
+   * `undefined` until the first measurement, which is a real state rather than
+   * a default: nothing has been observed yet, and a caller must not report a
+   * tier as live on the strength of a box nobody has looked at.
+   */
+  onMeasuredWidth?: (width: number | undefined) => void;
+  /**
    * The PRIMARY selected node's id, or null when the selection is empty.
    *
    * The one the inspector edits. Marked `data-nx-selected="primary"` so a
@@ -262,8 +301,42 @@ export function Canvas({
   dragHandlers,
   onDoubleClick,
   overlay,
+  previewWidth,
+  previewContainer,
+  onMeasuredWidth,
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
+
+  /*
+   * The box's real inline size, observed rather than assumed.
+   *
+   * `ResizeObserver` rather than a resize listener on the window: the box
+   * changes width when the inspector opens, when a rail panel is toggled and
+   * when the pane is dragged, none of which resize the window. A window
+   * listener would report the same number across all three.
+   *
+   * `contentBoxSize` rather than `getBoundingClientRect().width`, because the
+   * editor applies a canvas zoom transform and the rect is the TRANSFORMED
+   * size — which is what a reader sees but not what the container queries
+   * resolve against. A container query asks the element's own layout size, so
+   * reporting the visual one would name the wrong tier at any zoom but 100%.
+   */
+  useEffect(() => {
+    const box = root.current;
+    if (box === null || onMeasuredWidth === undefined) return;
+    // Guarded by CALLABILITY rather than presence: jsdom defines the global on
+    // some setups without a working constructor, so a property test passes and
+    // the construction throws.
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (entry === undefined) return;
+      const inline = entry.contentBoxSize[0]?.inlineSize;
+      onMeasuredWidth(typeof inline === "number" ? inline : undefined);
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [onMeasuredWidth]);
 
   /*
    * What to mark. The primary alone when a host has not adopted the set yet,
@@ -348,6 +421,25 @@ export function Canvas({
     <div
       ref={root}
       className={cn(CANVAS_ROOT_CLASS, className)}
+      /*
+       * The preview box: the container the sheet queries, and the width it is
+       * being asked to show.
+       *
+       * Centred rather than left-aligned, which is what every builder surveyed
+       * does and is not merely cosmetic — an off-centre narrow box reads as a
+       * layout that has broken rather than as a viewport being simulated.
+       *
+       * On the canvas ROOT rather than an inner wrapper, because the overlays
+       * are positioned in this element's own content coordinates: a box inside
+       * it would size the page while leaving the drop indicator and the
+       * selection chrome measuring the region instead.
+       */
+      style={{
+        ...previewContainerStyle(previewContainer),
+        ...(previewWidth === undefined
+          ? {}
+          : { maxWidth: `${previewWidth}px`, marginInline: "auto" }),
+      }}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and

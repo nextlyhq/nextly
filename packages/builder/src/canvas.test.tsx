@@ -435,3 +435,89 @@ describe("the gesture a click's modifiers meant", () => {
     expect(onSelect).toHaveBeenCalledWith("a", "replace");
   });
 });
+
+describe("the preview box the canvas establishes", () => {
+  /** A canvas with nothing selected, so only the box props vary. */
+  function boxed(props: Record<string, unknown>) {
+    return render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        {...props}
+      />
+    );
+  }
+
+  const root = (container: HTMLElement): HTMLElement => {
+    const found = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    if (!(found instanceof HTMLElement)) throw new Error("no canvas root");
+    return found;
+  };
+
+  it("carries the container NAME and TYPE together, or neither", () => {
+    /*
+     * Either alone does nothing and the failure is silent: a named container
+     * left at the default `container-type: normal` is not a size-query
+     * container, so every rule the preview compile emitted stays inactive while
+     * the sheet is valid and the name matches. Resizing the box then changes
+     * nothing, with no error anywhere to say why.
+     */
+    const { container } = boxed({ previewContainer: "nx-preview-viewport" });
+    const style = root(container).style;
+
+    expect(style.containerName).toBe("nx-preview-viewport");
+    expect(style.containerType).toBe("inline-size");
+  });
+
+  it("establishes NO container when the compiler would refuse the name", () => {
+    /*
+     * The symmetry is load-bearing rather than tidy. A refused name makes the
+     * compile PUBLISHED — viewport tiers emit `@media` and container tiers emit
+     * UNNAMED `@container` rules — so a box that established a query container
+     * anyway would let those unnamed rules resolve against IT. Viewport tiers
+     * would then follow the window while container tiers followed the box: a
+     * hybrid neither mode intends.
+     */
+    const { container } = boxed({ previewContainer: "none" });
+    const style = root(container).style;
+
+    expect(style.containerName).toBe("");
+    expect(style.containerType).toBe("");
+  });
+
+  it("constrains the box to a MAXIMUM, not a fixed width", () => {
+    /*
+     * The region can be narrower than the tier being asked for — a wide
+     * breakpoint inside a half-width editor pane cannot be honoured. A fixed
+     * width would push the page under the inspector rather than admitting the
+     * request could not be met.
+     */
+    const { container } = boxed({ previewWidth: 991 });
+    const style = root(container).style;
+
+    expect(style.maxWidth).toBe("991px");
+    expect(style.width).toBe("");
+    // Centred: an off-centre narrow box reads as a broken layout rather than as
+    // a viewport being simulated.
+    expect(style.marginInline).toBe("auto");
+  });
+
+  it("leaves the box UNCONSTRAINED when no width was asked for", () => {
+    /*
+     * The control. Without it, a canvas that always constrained would satisfy
+     * the case above while making the widest tier narrower than its region —
+     * the box would gain gutters on selecting the tier it was already showing.
+     */
+    const { container } = boxed({});
+    const style = root(container).style;
+
+    expect(style.maxWidth).toBe("");
+    expect(style.marginInline).toBe("");
+  });
+});
