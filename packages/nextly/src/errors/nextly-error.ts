@@ -255,11 +255,17 @@ export class NextlyError extends Error {
     // it came from. Without it the option is accepted and dropped whenever it
     // arrives through a spread, which reads as forwarded and is not.
     cause?: Error;
+    // A domain-specific message overriding the generic default, for a resource
+    // whose absence is answered on more than one surface and has to read the
+    // same on each. Mirrors `conflict`: without it a caller reaching the same
+    // resource through two entry points is told two different things, and the
+    // one that is not this factory wins by having a message at all.
+    message?: string;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "NOT_FOUND",
-      publicMessage: "Not found.",
+      publicMessage: opts?.message ?? "Not found.",
       cause: opts?.cause,
       logContext: opts?.logContext,
     });

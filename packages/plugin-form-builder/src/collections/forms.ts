@@ -15,6 +15,7 @@ import {
   textarea,
   select,
   checkbox,
+  date,
   group,
   json,
   relationship,
@@ -689,6 +690,49 @@ export function isMissingTarget(error: unknown): boolean {
   );
 }
 
+/**
+ * Records the moment a form first goes live.
+ *
+ * `status` on this collection is an ordinary select, not the framework's
+ * publish lifecycle, so nothing else writes down that a form was ever public.
+ * Without that, `closed` stands for two different histories — a form an author
+ * released and later stopped, and one created closed that nobody ever saw —
+ * and the public by-slug endpoint served both.
+ *
+ * Written once. A form republished after being closed keeps the original date,
+ * because the question this answers is "has this ever been public", not "when
+ * was it last".
+ */
+function stampFirstPublish(context: HookContext): void {
+  const data = context.data as Record<string, unknown> | undefined;
+  if (!data) return;
+  const stored = context.originalData as Record<string, unknown> | undefined;
+
+  // Written here or not at all. Duplicating an entry copies every non-system
+  // field, so a copy of a closed form arrives carrying the original's stamp
+  // and would qualify as previously public at a slug nobody has ever seen. The
+  // same goes for any caller that simply sends the field. Removing it from the
+  // patch leaves a stamp that IS stored untouched, because a column absent
+  // from an update is a column not written.
+  delete data.wentLiveAt;
+
+  if (recordedStamp(stored) !== undefined) return;
+
+  // Either side of the transition is proof. A form live before this field
+  // existed carries no stamp, so its first edit is the only chance to record
+  // one — and if that edit is the one CLOSING it, reading the incoming status
+  // alone would miss it and take a form that had been public offline.
+  if (data.status === "published" || stored?.status === "published") {
+    data.wentLiveAt = new Date();
+  }
+}
+
+/** The stamp a form already carries, treating blank as absent. */
+function recordedStamp(stored: Record<string, unknown> | undefined): unknown {
+  const value = stored?.wentLiveAt;
+  return value === null || value === "" ? undefined : value;
+}
+
 /** One shape for every refusal this rule makes, so callers see one field. */
 function redirectRefusal(message: string, field: PickedDocumentField) {
   // The path names the field the author actually filled in. Reporting every
@@ -918,6 +962,21 @@ export function formsCollection(
       },
     }),
 
+    // NOT `firstPublishedAt`, which is the obvious name and the one to reach
+    // for next. The framework owns that name on collections it manages the
+    // publish lifecycle for, and a write naming it from a plugin collection is
+    // stripped on the way to the insert — silently, leaving the column null and
+    // every closed form reading as one that was never public.
+    date({
+      name: "wentLiveAt",
+      label: "First Published",
+      admin: {
+        readOnly: true,
+        description:
+          "When this form first went live. Written once and never changed.",
+      },
+    }),
+
     textarea({
       name: "closedMessage",
       label: "Closed Form Message",
@@ -1057,6 +1116,7 @@ export function formsCollection(
               pluginConfig.redirectRelationships,
               pluginConfig.redirectTargetLocalization
             );
+            stampFirstPublish(context);
             return context.data;
           },
         ],

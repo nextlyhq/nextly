@@ -547,6 +547,17 @@ export type {
 // shared service types above.
 export type { BatchOperationResult } from "./domains/collections/services/collection-types";
 
+// What a form answers a visitor who reaches it. Exported because the plugin
+// that contributes the forms collection refuses submissions too, and a second
+// implementation of this is how the four public paths came to disagree.
+export {
+  formAvailability,
+  GENERIC_REFUSAL,
+  NO_SUCH_FORM,
+  type FormAvailability,
+  type FormAvailabilityInput,
+} from "./domains/forms/form-availability";
+
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {
   EventBus,

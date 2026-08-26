@@ -139,6 +139,16 @@ export interface FormDocument {
   notifications: FormNotification[];
   webhooks?: WebhookConfig[];
   status: "draft" | "published" | "closed";
+  /**
+   * What a closed form tells a visitor who reaches it.
+   *
+   * Optional because the field is only written once an author has a reason to
+   * give, and a row created before it existed has none. A closed form with
+   * nothing here falls back to the generic refusal, which is also what a draft
+   * gets — a draft has never been public, so there is no author intent to
+   * relay.
+   */
+  closedMessage?: string;
   createdAt: Date;
   updatedAt: Date;
 }

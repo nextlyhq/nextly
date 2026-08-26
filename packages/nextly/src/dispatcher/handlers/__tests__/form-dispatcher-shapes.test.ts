@@ -16,6 +16,7 @@ import { NextlyError } from "../../../errors";
 import type { ServiceContainer } from "../../../services";
 import { getCollectionsHandlerFromDI } from "../../helpers/di";
 import { dispatchForms } from "../form-dispatcher";
+import { NO_SUCH_FORM } from "../../../domains/forms/form-availability";
 
 type CollectionsHandlerLike = {
   listEntries: ReturnType<typeof vi.fn>;
@@ -90,7 +91,16 @@ describe("dispatchForms, paginated lists (respondList)", () => {
 
 describe("dispatchForms, single-doc reads (respondDoc)", () => {
   it("getFormBySlug returns bare doc body", async () => {
-    const fakeForm = { id: "f1", slug: "contact", fields: [] };
+    // `published` is what makes this form public, and it is what decides how
+    // much of the row comes back: only a published form is answered with its
+    // whole document. A fixture with no status would be judged as never having
+    // been public, and this test would then be asserting the shape of a 404.
+    const fakeForm = {
+      id: "f1",
+      slug: "contact",
+      status: "published",
+      fields: [],
+    };
     const handler: CollectionsHandlerLike = {
       listEntries: vi.fn().mockResolvedValue({
         success: true,
@@ -131,9 +141,12 @@ describe("dispatchForms, actions (respondAction)", () => {
     const fakeForm = {
       id: "f1",
       slug: "contact",
-      fields: [
-        { name: "email", label: "Email", type: "text", required: true },
-      ],
+      // Stated rather than assumed. The status used to be filtered in the
+      // query and the mock ignored the filter, so these fixtures described a
+      // form with no publication state at all and the assertion below could
+      // not have caught a change to how one is judged.
+      status: "published",
+      fields: [{ name: "email", label: "Email", type: "text", required: true }],
       settings: { successMessage: "Thanks for reaching out!" },
     };
     const fakeSubmission = { id: "s1" };
@@ -198,9 +211,12 @@ describe("dispatchForms('submitForm'), validation errors", () => {
     const fakeForm = {
       id: "f1",
       slug: "contact",
-      fields: [
-        { name: "email", label: "Email", type: "text", required: true },
-      ],
+      // Stated rather than assumed. The status used to be filtered in the
+      // query and the mock ignored the filter, so these fixtures described a
+      // form with no publication state at all and the assertion below could
+      // not have caught a change to how one is judged.
+      status: "published",
+      fields: [{ name: "email", label: "Email", type: "text", required: true }],
       settings: { successMessage: "Thanks!" },
     };
     const handler: CollectionsHandlerLike = {
@@ -295,5 +311,194 @@ describe("dispatchForms('submitForm'), validation errors", () => {
     // The dispatcher must short-circuit before any service calls.
     expect(handler.listEntries).not.toHaveBeenCalled();
     expect(handler.createEntry).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchForms, what a form's own address answers", () => {
+  const paginated = (docs: unknown[]) => ({
+    success: true,
+    statusCode: 200,
+    message: "ok",
+    data: {
+      docs,
+      totalDocs: docs.length,
+      limit: 1,
+      page: 1,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPrevPage: false,
+    },
+  });
+
+  const askFor = async (docs: unknown[]) => {
+    const handler: CollectionsHandlerLike = {
+      listEntries: vi.fn().mockResolvedValue(paginated(docs)),
+      createEntry: vi.fn(),
+    };
+    wireHandler(handler);
+    return dispatchForms(
+      makeContainer(handler),
+      "getFormBySlug",
+      { slug: "contact" },
+      undefined
+    );
+  };
+
+  it("answers a CLOSED form with the reason its author wrote", async () => {
+    // Someone following a link to a form that has stopped taking submissions
+    // is owed the explanation. They already hold the slug, so telling them
+    // discloses nothing they did not have.
+    const closed = {
+      id: "f1",
+      slug: "contact",
+      status: "closed",
+      // The form was live once. That is what it is served on the strength of.
+      wentLiveAt: "2026-01-01T00:00:00Z",
+      closedMessage: "Applications closed on 31 March.",
+      fields: [],
+    };
+
+    const response = (await askFor([closed])) as Response;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      slug: "contact",
+      status: "closed",
+      closedMessage: "Applications closed on 31 March.",
+    });
+  });
+
+  it("returns the message and nothing else off the row", async () => {
+    // The stamp says the FORM was once public. It does not say that THIS slug
+    // was — a closed form can be renamed afterwards — nor that fields and
+    // settings added since ever were. Answering with the row would authorize
+    // all of that on the strength of a fact about none of it.
+    const closedWithMore = {
+      id: "f1",
+      slug: "contact",
+      status: "closed",
+      wentLiveAt: "2026-01-01T00:00:00Z",
+      closedMessage: "Applications closed on 31 March.",
+      fields: [{ name: "salary_expectation", type: "text" }],
+      settings: { webhookUrl: "https://internal.example/hook" },
+    };
+
+    const body = (await (
+      (await askFor([closedWithMore])) as Response
+    ).json()) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("fields");
+    expect(body).not.toHaveProperty("settings");
+    expect(body).not.toHaveProperty("id");
+  });
+
+  it("still answers a PUBLISHED form with its whole document", async () => {
+    // The control. "Discloses little" is satisfied by an endpoint that
+    // discloses nothing, and a client cannot render a live form without the
+    // fields it is made of.
+    const live = {
+      id: "f1",
+      slug: "contact",
+      status: "published",
+      fields: [{ name: "email", type: "text" }],
+      settings: { successMessage: "Thanks!" },
+    };
+
+    expect(await ((await askFor([live])) as Response).json()).toEqual(live);
+  });
+
+  it("answers a form created closed exactly as it answers an unused slug", async () => {
+    // `closed` is accepted on creation, so it does not by itself mean the form
+    // was ever public. Serving one that never was hands its fields and
+    // configuration to anyone who guesses the slug.
+    const neverLive = {
+      id: "f1",
+      slug: "contact",
+      status: "closed",
+      closedMessage: "Applications closed on 31 March.",
+      fields: [],
+    };
+
+    await expect(askFor([neverLive])).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("answers a DRAFT exactly as it answers a slug nobody used", async () => {
+    // A draft has never been public, so its address must not confirm it
+    // exists — otherwise the endpoint becomes a way to discover unreleased
+    // forms one guess at a time.
+    const draft = { id: "f1", slug: "contact", status: "draft", fields: [] };
+
+    // The SENTENCE as well as the code, and taken from the shared constant
+    // rather than repeated as a literal: every path formats this answer, and a
+    // literal per path cannot say the four of them MATCH.
+    await expect(askFor([draft])).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      publicMessage: NO_SUCH_FORM,
+    });
+    await expect(askFor([])).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      publicMessage: NO_SUCH_FORM,
+    });
+  });
+});
+
+describe("dispatchForms, what a submission to a closed form is told", () => {
+  const submitTo = async (doc: unknown) => {
+    const handler: CollectionsHandlerLike = {
+      listEntries: vi.fn().mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        message: "ok",
+        data: {
+          docs: [doc],
+          totalDocs: 1,
+          limit: 1,
+          page: 1,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
+      }),
+      createEntry: vi.fn(),
+    };
+    wireHandler(handler);
+    return dispatchForms(
+      makeContainer(handler),
+      "submitForm",
+      { slug: "contact" },
+      { data: { message: "hello" } }
+    );
+  };
+
+  const closed = {
+    id: "f1",
+    slug: "contact",
+    status: "closed",
+    wentLiveAt: "2026-01-01T00:00:00Z",
+    closedMessage: "Applications closed on 31 March.",
+    fields: [],
+  };
+
+  it("carries the author's message as the error itself", async () => {
+    // Not nested inside a validation envelope. `NextlyError.validation` fixes
+    // the canonical message to "Validation failed." and puts the real one
+    // under `error.data.errors[0]`, so a client reading the documented shape
+    // is handed the explanation and never shows it.
+    await expect(submitTo(closed)).rejects.toMatchObject({
+      publicMessage: "Applications closed on 31 March.",
+    });
+  });
+
+  it("reports it as a state conflict, not a validation failure", async () => {
+    await expect(submitTo(closed)).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("still answers a form that was never public as an unused slug", async () => {
+    // The control. "Carries the message" must not be satisfied by a handler
+    // that has stopped distinguishing which forms may be explained at all.
+    await expect(
+      submitTo({ ...closed, wentLiveAt: undefined })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
