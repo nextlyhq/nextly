@@ -187,8 +187,13 @@ export interface DynamicSingleInsert {
   /**
    * Optional description of the Single's purpose.
    * Displayed in the Admin UI.
+   *
+   * `null` clears a stored description, where `undefined` means "leave the
+   * column as it is". A sync that could only say `undefined` had no way to
+   * remove one the config had dropped, so the row kept describing the Single
+   * by a sentence nothing declared any more. Matches `DynamicCollectionInsert`.
    */
-  description?: string;
+  description?: string | null;
 
   /**
    * Field configurations defining the Single's document structure.
@@ -199,8 +204,12 @@ export interface DynamicSingleInsert {
   /**
    * Admin UI configuration options.
    * Controls sidebar grouping, icon, visibility, etc.
+   *
+   * `null` clears a stored block, for the reason `description` states. The
+   * write path already resolved a falsy value to `NULL`; only this type said
+   * otherwise. Matches `DynamicCollectionInsert`.
    */
-  admin?: SingleAdminOptions;
+  admin?: SingleAdminOptions | null;
 
   /**
    * Where the Single was defined.
