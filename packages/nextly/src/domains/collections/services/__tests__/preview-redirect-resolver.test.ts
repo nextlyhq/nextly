@@ -7,8 +7,16 @@
  * one with teeth — for a host that is not the site's.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -902,6 +910,95 @@ describe("the authenticated boundary on the explaining form", () => {
     ]);
   });
 
+  /**
+   * Every module reachable from `entries` by `export *` that EXPORTS the
+   * constructor, relative to `root`.
+   *
+   * Only `export *` recurses, because only it propagates names the author did
+   * not write down: a named re-export exposes exactly the identifiers in its
+   * clause, which the export test below reads in place. A module that merely
+   * IMPORTS the constructor to call it exposes nothing, so it is not followed —
+   * otherwise every consumer would be reported and the boundary assertion would
+   * fail on correct code.
+   *
+   * A module the map names and the tree does not have is reported rather than
+   * skipped: an entry whose source cannot be found is not evidence of safety.
+   */
+  function modulesExportingTheConstructor(
+    root: URL,
+    entries: string[]
+  ): string[] {
+    const declaresIt =
+      /export\s+(?:async\s+)?(?:function|const|let|var|class|type|interface)\s+previewCallerAuthorized\b/;
+    const listsIt = /export\s*\{[^}]*\bpreviewCallerAuthorized\b[^}]*\}/;
+
+    /*
+     * Returns WHERE the module was found as well as its text. A bundled entry
+     * may be a directory index rather than a file, and a relative specifier
+     * inside it resolves against that directory — so resolving children against
+     * the name that was asked for sends the walk one level too high and every
+     * module it names comes back missing.
+     */
+    const readModule = (rel: string): { at: string; source: string } | null => {
+      for (const at of [rel, rel.replace(/\.ts$/, "/index.ts")]) {
+        try {
+          return { at, source: readFileSync(new URL(at, root), "utf8") };
+        } catch {
+          continue;
+        }
+      }
+      return null;
+    };
+
+    const seen = new Set<string>();
+    const found: string[] = [];
+
+    const walk = (rel: string): void => {
+      if (seen.has(rel)) return;
+      seen.add(rel);
+
+      const module = readModule(rel);
+      if (module === null) {
+        found.push(rel);
+        return;
+      }
+
+      /*
+       * Comments are removed before anything is matched. This package's own
+       * `src/index.ts` documents its barrel chain by quoting the statements
+       * verbatim, so a scan over raw text follows a specifier that no module
+       * actually re-exports — and reports the file it fails to find as a
+       * reachable one.
+       */
+      const source = module.source
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
+      const { at } = module;
+      if (declaresIt.test(source) || listsIt.test(source)) {
+        found.push(at);
+        return;
+      }
+
+      const stars = source.matchAll(
+        /export\s+\*(?:\s+as\s+\w+)?\s+from\s*["']([^"']+)["']/g
+      );
+      for (const [, spec] of stars) {
+        if (spec === undefined || !spec.startsWith(".")) continue;
+        const href = new URL(spec, new URL(at, root)).href.slice(
+          root.href.length
+        );
+        walk(
+          /\.[cm]?[jt]s$/.test(href)
+            ? href.replace(/\.[cm]?js$/, ".ts")
+            : `${href}.ts`
+        );
+      }
+    };
+
+    for (const entry of entries) walk(entry);
+    return found.sort();
+  }
+
   it("is not reachable from any of the package's PUBLIC entry points", () => {
     /*
      * The importer scan above is a syntax search over this package's own
@@ -915,10 +1012,9 @@ describe("the authenticated boundary on the explaining form", () => {
      * rather than listed here: a new export map entry is covered the day it is
      * added, which a hand-written list would not be.
      *
-     * What this reaches is a direct re-export from an entry point, which is the
-     * shape a barrel takes. It does not walk the full resolved graph — a chain
-     * through an intermediate barrel would evade it — and that limit is stated
-     * rather than left for someone to discover.
+     * The walk is TRANSITIVE, so an intermediate barrel is followed rather than
+     * ending the search: an entry re-exporting a barrel that re-exports the
+     * module reaches the same verdict a direct re-export does.
      */
     const pkgRoot = new URL("../../../../../", import.meta.url);
     const pkg = JSON.parse(
@@ -940,27 +1036,61 @@ describe("the authenticated boundary on the explaining form", () => {
     // cannot certify a package whose manifest this failed to parse.
     expect(entrySources.length).toBeGreaterThan(0);
 
-    const reachable = entrySources.filter(rel => {
-      let source: string;
-      try {
-        source = readFileSync(new URL(rel, pkgRoot), "utf8");
-      } catch {
-        try {
-          // A bundled entry may be a directory index rather than a file.
-          source = readFileSync(
-            new URL(rel.replace(/\.ts$/, "/index.ts"), pkgRoot),
-            "utf8"
-          );
-        } catch {
-          // An entry whose source is nowhere the map implies is not evidence of
-          // safety; surface it by name rather than skipping it.
-          return true;
-        }
-      }
-      return /preview-redirect-resolver|previewCallerAuthorized/.test(source);
-    });
+    expect(modulesExportingTheConstructor(pkgRoot, entrySources)).toEqual([]);
+  });
 
-    expect(reachable).toEqual([]);
+  it("follows a chain of barrels rather than stopping at the first", () => {
+    /*
+     * The instrument's own control. The assertion above passes when the walk
+     * reports nothing, and a walk that reports nothing under any circumstances
+     * satisfies it perfectly — so the walker is run against a tree whose answer
+     * is known and required to NAME the module it should find.
+     *
+     * The fixture carries both halves of the discrimination:
+     *   entry -> barrel -> leaf     re-exported, must be reported
+     *   entry -> uses               imports and calls it, must NOT be reported
+     *   entry's COMMENTS            quote both forms, must NOT be followed
+     *
+     * The second separates re-export from ordinary use. Every module consuming
+     * the constructor mentions its name, so a walker matching on the name alone
+     * would report the whole call graph and the real assertion above would fail
+     * on correct code.
+     *
+     * The third names a module that does not exist, so following it produces a
+     * report of an unreadable file — the shape a missing entry takes, arriving
+     * from a module nobody re-exports.
+     */
+    const dir = mkdtempSync(join(tmpdir(), "preview-export-walk-"));
+    try {
+      const root = pathToFileURL(`${dir}/`);
+      mkdirSync(join(dir, "barrel"));
+      writeFileSync(
+        join(dir, "entry.ts"),
+        'export * from "./barrel/index.js";\n' +
+          'export * from "./uses.js";\n' +
+          '// export * from "./ghost.js";\n' +
+          '/* export { previewCallerAuthorized } from "./ghost.js"; */\n'
+      );
+      writeFileSync(
+        join(dir, "barrel", "index.ts"),
+        'export * from "../leaf.js";\n'
+      );
+      writeFileSync(
+        join(dir, "leaf.ts"),
+        "export function previewCallerAuthorized() {}\n"
+      );
+      writeFileSync(
+        join(dir, "uses.ts"),
+        'import { previewCallerAuthorized } from "./leaf.js";\n' +
+          "export const call = () => previewCallerAuthorized();\n"
+      );
+
+      expect(modulesExportingTheConstructor(root, ["entry.ts"])).toEqual([
+        "leaf.ts",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses to mint proof without an authenticated identity", () => {

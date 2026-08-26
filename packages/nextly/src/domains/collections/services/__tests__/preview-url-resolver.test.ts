@@ -98,9 +98,12 @@ describe("resolvePreviewUrl", () => {
     ).toEqual({ status: "unavailable" });
   });
 
-  it("reports unavailable when the authored function throws", () => {
+  it("separates a THROWN declaration from one that declines", () => {
     // User code runs inside a request here. A throw is the collection failing to
-    // produce a URL, not the server failing, so it must not escape as a 500.
+    // produce a URL, not the server failing, so it must not escape as a 500 —
+    // and not as `unavailable` either, which tells the editor to fill in the
+    // field the URL is built from. A declaration that throws does so for every
+    // document, so no field on this one is the remedy.
     expect(
       resolvePreviewUrl({
         preview: {
@@ -111,8 +114,30 @@ describe("resolvePreviewUrl", () => {
         entry: {},
         siteUrl: SITE,
       })
+    ).toEqual({ status: "declarationFailed" });
+
+    // The control: the same declaration DECLINING is still `unavailable`, so
+    // the assertion above is about the throw rather than about this shape of
+    // call answering `declarationFailed` whatever it does.
+    expect(
+      resolvePreviewUrl({
+        preview: { url: () => null },
+        entry: {},
+        siteUrl: SITE,
+      })
     ).toEqual({ status: "unavailable" });
   });
+
+  /*
+   * The resolver's other `declarationFailed` producer — a candidate that fails
+   * to parse — has NO test, and that is stated rather than left as a gap for
+   * someone to read as coverage. The candidate is built by prefixing the site's
+   * own origin and path, so it always begins with a URL the parser already
+   * accepted, and no authored path reaches the failure: `/../../elsewhere`
+   * normalises to the site's root instead. The guard stays because reachability
+   * is a property of that composition rather than of the function, and it costs
+   * nothing to hold.
+   */
 
   it("reports unavailable when a template placeholder has no value yet", () => {
     for (const slug of [undefined, null, ""]) {

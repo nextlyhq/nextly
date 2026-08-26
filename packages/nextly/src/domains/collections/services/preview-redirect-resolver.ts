@@ -193,7 +193,15 @@ export type PreviewRefusalCause =
   /** The declaration named a different origin than the site is served from. */
   | "foreignOrigin"
   /** A URL that would not parse, or a path that escapes this origin. */
-  | "unresolvable";
+  | "unresolvable"
+  /**
+   * The declaration threw, or produced pieces that do not compose into a URL.
+   *
+   * Kept apart from `unavailable` for the reason that type exists: one is an
+   * empty field on this document and the other is broken code, and only the
+   * first is something the editor holding the document can act on.
+   */
+  | "declarationFailed";
 
 /** A site-relative path, or the reason there is not one. */
 export type PreviewPathOutcome =

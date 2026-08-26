@@ -73,7 +73,19 @@ export type PreviewUrlResolution =
    * returned. Both share one remedy: an administrator sets a real site URL. They
    * are merged for that reason and not because they are the same event.
    */
-  | { status: "noSiteUrl"; path: string };
+  | { status: "noSiteUrl"; path: string }
+  /**
+   * The declaration itself could not produce an address: the authored `url`
+   * function threw, or the pieces it returned do not compose into a URL under
+   * the site.
+   *
+   * Kept apart from `unavailable` because the two have opposite remedies. An
+   * `unavailable` document becomes previewable once someone fills in the field
+   * the URL is built from; this one cannot be fixed by editing the document at
+   * all, and telling an editor to fill in a slug sends them after a field that
+   * is already full.
+   */
+  | { status: "declarationFailed" };
 
 /**
  * True when a collection declares a preview by either route.
@@ -223,13 +235,15 @@ export function resolvePreviewUrl({
 
   if (typeof preview?.url === "function") {
     // The authored function is user code running inside a request. It may throw,
-    // and a throw here is the collection declining to preview rather than a
-    // server fault, so it is reported as `unavailable` — the same answer as a
-    // deliberate `return null` — instead of failing the request.
+    // and a throw here is the declaration being broken rather than a server
+    // fault, so it is reported rather than failing the request — and reported
+    // as its own status, because a deliberate `return null` is a document
+    // without an address yet while this is a declaration that cannot produce
+    // one for any document.
     try {
       path = preview.url(entry);
     } catch {
-      return { status: "unavailable" };
+      return { status: "declarationFailed" };
     }
   } else if (preview?.urlTemplate) {
     path = interpolate(preview.urlTemplate, entry);
@@ -257,8 +271,15 @@ export function resolvePreviewUrl({
 
   const joined = joinUnderSite(`${basePath}${suffix}`, base);
   // The pieces parsed separately and not together, which is a declaration this
-  // resolver cannot turn into an address.
-  if (joined === null) return { status: "unavailable" };
+  // resolver cannot turn into an address — for this document or any other, so
+  // it is the declaration's failure rather than the document's.
+  //
+  // DEFENSIVE: the candidate is built from an origin and path this function
+  // already parsed, so nothing an author can return reaches it today. It is
+  // held because that is a property of the composition above rather than of
+  // `joinUnderSite`, and an assertion over a value already in hand costs
+  // nothing while its rejection branch never runs.
+  if (joined === null) return { status: "declarationFailed" };
   return { status: "resolved", url: joined };
 }
 

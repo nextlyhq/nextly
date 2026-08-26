@@ -293,9 +293,22 @@ const REFUSALS: Record<
       "it shareable.",
     reason: "has-no-preview-target",
     remedy:
-      "The preview declaration returned no address for this document. A " +
-      "`url` function answering null, or a `urlTemplate` whose placeholder " +
-      "field is empty, both mean 'not previewable yet'.",
+      "The preview declaration DECLINED to name an address for this document. " +
+      "A `url` function answering null, or a `urlTemplate` whose placeholder " +
+      "field is empty, both mean 'not previewable yet'. A declaration that " +
+      "threw or produced an unusable address is `declarationFailed` instead.",
+  },
+  declarationFailed: {
+    message: (_subject, noun) =>
+      `This ${noun}'s preview URL could not be built, so a shared link would ` +
+      "have nowhere to open. Nothing on the document can fix it — a developer " +
+      "needs to correct the preview declaration.",
+    reason: "preview-declaration-failed",
+    remedy:
+      "The declaration threw while running, or returned pieces that do not " +
+      "compose into a URL under the site. Both are faults in " +
+      "`admin.preview.url` / `admin.preview.urlTemplate` rather than in this " +
+      "document, so they reproduce for every document in the collection.",
   },
   foreignOrigin: {
     message: (_subject, noun) =>
