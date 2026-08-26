@@ -23,7 +23,7 @@
  * @module components/features/entries/PreviewMode/PreviewSplit
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { GripVertical } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -67,6 +67,12 @@ export function PreviewSplit({
   preview,
   label,
 }: PreviewSplitProps) {
+  /*
+   * Generated rather than fixed: the id is what `aria-controls` points at, and
+   * two splits on one page sharing a literal would aim both separators at the
+   * first pane.
+   */
+  const editorPaneId = useId();
   const [editorPercent, setEditorPercent] = useState(DEFAULT_EDITOR_PERCENT);
   const container = useRef<HTMLDivElement>(null);
   /*
@@ -120,6 +126,15 @@ export function PreviewSplit({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      /*
+       * The owner is released with the listeners that would have released it.
+       * This component stays mounted while closed, so a pane closed mid-gesture
+       * — a second touch on the frame's close control, an entry switching into
+       * translation mode — otherwise leaves the ref holding a pointer whose
+       * `pointerup` nothing is listening for any more, and the guard in
+       * `onPointerDown` then refuses every press for the life of the editor.
+       */
+      dragPointer.current = null;
     };
   }, [open, moveTo]);
 
@@ -179,6 +194,7 @@ export function PreviewSplit({
       data-preview-split={open ? "open" : "closed"}
     >
       <div
+        id={editorPaneId}
         className={cn(
           open
             ? "@container/content min-w-0 overflow-y-auto"
@@ -216,6 +232,9 @@ export function PreviewSplit({
              * can be attached to the wrong side.
              */
             aria-label={`Resize the editor and ${label} panes`}
+            // Names the region the value measures. Without it the separator
+            // exposes a changing number and no way to tell what it is about.
+            aria-controls={editorPaneId}
             aria-valuenow={editorPercent}
             aria-valuetext={`Editor ${Math.round(editorPercent)}%, ${label} ${Math.round(100 - editorPercent)}%`}
             aria-valuemin={MIN_EDITOR_PERCENT}

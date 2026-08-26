@@ -16,12 +16,21 @@ const MIN_EDITOR_PERCENT = 35;
 const DEFAULT_EDITOR_PERCENT = 55;
 
 function renderSplit() {
-  render(
+  const { rerender } = render(
     <PreviewSplit open={true} label="Preview" preview={<p>preview</p>}>
       <p data-testid="editor">editor</p>
     </PreviewSplit>
   );
-  return screen.getByRole("separator");
+  return {
+    separator: screen.getByRole("separator"),
+    /** Re-renders at a new `open`, which is what a toggle does to this tree. */
+    setOpen: (open: boolean) =>
+      rerender(
+        <PreviewSplit open={open} label="Preview" preview={<p>preview</p>}>
+          <p data-testid="editor">editor</p>
+        </PreviewSplit>
+      ),
+  };
 }
 
 /**
@@ -44,7 +53,7 @@ afterEach(() => {
 
 describe("PreviewSplit keyboard", () => {
   it("cancels a handled key that moves nothing", () => {
-    const separator = renderSplit();
+    const { separator } = renderSplit();
 
     // Home once: the divider goes to the minimum and the key is cancelled.
     expect(fireEvent.keyDown(separator, { key: "Home" })).toBe(false);
@@ -61,7 +70,7 @@ describe("PreviewSplit keyboard", () => {
   });
 
   it("announces the pane its value measures", () => {
-    const separator = renderSplit();
+    const { separator } = renderSplit();
 
     /*
      * `aria-valuenow` on a window splitter reports the PRIMARY pane, which is
@@ -70,6 +79,14 @@ describe("PreviewSplit keyboard", () => {
      * on every arrow press, which grows one pane while the number describes the
      * other. The text carries both figures so no number is loose.
      */
+    // The value names the region it measures: `aria-controls` points at the
+    // editor pane's own id, so the number is attached to something.
+    const controls = separator.getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    expect(
+      screen.getByTestId("editor").closest(`#${CSS.escape(controls ?? "")}`)
+    ).not.toBeNull();
+
     expect(separator).toHaveAttribute("aria-valuenow", "55");
     expect(separator).toHaveAttribute(
       "aria-valuetext",
@@ -87,7 +104,7 @@ describe("PreviewSplit keyboard", () => {
   });
 
   it("lets a key it does not handle through", () => {
-    const separator = renderSplit();
+    const { separator } = renderSplit();
 
     /*
      * The control for the pair above. Without it, a handler that cancelled
@@ -157,7 +174,7 @@ describe("PreviewSplit pointer", () => {
 
   it("drags on the primary button", () => {
     stubMeasure(1000);
-    const separator = renderSplit();
+    const { separator } = renderSplit();
 
     pressPointer(separator, 1, { button: 0, clientX: 550 });
     movePointer(1, 700);
@@ -170,7 +187,7 @@ describe("PreviewSplit pointer", () => {
 
   it("ignores a press that is not the primary button", () => {
     stubMeasure(1000);
-    const separator = renderSplit();
+    const { separator } = renderSplit();
 
     // A right-click opens a context menu. It must not also resize underneath.
     pressPointer(separator, 1, { button: 2, clientX: 550 });
@@ -179,9 +196,32 @@ describe("PreviewSplit pointer", () => {
     expect(editorPercent()).toBe(DEFAULT_EDITOR_PERCENT);
   });
 
+  it("releases the drag owner when the pane closes mid-gesture", () => {
+    stubMeasure(1000);
+    const { separator, setOpen } = renderSplit();
+
+    // A press that never gets its `pointerup`, because the pane closes first —
+    // a second touch on the frame's close control does exactly this.
+    pressPointer(separator, 1, { button: 0, clientX: 550 });
+    setOpen(false);
+    setOpen(true);
+
+    /*
+     * This component stays mounted across the toggle, so a ref left holding
+     * pointer 1 would refuse every later press for the life of the editor. The
+     * assertion is that the divider MOVES, not that the ref is null: the ref is
+     * the mechanism and moving is the property.
+     */
+    const reopened = screen.getByRole("separator");
+    pressPointer(reopened, 2, { button: 0, clientX: 550 });
+    movePointer(2, 700);
+
+    expect(editorPercent()).toBe(70);
+  });
+
   it("ignores a second pointer while one already owns the divider", () => {
     stubMeasure(1000);
-    const separator = renderSplit();
+    const { separator } = renderSplit();
 
     pressPointer(separator, 1, { button: 0, clientX: 550 });
     pressPointer(separator, 2, { button: 0, clientX: 550 });
