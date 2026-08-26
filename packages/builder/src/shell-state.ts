@@ -142,6 +142,16 @@ export interface ShellPreferences {
    * Inner: panel id to percentage.
    */
   layouts: Record<string, Record<string, number>>;
+  /**
+   * Whether the canvas draws a box for containers that have no children yet.
+   *
+   * ON by default: a container with nothing in it has no height, so with this
+   * off it is invisible and unclickable, which is the state an author is most
+   * likely to need help with. It is a preference rather than a hardcode
+   * because the box is editor chrome the visitor never sees, and an author
+   * checking how the page really looks needs a way to take it away.
+   */
+  showEmptyElements: boolean;
 }
 
 /**
@@ -160,6 +170,7 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
   leftPinned: true,
   layouts: {},
+  showEmptyElements: true,
 };
 
 /**
@@ -273,6 +284,10 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
         ? record.leftPinned
         : DEFAULT_PREFERENCES.leftPinned,
     layouts: readLayouts(record.layouts),
+    showEmptyElements:
+      typeof record.showEmptyElements === "boolean"
+        ? record.showEmptyElements
+        : DEFAULT_PREFERENCES.showEmptyElements,
   };
 }
 
