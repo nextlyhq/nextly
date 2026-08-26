@@ -159,6 +159,31 @@ export interface ListSinglesOptions extends BaseListOptions {
 export type ListSinglesResult = BaseListResult<DynamicSingleRecord>;
 
 // ============================================================
+// Change Detection
+// ============================================================
+
+/**
+ * Whether the Single's own naming differs from the stored row.
+ *
+ * The admin block is asked about separately, by the inherited
+ * `adminConfigChanged`, so that one comparison stays shared with the collection
+ * registry rather than being written a second time here.
+ *
+ * `?? null` on both sides because a column with no value arrives as `null`
+ * while a config that declares none has `undefined`, and the two mean the same
+ * thing: comparing them directly would report a change on every boot.
+ */
+function metadataSyncNeeded(
+  config: CodeFirstSingleConfig,
+  existing: DynamicSingleRecord
+): boolean {
+  return (
+    config.label !== existing.label ||
+    (config.description ?? null) !== (existing.description ?? null)
+  );
+}
+
+// ============================================================
 // Service Implementation
 // ============================================================
 
@@ -770,19 +795,11 @@ export class SingleRegistryService extends BaseRegistryService<
           result.created.push(config.slug);
           await this.seedPermissionsForSingle(config.slug);
         } else if (
-          !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.status === true) !== (existing.status === true) ||
-          // Re-sync when the resolved versioning config changed (both sides are
-          // normalized JSON, so a stable string compare detects a real change).
-          JSON.stringify(config.versions ?? null) !==
-            JSON.stringify(existing.versions ?? null) ||
-          // Re-sync when the cache-revalidation config changed.
-          JSON.stringify(config.revalidate ?? null) !==
-            JSON.stringify(existing.revalidate ?? null) ||
-          // Re-sync when the webhook recording policy changed.
-          JSON.stringify(config.webhooks ?? null) !==
-            JSON.stringify(existing.webhooks ?? null) ||
-          (config.localized === true) !== (existing.localized === true)
+          this.schemaSyncNeeded(
+            config,
+            existing,
+            !schemaHashesMatch(schemaHash, existing.schemaHash)
+          )
         ) {
           // Either fields changed or the status toggle flipped — both warrant
           // a write so dynamic_singles.status stays in sync with the
@@ -808,6 +825,45 @@ export class SingleRegistryService extends BaseRegistryService<
               // of leaving a stale opt-out suppressing the outbox.
               webhooks: config.webhooks ?? null,
               localized: config.localized === true,
+            },
+            { source: "code" }
+          );
+          result.updated.push(config.slug);
+          await this.seedPermissionsForSingle(config.slug);
+        } else if (
+          this.adminConfigChanged(config.admin, existing.admin) ||
+          metadataSyncNeeded(config, existing)
+        ) {
+          /*
+           * Metadata only: no field changed, so nothing physical has to move.
+           *
+           * A separate branch rather than another clause on the one above,
+           * because that branch also carries `schemaHash` and drives the
+           * migration bookkeeping — routing a renamed preview through it would
+           * flag a migration for an edit that touches no column. These three
+           * are written INSIDE that branch and were not among the things that
+           * opened it, so until now they reached storage only when some
+           * unrelated schema change happened to trigger a write.
+           *
+           * The admin block is where a Single names its preview and declares
+           * the viewports it offers, and the admin app reads both from the
+           * stored row: a config function cannot travel over HTTP, so the row
+           * is the only copy the browser ever sees.
+           *
+           * This mirrors `CollectionRegistryService.syncCodeFirstCollections`,
+           * which already has the same branch for the same reason.
+           */
+          await this.updateSingle(
+            config.slug,
+            {
+              label: config.label,
+              // Explicit null where the config no longer declares one, so
+              // `updateSingle` clears the column instead of reading `undefined`
+              // as "leave unchanged" and stranding a description the config has
+              // dropped. Same reasoning as `revalidate` and `webhooks` above.
+              description: config.description ?? null,
+              admin: config.admin ?? null,
+              locked: true,
             },
             { source: "code" }
           );

@@ -586,24 +586,17 @@ export class CollectionRegistryService extends BaseRegistryService<
           result.created.push(config.slug);
           await this.seedPermissionsForCollection(config.slug);
         } else if (
-          !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.status === true) !== (existing.status === true) ||
-          // Re-sync when the resolved versioning config changed (both are
-          // normalized JSON, so a stable string compare detects a real change).
-          JSON.stringify(config.versions ?? null) !==
-            JSON.stringify(existing.versions ?? null) ||
-          // Re-sync when the cache-revalidation config changed.
-          JSON.stringify(config.revalidate ?? null) !==
-            JSON.stringify(existing.revalidate ?? null) ||
-          // Re-sync when the webhook recording policy changed.
-          JSON.stringify(config.webhooks ?? null) !==
-            JSON.stringify(existing.webhooks ?? null) ||
-          (config.localized === true) !== (existing.localized === true) ||
+          this.schemaSyncNeeded(
+            config,
+            existing,
+            !schemaHashesMatch(schemaHash, existing.schemaHash)
+          ) ||
           // Declared defaults are read from the stored definitions when an
           // entry is created, and the schema hash omits them, so they need
           // their own comparison or a changed default never reaches the write.
           fieldDefaultsSignature(config.fields) !==
             fieldDefaultsSignature(existing.fields) ||
+          // A collection's physical table, which a Single has no equivalent of.
           desiredTableName !== existing.tableName
         ) {
           // Fields changed, status toggle flipped, or `dbName` resolved to a
