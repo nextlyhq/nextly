@@ -25,7 +25,9 @@ import {
 } from "../utils/generate-schema";
 import {
   applyRedirectPattern,
+  documentReachability,
   parseRedirectReference,
+  pickedDocumentField,
   type RedirectTargetDocument,
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
@@ -427,21 +429,22 @@ async function resolveRedirectUrl(
   const settings = form.settings;
   if (!settings) return undefined;
 
-  const { confirmationType } = settings;
-  if (confirmationType !== "redirect" && confirmationType !== "relationship") {
-    return undefined;
-  }
-
   // A typed URL is returned verbatim: it is the whole point of that option,
   // and it may legitimately point off-site.
-  if (confirmationType === "redirect" && settings.redirectUrl) {
+  if (settings.confirmationType === "redirect" && settings.redirectUrl) {
     return settings.redirectUrl;
   }
 
+  // Otherwise whichever key names a document, read through the SAME function
+  // the save-time rule uses. Two readers here would let this path redirect to
+  // a document the rule never inspected — which it did: the rule matched only
+  // `relationship`, so a `redirect`-with-relation form was resolved here and
+  // guarded nowhere.
+  const field = pickedDocumentField(settings as Record<string, unknown>);
+  if (!field) return undefined;
+
   return urlForPickedDocument(
-    confirmationType === "relationship"
-      ? settings.redirectPage
-      : settings.redirectRelation,
+    (settings as Record<string, unknown>)[field],
     form,
     pluginConfig,
     pluginContext
@@ -484,6 +487,30 @@ async function urlForPickedDocument(
 
   const target = await readTarget(reference, form, pluginContext);
   if (!target) return undefined;
+
+  // Reachability is re-decided HERE, not inherited from the save. Nothing runs
+  // a forms hook when the target itself changes, so a page that was published
+  // when the form was saved can be unpublished afterwards and the save-time
+  // rule never sees it. Sending a visitor there produces exactly the "page not
+  // found" that rule exists to prevent, so this degrades to no redirect — the
+  // submission is still stored and still succeeds.
+  // The target collection's own `localized` setting, resolved at plugin init.
+  // Absent means it could not be read, which reports as undecided rather than
+  // as "not localized" — dropping a redirect on that guess would strand a
+  // destination a translation is still serving.
+  if (
+    documentReachability(
+      target,
+      pluginConfig.redirectTargetLocalization[reference.collection]
+    ) === "unreachable"
+  ) {
+    logger.warn?.("Form redirects to a page that has never been published", {
+      form: form.slug,
+      collection: reference.collection,
+      target: reference.id,
+    });
+    return undefined;
+  }
 
   return buildUrl(pattern, target, reference.collection, form, pluginContext);
 }

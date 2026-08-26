@@ -23,24 +23,100 @@ import {
 } from "@nextlyhq/ui";
 import { useEffect, useState } from "react";
 
-import { parseRedirectReference } from "../../../utils/redirect-reference";
+import {
+  documentReachability,
+  type Reachability,
+  parseRedirectReference,
+} from "../../../utils/redirect-reference";
 
 /** Rows per request. Search, not paging, is how the rest are reached. */
 const PAGE_SIZE = 50;
 
 /**
- * The only fields this control reads, in the order `documentLabel` prefers.
+ * The conventional title fields, tried in order when a collection does not say
+ * which of its fields names a document.
+ */
+const FALLBACK_TITLE_FIELDS = ["title", "name", "label", "slug"] as const;
+
+/**
+ * The fields this control reads for one collection, in the order
+ * `documentLabel` prefers them.
+ *
+ * A collection declares what names its documents through `admin.useAsTitle`,
+ * and that declaration leads here: a collection titled by `headline` is listed
+ * by its headlines rather than by opaque ids, which is the difference between
+ * choosing a redirect target and guessing at one. The conventional names still
+ * follow it, so a row whose configured title field happens to be empty reads
+ * as something recognisable instead of falling straight through to an id.
+ *
+ * `id` is always first because the control stores it.
  *
  * One declaration, used to build the request AND to choose the label, so a
  * field added to one cannot go missing from the other.
  */
-const LABEL_FIELDS = ["id", "title", "name", "label", "slug"] as const;
+export function labelFieldsFor(useAsTitle?: string): readonly string[] {
+  const configured = useAsTitle?.trim();
+  if (!configured) return ["id", ...FALLBACK_TITLE_FIELDS];
+  return [
+    "id",
+    configured,
+    ...FALLBACK_TITLE_FIELDS.filter(field => field !== configured),
+  ];
+}
+
+/**
+ * The `select` query value that projects a read down to `fields`.
+ *
+ * The dispatcher reads this parameter with `JSON.parse` and keeps only the
+ * keys whose values are booleans (`parseSelectParam`,
+ * packages/nextly/src/dispatcher/helpers/validation.ts). A value it cannot
+ * parse becomes `undefined` — no error, no warning, and a response carrying
+ * every field of every row. A comma-separated list is precisely such a value,
+ * so the encoding is the whole difference between projecting a read and
+ * appearing to project it.
+ */
+/**
+ * The fields to REQUEST, which is the label fields plus what decides
+ * reachability.
+ *
+ * Kept apart from `labelFieldsFor` on purpose. `status` decides whether a page
+ * is marked as a draft; it must never become a document's name, and
+ * `documentLabel` walks whatever list it is given — so a page with no title
+ * would otherwise be offered to an author as "draft".
+ *
+ * Derived from the label list rather than written out again, so a field added
+ * for labelling is still requested.
+ */
+export function selectFieldsFor(useAsTitle?: string): readonly string[] {
+  // `firstPublishedAt` as well as `status`: it is what says the collection has
+  // a publish lifecycle at all, and without it a page whose collection merely
+  // has a field called `status` would be marked as a draft. See
+  // `hasPublishLifecycle`.
+  return [...labelFieldsFor(useAsTitle), "status", "firstPublishedAt"];
+}
+
+export function selectParam(fields: readonly string[]): string {
+  return encodeURIComponent(
+    JSON.stringify(Object.fromEntries(fields.map(field => [field, true])))
+  );
+}
 
 /** One selectable document, reduced to what the control shows and stores. */
 interface Choice {
   collection: string;
   id: string;
   label: string;
+  /**
+   * Whether a visitor could reach this page today. Unpublished pages are
+   * offered on purpose — a form is usually configured beside the page it
+   * points at — but an author choosing one should be able to see that it is
+   * not live yet.
+   *
+   * Kept as the three-way answer rather than a boolean: a localized page whose
+   * translation may be public is not the same as one that is definitely a
+   * draft, and only the definite case earns a marker.
+   */
+  reachability: Reachability;
 }
 
 interface RedirectPagePickerProps {
@@ -68,10 +144,27 @@ export function selectionKey(
 }
 
 /** What to call a document, preferring the field an author would recognise. */
-export function documentLabel(row: Record<string, unknown>): string {
-  for (const field of LABEL_FIELDS.filter(name => name !== "id")) {
+export function documentLabel(
+  row: Record<string, unknown>,
+  fields: readonly string[] = labelFieldsFor()
+): string {
+  for (const field of fields.filter(name => name !== "id")) {
+    // A collection only has to point `useAsTitle` at a field that EXISTS, so
+    // the configured title can be a number or a boolean. Skipping those falls
+    // through to a conventional field or to the id, which is the opaque label
+    // reading the configuration was meant to replace. `0` and `false` are
+    // titles like any other, so emptiness is decided after stringifying, not
+    // by truthiness.
     const candidate = row[field];
-    if (typeof candidate === "string" && candidate.trim()) return candidate;
+    const text =
+      typeof candidate === "string"
+        ? candidate
+        : typeof candidate === "number" && Number.isFinite(candidate)
+          ? String(candidate)
+          : typeof candidate === "boolean"
+            ? String(candidate)
+            : undefined;
+    if (text !== undefined && text.trim()) return text;
   }
   return typeof row.id === "string" ? row.id : "Untitled";
 }
@@ -83,24 +176,25 @@ export function documentLabel(row: Record<string, unknown>): string {
  * the default of 10. `status=all` because a form is usually configured
  * alongside the page it points at, and filtering to published shows "create
  * one first" while the page sits in the next tab. `depth=0` because this reads
- * five fields and would otherwise inherit the collection API's expansion,
- * pulling every nested relation of every row to fill a dropdown.
+ * a handful of scalar fields and would otherwise inherit the collection API's
+ * expansion, pulling every nested relation of every row to fill a dropdown.
  */
 async function fetchChoices(
   collection: string,
   query: string,
-  page: number
+  page: number,
+  meta: CollectionMeta
 ): Promise<{ rows: Choice[]; hasMore: boolean } | null> {
   const search = query ? `&search=${encodeURIComponent(query)}` : "";
   try {
-    // `select` as well as `depth=0`. Without it every scalar and JSON field of
-    // up to fifty documents is downloaded per collection — for page-builder
-    // documents that is the whole block tree — to fill a dropdown that reads
-    // five fields.
+    // `select` as well as `depth=0`. Without one the server sends every scalar
+    // and JSON field of up to fifty documents per collection — for
+    // page-builder documents that is the whole block tree — to fill a dropdown
+    // that reads a handful of them.
     const response = await fetch(
       `/admin/api/collections/${collection}/entries` +
         `?limit=${PAGE_SIZE}&page=${page}&status=all&depth=0` +
-        `&select=${LABEL_FIELDS.join(",")}${search}`,
+        `&select=${selectParam(selectFieldsFor(meta.titleField))}${search}`,
       { credentials: "include" }
     );
     if (!response.ok) return null;
@@ -114,7 +208,11 @@ async function fetchChoices(
         .map(row => ({
           collection,
           id: row.id as string,
-          label: documentLabel(row),
+          label: documentLabel(row, labelFieldsFor(meta.titleField)),
+          reachability: documentReachability(
+            row as { id: string },
+            meta.localized
+          ),
         })),
       // Reported rather than assumed, so the control can offer the rest
       // instead of truncating where the author cannot see it.
@@ -151,16 +249,142 @@ function renderChoice(choice: Choice) {
       key={`${choice.collection}:${choice.id}`}
       value={`${choice.collection}:${choice.id}`}
     >
-      {choice.label}
+      <span className="inline-flex items-center gap-2">
+        <span>{choice.label}</span>
+        {/* Unpublished pages are offered deliberately — a form is usually
+            configured beside the page it points at — so the marker is what
+            keeps "offered" from reading as "live". A published form saved
+            against one is refused, and an author who cannot see which pages
+            are drafts has no way to predict that. */}
+        {choice.reachability === "unreachable" && (
+          <span className="shrink-0 rounded-sm border px-1 py-px text-[10px] uppercase tracking-wide text-muted-foreground">
+            Draft
+          </span>
+        )}
+      </span>
     </SelectItem>
   );
+}
+
+/**
+ * Which collections the picker needs metadata for, as the key the lookup is
+ * cached on.
+ *
+ * The configured ones, plus the collection the STORED target names when that
+ * is no longer among them. A polymorphic value can point at a collection since
+ * removed from `redirectRelationships`, and the picker recovers and displays
+ * that target on purpose — looking up only the configured ones would label it
+ * by the conventional names while the listing uses each collection's own title
+ * field, showing one document under two rules.
+ */
+export function metadataCollections(
+  collections: readonly string[],
+  value: unknown
+): string {
+  const stored = selectionKey(value, collections)?.split(":")[0];
+  const wanted =
+    stored && !collections.includes(stored)
+      ? [...collections, stored]
+      : collections;
+  return wanted.join(",");
+}
+
+/**
+ * The field a collection says names its documents, or undefined when it does
+ * not say or cannot be asked.
+ *
+ * Undefined covers both "this collection declares no title field" and "the
+ * metadata could not be read", because the control does the same thing in
+ * either case: fall back to the conventional names. Nothing on screen depends
+ * on telling them apart, and the listing itself still reports its own
+ * failures.
+ */
+interface CollectionMeta {
+  /** The field the collection says names its documents. */
+  titleField: string | undefined;
+  /**
+   * The collection's `localized` setting, or undefined when it could not be
+   * read. Undefined is NOT false: a localized collection read as plain marks
+   * reachable translations as drafts.
+   */
+  localized: boolean | undefined;
+}
+
+async function fetchCollectionMeta(
+  collection: string
+): Promise<CollectionMeta> {
+  try {
+    // The bare document, not a `{ message, item }` envelope — that shape is
+    // for mutations, and this is a read.
+    const response = await fetch(`/admin/api/collections/${collection}`, {
+      credentials: "include",
+    });
+    if (!response.ok) return { titleField: undefined, localized: undefined };
+    const body = (await response.json()) as {
+      admin?: { useAsTitle?: unknown };
+      localized?: unknown;
+    };
+    const configured = body.admin?.useAsTitle;
+    return {
+      titleField:
+        typeof configured === "string" && configured.trim()
+          ? configured.trim()
+          : undefined,
+      localized:
+        typeof body.localized === "boolean" ? body.localized : undefined,
+    };
+  } catch {
+    return { titleField: undefined, localized: undefined };
+  }
+}
+
+/**
+ * The fields to read and to label from, per configured collection.
+ *
+ * Resolved once per collection list rather than per search: what a collection
+ * calls its title does not change while an author types, and folding this into
+ * the listing effect would spend a request per keystroke to re-learn a
+ * constant.
+ *
+ * `null` means not resolved yet. The listing waits for it, because a first
+ * page fetched under the fallback fields would have to be refetched or else
+ * left labelled differently from every page after it.
+ */
+function useTitleFields(key: string) {
+  const [fields, setFields] = useState<Record<string, CollectionMeta> | null>(
+    null
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const wanted = key ? key.split(",") : [];
+    setFields(null);
+
+    void Promise.all(
+      wanted.map(async collection => {
+        return [collection, await fetchCollectionMeta(collection)] as const;
+      })
+    ).then(pairs => {
+      if (!cancelled) setFields(Object.fromEntries(pairs));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+
+  return fields;
 }
 
 /**
  * The matching documents for every configured collection, and which of them
  * could not be read.
  */
-function useChoices(key: string, applied: string) {
+function useChoices(
+  key: string,
+  applied: string,
+  titleFields: Record<string, CollectionMeta> | null
+) {
   const [choices, setChoices] = useState<Choice[] | null>(null);
   const [failed, setFailed] = useState<readonly string[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -184,13 +408,26 @@ function useChoices(key: string, applied: string) {
   }, [key, applied]);
 
   useEffect(() => {
+    // Nothing to request until each collection's title field is known —
+    // see `useTitleFields`. `choices` stays null, which the control already
+    // renders as loading.
+    if (titleFields === null) return;
+
     let cancelled = false;
     const wanted = key ? key.split(",") : [];
     setLoading(true);
 
     void Promise.all(
       wanted.map(collection =>
-        fetchChoices(collection, applied, pages[collection] ?? 1)
+        fetchChoices(
+          collection,
+          applied,
+          pages[collection] ?? 1,
+          titleFields[collection] ?? {
+            titleField: undefined,
+            localized: undefined,
+          }
+        )
       )
     ).then(results => {
       if (cancelled) return;
@@ -219,7 +456,7 @@ function useChoices(key: string, applied: string) {
     return () => {
       cancelled = true;
     };
-  }, [key, applied, pages]);
+  }, [key, applied, pages, titleFields]);
 
   return {
     choices,
@@ -270,7 +507,8 @@ function useChoices(key: string, applied: string) {
 function useSelectedChoice(
   selected: string | undefined,
   choices: Choice[] | null,
-  setChoices: (update: (current: Choice[] | null) => Choice[]) => void
+  setChoices: (update: (current: Choice[] | null) => Choice[]) => void,
+  titleFields: Record<string, CollectionMeta> | null
 ) {
   // Whether the stored selection could not be read. A controlled `Select`
   // holding a value with no matching option renders BLANK, which looks
@@ -319,7 +557,21 @@ function useSelectedChoice(
         }
         setUnreadable(false);
         setChoices(current => [
-          { collection, id: row.id as string, label: documentLabel(row) },
+          {
+            collection,
+            id: row.id as string,
+            // The same fields the listing labels by. Labelling the recovered
+            // document differently would show one document under two names
+            // depending on whether the listing happened to reach it.
+            label: documentLabel(
+              row,
+              labelFieldsFor(titleFields?.[collection]?.titleField)
+            ),
+            reachability: documentReachability(
+              row as { id: string },
+              titleFields?.[collection]?.localized
+            ),
+          },
           ...(current ?? []),
         ]);
       } catch {
@@ -330,7 +582,7 @@ function useSelectedChoice(
     return () => {
       cancelled = true;
     };
-  }, [selected, choices, setChoices]);
+  }, [selected, choices, setChoices, titleFields]);
 
   return unreadable;
 }
@@ -512,6 +764,7 @@ export function RedirectPagePicker({
 
   // `collections` is an array prop, so a new identity every render would
   // refetch forever; the join is the value that actually decides the request.
+  const titleFields = useTitleFields(metadataCollections(collections, value));
   const {
     choices,
     setChoices,
@@ -520,14 +773,19 @@ export function RedirectPagePicker({
     loading,
     loadMore,
     retryFailed,
-  } = useChoices(collections.join(","), applied);
+  } = useChoices(collections.join(","), applied, titleFields);
   const selected = selectionKey(value, collections);
   // A value is stored and this control cannot say WHICH document it is: a bare
   // id names no collection, and with none configured there is nowhere to look
   // it up. Distinct from an unreadable selection, which is a failed request
   // rather than missing information.
   const unidentifiable = value != null && selected === undefined;
-  const selectionUnreadable = useSelectedChoice(selected, choices, setChoices);
+  const selectionUnreadable = useSelectedChoice(
+    selected,
+    choices,
+    setChoices,
+    titleFields
+  );
 
   if (choices === null) {
     return <p className="text-[12px] text-muted-foreground">Loading pages…</p>;
