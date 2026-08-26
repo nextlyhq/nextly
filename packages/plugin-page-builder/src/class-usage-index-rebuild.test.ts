@@ -487,3 +487,144 @@ describe("a document the walk missed but which still exists", () => {
     expect(deletes).toEqual([]);
   });
 });
+
+describe("a variant of a document that no longer exists", () => {
+  /**
+   * One draft row, and stores that answer per variant.
+   *
+   * `draftLives` is the only thing that differs between the two cases below,
+   * so the pair is a must-differ control: if the sweep ignored the variant it
+   * would return the same answer for both, and the two expectations could not
+   * both hold.
+   */
+  const sweepWithDraft = async (draftLives: boolean) => {
+    const rows = [
+      {
+        id: "r1",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "page-1",
+        field: "content",
+        locale: "",
+        variant: "draft",
+        classId: "hero",
+      },
+    ];
+    const deletes: string[] = [];
+    const index: ClassUsageIndexStore = {
+      find: async args => ({
+        items: rows.filter(r =>
+          Object.entries(args.where).every(
+            ([column, predicate]) =>
+              (r as Record<string, unknown>)[column] === predicate.equals
+          )
+        ),
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async args => {
+        deletes.push(args.id);
+        return {};
+      },
+    };
+
+    const documents: ClassUsageDocumentStore = {
+      // The draft pass reaches no document: a discarded working draft is not
+      // returned by a draft-scoped read.
+      find: async () => ({ items: [], meta: { hasNext: false } }),
+      // The published document is still there in BOTH cases. Only the draft
+      // moves, which is what makes the variant the operative input.
+      exists: async ({ variant }) =>
+        variant === "published" ? true : draftLives,
+    };
+
+    const report = await rebuildClassUsageIndex({
+      documents,
+      index,
+      collection: "pages",
+      field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
+      variant: "draft",
+    });
+    return { report, deletes };
+  };
+
+  it("sweeps its rows once that variant is gone", async () => {
+    // Discarding a working draft leaves the published document untouched, so a
+    // check asking only whether SOME document has this id answers `true` for a
+    // draft that no longer exists. Its rows then survive every future pass —
+    // permanently, because the sweep is the only thing that could remove them
+    // and it is the thing that could not see the difference. The classes that
+    // draft applied stay counted as in use and can never be deleted.
+    const { report, deletes } = await sweepWithDraft(false);
+
+    expect(report.orphansRemoved).toBe(1);
+    expect(deletes).toEqual(["r1"]);
+  });
+
+  it("keeps them while that variant still exists", async () => {
+    // The control, and the half that has to stay true: a live draft missed by
+    // an offset walk must not lose its rows. Scoping the question does not
+    // weaken the bias towards keeping them, it only stops the check answering
+    // for a document nobody asked about.
+    const { report, deletes } = await sweepWithDraft(true);
+
+    expect(report.orphansRemoved).toBe(0);
+    expect(deletes).toEqual([]);
+  });
+});
+
+describe("the coordinates an existence check is asked in", () => {
+  it("carries the subject's locale as well as its variant", async () => {
+    // A working draft can be per-locale, so the same reasoning that scopes the
+    // check by variant scopes it by locale: asked in the wrong translation, it
+    // answers for a document nobody indexed. Asserted on the ARGUMENTS rather
+    // than on an outcome, because a fixture whose locales agree cannot tell a
+    // check that reads the field from one that ignores it.
+    const asked: string[] = [];
+    const rows = [
+      {
+        id: "r1",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "gone-page",
+        field: "content",
+        locale: "fr",
+        variant: "draft",
+        classId: "hero",
+      },
+    ];
+    const index: ClassUsageIndexStore = {
+      find: async args => ({
+        items: rows.filter(r =>
+          Object.entries(args.where).every(
+            ([column, predicate]) =>
+              (r as Record<string, unknown>)[column] === predicate.equals
+          )
+        ),
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async () => ({}),
+    };
+    const documents: ClassUsageDocumentStore = {
+      find: async () => ({ items: [], meta: { hasNext: false } }),
+      exists: async ({ id, locale, variant }) => {
+        asked.push(`${id}:${locale}:${variant}`);
+        return true;
+      },
+    };
+
+    await rebuildClassUsageIndex({
+      documents,
+      index,
+      collection: "pages",
+      field: "content",
+      locale: "fr",
+      variant: "draft",
+    });
+
+    expect(asked).toEqual(["gone-page:fr:draft"]);
+  });
+});

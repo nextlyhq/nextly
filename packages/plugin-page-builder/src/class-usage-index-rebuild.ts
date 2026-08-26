@@ -115,15 +115,27 @@ export interface ClassUsageDocumentStore {
    * query per suspected orphan, which is proportional to the damage rather
    * than to the site.
    *
-   * Takes no variant, unlike `find`, and that asymmetry is deliberate. This
-   * asks whether the document exists AT ALL, because answering `true` is what
-   * keeps its rows. A document that exists only as an unpublished draft is
-   * absent from the published pass's walk, and scoping this question to the
-   * published variant would answer `false` and sweep rows the draft justifies —
-   * turning a check that exists to fail towards keeping rows into one that
-   * deletes them.
+   * Scoped to the SAME locale and variant as the rows it decides the fate of,
+   * because that is the question the sweep is actually asking: not "is there a
+   * document with this id" but "does the thing these rows describe still
+   * exist". A document has a published form and a draft form and they come and
+   * go independently — discarding a working draft leaves the published
+   * document untouched — so an unscoped check answers `true` for a draft that
+   * is gone, and its rows survive every future pass. Nothing else can remove
+   * them, because the sweep is the only mechanism that could and it is the one
+   * that cannot see the difference.
+   *
+   * Scoping does not weaken the bias towards keeping rows. A document that
+   * exists only as an unpublished draft answers `true` when asked about the
+   * draft variant, which is the answer that keeps its rows, and the published
+   * pass has no rows for it to lose.
    */
-  exists(args: { collection: string; id: string }): Promise<boolean>;
+  exists(args: {
+    collection: string;
+    id: string;
+    locale: string;
+    variant: ClassUsageVariant;
+  }): Promise<boolean>;
 }
 
 /** What a rebuild did, in numbers that mean different things. */
@@ -339,7 +351,15 @@ export async function rebuildClassUsageIndex(args: {
     // blocks a delete, while a wrongly removed one under-counts and permits
     // deleting a class the live document still renders.
     stillExists: id =>
-      args.documents.exists({ collection: args.collection, id }),
+      args.documents.exists({
+        collection: args.collection,
+        id,
+        // The subject's own coordinates, not the document's id alone. A row is
+        // filed under all of them, so the question that decides whether to
+        // remove it has to be asked in all of them.
+        locale: args.locale,
+        variant: args.variant,
+      }),
   });
 
   return { scanned, repaired, undetermined, orphansRemoved: removed };

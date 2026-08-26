@@ -66,6 +66,13 @@ N of an ordered set, so ordering by a mutable key while writing during the walk 
 rows between queries and skips some - and `updatedAt`, the obvious ordering for a
 maintenance pass, is exactly the key each write moves.
 
+The existence check the sweep makes is asked in the SAME locale and variant as the rows it
+decides the fate of. A document's published and draft forms come and go independently -
+discarding a working draft leaves the published document untouched - so a check asking only
+whether some document has that id answers yes for a draft that is gone, and its rows survive
+every future pass. Nothing else could remove them, because the sweep is the only mechanism
+that can and it would be the one unable to see the difference.
+
 Rows whose document no longer exists are swept: a document deleted through a path that
 bypassed maintenance never appears in the walk, so its rows would otherwise survive a
 rebuild that reported success. The sweep runs only after the walk completes, since against a
