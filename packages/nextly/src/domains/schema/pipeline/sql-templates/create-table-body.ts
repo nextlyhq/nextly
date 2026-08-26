@@ -29,7 +29,7 @@ import type { ColumnSpec, TableSpec } from "../diff/types";
  * MySQL and SQLite report the declaration itself, so their `type` already carries the modifier and
  * must not have a second one appended.
  */
-function renderedType(c: ColumnSpec): string {
+export function renderedType(c: ColumnSpec): string {
   if (c.typeModifier === undefined) return c.type;
   // Already spelled inside the type — the MySQL and SQLite case.
   if (c.type.includes("(")) return c.type;

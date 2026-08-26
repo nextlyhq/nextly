@@ -12,6 +12,7 @@ import type {
   Operation,
   TableSpec,
 } from "../pipeline/diff/types";
+import { renderedType } from "../pipeline/sql-templates/create-table-body";
 
 function findTable(snap: NextlySchemaSnapshot, name: string): TableSpec {
   const t = snap.tables.find(tbl => tbl.name === name);
@@ -49,7 +50,7 @@ function invertOne(op: Operation, prev: NextlySchemaSnapshot): Operation {
         type: "drop_column",
         tableName: op.tableName,
         columnName: op.column.name,
-        columnType: op.column.type,
+        columnType: renderedType(op.column),
       };
     case "drop_column":
       return {

@@ -13,6 +13,7 @@ function snap(
       type: string;
       nullable: boolean;
       default?: string;
+      typeModifier?: string;
     }>;
   }>
 ): NextlySchemaSnapshot {
@@ -100,6 +101,69 @@ describe("diffSnapshots - column-level diff within existing table", () => {
         tableName: "dc_posts",
         columnName: "title",
         columnType: "text",
+      },
+    ]);
+  });
+
+  it("reports a dropped PostgreSQL column with its modifier restored", () => {
+    // PG introspection reads `udt_name`, which spells `numeric(10,2)` as a
+    // bare `numeric` with the precision recorded separately. A drop that
+    // reports `type` alone describes the column as unbounded, and the rename
+    // detector then reads a narrowing conversion as a move between two
+    // identical types.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [
+        { name: "id", type: "int4", nullable: false },
+        {
+          name: "amount",
+          type: "numeric",
+          nullable: true,
+          typeModifier: "10,2",
+        },
+      ],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [{ name: "id", type: "int4", nullable: false }],
+    });
+    const ops = diffSnapshots(prev, cur);
+    expect(ops).toEqual([
+      {
+        type: "drop_column",
+        tableName: "dc_orders",
+        columnName: "amount",
+        columnType: "numeric(10,2)",
+      },
+    ]);
+  });
+
+  it("does not append a modifier the type already spells out", () => {
+    // MySQL and SQLite report the declaration itself, so `type` already
+    // carries the size. Appending the modifier there yields `numeric(10,2)(10,2)`.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [
+        { name: "id", type: "int4", nullable: false },
+        {
+          name: "amount",
+          type: "numeric(10,2)",
+          nullable: true,
+          typeModifier: "10,2",
+        },
+      ],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [{ name: "id", type: "int4", nullable: false }],
+    });
+    const ops = diffSnapshots(prev, cur);
+    expect(ops).toEqual([
+      {
+        type: "drop_column",
+        tableName: "dc_orders",
+        columnName: "amount",
+        columnType: "numeric(10,2)",
       },
     ]);
   });

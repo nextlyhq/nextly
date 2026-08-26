@@ -21,6 +21,7 @@ import type {
 } from "./pushschema-pipeline-interfaces";
 import { isTypesCompatible } from "./rename-detector-type-families";
 import { renamePreservation } from "./rename-preservation";
+import { renderedType } from "./sql-templates/create-table-body";
 
 export class RegexRenameDetector implements RenameDetector {
   detect(
@@ -53,7 +54,12 @@ export class RegexRenameDetector implements RenameDetector {
       for (const drop of drops) {
         for (const add of adds) {
           const fromType = drop.columnType;
-          const toType = add.column.type;
+          // The DECLARATION on both sides. `drop_column` already reports one;
+          // an add whose ColumnSpec came from introspection (an inverse
+          // migration reverses a drop back into one) keeps its size in a
+          // separate field, and reading `type` alone would describe the
+          // column as unbounded.
+          const toType = renderedType(add.column);
           const compatible =
             fromType === ""
               ? false

@@ -537,3 +537,53 @@ describe("the text-to-JSON exception is scoped to the shape it repairs", () => {
     expect(candidates[0]?.defaultSuggestion).toBe("drop_and_add");
   });
 });
+
+describe("RegexRenameDetector - the type each side reports", () => {
+  // An `add_column` normally carries an authored declaration inside `type`.
+  // An inverse migration builds one by reversing a drop, so its ColumnSpec is
+  // whatever introspection recorded — and PostgreSQL records `numeric(5,1)`
+  // as a bare `numeric` plus a separate modifier.
+  const introspectedAdd = (
+    tableName: string,
+    columnName: string,
+    type: string,
+    typeModifier: string
+  ): AddColumnOp => ({
+    type: "add_column",
+    tableName,
+    column: { name: columnName, type, nullable: true, typeModifier },
+  });
+
+  it("reports the target's declaration, not its bare token", () => {
+    const [candidate] = detector.detect(
+      [
+        drop("dc_orders", "amount", "numeric(5,1)"),
+        introspectedAdd("dc_orders", "total", "numeric", "10,2"),
+      ],
+      "postgresql"
+    );
+    expect(candidate?.toType).toBe("numeric(10,2)");
+  });
+
+  it("sees a narrowing into a target whose size is recorded separately", () => {
+    const [candidate] = detector.detect(
+      [
+        drop("dc_orders", "amount", "numeric(10,2)"),
+        introspectedAdd("dc_orders", "total", "numeric", "5,1"),
+      ],
+      "postgresql"
+    );
+    expect(candidate?.preservesValues).toBe(false);
+  });
+
+  it("still preserves a widening between the same recorded sizes", () => {
+    const [candidate] = detector.detect(
+      [
+        drop("dc_orders", "amount", "numeric(5,1)"),
+        introspectedAdd("dc_orders", "total", "numeric", "10,2"),
+      ],
+      "postgresql"
+    );
+    expect(candidate?.preservesValues).toBe(true);
+  });
+});
