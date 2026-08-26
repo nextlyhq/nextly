@@ -344,6 +344,98 @@ describe("assertRedirectTargetUsable", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("lets the admin's whole-form save through when the target's collection is gone", async () => {
+    // The shipped shape: `FormBuilderView` spreads the entire `settings`
+    // object into every PATCH, so a rename carries a redirect naming a
+    // collection that has since left `redirectRelationships`. Refusing on the
+    // mention meant the author could not edit the form at all — not even to
+    // fix the redirect.
+    await expect(
+      assertRedirectTargetUsable(
+        context({
+          operation: "update",
+          data: {
+            name: "Renamed",
+            settings: {
+              confirmationType: "relationship",
+              redirectPage: { relationTo: "archive", value: "p1" },
+            },
+          },
+          originalData: {
+            status: "published",
+            settings: JSON.stringify({
+              confirmationType: "relationship",
+              redirectPage: { relationTo: "archive", value: "p1" },
+            }),
+          },
+        }),
+        { pages: "/{slug}" },
+        { pages: false }
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("still refuses a whole-form save that MOVES the target to an unconfigured collection", async () => {
+    // The control. Without it, "unchanged saves pass" is satisfied by a rule
+    // that stopped judging chosen targets altogether.
+    await expect(
+      assertRedirectTargetUsable(
+        context({
+          operation: "update",
+          data: {
+            name: "Renamed",
+            settings: {
+              confirmationType: "relationship",
+              redirectPage: { relationTo: "archive", value: "p2" },
+            },
+          },
+          originalData: {
+            status: "published",
+            settings: JSON.stringify({
+              confirmationType: "relationship",
+              redirectPage: { relationTo: "archive", value: "p1" },
+            }),
+          },
+        }),
+        { pages: "/{slug}" },
+        { pages: false }
+      )
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "settings.redirectPage" }] },
+    });
+  });
+
+  it("refuses a whole-form save that publishes over an unconfigured target", async () => {
+    // Unchanged target, so the rename exception would normally apply — but
+    // this write is what makes the form reachable, and its destination cannot
+    // be built at all.
+    await expect(
+      assertRedirectTargetUsable(
+        context({
+          operation: "update",
+          data: {
+            status: "published",
+            settings: {
+              confirmationType: "relationship",
+              redirectPage: { relationTo: "archive", value: "p1" },
+            },
+          },
+          originalData: {
+            status: "draft",
+            settings: JSON.stringify({
+              confirmationType: "relationship",
+              redirectPage: { relationTo: "archive", value: "p1" },
+            }),
+          },
+        }),
+        { pages: "/{slug}" },
+        { pages: false }
+      )
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "settings.redirectPage" }] },
+    });
+  });
+
   it("refuses when the write picks a page its pattern cannot describe", async () => {
     await expect(
       assertRedirectTargetUsable(

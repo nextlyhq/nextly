@@ -293,13 +293,17 @@ function normalizeStoredReference(
   }
 }
 
-function assertRedirectTargetNamed(
+function namedRedirectReference(
   data: Record<string, unknown> | undefined,
   operation: string,
   patterns: RedirectRelationships
 ): {
-  reference: { collection: string; id: string };
+  settings: Record<string, unknown>;
   field: PickedDocumentField;
+  /** Null when the settings name a redirect this cannot read. */
+  reference: { collection: string; id: string } | null;
+  /** Whether that collection is still a configured redirect target. */
+  configured: boolean;
 } | null {
   const picked = pageRedirectSettings(data, operation);
   if (!picked) return null;
@@ -307,16 +311,15 @@ function assertRedirectTargetNamed(
 
   const collections = Object.keys(patterns);
   const reference = parseRedirectReference(settings[field], collections);
-  if (!reference || !collections.includes(reference.collection)) {
-    throw redirectRefusal(
-      "Choose a page to redirect to, or pick a different confirmation.",
-      field
-    );
-  }
+  if (reference) normalizeStoredReference(settings, field, reference);
 
-  normalizeStoredReference(settings, field, reference);
-
-  return { reference, field };
+  return {
+    settings,
+    field,
+    reference,
+    configured:
+      reference !== null && collections.includes(reference.collection),
+  };
 }
 
 /**
@@ -395,28 +398,51 @@ function redirectReferenceForWrite(
   /** Whether the target's collection is still a configured redirect target. */
   configured: boolean;
 } | null {
-  const named = assertRedirectTargetNamed(
+  const stored = storedRedirectReference(
+    context.originalData as Record<string, unknown> | undefined,
+    patterns
+  );
+  const named = namedRedirectReference(
     context.data,
     context.operation,
     patterns
   );
+
   if (named) {
-    // NAMING a target is not CHOOSING one. The admin's save sends the whole
-    // `settings` object on every write — a rename carries the redirect it did
-    // not touch — so treating a mention as a choice made every unrelated save
-    // answer for a target the author never opened. Compared against what is
-    // stored: an unchanged reference is inherited, and only a write that moves
-    // it has chosen it.
-    const stored = storedRedirectReference(
-      context.originalData as Record<string, unknown> | undefined,
-      patterns
-    );
+    // NAMING a target is not CHOOSING one, and the refusal has to come AFTER
+    // that distinction rather than before it. The admin's save sends the whole
+    // `settings` object on every write, so a rename carries the redirect it
+    // never touched — and judging the mention meant a form whose collection
+    // had since been unconfigured could not be edited at all.
     const unchanged =
+      named.reference !== null &&
       stored !== null &&
       stored.field === named.field &&
       stored.reference.collection === named.reference.collection &&
       stored.reference.id === named.reference.id;
-    return { ...named, chosen: !unchanged, configured: true };
+
+    if (unchanged && named.reference) {
+      return {
+        reference: named.reference,
+        field: named.field,
+        chosen: false,
+        configured: named.configured,
+      };
+    }
+
+    // This write moved the target, so it answers for what it moved it to.
+    if (!named.reference || !named.configured) {
+      throw redirectRefusal(
+        "Choose a page to redirect to, or pick a different confirmation.",
+        named.field
+      );
+    }
+    return {
+      reference: named.reference,
+      field: named.field,
+      chosen: true,
+      configured: true,
+    };
   }
 
   // A write that REPLACES `settings` has answered the question: this form no
@@ -427,10 +453,6 @@ function redirectReferenceForWrite(
   const data = context.data as Record<string, unknown> | undefined;
   if (data?.settings !== undefined) return null;
 
-  const stored = storedRedirectReference(
-    context.originalData as Record<string, unknown> | undefined,
-    patterns
-  );
   return stored ? { ...stored, chosen: false } : null;
 }
 
@@ -964,7 +986,10 @@ export function formsCollection(
             // Reported here so an author sees it beside the form's other
             // errors. The GUARANTEE is the trailing `beforeChange` call below,
             // which a host hook cannot run after.
-            assertRedirectTargetNamed(
+            // Shape only at this phase: the same reading, without the
+            // stored document a refusal for an unconfigured collection would
+            // need. `assertRedirectTargetUsable` below makes that call.
+            namedRedirectReference(
               data,
               operation,
               pluginConfig.redirectRelationships
