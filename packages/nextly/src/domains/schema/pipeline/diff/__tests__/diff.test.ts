@@ -185,6 +185,10 @@ describe("diffSnapshots - column-level diff within existing table", () => {
         columnName: "title",
         fromType: "varchar",
         toType: "text",
+        // MySQL's MODIFY COLUMN restates the whole definition, so the
+        // nullability travels with the type or the column loses it.
+        nullable: false,
+        fromNullable: false,
       },
     ]);
   });
@@ -444,8 +448,68 @@ describe("diffSnapshots - a column resized but not retyped", () => {
         columnName: "amount",
         fromType: "numeric(10,2)",
         toType: "numeric(5,1)",
+        nullable: true,
+        fromNullable: true,
       },
     ]);
+  });
+
+  it("carries the nullability and default through the change", () => {
+    // MySQL spells a type change as `MODIFY COLUMN`, which restates the whole
+    // definition and drops whatever it does not restate. A generated migration
+    // has no schema push behind it to put them back, so a NOT NULL DEFAULT '0'
+    // column comes out of a resize nullable and defaultless — and its DOWN
+    // cannot recover them unless the previous pair travels too.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [
+        {
+          name: "amount",
+          type: "decimal(10,2)",
+          nullable: false,
+          default: "'0'",
+        },
+      ],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [
+        {
+          name: "amount",
+          type: "decimal(12,4)",
+          nullable: false,
+          default: "'0'",
+        },
+      ],
+    });
+    expect(diffSnapshots(prev, cur)[0]).toMatchObject({
+      type: "change_column_type",
+      nullable: false,
+      columnDefault: "'0'",
+      fromNullable: false,
+      fromColumnDefault: "'0'",
+    });
+  });
+
+  it("states a column that has no default as having none", () => {
+    // The control: the attributes must describe the column, not be filled in
+    // with whatever keeps the assertion above true. A default invented here
+    // would be written into every resized column that never had one.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [{ name: "amount", type: "decimal(10,2)", nullable: true }],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [{ name: "amount", type: "decimal(12,4)", nullable: true }],
+    });
+    const op = diffSnapshots(prev, cur)[0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(op.nullable).toBe(true);
+    expect(op).not.toHaveProperty("columnDefault");
+    expect(op).not.toHaveProperty("fromColumnDefault");
   });
 
   it("emits nothing when the same size is spelled two ways", () => {
