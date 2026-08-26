@@ -37,8 +37,29 @@ entirely, and a class the page still renders would then read as unused. A NAMED 
 repeater stay excluded, because their children are reachable only through a path the rebuild
 cannot resolve - indexing those would write rows nothing could ever reconcile or sweep.
 
+A group whose name is the EMPTY STRING is presentational too. That is what a host writes for
+a layout group it gave no key, and core resolves references and redacts paths through such a
+group at the parent level - so one definition of "has a name" now answers both questions this
+filter asks, and a group cannot be read as named while the blocks field inside it is read as
+unaddressable.
+
+A group that contains itself no longer hides its siblings. Expansion is tracked by identity,
+so a cyclic group is descended into once; a bound alone ended the walk without ever reaching
+the fields declared after the cycle, and an empty result is indistinguishable from a
+collection that declares no blocks field - every class the document applies would have read
+as unused.
+
+Whether a field stores per language is decided by the collection's localization master switch
+together with the field's own flag, through the same classifier storage obeys. A field flagged
+localized on a collection that stores no translations is held ONCE, under the empty locale
+key; reading the flag alone enumerated a subject per configured language and left the single
+subject a read resolves to holding no rows at all. The filter therefore takes the collection
+rather than its field list, because pairing one collection's fields with another's switch
+would produce subjects under locales that collection never stores.
+
 Configuration is read defensively, because it arrives as whatever the host wrote, including
-from untyped JavaScript and the Schema Builder's stored JSON. A localized flag is read as a
-strict boolean, so a stored string does not file one document's classes under every language.
-A field with no usable name is skipped rather than defaulted, since the name is the column
-every row is keyed by. A duplicate name yields one subject rather than two.
+from untyped JavaScript and the Schema Builder's stored JSON. The localized flag and the
+master switch are both read as strict booleans, so a stored string does not file one
+document's classes under every language. A field with no usable name is skipped rather than
+defaulted, since the name is the column every row is keyed by. A duplicate name yields one
+subject rather than two.
