@@ -58,6 +58,45 @@ describe("alignUnits", () => {
     });
   });
 
+  it("pairs a MULTI-unit replacement positionally, not just at its boundary", () => {
+    // The differ emits a replacement as every removal followed by every
+    // insertion, so a rule that looks only at the boundary between those runs
+    // pairs one removal with one insertion and reports the rest as a stray
+    // removal and a stray addition. The single-unit case above cannot tell the
+    // two implementations apart — this one can.
+    const { pairs } = alignUnits(
+      ["old one", "old two"],
+      ["new one", "new two"]
+    );
+    expect(pairs.map(p => p.status)).toEqual(["changed", "changed"]);
+    expect(pairs[0]).toMatchObject({
+      before: "old one",
+      after: "new one",
+      fromIndex: 0,
+      toIndex: 0,
+    });
+    expect(pairs[1]).toMatchObject({
+      before: "old two",
+      after: "new two",
+      fromIndex: 1,
+      toIndex: 1,
+    });
+  });
+
+  it("leaves the unmatched tail of a longer removal run as removals", () => {
+    const { pairs } = alignUnits(["a1", "a2", "a3"], ["b1"]);
+    expect(pairs.map(p => p.status)).toEqual(["changed", "removed", "removed"]);
+    expect(pairs[1]).toMatchObject({ before: "a2", fromIndex: 1 });
+    expect(pairs[2]).toMatchObject({ before: "a3", fromIndex: 2 });
+  });
+
+  it("leaves the unmatched tail of a longer insertion run as additions", () => {
+    const { pairs } = alignUnits(["a1"], ["b1", "b2", "b3"]);
+    expect(pairs.map(p => p.status)).toEqual(["changed", "added", "added"]);
+    expect(pairs[1]).toMatchObject({ after: "b2", toIndex: 1 });
+    expect(pairs[2]).toMatchObject({ after: "b3", toIndex: 2 });
+  });
+
   it("carries indices that address the correct side of each pair", () => {
     // An insertion desynchronises the two sides, so a pair after it must name
     // a different index on each side. One shared index would silently address

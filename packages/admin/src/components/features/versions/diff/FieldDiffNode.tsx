@@ -26,31 +26,30 @@ import { Badge } from "@admin/components/ui";
 import type {
   FieldDiff,
   ListItemDiff,
+  GroupFieldDiff,
   RelationTarget,
-  TextSegment,
+  SetFieldDiff,
+  TextFieldDiff,
   ValueFieldDiff,
 } from "@admin/services/versionApi";
 
 import { FieldValue } from "../value-display/FieldValueDisplay";
 
+import {
+  FieldRow,
+  StatusBadge,
+  TextRuns,
+  type DiffStatus,
+} from "./diff-primitives";
+import { resolveFieldDiff } from "./field-diff-registry";
+// Imported for their registration side effect, exactly as the value-display kit
+// is. They live here rather than at a view, because a renderer that is never
+// imported is never registered and its field would silently fall back to the
+// unrecognised-kind row — so the dispatcher owns making sure its own renderers
+// exist. Neither imports this module, so there is no cycle.
+import "./RichTextDiff";
+import "./SourceDiff";
 import { splitTextSegments } from "./text-segment-sides";
-
-type DiffStatus = FieldDiff["status"];
-
-const STATUS_BADGE: Record<
-  DiffStatus,
-  { variant: "success" | "destructive" | "warning" | "outline"; label: string }
-> = {
-  added: { variant: "success", label: "Added" },
-  removed: { variant: "destructive", label: "Removed" },
-  changed: { variant: "warning", label: "Changed" },
-  unchanged: { variant: "outline", label: "Unchanged" },
-};
-
-function StatusBadge({ status }: { status: DiffStatus }) {
-  const badge = STATUS_BADGE[status];
-  return <Badge variant={badge.variant}>{badge.label}</Badge>;
-}
 
 /**
  * A React key that stays unique across a component-type swap. When a dynamic
@@ -75,45 +74,6 @@ function renderField(node: ValueFieldDiff): FieldConfig {
     label: node.label,
     ...node.display,
   } as FieldConfig;
-}
-
-/** A labelled block wrapping one field's diff. */
-function FieldRow({
-  label,
-  status,
-  children,
-}: {
-  label: string;
-  status: DiffStatus;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="py-2.5 border-b border-border last:border-b-0">
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-xs font-medium text-muted-foreground">
-          {label}
-        </span>
-        <StatusBadge status={status} />
-      </div>
-      <div className="text-sm text-foreground">{children}</div>
-    </div>
-  );
-}
-
-function TextSegmentSpan({ segment }: { segment: TextSegment }) {
-  if (segment.op === 0) return <span>{segment.text}</span>;
-  if (segment.op === 1) {
-    return (
-      <ins className="rounded-sm px-0.5 no-underline bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100">
-        {segment.text}
-      </ins>
-    );
-  }
-  return (
-    <del className="rounded-sm px-0.5 bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100">
-      {segment.text}
-    </del>
-  );
 }
 
 /**
@@ -215,132 +175,188 @@ function targetLabel(target: RelationTarget): string {
   return target.relationTo ? `${target.relationTo}: ${display}` : display;
 }
 
-/** One sequence of text-diff runs as a paragraph of marked spans. */
-function TextRuns({ segments }: { segments: readonly TextSegment[] }) {
+/**
+ * A node kind this build does not draw.
+ *
+ * Reached when a server sends a kind the client predates. Rendering nothing
+ * would make the field VANISH from the comparison, which reads exactly like a
+ * field that did not change — the one conclusion that must never be reached by
+ * accident. Degrading to the name and status loses the detail and keeps the
+ * fact, so the reader knows to open the version itself.
+ */
+function UnrecognisedField({ node }: { node: FieldDiff }) {
+  const unrecognised = node as {
+    name?: string;
+    label?: string;
+    status?: DiffStatus;
+  };
   return (
-    <p className="whitespace-pre-wrap break-words leading-relaxed">
-      {segments.map((segment, index) => (
-        <TextSegmentSpan key={index} segment={segment} />
-      ))}
-    </p>
+    <FieldRow
+      label={unrecognised.label ?? unrecognised.name ?? "Field"}
+      status={unrecognised.status ?? "changed"}
+    >
+      <p className="text-xs text-muted-foreground">
+        This field changed, but this version of the admin cannot display the
+        comparison. Open the version to read it.
+      </p>
+    </FieldRow>
   );
 }
 
-export function FieldDiffNode({ node }: { node: FieldDiff }) {
+/**
+ * A text field's runs.
+ *
+ * An unchanged node has only common runs, so both sides would be identical; it
+ * spans instead, matching how a value node handles the same case. An added or
+ * removed one has no runs at all on the side it never reached, so its sides are
+ * handed over unconditionally and `SplitPair` substitutes the absence marker —
+ * rendering the empty list would paint a blank paragraph, which reads as a
+ * field that existed and held nothing.
+ */
+function TextDiff({ node }: { node: TextFieldDiff }) {
+  if (node.status === "unchanged") {
+    return (
+      <FieldRow label={node.label} status={node.status}>
+        <TextRuns segments={node.segments} />
+      </FieldRow>
+    );
+  }
+  const sides = splitTextSegments(node.segments);
+  return (
+    <FieldRow label={node.label} status={node.status}>
+      <SplitPair
+        status={node.status}
+        before={<TextRuns segments={sides.before} />}
+        after={<TextRuns segments={sides.after} />}
+      />
+    </FieldRow>
+  );
+}
+
+/**
+ * A scalar, media or single-relationship value.
+ *
+ * Already normalized by the engine, so the kit renders it without normalizing a
+ * second time. A schema-less container never reaches here: the engine emits it
+ * as an unknown node so its value stays hidden. A relationship or upload value
+ * arrives resolved to the kit's display shape, so the same kit renders its
+ * label with no special-casing.
+ */
+function ValueDiff({ node }: { node: ValueFieldDiff }) {
+  const field = renderField(node);
+  return (
+    <FieldRow label={node.label} status={node.status}>
+      <BeforeAfter
+        status={node.status}
+        before={node.before}
+        after={node.after}
+        renderValue={value => (
+          <FieldValue field={field} value={value} preNormalized />
+        )}
+      />
+    </FieldRow>
+  );
+}
+
+/**
+ * A group or single component, nested. A dynamic-zone component whose type
+ * changed carries the slug transition, so the swap is legible even when neither
+ * side has field values to show.
+ */
+function GroupDiff({ node }: { node: GroupFieldDiff }) {
+  const swapped =
+    node.componentTypeBefore !== undefined ||
+    node.componentTypeAfter !== undefined;
+  return (
+    <FieldRow label={node.label} status={node.status}>
+      <div className="pl-3 border-l border-border">
+        {swapped ? (
+          <p className="text-xs text-muted-foreground mb-1">
+            Type: {node.componentTypeBefore ?? "none"} &rarr;{" "}
+            {node.componentTypeAfter ?? "none"}
+          </p>
+        ) : null}
+        {node.fields.map(child => (
+          <FieldDiffNode key={childKey(child)} node={child} />
+        ))}
+      </div>
+    </FieldRow>
+  );
+}
+
+/** The targets that entered or left a many-relationship. */
+function TargetGroup({
+  label,
+  targets,
+  variant,
+}: {
+  label: string;
+  targets: readonly RelationTarget[];
+  variant: "success" | "destructive";
+}) {
+  if (targets.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      {targets.map(target => (
+        <Badge key={targetKey(target)} variant={variant}>
+          {targetLabel(target)}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A many-relationship, as a set difference.
+ *
+ * It spans both columns rather than splitting into them. It is not a
+ * before/after pair: it names only the targets that entered or left, so putting
+ * "removed" under a heading naming the older version would imply that version
+ * held nothing else, when the targets present in both appear on neither side.
+ */
+function SetDiff({ node }: { node: SetFieldDiff }) {
+  const empty = node.added.length === 0 && node.removed.length === 0;
+  return (
+    <FieldRow label={node.label} status={node.status}>
+      <div className="flex flex-col gap-1.5">
+        <TargetGroup
+          label="Removed"
+          targets={node.removed}
+          variant="destructive"
+        />
+        <TargetGroup label="Added" targets={node.added} variant="success" />
+        {empty ? (
+          // An unchanged relationship (reachable with "Changed only" off)
+          // carries no targets, so say so rather than leaving a blank body
+          // under the "Unchanged" badge.
+          <span className="text-xs text-muted-foreground">No change</span>
+        ) : null}
+      </div>
+    </FieldRow>
+  );
+}
+
+/**
+ * Draws a node whose kind this module handles itself.
+ *
+ * Kept apart from the registry lookup so the two jobs stay separable: this
+ * switch is the built-in set, and nothing about it has to change when a
+ * renderer is registered for a new kind.
+ */
+function BuiltInFieldDiff({ node }: { node: FieldDiff }) {
   switch (node.kind) {
-    case "text": {
-      // An unchanged text node has only common runs, so both sides would be
-      // identical; it spans instead, matching how a value node handles the same
-      // case. A changed one distributes its runs, keeping each run's `op` so a
-      // deletion still reads as struck on the left and an insertion as inserted
-      // on the right.
-      if (node.status === "unchanged") {
-        return (
-          <FieldRow label={node.label} status={node.status}>
-            <TextRuns segments={node.segments} />
-          </FieldRow>
-        );
-      }
-      // An added or removed text field has no runs at all on the side it never
-      // reached, so its sides are handed over unconditionally and `SplitPair`
-      // substitutes the absence marker. Rendering the empty list here would
-      // paint a blank paragraph, which reads as a field that existed and held
-      // nothing.
-      const sides = splitTextSegments(node.segments);
-      return (
-        <FieldRow label={node.label} status={node.status}>
-          <SplitPair
-            status={node.status}
-            before={<TextRuns segments={sides.before} />}
-            after={<TextRuns segments={sides.after} />}
-          />
-        </FieldRow>
-      );
-    }
+    case "text":
+      return <TextDiff node={node} />;
 
-    case "value": {
-      // The value is already normalized by the engine, so the kit renders it
-      // without normalizing a second time. A schema-less container never reaches
-      // here: the engine emits it as an unknown node so its value stays hidden.
-      // A relationship or upload value arrives resolved to the kit's display
-      // shape, so the same kit renders its label with no special-casing here.
-      const field = renderField(node);
-      return (
-        <FieldRow label={node.label} status={node.status}>
-          <BeforeAfter
-            status={node.status}
-            before={node.before}
-            after={node.after}
-            renderValue={value => (
-              <FieldValue field={field} value={value} preNormalized />
-            )}
-          />
-        </FieldRow>
-      );
-    }
+    case "value":
+      return <ValueDiff node={node} />;
 
-    case "set": {
-      // A set difference spans both columns rather than splitting into them. It
-      // is not a before/after pair: it names only the targets that entered or
-      // left, so putting "removed" under a heading naming the older version
-      // would imply that version held nothing else, when the targets present in
-      // both appear on neither side.
-      return (
-        <FieldRow label={node.label} status={node.status}>
-          <div className="flex flex-col gap-1.5">
-            {node.removed.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-1">
-                <span className="text-xs text-muted-foreground">Removed</span>
-                {node.removed.map(target => (
-                  <Badge key={targetKey(target)} variant="destructive">
-                    {targetLabel(target)}
-                  </Badge>
-                ))}
-              </div>
-            ) : null}
-            {node.added.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-1">
-                <span className="text-xs text-muted-foreground">Added</span>
-                {node.added.map(target => (
-                  <Badge key={targetKey(target)} variant="success">
-                    {targetLabel(target)}
-                  </Badge>
-                ))}
-              </div>
-            ) : null}
-            {node.added.length === 0 && node.removed.length === 0 ? (
-              // An unchanged relationship (reachable with "Changed only" off)
-              // carries no targets, so say so rather than leaving a blank body
-              // under the "Unchanged" badge.
-              <span className="text-xs text-muted-foreground">No change</span>
-            ) : null}
-          </div>
-        </FieldRow>
-      );
-    }
+    case "set":
+      return <SetDiff node={node} />;
 
-    case "group": {
-      // A dynamic-zone component whose type changed carries the slug transition,
-      // so the swap is legible even when neither side has field values to show.
-      const swapped =
-        node.componentTypeBefore !== undefined ||
-        node.componentTypeAfter !== undefined;
-      return (
-        <FieldRow label={node.label} status={node.status}>
-          <div className="pl-3 border-l border-border">
-            {swapped ? (
-              <p className="text-xs text-muted-foreground mb-1">
-                Type: {node.componentTypeBefore ?? "none"} &rarr;{" "}
-                {node.componentTypeAfter ?? "none"}
-              </p>
-            ) : null}
-            {node.fields.map(child => (
-              <FieldDiffNode key={childKey(child)} node={child} />
-            ))}
-          </div>
-        </FieldRow>
-      );
-    }
+    case "group":
+      return <GroupDiff node={node} />;
 
     case "list": {
       return (
@@ -368,7 +384,22 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
         </FieldRow>
       );
     }
+
+    default:
+      return <UnrecognisedField node={node} />;
   }
+}
+
+/**
+ * Draws one node of a comparison.
+ *
+ * A registered renderer wins, so the structural kinds — and any a plugin
+ * contributes — are drawn without the built-in switch growing an arm for each.
+ */
+export function FieldDiffNode({ node }: { node: FieldDiff }) {
+  const registered = resolveFieldDiff(node.kind);
+  if (registered) return <>{registered(node)}</>;
+  return <BuiltInFieldDiff node={node} />;
 }
 
 function ListItemRow({ item }: { item: ListItemDiff }) {

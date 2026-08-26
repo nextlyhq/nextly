@@ -14,6 +14,7 @@
  * @module style-colour-panel.test
  */
 import {
+  BASE_BREAKPOINT,
   clearBlocks,
   registerBlocks,
   type BlockDocument,
@@ -21,7 +22,13 @@ import {
   type NodeStyles,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -954,5 +961,215 @@ describe("a malformed stored document does not take the Style tab down", () => {
       "value",
       "#3b82f6"
     );
+  });
+});
+
+describe("a Reset beside a picker mid-gesture", () => {
+  /**
+   * A site with one viewport tier, so the panel previews and the cascade's
+   * entries are attributable to a breakpoint the badge can name.
+   */
+  const SITE = {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  } as never;
+
+  /**
+   * The Style tab with a CASCADE, which is what earns a control its Reset.
+   *
+   * `mount` above renders no cascade, so every control there reads as unset and
+   * offers no action at all — a fixture that cannot reach the mechanism these
+   * cases are about.
+   */
+  function mountWithResets(
+    authored: ReadonlyArray<{ property: string; descendant?: string }>
+  ) {
+    registerBlocks(
+      [
+        {
+          name: "acme/box",
+          version: 1,
+          description: "A box.",
+          example: { props: {} },
+          editor: { label: "Box" },
+          props: { text: { type: "text" } },
+          // `link` puts a SECOND colour control in the same section as the
+          // first. The accordion opens one section at a time, so a control in
+          // another section is not in the tree while this one's picker is open.
+          supports: { color: { text: true, link: true } },
+          render: () => null,
+        },
+      ] as never,
+      { source: "style-colour-panel-test" }
+    );
+    const document_: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          // BOTH colours stored, because a Reset on a property the document
+          // does not hold clears nothing and writes no operation — so the other
+          // control would press cleanly and record nothing to order against.
+          styles: {
+            base: { base: { color: "#3b82f6", linkColor: "#22c55e" } },
+          },
+        },
+      ] as BlockNode[],
+    } as BlockDocument;
+    const editor = editorFor(document_);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        tokens={TOKENS}
+        breakpoints={SITE}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            entries: authored.map(entry => ({
+              origin: { kind: "node", id: "a" },
+              property: entry.property,
+              ...(entry.descendant === undefined
+                ? {}
+                : { descendant: entry.descendant }),
+              value: "#3b82f6",
+              state: "base",
+              breakpoint: BASE_BREAKPOINT,
+            })),
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+    return editor;
+  }
+
+  /** The Reset button of the control whose action is named `actionName`. */
+  const resetFor = (actionName: string): HTMLElement => {
+    const found = screen
+      .getAllByRole("button")
+      .find(
+        button =>
+          button.dataset.action === "reset" &&
+          (button.getAttribute("aria-label") ?? "").startsWith(
+            `Reset ${actionName} at `
+          )
+      );
+    expect(found).toBeDefined();
+    return found as HTMLElement;
+  };
+
+  /** Move the picker without committing, leaving a gesture pending. */
+  const dragTo = async (hex: string): Promise<void> => {
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    // Radix arms its outside-pointerdown listener in a `setTimeout`. Until that
+    // has run nothing can dismiss the popover, so a case that presses a button
+    // outside it asserts against a picker that never closed.
+    await settle();
+    /*
+     * The PICKER's hex field, found INSIDE the open popover.
+     *
+     * Not "the textbox that is not this control's own": a panel with a second
+     * colour control has a third textbox, and that rule picks up the other
+     * control's field instead. Committing through a control's own field writes
+     * on blur and never reaches the pending gesture, so the case would then
+     * drive nothing the supersede can act on and assert against zero writes.
+     */
+    const picker = within(screen.getByRole("dialog")).getAllByRole(
+      "textbox"
+    )[0];
+    expect(picker).toBeDefined();
+    if (picker === undefined) return;
+    fireEvent.change(picker, { target: { value: hex } });
+  };
+
+  it("drops the gesture the Reset replaced, rather than queueing it", async () => {
+    /*
+     * Reset supersedes the gesture, so the picker must DISCARD it — not merely
+     * decline to write it there and then. Left queued, the unmount flush writes
+     * the old colour back over the reset as a later operation: the property the
+     * author cleared reappears, and one undo removes a write no gesture of
+     * theirs produced.
+     */
+    const editor = mountWithResets([{ property: "color" }]);
+    await dragTo("#ff0000");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    const reset = resetFor("Color");
+    fireEvent.pointerDown(reset);
+    fireEvent.click(reset);
+    await settle();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a gesture when Reset is only FOCUSED, never pressed", async () => {
+    /*
+     * Radix dismisses on focus leaving the popover as well as on a press
+     * outside it. A keyboard author tabbing out of the picker lands on the
+     * Reset beside this very control — so a supersede decided from "the
+     * dismissal's target is a marked control" discards the gesture because of a
+     * button nobody activated, and tabbing onward loses it with nothing shown.
+     *
+     * Leaving a control is a COMMIT everywhere else in this panel; the text
+     * fields write on blur. The gesture is therefore written here, and the
+     * Reset writes nothing because it never ran.
+     */
+    const editor = mountWithResets([{ property: "color" }]);
+    await dragTo("#ff0000");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    // Focus alone: no pointer press, no click, so `onReset` never runs. Moved
+    // with `.focus()` rather than a synthetic event, because Radix listens for
+    // `focusin` on the document and decides from `document.activeElement` —
+    // dispatched at the button, the listener sees focus still inside the
+    // popover and dismisses nothing.
+    resetFor("Color").focus();
+    await settle();
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
+  });
+
+  it("keeps a gesture ANOTHER control's Reset does not replace", async () => {
+    /*
+     * The supersede is scoped to the field whose value the press writes. A
+     * Reset on the background colour replaces nothing the text-colour picker is
+     * holding, so that gesture is the author's edit and is written as the
+     * popover closes — before the reset, which is the order the two intents
+     * happened in.
+     *
+     * Marked globally instead, the picker treats every Reset in the panel as
+     * superseding it and the gesture is discarded silently.
+     */
+    // The link colour, which is the same CSS property at a DESCENDANT — so the
+    // trace attributes it separately and it earns its own Reset.
+    const editor = mountWithResets([
+      { property: "color" },
+      { property: "color", descendant: "a" },
+    ]);
+    await dragTo("#ff0000");
+
+    const resets = screen
+      .getAllByRole("button")
+      .filter(button => button.dataset.action === "reset");
+    // Two, or the case is not about one control's Reset versus another's.
+    expect(resets).toHaveLength(2);
+    const mine = resetFor("Color");
+    const other = resets.find(button => button !== mine);
+    expect(other).toBeDefined();
+    if (other === undefined) return;
+    fireEvent.pointerDown(other);
+    fireEvent.click(other);
+    await settle();
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
   });
 });
