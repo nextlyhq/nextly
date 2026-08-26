@@ -517,12 +517,42 @@ describe("the preview box the canvas establishes", () => {
      * The control. Without it, a canvas that always constrained would satisfy
      * the case above while making the widest tier narrower than its region —
      * the box would gain gutters on selecting the tier it was already showing.
+     *
+     * PREVIEWING, with no width. Not "no preview at all": those are different
+     * states and only this one reaches the width decision. Asserted from an
+     * absent preview instead, this case returns before the width is ever
+     * consulted, and a canvas that constrained every previewing box would
+     * satisfy it — the test would carry the name of a branch it no longer
+     * enters.
      */
-    const { container } = boxed({});
+    const { container } = boxed({
+      preview: { container: "nx-preview-viewport" },
+    });
     const style = root(container).style;
 
     expect(style.maxWidth).toBe("");
     expect(style.marginInline).toBe("");
+    // Previewing, though: the state under test is "no width", and a box that
+    // established no container would satisfy the two assertions above by not
+    // previewing at all.
+    expect(style.containerName).toBe("nx-preview-viewport");
+  });
+
+  it("establishes NO box at all when the canvas is not previewing", () => {
+    /*
+     * Distinct from the case above, and the distinction is the whole contract:
+     * a canvas rendering at the region's own width against a published sheet
+     * must not establish a query container. One that did would let the
+     * UNNAMED `@container` rules a published compile emits for container tiers
+     * resolve against the canvas, so those would follow the box while viewport
+     * tiers followed the window.
+     */
+    const { container } = boxed({});
+    const style = root(container).style;
+
+    expect(style.containerName).toBe("");
+    expect(style.containerType).toBe("");
+    expect(style.maxWidth).toBe("");
   });
 });
 
