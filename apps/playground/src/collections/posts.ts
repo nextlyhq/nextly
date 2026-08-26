@@ -4,6 +4,8 @@ import {
   text,
   textarea,
   richText,
+  code,
+  json,
   date,
   upload,
   relationship,
@@ -47,6 +49,21 @@ export const Posts = defineCollection({
     richText({
       name: "content",
       admin: { condition: { field: "editorMode", equals: "standard" } },
+    }),
+    // Source-shaped fields, so the harness exercises the surfaces that read a
+    // value as LINES rather than as prose: the CodeMirror editor, the read-only
+    // display, and the version comparison, which picks its grammar from the
+    // declared language.
+    code({
+      name: "customScript",
+      admin: {
+        language: "typescript",
+        description: "Runs when this post is rendered.",
+      },
+    }),
+    json({
+      name: "settings",
+      admin: { description: "Arbitrary per-post configuration." },
     }),
     // A contributed field type declared code-first. `blocks` lives in the
     // page-builder plugin, so this is also the harness's proof that a plugin

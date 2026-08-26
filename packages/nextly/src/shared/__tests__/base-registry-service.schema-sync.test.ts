@@ -142,6 +142,58 @@ describe("BaseRegistryService.schemaSyncNeeded", () => {
     expect(probe.ask(declared, storedDifferentOrder, false)).toBe(false);
   });
 
+  it("sees a difference that lives under `__proto__`", () => {
+    /*
+     * `JSON.parse` creates `__proto__` as an ORDINARY own key, so a stored
+     * `jsonb` column round-tripping through it reaches here carrying one. The
+     * canonical rebuild then has to keep it — assigning that key to a plain
+     * `{}` invokes the legacy prototype setter instead of creating an
+     * enumerable property, `JSON.stringify` omits it, and two configs
+     * differing only there compare EQUAL. A null-prototype target is what makes
+     * the key survive.
+     *
+     * The failure is quiet in exactly the wrong direction: a real edit reads as
+     * "unchanged" and never reaches storage.
+     */
+    const declared = JSON.parse(
+      '{"drafts":true,"__proto__":{"max":10}}'
+    ) as SchemaSyncSubject["versions"];
+    const stored = JSON.parse(
+      '{"drafts":true}'
+    ) as SchemaSyncSubject["versions"];
+
+    expect(
+      probe.ask(
+        { ...same, versions: declared },
+        { ...same, versions: stored },
+        false
+      )
+    ).toBe(true);
+  });
+
+  it("sees a difference INSIDE `__proto__`, not merely its presence", () => {
+    /*
+     * The stronger half of the case above, and the one that pins the VALUE
+     * rather than the key. Both sides carry a `__proto__` key, so a comparison
+     * that merely noticed one side had it would answer "same" here; only a
+     * canonical form that carries what is under it can tell these apart.
+     *
+     * This replaces a test asserting that canonicalising does not pollute
+     * `Object.prototype`. That assertion was satisfied by absence: assigning
+     * `__proto__` to a plain `{}` sets that temporary object's prototype and
+     * never touches `Object.prototype`, so it passed against the broken
+     * implementation as readily as the fixed one — a permanently green
+     * assertion presented as coverage. Pollution is not a risk this code shape
+     * has; the dropped key is, and that is what these two tests measure.
+     */
+    const a = JSON.parse('{"drafts":true,"__proto__":{"max":10}}');
+    const b = JSON.parse('{"drafts":true,"__proto__":{"max":25}}');
+
+    expect(
+      probe.ask({ ...same, versions: a }, { ...same, versions: b }, false)
+    ).toBe(true);
+  });
+
   it("still sees a REORDERED ARRAY as a change", () => {
     // The control on the case above. Canonicalising keys must not extend to
     // sorting array members: `[a, b]` and `[b, a]` are different values, and a

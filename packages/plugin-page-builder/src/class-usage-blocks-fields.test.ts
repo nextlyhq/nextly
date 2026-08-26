@@ -315,4 +315,26 @@ describe("a presentational group with a very large field list", () => {
       { name: "content", localized: false },
     ]);
   });
+
+  it("returns a field declared AFTER the wide filler, not only before it", () => {
+    // The case a visit bound silently loses. Nothing validates a field count,
+    // so a long list is legal configuration, and a walk that stops partway
+    // returns fewer descriptors while reporting nothing — the document's
+    // classes are then absent from the index and read as unused.
+    //
+    // Placing the field last is the whole point: with it first, a truncating
+    // walk satisfies the assertion above and the loss is invisible.
+    const filler = { type: "text", name: "filler" };
+    const wide = {
+      type: "group",
+      fields: [
+        ...new Array<unknown>(200_000).fill(filler),
+        { type: "blocks", name: "content" },
+      ],
+    };
+
+    expect(blocksFieldsOf({ fields: [wide] })).toEqual([
+      { name: "content", localized: false },
+    ]);
+  });
 });

@@ -134,13 +134,23 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(withSortedKeys(value));
 }
 
-/** The same value with every object's keys in a fixed order. */
+/**
+ * The same value with every object's keys in a fixed order.
+ *
+ * The rebuilt object has a NULL prototype, which is load-bearing rather than
+ * defensive. Assigning an own `"__proto__"` key to an ordinary `{}` invokes the
+ * legacy prototype setter instead of creating an enumerable property, so
+ * `JSON.stringify` omits it — and two configs differing ONLY under that key
+ * serialise identically and compare equal. `JSON.parse` does create it as an
+ * own key, so a stored `jsonb` column round-tripping through it reaches here
+ * carrying one.
+ */
 function withSortedKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withSortedKeys);
   if (value === null || typeof value !== "object") return value;
 
   const source = value as Record<string, unknown>;
-  const sorted: Record<string, unknown> = {};
+  const sorted = Object.create(null) as Record<string, unknown>;
   for (const key of Object.keys(source).sort()) {
     sorted[key] = withSortedKeys(source[key]);
   }

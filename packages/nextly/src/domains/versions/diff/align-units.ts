@@ -125,16 +125,23 @@ function encode(
 }
 
 /**
- * One unit's position in the edit script, before removals and insertions pair
- * up. Discriminated by `op` so each variant carries exactly the indices it has:
- * a removal has no position on the "after" side and an insertion none on the
- * "before" side, and a shape admitting both would need a fallback at every
- * read.
+ * One RUN of the edit script — consecutive units sharing an operation — with
+ * the index its first unit sits at on each side it exists on.
+ *
+ * Runs rather than individual units, because that is the shape a replacement
+ * actually arrives in: the differ emits every removed unit, then every inserted
+ * one. Walking unit by unit sees only the boundary between those two runs and
+ * pairs a single removal with a single insertion, which mis-reports two
+ * consecutive edits as `removed, changed, added`.
+ *
+ * Discriminated by `op` so each variant carries exactly the indices it has: a
+ * removal has no position on the "after" side and an insertion none on the
+ * "before" side, and a shape admitting both would need a fallback at every read.
  */
-type Entry =
-  | { op: 0; fromIndex: number; toIndex: number }
-  | { op: -1; fromIndex: number }
-  | { op: 1; toIndex: number };
+type Run =
+  | { op: 0; fromIndex: number; toIndex: number; count: number }
+  | { op: -1; fromIndex: number; count: number }
+  | { op: 1; toIndex: number; count: number };
 
 /**
  * Read a unit the edit script has already proved is present.
@@ -155,87 +162,131 @@ function unitAt(units: readonly string[], index: number): string {
 }
 
 /**
- * Expand the diff's runs into one entry per unit, tracking the index on each
- * side separately. The two sides desynchronise at the first insertion or
- * removal, so a single shared counter would address the wrong unit from there
- * onwards.
+ * Read the diff's runs, tracking the index on each side separately. The two
+ * sides desynchronise at the first insertion or removal, so a single shared
+ * counter would address the wrong unit from there onwards.
  */
-function toEntries(ops: readonly [number, string][]): Entry[] {
-  const entries: Entry[] = [];
+function toRuns(ops: readonly [number, string][]): Run[] {
+  const runs: Run[] = [];
   let fromIndex = 0;
   let toIndex = 0;
   for (const [op, text] of ops) {
-    // Iterating a string yields whole code points, so a supplementary-plane
+    // Spreading a string yields whole code points, so a supplementary-plane
     // marker counts as one unit rather than as two surrogate halves.
-    for (const _unit of text) {
-      if (op === 0) {
-        entries.push({ op: 0, fromIndex: fromIndex++, toIndex: toIndex++ });
-      } else if (op === -1) {
-        entries.push({ op: -1, fromIndex: fromIndex++ });
-      } else {
-        entries.push({ op: 1, toIndex: toIndex++ });
-      }
+    const count = [...text].length;
+    if (count === 0) continue;
+    if (op === 0) {
+      runs.push({ op: 0, fromIndex, toIndex, count });
+      fromIndex += count;
+      toIndex += count;
+    } else if (op === -1) {
+      runs.push({ op: -1, fromIndex, count });
+      fromIndex += count;
+    } else {
+      runs.push({ op: 1, toIndex, count });
+      toIndex += count;
     }
   }
-  return entries;
+  return runs;
+}
+
+/** Append `count` units from the "after" side as additions. */
+function pushAdded(
+  pairs: UnitPair[],
+  after: readonly string[],
+  toIndex: number,
+  count: number
+): void {
+  for (let k = 0; k < count; k += 1) {
+    pairs.push({
+      status: "added",
+      after: unitAt(after, toIndex + k),
+      toIndex: toIndex + k,
+    });
+  }
+}
+
+/** Append `count` units from the "before" side as removals. */
+function pushRemoved(
+  pairs: UnitPair[],
+  before: readonly string[],
+  fromIndex: number,
+  count: number
+): void {
+  for (let k = 0; k < count; k += 1) {
+    pairs.push({
+      status: "removed",
+      before: unitAt(before, fromIndex + k),
+      fromIndex: fromIndex + k,
+    });
+  }
 }
 
 /**
- * Turn the edit script into pairs, joining a removal that is directly followed
- * by an insertion into one `changed` row: that shape is a unit the author
- * edited, and reporting it as a removal beside an unrelated addition leaves the
- * reader to join the two by eye and gives the caller nothing to diff within.
+ * Turn the edit script into pairs.
+ *
+ * A replacement arrives as a removal run followed by an insertion run, so the
+ * two are zipped POSITIONALLY: the nth removed unit pairs with the nth inserted
+ * one, and whichever side is longer contributes its tail as plain removals or
+ * additions. Pairing only at the boundary between the runs reports two
+ * consecutive edits as `removed, changed, added`, which loses the within-unit
+ * comparison on both outer units.
+ *
+ * Positional is the only defensible zip here: these units are opaque strings
+ * whose contents this function does not read, so it has nothing better than
+ * order to match them by.
  */
 function buildPairs(
-  entries: readonly Entry[],
+  runs: readonly Run[],
   before: readonly string[],
   after: readonly string[]
 ): UnitPair[] {
   const pairs: UnitPair[] = [];
 
-  for (let i = 0; i < entries.length; i += 1) {
-    const entry = entries[i];
-    if (entry === undefined) continue;
+  for (let i = 0; i < runs.length; i += 1) {
+    const run = runs[i];
+    if (run === undefined) continue;
 
-    if (entry.op === 0) {
-      pairs.push({
-        status: "unchanged",
-        before: unitAt(before, entry.fromIndex),
-        after: unitAt(after, entry.toIndex),
-        fromIndex: entry.fromIndex,
-        toIndex: entry.toIndex,
-      });
+    if (run.op === 0) {
+      for (let k = 0; k < run.count; k += 1) {
+        pairs.push({
+          status: "unchanged",
+          before: unitAt(before, run.fromIndex + k),
+          after: unitAt(after, run.toIndex + k),
+          fromIndex: run.fromIndex + k,
+          toIndex: run.toIndex + k,
+        });
+      }
       continue;
     }
 
-    if (entry.op === 1) {
-      pairs.push({
-        status: "added",
-        after: unitAt(after, entry.toIndex),
-        toIndex: entry.toIndex,
-      });
+    if (run.op === 1) {
+      pushAdded(pairs, after, run.toIndex, run.count);
       continue;
     }
 
-    const next = entries[i + 1];
-    if (next !== undefined && next.op === 1) {
+    // A removal run. Only an insertion run DIRECTLY after it is a replacement;
+    // anything else means these units were simply deleted.
+    const next = runs[i + 1];
+    if (next === undefined || next.op !== 1) {
+      pushRemoved(pairs, before, run.fromIndex, run.count);
+      continue;
+    }
+
+    const zipped = Math.min(run.count, next.count);
+    for (let k = 0; k < zipped; k += 1) {
       pairs.push({
         status: "changed",
-        before: unitAt(before, entry.fromIndex),
-        after: unitAt(after, next.toIndex),
-        fromIndex: entry.fromIndex,
-        toIndex: next.toIndex,
+        before: unitAt(before, run.fromIndex + k),
+        after: unitAt(after, next.toIndex + k),
+        fromIndex: run.fromIndex + k,
+        toIndex: next.toIndex + k,
       });
-      // The insertion has been consumed by the pair above.
-      i += 1;
-      continue;
     }
-
-    pairs.push({
-      status: "removed",
-      before: unitAt(before, entry.fromIndex),
-      fromIndex: entry.fromIndex,
-    });
+    pushRemoved(pairs, before, run.fromIndex + zipped, run.count - zipped);
+    pushAdded(pairs, after, next.toIndex + zipped, next.count - zipped);
+    // The insertion run has been consumed by the pairing above.
+    i += 1;
   }
 
   return pairs;
@@ -254,6 +305,6 @@ export function alignUnits(
 
   // No semantic cleanup pass: these are opaque markers, and the heuristics that
   // make prose runs readable would coalesce unrelated units.
-  const entries = toEntries(makeDiff(encoded.a, encoded.b));
-  return { aligned: true, pairs: buildPairs(entries, before, after) };
+  const runs = toRuns(makeDiff(encoded.a, encoded.b));
+  return { aligned: true, pairs: buildPairs(runs, before, after) };
 }

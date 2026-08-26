@@ -100,6 +100,144 @@ describe("LanguagePanel", () => {
     publishState.mockReturnValue(PUBLISH_IDLE);
   });
 
+  /** A site with more languages than a person can scan at a glance. */
+  const MANY = {
+    defaultLocale: "en",
+    fallback: true,
+    locales: [
+      ["en", "English"],
+      ["de", "German"],
+      ["ar", "Arabic"],
+      ["es", "Spanish"],
+      ["fr", "French"],
+      ["it", "Italian"],
+      ["pt", "Portuguese"],
+      ["nl", "Dutch"],
+      ["pl", "Polish"],
+      ["sv", "Swedish"],
+      ["ja", "Japanese"],
+      ["ko", "Korean"],
+    ].map(([code, label]) => ({
+      code,
+      label,
+      rtl: code === "ar",
+      fallbackLocale: [],
+    })),
+  };
+
+  describe("finding one language among many", () => {
+    /*
+     * The panel is about to become the ONLY place a language is chosen, so it
+     * has to stay usable at the locale counts a real multilingual site has.
+     * Twelve identical rows is not a scrolling problem — it is a scanning one,
+     * and scanning is linear where a filter is not.
+     */
+    it("offers no filter for a handful of languages", () => {
+      // The common case must not pay for the uncommon one: three languages fit
+      // in a glance, and a search box over them is chrome that asks a question
+      // nobody had.
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS });
+
+      expect(screen.queryByRole("searchbox")).toBeNull();
+      expect(rows()).toHaveLength(3);
+    });
+
+    it("offers a filter once the list is past scanning", () => {
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      expect(screen.getByRole("searchbox")).toBeInTheDocument();
+      expect(rows()).toHaveLength(12);
+    });
+
+    it("narrows the rows to what was typed", async () => {
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.type(screen.getByRole("searchbox"), "ger");
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toHaveTextContent("German");
+    });
+
+    it("matches the language CODE as well as its name", async () => {
+      /*
+       * The separating property against a plain label search. A translator
+       * working in Spanish types `es` far more readily than "Spanish", and on a
+       * site whose admin language differs from the content languages the code
+       * may be the only spelling they share.
+       */
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.type(screen.getByRole("searchbox"), "pt");
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toHaveTextContent("Portuguese");
+    });
+
+    it("ignores case and surrounding space", async () => {
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.type(screen.getByRole("searchbox"), "  JAPAN ");
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toHaveTextContent("Japanese");
+    });
+
+    it("says so when nothing matches, rather than showing an empty list", async () => {
+      // An empty list under a search box reads as "this document has no
+      // languages", which is alarming and untrue. The panel says what happened.
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.type(screen.getByRole("searchbox"), "klingon");
+
+      expect(
+        screen.queryByRole("list", { name: "Languages in this document" })
+      ).toBeNull();
+      expect(screen.getByText(/no languages match/i)).toBeInTheDocument();
+    });
+
+    it("hides the language being edited too, rather than pinning it", async () => {
+      /*
+       * Deliberate, and the alternative was tried first. A row kept against a
+       * query it does not match READS as a match — and on a search for
+       * something absent it would leave one language on screen looking like the
+       * answer, which is worse than an honest empty state.
+       */
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS, activeLocale: "ko" });
+
+      await user.type(screen.getByRole("searchbox"), "ger");
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toHaveTextContent("German");
+    });
+
+    it("brings every language back when the filter is cleared", async () => {
+      // The property that makes hiding the active row safe: nothing is lost,
+      // and the way back is the control the author is already holding.
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS, activeLocale: "ko" });
+
+      const box = screen.getByRole("searchbox");
+      await user.type(box, "ger");
+      expect(rows()).toHaveLength(1);
+
+      await user.clear(box);
+      expect(rows()).toHaveLength(12);
+    });
+  });
+
   it("renders nothing when localization is not configured", () => {
     useBranding.mockReturnValue({ locales: undefined });
     const { container } = renderPanel();

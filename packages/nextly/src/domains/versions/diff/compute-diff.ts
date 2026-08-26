@@ -23,16 +23,19 @@ import { dequal } from "dequal";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
-import { defineOwnProperty } from "../../../shared/lib/own-property";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 
+import { maskSecret } from "./mask-secret";
 import { reconcileById, type ItemMatch } from "./reconcile-list";
+import { richTextNode } from "./rich-text-node";
+import { PLAINTEXT, sourceNode, type SourceSide } from "./source-node";
 import { diffText } from "./text-diff";
 import type {
   DiffStatus,
   FieldDiff,
   FieldDisplay,
   ListItemDiff,
+  NodeMeta,
   RelationTarget,
   UnknownFieldDiff,
   VersionDiff,
@@ -44,13 +47,6 @@ export type VersionDiffBody = Pick<VersionDiff, "hasChanges" | "fields">;
 export interface ComputeDiffOptions {
   /** Drop every node that did not change (nested included). */
   modifiedOnly?: boolean;
-}
-
-/** The label triple every emitted node carries, computed once with a real name. */
-interface NodeMeta {
-  name: string;
-  label: string;
-  type: string;
 }
 
 // Framework-managed columns on a top-level document, never user content.
@@ -89,24 +85,17 @@ interface WalkContext {
 // Field types whose value is a single string diffed word by word. slug/url/phone
 // are not core field types but are string-valued (plugin field types, and the
 // admin value-display kit groups them with text), so word-diffing them is
-// correct; a type no field actually has simply never matches. richText is
-// excluded: there is no server-side plain-text flattener, so it diffs as a whole
-// value (each side rendered read-only) rather than guessing.
+// correct; a type no field actually has simply never matches. richText is not
+// here because it is not a single string: it is compared block by block by
+// `rich-text-node`, which keeps its structure and its non-text properties.
 const TEXT_TYPES = new Set([
   "text",
   "textarea",
   "email",
-  "code",
   "slug",
   "url",
   "phone",
 ]);
-
-// A stored value matching bcrypt's format is a hashed password. Captured
-// passwords are hashed, so this masks one that slipped past redaction because
-// its field was deleted or retyped after capture.
-const BCRYPT_HASH = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
-const SECRET_MASK = "[protected]";
 
 // ---- small typed structural accessors (no `any`) ----------------------------
 
@@ -118,6 +107,19 @@ function componentSlugs(field: FieldConfig): string[] | undefined {
 }
 function isRepeatable(field: FieldConfig): boolean {
   return (field as { repeatable?: boolean }).repeatable === true;
+}
+/**
+ * The language a code field declares, which the renderer needs to pick a
+ * grammar.
+ *
+ * Read from `admin.language`, which is where `CodeFieldAdminOptions` declares
+ * it and where the field's own editor reads it. A top-level `language` is not
+ * part of the config's shape, so looking there found nothing on every correctly
+ * configured field and silently rendered all of them as plain text.
+ */
+function codeLanguageOf(field: FieldConfig): string | undefined {
+  const admin = (field as { admin?: { language?: unknown } }).admin;
+  return typeof admin?.language === "string" ? admin.language : undefined;
 }
 function isHasMany(field: FieldConfig): boolean {
   return (field as { hasMany?: boolean }).hasMany === true;
@@ -204,29 +206,6 @@ function asText(value: unknown): string {
     return String(value);
   }
   return "";
-}
-
-/**
- * Replace bcrypt-hash values with a mask so a leaked password never renders,
- * recursing into arrays and objects: an opaque node (a removed component, or a
- * dynamic-zone type swap rendered as a whole value) can carry a hash nested
- * several levels down.
- */
-function maskSecret(value: unknown): unknown {
-  if (typeof value === "string") {
-    return BCRYPT_HASH.test(value) ? SECRET_MASK : value;
-  }
-  if (Array.isArray(value)) return value.map(maskSecret);
-  if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [key, inner] of Object.entries(value)) {
-      // Defined, not assigned: a stored JSON value can carry a `__proto__` key,
-      // and assigning it would silently drop it from the diff.
-      defineOwnProperty(out, key, maskSecret(inner));
-    }
-    return out;
-  }
-  return value;
 }
 
 /** Whether a field declares a read-access rule (a function or a serialized rule). */
@@ -386,23 +365,23 @@ function valueNode(
 }
 
 /**
- * Status for a `json` value. A json field can hold the primitive `null` as a
- * real value, which normalization collapses to the same `null` as an absent
- * key. Classifying from raw key presence keeps the two apart, so an object-to-
- * null edit reads as a two-sided change rather than a removal.
+ * One side of a source comparison, with its presence decided from the RAW
+ * stored value.
+ *
+ * A json field can hold the primitive `null` as a real value, and normalization
+ * collapses that to the same `null` an absent key produces. Raw key presence is
+ * the only thing that still separates them, so it is read here — the last place
+ * holding it — rather than inferred further down, where an added field opened
+ * with a fabricated `null` line against the whole of the other side. Every
+ * other type stores a string, for which the normalized empty case IS absence.
  */
-function jsonPresenceStatus(
-  rawBefore: unknown,
-  rawAfter: unknown,
-  before: unknown,
-  after: unknown
-): DiffStatus {
-  const beforeAbsent = rawBefore === undefined;
-  const afterAbsent = rawAfter === undefined;
-  if (beforeAbsent && afterAbsent) return "unchanged";
-  if (beforeAbsent) return "added";
-  if (afterAbsent) return "removed";
-  return dequal(before, after) ? "unchanged" : "changed";
+function sourceSide(
+  field: FieldConfig,
+  raw: unknown,
+  normalized: unknown
+): SourceSide {
+  const absent = field.type === "json" ? raw === undefined : normalized == null;
+  return absent ? { present: false } : { present: true, value: normalized };
 }
 
 function setNode(
@@ -639,6 +618,124 @@ function unknownNode(
 
 // ---- field dispatch ---------------------------------------------------------
 
+/**
+ * A dynamic zone whose stored component TYPE differs between the versions — a
+ * discriminator that changed, appeared, or disappeared.
+ *
+ * That is a change even when the shared field values match, so it is reported
+ * field-by-field against each side's own schema rather than as a raw object
+ * dump. Null when the field is not a dynamic zone, or when both sides hold the
+ * same type and the ordinary group comparison applies.
+ */
+function componentSwapNode(
+  meta: NodeMeta,
+  field: FieldConfig,
+  before: unknown,
+  after: unknown,
+  ctx: WalkContext
+): FieldDiff | null {
+  if (!Array.isArray(componentSlugs(field))) return null;
+  const beforeType = componentTypeOf(asObject(before));
+  const afterType = componentTypeOf(asObject(after));
+  if (beforeType === afterType) return null;
+  return {
+    ...meta,
+    kind: "group",
+    status: statusFromPresence(before, after, true),
+    // Carry the type transition so a swap still shows what changed even when
+    // neither component instance has field values to diff.
+    ...(beforeType !== undefined ? { componentTypeBefore: beforeType } : {}),
+    ...(afterType !== undefined ? { componentTypeAfter: afterType } : {}),
+    fields: componentSwapFields(
+      field,
+      beforeType,
+      afterType,
+      asObject(before),
+      asObject(after),
+      ctx
+    ),
+  };
+}
+
+/** A group or component field, which nests rather than holding a value. */
+function nestedNode(
+  meta: NodeMeta,
+  field: FieldConfig,
+  before: unknown,
+  after: unknown,
+  ctx: WalkContext
+): FieldDiff {
+  // A named group's value is a nested object (no longer the top level) but has
+  // no framework columns of its own, and it is not a component subtree.
+  if (field.type === "group") {
+    return groupNode(meta, inlineFields(field) ?? [], before, after, {
+      top: false,
+      inRow: false,
+      inComponent: ctx.inComponent,
+    });
+  }
+  // A component instance is a row (its `id` is framework) inside a component.
+  const componentCtx: WalkContext = {
+    top: false,
+    inRow: true,
+    inComponent: true,
+  };
+  return (
+    componentSwapNode(meta, field, before, after, componentCtx) ??
+    groupNode(
+      meta,
+      singleComponentChildFields(field, before, after),
+      before,
+      after,
+      componentCtx
+    )
+  );
+}
+
+/**
+ * A json or code field, compared as LINES.
+ *
+ * `code` used to be word-diffed as one string, which rendered it as a
+ * proportional, word-wrapped paragraph — less readable in the comparison than
+ * in its own read-only display.
+ */
+function sourceFieldNode(
+  meta: NodeMeta,
+  field: FieldConfig,
+  rawBefore: unknown,
+  rawAfter: unknown,
+  before: unknown,
+  after: unknown
+): FieldDiff {
+  // A code field declares the language it is written in, and the renderer needs
+  // it to pick a grammar. Without a declared one the field type's own
+  // documented default applies; emitting the literal "code" would name a
+  // language no highlighter knows.
+  const language =
+    field.type === "json" ? "json" : (codeLanguageOf(field) ?? PLAINTEXT);
+  return sourceNode(
+    meta,
+    sourceSide(field, rawBefore, before),
+    sourceSide(field, rawAfter, after),
+    language
+  );
+}
+
+/**
+ * Whether a field holds ONE string, so its value can be word-diffed.
+ *
+ * A `hasMany` text field stores an array rather than a string, which has no
+ * word-level comparison; it falls through to a value comparison instead.
+ */
+function isWordDiffable(field: FieldConfig): boolean {
+  return TEXT_TYPES.has(field.type) && !isHasMany(field);
+}
+
+/** Whether a field's value is read as LINES rather than as prose or a value. */
+function isSourceField(field: FieldConfig): boolean {
+  return field.type === "json" || field.type === "code";
+}
+
 function diffField(
   field: FieldConfig,
   name: string,
@@ -651,77 +748,17 @@ function diffField(
   const after = normalizeStoredValue(field, rawAfter);
 
   if (isListField(field)) return listNode(meta, field, before, after, ctx);
-  if (isGroupField(field)) {
-    // A named group's value is a nested object (no longer the top level) but has
-    // no framework columns of its own, and it is not a component subtree.
-    if (field.type === "group") {
-      return groupNode(meta, inlineFields(field) ?? [], before, after, {
-        top: false,
-        inRow: false,
-        inComponent: ctx.inComponent,
-      });
-    }
-    // A component instance is a row (its `id` is framework) inside a component.
-    const componentCtx: WalkContext = {
-      top: false,
-      inRow: true,
-      inComponent: true,
-    };
-    // Non-repeatable component. A single-mode component keeps a fixed schema; a
-    // dynamic zone whose stored type differs between versions — a discriminator
-    // that changed, appeared, or disappeared — is a change even when the shared
-    // field values match, and is diffed field-by-field per schema (never a raw
-    // object dump).
-    if (Array.isArray(componentSlugs(field))) {
-      const beforeType = componentTypeOf(asObject(before));
-      const afterType = componentTypeOf(asObject(after));
-      if (beforeType !== afterType) {
-        return {
-          ...meta,
-          kind: "group",
-          status: statusFromPresence(before, after, true),
-          // Carry the type transition so a swap still shows what changed even
-          // when neither component instance has field values to diff.
-          ...(beforeType !== undefined
-            ? { componentTypeBefore: beforeType }
-            : {}),
-          ...(afterType !== undefined ? { componentTypeAfter: afterType } : {}),
-          fields: componentSwapFields(
-            field,
-            beforeType,
-            afterType,
-            asObject(before),
-            asObject(after),
-            componentCtx
-          ),
-        };
-      }
-    }
-    return groupNode(
-      meta,
-      singleComponentChildFields(field, before, after),
-      before,
-      after,
-      componentCtx
-    );
-  }
+  if (isGroupField(field)) return nestedNode(meta, field, before, after, ctx);
   if (isSetField(field, before, after)) {
     return setNode(meta, before, after, pickFieldDisplay(field));
   }
-  // A hasMany text field stores an ARRAY, not a single string, so it cannot be
-  // word-diffed; fall through to a value comparison.
-  if (TEXT_TYPES.has(field.type) && !isHasMany(field)) {
-    return textNode(meta, before, after);
-  }
-  if (field.type === "json") {
-    // Classify from raw presence: a stored json `null` is a value, not absence.
-    return valueNode(
-      meta,
-      before,
-      after,
-      pickFieldDisplay(field),
-      jsonPresenceStatus(rawBefore, rawAfter, before, after)
-    );
+  // Rich text is compared structurally rather than as one value. Comparing two
+  // editor documents by equality reports only THAT they differ, which is the
+  // one thing the reader already knows.
+  if (field.type === "richText") return richTextNode(meta, before, after);
+  if (isWordDiffable(field)) return textNode(meta, before, after);
+  if (isSourceField(field)) {
+    return sourceFieldNode(meta, field, rawBefore, rawAfter, before, after);
   }
   return valueNode(meta, before, after, pickFieldDisplay(field));
 }

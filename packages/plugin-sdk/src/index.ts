@@ -17,6 +17,38 @@
 export { definePlugin } from "nextly";
 
 /**
+ * @experimental `collectionDraftSplit` — whether a collection stores a working
+ *   draft beside its published row.
+ *
+ * A plugin storing anything per published/draft has to know, and cannot work it
+ * out: the split resolves from five conditions together, and `status: true` —
+ * the flag that looks like the answer — is true for collections that keep no
+ * draft at all. A plugin that guesses writes records against a document which
+ * does not exist, and nothing downstream can tell them from real ones.
+ *
+ * Takes the collection AS AUTHORED, so `versions: true` and `{ drafts: true }`
+ * both work. The reason travels with the verdict, so a caller can say WHY a
+ * collection it expected to draft does not.
+ *
+ * Re-exported here because this is the only surface a plugin may depend on.
+ * Reaching into `nextly` for it would work and would be a plugin depending on
+ * core's layout rather than on a contract.
+ */
+export { collectionDraftSplit } from "nextly";
+/**
+ * @experimental `AuthoredDraftSplitCollection` is the collection shape the
+ *   question accepts, and `DraftSplitEligibility` / `DraftSplitDisabledReason`
+ *   are the verdict it answers with. Tagged on their own declaration: a release
+ *   tag applies to the declaration it precedes, so the block above classifies
+ *   the function alone and these three would otherwise be published untagged.
+ */
+export type {
+  AuthoredDraftSplitCollection,
+  DraftSplitEligibility,
+  DraftSplitDisabledReason,
+} from "nextly";
+
+/**
  * Plugin identity and classification.
  * @experimental `PLUGIN_CATEGORIES` and `isPluginCategory` enumerate and narrow
  *   the vocabulary `category` accepts; `pluginAdminSlug` derives the identifier
