@@ -42,6 +42,7 @@ import {
   hasPreviewConfigured,
   type PreviewDeclaration,
 } from "../domains/collections/services/preview-url-resolver";
+import { resolvePreviewViewports } from "../domains/collections/services/preview-viewports";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
 import type { UserContext } from "../domains/singles/types";
@@ -472,6 +473,14 @@ async function respondWithPreviewLink(
    * costs a fallback rather than access to anything.
    */
   adminOrigin: string,
+  /**
+   * The collection's or Single's own preview declaration.
+   *
+   * Passed in rather than re-read: both call sites already loaded it to decide
+   * whether a link could be built at all, and reading it twice would let the
+   * link and the viewports it offers come from two different reads.
+   */
+  declaration: PreviewDeclaration | undefined,
   ttlSeconds?: number
 ): Promise<Response> {
   const generation = await (
@@ -551,6 +560,13 @@ async function respondWithPreviewLink(
      * application's own `frame-ancestors` is invisible from here.
      */
     embeddable: previewSessionReachesFrame(url, adminOrigin),
+    /*
+     * Resolved HERE because the declaration may be a FUNCTION, and a function
+     * cannot be stored or sent. The browser receives the list it produced, so
+     * the admin never needs to know where a site keeps its breakpoints — which
+     * is what lets a plugin supply them without the admin depending on it.
+     */
+    viewports: await resolvePreviewViewports(declaration?.breakpoints),
   });
 }
 
@@ -773,6 +789,7 @@ async function mintForSingle(
     { kind: "single", single, ...(locale === undefined ? {} : { locale }) },
     auth.userId,
     new URL(req.url).origin,
+    declaration,
     ttlSeconds
   );
 }
@@ -924,6 +941,7 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
     { collection, entryId, ...(locale === undefined ? {} : { locale }) },
     auth.userId,
     new URL(req.url).origin,
+    declaration,
     ttlSeconds
   );
 });

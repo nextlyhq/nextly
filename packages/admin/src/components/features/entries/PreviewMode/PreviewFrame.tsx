@@ -81,6 +81,7 @@ export function PreviewFrame({
   noun,
   requestedWidth,
   onRequestWidth,
+  viewports,
 }: PreviewFrameProps) {
   /*
    * The area the frame is drawn into, measured rather than assumed. Its width
@@ -126,6 +127,7 @@ export function PreviewFrame({
               requestedWidth={requestedWidth}
               onRequestWidth={onRequestWidth}
               fit={fit}
+              viewports={viewports}
             />
           )}
           {/* The three actions are ONE flex item, so the row above breaks

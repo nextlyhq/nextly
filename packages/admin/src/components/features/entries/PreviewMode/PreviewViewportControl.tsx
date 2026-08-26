@@ -33,6 +33,8 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { UI } from "@admin/constants/ui";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 
+import type { PreviewViewport } from "@admin/services/previewLinkApi";
+
 import type { PreviewFit } from "./previewFrameFit";
 
 /** The width the author asked for, or `null` for "fill the pane". */
@@ -41,6 +43,14 @@ export interface PreviewViewportControlProps {
   onRequestWidth: (width: number | null) => void;
   /** What the pane could actually do with that request. */
   fit: PreviewFit;
+  /**
+   * The named viewports this preview offers, as the server resolved them.
+   *
+   * May be empty, and that is a real answer rather than a missing one: a site
+   * that declares no breakpoints gets Responsive and a custom width, which is
+   * everything that can be offered honestly without inventing widths.
+   */
+  viewports: readonly PreviewViewport[];
 }
 
 /** The `Select` value standing for "fill the pane". */
@@ -74,9 +84,24 @@ export function PreviewViewportControl({
   requestedWidth,
   onRequestWidth,
   fit,
+  viewports,
 }: PreviewViewportControlProps) {
   const widthInputId = useId();
-  const selection = requestedWidth === null ? RESPONSIVE : CUSTOM;
+
+  /*
+   * Which option is selected is DERIVED from the width, not stored beside it.
+   * A separate selection would let the two disagree — typing a custom width
+   * that happens to equal a named one would leave "Custom" showing while the
+   * frame is at the named viewport, and the author would have no way to tell
+   * which of the two the control thinks it is on.
+   */
+  const named = viewports.find(v => v.width === requestedWidth);
+  const selection =
+    requestedWidth === null
+      ? RESPONSIVE
+      : named !== undefined
+        ? String(named.width)
+        : CUSTOM;
 
   /*
    * What the box SAYS, held separately from the width the frame is at.
@@ -137,7 +162,11 @@ export function PreviewViewportControl({
           // A choice from the list ends the edit, so an abandoned draft does
           // not reappear the next time the box is shown.
           setDraft(null);
-          onRequestWidth(value === RESPONSIVE ? null : CUSTOM_SEED_WIDTH);
+          if (value === RESPONSIVE) return onRequestWidth(null);
+          if (value === CUSTOM) return onRequestWidth(CUSTOM_SEED_WIDTH);
+          // A named option carries its own width as the value, so no lookup can
+          // go stale between rendering the list and reading a choice from it.
+          return onRequestWidth(Number.parseInt(value, 10));
         }}
       >
         <SelectTrigger
@@ -148,11 +177,20 @@ export function PreviewViewportControl({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={RESPONSIVE}>Responsive</SelectItem>
+          {/* The author's own names, in the order they declared them. The width
+              is shown beside each because two sites can call very different
+              numbers "Tablet", and the number is what the preview is actually
+              sized to. */}
+          {viewports.map(viewport => (
+            <SelectItem key={viewport.width} value={String(viewport.width)}>
+              {`${viewport.label} · ${viewport.width}px`}
+            </SelectItem>
+          ))}
           <SelectItem value={CUSTOM}>Custom width</SelectItem>
         </SelectContent>
       </Select>
 
-      {requestedWidth !== null && (
+      {requestedWidth !== null && named === undefined && (
         <>
           {/* Labelled for assistive technology only: the unit beside the box
               reads as the visible label, and a second visible one would say the

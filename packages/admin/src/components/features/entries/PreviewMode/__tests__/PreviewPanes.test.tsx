@@ -22,6 +22,7 @@ const frameArgs = vi.hoisted(() => vi.fn());
 const frameState = vi.hoisted(() => ({
   current: {
     url: "https://site.example/api/preview?token=t",
+    viewports: [],
     reloadKey: 0,
     isLoading: false,
     reason: null,
@@ -29,6 +30,7 @@ const frameState = vi.hoisted(() => ({
     refresh: vi.fn(),
   } as {
     url: string | null;
+    viewports: { label: string; width: number }[];
     reloadKey: number;
     isLoading: boolean;
     reason: string | null;
@@ -70,6 +72,10 @@ beforeEach(() => {
   // into the next test.
   frameState.current = {
     url: "https://site.example/api/preview?token=t",
+    // The server resolves these, so a frame always carries the key. Empty is
+    // the honest default here: this fixture declares no breakpoints, and the
+    // pane then offers Responsive and a custom width.
+    viewports: [],
     reloadKey: 0,
     isLoading: false,
     reason: null,
