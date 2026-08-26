@@ -49,11 +49,18 @@ the fields declared after the cycle, and an empty result is indistinguishable fr
 collection that declares no blocks field - every class the document applies would have read
 as unused.
 
-A group with a very long field list is read without failing. The walk holds a cursor into each
-list where it lies rather than moving children into a queue: moving them passes each one as an
-argument, which reaches the engine's limit at around a hundred thousand and throws before the
-visit bound can apply. Maintenance runs after the document has committed, so a throw there
-reports a failed save for one that succeeded.
+A group with a very long field list is read whole. The walk holds a cursor into each list where
+it lies rather than moving children into a queue: moving them passes each one as an argument,
+which reaches the engine's limit at around a hundred thousand and throws. Maintenance runs
+after the document has committed, so a throw there reports a failed save for one that
+succeeded.
+
+There is no cap on how many declarations are visited. Expanding each group at most once is
+what makes the walk finite, and it is sufficient - a cap beside it would end a cyclic walk
+without reaching the fields the cycle hides, and on a merely LONG list it stops partway and
+returns fewer descriptors while reporting nothing, so those documents' classes go unindexed
+and read as unused. Nothing validates a field count, so a long list is legal configuration
+rather than evidence the config is wrong.
 
 Whether a field stores per language is decided by the collection's localization master switch
 together with the field's own flag, through the same classifier storage obeys. A field flagged

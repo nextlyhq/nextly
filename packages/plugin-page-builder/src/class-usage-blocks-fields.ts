@@ -41,22 +41,6 @@ import type { BlocksFieldDescriptor } from "./class-usage-subjects";
 import { isBlocksField } from "./fields/blocksHelper";
 
 /**
- * A bound on how many field declarations one collection can contribute.
- *
- * Groups nest and the shape is author-supplied, so a pathological depth or
- * breadth would otherwise spin here. Sized so that reaching it means the
- * configuration is wrong rather than large, and deliberately meaningless about
- * how many fields a real collection has.
- *
- * It is a backstop and neither of the two defences that matter. A cycle is
- * broken by identity below, because a bound alone ends the walk without ever
- * reaching the fields the cycle is hiding. Breadth is survived by reading each
- * list where it lies, because a bound cannot apply to a list that throws while
- * being moved.
- */
-const MAX_FIELDS_VISITED = 10_000;
-
-/**
  * The name a field is addressed by, or null when it has none usable.
  *
  * One definition, because two questions depend on it and they must not answer
@@ -167,11 +151,18 @@ export function blocksFieldsOf(
 
   const found: BlocksFieldDescriptor[] = [];
   const seen = new Set<string>();
-  // Groups already expanded, by IDENTITY. A group that lists itself would
-  // otherwise be re-entered every iteration, and the siblings behind it would
-  // never be reached — the walk would end at the bound having silently returned
-  // nothing, which is indistinguishable from a collection that declares no
-  // blocks field.
+  // Groups already expanded, by IDENTITY. This is what makes the walk finite,
+  // and it is the ONLY thing that does: a group listing itself would otherwise
+  // be re-entered forever. Expanding each group once bounds the visits at the
+  // number of declarations the configuration actually contains.
+  //
+  // There is no visit cap beside it, deliberately. A cap terminates a cyclic
+  // walk without ever reaching the fields the cycle hides, and on a merely LONG
+  // list it stops partway and returns fewer descriptors while reporting
+  // nothing — so the document's classes go unindexed and read as unused, which
+  // is the state that licences deleting a class a page still renders. Nothing
+  // validates a field count, so a long list is legal configuration rather than
+  // a signal that the config is wrong.
   const expanded = new WeakSet<object>();
 
   // Depth-first over a stack of CURSORS rather than recursion or a queue of
@@ -185,9 +176,8 @@ export function blocksFieldsOf(
   const stack: { fields: readonly unknown[]; index: number }[] = [
     { fields, index: 0 },
   ];
-  let visited = 0;
 
-  while (stack.length > 0 && visited < MAX_FIELDS_VISITED) {
+  while (stack.length > 0) {
     const frame = stack[stack.length - 1];
     if (frame === undefined || frame.index >= frame.fields.length) {
       stack.pop();
@@ -195,7 +185,6 @@ export function blocksFieldsOf(
     }
     const field = frame.fields[frame.index];
     frame.index += 1;
-    visited += 1;
 
     const children = presentationalChildren(field);
     if (children !== null) {
