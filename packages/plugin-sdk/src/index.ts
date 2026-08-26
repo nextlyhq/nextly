@@ -49,6 +49,30 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental `resolvedCollectionDraftSplit` — the same question, asked of a
+ *   collection the SCHEMA BUILDER created.
+ *
+ * A Builder collection is not authored config. It lives in the dynamic registry,
+ * which stores `versions` already resolved, so `collectionDraftSplit` above is
+ * the one shape it can never take — the checker rejects it, and untyped code
+ * gets `false` for a collection whose drafts are ON, because nothing named
+ * `drafts.enabled` is there to read. A plugin reaching a Builder collection
+ * through `ctx.services.collections.getCollection` holds a record for this one.
+ *
+ * Which to call is decided by where the collection CAME FROM, not by inspecting
+ * it: the two inputs overlap in neither direction, and a runtime check that
+ * tried to tell them apart would misread the boolean shorthand and fail
+ * silently in the direction that disables drafts.
+ */
+export { resolvedCollectionDraftSplit } from "nextly";
+/**
+ * @experimental `ResolvedDraftSplitCollection` is the registry-shaped input
+ *   `resolvedCollectionDraftSplit` accepts. Tagged on its own declaration: a
+ *   release tag applies to the declaration it precedes.
+ */
+export type { ResolvedDraftSplitCollection } from "nextly";
+
+/**
  * Plugin identity and classification.
  * @experimental `PLUGIN_CATEGORIES` and `isPluginCategory` enumerate and narrow
  *   the vocabulary `category` accepts; `pluginAdminSlug` derives the identifier
