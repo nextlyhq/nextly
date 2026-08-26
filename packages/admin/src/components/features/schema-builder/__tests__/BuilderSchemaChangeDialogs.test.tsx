@@ -90,6 +90,7 @@ describe("BuilderSchemaChangeDialogs", () => {
             fromType: "text",
             toType: "text",
             typesCompatible: true,
+            preservesValues: true,
             defaultSuggestion: "rename",
           },
         ],
@@ -157,5 +158,57 @@ describe("BuilderSchemaChangeDialogs", () => {
   it("disables the confirm while the apply is in flight", () => {
     renderDialogs(preview(), vi.fn(), { isApplying: true });
     expect(screen.getByRole("button", { name: /applying/i })).toBeDisabled();
+  });
+});
+
+describe("a rename that keeps the rows but converts their values", () => {
+  it("does not call it preserved, and says what happens instead", () => {
+    // `numeric` and `float8` are compatible enough to rename between and the
+    // dialog used to read that as "data preserved" — while every stored
+    // decimal became the nearest binary float.
+    renderDialogs(
+      preview({
+        renamed: [
+          {
+            table: "orders",
+            from: "amount",
+            to: "total",
+            fromType: "numeric(10,2)",
+            toType: "float8",
+            typesCompatible: true,
+            preservesValues: false,
+            valueChangeReason:
+              "exact decimals become the nearest binary float, so stored digits are lost",
+            defaultSuggestion: "rename",
+          },
+        ],
+      })
+    );
+
+    expect(screen.queryByText(/data preserved/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/rows kept, values change/i)).toBeInTheDocument();
+    expect(screen.getByText(/nearest binary float/i)).toBeInTheDocument();
+  });
+
+  it("still says preserved when the values really are", () => {
+    // The control: without it, "does not say preserved" is satisfied by a
+    // dialog that stopped saying it at all.
+    renderDialogs(
+      preview({
+        renamed: [
+          {
+            table: "posts",
+            from: "body",
+            to: "content",
+            fromType: "text",
+            toType: "text",
+            typesCompatible: true,
+            preservesValues: true,
+            defaultSuggestion: "rename",
+          },
+        ],
+      })
+    );
+    expect(screen.getByText(/data preserved/i)).toBeInTheDocument();
   });
 });

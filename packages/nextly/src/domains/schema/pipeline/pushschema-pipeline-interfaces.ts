@@ -21,6 +21,17 @@ export interface RenameCandidate {
   fromType: string;
   toType: string;
   typesCompatible: boolean;
+  /**
+   * Whether the rename leaves every stored value unchanged.
+   *
+   * Separate from `typesCompatible`, which answers whether the pair can be
+   * read as a rename at all. Two types can be compatible and still convert
+   * their values — `numeric` to `float8` is the pair that made the difference
+   * matter — so a surface that wants to say "data preserved" reads THIS.
+   */
+  preservesValues: boolean;
+  /** What happens to the values when `preservesValues` is false. */
+  valueChangeReason?: string;
   defaultSuggestion: "rename" | "drop_and_add";
 }
 

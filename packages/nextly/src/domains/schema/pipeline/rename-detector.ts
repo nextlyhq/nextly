@@ -20,6 +20,7 @@ import type {
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
 import { isTypesCompatible } from "./rename-detector-type-families";
+import { renamePreservation } from "./rename-preservation";
 
 export class RegexRenameDetector implements RenameDetector {
   detect(
@@ -60,6 +61,10 @@ export class RegexRenameDetector implements RenameDetector {
                   from: drop.columnName,
                   to: add.column.name,
                 });
+          // Asked whatever the compatibility answer was: an incompatible pair
+          // is offered as drop_and_add and never claims preservation, so the
+          // two questions stay independent rather than one gating the other.
+          const preservation = renamePreservation(fromType, toType);
           candidates.push({
             tableName,
             fromColumn: drop.columnName,
@@ -67,6 +72,8 @@ export class RegexRenameDetector implements RenameDetector {
             fromType,
             toType,
             typesCompatible: compatible,
+            preservesValues: preservation.preserved,
+            valueChangeReason: preservation.reason,
             defaultSuggestion: compatible ? "rename" : "drop_and_add",
           });
         }

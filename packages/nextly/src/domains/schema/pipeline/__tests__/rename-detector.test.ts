@@ -80,6 +80,47 @@ describe("RegexRenameDetector - empty / edge inputs", () => {
   });
 });
 
+describe("RegexRenameDetector - preservation is a second answer", () => {
+  it("marks a numeric-to-float rename compatible but NOT preserving", () => {
+    // Both sit in the `decimal` family, so the pair is compatible and can be
+    // offered as a rename — and the values still change, because an exact
+    // decimal becomes the nearest binary float. One flag answering both is
+    // what made the prompt say "data preserved" over this conversion.
+    const result = detector.detect(
+      [
+        drop("dc_orders", "amount", "numeric(10,2)"),
+        add("dc_orders", "total", "float8"),
+      ],
+      "postgresql"
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      typesCompatible: true,
+      preservesValues: false,
+    });
+    expect(result[0].valueChangeReason).toMatch(/binary float/);
+  });
+
+  it("keeps saying preserved for a rename that changes no type", () => {
+    // The control. Without it, "not preserving" is satisfied by a detector
+    // that stopped claiming preservation for anything.
+    const result = detector.detect(
+      [
+        drop("dc_orders", "amount", "numeric(10,2)"),
+        add("dc_orders", "total", "numeric(10,2)"),
+      ],
+      "postgresql"
+    );
+
+    expect(result[0]).toMatchObject({
+      typesCompatible: true,
+      preservesValues: true,
+    });
+    expect(result[0].valueChangeReason).toBeUndefined();
+  });
+});
+
 describe("RegexRenameDetector - spec acceptance criteria", () => {
   it("simple PG: text -> text yields 1 candidate, typesCompatible:true", () => {
     const result = detector.detect(
@@ -94,6 +135,7 @@ describe("RegexRenameDetector - spec acceptance criteria", () => {
       fromType: "text",
       toType: "text",
       typesCompatible: true,
+      preservesValues: true,
       defaultSuggestion: "rename",
     });
   });
@@ -111,6 +153,7 @@ describe("RegexRenameDetector - spec acceptance criteria", () => {
       fromType: "int4",
       toType: "date",
       typesCompatible: false,
+      preservesValues: true,
       defaultSuggestion: "drop_and_add",
     });
   });
@@ -153,6 +196,7 @@ describe("RegexRenameDetector - spec acceptance criteria", () => {
       fromType: "",
       toType: "text",
       typesCompatible: false,
+      preservesValues: true,
       defaultSuggestion: "drop_and_add",
     });
   });
@@ -261,6 +305,7 @@ describe("RegexRenameDetector - a column left under a legacy spelling", () => {
         fromType: "timestamp",
         toType: "timestamp",
         typesCompatible: true,
+        preservesValues: true,
         defaultSuggestion: "rename",
       },
     ]);

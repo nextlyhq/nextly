@@ -41,7 +41,22 @@ const candidate = (
   fromType: "text",
   toType: "text",
   typesCompatible,
+  preservesValues: true,
   defaultSuggestion: typesCompatible ? "rename" : "drop_and_add",
+});
+
+/** A compatible rename that CONVERTS its values, as numeric-to-float does. */
+const lossyCandidate = (): RenameCandidate => ({
+  tableName: "dc_orders",
+  fromColumn: "amount",
+  toColumn: "total",
+  fromType: "numeric(10,2)",
+  toType: "float8",
+  typesCompatible: true,
+  preservesValues: false,
+  valueChangeReason:
+    "exact decimals become the nearest binary float, so stored digits are lost",
+  defaultSuggestion: "rename",
 });
 
 const dropEvent = (col: string, type = "text", rows = 5) => ({
@@ -210,6 +225,49 @@ describe("ClackTerminalPromptDispatcher - TTY available", () => {
 
     expect(result.confirmedRenames).toEqual([c]);
     expect(mockSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer a value-converting rename as 'data preserved'", async () => {
+    // The hint is the only thing an author reads before choosing, and it said
+    // "data preserved" over a conversion that turns every exact decimal into
+    // the nearest binary float. Asserted on the OPTIONS the prompt is built
+    // with, because that is the text on screen.
+    mockSelect.mockResolvedValueOnce("rename:total");
+
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    await dispatcher.dispatch({
+      candidates: [lossyCandidate()],
+      events: [],
+      classification: "destructive",
+      channel: "terminal",
+    });
+
+    const options = (
+      mockSelect.mock.calls[0][0] as { options: { hint?: string }[] }
+    ).options;
+    const renameHint = options[0].hint ?? "";
+    expect(renameHint).not.toMatch(/data preserved/i);
+    expect(renameHint).toMatch(/VALUES CHANGE/);
+    expect(renameHint).toMatch(/binary float/);
+  });
+
+  it("still offers a type-preserving rename as 'data preserved'", async () => {
+    // The control: without it the assertion above passes just as well against
+    // a prompt that stopped saying it for every candidate.
+    mockSelect.mockResolvedValueOnce("rename:name");
+
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    await dispatcher.dispatch({
+      candidates: [candidate("title", "name")],
+      events: [],
+      classification: "destructive",
+      channel: "terminal",
+    });
+
+    const options = (
+      mockSelect.mock.calls[0][0] as { options: { hint?: string }[] }
+    ).options;
+    expect(options[0].hint ?? "").toMatch(/data preserved/i);
   });
 
   it("user picks 'drop_and_add' on a single candidate; confirmedRenames is empty", async () => {
