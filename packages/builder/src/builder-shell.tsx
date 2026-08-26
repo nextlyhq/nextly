@@ -134,6 +134,24 @@ export interface BuilderShellProps {
    * such control gets by default.
    */
   openInsertPanelToken?: number;
+  /**
+   * Reports `showEmptyElements` to a host that needs to know whether the
+   * canvas's empty-container chrome should be showing right now.
+   *
+   * The preference lives entirely inside this shell — see `store` below —
+   * and a caller drawing a SEPARATE overlay over the same canvas (the
+   * empty-container appender, mounted through `Canvas`'s own `overlay` prop
+   * rather than through this component's internals) has no way to reach it.
+   * This is the read half of that gap; `openInsertPanelToken` above is the
+   * write half of a different one.
+   *
+   * Called for every value the preference takes, including the very first
+   * one: a host that waited for a change would have no answer at all until
+   * the author touched the control, and would have to guess the default in
+   * the meantime — a guess that silently goes stale the day the default
+   * changes here and not at every call site that duplicated it.
+   */
+  onShowEmptyElementsChange?: (showEmptyElements: boolean) => void;
   /** The canvas. The shell never looks inside it. */
   children?: React.ReactNode;
   /** The inspector's contents. */
@@ -1049,6 +1067,7 @@ function ShellRegions({
 export function BuilderShell({
   store,
   openInsertPanelToken,
+  onShowEmptyElementsChange,
   ...props
 }: BuilderShellProps) {
   // The browser store is built once: rebuilt each render it would change
@@ -1087,6 +1106,21 @@ export function BuilderShell({
     handledInsertPanelToken.current = openInsertPanelToken;
     update(current => ({ ...current, leftPanel: "insert" }));
   }, [openInsertPanelToken, update]);
+
+  /*
+   * The read half of the same gap: told on every value `showEmptyElements`
+   * takes, including the first, so a host answers "should my own overlay be
+   * showing" honestly from the start rather than assuming the default and
+   * drifting from it the day that default changes here.
+   *
+   * No once-per-value guard here, unlike the token above. Reporting the same
+   * value twice is calling the host back with information it already has —
+   * inert, not incorrect — where applying the SAME token twice would have
+   * been a second unwanted forced-open.
+   */
+  React.useEffect(() => {
+    onShowEmptyElementsChange?.(preferences.showEmptyElements);
+  }, [preferences.showEmptyElements, onShowEmptyElementsChange]);
   /*
    * Where overlays inside this shell portal to. State rather than a ref,
    * because `PortalProvider` has to RE-RENDER once the node exists; a ref

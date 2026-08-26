@@ -360,15 +360,41 @@ describe("opening the insert panel from outside the shell", () => {
     expect(screen.getByText("insert panel")).toBeTruthy();
   });
 
-  it("does not close an already-open insert panel on the same token", () => {
+  it("does not close an already-open insert panel when the effect first applies its token", () => {
     // The rail's own click handler TOGGLES: a second press on the same item
     // closes the panel. Forcing the panel open must not inherit that —
     // pressing the canvas control again for the same container must never
     // read as "hide it".
-    renderShell({
-      renderPanel: panel => <p>{panel} panel</p>,
-      openInsertPanelToken: 1,
-    });
+    //
+    // The panel is opened by a RAIL CLICK here, deliberately not by an
+    // earlier token — from `leftPanel: null`, a correct force-set and a
+    // buggy `panelAfterRailClick(current, "insert")` both land on
+    // `"insert"`, so a fixture starting closed cannot tell them apart. Only
+    // starting from ALREADY OPEN separates them: the toggle would close it,
+    // the force-set leaves it exactly as it was.
+    stubContainerFits(true);
+    const store = memoryStore();
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.getByText("insert panel")).toBeTruthy();
+
+    // The token's FIRST value, applied against a panel already open by the
+    // rail rather than by a previous token — so the once-per-token guard is
+    // not what is standing between this render and the effect running.
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
 
     expect(screen.getByText("insert panel")).toBeTruthy();
   });
