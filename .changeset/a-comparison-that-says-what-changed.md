@@ -56,3 +56,13 @@ identifiable source, a value that cannot be represented — the comparison says
 so instead of reporting the two sides as identical. "I could not read this" and
 "these are the same" point a person deciding whether to restore in opposite
 directions.
+
+The admin now draws all of this. A rich-text comparison keeps the document's
+own shape — one row per paragraph, in order — with the changed words marked in
+place and a coloured edge marking a paragraph that was added or removed. JSON
+and code are shown as numbered lines with the same colours the editors use, so
+a value reads the same wherever you meet it.
+
+A field whose comparison this version of the admin cannot draw now says so and
+names itself, instead of disappearing from the list — a field that vanishes
+from a comparison reads exactly like a field that did not change.
