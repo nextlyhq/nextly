@@ -113,6 +113,27 @@ export interface BuilderShellProps {
    * the panel body.
    */
   availablePanels?: readonly LeftPanel[];
+  /**
+   * Opens the insert panel from OUTSIDE the shell, once per distinct value.
+   *
+   * The rail is normally the only way to change which panel is open, and its
+   * own click handler is a TOGGLE — pressing an already-open panel's item
+   * closes it. A control drawn on the canvas itself (the empty-container
+   * appender) needs the opposite contract: pressing it must show the insert
+   * panel whether or not it is already open, and pressing it again for a
+   * DIFFERENT empty container must show it again even if the author closed it
+   * by hand in between.
+   *
+   * A plain boolean or a bare panel name cannot express "again" — the second
+   * press would carry the same value as the first, and an effect keyed on it
+   * would never re-run. A counter the caller bumps on every press is the same
+   * shape `usePreferences` already uses for `loadCount` below: not the state
+   * itself, but a count of how many times the caller asked for it.
+   *
+   * Left `undefined` this does nothing, which is what every host that has no
+   * such control gets by default.
+   */
+  openInsertPanelToken?: number;
   /** The canvas. The shell never looks inside it. */
   children?: React.ReactNode;
   /** The inspector's contents. */
@@ -1025,7 +1046,11 @@ function ShellRegions({
  *
  * @experimental
  */
-export function BuilderShell({ store, ...props }: BuilderShellProps) {
+export function BuilderShell({
+  store,
+  openInsertPanelToken,
+  ...props
+}: BuilderShellProps) {
   // The browser store is built once: rebuilt each render it would change
   // `usePreferences`' callback identity every render, and the write effect with
   // it. Only the FALLBACK needs that treatment though. Capturing the caller's
@@ -1037,6 +1062,31 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update, loadCount] = usePreferences(resolvedStore);
   const [measureShell, shellFits] = useFitsFullShell();
+
+  /*
+   * Applies an `openInsertPanelToken` change AT MOST ONCE, the same
+   * once-per-value guard `usePreferences` uses `loadCount` for above — a ref
+   * rather than state, because recording that a token was handled is not
+   * itself something a re-render should follow from.
+   *
+   * FORCES `leftPanel` to `"insert"` rather than routing through
+   * `panelAfterRailClick`: that helper TOGGLES, and toggling is exactly wrong
+   * for a control whose contract is "show the panel this fills" — never
+   * "close it if it happens to already be open", which is what a second rail
+   * click on the same item means.
+   *
+   * No availability check against `availablePanels` here: `ShellRegions`
+   * below already normalises `preferences.leftPanel` against it when deriving
+   * the panel it actually renders, so a request naming a panel the host
+   * cannot fill is absorbed there rather than needing a second check here.
+   */
+  const handledInsertPanelToken = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (openInsertPanelToken === undefined) return;
+    if (handledInsertPanelToken.current === openInsertPanelToken) return;
+    handledInsertPanelToken.current = openInsertPanelToken;
+    update(current => ({ ...current, leftPanel: "insert" }));
+  }, [openInsertPanelToken, update]);
   /*
    * Where overlays inside this shell portal to. State rather than a ref,
    * because `PortalProvider` has to RE-RENDER once the node exists; a ref

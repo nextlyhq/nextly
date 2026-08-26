@@ -214,6 +214,19 @@ export { SpacingOverlay } from "./spacing-overlay";
 export type { SpacingOverlayProps } from "./spacing-overlay";
 
 /**
+ * A labelled "+" drawn over every container that has nothing in it.
+ *
+ * A canvas overlay like the two above, and composed the same way — it goes in
+ * `Canvas`'s `overlay`, because it is positioned in the canvas's own content
+ * coordinates and the canvas root is what establishes them. It is a client
+ * component for the same reason `SpacingOverlay` is: it holds React state for
+ * what it has measured, so it belongs behind this entry's banner rather than
+ * the root's.
+ */
+export { EmptyContainerAppenders } from "./empty-container-appender";
+export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+
+/**
  * The editor's document state, published beside the canvas because it is a hook
  * and therefore client-only for the same reason the shell is.
  *

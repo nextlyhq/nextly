@@ -329,6 +329,127 @@ describe("the rail", () => {
   });
 });
 
+describe("opening the insert panel from outside the shell", () => {
+  // `rerender` rather than `renderShell` throughout: these assert what
+  // happens BETWEEN two renders holding the same store, and `renderShell`
+  // builds a fresh store each call, which would additionally exercise the
+  // reload-on-swapped-store behaviour covered elsewhere and confuse which
+  // effect produced the result.
+
+  it("opens it once the token changes from undefined", () => {
+    stubContainerFits(true);
+    const store = memoryStore();
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+    expect(screen.queryByText("insert panel")).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+  });
+
+  it("does not close an already-open insert panel on the same token", () => {
+    // The rail's own click handler TOGGLES: a second press on the same item
+    // closes the panel. Forcing the panel open must not inherit that —
+    // pressing the canvas control again for the same container must never
+    // read as "hide it".
+    renderShell({
+      renderPanel: panel => <p>{panel} panel</p>,
+      openInsertPanelToken: 1,
+    });
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+  });
+
+  it("reopens on a NEW token after the author closed the panel by hand", () => {
+    stubContainerFits(true);
+    const store = memoryStore();
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+    expect(screen.getByText("insert panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.queryByText("insert panel")).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={2}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+  });
+
+  it("does not reopen a manually closed panel when the SAME token survives an unrelated effect re-run", () => {
+    // `update`'s identity follows the `store` prop (documented on `store`
+    // above: a host swapping stores is expected to hand over a new object),
+    // so a re-render that swaps stores re-runs this effect even though the
+    // TOKEN did not change. The regression this guards: without the
+    // once-per-token guard, that re-run would reapply "insert" over a manual
+    // close it had nothing to do with.
+    //
+    // A `className` change was tried here first and did not exercise this at
+    // all — neither `openInsertPanelToken` nor `update` depends on it, so the
+    // effect never re-runs and the guard is never reached. Only a dependency
+    // the effect actually reads can demonstrate the guard is doing anything.
+    stubContainerFits(true);
+    const backing: { value: string | null } = { value: null };
+    const storeOverBacking = (): PreferenceStore => ({
+      read: () => backing.value,
+      write: value => {
+        backing.value = value;
+      },
+    });
+
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={storeOverBacking()}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+    expect(screen.getByText("insert panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.queryByText("insert panel")).toBeNull();
+
+    // A DIFFERENT store object reading the same backing value — `update`
+    // changes identity, `openInsertPanelToken` does not.
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={storeOverBacking()}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.queryByText("insert panel")).toBeNull();
+  });
+});
+
 describe("preferences", () => {
   it("writes the open panel through the store, not to localStorage", () => {
     // The port is what lets these become durable server-side prefs later. A
