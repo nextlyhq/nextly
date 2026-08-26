@@ -7,6 +7,8 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
+  drawsAnyValidationRule,
+  EDITABLE_VALIDATION_RULES,
   FieldShell,
   FormActions,
   FormSection,
@@ -22,9 +24,12 @@ import {
   SelectValue,
   Switch,
   Textarea,
+  ValidationRulesEditor,
 } from "@nextlyhq/plugin-sdk/admin";
 import type {
   FieldShellProps,
+  ValidationRuleValues,
+  ValidationRulesEditorProps,
   FieldWidth,
   FormActionsProps,
   FormSectionProps,
@@ -106,3 +111,29 @@ expectTypeOf<FieldShellProps>().not.toBeNever();
 expectTypeOf<FormSectionProps>().not.toBeNever();
 expectTypeOf<FormActionsProps>().not.toBeNever();
 expectTypeOf<FieldWidth>().not.toBeNever();
+
+// ---------------------------------------------------------------------------
+// The validation-rules editor.
+//
+// Asserting the PROPS, not only the name: this component's whole contract is
+// that it takes an allowed-rule LIST rather than a field type. A version that
+// went back to branching on a type would still export a function of the right
+// name, and only the parameter shape separates the two.
+// ---------------------------------------------------------------------------
+
+expectTypeOf(ValidationRulesEditor).toBeFunction();
+expectTypeOf(ValidationRulesEditor).parameter(0).toMatchTypeOf<{
+  allowed: readonly string[];
+  value: ValidationRuleValues;
+  onChange: (next: Partial<ValidationRuleValues>) => void;
+}>();
+
+// It must NOT accept a field type — that is the defect it exists to remove.
+expectTypeOf(ValidationRulesEditor)
+  .parameter(0)
+  .not.toMatchTypeOf<{ fieldType: string }>();
+
+expectTypeOf(drawsAnyValidationRule).toBeFunction();
+expectTypeOf(EDITABLE_VALIDATION_RULES).toMatchTypeOf<readonly string[]>();
+expectTypeOf<ValidationRulesEditorProps>().not.toBeNever();
+expectTypeOf<ValidationRuleValues>().not.toBeNever();

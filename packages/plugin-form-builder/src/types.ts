@@ -843,6 +843,34 @@ export interface HiddenFormField extends Omit<BaseFormField, "type"> {
 /**
  * Validation rules for form fields.
  */
+/**
+ * Turn a union of object types into their intersection.
+ *
+ * The standard conditional-type idiom: distributing the union into contravariant
+ * positions makes the compiler infer the intersection that satisfies all of them.
+ */
+type UnionToIntersection<U> = (
+  U extends unknown ? (k: U) => void : never
+) extends (k: infer I) => void
+  ? I
+  : never;
+
+/**
+ * Every validation key any form field type may carry, each optional.
+ *
+ * For surfaces that read validation ACROSS field types rather than inside one —
+ * a shared rules editor cannot narrow to `TextFormField` without becoming the
+ * per-type branching it exists to remove.
+ *
+ * DERIVED from the field union rather than restated. A field type that declares
+ * a new rule becomes readable here with nobody remembering to add it, and a rule
+ * removed there stops compiling here. A hand-kept list would agree on the day it
+ * was written and drift after, silently, because both would look correct.
+ */
+export type AnyFieldValidation = Partial<
+  UnionToIntersection<NonNullable<FormField["validation"]>>
+>;
+
 export interface ValidationRules {
   /** Custom error message */
   errorMessage?: string;
