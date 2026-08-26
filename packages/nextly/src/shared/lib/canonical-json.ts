@@ -7,12 +7,14 @@
  * keep their order, which IS content — an author who reorders a list changed
  * something.
  *
- * Shared by the rich-text and source comparisons because both ask exactly this
- * question. Two implementations of it would agree on the day they were written
- * and drift after — and the drift would be silent, because each looks correct
- * beside its own caller.
+ * Shared rather than per-caller because several places ask exactly this
+ * question — the rich-text and source comparisons, and any registry deciding
+ * whether stored config still matches what the code declares. Two
+ * implementations of it would agree on the day they were written and drift
+ * after, and the drift would be silent because each looks correct beside its
+ * own caller.
  *
- * @module domains/versions/diff/canonical-json
+ * @module shared/lib/canonical-json
  */
 
 /**

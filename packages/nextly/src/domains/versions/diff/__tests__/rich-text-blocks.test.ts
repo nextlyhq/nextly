@@ -323,6 +323,32 @@ describe("toComparableBlocks — what it genuinely cannot read", () => {
     });
   });
 
+  it("marks a block unsupported when `children` is present but not a container", () => {
+    // A leaf has no `children` at all, so a present non-array is a container
+    // this cannot read rather than a leaf. Treating it as a leaf hides it
+    // completely: `children` is excluded from the attribute comparison, so
+    // nothing else would carry it either.
+    const blocks = toComparableBlocks(
+      doc([{ type: "paragraph", version: 1, children: "corrupt" }])
+    );
+    expect(blocks?.[0]?.unsupported).toBe(true);
+  });
+
+  it("MUST DIFFER: a malformed container is not equal to no container at all", () => {
+    const malformed = toComparableBlocks(
+      doc([{ type: "paragraph", version: 1, children: "corrupt" }])
+    );
+    const absent = toComparableBlocks(doc([{ type: "paragraph", version: 1 }]));
+    expect(malformed?.[0]).not.toEqual(absent?.[0]);
+  });
+
+  it("still treats a node with no `children` property as an ordinary leaf", () => {
+    // The control for the two above: refusing every node without a container
+    // would mark every text node in every document unsupported.
+    const blocks = toComparableBlocks(doc([para([text("a")])]));
+    expect(blocks?.[0]?.unsupported).toBe(false);
+  });
+
   it("refuses a document nested past its depth bound instead of overflowing", () => {
     // Validation only checks the root's children are node-shaped, so a crafted
     // value can nest arbitrarily. Recursing it would exhaust the call stack and

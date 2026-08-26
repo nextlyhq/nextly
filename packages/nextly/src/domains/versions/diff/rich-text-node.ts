@@ -21,14 +21,11 @@
  * @module domains/versions/diff/rich-text-node
  */
 
-import { alignUnits } from "./align-units";
-import { canonicalJson } from "./canonical-json";
+import { canonicalJson } from "../../../shared/lib/canonical-json";
+
+import { alignBlocks } from "./align-blocks";
 import { presenceStatus } from "./presence-status";
-import {
-  blockAlignKey,
-  toComparableBlocks,
-  type ComparableBlock,
-} from "./rich-text-blocks";
+import { toComparableBlocks, type ComparableBlock } from "./rich-text-blocks";
 import { diffText } from "./text-diff";
 import type {
   DiffStatus,
@@ -40,6 +37,27 @@ import type {
 
 /** How many changed attributes travel with a block before the rest are dropped. */
 const MAX_ATTR_CHANGES = 12;
+
+/** The side of a one-sided pair that holds nothing. */
+const ABSENT_BLOCK: ComparableBlock = {
+  blockType: "",
+  text: "",
+  attrs: {},
+  unsupported: false,
+};
+
+/**
+ * Changed attributes as they travel with a block. Bounded, because a block
+ * whose every node changed would otherwise send its whole contents a second
+ * time; the status already says the block changed.
+ */
+function attrChangesField(changes: readonly RichTextAttrChange[]): {
+  attrChanges?: RichTextAttrChange[];
+} {
+  return changes.length > 0
+    ? { attrChanges: changes.slice(0, MAX_ATTR_CHANGES) }
+    : {};
+}
 
 /**
  * A whole-field refusal: nothing about the CONTENT of this comparison can be
@@ -114,6 +132,27 @@ function attrChanges(
   return changes;
 }
 
+/**
+ * What a one-sided block reports beyond its text.
+ *
+ * A block carrying words is described by those words, and listing a paragraph's
+ * format, indent and mode beside them buries the sentence the reader came for.
+ * A block carrying NONE is described by nothing at all — which is every
+ * decorator, since an image, a gallery and a button group hold their identity
+ * in properties rather than in text. Without this an added image renders as a
+ * status badge above an empty row, and the reader cannot tell which picture
+ * arrived.
+ */
+function oneSidedAttrs(
+  block: ComparableBlock,
+  status: "added" | "removed"
+): RichTextAttrChange[] {
+  if (block.text !== "") return [];
+  return status === "added"
+    ? attrChanges(ABSENT_BLOCK, block, false)
+    : attrChanges(block, ABSENT_BLOCK, false);
+}
+
 /** One side of a pair the other side never had. */
 function oneSidedBlock(
   block: ComparableBlock,
@@ -127,6 +166,7 @@ function oneSidedBlock(
     status,
     segments:
       status === "added" ? diffText("", block.text) : diffText(block.text, ""),
+    ...attrChangesField(oneSidedAttrs(block, status)),
   };
 }
 
@@ -152,12 +192,8 @@ function pairedBlock(
     segments: textMatched
       ? [{ op: 0, text: to.text }]
       : diffText(from.text, to.text),
-    // Carried so the reader is told which property moved. Bounded, because a
-    // block whose every node changed would otherwise send its whole contents a
-    // second time; the status already says the block changed.
-    ...(changes.length > 0
-      ? { attrChanges: changes.slice(0, MAX_ATTR_CHANGES) }
-      : {}),
+    // Carried so the reader is told which property moved.
+    ...attrChangesField(changes),
   };
 }
 
@@ -166,18 +202,15 @@ function compareBlocks(
   beforeBlocks: readonly ComparableBlock[],
   afterBlocks: readonly ComparableBlock[]
 ): RichTextBlockDiff[] | null {
-  const alignment = alignUnits(
-    beforeBlocks.map(blockAlignKey),
-    afterBlocks.map(blockAlignKey)
-  );
-  if (!alignment.aligned) return null;
+  const pairs = alignBlocks(beforeBlocks, afterBlocks);
+  if (pairs === null) return null;
 
   const unreadable: RichTextBlockDiff = {
     blockType: "unknown",
     status: "unsupported",
   };
 
-  return alignment.pairs.map(pair => {
+  return pairs.map(pair => {
     if (pair.status === "added") {
       const block = afterBlocks[pair.toIndex];
       return block ? oneSidedBlock(block, "added") : unreadable;

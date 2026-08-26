@@ -49,7 +49,11 @@ difference no longer reads as an edit.
 
 Code fields were compared as running prose, which wrapped them into a
 proportional-font paragraph — harder to read in the comparison than simply
-viewing the version. They are now compared line by line as well.
+viewing the version. They are now compared line by line as well, and coloured
+in the language the field declares: SQL reads as SQL, Python as Python. Each
+side is read whole rather than a line at a time, so a comment or a docstring
+spanning several lines stays one comment instead of its later lines being
+coloured as though they were code.
 
 When something genuinely cannot be compared — a media element with no
 identifiable source, a value that cannot be represented — the comparison says
@@ -66,3 +70,17 @@ a value reads the same wherever you meet it.
 A field whose comparison this version of the admin cannot draw now says so and
 names itself, instead of disappearing from the list — a field that vanishes
 from a comparison reads exactly like a field that did not change.
+
+A picture, gallery or button that was added or removed now says WHICH one. Such
+a block carries no words, so a comparison built on text alone showed an
+Added badge above an empty row and left the reader unable to tell what had
+arrived.
+
+Blocks that read alike are no longer confused for one another. Inserting a
+paragraph among others with the same words and a different link used to report
+two edits and an unrelated addition — none of them the change that was made.
+
+A password field that was later retyped as code or JSON keeps its protection.
+Old versions still hold the stored hash, and the comparison now masks it in
+what it displays while still reporting that it changed, so a changed password
+is neither printed nor passed off as unchanged.

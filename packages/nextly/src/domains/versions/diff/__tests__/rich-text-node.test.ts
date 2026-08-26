@@ -305,3 +305,142 @@ describe("richTextNode — what it cannot compare", () => {
     expect(node.status).toBe("removed");
   });
 });
+
+describe("richTextNode — a block that arrives or leaves carrying no words", () => {
+  const imageDoc = (src: string) => ({
+    root: {
+      type: "root",
+      version: 1,
+      format: "",
+      indent: 0,
+      direction: "ltr",
+      children: [
+        {
+          type: "paragraph",
+          version: 1,
+          format: "",
+          indent: 0,
+          direction: "ltr",
+          children: [{ type: "image", version: 1, src, altText: "" }],
+        },
+      ],
+    },
+  });
+
+  it("says WHICH image arrived, rather than a badge over an empty row", () => {
+    // A decorator holds its identity in properties, so its flattened text is
+    // empty and the word comparison has nothing to show. Without the
+    // properties the reader is told a picture appeared and not which one.
+    const node = richTextNode(meta, doc([]), imageDoc("/hero.png"));
+    const block = node.blocks[0];
+    expect(block?.status).toBe("added");
+    const src = (block?.attrChanges ?? []).find(c => c.name.endsWith("src"));
+    expect(src).toMatchObject({ after: "/hero.png" });
+  });
+
+  it("says WHICH image left", () => {
+    const node = richTextNode(meta, imageDoc("/hero.png"), doc([]));
+    const block = node.blocks[0];
+    expect(block?.status).toBe("removed");
+    const src = (block?.attrChanges ?? []).find(c => c.name.endsWith("src"));
+    expect(src).toMatchObject({ before: "/hero.png" });
+  });
+
+  it("leaves an added paragraph to its own words", () => {
+    // The other direction: a block described by its text must not also list
+    // every format, indent and mode its nodes carry, which would bury the
+    // sentence the reader came for under a dozen rows of defaults.
+    const node = richTextNode(meta, doc([]), doc(["A new sentence."]));
+    expect(node.blocks[0]?.status).toBe("added");
+    expect(node.blocks[0]?.attrChanges).toBeUndefined();
+  });
+});
+
+describe("richTextNode — blocks that read alike", () => {
+  const linked = (url: string) => ({
+    type: "paragraph",
+    version: 1,
+    format: "",
+    indent: 0,
+    direction: "ltr",
+    children: [
+      {
+        type: "link",
+        version: 1,
+        url,
+        rel: null,
+        target: null,
+        children: [text("Same")],
+      },
+    ],
+  });
+  const links = (urls: string[]) => ({
+    root: {
+      type: "root",
+      version: 1,
+      format: "",
+      indent: 0,
+      direction: "ltr",
+      children: urls.map(linked),
+    },
+  });
+
+  it("pairs an inserted duplicate with itself rather than shifting its neighbours", () => {
+    // All three read `Same`, so a comparison aligning on type and text alone
+    // cannot tell them apart: it pairs each existing block with its
+    // neighbour's link and reports two edits and an addition, none of which
+    // the reader made.
+    const node = richTextNode(
+      meta,
+      links(["/a", "/b"]),
+      links(["/c", "/a", "/b"])
+    );
+    expect(node.blocks.map(b => b.status)).toEqual([
+      "added",
+      "unchanged",
+      "unchanged",
+    ]);
+  });
+
+  const tagged = (tag: string, value: string) => ({
+    type: "heading",
+    version: 1,
+    tag,
+    format: "",
+    indent: 0,
+    direction: "ltr",
+    children: [text(value)],
+  });
+  const headed = (children: unknown[]) => ({
+    root: {
+      type: "root",
+      version: 1,
+      format: "",
+      indent: 0,
+      direction: "ltr",
+      children,
+    },
+  });
+
+  it("still pairs an attribute-only edit with its old self across an insertion", () => {
+    // The control for the case above. Matching only identical blocks leaves
+    // both retagged headings and the new paragraph in one unanchored stretch,
+    // paired by position — which puts the second heading against the
+    // paragraph. Pairing that stretch on type and text is what recovers it.
+    const node = richTextNode(
+      meta,
+      headed([tagged("h2", "A"), tagged("h2", "B")]),
+      headed([tagged("h3", "A"), para("mid"), tagged("h3", "B")])
+    );
+    expect(node.blocks.map(b => b.status)).toEqual([
+      "changed",
+      "added",
+      "changed",
+    ]);
+  });
+
+  it("IDEMPOTENCE: three blocks that read alike compare equal to themselves", () => {
+    const same = links(["/a", "/b", "/c"]);
+    expect(richTextNode(meta, same, same).status).toBe("unchanged");
+  });
+});

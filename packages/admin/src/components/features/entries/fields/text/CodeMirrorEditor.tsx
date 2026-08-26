@@ -10,15 +10,6 @@
  * @since 1.0.0
  */
 
-import { css } from "@codemirror/lang-css";
-import { html } from "@codemirror/lang-html";
-import { javascript } from "@codemirror/lang-javascript";
-import { json } from "@codemirror/lang-json";
-import { markdown } from "@codemirror/lang-markdown";
-import { python } from "@codemirror/lang-python";
-import { sql } from "@codemirror/lang-sql";
-import { xml } from "@codemirror/lang-xml";
-import { yaml } from "@codemirror/lang-yaml";
 import { linter, type Diagnostic } from "@codemirror/lint";
 import { EditorView } from "@codemirror/view";
 import CodeMirror, { type ReactCodeMirrorProps } from "@uiw/react-codemirror";
@@ -30,6 +21,7 @@ import {
   nextlyEditorChrome,
   nextlyHighlighting,
 } from "@admin/lib/code-highlight";
+import { codeLanguageSupport } from "@admin/lib/code-language";
 
 /** Extension type extracted from ReactCodeMirror props (avoids direct @codemirror/state dependency) */
 type Extension = NonNullable<ReactCodeMirrorProps["extensions"]>[number];
@@ -217,55 +209,40 @@ function cssLinter(view: EditorView): Diagnostic[] {
 // ============================================================
 
 /**
- * Gets the appropriate CodeMirror language extension and linter
+ * Which linter runs for a language, where one exists.
+ *
+ * Separate from the grammar table, which `@admin/lib/code-language` owns and a
+ * version comparison reads too. A comparison wants the parser and has no use
+ * for diagnostics, so only this half stays with the editor.
+ */
+const LINTERS: Record<
+  string,
+  ((view: EditorView) => Diagnostic[]) | undefined
+> = {
+  json: jsonLinter,
+  html: xmlLinter,
+  xml: xmlLinter,
+  css: cssLinter,
+  scss: cssLinter,
+  less: cssLinter,
+};
+
+/**
+ * The grammar and the diagnostics for a language.
+ *
+ * The grammar is asked for rather than chosen here: the same question is
+ * answered for a version comparison, and two tables would agree today and
+ * drift apart later with nothing to notice it.
  */
 function getLanguageExtensions(language?: CodeLanguage | "plaintext") {
   const extensions: Extension[] = [];
+  if (language === undefined) return extensions;
 
-  switch (language) {
-    case "javascript":
-    case "jsx":
-      extensions.push(javascript({ jsx: true }));
-      break;
-    case "typescript":
-    case "tsx":
-      extensions.push(
-        javascript({ typescript: true, jsx: language === "tsx" })
-      );
-      break;
-    case "json":
-      extensions.push(json());
-      extensions.push(linter(jsonLinter));
-      break;
-    case "html":
-      extensions.push(html());
-      extensions.push(linter(xmlLinter));
-      break;
-    case "css":
-    case "scss":
-    case "less":
-      extensions.push(css());
-      extensions.push(linter(cssLinter));
-      break;
-    case "python":
-      extensions.push(python());
-      break;
-    case "sql":
-      extensions.push(sql());
-      break;
-    case "yaml":
-      extensions.push(yaml());
-      break;
-    case "markdown":
-      extensions.push(markdown());
-      break;
-    case "xml":
-      extensions.push(xml());
-      extensions.push(linter(xmlLinter));
-      break;
-    default:
-      break;
-  }
+  const support = codeLanguageSupport(language);
+  if (support) extensions.push(support);
+
+  const lint = LINTERS[language];
+  if (lint) extensions.push(linter(lint));
 
   return extensions;
 }

@@ -209,13 +209,32 @@ describe("computeVersionDiff — per field kind", () => {
     // `SourceFieldDiff.language` exists so a renderer can choose a grammar.
     // Emitting a literal "code" named a language no highlighter knows, which
     // left the configured one unreachable for exactly the fields that set it.
+    //
+    // The language sits under `admin`, which is where the field type declares
+    // it and where the field's own editor reads it. An earlier fixture put it
+    // at the top level — a shape no real config has — so this test passed
+    // against an engine that read the wrong place and rendered every correctly
+    // configured code field as plain text.
+    const diff = computeVersionDiff(
+      { snippet: "select 1" },
+      { snippet: "select 2" },
+      [field({ name: "snippet", type: "code", admin: { language: "sql" } })]
+    );
+    const node = diff.fields[0];
+    if (node.kind === "source") expect(node.language).toBe("sql");
+    else throw new Error("expected a source node");
+  });
+
+  it("ignores a language written where the config does not declare one", () => {
+    // The control for the fixture above: reading a top-level `language` must
+    // NOT work, or the test cannot tell the two accessors apart.
     const diff = computeVersionDiff(
       { snippet: "select 1" },
       { snippet: "select 2" },
       [field({ name: "snippet", type: "code", language: "sql" })]
     );
     const node = diff.fields[0];
-    if (node.kind === "source") expect(node.language).toBe("sql");
+    if (node.kind === "source") expect(node.language).toBe("plaintext");
     else throw new Error("expected a source node");
   });
 

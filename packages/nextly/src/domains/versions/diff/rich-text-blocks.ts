@@ -31,6 +31,8 @@
  * @module domains/versions/diff/rich-text-blocks
  */
 
+import { canonicalJson } from "../../../shared/lib/canonical-json";
+
 /**
  * Properties never compared, each for a stated reason. This list is the thing
  * a reviewer should argue with: every entry makes a falsifiable claim that a
@@ -146,8 +148,17 @@ function walk(
     out.text += node.text;
   }
 
+  // A leaf has no `children` property at all. One that is PRESENT but is not an
+  // array is a container this cannot read, and returning as though it were a
+  // leaf hides it entirely: `children` is excluded from the attribute
+  // comparison, so a document carrying a malformed container would compare
+  // equal to one where it had been removed.
+  if (!("children" in node)) return;
   const children = node.children;
-  if (!Array.isArray(children)) return;
+  if (!Array.isArray(children)) {
+    out.unsupported = true;
+    return;
+  }
 
   children.forEach((child, index) => {
     const childNode = asNode(child);
@@ -216,4 +227,30 @@ export function toComparableBlocks(value: unknown): ComparableBlock[] | null {
 export function blockAlignKey(block: ComparableBlock): string {
   // A private-use separator, so a block type cannot run into the text.
   return `${block.blockType}\u{E011}${block.text}`;
+}
+
+/**
+ * The string two blocks are IDENTICAL by — everything a comparison reads.
+ *
+ * Alignment runs this first, so blocks that did not change at all become
+ * anchors and only what sits between them is paired by the coarser key above.
+ * Without that, blocks sharing a type and a text but differing in attributes are
+ * indistinguishable during alignment: inserting one among them pairs each
+ * existing block with its neighbour's content and reports two edits and a
+ * spurious addition where a reader made one insertion.
+ *
+ * It decides PAIRING and never equality. Whether a pair actually differs is
+ * recomputed from the blocks themselves, so a key that brings two unequal
+ * blocks together costs a worse pairing and cannot produce a wrong answer.
+ */
+export function blockExactKey(block: ComparableBlock): string {
+  return [
+    block.blockType,
+    block.text,
+    block.unsupported ? "!" : "",
+    // A value with no JSON representation cannot arrive here — attributes are
+    // read from a parsed document — and the fallback keeps a block equal to
+    // ITSELF rather than inventing an identity that could never match.
+    canonicalJson(block.attrs) ?? "",
+  ].join("\u{E012}");
 }
