@@ -1778,6 +1778,19 @@ describe("rich-text inline styles reach the page", () => {
        * `inherit` because it is legal for every one of these, so one fixture
        * serves the whole list without inventing a value per property.
        */
+      /*
+       * `text-decoration` is a SHORTHAND and the engine resolves it into the
+       * three longhands it assigns, so it never reaches the page under its own
+       * name. `inherit` is not a line keyword either, so the value asserted for
+       * it is the one the expansion produces.
+       */
+      if (property === "text-decoration") {
+        const decorated = renderToStaticMarkup(
+          <RichText value={styled(`${property}: underline`)} />
+        );
+        expect(decorated).toContain("text-decoration-line:underline");
+        return;
+      }
       const html = renderToStaticMarkup(
         <RichText value={styled(`${property}: inherit`)} />
       );
@@ -2023,7 +2036,8 @@ describe("rich-text a decoration the style already draws", () => {
         value={mk("text-decoration: underline wavy red", TEXT_FORMAT.UNDERLINE)}
       />
     );
-    expect(html).toContain("text-decoration:underline wavy red");
+    expect(html).toContain("text-decoration-line:underline");
+    expect(html).toContain("text-decoration-style:wavy");
     expect(html).not.toContain("<u>");
   });
 
@@ -2136,7 +2150,7 @@ describe("rich-text an updated node matches a fresh one", () => {
     [
       "a shorthand beside its own longhand",
       "text-decoration: underline blue; text-decoration-color: green",
-      "text-decoration: underline red; text-decoration-color: green",
+      "text-decoration: overline blue; text-decoration-color: green",
     ],
     ["a plain value", "color: #ff0000", "color: #00ff00"],
   ])("replaces the element when %s changes", (_label, before, after) => {
@@ -2162,6 +2176,36 @@ describe("rich-text an updated node matches a fresh one", () => {
 
     expect(second).not.toBeNull();
     expect(second).not.toBe(first);
+  });
+
+  it("does not replace the element when the cascade resolves the same way", () => {
+    /*
+     * Two different declaration LISTS, one resolved style. The shorthand's
+     * colour is overwritten by the longhand after it either way, so
+     * `underline blue` and `underline red` beside `text-decoration-color:
+     * green` mean the same thing — and the element correctly stays put.
+     *
+     * This was a remount fixture until the shorthand began being resolved,
+     * which is the clearest demonstration of what that change bought: the
+     * question moved from "did the text differ" to "did the meaning differ".
+     */
+    const view = render(
+      <RichText
+        value={styled(
+          "text-decoration: underline blue; text-decoration-color: green"
+        )}
+      />
+    );
+    const first = view.container.querySelector("span");
+    expect(first).not.toBeNull();
+    view.rerender(
+      <RichText
+        value={styled(
+          "text-decoration: underline red; text-decoration-color: green"
+        )}
+      />
+    );
+    expect(view.container.querySelector("span")).toBe(first);
   });
 
   it("does not replace the element when nothing changed", () => {
@@ -2196,7 +2240,7 @@ describe("rich-text a decoration that adds a second line", () => {
       />
     );
     expect(html).toContain("<s>");
-    expect(html).toContain("text-decoration:underline wavy red");
+    expect(html).toContain("text-decoration-line:underline");
   });
 
   it("drops the wrapper when they draw the SAME line", () => {
@@ -2207,6 +2251,6 @@ describe("rich-text a decoration that adds a second line", () => {
       />
     );
     expect(html).not.toContain("<u>");
-    expect(html).toContain("text-decoration:underline wavy red");
+    expect(html).toContain("text-decoration-line:underline");
   });
 });
