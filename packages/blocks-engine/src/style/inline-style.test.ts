@@ -56,6 +56,16 @@ describe("readInlineStyle", () => {
     expect(read(value)).toEqual(expected);
   });
 
+  it("drops text-align, which a span cannot honour", () => {
+    // Both surfaces put a text node's style on a `<span>` — this package's
+    // renderer and the CMS's `serializeTextNode` — and `text-align` applies to
+    // a block container. Kept on the list it survived sanitization and aligned
+    // nothing, so the list promised what no reader could deliver and the
+    // versions differ reported an edit no visitor could see.
+    expect(read("text-align: center")).toEqual({});
+    expect([...INLINE_STYLE_PROPERTIES]).not.toContain("text-align");
+  });
+
   it.each([
     ["position", "position: fixed"],
     ["display", "display: none"],

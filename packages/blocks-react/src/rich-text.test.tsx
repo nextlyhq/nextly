@@ -1875,3 +1875,42 @@ describe("rich-text authored colours beat the format element's own", () => {
     ).toBe("<p><strong>Hi</strong></p>");
   });
 });
+
+describe("rich-text carries the editor's own font values to the page", () => {
+  /*
+   * The end of the chain, asserted where it ends. The engine's tests prove its
+   * reader keeps every family and size the toolbar offers, and the admin's
+   * conformance test proves that list IS the toolbar's — but neither renders
+   * anything. A renderer that dropped values containing a space, or lost a
+   * property's React name, would leave both of those green while the page
+   * published the font as plain prose.
+   *
+   * `inherit` is what the per-property test above uses, and it is legal for all
+   * of them, which is exactly why it cannot catch this: a real family carries a
+   * space and a real size carries a unit.
+   */
+  const styled = (style: string): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it.each(["Courier New", "Times New Roman", "Georgia"])(
+    "publishes the family %s",
+    family => {
+      expect(
+        renderToStaticMarkup(
+          <RichText value={styled(`font-family: ${family}`)} />
+        )
+      ).toContain(`font-family:${family}`);
+    }
+  );
+
+  it.each(["10px", "24px", "72px"])("publishes the size %s", size => {
+    expect(
+      renderToStaticMarkup(<RichText value={styled(`font-size: ${size}`)} />)
+    ).toContain(`font-size:${size}`);
+  });
+});

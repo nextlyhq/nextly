@@ -51,7 +51,13 @@ export const INLINE_STYLE_PROPERTIES = [
   "text-decoration-line",
   "text-decoration-color",
   "text-decoration-style",
-  "text-align",
+  // `text-align` is deliberately ABSENT, and this note is here so it is not
+  // added back as an oversight. Both surfaces put a text node's style on a
+  // `<span>` — this package's renderer and `serializeTextNode` in the CMS — and
+  // `text-align` applies to a block container, so it survived sanitization and
+  // aligned nothing. Keeping it made the list promise something no reader could
+  // deliver, and made a change to it show up in the versions differ as an edit
+  // no visitor could see. Aligning a paragraph is the paragraph's own property.
   "vertical-align",
   "line-height",
   "letter-spacing",
@@ -146,8 +152,13 @@ export function sanitizeInlineStyle(value: unknown): string {
  * this list has never heard of, and refusing it would strip a face the CMS
  * publishes today. What the list is for is the opposite direction — holding the
  * reader to the editor, so a value an author CAN choose is never one the page
- * silently drops. `richTextInlineStyleVocabulariesAgree` in the admin is what
- * checks that, because the editor's lists live where this package cannot reach.
+ * silently drops.
+ *
+ * Two checks together make that hold, and neither does it alone: the admin
+ * compares this list to the toolbar's own options, because the editor's lists
+ * live where this package cannot reach; and this package's own tests render
+ * every member through {@link readInlineStyle}. The first says the list is the
+ * editor's, the second says the reader keeps what is on it.
  */
 export const RICH_TEXT_FONT_FAMILIES = [
   "Arial",

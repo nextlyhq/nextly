@@ -53,12 +53,12 @@ import { useToolbarState } from "./useToolbarState";
 /**
  * The font families this toolbar offers.
  *
- * EXPORTED because the published renderer restates this vocabulary — it lives
- * in `blocks-react`, which may not import this package — and a restatement that
- * drifts is silent: the author picks a face and the page drops it, with nothing
- * anywhere reporting the loss. `renderer-covers-the-editor.test.ts` holds the
- * two together, and it imports this rather than reading the file, so a
- * reformatting cannot make the check pass by finding nothing.
+ * EXPORTED because `blocks-engine` restates this vocabulary. It cannot import
+ * this package — the dependency does not exist and must not — so the two lists
+ * are held together by `renderer-covers-the-editor.test.ts`, which imports this
+ * one and reads the engine's as source. A restatement that drifts is otherwise
+ * silent: the author picks a face and the page drops it, with nothing anywhere
+ * reporting the loss.
  */
 export const FONT_FAMILY_OPTIONS = [
   { label: "Default", value: "" },
