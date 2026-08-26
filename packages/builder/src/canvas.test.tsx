@@ -16,7 +16,13 @@
  *
  * @module canvas.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import {
   afterAll,
   afterEach,
@@ -37,6 +43,7 @@ import {
   CANVAS_ROOT_CLASS,
   Canvas,
   SELECTED_ATTRIBUTE,
+  canvasScale,
   nodeIdFromEvent,
 } from "./canvas";
 
@@ -575,6 +582,40 @@ describe("the preview box the canvas establishes", () => {
   });
 });
 
+describe("how far the canvas must shrink for a width to fit", () => {
+  it("is the ratio when the region is too narrow", () => {
+    // The measured case: ~912px of canvas on the supported 1280px shell.
+    expect(canvasScale(1280, 912)).toBe(912 / 1280);
+  });
+
+  it("never MAGNIFIES a box the region can already hold", () => {
+    /*
+     * A region wider than the request means the box is simply narrower than
+     * the space, which the auto margins centre. Scaled up it would show the
+     * author a page larger than life, and every judgement they make from the
+     * screen — type size, spacing, whether a line wraps — would be wrong in the
+     * flattering direction.
+     */
+    expect(canvasScale(600, 912)).toBe(1);
+    expect(canvasScale(912, 912)).toBe(1);
+  });
+
+  it("is the IDENTITY for anything it cannot divide", () => {
+    /*
+     * Each of these reaches the real code. The unmeasured region runs on every
+     * mount before the first observation; a region of zero is what a collapsed
+     * pane reports. Neither `NaN` nor `Infinity` fails loudly — both paint the
+     * canvas nowhere while leaving it present in the tree, which reads as the
+     * editor having lost the page rather than as a bad number.
+     */
+    expect(canvasScale(1280, undefined)).toBe(1);
+    expect(canvasScale(undefined, 912)).toBe(1);
+    expect(canvasScale(1280, 0)).toBe(1);
+    expect(canvasScale(0, 912)).toBe(1);
+    expect(canvasScale(1280, Number.NaN)).toBe(1);
+  });
+});
+
 describe("what the canvas reports about the box it got", () => {
   /**
    * A `ResizeObserver` that records what it was asked to watch and hands the
@@ -585,10 +626,22 @@ describe("what the canvas reports about the box it got", () => {
    * not, so without a stub every assertion here would pass on absence.
    */
   class FakeResizeObserver {
+    /**
+     * Every observer built since the last reset, newest first.
+     *
+     * The canvas builds more than one — the box it reports on, and the region
+     * it derives its scale from — so "the last one constructed" names whichever
+     * effect happened to run second. Addressing them by WHAT THEY OBSERVE is
+     * the structural question; construction order is a proxy that silently
+     * re-points when an effect is added, and every case here would then drive
+     * an observer watching a different element and assert against nothing.
+     */
+    static all: FakeResizeObserver[] = [];
     static last: FakeResizeObserver | undefined;
     readonly observed: Element[] = [];
     disconnected = false;
     constructor(readonly callback: ResizeObserverCallback) {
+      FakeResizeObserver.all.unshift(this);
       FakeResizeObserver.last = this;
     }
     observe(element: Element): void {
@@ -616,7 +669,157 @@ describe("what the canvas reports about the box it got", () => {
   });
 
   afterEach(() => {
+    FakeResizeObserver.all = [];
     FakeResizeObserver.last = undefined;
+  });
+
+  /**
+   * The observer watching the canvas ROOT, which is the box the sheet queries.
+   *
+   * Found by the element rather than taken as the newest, so a case reading the
+   * reported width cannot be handed the region observer instead.
+   */
+  function rootObserver(): FakeResizeObserver | undefined {
+    return FakeResizeObserver.all.find(observer =>
+      observer.observed.some(element =>
+        element.classList.contains(CANVAS_ROOT_CLASS)
+      )
+    );
+  }
+
+  /** The observer watching the REGION, which is the canvas root's parent. */
+  function regionObserver(): FakeResizeObserver | undefined {
+    return FakeResizeObserver.all.find(observer =>
+      observer.observed.some(
+        element => !element.classList.contains(CANVAS_ROOT_CLASS)
+      )
+    );
+  }
+
+  /**
+   * Report a region width, and REFUSE if there is no observer to report it to.
+   *
+   * `regionObserver()?.deliver(...)` is silent when the observer was never
+   * built: the width is never delivered, the canvas keeps its unmeasured style,
+   * and a case asserting the unscaled shape passes for the wrong reason. The
+   * assertion is what turns a missing observer into a failure.
+   *
+   * Wrapped in `act` because this one sets React state rather than calling a
+   * host's reporter — without it the render that reads the new width has not
+   * happened when the assertions run.
+   */
+  function region(inlineSize: number): void {
+    const observer = regionObserver();
+    expect(observer).toBeDefined();
+    act(() => {
+      observer?.deliver({
+        contentBoxSize: [{ inlineSize, blockSize: 700 }],
+      } as never);
+    });
+  }
+
+  /** A canvas asked for `width`, so it has a region to scale against. */
+  function atWidth(width: number) {
+    return render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={PREVIEWABLE}
+        preview={{ container: "nx-preview-viewport", width }}
+      />
+    );
+  }
+
+  const rootOf = (container: HTMLElement): HTMLElement =>
+    container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement;
+
+  describe("a tier wider than the region it has to fit in", () => {
+    it("takes its FULL width and is scaled down to the region", () => {
+      /*
+       * The regression this exists for. The canvas region is around 912px on
+       * the supported 1280px shell, so against a site whose widest bound is
+       * 1024 there is no width an author can ask for that puts the box above
+       * it — every edit lands in the tier below, and the unconditional one
+       * cannot be reached at all.
+       *
+       * The width must therefore be EXACT rather than a maximum. Capped at the
+       * region the box is not simulating a 1280px viewport; it is simulating a
+       * 912px one and naming the wrong tier with confidence.
+       */
+      const { container } = atWidth(1280);
+      region(912);
+
+      const root = rootOf(container);
+      expect(root.style.width).toBe("1280px");
+      expect(root.style.transform).toBe(`scale(${912 / 1280})`);
+      // Not a centred origin: the scale is exactly region / requested, so the
+      // painted box already fills the region and a centred origin would push it
+      // half its shortfall to the right and clip that much off the far side.
+      expect(root.style.transformOrigin).toBe("top left");
+      // Published for the stylesheet, which divides the canvas minimum height
+      // back out — a scaled root laid out at the region's height paints shorter
+      // than it and leaves the bottom of the region unaimable.
+      expect(root.style.getPropertyValue("--nx-canvas-scale")).toBe(
+        `${912 / 1280}`
+      );
+    });
+
+    it("leaves a tier that FITS unscaled and centred", () => {
+      /*
+       * The control, and it has to come out different or the case above says
+       * only that the canvas sets styles. A request the region can honour is
+       * not a simulation of anything and must stay pixel-exact: resampling it
+       * would soften a page the author is judging type and spacing on.
+       */
+      const { container } = atWidth(600);
+      region(912);
+
+      const root = rootOf(container);
+      expect(root.style.maxWidth).toBe("600px");
+      expect(root.style.marginInline).toBe("auto");
+      expect(root.style.transform).toBe("");
+      expect(root.style.width).toBe("");
+    });
+
+    it("does not scale before the region has been measured", () => {
+      /*
+       * Every mount runs this before the first measurement. A scale derived
+       * from an unmeasured region is `NaN`, which does not fail loudly — it
+       * paints the canvas nowhere and leaves nothing to aim at, on a surface
+       * that looks present in the tree.
+       */
+      const { container } = atWidth(1280);
+
+      const root = rootOf(container);
+      expect(root.style.transform).toBe("");
+      expect(root.style.maxWidth).toBe("1280px");
+    });
+
+    it("observes NOTHING extra when no width was asked for", () => {
+      // A canvas filling its region has no scale to derive, and an observer
+      // that exists to answer a question nobody asked still fires on every
+      // pane drag.
+      render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport" }}
+        />
+      );
+
+      expect(regionObserver()).toBeUndefined();
+    });
   });
 
   /** A canvas previewing, with a reporter the test can read. */

@@ -42,7 +42,7 @@ import {
 } from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { cn } from "@nextlyhq/ui/utils";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { CanvasDragHandlers } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
@@ -273,28 +273,168 @@ function useReportedInlineWidth(
 }
 
 /**
- * The canvas root's own style: the container the sheet queries, and the width
- * the box is being asked to show.
+ * The width of the REGION the canvas has been given, or `undefined` until it
+ * has been measured.
  *
- * A MAXIMUM with an auto inline margin rather than a fixed width, because the
- * region may be narrower than the tier asked for — a wide breakpoint inside a
- * half-width editor pane cannot be honoured, and stretching the box past its
- * region would put the page under the inspector.
+ * The canvas's own parent, which the canvas does not own — the same dependency
+ * `min-height: 100%` already has, and for the same reason: how much room there
+ * is is a fact about the surface hosting the editor, not about the document.
  *
- * Centred rather than left-aligned, which is what every builder surveyed does
- * and is not merely cosmetic: an off-centre narrow box reads as a layout that
- * has broken rather than as a viewport being simulated.
+ * Measured rather than passed, so a host cannot state a region that disagrees
+ * with the one it laid out. A number a caller supplies is a second answer to a
+ * question the box can be asked directly, and the two would first disagree when
+ * a rail is toggled — exactly when the scale has to change.
+ *
+ * `clientWidth` is not used, and the difference is load-bearing: it is an
+ * integer, so a fractional region rounds and the scale derived from it leaves
+ * the painted box a fraction wide of the space, which reads as a hairline of
+ * background down one edge that moves as the pane is dragged.
+ *
+ * Observed only while `scaling`, so a canvas that fills its region builds no
+ * observer at all — there is nothing for it to answer, and one that exists
+ * anyway fires on every pane drag for a number nobody reads.
+ */
+function useRegionWidth(
+  box: React.RefObject<HTMLElement | null>,
+  scaling: boolean
+): number | undefined {
+  const [width, setWidth] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (!scaling) return;
+    const region = box.current?.parentElement ?? null;
+    if (region === null) return;
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (entry === undefined) return;
+      setWidth(inlineSizeOf(entry));
+    });
+    observer.observe(region);
+    return () => {
+      observer.disconnect();
+      // The region is gone, so its last width describes nothing. Reported as
+      // absent, the scale falls back to 1 — which is the identity, and the
+      // only answer that cannot place the canvas somewhere nobody can see.
+      setWidth(undefined);
+    };
+  }, [box, scaling]);
+  return width;
+}
+
+/**
+ * How much the canvas must be shrunk for the width it was asked for to fit.
+ *
+ * `1` whenever the request already fits, which is the ordinary case and must
+ * stay pixel-exact: a canvas showing a tier narrower than its region is not
+ * simulating anything and has nothing to gain from being resampled.
+ *
+ * Never above 1. A region wider than the request means the box is simply
+ * narrower than the space, which the auto margins centre; magnifying it would
+ * show the author a page larger than life and make every measurement they take
+ * from the screen wrong in the flattering direction.
+ *
+ * `1` for an unmeasured or nonsensical region as well. This runs before the
+ * first measurement on every mount, and a scale derived from `undefined` — or
+ * from a region of zero, which a collapsed pane reports — is either `NaN` or
+ * infinite, neither of which fails loudly: both produce a canvas that is
+ * present, painted nowhere, and impossible to aim at.
+ */
+export function canvasScale(
+  requested: number | undefined,
+  region: number | undefined
+): number {
+  if (requested === undefined || region === undefined) return 1;
+  if (!(requested > 0) || !(region > 0)) return 1;
+  return Math.min(1, region / requested);
+}
+
+/**
+ * The canvas root's own style: the container the sheet queries, the width the
+ * box is asked to show, and the scale that makes that width fit.
+ *
+ * Two shapes, because a request that fits and a request that does not are
+ * different situations rather than one with a parameter.
+ *
+ * WHERE IT FITS, the width is a MAXIMUM with an auto inline margin. Centred
+ * rather than left-aligned, which is what every builder surveyed does and is
+ * not merely cosmetic: an off-centre narrow box reads as a layout that has
+ * broken rather than as a viewport being simulated.
+ *
+ * WHERE IT DOES NOT, the width is EXACT and a transform shrinks the box until
+ * it does. That is the only way the widest tier stays editable at all: the
+ * region is around 912px on the supported 1280px shell, so a site whose widest
+ * bound is 1024 has no width an author can ask for that puts the box above it,
+ * and the unconditional tier becomes unreachable. Capping the width there does
+ * not simulate a 1280px viewport — it simulates a 912px one and reports the
+ * wrong tier with confidence.
+ *
+ * A transform rather than `zoom`, and rather than letting the box overflow.
+ * Measured: both `zoom` and a transform keep the container queries resolving at
+ * the REQUESTED width, because both leave the layout width alone; `zoom` also
+ * collapses the reserved height for free, which a transform does not. The
+ * transform is still the right one — `zoom`'s documented weakness is
+ * inconsistency in how it interacts with other layout features, which is where
+ * this canvas lives: overlays, drop targets and hit-testing all read boxes.
+ *
+ * `top left` rather than a centred origin, because the scale is exactly
+ * `region / requested`: the painted box then fills the region precisely, and
+ * there is nothing left over to centre. A centred origin would place the
+ * painted box half its shortfall to the right and clip that much off the far
+ * side.
+ *
+ * The scale is published as a custom property because the stylesheet needs it
+ * too: `min-height: 100%` gives the root the region's height, which paints at
+ * `scale` of it and leaves the rest of the region with no canvas on it —
+ * measured at 285px painted into a 400px region, 115px an author cannot aim a
+ * drop at. Dividing the minimum back out is what fills it.
  */
 function previewBoxStyle(
-  preview: CanvasPreview | undefined
+  preview: CanvasPreview | undefined,
+  scale: number
 ): React.CSSProperties {
   if (preview === undefined) return {};
+  const container = previewContainerStyle(preview.container);
+  if (preview.width === undefined) return container;
+  if (scale >= 1) {
+    return {
+      ...container,
+      maxWidth: `${preview.width}px`,
+      marginInline: "auto",
+    };
+  }
   return {
-    ...previewContainerStyle(preview.container),
-    ...(preview.width === undefined
-      ? {}
-      : { maxWidth: `${preview.width}px`, marginInline: "auto" }),
+    ...container,
+    width: `${preview.width}px`,
+    transform: `scale(${scale})`,
+    transformOrigin: "top left",
+    ["--nx-canvas-scale" as string]: `${scale}`,
   };
+}
+
+/**
+ * The canvas root's surface: what it queries, how wide it is asked to be, how
+ * far it must shrink for that width to fit, and what it ended up being.
+ *
+ * One decision rather than several statements in the component, because they
+ * are not independent. Three numbers describe this box — the width an author
+ * asked for, the room the region has, and the width the box ended up with — and
+ * only the first is chosen. The scale is DERIVED from the first two and the
+ * third is REPORTED from the result, so there is no stored value that can
+ * disagree with any other. Kept apart, a component holds all three and each can
+ * be updated without the rest.
+ */
+function useCanvasSurface(
+  root: React.RefObject<HTMLElement | null>,
+  preview: CanvasPreview | undefined
+): React.CSSProperties {
+  // What the box GOT, reported outward to whoever asked.
+  useReportedInlineWidth(root, preview?.onMeasured);
+  // What the box has ROOM for, read inward to decide how far it must shrink.
+  // Observed only where a width was asked for: a canvas filling its region has
+  // nothing to scale, and an observer that exists to answer a question nobody
+  // asked still fires on every pane drag.
+  const region = useRegionWidth(root, preview?.width !== undefined);
+  return previewBoxStyle(preview, canvasScale(preview?.width, region));
 }
 
 /**
@@ -739,7 +879,7 @@ export function Canvas({
     preview
   );
 
-  useReportedInlineWidth(root, active?.onMeasured);
+  const boxStyle = useCanvasSurface(root, active);
 
   const page = useMemo(
     () => (
@@ -769,7 +909,7 @@ export function Canvas({
       // are positioned in this element's own content coordinates: a box inside
       // it would size the page while leaving the drop indicator and the
       // selection chrome measuring the region instead.
-      style={previewBoxStyle(active)}
+      style={boxStyle}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and

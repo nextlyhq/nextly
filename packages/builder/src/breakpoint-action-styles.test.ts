@@ -56,3 +56,30 @@ describe("the breakpoint actions are styled, not merely marked", () => {
     expect(CHROME).not.toContain(".nx-style-inspector__breakpoint-nonexistent");
   });
 });
+
+describe("the canvas minimum height answers to the canvas scale", () => {
+  it("divides the minimum back out by the scale the canvas publishes", () => {
+    /*
+     * Two halves of one decision that no type or render test connects: the
+     * canvas sets `--nx-canvas-scale` in JavaScript, and only this stylesheet
+     * consumes it.
+     *
+     * The minimum exists so the region an author can aim a drop at does not end
+     * at the last block — without it, the end of the page has no pixels to
+     * point at and a block cannot be dragged there at all. A scaled canvas
+     * reintroduces exactly that: laid out at the region's height it PAINTS at a
+     * fraction of it, measured at 285px into a 400px region, leaving 115px of
+     * region with no canvas on it. Dividing the minimum by the scale is what
+     * fills the region again, and it is the case the minimum is needed in most.
+     *
+     * The FALLBACK is asserted with it, because every unscaled surface — which
+     * is all of them until a tier wider than the region is chosen — reads this
+     * declaration with the property unset. Without `1` there, the whole minimum
+     * becomes invalid and the aiming failure returns everywhere rather than
+     * only when zoomed.
+     */
+    expect(CHROME).toContain(
+      "min-height: calc(100% / var(--nx-canvas-scale, 1))"
+    );
+  });
+});
