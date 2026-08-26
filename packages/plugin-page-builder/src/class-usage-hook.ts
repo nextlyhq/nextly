@@ -23,6 +23,7 @@
  * @module class-usage-hook
  */
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
+import type { HookContext } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import {
@@ -43,8 +44,15 @@ import { reconcileWrittenDocument } from "./class-usage-write";
  */
 const MAINTAINED_PHASES = ["afterCreate", "afterUpdate"] as const;
 
-/** Whatever the host wrote, as a hook receives it. */
-type UnknownRecord = Record<string, unknown>;
+/**
+ * A hook context, as core defines it.
+ *
+ * Imported rather than described. A hand-written record type accepted this
+ * package's own fake and rejected the real `HookContext`, which carries no
+ * index signature — the mismatch only surfaced when the registration was
+ * finally wired to a real plugin context.
+ */
+type UnknownRecord = HookContext<unknown>;
 
 /**
  * The plugin context this needs, named structurally.
@@ -67,7 +75,9 @@ export interface ClassUsagePluginContext {
       getCollection(name: string, context: unknown): Promise<unknown>;
     };
   };
-  logger?: { error?: (message: string, meta?: unknown) => void };
+  logger?: {
+    error?: (message: string, meta?: Record<string, unknown>) => void;
+  };
 }
 
 /** How a collection's draft split is resolved. Injected so tests need no registry. */

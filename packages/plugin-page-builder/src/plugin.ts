@@ -1,8 +1,12 @@
 import {
+  DEFAULT_LIMITS,
   type DocumentLimits,
   type RemotePattern,
 } from "@nextlyhq/blocks-engine";
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  resolvedCollectionDraftSplit,
+} from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
 // Imported rather than read at runtime so it can never drift from the published
@@ -19,7 +23,12 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { classUsageIndexCollection } from "./collections/class-usage-index";
+import { resolvedCollectionView } from "./class-usage-collection-view";
+import { registerClassUsageMaintenance } from "./class-usage-hook";
+import {
+  CLASS_USAGE_INDEX_SLUG,
+  classUsageIndexCollection,
+} from "./collections/class-usage-index";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { blocksFieldType } from "./fields/blocksField";
@@ -305,6 +314,25 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
     init: ctx => {
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
+      // Class-usage maintenance. Registered here rather than beside the
+      // collection, because it is a property of the plugin being INSTALLED: the
+      // index table exists whether or not anything maintains it, and a host
+      // that installs the plugin is asking for both.
+      registerClassUsageMaintenance({
+        ctx,
+        indexCollection: CLASS_USAGE_INDEX_SLUG,
+        // The registry record, projected. `getCollection` is declared to
+        // return a shape that promises none of the properties this question
+        // reads, while returning an object that carries all of them.
+        draftSplit: (collection: unknown) =>
+          resolvedCollectionDraftSplit(resolvedCollectionView(collection)),
+        // Read per call, not captured: a host can reconfigure either, and a
+        // value captured at install would keep deriving rows under bounds the
+        // renderer no longer applies.
+        locales: () =>
+          ctx.config.localization?.locales.map(locale => locale.code) ?? [],
+        limits: () => DEFAULT_LIMITS,
+      });
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no

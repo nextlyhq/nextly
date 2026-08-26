@@ -55,6 +55,19 @@ their work was lost when it was not. Every failure reaches the logger instead, i
 ones this code is responsible for. An index that disagrees with a document is recoverable by a
 rebuild; that false error is not recoverable at all.
 
+A write inside a CALLER-OWNED transaction is skipped. Core runs the after-hook before that
+transaction commits and binds its executor onto the hook context to say so; maintenance reaches
+the database through the pooled Direct API, which cannot join it - so on a small pool it can
+stall on the connection the transaction holds, and otherwise it reads a database that does not
+yet contain the write it was called for. Rows derived from that read record the document's
+previous classes, or none at all for a create, and report success. The rebuild is what repairs
+a subject a write bypassed.
+
+The plugin now installs this in its own `init`, so a host that installs the page builder gets
+the index table and the thing that maintains it together. A table with no maintenance records
+nothing while reporting success, which is the state in which every class on a site reads as
+unused.
+
 Deletion is deliberately absent. Removing a document's rows is a different reconciliation -
 there is no document left to derive from - and it is built separately rather than bolted on
 here.
