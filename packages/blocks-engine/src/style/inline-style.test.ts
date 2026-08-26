@@ -135,6 +135,73 @@ describe("readInlineStyle", () => {
   });
 });
 
+describe("a repeated property whose later value is unusable", () => {
+  it("keeps the fallback a browser would keep", () => {
+    /*
+     * `color: red; color: not-a-color` renders RED. The second declaration is
+     * discarded when it is parsed, so the first is what applies — which is the
+     * whole point of writing a fallback chain, and what the CMS used to get
+     * right by emitting both declarations.
+     *
+     * Deduplicating on POSITION alone loses it. Judging the VALUE recovers it.
+     */
+    expect(read("color: red; color: not-a-color")["color"]).toBe("red");
+  });
+
+  it("still lets a later VALID colour win", () => {
+    // The control, and it is the one that matters: a rule that simply kept the
+    // first declaration would satisfy the assertion above and break every
+    // ordinary override.
+    expect(read("color: red; color: #00ff00")["color"]).toBe("#00ff00");
+  });
+
+  it("cannot do the same for a length, and says so", () => {
+    /*
+     * The limit, asserted rather than left to be discovered. Deciding that
+     * `not-a-size` is not a length means a CSS property database, which this
+     * package does not have and should not grow for this. So the later
+     * declaration wins, which is what a browser does whenever the later one IS
+     * valid — the divergence is confined to the case where it is not.
+     */
+    expect(read("font-size: 16px; font-size: not-a-size")["font-size"]).toBe(
+      "not-a-size"
+    );
+  });
+});
+
+describe("a declaration carrying !important", () => {
+  it("keeps the declaration and drops the priority", () => {
+    /*
+     * React sets a style property through `CSSStyleDeclaration`, which REJECTS
+     * a value with an embedded priority and leaves the property unset — while
+     * server rendering writes the string out and it applies. Carried through,
+     * the same document would render one way from the server and another once
+     * the client mounted.
+     *
+     * Stripping costs only the priority, which an inline style barely needs: it
+     * already outranks every stylesheet rule that is not itself `!important`.
+     */
+    expect(read("color: red!important")["color"]).toBe("red");
+    expect(read("color: red ! important ")["color"]).toBe("red");
+  });
+
+  it("does not take the rest of the declaration list with it", () => {
+    expect(read("color: red !important; font-size: 16px")).toEqual({
+      color: "red",
+      "font-size": "16px",
+    });
+  });
+
+  it("leaves an inner `!important` alone rather than editing the value", () => {
+    // Anchored at the END. A value that merely CONTAINS the word is not a
+    // priority, and rewriting the middle of a declaration would be this
+    // function inventing CSS rather than removing a suffix.
+    expect(read('font-family: "not!important"')["font-family"]).toBe(
+      '"not!important"'
+    );
+  });
+});
+
 describe("a format bit and a style that contradict it", () => {
   it.each([
     ["BOLD", TEXT_FORMAT.BOLD, "font-weight: normal", "font-weight"],

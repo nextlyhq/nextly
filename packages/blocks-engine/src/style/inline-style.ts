@@ -26,7 +26,7 @@
 
 import { hasFormat, TEXT_FORMAT } from "../rich-text";
 
-import { hasCssInjection, normalizeCssValue } from "./css-color";
+import { cssColor, hasCssInjection, normalizeCssValue } from "./css-color";
 
 /**
  * The properties a stored inline style may carry onto a page.
@@ -110,6 +110,38 @@ const FORMAT_OWNED: readonly {
   { flag: TEXT_FORMAT.SUPERSCRIPT, properties: ["vertical-align"] },
 ];
 
+/**
+ * The properties on this list whose value is a colour.
+ *
+ * Separated because a colour is the one kind of value here that can be CHECKED.
+ * `cssColor` decides it exactly, which lets a declaration be judged on what it
+ * says rather than on where it sits — see {@link readInlineStyle} for why that
+ * matters to a fallback chain.
+ */
+const COLOR_VALUED: ReadonlySet<string> = new Set([
+  "color",
+  "background-color",
+  "text-decoration-color",
+]);
+
+/**
+ * A declaration with any `!important` taken off it.
+ *
+ * STRIPPED rather than refused, and it has to be one or the other. React sets a
+ * style property through `CSSStyleDeclaration`, which rejects a value carrying
+ * an embedded priority and leaves the property UNSET — while server rendering
+ * writes the string out and it applies. So the same document renders one way
+ * from the server and another once the client mounts, which is exactly the
+ * divergence this module exists to remove.
+ *
+ * Stripping keeps the author's declaration and costs only the priority, which
+ * an inline style barely needs: it already outranks every stylesheet rule that
+ * is not itself `!important`. Refusing would drop the colour entirely.
+ */
+function withoutPriority(declared: string): string {
+  return declared.replace(/\s*!\s*important\s*$/i, "").trim();
+}
+
 /** The properties an active format bit has already decided. */
 function ownedByFormat(format: number | undefined): ReadonlySet<string> {
   const owned = new Set<string>();
@@ -144,47 +176,74 @@ export function isInlineStyleProperty(name: unknown): boolean {
  * style is not a request, it is what an old document happens to contain, and
  * one unreadable declaration must not take an author's colour with it.
  */
+/**
+ * One declaration, as the pair it contributes — or nothing, if it contributes.
+ *
+ * Separated from the walk because the walk is bookkeeping and this is the whole
+ * decision: everything about whether a stored declaration may reach a page is
+ * here, in the order the reasons apply.
+ */
+function usableDeclaration(
+  text: string,
+  owned: ReadonlySet<string>
+): readonly [string, string] | undefined {
+  // `indexOf` rather than `split`, because a value may contain a colon of its
+  // own — `background-color: rgb(0 0 0 / 50%)` does not, but a `font-family`
+  // naming a source with one would, and splitting would truncate it.
+  const colon = text.indexOf(":");
+  if (colon === -1) return undefined;
+
+  const property = text.slice(0, colon).trim().toLowerCase();
+  const declared = withoutPriority(text.slice(colon + 1).trim());
+  if (declared === "" || !ALLOWED.has(property)) return undefined;
+  // See {@link FORMAT_OWNED}: the bit is an act, the style is baggage.
+  if (owned.has(property)) return undefined;
+  /*
+   * A colour is CHECKED, not merely carried, and that is what makes a fallback
+   * chain survive. `color: red; color: not-a-color` renders red in a browser,
+   * because the second declaration is discarded when it is parsed — so keeping
+   * the later one on position alone loses the colour the author would see, and
+   * the CMS used to emit both and get this right.
+   *
+   * Judging the VALUE recovers it for every property whose value this package
+   * can decide, and only a colour qualifies today: the rest of the list takes
+   * lengths, keywords and shorthands whose validity is a CSS property database,
+   * not something to guess at here. For those the later declaration still wins,
+   * which is what a browser does whenever the later one is valid.
+   */
+  if (COLOR_VALUED.has(property) && cssColor(declared) === undefined) {
+    return undefined;
+  }
+  // The same guard the colours cross, and for the same reason: this string
+  // reaches a `style` attribute, where a `;` ends the declaration and starts
+  // another, and a `url()` fetches.
+  if (hasCssInjection(declared)) return undefined;
+  return [property, declared];
+}
+
 export function readInlineStyle(
   value: unknown,
   format?: number
 ): ReadonlyMap<string, string> {
   const kept = new Map<string, string>();
   if (typeof value !== "string" || value === "") return kept;
-  const owned = ownedByFormat(format);
 
   const normalized = normalizeCssValue(value);
   if (normalized === "") return kept;
 
+  const owned = ownedByFormat(format);
   for (const declaration of normalized.split(";")) {
-    const text = declaration.trim();
-    if (text === "") continue;
-
-    // `indexOf` rather than `split`, because a value may contain a colon of its
-    // own — `background-color: rgb(0 0 0 / 50%)` does not, but a `font-family`
-    // naming a source with one would, and splitting would truncate it.
-    const colon = text.indexOf(":");
-    if (colon === -1) continue;
-
-    const property = text.slice(0, colon).trim().toLowerCase();
-    const declared = text.slice(colon + 1).trim();
-    if (declared === "" || !ALLOWED.has(property)) continue;
-    // See {@link FORMAT_OWNED}: the bit is an act, the style is baggage.
-    if (owned.has(property)) continue;
-    // The same guard the colours cross, and for the same reason: this string
-    // reaches a `style` attribute, where a `;` ends the declaration and starts
-    // another, and a `url()` fetches.
-    if (hasCssInjection(declared)) continue;
-
+    const usable = usableDeclaration(declaration.trim(), owned);
+    if (usable === undefined) continue;
     // DELETED before it is set again, because `Map.set` on an existing key
     // replaces the value and leaves the key where it first appeared. The later
     // declaration would then be emitted in the earlier one's POSITION, and
-    // position is meaning here: `text-decoration-color:red;
-    // text-decoration:underline blue; text-decoration-color:green` would come
-    // back with green ahead of the shorthand, so the shorthand resets the
-    // colour the author wrote last. Keeping the winner's own position is what
-    // makes the emitted text cascade the way the stored text did.
-    kept.delete(property);
-    kept.set(property, declared);
+    // position is meaning here: a shorthand written after a longhand resets it,
+    // so a winner emitted ahead of that shorthand loses to it. Keeping the
+    // winner's own place is what makes the emitted text cascade the way the
+    // stored text did.
+    kept.delete(usable[0]);
+    kept.set(usable[0], usable[1]);
   }
   return kept;
 }
