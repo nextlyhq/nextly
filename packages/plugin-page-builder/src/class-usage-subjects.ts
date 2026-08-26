@@ -69,17 +69,20 @@ export interface WrittenDocument {
    * reconciled against anything — the unaddressable state the sweep cannot
    * reach.
    *
-   * NOT `status === true`. The draft/publish split resolves from five
-   * conditions together: `status: true`, versioning resolving `drafts.enabled`
-   * to true, the collection being non-localized, every reachable component
-   * schema resolving and being non-localized, and no reachable field being a
-   * password. A caller that reads `status` alone will enumerate a draft subject
-   * for a collection that stores no draft.
+   * NOT `status === true`. The split resolves from five conditions together:
+   * versioning resolving `drafts.enabled`, `status: true`, no reachable
+   * password field on the collection, every reachable component schema
+   * resolving, and no component carrying a password field. A caller that reads
+   * `status` alone enumerates a draft subject for a collection that stores no
+   * draft, and those rows are reachable by nothing.
    *
-   * One consequence is worth stating because it bounds the cost of this whole
-   * approach: **drafts and localization are mutually exclusive**, so a real
-   * collection has at most one of `locales` and `variants` above one. The
-   * product below is a product of at most one multiplying dimension, not two.
+   * Localization is NOT among those conditions, and it is worth saying so
+   * because two comments in core assert the opposite. `evaluateDraftSplitEligibility`
+   * has no localization check and its own comment explains why — a snapshot
+   * holds exactly one locale's values and the draft is keyed by that locale —
+   * which is why `working-draft-locale.ts` exists at all. So a localized
+   * collection can draft, both dimensions below can exceed one at once, and the
+   * enumeration really is a product.
    */
   hasDrafts: boolean;
 }
