@@ -464,6 +464,52 @@ describe("mintPreviewLink for a Single", () => {
     expect(response.status).toBe(409);
   });
 
+  /*
+   * A Single's read reports failure by THROWING, not by returning null.
+   * `findSingle` raises a typed error for every unsuccessful service result, so
+   * a loader that only checked for null let the throw travel past it and the
+   * endpoint answered with the raw error instead of a refusal. A fixture that
+   * resolves null cannot reproduce that, which is why these reject instead.
+   */
+  it("refuses, rather than erroring, when the Single's read throws not-found", async () => {
+    findSingle.mockRejectedValue(
+      new NextlyError({
+        code: "NOT_FOUND",
+        statusCode: 404,
+        publicMessage: "No such single",
+      })
+    );
+
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+    const message = String(
+      ((await json(response)).error as { message?: string } | undefined)
+        ?.message ?? ""
+    );
+
+    expect(response.status).toBe(409);
+    expect(message).toMatch(/deleted|removed/i);
+  });
+
+  it("says a FAILED Single read could not be read, not that it was deleted", async () => {
+    findSingle.mockRejectedValue(
+      new NextlyError({
+        code: "INTERNAL_ERROR",
+        statusCode: 500,
+        publicMessage: "Database unavailable",
+      })
+    );
+
+    const response = await mintPreviewLink(post({ single: "homepage" }));
+    const message = String(
+      ((await json(response)).error as { message?: string } | undefined)
+        ?.message ?? ""
+    );
+
+    expect(response.status).toBe(409);
+    expect(message).toMatch(/could not be read just now|try again/i);
+    expect(message).not.toMatch(/deleted/i);
+  });
+
   // Naming both is not a narrower request, it is two different documents — and
   // silently honouring one would mint a credential for a document the caller
   // may not have meant.
@@ -586,6 +632,169 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
     );
 
     expect(response.status).toBe(200);
+  });
+
+  /*
+   * The three refusals an editor cannot act on, asserted THROUGH the endpoint.
+   *
+   * The resolver's own suite stops at the cause value, which says nothing about
+   * what anyone reads: the mapping from cause to message could be swapped back
+   * to the slug advice and every resolver test would stay green, while the
+   * user-facing behaviour this change exists for would be gone. So each case
+   * asserts the remedy it names AND that it does not name the slug.
+   */
+  const slugAdvice = /slug/i;
+
+  /** The message an endpoint refusal put in front of the editor. */
+  const messageOf = (b: { error?: unknown }): string =>
+    String((b.error as { message?: string } | undefined)?.message ?? "");
+
+  async function refusalMessage(): Promise<string> {
+    return messageOf(
+      await json(
+        await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+      )
+    );
+  }
+
+  it("says the document could not be read, rather than blaming the slug", async () => {
+    // The entry vanished between the authorization read and the resolver's own.
+    getEntry.mockResolvedValue({ success: true, statusCode: 200, data: null });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/could not be read|deleted/i);
+    expect(message).not.toMatch(slugAdvice);
+  });
+
+  /**
+   * A read that succeeds for AUTHORIZATION and then fails for the resolver.
+   *
+   * Both of the cases below are only reachable through this window, and
+   * discovering that was worth the fixture: the mint authorizes by reading the
+   * entry, so a read failing on the FIRST call is refused as a permission
+   * problem and never reaches the resolver at all. What the resolver can see is
+   * the race — the entry readable when the caller was authorized and not
+   * readable a moment later — which is exactly the situation being diagnosed.
+   */
+  function readableThenFailing(second: Record<string, unknown>): void {
+    getEntry.mockReset();
+    getEntry.mockResolvedValueOnce({
+      success: true,
+      statusCode: 200,
+      data: { id: "7", slug: "seven" },
+    });
+    getEntry.mockResolvedValue(second);
+  }
+
+  it("does not call a FAILED read a deletion", async () => {
+    /*
+     * A transient database error, a rate limit or a throwing read hook all
+     * arrive as `success: false` with a non-404 status. None of them shows the
+     * entry is absent, so "it may have been deleted" is a claim the read never
+     * established — and it is the most alarming possible wrong answer to give
+     * an editor about their own work.
+     */
+    readableThenFailing({ success: false, statusCode: 500 });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/could not be read just now|try again/i);
+    expect(message).not.toMatch(/deleted/i);
+    expect(message).not.toMatch(slugAdvice);
+    // The ENTRY, not the collection. What failed is the trusted read of one
+    // document; the collection and its declaration were both read fine a
+    // moment earlier, so naming the collection points at the wrong scope.
+    expect(message).toMatch(/this entry/i);
+    expect(message).not.toMatch(/this collection/i);
+  });
+
+  it("still calls a 404 a deletion, so the pair discriminates", async () => {
+    // The control for the case above: a read that DID establish absence keeps
+    // the permanent diagnosis, so the split is on the failure KIND rather than
+    // this endpoint having stopped saying "deleted" at all.
+    readableThenFailing({ success: false, statusCode: 404 });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/deleted/i);
+    expect(message).not.toMatch(/try again/i);
+  });
+
+  it("says the preview URL names another site, rather than blaming the slug", async () => {
+    // No field on this entry can move the declaration to another origin, so
+    // sending the editor to fill one in is advice they cannot act on.
+    previewDeclaration.mockResolvedValue({
+      url: () => "https://elsewhere.test/about",
+    });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/different site/i);
+    expect(message).not.toMatch(slugAdvice);
+  });
+
+  it("says the preview URL does not resolve, rather than blaming the slug", async () => {
+    getSettings.mockResolvedValue({ siteUrl: "not a url" });
+    previewDeclaration.mockResolvedValue({
+      url: () => "https://site.example/about",
+    });
+
+    const message = await refusalMessage();
+
+    expect(message).toMatch(/could not be turned into an address/i);
+    expect(message).not.toMatch(slugAdvice);
+  });
+
+  it("gives all six refusals six different messages", async () => {
+    /*
+     * Stronger than each matching its own pattern: two causes could both match
+     * their phrases while sharing a message, and the whole point is that an
+     * editor can tell which of the six happened. The set having six members is
+     * the property; six individual assertions do not state it.
+     */
+    previewDeclaration.mockResolvedValue(undefined);
+    const notConfigured = await refusalMessage();
+
+    previewDeclaration.mockResolvedValue({ url: () => null });
+    const unavailable = await refusalMessage();
+
+    previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
+    getEntry.mockResolvedValue({ success: true, statusCode: 200, data: null });
+    const documentGone = await refusalMessage();
+
+    readableThenFailing({ success: false, statusCode: 500 });
+    const documentUnreadable = await refusalMessage();
+
+    getEntry.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { id: "7", slug: "seven" },
+    });
+    previewDeclaration.mockResolvedValue({
+      url: () => "https://elsewhere.test/about",
+    });
+    const foreignOrigin = await refusalMessage();
+
+    getSettings.mockResolvedValue({ siteUrl: "not a url" });
+    previewDeclaration.mockResolvedValue({
+      url: () => "https://site.example/about",
+    });
+    const unresolvable = await refusalMessage();
+
+    const all = [
+      notConfigured,
+      unavailable,
+      documentGone,
+      documentUnreadable,
+      foreignOrigin,
+      unresolvable,
+    ];
+    // Non-empty first, so six identical empty strings cannot satisfy the size
+    // check by collapsing to one — and so a refusal that stopped carrying a
+    // message at all fails here rather than passing quietly.
+    expect(all.every(m => m.length > 0)).toBe(true);
+    expect(new Set(all).size).toBe(6);
   });
 });
 
