@@ -457,12 +457,23 @@ describe("resolveComponentFieldMap", () => {
       })),
     };
 
+    // The lookup RESOLVES one of them, and the assertion is that it came back.
+    // Asserting an empty map instead would be satisfied by an implementation
+    // that never descends into `wide.fields` at all — the same green for the
+    // opposite behaviour.
+    const asked: string[] = [];
     const map = await resolveComponentFieldMap(
       [wide] as unknown as FieldConfig[],
-      async () => null
+      async slug => {
+        asked.push(slug);
+        return slug === "c199999"
+          ? ([{ name: "deep", type: "text" }] as FieldConfig[])
+          : null;
+      }
     );
 
-    expect(map.size).toBe(0);
+    expect(asked).toHaveLength(200_000);
+    expect(map.get("c199999")).toEqual([{ name: "deep", type: "text" }]);
   });
 
   it("terminates on a cycle", async () => {
