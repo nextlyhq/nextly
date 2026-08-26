@@ -8,11 +8,10 @@
  * beside it, and the actions lived in the document rail, which hides at
  * narrower widths. Each answered part of one question from a different place.
  *
- * This is that question's home — one row per language carrying its state, and
- * the action that row makes sense of: seed an untranslated language from
- * another, or open one that already has content. It renders in the rail where
- * there is room and inline where there is not, so it can never be the surface
- * that disappeared.
+ * This is that question's home — one row per language carrying its state, the
+ * action that row makes sense of, and a way to fill any language from any
+ * other. It renders in the rail where there is room and inline where there is
+ * not, so it can never be the surface that disappeared.
  *
  * The header keeps its compact switcher. This does not replace quick
  * switching; it is where the work is decided rather than where a language is
@@ -32,6 +31,7 @@ import { cn } from "@admin/lib/utils";
 
 import { CompletenessMeter } from "./CompletenessMeter";
 import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
+import { CopyFromLanguageMenu } from "./CopyFromLanguageMenu";
 import { useEntryLocale } from "./EntryLocaleContext";
 import { StateDot } from "./LanguageStateDot";
 import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
@@ -44,7 +44,10 @@ import {
   type LocaleTranslationMeta,
   type TranslationCounts,
 } from "./translation-meta";
-import { useCopyFromLanguage } from "./useCopyFromLanguage";
+import {
+  useCopyFromLanguage,
+  type CopyFromLanguage,
+} from "./useCopyFromLanguage";
 import { usePublishAllLanguages } from "./usePublishAllLanguages";
 
 export interface LanguagePanelProps {
@@ -236,7 +239,7 @@ function LanguageRows({
   translations,
   defaultLocale,
   active,
-  canSeed,
+  copy,
   actionsDisabled,
   onSelect,
 }: {
@@ -253,7 +256,8 @@ function LanguageRows({
   translations: Record<string, LocaleTranslationMeta> | undefined;
   defaultLocale: string;
   active: string;
-  canSeed: boolean;
+  /** The one copy-from state, owned by the panel and shared by every row. */
+  copy: CopyFromLanguage;
   actionsDisabled: boolean;
   onSelect:
     | ((code: string, options?: { seedFrom?: string }) => void)
@@ -282,7 +286,7 @@ function LanguageRows({
           state={languageState(translations?.[locale.code])}
           pendingChange={translations?.[locale.code]?.pendingChange}
           isActive={locale.code === active}
-          canSeed={canSeed}
+          copy={copy}
           {...(onSelect === undefined ? {} : { onSelect })}
           onSeed={() => {
             // The row clicked is the target and the language being edited is
@@ -315,6 +319,19 @@ function LanguageRows({
  * absent it leaves one language on screen looking like the answer. The query is
  * transient and self-inflicted, and clearing it brings everything back.
  */
+/**
+ * One action, one word for it, and the state it acts on decides which word.
+ *
+ * "Start from…" on a language that already holds a translation says something
+ * untrue, and the overwrite is the part an author needs told BEFORE the confirm
+ * step rather than by it. Resolved here rather than at each trigger so the row
+ * button and the active row's source picker can never drift into two names for
+ * the same thing — which is the failure this whole panel exists to undo.
+ */
+function seedVerb(state: LanguageState): string {
+  return state === "missing" ? "Start" : "Replace";
+}
+
 function filteredLanguages<T extends { code: string; label: string }>(
   locales: readonly T[],
   filter: string
@@ -333,7 +350,7 @@ function LanguageRow({
   state,
   pendingChange,
   isActive,
-  canSeed,
+  copy,
   onSelect,
   onSeed,
   actionsDisabled,
@@ -346,7 +363,7 @@ function LanguageRow({
   /** Whether this language holds a saved change nobody has published. */
   pendingChange?: boolean;
   isActive: boolean;
-  canSeed: boolean;
+  copy: CopyFromLanguage;
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
   onSeed?: () => void;
   actionsDisabled: boolean;
@@ -400,16 +417,28 @@ function LanguageRow({
         </span>
       </div>
       {isActive ? (
-        <span className="shrink-0 text-xs text-muted-foreground">
-          editing now
-        </span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">editing now</span>
+          {/* The one row whose source cannot be implied. Every other row is
+              filled from wherever the author is standing; this row IS where
+              they are standing, so the source gets named here. Withholding it
+              was what made a populated language unfillable from anywhere once
+              the header's Languages menu was deleted. */}
+          <CopyFromLanguageMenu
+            copy={copy}
+            verb={seedVerb(state)}
+            targetLabel={label}
+            disabled={actionsDisabled}
+          />
+        </div>
       ) : (
         <div className="flex shrink-0 items-center gap-1.5">
-          {/* Offered only where it is the useful next step: a language with
-              nothing in it. Seeding one that already has content is the
-              overwrite the confirm step exists to warn about, and it stays
-              available from the Languages menu for that case. */}
-          {canSeed && state === "missing" && onSeed && (
+          {/* Offered on EVERY language, not only an empty one. Filling a
+              language that already has content is an overwrite rather than a
+              start, which is what the verb reports and what the confirm step
+              then spells out; refusing the action instead left it reachable
+              from nowhere. */}
+          {copy.available && onSeed && (
             <Button
               type="button"
               variant="outline"
@@ -419,10 +448,10 @@ function LanguageRow({
               // Named for the language it acts on. Read out of context — a
               // screen reader listing this panel's controls — three buttons
               // all saying "Start from…" name no language at all.
-              aria-label={`Start ${label} from another language`}
+              aria-label={`${seedVerb(state)} ${label} from another language`}
               onClick={onSeed}
             >
-              Start from…
+              {seedVerb(state)} from…
             </Button>
           )}
           {onSelect && (
@@ -540,7 +569,7 @@ export function LanguagePanel({
         translations={translations}
         defaultLocale={defaultLocale}
         active={active}
-        canSeed={copy.available}
+        copy={copy}
         actionsDisabled={actionsDisabled}
         onSelect={onSelect}
       />

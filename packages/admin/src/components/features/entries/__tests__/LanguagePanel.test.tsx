@@ -367,7 +367,11 @@ describe("LanguagePanel", () => {
     ).toBeNull();
   });
 
-  it("offers to seed only the languages that have nothing in them", () => {
+  it("offers to fill EVERY language, and the verb says which it is doing", () => {
+    // The panel is the only surface that offers this now, so a language it
+    // refuses to act on cannot be filled from anywhere. Both cases are here in
+    // one test because it is their DIFFERENCE that carries the meaning: the
+    // same action, named for the state it lands on.
     useBranding.mockReturnValue({ locales: LOCALES });
     renderPanel({
       translations: TRANSLATIONS,
@@ -376,19 +380,64 @@ describe("LanguagePanel", () => {
     });
 
     const [en, , ar] = rows();
-    // Arabic is empty, so seeding is the useful next step.
+    // Arabic is empty — a start.
     expect(
       within(ar).getByRole("button", {
         name: "Start Arabic from another language",
       })
     ).toBeInTheDocument();
-    // English already has content: seeding it is an overwrite, which stays in
-    // the Languages menu behind its confirm step rather than sitting here.
+    // English already has content — the same action, but it overwrites, and
+    // saying "start" about it would be untrue before the confirm step ever
+    // appears.
+    expect(
+      within(en).getByRole("button", {
+        name: "Replace English from another language",
+      })
+    ).toBeInTheDocument();
     expect(
       within(en).queryByRole("button", {
         name: "Start English from another language",
       })
     ).toBeNull();
+  });
+
+  it("routes an overwrite through the same one switch a start uses", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const onSelect = vi.fn();
+    renderPanel({ translations: TRANSLATIONS, activeLocale: "de", onSelect });
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Replace English from another language",
+      })
+    );
+    // Target and source in one call, exactly as the empty case does it — the
+    // overwrite is not a second mechanism, only a second word for the button.
+    expect(onSelect).toHaveBeenCalledWith("en", { seedFrom: "de" });
+  });
+
+  it("lets the language being edited name its own source", async () => {
+    // The one row whose source cannot be implied: it IS where the author is
+    // standing. Before this the action lived in the header's Languages menu,
+    // and deleting that menu left a populated language fillable from nowhere.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const onSelect = vi.fn();
+    renderPanel({ translations: TRANSLATIONS, activeLocale: "de", onSelect });
+
+    const [, de] = rows();
+    await userEvent.click(
+      within(de).getByRole("button", {
+        name: "Replace German from another language",
+      })
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "English" })
+    );
+
+    // Asked for directly, not routed through a switch: the editor is already
+    // showing the target, so switching would be a trip back to where it is.
+    expect(requestCopy).toHaveBeenCalledWith("en");
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("withholds seeding entirely when copy-from does not apply", () => {
@@ -402,6 +451,12 @@ describe("LanguagePanel", () => {
     expect(
       screen.queryByRole("button", {
         name: "Start Arabic from another language",
+      })
+    ).toBeNull();
+    // Including the active row's source picker, which reads the same gate.
+    expect(
+      screen.queryByRole("button", {
+        name: "Replace German from another language",
       })
     ).toBeNull();
   });
@@ -451,6 +506,11 @@ describe("LanguagePanel", () => {
 
     expect(
       screen.getByRole("button", { name: "Start Arabic from another language" })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", {
+        name: "Replace German from another language",
+      })
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
     // Switching too: changing the document under the history banner would show
