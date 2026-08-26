@@ -72,43 +72,105 @@ export const INLINE_STYLE_PROPERTIES = [
 const ALLOWED: ReadonlySet<string> = new Set(INLINE_STYLE_PROPERTIES);
 
 /**
- * What each format bit already decides, and therefore what a style may not.
+ * What each format bit ASSERTS, and how a declaration can contradict it.
  *
- * A stored node can carry BOTH — `BOLD` with `font-weight: normal` is what a
+ * A stored node can carry both — `BOLD` with `font-weight: normal` is what a
  * paste from a word processor looks like, and the two are a contradiction the
  * document does not resolve. Whichever is written closer to the text wins, so
  * the answer would otherwise be decided by markup nesting: the CMS puts the
- * style outside the `<strong>` and keeps the bold, this package puts it inside
- * so an author's colour can beat `<mark>`, and the same stored value would
- * render bold on one surface and not on the other.
+ * style outside the `<strong>`, this package puts it inside so an author's
+ * colour can beat `<mark>`, and the same stored value would render bold on one
+ * surface and not on the other.
  *
- * Resolved here instead, once, by the PROPERTY rather than by the nesting. The
- * format bit is an act — a button pressed on this selection — where the style
- * string is whatever the document arrived carrying, so the bit wins and the
- * declaration it contradicts is dropped.
+ * Resolved here instead, once, by the PROPERTY and its VALUE together. Dropping
+ * the property outright was the first attempt and it was too broad: a
+ * `font-weight: 900` beside `BOLD` REINFORCES it and carries a weight the
+ * `<strong>` alone does not, and `text-decoration: underline wavy red` beside
+ * `UNDERLINE` adds a style and a colour while still underlining. Those are not
+ * contradictions and keeping them costs nothing.
  *
- * `font-size` is deliberately NOT owned by the subscript bits. `<sub>` shrinks
+ * So each entry says what a declaration must still assert to survive. Only a
+ * value that stops asserting it is dropped, and the bit — a button pressed on
+ * this selection — wins over a style string the document merely arrived with.
+ *
+ * `font-size` is deliberately absent from the subscript entries. `<sub>` shrinks
  * its text as a side effect of being a subscript, and an author who then sets a
- * size has chosen that size; the POSITION is what makes it a subscript, and
- * that is `vertical-align`.
+ * size has chosen it; the POSITION is what makes it a subscript, and that is
+ * `vertical-align`.
  */
-const FORMAT_OWNED: readonly {
+const FORMAT_ASSERTS: readonly {
   flag: (typeof TEXT_FORMAT)[keyof typeof TEXT_FORMAT];
   properties: readonly string[];
+  keeps: (value: string) => boolean;
 }[] = [
-  { flag: TEXT_FORMAT.BOLD, properties: ["font-weight"] },
-  { flag: TEXT_FORMAT.ITALIC, properties: ["font-style"] },
+  {
+    flag: TEXT_FORMAT.BOLD,
+    properties: ["font-weight"],
+    // `bolder` is relative and cannot be resolved without the parent, so it is
+    // read as still asking for MORE weight rather than less. The numeric cut is
+    // CSS's own: `bold` is 700.
+    keeps: value =>
+      value === "bold" || value === "bolder" || Number(value) >= 700,
+  },
+  {
+    flag: TEXT_FORMAT.ITALIC,
+    properties: ["font-style"],
+    keeps: value => value === "italic" || value.startsWith("oblique"),
+  },
   {
     flag: TEXT_FORMAT.UNDERLINE,
     properties: ["text-decoration", "text-decoration-line"],
+    keeps: value => hasLine(value, "underline"),
   },
   {
     flag: TEXT_FORMAT.STRIKETHROUGH,
     properties: ["text-decoration", "text-decoration-line"],
+    keeps: value => hasLine(value, "line-through"),
   },
-  { flag: TEXT_FORMAT.SUBSCRIPT, properties: ["vertical-align"] },
-  { flag: TEXT_FORMAT.SUPERSCRIPT, properties: ["vertical-align"] },
+  {
+    flag: TEXT_FORMAT.SUBSCRIPT,
+    properties: ["vertical-align"],
+    keeps: value => value === "sub",
+  },
+  {
+    flag: TEXT_FORMAT.SUPERSCRIPT,
+    properties: ["vertical-align"],
+    keeps: value => value === "super",
+  },
 ];
+
+/**
+ * Whether a `text-decoration` value still draws one particular line.
+ *
+ * The shorthand REPLACES the line list, so `text-decoration: underline` beside a
+ * `STRIKETHROUGH` bit removes the strike even though it looks like it is only
+ * adding an underline. Read as tokens for that reason: what matters is whether
+ * the line this bit asserts is still among them.
+ */
+function hasLine(value: string, line: string): boolean {
+  return value.split(/\s+/).includes(line);
+}
+
+/**
+ * Whether an active format bit contradicts this declaration.
+ *
+ * Answered per DECLARATION rather than per property, which is what lets a value
+ * that reinforces the bit through.
+ */
+function contradictsFormat(
+  property: string,
+  value: string,
+  format: number | undefined
+): boolean {
+  if (format === undefined) return false;
+  const declared = value.trim().toLowerCase();
+  return FORMAT_ASSERTS.some(
+    entry =>
+      entry.properties.includes(property) &&
+      hasFormat(format, entry.flag) &&
+      !entry.keeps(declared)
+  );
+}
 
 /**
  * The properties on this list whose value is a colour.
@@ -142,17 +204,6 @@ function withoutPriority(declared: string): string {
   return declared.replace(/\s*!\s*important\s*$/i, "").trim();
 }
 
-/** The properties an active format bit has already decided. */
-function ownedByFormat(format: number | undefined): ReadonlySet<string> {
-  const owned = new Set<string>();
-  if (format === undefined) return owned;
-  for (const entry of FORMAT_OWNED) {
-    if (!hasFormat(format, entry.flag)) continue;
-    for (const property of entry.properties) owned.add(property);
-  }
-  return owned;
-}
-
 /**
  * Whether a property name is one this format carries.
  *
@@ -177,6 +228,54 @@ export function isInlineStyleProperty(name: unknown): boolean {
  * one unreadable declaration must not take an author's colour with it.
  */
 /**
+ * A declaration list split on the semicolons that actually separate one.
+ *
+ * `String.prototype.split` is wrong here: a semicolon inside a QUOTED value is
+ * ordinary text, so `font-family: "A;B"; color: red` came apart in the middle of
+ * the family name and published `font-family:"A`. Parentheses are tracked for
+ * the same reason — nothing in CSS today puts a `;` inside one, but the cost of
+ * covering it is a counter and the cost of being wrong is a silently truncated
+ * value.
+ *
+ * Escapes need no handling: `hasCssInjection` refuses a value carrying a
+ * backslash outright, so a quote can never be escaped by the time this matters.
+ */
+/** The quote state after reading one character, `""` when outside a string. */
+function quoteAfter(character: string, quote: string): string {
+  if (quote !== "") return character === quote ? "" : quote;
+  return character === '"' || character === "'" ? character : "";
+}
+
+/** What one character does to the parenthesis depth a `;` cannot break out of. */
+function depthShift(character: string): number {
+  if (character === "(") return 1;
+  return character === ")" ? -1 : 0;
+}
+
+function splitDeclarations(list: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote = "";
+  for (let at = 0; at < list.length; at += 1) {
+    const character = list[at] ?? "";
+    const next = quoteAfter(character, quote);
+    // Inside a string EITHER side of this character: the quote that opens one
+    // and the quote that closes it are both part of it.
+    const quoted = quote !== "" || next !== "";
+    quote = next;
+    if (quoted) continue;
+    depth = Math.max(0, depth + depthShift(character));
+    if (character === ";" && depth === 0) {
+      out.push(list.slice(start, at));
+      start = at + 1;
+    }
+  }
+  out.push(list.slice(start));
+  return out;
+}
+
+/**
  * One declaration, as the pair it contributes — or nothing, if it contributes.
  *
  * Separated from the walk because the walk is bookkeeping and this is the whole
@@ -185,7 +284,7 @@ export function isInlineStyleProperty(name: unknown): boolean {
  */
 function usableDeclaration(
   text: string,
-  owned: ReadonlySet<string>
+  format: number | undefined
 ): readonly [string, string] | undefined {
   // `indexOf` rather than `split`, because a value may contain a colon of its
   // own — `background-color: rgb(0 0 0 / 50%)` does not, but a `font-family`
@@ -196,8 +295,9 @@ function usableDeclaration(
   const property = text.slice(0, colon).trim().toLowerCase();
   const declared = withoutPriority(text.slice(colon + 1).trim());
   if (declared === "" || !ALLOWED.has(property)) return undefined;
-  // See {@link FORMAT_OWNED}: the bit is an act, the style is baggage.
-  if (owned.has(property)) return undefined;
+  // See {@link FORMAT_ASSERTS}: only a value that stops asserting what the bit
+  // asserts is dropped, so one that reinforces it survives.
+  if (contradictsFormat(property, declared, format)) return undefined;
   /*
    * A colour is CHECKED, not merely carried, and that is what makes a fallback
    * chain survive. `color: red; color: not-a-color` renders red in a browser,
@@ -231,9 +331,8 @@ export function readInlineStyle(
   const normalized = normalizeCssValue(value);
   if (normalized === "") return kept;
 
-  const owned = ownedByFormat(format);
-  for (const declaration of normalized.split(";")) {
-    const usable = usableDeclaration(declaration.trim(), owned);
+  for (const declaration of splitDeclarations(normalized)) {
+    const usable = usableDeclaration(declaration.trim(), format);
     if (usable === undefined) continue;
     // DELETED before it is set again, because `Map.set` on an existing key
     // replaces the value and leaves the key where it first appeared. The later

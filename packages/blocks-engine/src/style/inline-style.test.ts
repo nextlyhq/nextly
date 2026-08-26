@@ -240,6 +240,71 @@ describe("a format bit and a style that contradict it", () => {
     }
   );
 
+  it.each([
+    ["BOLD", TEXT_FORMAT.BOLD, "font-weight: 900", "font-weight", "900"],
+    ["BOLD", TEXT_FORMAT.BOLD, "font-weight: bolder", "font-weight", "bolder"],
+    [
+      "ITALIC",
+      TEXT_FORMAT.ITALIC,
+      "font-style: oblique 10deg",
+      "font-style",
+      "oblique 10deg",
+    ],
+    [
+      "UNDERLINE",
+      TEXT_FORMAT.UNDERLINE,
+      "text-decoration: underline wavy red",
+      "text-decoration",
+      "underline wavy red",
+    ],
+  ])(
+    "keeps a value that REINFORCES %s",
+    (_l, flag, style, property, expected) => {
+      /*
+       * The first version of this rule dropped the property outright whenever
+       * the bit was set, which threw away declarations that agree with it and
+       * carry more than the element alone: a weight of 900 where `<strong>` gives
+       * 700, a wavy red underline where `<u>` gives a plain one.
+       *
+       * The no-bit control could not catch that — it asserts what happens with
+       * no format at all, and passes under a rule that drops everything when a
+       * format IS set. Reinforcement is its own case and needs its own test.
+       */
+      expect(read(style, flag)[property]).toBe(expected);
+    }
+  );
+
+  it("drops a shorthand that replaces the line the bit asserts", () => {
+    // `text-decoration` REPLACES the line list, so `underline` beside a
+    // STRIKETHROUGH bit removes the strike while looking like it only adds an
+    // underline. Read as tokens, not as a string that mentions a decoration.
+    expect(
+      Object.keys(read("text-decoration: underline", TEXT_FORMAT.STRIKETHROUGH))
+    ).not.toContain("text-decoration");
+    // And the same value beside UNDERLINE is a reinforcement, not a conflict.
+    expect(
+      read("text-decoration: underline", TEXT_FORMAT.UNDERLINE)[
+        "text-decoration"
+      ]
+    ).toBe("underline");
+  });
+
+  it("reads the decoration as TOKENS, not as text that mentions one", () => {
+    /*
+     * `underlinexyz` CONTAINS the word `underline` and asserts nothing — it is
+     * not a decoration line, so a browser discards the declaration and the
+     * `<u>` underlines on its own. A substring check keeps it and lets an
+     * unusable value sit on the page instead.
+     *
+     * This case exists because break-verifying the token split changed NOTHING:
+     * every other fixture answers the same either way, so the suite could not
+     * tell a tokeniser from a `String.includes`.
+     */
+    expect(
+      Object.keys(read("text-decoration: underlinexyz", TEXT_FORMAT.UNDERLINE))
+    ).not.toContain("text-decoration");
+  });
+
   it("drops only what the bit decided", () => {
     // The control. A rule that dropped the whole style when any bit was set
     // would satisfy every assertion above and take the author's colour with it.
@@ -261,6 +326,34 @@ describe("a format bit and a style that contradict it", () => {
     expect(read("font-size: 24px", TEXT_FORMAT.SUBSCRIPT)["font-size"]).toBe(
       "24px"
     );
+  });
+});
+
+describe("the declaration list", () => {
+  it("does not split on a semicolon inside a quoted value", () => {
+    // `font-family: "A;B"` is one declaration carrying a family whose NAME has a
+    // semicolon in it. Split on every `;`, it came apart in the middle and
+    // published `font-family:"A` — a truncated value, and the authored font
+    // gone. Escapes need no handling here: a backslash is refused outright.
+    expect(read('font-family: "A;B"; color: red')).toEqual({
+      "font-family": '"A;B"',
+      color: "red",
+    });
+  });
+
+  it("does not split on a semicolon inside parentheses", () => {
+    // Nothing in CSS puts one there today. The cost of covering it is a
+    // counter; the cost of being wrong is a value truncated in silence.
+    expect(read('font-family: local("A;B"); color: red')["color"]).toBe("red");
+  });
+
+  it("still splits the ordinary case", () => {
+    // The control. A splitter that never split would satisfy neither assertion
+    // above by accident, but one that got its quote state stuck would.
+    expect(Object.keys(read("color: red; font-size: 16px"))).toEqual([
+      "color",
+      "font-size",
+    ]);
   });
 });
 
