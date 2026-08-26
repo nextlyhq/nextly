@@ -240,6 +240,18 @@ export interface SingleAdminOptions {
   sidebarGroup?: string;
   /** Description text displayed below the Single title */
   description?: string;
+  /**
+   * What this Single's preview is called.
+   *
+   * Only the label. The declaration's `url` is a FUNCTION and cannot survive
+   * being stored as JSON, so it never reaches the browser and nothing here
+   * should imply it does — resolving an address is the server's job, and the
+   * admin asks for one rather than building it.
+   */
+  preview?: {
+    /** Custom label for the preview button and pane. @default "Preview" */
+    label?: string;
+  };
 }
 
 /**

@@ -59,6 +59,18 @@ const SELF_PREVIEW_TTL_SECONDS = 15 * 60;
  * `urlTemplate` is the server's resolution input, so neither belongs here.
  * What the panel needs is whether to draw a button and how to label it.
  */
+/**
+ * What to call the preview, on a button or a pane.
+ *
+ * Exported and shared rather than inlined at each surface: entries and Singles
+ * both need it, and a second `?? "Preview"` elsewhere would silently keep the
+ * default after someone changed this one. The fallback is the whole value here
+ * — a declaration that names no label is the common case.
+ */
+export function previewLabel(config?: { label?: string }): string {
+  return config?.label || "Preview";
+}
+
 export interface PreviewConfig {
   /**
    * Whether this collection previews at all, decided when the config synced.
@@ -472,6 +484,6 @@ export function useEntryPreview({
   return {
     isPreviewAvailable,
     openPreview,
-    label: previewConfig?.label || "Preview",
+    label: previewLabel(previewConfig),
   };
 }

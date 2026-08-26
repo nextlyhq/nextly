@@ -176,6 +176,31 @@ describe("SingleForm offers the preview pane", () => {
     expect(lastPaneProps().scope).toEqual(minted);
   });
 
+  it("calls the pane by the Single's OWN word for it", () => {
+    /*
+     * A declaration may name its preview, and the label is a string, so unlike
+     * the `url` function beside it the label does survive being stored as JSON
+     * and does reach the browser. The pane was calling every Single's preview
+     * "Preview" regardless.
+     */
+    renderForm({
+      schema: {
+        ...(schema as unknown as Record<string, unknown>),
+        admin: { preview: { label: "Landing preview" } },
+      } as never,
+    });
+
+    expect(lastPaneProps().label).toBe("Landing preview");
+  });
+
+  it("falls back to Preview when the Single names none", () => {
+    // The control: the label above comes from the declaration rather than from
+    // a rename that happens to match, and a Single without one is unaffected.
+    renderForm();
+
+    expect(lastPaneProps().label).toBe("Preview");
+  });
+
   it("keeps the pane closed until someone asks for it", () => {
     renderForm();
 
