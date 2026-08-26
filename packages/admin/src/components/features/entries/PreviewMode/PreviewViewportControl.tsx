@@ -102,6 +102,8 @@ export function PreviewViewportControl({
    * masked by a draft nobody is typing.
    */
   const [draft, setDraft] = useState<string | null>(null);
+  /** Whether the author asked for a custom width, rather than landing on one. */
+  const [editingCustom, setEditingCustom] = useState(false);
 
   /*
    * The width is taken when the author STOPS typing, not per keystroke.
@@ -155,11 +157,20 @@ export function PreviewViewportControl({
    * The draft ends on blur or on a choice from the list, and the match resolves
    * then, so a typed width that equals a named tier still gives way to it one
    * moment later — when the author has finished saying so.
+   *
+   * `editingCustom` is the same exception held for longer. Choosing "Custom
+   * width" is a statement the WIDTH cannot carry: it commits a seed, and if the
+   * site declares a viewport at that width — 1280 is the seed and an entirely
+   * ordinary desktop tier — the lookup resolved it on the next render, showed
+   * that preset's name and never rendered the box, so a custom width could not
+   * be entered at all. The flag records what the author asked for; every other
+   * choice clears it, so the two cannot drift into disagreeing about the width
+   * itself, which is what deriving the selection is for.
    */
   const named =
-    draft === null
-      ? viewports.find(v => v.width === requestedWidth)
-      : undefined;
+    editingCustom || draft !== null
+      ? undefined
+      : viewports.find(v => v.width === requestedWidth);
   const selection =
     requestedWidth === null
       ? RESPONSIVE
@@ -175,11 +186,21 @@ export function PreviewViewportControl({
           // A choice from the list ends the edit, so an abandoned draft does
           // not reappear the next time the box is shown.
           setDraft(null);
+          setEditingCustom(value === CUSTOM);
           if (value === RESPONSIVE) return onRequestWidth(null);
           if (value === CUSTOM) return onRequestWidth(CUSTOM_SEED_WIDTH);
-          // A named option carries its own width as the value, so no lookup can
-          // go stale between rendering the list and reading a choice from it.
-          return onRequestWidth(Number.parseInt(value, 10));
+          /*
+           * A named option carries its own width as the value, so no lookup can
+           * go stale between rendering the list and reading a choice from it.
+           *
+           * `Number`, not `parseInt`: a declared width is offered exactly as
+           * the site declares it, fractions included, and truncating `767.6` to
+           * `767` would size the frame one side of the site's own
+           * `@media (max-width: 767.6px)` boundary — and then match no viewport
+           * at all, so the control would show Custom for an option the author
+           * had just picked by name.
+           */
+          return onRequestWidth(Number(value));
         }}
       >
         <SelectTrigger
@@ -216,6 +237,14 @@ export function PreviewViewportControl({
             type="number"
             inputMode="numeric"
             min={MIN_PREVIEW_WIDTH}
+            /*
+             * A number input steps by 1 unless told otherwise, so the browser
+             * reports a committed `390.5` as `stepMismatch`: the field reads as
+             * invalid to native validation and to assistive technology while
+             * the preview is using that exact width. Fractional widths are real
+             * here, so the step has to say so.
+             */
+            step="any"
             className="h-7 w-20 text-xs"
             value={draft ?? String(requestedWidth)}
             onChange={event => {

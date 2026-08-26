@@ -69,6 +69,100 @@ function stopTyping() {
   });
 }
 
+describe("PreviewViewportControl — choosing a viewport", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Opens the list and picks the option with this exact visible text. */
+  function choose(name: string | RegExp) {
+    fireEvent.click(screen.getByLabelText("Preview viewport"));
+    fireEvent.click(screen.getByRole("option", { name }));
+  }
+
+  it("keeps Custom reachable when its seed matches a declared viewport", () => {
+    /*
+     * Entering custom mode commits a seed width. If the site happens to declare
+     * a viewport at that width — 1280 is the seed and a very ordinary desktop
+     * tier — the named lookup resolved it on the next render, flipped the
+     * selection to that preset's name and never rendered the input. The author
+     * could then not enter a custom width at all.
+     *
+     * Choosing Custom is a statement the width alone cannot carry, so it opens
+     * an edit rather than relying on the number being unrecognised.
+     */
+    renderControl(null, [{ label: "Desktop", width: 1280 }]);
+
+    choose("Custom width");
+
+    expect(
+      screen.getByLabelText("Preview width in pixels")
+    ).toBeInTheDocument();
+  });
+
+  it("STAYS in custom mode after typing a width a viewport also declares", () => {
+    /*
+     * The deliberate consequence of recording the choice. Having asked for a
+     * custom width, an author who then types one that happens to equal a
+     * declared tier keeps the box: they said "custom", and resolving the number
+     * against the list would take the control away from them on the strength of
+     * a coincidence. Picking an option from the list is how they leave.
+     */
+    renderControl(null, [{ label: "Tablet", width: 768 }]);
+
+    choose("Custom width");
+    const box = screen.getByLabelText(
+      "Preview width in pixels"
+    ) as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "768" } });
+    fireEvent.blur(box);
+
+    expect(
+      screen.getByLabelText("Preview width in pixels")
+    ).toBeInTheDocument();
+
+    // ...and choosing the named option is what hands it back.
+    choose(/Tablet/);
+    expect(screen.queryByLabelText("Preview width in pixels")).toBeNull();
+  });
+
+  it("commits a named viewport at its EXACT declared width", () => {
+    /*
+     * Declared widths are no longer rounded on the server, so a site can offer
+     * `767.6` — and `parseInt` on the option's value committed `767`. The frame
+     * then sat one side of the site's own `@media (max-width: 767.6px)`
+     * boundary while the control displayed the tier it was not in.
+     */
+    const ui = renderControl(null, [{ label: "Tablet", width: 767.6 }]);
+
+    choose(/Tablet/);
+
+    expect(ui.committed()).toBe("767.6");
+  });
+
+  it("shows a named viewport as selected once it is committed", () => {
+    /*
+     * The control on the case above: committing the exact width is only right
+     * if the lookup then RECOGNISES it. Truncated to 767 it matched nothing and
+     * the control fell back to Custom, which is how the rounding disagreement
+     * would have been visible had anyone looked.
+     */
+    renderControl(null, [{ label: "Tablet", width: 767.6 }]);
+
+    choose(/Tablet/);
+
+    expect(screen.queryByLabelText("Preview width in pixels")).toBeNull();
+    expect(screen.getByLabelText("Preview viewport")).toHaveTextContent(
+      /Tablet/
+    );
+  });
+});
+
 describe("PreviewViewportControl — the width box", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -241,6 +335,25 @@ describe("PreviewViewportControl — the width box", () => {
     fireEvent.change(box, { target: { value: "1e3" } });
     stopTyping();
     expect(ui.committed()).toBe("1000");
+  });
+
+  it("reports a fractional width as VALID to the browser", () => {
+    /*
+     * A number input steps by 1 unless told otherwise, so a committed `390.5`
+     * raised `stepMismatch`: native validation and assistive technology both
+     * called the field invalid while the preview was using that exact width.
+     * Asserted through `validity` rather than by reading the `step` attribute,
+     * because the attribute is the mechanism and this is the consequence.
+     */
+    const ui = renderControl(1280);
+    const box = ui.box() as HTMLInputElement;
+
+    fireEvent.change(box, { target: { value: "390.5" } });
+    stopTyping();
+
+    expect(ui.committed()).toBe("390.5");
+    expect(box.validity.stepMismatch).toBe(false);
+    expect(box.checkValidity()).toBe(true);
   });
 
   it("still refuses text that names no width at all", () => {

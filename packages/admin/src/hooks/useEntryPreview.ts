@@ -433,8 +433,18 @@ export interface UseEntryPreviewResult {
   isPreviewAvailable: boolean;
   /** Resolve and open. Asynchronous: the URL comes from the server. */
   openPreview: () => Promise<void>;
-  /** Label for the preview button. */
+  /** Label for the preview button, defaulted where none was declared. */
   label: string;
+  /**
+   * The label the collection actually DECLARED, or nothing.
+   *
+   * Carried beside the defaulted one because the surfaces that show it default
+   * differently: a button is named "Preview", while a pane toggle reads its
+   * label into "Show ..." and wants the sentence instead. Handing the defaulted
+   * value to both made the toggle say "Preview" in either state, which is the
+   * one wording that reports nothing about what clicking does.
+   */
+  declaredLabel: string | undefined;
 }
 
 // ============================================================================
@@ -509,5 +519,6 @@ export function useEntryPreview({
     isPreviewAvailable,
     openPreview,
     label: previewLabel(previewConfig),
+    declaredLabel: declaredPreviewLabel(previewConfig),
   };
 }
