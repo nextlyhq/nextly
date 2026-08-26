@@ -9,7 +9,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { CSSProperties, ReactNode } from "react";
 
-import { number, oneOf, relFor, text, url } from "./blocks/props";
+import { oneOf, relFor, text, url } from "./blocks/props";
 import type { BlockHostPolicy } from "./context";
 
 /**
@@ -246,14 +246,61 @@ function mediaSource(
  * exists to provide, reserved wrongly.
  */
 function boxOf(
-  node: RichTextNode
+  node: Readonly<Record<string, unknown>>
 ): { width: number; height: number } | undefined {
-  if (typeof node.width !== "number" || typeof node.height !== "number") {
-    return undefined;
-  }
-  const width = number(node.width, { min: 1, max: 20000, fallback: 0 });
-  const height = number(node.height, { min: 1, max: 20000, fallback: 0 });
-  return width === 0 || height === 0 ? undefined : { width, height };
+  const width = usableEdge(node.width);
+  const height = usableEdge(node.height);
+  return width === undefined || height === undefined
+    ? undefined
+    : { width, height };
+}
+
+/**
+ * One edge, judged BEFORE anything clamps it.
+ *
+ * Clamping first and rejecting zero after cannot work: a stored `0` becomes the
+ * minimum on the way in, so the rejection never fires and the page draws a
+ * one-pixel image. That makes the picture DISAPPEAR, where dropping the
+ * dimension entirely would have let its intrinsic size render normally — the
+ * failure is worse than the one the bound was added to prevent.
+ */
+function usableEdge(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (value <= 0 || value > MAX_IMAGE_EDGE) return undefined;
+  return Math.round(value);
+}
+
+/** The largest edge an `<img>` is given a reserved box for. */
+const MAX_IMAGE_EDGE = 20000;
+
+/**
+ * The `<img>` every image in this file goes through.
+ *
+ * ONE path rather than one per caller. A gallery entry carries the same fields
+ * a standalone image does — a title the author wrote, the intrinsic width and
+ * height — and a second, reduced projection beside this one drops them: the
+ * gallery loses its titles and reserves no space, so its rows shift as the
+ * images load while the standalone path above them does not.
+ */
+function ImageElement({
+  src,
+  node,
+}: {
+  src: string;
+  node: Readonly<Record<string, unknown>>;
+}): ReactNode {
+  const title = text(node.title);
+  const box = boxOf(node);
+  return (
+    <img
+      src={src}
+      alt={text(node.altText ?? node.alt)}
+      {...(title === "" ? {} : { title })}
+      {...(box ?? {})}
+      loading="lazy"
+      decoding="async"
+    />
+  );
 }
 
 /** A caption, when the author wrote one. */
@@ -292,17 +339,9 @@ function ImageView({
 }): ReactNode {
   const src = mediaSource(node.src, policy);
   if (src === undefined) return null;
-  const box = boxOf(node);
   return (
     <figure className="nextly-rich-text-image">
-      <img
-        src={src}
-        alt={text(node.altText)}
-        {...(text(node.title) === "" ? {} : { title: text(node.title) })}
-        {...(box ?? {})}
-        loading="lazy"
-        decoding="async"
-      />
+      <ImageElement src={src} node={node} />
       <CaptionView value={node.caption} />
     </figure>
   );
@@ -335,12 +374,18 @@ function GalleryView({
   const images = node.images
     .map(entry => {
       if (entry === null || typeof entry !== "object") return undefined;
-      const item = entry as Record<string, unknown>;
+      const item: Readonly<Record<string, unknown>> = entry;
       const src = mediaSource(item.src, policy);
-      return src === undefined ? undefined : { src, alt: text(item.alt) };
+      // The WHOLE entry travels on, not a `{ src, alt }` reduction of it. The
+      // shared element below reads the title and the dimensions off it, and a
+      // projection that kept two fields is what dropped them here before.
+      return src === undefined ? undefined : { src, item };
     })
     .filter(
-      (entry): entry is { src: string; alt: string } => entry !== undefined
+      (
+        entry
+      ): entry is { src: string; item: Readonly<Record<string, unknown>> } =>
+        entry !== undefined
     );
   if (images.length === 0) return null;
 
@@ -369,12 +414,7 @@ function GalleryView({
       >
         {images.map((image, i) => (
           <li key={i}>
-            <img
-              src={image.src}
-              alt={image.alt}
-              loading="lazy"
-              decoding="async"
-            />
+            <ImageElement src={image.src} node={image.item} />
           </li>
         ))}
       </ul>
@@ -409,49 +449,154 @@ const DEFAULT_VARIANT = "filled";
 const DEFAULT_SIZE = "md";
 const DEFAULT_ALIGNMENT = "center";
 
+/** Padding and text size per size the editor offers. */
+const BUTTON_METRICS: Readonly<
+  Record<string, { padding: string; fontSize: string }>
+> = {
+  sm: { padding: "0.375rem 0.75rem", fontSize: "0.875rem" },
+  md: { padding: "0.5rem 1rem", fontSize: "0.875rem" },
+  lg: { padding: "0.75rem 1.5rem", fontSize: "1rem" },
+};
+
+/**
+ * What a button LOOKS like, as far as the author decided it.
+ *
+ * The dividing line this file uses everywhere: **the renderer owes what the
+ * author chose; what nobody chose stays the host's to theme.** Size and
+ * alignment are choices the editor always records, so leaving them to a
+ * stylesheet means an author picks `lg`, centred, and the page draws a
+ * default-sized link on the left — the same failure the gallery column count
+ * had. The colours are only written when the author set them; unset, the editor
+ * falls back to its own `--nx-*` tokens, which a published site has no reason to
+ * define, so emitting those would put a broken `var()` on the page instead of
+ * letting the host's own rule apply.
+ *
+ * Enough shape to be a button and no more. No hover, no transition, no font
+ * family: those are nobody's explicit choice, and the class beside them is how a
+ * host says what it wants.
+ */
+function buttonStyle(
+  item: Readonly<Record<string, unknown>>,
+  variant: string,
+  size: string
+): CSSProperties {
+  const metrics = Object.hasOwn(BUTTON_METRICS, size)
+    ? BUTTON_METRICS[size]
+    : undefined;
+  const background = text(item.bgColor);
+  const foreground = text(item.textColor);
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: "0.375rem",
+    textDecoration: "none",
+    ...(metrics ?? {}),
+    ...(variant === "outline"
+      ? {
+          border: "1px solid currentColor",
+          ...(foreground === "" ? {} : { color: foreground }),
+        }
+      : {
+          ...(background === "" ? {} : { backgroundColor: background }),
+          ...(foreground === "" ? {} : { color: foreground }),
+        }),
+  };
+}
+
 /**
  * One button, as the ANCHOR it is.
  *
  * Never a `<button>`. It navigates, so it has to be announced as a link and
  * behave like one — opening in a new tab, copying its address, being followed
- * by a keyboard. Styling it to look like a button is a class, not an element.
+ * by a keyboard. Styling it to look like a button is presentation, not element
+ * choice.
  *
  * The destination crosses `url()` for the reason {@link LinkView} gives, and a
  * refused one renders nothing at all rather than the label alone: unlike a link
  * wrapping prose, a button's text IS the button, and leaving it behind as bare
  * words puts an orphaned "Buy now" in the middle of an article.
  */
-function ButtonView({ item }: { item: Record<string, unknown> }): ReactNode {
+function ButtonView({
+  item,
+}: {
+  item: Readonly<Record<string, unknown>>;
+}): ReactNode {
   const href = url(item.url);
   if (href === undefined) return null;
   const label = text(item.text);
   if (label === "") return null;
   const target = item.target === "_blank" ? "_blank" : undefined;
+  const variant = oneOf(item.variant, BUTTON_VARIANTS, DEFAULT_VARIANT);
+  const size = oneOf(item.size, BUTTON_SIZES, DEFAULT_SIZE);
   return (
     <a
       className="nextly-rich-text-button"
       href={href}
       target={target}
       rel={relFor(target, item.rel)}
-      data-variant={oneOf(item.variant, BUTTON_VARIANTS, DEFAULT_VARIANT)}
-      data-size={oneOf(item.size, BUTTON_SIZES, DEFAULT_SIZE)}
+      data-variant={variant}
+      data-size={size}
+      style={buttonStyle(item, variant, size)}
     >
       {label}
     </a>
   );
 }
 
-/** A single button the author placed in their prose. */
-function ButtonLinkView({ node }: { node: RichTextNode }): ReactNode {
-  const button = <ButtonView item={node} />;
+/**
+ * Whether an entry can become a button at all.
+ *
+ * Asked BEFORE the wrapper is built, because a wrapper around nothing is not
+ * nothing: an empty `<p>` keeps its paragraph margins and leaves a blank gap in
+ * the prose, which is a visible artefact of a refusal whose stated behaviour is
+ * to render nothing. A test asserting only that the LABEL is gone stays green
+ * with that gap present.
+ */
+function isRenderable(item: Readonly<Record<string, unknown>>): boolean {
+  return url(item.url) !== undefined && text(item.text) !== "";
+}
+
+/** The row a button or a group of them sits in. */
+function ButtonRow({
+  node,
+  items,
+}: {
+  node: RichTextNode;
+  items: readonly Readonly<Record<string, unknown>>[];
+}): ReactNode {
+  const usable = items.filter(isRenderable);
+  if (usable.length === 0) return null;
+  const align = oneOf(node.alignment, BUTTON_ALIGNMENTS, DEFAULT_ALIGNMENT);
   return (
     <p
       className="nextly-rich-text-buttons"
-      data-align={oneOf(node.alignment, BUTTON_ALIGNMENTS, DEFAULT_ALIGNMENT)}
+      data-align={align}
+      // Alignment is a choice the editor always records, so the page owes it
+      // for the reason the size above is owed: left to a stylesheet, a button
+      // the author centred publishes against the margin.
+      style={{
+        textAlign: align,
+        display: "flex",
+        gap: "0.75rem",
+        justifyContent:
+          align === "left"
+            ? "flex-start"
+            : align === "right"
+              ? "flex-end"
+              : "center",
+      }}
     >
-      {button}
+      {usable.map((item, i) => (
+        <ButtonView key={i} item={item} />
+      ))}
     </p>
   );
+}
+
+/** A single button the author placed in their prose. */
+function ButtonLinkView({ node }: { node: RichTextNode }): ReactNode {
+  return <ButtonRow node={node} items={[node]} />;
 }
 
 /**
@@ -464,20 +609,10 @@ function ButtonLinkView({ node }: { node: RichTextNode }): ReactNode {
 function ButtonGroupView({ node }: { node: RichTextNode }): ReactNode {
   if (!Array.isArray(node.buttons)) return null;
   const items = node.buttons.filter(
-    (entry): entry is Record<string, unknown> =>
+    (entry): entry is Readonly<Record<string, unknown>> =>
       entry !== null && typeof entry === "object"
   );
-  if (items.length === 0) return null;
-  return (
-    <p
-      className="nextly-rich-text-buttons"
-      data-align={oneOf(node.alignment, BUTTON_ALIGNMENTS, DEFAULT_ALIGNMENT)}
-    >
-      {items.map((item, i) => (
-        <ButtonView key={i} item={item} />
-      ))}
-    </p>
-  );
+  return <ButtonRow node={node} items={items} />;
 }
 
 /**

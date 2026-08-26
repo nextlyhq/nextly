@@ -677,7 +677,7 @@ describe("rich-text media leaves", () => {
     const { container } = render(<RichText value={value} />);
     const found = container.querySelectorAll("img");
     expect(found.length).toBe(2);
-    expect([...found].map(el => el.getAttribute("alt"))).toEqual(["A", "B"]);
+    expect(Array.from(found, el => el.getAttribute("alt"))).toEqual(["A", "B"]);
   });
 
   it("draws a button as an ANCHOR, never a button element", () => {
@@ -730,7 +730,7 @@ describe("rich-text media leaves", () => {
 
     const { container } = render(<RichText value={value} />);
     const links = container.querySelectorAll("a");
-    expect([...links].map(el => el.textContent)).toEqual(["Alpha", "Beta"]);
+    expect(Array.from(links, el => el.textContent)).toEqual(["Alpha", "Beta"]);
   });
 
   it("keeps the variant the editor actually serialises", () => {
@@ -814,6 +814,142 @@ describe("rich-text media leaves", () => {
     expect(twoStyle).not.toBe(fourStyle);
     expect(twoStyle).toContain("repeat(2");
     expect(fourStyle).toContain("repeat(4");
+  });
+
+  it("drops a nonpositive dimension instead of drawing a 1x1 image", () => {
+    /*
+     * A stored `0` is a FINITE number, so a bound that clamps before it rejects
+     * turns it into the minimum and the rejection can never fire — the page then
+     * draws a one-pixel image, which makes the picture disappear. Dropping the
+     * dimension lets the intrinsic size render normally, so the failure the
+     * clamp produces is worse than the one the bound exists to prevent.
+     *
+     * The NaN case beside this one cannot reach it: it is answered by the
+     * finiteness check, never by the range.
+     */
+    const { container } = render(
+      <RichText value={image({ width: 0, height: 600 })} />
+    );
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute("width")).toBeNull();
+    expect(img?.getAttribute("height")).toBeNull();
+  });
+
+  it("carries a gallery image's title and reserved box, as a lone image does", () => {
+    /*
+     * The gallery went through a `{ src, alt }` projection beside the standalone
+     * path, so it lost the author's title and reserved no space — its rows
+     * shifted as the images loaded while a single image above them did not. One
+     * shared element renders both now, and this asserts the gallery gets what
+     * the lone path already had.
+     */
+    const value = doc([
+      {
+        type: "gallery",
+        version: 1,
+        images: [
+          {
+            src: "https://cdn.example.com/a.jpg",
+            alt: "A",
+            title: "Sunrise",
+            width: 800,
+            height: 600,
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container } = render(<RichText value={value} />);
+    const img = container.querySelector("img");
+    expect(img?.getAttribute("title")).toBe("Sunrise");
+    expect(img?.getAttribute("width")).toBe("800");
+    expect(img?.getAttribute("height")).toBe("600");
+  });
+
+  it("emits NO wrapper when every button in a group is refused", () => {
+    /*
+     * A wrapper around nothing is not nothing: an empty `<p>` keeps its
+     * paragraph margins and leaves a visible gap in the prose. Asserting only
+     * that the label is gone stays green with that gap present, which is what
+     * the earlier test did.
+     *
+     * Population first — a group whose buttons ARE usable must produce the
+     * wrapper, or "no paragraph" passes against a renderer that never makes one.
+     */
+    const group = (urls: readonly string[]) =>
+      doc([
+        {
+          type: "button-group",
+          version: 1,
+          buttons: urls.map((u, i) => ({ url: u, text: `B${i}` })),
+        },
+      ] as unknown as RichTextValue["root"]["children"]);
+
+    const good = render(<RichText value={group(["https://example.com/a"])} />);
+    expect(
+      good.container.querySelector("p.nextly-rich-text-buttons")
+    ).not.toBeNull();
+    cleanup();
+
+    const bad = render(<RichText value={group(["javascript:alert(1)"])} />);
+    expect(
+      bad.container.querySelector("p.nextly-rich-text-buttons")
+    ).toBeNull();
+    expect(bad.container.textContent).toBe("");
+  });
+
+  it("draws the appearance the author chose, not attributes alone", () => {
+    /*
+     * Size and alignment are choices the editor always records. Left to a
+     * stylesheet this package does not ship, an author picks a large centred
+     * button and the page draws a default-sized link against the margin — the
+     * same failure the gallery column count had, one element over.
+     *
+     * Two sizes compared rather than one asserted: a single assertion passes
+     * against a renderer that emits identical styling whatever was chosen.
+     */
+    const button = (extra: Record<string, unknown>) =>
+      doc([
+        {
+          type: "button-link",
+          version: 1,
+          url: "https://example.com/buy",
+          text: "Buy",
+          ...extra,
+        },
+      ] as unknown as RichTextValue["root"]["children"]);
+
+    const small = render(<RichText value={button({ size: "sm" })} />);
+    const smallStyle =
+      small.container.querySelector("a")?.getAttribute("style") ?? "";
+    cleanup();
+    const large = render(<RichText value={button({ size: "lg" })} />);
+    const largeStyle =
+      large.container.querySelector("a")?.getAttribute("style") ?? "";
+
+    expect(smallStyle).not.toBe("");
+    expect(smallStyle).not.toBe(largeStyle);
+    cleanup();
+
+    // The author's colours, when they set them. Unset, nothing is written: the
+    // editor falls back to its own tokens, which a published site has no reason
+    // to define, so emitting those would put a broken `var()` on the page.
+    const coloured = render(
+      <RichText value={button({ bgColor: "#123456", textColor: "#ffffff" })} />
+    );
+    const style =
+      coloured.container.querySelector("a")?.getAttribute("style") ?? "";
+    // Compared as the value the DOM actually holds: a colour written as a hex
+    // literal is normalised to `rgb(...)` on the way in, so asserting the
+    // source spelling fails against a renderer that applied it correctly.
+    expect(style).toContain("rgb(18, 52, 86)");
+    cleanup();
+
+    const plain = render(<RichText value={button({})} />);
+    expect(
+      plain.container.querySelector("a")?.getAttribute("style") ?? ""
+    ).not.toContain("var(--nx-");
   });
 
   it("adds rel protection to a button opening a new tab", () => {
