@@ -40,13 +40,18 @@ describe("resolvePair", () => {
     numbers.map(versionNo => ({ versionNo, locale: null }));
 
   it("takes the pair the URL names", () => {
-    expect(resolvePair(rows(9, 8, 7), 7, 9, false)).toEqual({ from: 7, to: 9 });
+    expect(resolvePair(rows(9, 8, 7), 7, 9, false)).toEqual({
+      kind: "pair",
+      from: 7,
+      to: 9,
+    });
   });
 
   it("defaults to the two newest versions when the URL names none", () => {
     // Arriving without a pair is the ordinary case, and the most recent change
     // is what that reader came for.
     expect(resolvePair(rows(9, 8, 7), undefined, undefined, false)).toEqual({
+      kind: "pair",
       from: 8,
       to: 9,
     });
@@ -56,23 +61,33 @@ describe("resolvePair", () => {
     // History is paginated. Refusing an older pair because it has not been
     // fetched yet would break exactly the shared link this supports; the
     // request that follows is what decides whether those versions exist.
-    expect(resolvePair(rows(9, 8), 2, 3, true)).toEqual({ from: 2, to: 3 });
+    expect(resolvePair(rows(9, 8), 2, 3, true)).toEqual({
+      kind: "pair",
+      from: 2,
+      to: 3,
+    });
   });
 
   it("refuses when only one half is named, rather than inventing the other", () => {
     expect(resolvePair(rows(9, 8), 5, undefined, false)).toEqual({
+      kind: "pair",
       from: 8,
       to: 9,
     });
     expect(resolvePair(rows(9, 8), undefined, 5, false)).toEqual({
+      kind: "pair",
       from: 8,
       to: 9,
     });
   });
 
   it("has nothing to compare with a single version", () => {
-    expect(resolvePair(rows(1), undefined, undefined, false)).toBeNull();
-    expect(resolvePair([], undefined, undefined, false)).toBeNull();
+    expect(resolvePair(rows(1), undefined, undefined, false)).toEqual({
+      kind: "only-version",
+    });
+    expect(resolvePair([], undefined, undefined, false)).toEqual({
+      kind: "no-history",
+    });
   });
 
   it("MUST NOT default to a pair spanning two locales", () => {
@@ -85,6 +100,7 @@ describe("resolvePair", () => {
       { versionNo: 3, locale: "en" },
     ];
     expect(resolvePair(interleaved, undefined, undefined, false)).toEqual({
+      kind: "pair",
       from: 3,
       to: 5,
     });
@@ -98,6 +114,8 @@ describe("resolvePair", () => {
       { versionNo: 5, locale: "en" },
       { versionNo: 4, locale: "fr" },
     ];
-    expect(resolvePair(interleaved, undefined, undefined, true)).toBeNull();
+    expect(resolvePair(interleaved, undefined, undefined, true)).toEqual({
+      kind: "not-loaded",
+    });
   });
 });

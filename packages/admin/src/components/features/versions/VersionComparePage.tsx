@@ -24,7 +24,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { VersionDiffView } from "./diff/VersionDiffView";
-import { predecessorOf } from "./version-pairing";
+import { predecessorOf, type PairResolution } from "./version-pairing";
 import { resolvePair } from "./version-search-params";
 import { VersionTimelineRail } from "./VersionTimelineRail";
 
@@ -48,6 +48,27 @@ export interface VersionComparePageProps {
   to?: number;
 }
 
+/**
+ * Why there is nothing to compare, in the reader's terms.
+ *
+ * A table rather than nested conditionals, so adding a reason is data — and so
+ * that no reason can quietly fall through to another's sentence, which is how
+ * a document with no versions came to be told it had exactly one.
+ */
+const NO_PAIR_MESSAGE: Record<
+  Exclude<PairResolution["kind"], "pair">,
+  string
+> = {
+  // The rail already states that the history is empty and what to do about
+  // it. This side answers only why no COMPARISON is drawn, so the two
+  // surfaces say different things rather than the same thing twice.
+  "no-history": "There is nothing to compare yet.",
+  "only-version":
+    "There is only one version so far, so there is nothing to compare it with.",
+  "not-loaded":
+    "The version before this one has not been loaded yet. Choose Load more in the list to fetch it.",
+};
+
 /** What fills the comparison side: a failure, a reason there is no pair, or one. */
 function ComparisonPane({
   scope,
@@ -57,7 +78,7 @@ function ComparisonPane({
   onRetry,
 }: {
   scope: VersionScope;
-  pair: { from: number; to: number } | null;
+  pair: PairResolution;
   isError: boolean;
   isLoading: boolean;
   onRetry: () => void;
@@ -77,16 +98,15 @@ function ComparisonPane({
     );
   }
 
-  if (pair === null) {
-    // One version cannot be compared with anything. Said plainly rather than
-    // shown as an empty comparison, which would read as "nothing changed" — the
-    // answer this feature must never give by accident.
+  if (pair.kind !== "pair") {
+    // Said plainly rather than shown as an empty comparison, which would read
+    // as "nothing changed" — the answer this feature must never give by
+    // accident. Which sentence depends on WHY there is no pair: the three cases
+    // are different situations and a reader acts differently on each.
     return (
       <div className="px-4 py-8 text-center">
         <p className="text-sm text-muted-foreground">
-          {isLoading
-            ? "Loading history…"
-            : "There is only one version so far, so there is nothing to compare it with."}
+          {isLoading ? "Loading history…" : NO_PAIR_MESSAGE[pair.kind]}
         </p>
       </div>
     );
@@ -182,7 +202,7 @@ export function VersionComparePage({
           <VersionTimelineRail
             scope={scope}
             versions={versions}
-            selected={pair?.to ?? null}
+            selected={pair.kind === "pair" ? pair.to : null}
             onSelect={selectPair}
             isLoading={list.isLoading}
             isError={list.isError}

@@ -47,9 +47,12 @@ export default function SingleVersionsPage({
       scope={{ kind: "single", slug, documentId: String(documentId) }}
       documentHref={buildRoute(ROUTES.SINGLE_EDIT, { slug })}
       // Reaching this page needs `read-${slug}`; the single's own editor needs
-      // `update-${slug}`. The singles index carries no per-document permission,
-      // so it is reachable by anyone who could open this history.
-      readOnlyHref={ROUTES.SINGLES}
+      // `update-${slug}`. `/admin/singles` is NOT the readable alternative it
+      // looks like: it redirects straight to the first single the viewer can
+      // READ, and that destination is guarded on `update-`. So a read-only
+      // viewer would land on permission-denied by a longer route. The dashboard
+      // is reachable by anyone who can reach this page at all.
+      readOnlyHref={ROUTES.DASHBOARD}
       from={readVersionParam(searchParams?.from)}
       to={readVersionParam(searchParams?.to)}
     />

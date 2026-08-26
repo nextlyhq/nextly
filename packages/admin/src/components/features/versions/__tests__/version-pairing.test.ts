@@ -122,22 +122,37 @@ describe("sameLocaleVersions", () => {
 
 describe("defaultPair", () => {
   it("is the newest version and what precedes it in its locale", () => {
-    expect(defaultPair(interleaved, false)).toEqual({ from: 3, to: 5 });
+    expect(defaultPair(interleaved, false)).toEqual({
+      kind: "pair",
+      from: 3,
+      to: 5,
+    });
   });
 
   it("refuses rather than pairing the two newest ROWS", () => {
     // v5 is English and v4 is French. A pair of the two newest rows is what the
     // page used to default to, and the server rejects it.
-    const pair = defaultPair(interleaved, false);
-    expect(pair).not.toEqual({ from: 4, to: 5 });
+    expect(defaultPair(interleaved, false)).not.toEqual({
+      kind: "pair",
+      from: 4,
+      to: 5,
+    });
   });
 
-  it("has nothing to offer for a history of one", () => {
-    expect(defaultPair(plain(1), false)).toBeNull();
-    expect(defaultPair([], false)).toBeNull();
+  // The three reasons there is no pair are three different situations, and a
+  // reader acts differently on each. Collapsing them into one empty answer told
+  // a document with NO versions that it had exactly one.
+  it("distinguishes a document with no history at all", () => {
+    expect(defaultPair([], false)).toEqual({ kind: "no-history" });
   });
 
-  it("refuses while the newest version's predecessor is still unloaded", () => {
-    expect(defaultPair(plain(9), true)).toBeNull();
+  it("distinguishes a history that genuinely holds one version", () => {
+    expect(defaultPair(plain(1), false)).toEqual({ kind: "only-version" });
+  });
+
+  it("distinguishes a predecessor that has merely not loaded", () => {
+    // "Load more" would find it. Telling this reader they have one version is
+    // false, and telling them they have none is worse.
+    expect(defaultPair(plain(9), true)).toEqual({ kind: "not-loaded" });
   });
 });

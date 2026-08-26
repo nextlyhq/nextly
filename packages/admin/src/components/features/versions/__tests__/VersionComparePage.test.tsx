@@ -6,10 +6,10 @@
  * viewer who may only READ the document to a page their permission refuses; and
  * nest a second primary landmark inside the one the dashboard shell provides.
  */
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 
 const { useVersionsMock, canMock, navigateMock, diffMountMock } = vi.hoisted(
   () => ({
@@ -29,11 +29,13 @@ const { useVersionsMock, canMock, navigateMock, diffMountMock } = vi.hoisted(
 // which is the broken behaviour it exists to catch.
 vi.mock("../diff/VersionDiffView", () => ({
   VersionDiffView: (props: Record<string, unknown>) => {
+    // The props as they were at MOUNT, held in a ref so the effect below needs
+    // no dependency on them. A ref is stable, so the empty dependency list is
+    // honest rather than suppressed — and mount-time props are exactly what a
+    // remount counter should record.
+    const mounted = useRef(props);
     useEffect(() => {
-      diffMountMock(props);
-      // Mount only: an empty dependency list is what makes this a remount
-      // counter rather than a render counter.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+      diffMountMock(mounted.current);
     }, []);
     return <div data-testid="diff-view" />;
   },
@@ -201,6 +203,66 @@ describe("VersionComparePage — one comparison never paints under another", () 
       diffMountMock.mock.calls as [{ scope: { entryId: string } }][]
     ).map(([props]) => props.scope.entryId);
     expect(scopes).toEqual(["e1", "e2"]);
+  });
+});
+
+describe("VersionComparePage — why there is nothing to compare", () => {
+  it("MUST NOT tell a document with no versions that it has one", () => {
+    // The rail says "No versions yet" in this state. The pane used to say
+    // "There is only one version so far" beside it, because both were derived
+    // from the same empty pair — two claims about the same document, one false.
+    useVersionsMock.mockReturnValue(listing([]));
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/a"
+        readOnlyHref="/list"
+      />
+    );
+
+    // Scoped to each surface, because the point is that they say DIFFERENT
+    // things: the rail reports the history, the pane reports the comparison.
+    const pane = within(screen.getByRole("region", { name: "Comparison" }));
+    expect(pane.queryByText(/only one version so far/)).not.toBeInTheDocument();
+    expect(pane.getByText(/nothing to compare yet/i)).toBeInTheDocument();
+    // The rail still owns that message, and now owns it alone.
+    expect(screen.getByText("No versions yet")).toBeInTheDocument();
+  });
+
+  it("says a genuine single-version history is exactly that", () => {
+    // The control: distinguishing the empty case must not stop this one being
+    // reported, which is the ordinary reason a comparison cannot be drawn.
+    useVersionsMock.mockReturnValue(listing([row(1)]));
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/a"
+        readOnlyHref="/list"
+      />
+    );
+
+    expect(screen.getByText(/only one version so far/)).toBeInTheDocument();
+  });
+
+  it("points at Load more when the predecessor is merely unfetched", () => {
+    // Neither "no versions" nor "only one version" is true here, and both send
+    // the reader to the wrong conclusion about their own document.
+    useVersionsMock.mockReturnValue(listing([row(9)], { hasNextPage: true }));
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/a"
+        readOnlyHref="/list"
+      />
+    );
+
+    expect(screen.getByText(/has not been loaded yet/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/only one version so far/)
+    ).not.toBeInTheDocument();
   });
 });
 

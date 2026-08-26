@@ -94,20 +94,37 @@ export function predecessorOf(
 }
 
 /**
+ * A pair to compare, or the reason there is none.
+ *
+ * The reasons are kept apart because they are three different situations and a
+ * reader acts differently on each: a document with no history at all, one whose
+ * history holds a single version, and one whose older versions simply have not
+ * been fetched. Collapsing them into a null pair made the pane tell someone
+ * with no versions that they had exactly one.
+ */
+export type PairResolution =
+  | { kind: "pair"; from: number; to: number }
+  | { kind: "no-history" }
+  | { kind: "only-version" }
+  | { kind: "not-loaded" };
+
+/**
  * The pair to compare when the address names none: the newest version and what
  * precedes it, within one locale.
- *
- * Null when there is nothing to compare — a history of one, or a newest version
- * whose predecessor has not loaded. The page says so in words rather than
- * rendering an empty comparison, which would read as "nothing changed".
  */
 export function defaultPair(
   versions: readonly PairableVersion[],
   hasMore: boolean
-): { from: number; to: number } | null {
+): PairResolution {
   const newest = versions.find(v => v.versionNo !== null);
-  if (newest?.versionNo == null) return null;
+  if (newest?.versionNo == null) return { kind: "no-history" };
   const previous = predecessorOf(versions, newest.versionNo, hasMore);
-  if (previous.kind !== "version") return null;
-  return { from: previous.versionNo, to: newest.versionNo };
+  if (previous.kind === "version") {
+    return { kind: "pair", from: previous.versionNo, to: newest.versionNo };
+  }
+  // `first` means this document really does hold one version; `unknown` means
+  // its predecessor is beyond the loaded pages and "Load more" would find it.
+  return previous.kind === "first"
+    ? { kind: "only-version" }
+    : { kind: "not-loaded" };
 }

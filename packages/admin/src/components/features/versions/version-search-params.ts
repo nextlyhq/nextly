@@ -9,7 +9,11 @@
  * @module components/features/versions/version-search-params
  */
 
-import { defaultPair, type PairableVersion } from "./version-pairing";
+import {
+  defaultPair,
+  type PairableVersion,
+  type PairResolution,
+} from "./version-pairing";
 
 /**
  * One numeric search parameter, or undefined for anything that is not a version
@@ -48,8 +52,8 @@ export function resolvePair(
   from: number | undefined,
   to: number | undefined,
   hasMore: boolean
-): { from: number; to: number } | null {
-  if (from !== undefined && to !== undefined) return { from, to };
+): PairResolution {
+  if (from !== undefined && to !== undefined) return { kind: "pair", from, to };
   // The default pair is derived rather than read off the top of the list: on a
   // localized document the two newest rows are routinely different languages,
   // and the server rejects a cross-locale pair — so a page opened with no
