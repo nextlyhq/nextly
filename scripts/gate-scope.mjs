@@ -35,6 +35,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 /**
  * The workspace directory a path belongs to, for each declared root.
@@ -230,4 +231,10 @@ function main() {
   console.log(report({ filters, unreadable, scripts: touchesScripts(paths) }));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+// Compared as a normalised file URL. Interpolating the raw path leaves any
+// character the URL form percent-encodes — a space in the checkout path is
+// enough — so the comparison is false, `main()` never runs, and the command
+// exits 0 having printed nothing. A gate that silently becomes a no-op is
+// worse than one that fails, because its silence reads as "no packages
+// changed".
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();
