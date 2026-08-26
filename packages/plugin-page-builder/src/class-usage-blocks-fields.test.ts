@@ -290,3 +290,29 @@ describe("a group that contains itself", () => {
     ]);
   });
 });
+
+describe("a presentational group with a very large field list", () => {
+  it("reads it without throwing, and still returns the field inside", () => {
+    // The bound cannot protect a list that fails while being MOVED. Passing a
+    // group's children as arguments reaches the engine's argument limit — a
+    // measured 125,000 on the supported runtime — and the throw happens before
+    // any visit is counted. This runs after the document has committed, so a
+    // throw there reports a failed save for one that succeeded.
+    //
+    // Asserting the field is returned rather than only that nothing threw: a
+    // walk that gave up on the group would satisfy `not.toThrow` while leaving
+    // the document's classes out of the index entirely.
+    const filler = { type: "text", name: "filler" };
+    const wide = {
+      type: "group",
+      fields: [
+        { type: "blocks", name: "content" },
+        ...new Array<unknown>(200_000).fill(filler),
+      ],
+    };
+
+    expect(blocksFieldsOf({ fields: [wide] })).toEqual([
+      { name: "content", localized: false },
+    ]);
+  });
+});

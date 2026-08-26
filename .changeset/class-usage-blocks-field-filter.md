@@ -49,6 +49,12 @@ the fields declared after the cycle, and an empty result is indistinguishable fr
 collection that declares no blocks field - every class the document applies would have read
 as unused.
 
+A group with a very long field list is read without failing. The walk holds a cursor into each
+list where it lies rather than moving children into a queue: moving them passes each one as an
+argument, which reaches the engine's limit at around a hundred thousand and throws before the
+visit bound can apply. Maintenance runs after the document has committed, so a throw there
+reports a failed save for one that succeeded.
+
 Whether a field stores per language is decided by the collection's localization master switch
 together with the field's own flag, through the same classifier storage obeys. A field flagged
 localized on a collection that stores no translations is held ONCE, under the empty locale

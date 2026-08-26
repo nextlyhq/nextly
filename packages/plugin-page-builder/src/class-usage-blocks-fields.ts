@@ -46,9 +46,13 @@ import { isBlocksField } from "./fields/blocksHelper";
  * Groups nest and the shape is author-supplied, so a pathological depth or
  * breadth would otherwise spin here. Sized so that reaching it means the
  * configuration is wrong rather than large, and deliberately meaningless about
- * how many fields a real collection has. It is a backstop rather than the cycle
- * defence: a cycle is broken by identity below, because a bound alone ends the
- * walk without ever reaching the fields the cycle is hiding.
+ * how many fields a real collection has.
+ *
+ * It is a backstop and neither of the two defences that matter. A cycle is
+ * broken by identity below, because a bound alone ends the walk without ever
+ * reaching the fields the cycle is hiding. Breadth is survived by reading each
+ * list where it lies, because a bound cannot apply to a list that throws while
+ * being moved.
  */
 const MAX_FIELDS_VISITED = 10_000;
 
@@ -164,27 +168,41 @@ export function blocksFieldsOf(
   const found: BlocksFieldDescriptor[] = [];
   const seen = new Set<string>();
   // Groups already expanded, by IDENTITY. A group that lists itself would
-  // otherwise be pushed back to the front of the queue every iteration, and the
-  // siblings behind it would never be reached — the walk would end at the bound
-  // having silently returned nothing, which is indistinguishable from a
-  // collection that declares no blocks field.
+  // otherwise be re-entered every iteration, and the siblings behind it would
+  // never be reached — the walk would end at the bound having silently returned
+  // nothing, which is indistinguishable from a collection that declares no
+  // blocks field.
   const expanded = new WeakSet<object>();
 
-  // Depth-first over a stack rather than recursion: the nesting is
-  // author-supplied, and a cycle must not take the process with it.
-  const pending: unknown[] = [...fields];
+  // Depth-first over a stack of CURSORS rather than recursion or a queue of
+  // fields. Recursion would let author-supplied nesting exhaust the call stack.
+  // A queue would have to move a group's children into it, and a list long
+  // enough makes that move throw before any bound can apply — passing them as
+  // arguments reaches the engine's argument limit. This runs after the document
+  // has committed, where a throw reports a failed save for one that succeeded.
+  // A cursor holds each list where it is and reads one field at a time, so no
+  // length is ever material.
+  const stack: { fields: readonly unknown[]; index: number }[] = [
+    { fields, index: 0 },
+  ];
   let visited = 0;
 
-  while (pending.length > 0 && visited < MAX_FIELDS_VISITED) {
+  while (stack.length > 0 && visited < MAX_FIELDS_VISITED) {
+    const frame = stack[stack.length - 1];
+    if (frame === undefined || frame.index >= frame.fields.length) {
+      stack.pop();
+      continue;
+    }
+    const field = frame.fields[frame.index];
+    frame.index += 1;
     visited += 1;
-    const field = pending.shift();
 
     const children = presentationalChildren(field);
     if (children !== null) {
       const group = field as object;
       if (expanded.has(group)) continue;
       expanded.add(group);
-      pending.unshift(...children);
+      stack.push({ fields: children, index: 0 });
       continue;
     }
 
