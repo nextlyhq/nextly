@@ -142,6 +142,44 @@ describe("BaseRegistryService.schemaSyncNeeded", () => {
     expect(probe.ask(declared, storedDifferentOrder, false)).toBe(false);
   });
 
+  it("sees a difference that lives under `__proto__`", () => {
+    /*
+     * `JSON.parse` creates `__proto__` as an ORDINARY own key, so a stored
+     * `jsonb` column round-tripping through it reaches here carrying one. The
+     * canonical rebuild then has to keep it — assigning that key to a plain
+     * `{}` invokes the legacy prototype setter instead of creating an
+     * enumerable property, `JSON.stringify` omits it, and two configs
+     * differing only there compare EQUAL. A null-prototype target is what makes
+     * the key survive.
+     *
+     * The failure is quiet in exactly the wrong direction: a real edit reads as
+     * "unchanged" and never reaches storage.
+     */
+    const declared = JSON.parse(
+      '{"drafts":true,"__proto__":{"max":10}}'
+    ) as SchemaSyncSubject["versions"];
+    const stored = JSON.parse(
+      '{"drafts":true}'
+    ) as SchemaSyncSubject["versions"];
+
+    expect(
+      probe.ask(
+        { ...same, versions: declared },
+        { ...same, versions: stored },
+        false
+      )
+    ).toBe(true);
+  });
+
+  it("does not let a canonicalised value pollute Object.prototype", () => {
+    // The neighbouring risk in the same key. Nothing here writes through a
+    // prototype setter, and this is what would notice if that changed.
+    const declared = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+    probe.ask({ ...same, versions: declared }, { ...same }, false);
+
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it("still sees a REORDERED ARRAY as a change", () => {
     // The control on the case above. Canonicalising keys must not extend to
     // sorting array members: `[a, b]` and `[b, a]` are different values, and a
