@@ -26,8 +26,12 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Add the `core/rich-text` block, so a passage with bold, links, lists and headings inside it is one block rather than one block per fragment.
+Add inline rich text on the page-builder canvas: a `core/rich-text` block, and one shared editor an author types into directly on the page.
+
+A passage with bold, links, lists and headings inside it is now one block rather than one block per fragment. Double-clicking it opens a rich-text editor in place; double-clicking a plain value still opens the plain one, decided from the block's own prop declaration so the two surfaces cannot disagree about which values are theirs.
 
 The stored shape, the format bits and the walk that draws them already existed and are reused rather than reimplemented, so a passage renders the same on a page as it serializes in the CMS.
 
-A rich value is also now refused by the canvas plain-text editor. It declares itself editable in place like any other inline prop, but everything on that path reads a value as text and writes a string back — so before this an author who double-clicked a passage would have found an empty element and committed an empty string over their work on the way out.
+The editor is loaded on first edit rather than on mount, because its node classes carry a 630KB chunk an author who never edits a passage should never fetch. It is reached through `@nextlyhq/plugin-sdk/admin`, which now hands over the operations to edit one passage rather than the editor itself: a consumer that built its own would have to import Lexical, and a second copy of Lexical makes its node classes unrecognisable, with content saving and reading back as plain text.
+
+A rich value is also now refused by the canvas plain-text editor. It declares itself editable in place like any other inline prop, but that path reads a value as text and writes a string back, so before this an author who double-clicked a passage would have found an empty element and committed an empty string over their work on the way out.

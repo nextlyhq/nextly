@@ -130,6 +130,47 @@ export { useEntryFieldsPanel } from "@nextlyhq/admin";
 export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
 
 /**
+ * Edit ONE passage in place, anywhere on your own surface (@experimental).
+ *
+ * The companion to {@link loadRichTextEditorKit}, for the case that kit cannot
+ * serve on its own: building an editor from the registry means calling
+ * `createEditor`, which means importing Lexical — and a second declarer of
+ * Lexical is exactly the failure sharing the registry exists to prevent. This
+ * hands over the operations instead, so a consumer edits rich text without ever
+ * naming a Lexical type.
+ *
+ * ONE editor, moved between elements. `attach` releases whatever it held
+ * before, so at most one passage is live at a time — which is both what
+ * Lexical's own ecosystem supports and an honest model of a caret.
+ *
+ * Its undo history is created at `attach` and given away at `detach`, so it
+ * covers the open passage alone. A surface with its own history — the page
+ * builder's document ops are one — keeps everything larger, and a finished edit
+ * is one entry there rather than one per keystroke.
+ *
+ * Values cross as `unknown` in both directions: the stored shape is defined in
+ * `@nextlyhq/blocks-engine`, which this package does not depend on, and
+ * restating it here would be a second declaration of one format. Narrow a
+ * result with that package's own `isRichTextValue`.
+ *
+ * ASYNC for the same 630KB reason the kit is.
+ *
+ * @example
+ * ```ts
+ * const editor = await loadInlineRichTextEditor();
+ * editor.attach(element, node.props.content);
+ * editor.focus();
+ * // ...the author types...
+ * const next = editor.read();
+ * editor.detach();
+ * ```
+ */
+export {
+  loadInlineRichTextEditor,
+  type InlineRichTextEditor,
+} from "@nextlyhq/admin";
+
+/**
  * Record a recovery point for the surrounding document (@experimental).
  *
  * For a contributed field that holds its own editing state — a canvas, a

@@ -42,6 +42,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
+import { namedTarget } from "./inline-target";
 import { inlineTarget, inlineTargets, inlineTextOp } from "./inline-text";
 
 /** The attribute naming the element an author is currently typing into. */
@@ -225,9 +226,10 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
   }, [release]);
 
   const begin = useCallback((nodeId: string, prop?: string) => {
-    const targets = inlineTargets(editorRef.current.document, nodeId);
-    const target =
-      prop === undefined ? targets[0] : targets.find(t => t.prop === prop);
+    const target = namedTarget(
+      inlineTargets(editorRef.current.document, nodeId),
+      prop
+    );
     if (target === undefined) return false;
     setEditing({ nodeId: target.nodeId, prop: target.prop });
     return true;

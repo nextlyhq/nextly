@@ -72,9 +72,10 @@ import {
   useBuilderChecklist,
   useCanvasDrag,
   useEditorState,
-  useInlineText,
+  useInlineEditing,
 } from "@nextlyhq/builder/shell";
 import {
+  loadInlineRichTextEditor,
   useDocumentCheckpoint,
   usePluginClientConfig,
   useEntryFieldsPanel,
@@ -628,9 +629,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
-   * may be typed into is the block's own declaration, read by the builder.
+   * may be typed into is the block's own declaration, read by the builder, and
+   * WHICH editor a value gets is that declaration too.
+   *
+   * The rich-text loader is passed rather than imported by the builder, because
+   * it reaches Lexical and the builder must not: one copy of Lexical is what
+   * keeps its node classes recognisable, and this package is already on the
+   * admin side of that line.
    */
-  const inline = useInlineText(editor);
+  const inline = useInlineEditing(editor, loadInlineRichTextEditor);
 
   /*
    * The entry's other fields, or null when there is no surrounding form. Null

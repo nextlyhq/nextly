@@ -150,6 +150,17 @@ export {
   type RichTextEditorKit,
 } from "./lib/rich-text/load-editor-kit";
 /**
+ * ONE rich-text editor, moved between the elements an author edits in place.
+ *
+ * A loader for the same reason the kit is one, and a controller rather than the
+ * editor itself: a consumer handed Lexical would have to import it to use it,
+ * and a second declarer of Lexical is what the bundling here exists to prevent.
+ */
+export {
+  loadInlineRichTextEditor,
+  type InlineRichTextEditor,
+} from "./lib/rich-text/inline-editor";
+/**
  * A field telling the form it holds work the form's values do not contain.
  *
  * Exported for the plugin surface: a contributed field with its own editing

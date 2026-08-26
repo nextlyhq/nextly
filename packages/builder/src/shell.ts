@@ -248,6 +248,37 @@ export { useInlineText, EDITING_ATTRIBUTE } from "./use-inline-text";
 export type { InlineTextEditing, UseInlineTextResult } from "./use-inline-text";
 export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
 /**
+ * Typing a block's PASSAGE directly on the canvas, and the one gesture that
+ * reaches either surface.
+ *
+ * `useInlineEditing` is what a host wires to the canvas: it owns both the plain
+ * and the rich edit, decides from the block's own schema which a double-click
+ * opened, and keeps at most one of them live. A host that supplies no rich-text
+ * loader still edits plain text; passages simply do not open.
+ *
+ * The rich editor is loaded on first edit, not on mount, because its node
+ * classes carry a 630KB chunk that an author who never edits a passage should
+ * never fetch.
+ */
+export { useInlineEditing } from "./use-inline-editing";
+export type { UseInlineEditingResult } from "./use-inline-editing";
+export { useInlineRichText } from "./use-inline-rich-text";
+export type {
+  InlineRichTextEditing,
+  InlineRichTextEditorLoader,
+  UseInlineRichTextResult,
+} from "./use-inline-rich-text";
+export {
+  richInlineTargets,
+  richInlineTarget,
+  richInlineTextOp,
+  richTextChanged,
+} from "./inline-rich-text";
+export type { InlineRichTextTarget } from "./inline-rich-text";
+export { inlinePropKind } from "./inline-prop-kind";
+export { namedTarget } from "./inline-target";
+export type { InlinePropKind } from "./inline-prop-kind";
+/**
  * The first-run checklist: what an author has not done on this page yet.
  *
  * Every step is DERIVED from the document rather than tracked, so it describes

@@ -124,6 +124,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  /*
+   * Never awaited by these cases: the loader is reached only when an author
+   * double-clicks a passage, and none of them do. Present because the mock
+   * REPLACES the module wholesale, so an export the subject imports and this
+   * omits is a missing-export error rather than an unused stub.
+   */
+  loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
