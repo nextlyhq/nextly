@@ -256,16 +256,30 @@ describe("what a form that is not taking submissions says", () => {
     const probe = contextProbe("@test/fb-closed");
     current = await createTestNextly({ plugins: [fb.plugin, probe.plugin] });
 
+    // A CLOSED form is published first and then moved, because that is the
+    // only status whose meaning depends on history: it is served to the public
+    // on the strength of having once been live. A draft has no such history and
+    // is created as one.
+    const publishFirst = status === "closed";
+
     await current.nextly.create({
       collection: "forms",
       data: {
         name: "Contact",
         slug: "contact",
-        status,
+        status: publishFirst ? "published" : status,
         fields: [{ type: "text", name: "message", label: "Message" }],
         ...extra,
       },
     });
+
+    if (publishFirst) {
+      await current.nextly.update({
+        collection: "forms",
+        where: { slug: { equals: "contact" } },
+        data: { status },
+      });
+    }
 
     return submitForm(
       { formSlug: "contact", data: { message: "hello" } },
@@ -292,6 +306,38 @@ describe("what a form that is not taking submissions says", () => {
     // Blank is not an instruction. An author who cleared the box gets the
     // default rather than an empty explanation.
     const result = await submitTo("closed", { closedMessage: "   " });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(
+      "This form is not currently accepting submissions"
+    );
+  });
+
+  it("says nothing specific about a form created closed and never released", async () => {
+    // `closed` does not by itself mean a form was ever public: the collection
+    // accepts it on creation. Relaying an author's message here would confirm
+    // an unreleased form exists to anyone who guessed its slug.
+    const fb = formBuilder({
+      spamProtection: { honeypot: false, recaptcha: { enabled: false } },
+    });
+    const probe = contextProbe("@test/fb-never-published");
+    current = await createTestNextly({ plugins: [fb.plugin, probe.plugin] });
+
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "closed",
+        closedMessage: "Applications closed on 31 March.",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+      },
+    });
+
+    const result = await submitForm(
+      { formSlug: "contact", data: { message: "hello" } },
+      { pluginContext: probe.get(), pluginConfig: fb.config }
+    );
 
     expect(result.success).toBe(false);
     expect(result.error).toBe(

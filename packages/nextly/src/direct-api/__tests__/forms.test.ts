@@ -293,7 +293,42 @@ describe("Direct API - Forms Operations", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain("not currently accepting submissions");
+      // "Not currently accepting submissions" would confirm the form exists.
+      // A draft has never been public, so it answers as an unused slug does —
+      // the same answer the HTTP paths give, which is the point of routing all
+      // of them through one reading.
+      expect(result.error).toBe("Form not found");
+    });
+
+    it("relays a closed form's own message, as the HTTP paths do", async () => {
+      // This path returned one fixed sentence for every non-published form, so
+      // what a visitor was told depended on whether their client spoke HTTP or
+      // called the Direct API.
+      mocks.collectionsHandler.listEntries.mockResolvedValueOnce({
+        success: true,
+        statusCode: 200,
+        message: "OK",
+        data: {
+          docs: [
+            {
+              id: "form-1",
+              slug: "closed-form",
+              status: "closed",
+              wentLiveAt: "2026-01-01T00:00:00Z",
+              closedMessage: "Applications closed on 31 March.",
+            },
+          ],
+          totalDocs: 1,
+        },
+      });
+
+      const result = await nextly.forms.submit({
+        form: "closed-form",
+        data: { name: "Test" },
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Applications closed on 31 March.");
     });
 
     it("should throw when form slug is missing", async () => {

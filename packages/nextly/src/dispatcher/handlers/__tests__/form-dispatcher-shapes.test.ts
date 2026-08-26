@@ -136,6 +136,11 @@ describe("dispatchForms, actions (respondAction)", () => {
     const fakeForm = {
       id: "f1",
       slug: "contact",
+      // Stated rather than assumed. The status used to be filtered in the
+      // query and the mock ignored the filter, so these fixtures described a
+      // form with no publication state at all and the assertion below could
+      // not have caught a change to how one is judged.
+      status: "published",
       fields: [{ name: "email", label: "Email", type: "text", required: true }],
       settings: { successMessage: "Thanks for reaching out!" },
     };
@@ -201,6 +206,11 @@ describe("dispatchForms('submitForm'), validation errors", () => {
     const fakeForm = {
       id: "f1",
       slug: "contact",
+      // Stated rather than assumed. The status used to be filtered in the
+      // query and the mock ignored the filter, so these fixtures described a
+      // form with no publication state at all and the assertion below could
+      // not have caught a change to how one is judged.
+      status: "published",
       fields: [{ name: "email", label: "Email", type: "text", required: true }],
       settings: { successMessage: "Thanks!" },
     };
@@ -337,6 +347,8 @@ describe("dispatchForms, what a form's own address answers", () => {
       id: "f1",
       slug: "contact",
       status: "closed",
+      // The form was live once. That is what it is served on the strength of.
+      wentLiveAt: "2026-01-01T00:00:00Z",
       closedMessage: "Applications closed on 31 March.",
       fields: [],
     };
@@ -344,6 +356,23 @@ describe("dispatchForms, what a form's own address answers", () => {
     const response = (await askFor([closed])) as Response;
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(closed);
+  });
+
+  it("answers a form created closed exactly as it answers an unused slug", async () => {
+    // `closed` is accepted on creation, so it does not by itself mean the form
+    // was ever public. Serving one that never was hands its fields and
+    // configuration to anyone who guesses the slug.
+    const neverLive = {
+      id: "f1",
+      slug: "contact",
+      status: "closed",
+      closedMessage: "Applications closed on 31 March.",
+      fields: [],
+    };
+
+    await expect(askFor([neverLive])).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
   });
 
   it("answers a DRAFT exactly as it answers a slug nobody used", async () => {

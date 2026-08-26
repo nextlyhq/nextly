@@ -18,6 +18,7 @@ import {
   FieldShell,
   FormActions,
   Input,
+  Textarea,
   toast,
   Tabs,
   TabsList,
@@ -70,6 +71,7 @@ export interface FormBuilderViewProps {
     slug?: string;
     description?: string;
     status?: "draft" | "published" | "closed";
+    closedMessage?: string;
     fields?: unknown[];
     settings?: Record<string, unknown>;
     notifications?: unknown[];
@@ -479,6 +481,33 @@ function FormBuilderViewInner({
             </FieldShell>
           </div>
         </div>
+
+        {/* Shown only once the author has chosen Closed. The explanation is
+            written at the moment the decision is made, which is when they know
+            what it should say; a box that is always there would sit empty on
+            the great majority of forms, which are never closed. */}
+        {formData.status === "closed" && (
+          <div className="mt-4">
+            <FieldShell
+              label="Message for visitors"
+              htmlFor="form-closed-message"
+              // Prose, not a value: the half width the other fields take is
+              // sized for a name or a slug, and wrapping a sentence every six
+              // words makes it harder to read back what was written.
+              width="full"
+              description="Shown to anyone who reaches this form now that it is closed. Left empty, they are told only that it is not accepting submissions."
+            >
+              <Textarea
+                value={formData.closedMessage ?? ""}
+                onChange={e =>
+                  updateFormData({ closedMessage: e.target.value })
+                }
+                placeholder="e.g., Applications closed on 31 March. Thank you to everyone who applied."
+                rows={3}
+              />
+            </FieldShell>
+          </div>
+        )}
       </Card>
 
       {/* ── Main tab navigation ──
@@ -682,6 +711,7 @@ export function FormBuilderView({
         slug: initialData?.slug,
         description: initialData?.description,
         status: initialData?.status,
+        closedMessage: initialData?.closedMessage,
         fields: initialData?.fields as FormField[],
         settings: initialData?.settings as Record<string, unknown>,
         notifications: initialData?.notifications as FormNotification[],

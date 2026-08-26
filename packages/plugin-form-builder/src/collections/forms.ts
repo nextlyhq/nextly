@@ -15,6 +15,7 @@ import {
   textarea,
   select,
   checkbox,
+  date,
   group,
   json,
   relationship,
@@ -689,6 +690,34 @@ export function isMissingTarget(error: unknown): boolean {
   );
 }
 
+/**
+ * Records the moment a form first goes live.
+ *
+ * `status` on this collection is an ordinary select, not the framework's
+ * publish lifecycle, so nothing else writes down that a form was ever public.
+ * Without that, `closed` stands for two different histories — a form an author
+ * released and later stopped, and one created closed that nobody ever saw —
+ * and the public by-slug endpoint served both.
+ *
+ * Written once. A form that is republished after being closed keeps the
+ * original date, because the question this answers is "has this ever been
+ * public", not "when was it last".
+ */
+function stampFirstPublish(context: HookContext): void {
+  const data = context.data as Record<string, unknown> | undefined;
+  if (!data || data.status !== "published") return;
+
+  // Presence, not the payload: a whole-document save carries `wentLiveAt`
+  // on every write, so reading the patch alone would restamp a form each time
+  // it is edited while live.
+  const already =
+    (context.originalData as Record<string, unknown> | undefined)?.wentLiveAt ??
+    data.wentLiveAt;
+  if (already !== undefined && already !== null && already !== "") return;
+
+  data.wentLiveAt = new Date();
+}
+
 /** One shape for every refusal this rule makes, so callers see one field. */
 function redirectRefusal(message: string, field: PickedDocumentField) {
   // The path names the field the author actually filled in. Reporting every
@@ -918,6 +947,21 @@ export function formsCollection(
       },
     }),
 
+    // NOT `firstPublishedAt`, which is the obvious name and the one to reach
+    // for next. The framework owns that name on collections it manages the
+    // publish lifecycle for, and a write naming it from a plugin collection is
+    // stripped on the way to the insert — silently, leaving the column null and
+    // every closed form reading as one that was never public.
+    date({
+      name: "wentLiveAt",
+      label: "First Published",
+      admin: {
+        readOnly: true,
+        description:
+          "When this form first went live. Written once and never changed.",
+      },
+    }),
+
     textarea({
       name: "closedMessage",
       label: "Closed Form Message",
@@ -1057,6 +1101,7 @@ export function formsCollection(
               pluginConfig.redirectRelationships,
               pluginConfig.redirectTargetLocalization
             );
+            stampFirstPublish(context);
             return context.data;
           },
         ],

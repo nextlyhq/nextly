@@ -19,6 +19,10 @@ import {
   respondDoc,
   respondList,
 } from "../../api/response-shapes";
+import {
+  formAvailability,
+  type FormAvailabilityInput,
+} from "../../domains/forms/form-availability";
 import { NextlyError } from "../../errors";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -99,26 +103,23 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
         slug,
       });
 
-      const doc = paginated.docs?.[0] as { status?: unknown } | undefined;
+      const doc = paginated.docs?.[0] as FormAvailabilityInput | undefined;
 
-      // A DRAFT has never been public, so its address answers exactly as an
-      // unused one does. Only a form that HAS been public explains itself:
-      // telling a caller who already holds the slug why it stopped accepting
-      // submissions discloses nothing they did not have, while answering the
-      // same way from the listing would let anyone enumerate slugs by probing.
-      // The listing above is unchanged and still shows published forms only.
-      if (!doc || (doc.status !== "published" && doc.status !== "closed")) {
+      // A form that has never been public answers exactly as an unused address
+      // does. Only one that HAS been public explains itself: telling a caller
+      // who already holds the slug why it stopped accepting submissions
+      // discloses nothing they did not have, while answering the same way from
+      // the listing would let anyone enumerate slugs by probing. The listing
+      // above is unchanged and still shows published forms only.
+      const availability = formAvailability(doc);
+      if (availability.kind === "absent") {
         // §13.8: identifier (slug) belongs in logContext only.
         throw NextlyError.notFound({
-          logContext: {
-            entity: "form",
-            slug,
-            reason: "not-found-or-never-published",
-          },
+          logContext: { entity: "form", slug, reason: availability.reason },
         });
       }
 
-      return respondDoc(doc);
+      return respondDoc(doc as Record<string, unknown>);
     },
   },
 
@@ -147,34 +148,43 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
         });
       }
 
-      // Validate the form exists and is published.
+      // Fetched by slug alone, then judged. Filtering on `published` in the
+      // query answered 404 for a closed form as readily as for one that never
+      // existed, so the author's explanation never reached the visitor who
+      // most needed it — the one trying to submit.
       const formResult = await svc.collectionsHandler.listEntries({
         collectionName: "forms",
         limit: 1,
-        where: {
-          and: [
-            { slug: { equals: slug } },
-            { status: { equals: "published" } },
-          ],
-        },
+        where: { slug: { equals: slug } },
       });
       const formPaginated = unwrapServiceResult<PaginatedShape>(formResult, {
         scope: "forms-submit-lookup",
         slug,
       });
 
-      const forms = formPaginated.docs;
-      if (!forms || forms.length === 0) {
+      const candidate = formPaginated.docs?.[0] as
+        | (FormRecord & FormAvailabilityInput)
+        | undefined;
+      const availability = formAvailability(candidate);
+      if (availability.kind === "absent") {
         throw NextlyError.notFound({
-          logContext: {
-            entity: "form",
-            slug,
-            reason: "not-found-or-unpublished",
-          },
+          logContext: { entity: "form", slug, reason: availability.reason },
+        });
+      }
+      if (availability.kind === "closed") {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "form",
+              code: "FORM_CLOSED",
+              message: availability.message,
+            },
+          ],
+          logContext: { slug },
         });
       }
 
-      const form = forms[0] as FormRecord;
+      const form = candidate as FormRecord;
 
       // Validate required fields.
       const errors: Array<{ path: string; code: string; message: string }> = [];

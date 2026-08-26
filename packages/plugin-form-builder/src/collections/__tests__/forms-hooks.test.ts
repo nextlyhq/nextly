@@ -130,3 +130,92 @@ describe("isMissingTarget", () => {
     }
   });
 });
+
+/**
+ * The trailing `beforeChange`, which records the moment a form first goes live.
+ *
+ * `status` here is an ordinary select, not the framework's publish lifecycle,
+ * so nothing else writes that down — and without it `closed` stands for two
+ * different histories: a form that was released and later stopped, and one
+ * created closed that nobody ever saw. The public by-slug endpoint served both.
+ */
+function beforeChange(): (context: HookContext) => Promise<unknown> {
+  const collection = formsCollection({
+    formOverrides: { slug: "forms" },
+    formSubmissionOverrides: {},
+    redirectRelationships: [],
+  } as unknown as ResolvedFormBuilderConfig);
+  const hooks = (
+    collection as unknown as {
+      hooks?: {
+        beforeChange?: Array<(context: HookContext) => Promise<unknown>>;
+      };
+    }
+  ).hooks;
+  const handler = hooks?.beforeChange?.[0];
+  if (!handler) throw new Error("forms collection has no beforeChange hook");
+  return handler;
+}
+
+async function stamped(
+  data: Record<string, unknown>,
+  originalData?: Record<string, unknown>
+): Promise<unknown> {
+  await beforeChange()({
+    data,
+    originalData,
+    operation: originalData ? "update" : "create",
+  } as unknown as HookContext);
+  return data.wentLiveAt;
+}
+
+describe("forms beforeChange - recording the first publish", () => {
+  it("stamps a form the first time it is published", async () => {
+    expect(await stamped({ status: "published" })).toBeInstanceOf(Date);
+  });
+
+  it("does not stamp a draft", async () => {
+    expect(await stamped({ status: "draft" })).toBeUndefined();
+  });
+
+  it("does not stamp a form created closed", async () => {
+    // The whole point of the stamp: this form has never been public, and
+    // nothing about it should say otherwise.
+    expect(await stamped({ status: "closed" })).toBeUndefined();
+  });
+
+  it("keeps the original date when a live form is saved again", async () => {
+    // FormBuilderView spreads the whole document into every save, so a form
+    // edited while live arrives carrying its own stamp. Restamping here would
+    // move the date on every keystroke-driven save.
+    const first = new Date("2026-01-01T00:00:00Z");
+    expect(
+      await stamped(
+        { status: "published", wentLiveAt: first },
+        { status: "published", wentLiveAt: first }
+      )
+    ).toBe(first);
+  });
+
+  it("writes nothing when a closed form is published again", async () => {
+    // The stamp is already stored. Leaving it out of the patch is what keeps
+    // it: writing a fresh date here would answer "when was this last
+    // released", which is not the question the stamp exists for.
+    const first = new Date("2026-01-01T00:00:00Z");
+    expect(
+      await stamped(
+        { status: "published" },
+        { status: "closed", wentLiveAt: first }
+      )
+    ).toBeUndefined();
+  });
+
+  it("stamps a form whose earlier publish predates the stamp", async () => {
+    // The control for the test above: "writes nothing" must not be satisfied
+    // by a hook that has stopped writing. A form live before this shipped has
+    // no stamp, and its next save is the first chance to record one.
+    expect(
+      await stamped({ status: "published" }, { status: "published" })
+    ).toBeInstanceOf(Date);
+  });
+});

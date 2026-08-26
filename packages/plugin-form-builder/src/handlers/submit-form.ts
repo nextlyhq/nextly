@@ -8,6 +8,7 @@
  * @since 0.1.0
  */
 
+import { formAvailability, GENERIC_REFUSAL } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -133,28 +134,6 @@ export interface SubmitFormContext {
  * }
  * ```
  */
-/**
- * What to tell someone whose submission a form will not take.
- *
- * A CLOSED form is one an author deliberately stopped, and the collection
- * gives them a message to explain why — a deadline that passed, a role that is
- * filled. It was stored and never read: this path answered every non-published
- * form with one fixed sentence, so the box in the admin changed nothing an
- * author or a visitor could see.
- *
- * A DRAFT gets the generic sentence. It has never been public, so there is no
- * author intent to relay and nothing about it should confirm it exists.
- */
-function closedFormMessage(form: FormDocument): string {
-  const generic = "This form is not currently accepting submissions";
-  if (form.status !== "closed") return generic;
-
-  const authored = (form as { closedMessage?: unknown }).closedMessage;
-  return typeof authored === "string" && authored.trim()
-    ? authored.trim()
-    : generic;
-}
-
 export async function submitForm(
   options: SubmitFormOptions,
   context: SubmitFormContext
@@ -178,15 +157,22 @@ export async function submitForm(
       };
     }
 
-    // 2. Check form status
-    if (form.status !== "published") {
-      logger.info?.("Form submission rejected - form not published", {
+    // 2. Check form status. The same reading the HTTP and Direct API paths do,
+    // so what a visitor is told does not depend on which entry point their
+    // client used.
+    const availability = formAvailability(form);
+    if (availability.kind !== "open") {
+      logger.info?.("Form submission rejected - form not accepting", {
         formSlug,
         status: form.status,
+        availability: availability.kind,
       });
       return {
         success: false,
-        error: closedFormMessage(form),
+        error:
+          availability.kind === "closed"
+            ? availability.message
+            : GENERIC_REFUSAL,
       };
     }
 
