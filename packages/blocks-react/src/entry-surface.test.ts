@@ -341,6 +341,7 @@ describe("the root entry", () => {
       "rendersOwnMarkup",
       "resolvePageStyles",
       "resolvePageStylesWithTrace",
+      "sharedStyleInputs",
       "styleTextForInjection",
     ]);
   });
