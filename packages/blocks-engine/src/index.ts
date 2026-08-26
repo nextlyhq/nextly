@@ -380,6 +380,7 @@ export {
 // One reading of a rich-text inline style. The CMS serializer, the React
 // renderer and the versions differ all ask this module rather than each other.
 export {
+  formatsDrawnByStyle,
   INLINE_STYLE_PROPERTIES,
   isInlineStyleProperty,
   readInlineStyle,

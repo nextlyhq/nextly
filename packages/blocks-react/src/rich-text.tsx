@@ -2,6 +2,7 @@ import {
   codeTokenClass,
   cssColor,
   hasFormat,
+  formatsDrawnByStyle,
   isRichTextNode,
   readInlineStyle,
   isRichTextValue,
@@ -202,8 +203,15 @@ function formatted(
         {text}
       </span>
     );
+  // A wrapper whose LINE the style already draws is not emitted. A text
+  // decoration propagates to descendants rather than being replaced by theirs,
+  // so a `<u>` around a span declaring `underline wavy red` draws two
+  // underlines — the wrapper's plain one, which the span cannot remove, and the
+  // span's on top. The declaration is the richer of the two, so the wrapper is
+  // what goes. The engine decides which, and the CMS asks the same question.
+  const drawn = formatsDrawnByStyle(style, format);
   for (const { flag, wrap } of FORMAT_ELEMENTS) {
-    if (hasFormat(format, flag)) out = wrap(out);
+    if (hasFormat(format, flag) && (drawn & flag) === 0) out = wrap(out);
   }
   return out;
 }

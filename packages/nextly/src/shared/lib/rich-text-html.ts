@@ -11,6 +11,7 @@
 import {
   codeTokenClass,
   isRichTextValue,
+  formatsDrawnByStyle,
   TEXT_FORMAT,
 } from "@nextlyhq/blocks-engine";
 
@@ -234,7 +235,13 @@ function serializeTextNode(node: LexicalSerializedNode): string {
     }
   }
 
-  return applyTextFormat(inner, format);
+  // The same question the React renderer asks, from the same module: a wrapper
+  // whose line the style already draws would add a second one, because a text
+  // decoration propagates rather than being replaced.
+  return applyTextFormat(
+    inner,
+    format & ~formatsDrawnByStyle(node.style, format)
+  );
 }
 
 function serializeLineBreakNode(): string {

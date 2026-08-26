@@ -152,6 +152,44 @@ function hasLine(value: string, line: string): boolean {
 }
 
 /**
+ * The format bits whose LINE the style already draws.
+ *
+ * A text decoration is not overridden by a descendant — it PROPAGATES, and the
+ * descendant's own decoration is drawn as well. So a `<u>` around a span that
+ * declares `text-decoration: underline wavy red` produces TWO underlines: the
+ * wrapper's plain one, which the span cannot remove, and the span's wavy red
+ * one on top.
+ *
+ * That makes decoration different from the other formats, and the difference is
+ * why this exists. A `font-weight: 900` inside a `<strong>` simply wins; there
+ * is one weight. A decoration inside a `<u>` accumulates.
+ *
+ * So where a declaration already asserts the line a bit would draw, the bit's
+ * WRAPPER is what goes, not the declaration — the declaration is the richer of
+ * the two, carrying the style and the colour the wrapper cannot express. Both
+ * surfaces ask this, so both drop the same wrapper.
+ */
+export function formatsDrawnByStyle(
+  value: unknown,
+  format: number | undefined
+): number {
+  if (format === undefined) return 0;
+  const declared = readInlineStyle(value, format);
+  let drawn = 0;
+  for (const entry of FORMAT_ASSERTS) {
+    // Only the decoration entries: they are the ones that accumulate.
+    if (!entry.properties.includes("text-decoration")) continue;
+    if (!hasFormat(format, entry.flag)) continue;
+    const asserted = entry.properties.some(property => {
+      const written = declared.get(property);
+      return written !== undefined && entry.keeps(written);
+    });
+    if (asserted) drawn |= entry.flag;
+  }
+  return drawn;
+}
+
+/**
  * Whether an active format bit contradicts this declaration.
  *
  * Answered per DECLARATION rather than per property, which is what lets a value

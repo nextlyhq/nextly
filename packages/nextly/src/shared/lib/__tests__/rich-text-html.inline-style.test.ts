@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 import type { RichTextValue } from "../../../collections/fields/types/rich-text";
 import { convertRichTextToHtml } from "../rich-text-html";
 
-const TEXT_FORMAT = { BOLD: 1, HIGHLIGHT: 128 } as const;
+const TEXT_FORMAT = { BOLD: 1, UNDERLINE: 8, HIGHLIGHT: 128 } as const;
 
 const html = (node: Record<string, unknown>): string =>
   // `?? ""` rather than a non-null assertion: the serializer answers `null` for
@@ -68,6 +68,25 @@ describe("an inline style beside a format wrapper", () => {
     expect(bold).toContain("<strong");
     expect(bold).toContain("color:#ff0000");
     expect(bold).not.toContain("font-weight:normal");
+  });
+
+  it("drops a wrapper whose line the style already draws", () => {
+    // The same question the React renderer asks, from the same module. A text
+    // decoration propagates to descendants rather than being replaced by
+    // theirs, so `<u>` around a span declaring `underline wavy red` would draw
+    // two underlines here exactly as it does there.
+    const decorated = html({
+      format: TEXT_FORMAT.UNDERLINE,
+      style: "text-decoration: underline wavy red",
+    });
+    expect(decorated).toContain("text-decoration:underline wavy red");
+    expect(decorated).not.toContain("<u");
+  });
+
+  it("keeps that wrapper when nothing draws its line", () => {
+    // The control, and it is what makes the assertion above about the STYLE
+    // rather than about underlines having stopped working.
+    expect(html({ format: TEXT_FORMAT.UNDERLINE })).toContain("<u");
   });
 
   it("emits no span when the style survives nothing", () => {

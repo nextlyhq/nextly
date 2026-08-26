@@ -1998,3 +1998,87 @@ describe("rich-text a format bit beats a style that would cancel it", () => {
     );
   });
 });
+
+describe("rich-text a decoration the style already draws", () => {
+  const mk = (style: string, format: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style, format }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("drops the wrapper rather than drawing a second line", () => {
+    /*
+     * A text decoration PROPAGATES to descendants instead of being replaced by
+     * theirs, and a descendant cannot remove it. So `<u>` around a span
+     * declaring `underline wavy red` draws two underlines — the wrapper's plain
+     * one and the span's on top.
+     *
+     * The declaration is the richer of the two, carrying a style and a colour
+     * the wrapper cannot express, so the WRAPPER is what goes.
+     */
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk("text-decoration: underline wavy red", TEXT_FORMAT.UNDERLINE)}
+      />
+    );
+    expect(html).toContain("text-decoration:underline wavy red");
+    expect(html).not.toContain("<u>");
+  });
+
+  it("keeps a wrapper the style does not draw", () => {
+    // The control that matters most: only the bit whose line is already drawn
+    // loses its wrapper. Bold is not a decoration and accumulates with nothing.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk(
+          "text-decoration: underline wavy red",
+          TEXT_FORMAT.UNDERLINE | TEXT_FORMAT.BOLD
+        )}
+      />
+    );
+    expect(html).toContain("<strong>");
+    expect(html).not.toContain("<u>");
+  });
+
+  it("keeps a wrapper for a format that does NOT accumulate", () => {
+    /*
+     * Only a decoration accumulates. A `font-weight: 900` inside a `<strong>`
+     * simply wins — there is one weight — so dropping the `<strong>` would
+     * discard its semantics for no benefit, and a screen reader would stop
+     * announcing the emphasis.
+     *
+     * This case exists because break-verifying the decoration-only filter
+     * changed NOTHING: with every format treated as accumulating, no test
+     * failed, because none of them paired a bit with a reinforcing value of its
+     * own property.
+     */
+    const html = renderToStaticMarkup(
+      <RichText value={mk("font-weight: 900", TEXT_FORMAT.BOLD)} />
+    );
+    expect(html).toContain("<strong>");
+    expect(html).toContain("font-weight:900");
+  });
+
+  it("keeps the wrapper when the style contradicts it instead", () => {
+    // `none` beside the bit is a contradiction, not a richer decoration: the
+    // declaration goes and the wrapper stays, which is the other branch.
+    const html = renderToStaticMarkup(
+      <RichText value={mk("text-decoration: none", TEXT_FORMAT.UNDERLINE)} />
+    );
+    expect(html).toContain("<u>");
+    expect(html).not.toContain("text-decoration");
+  });
+
+  it("keeps a wrapper whose own line the style does not assert", () => {
+    // An underline declaration beside STRIKETHROUGH asserts the wrong line, so
+    // it is dropped as a contradiction and the `<s>` survives.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk("text-decoration: underline", TEXT_FORMAT.STRIKETHROUGH)}
+      />
+    );
+    expect(html).toContain("<s>");
+  });
+});
