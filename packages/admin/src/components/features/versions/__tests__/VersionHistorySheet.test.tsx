@@ -7,7 +7,7 @@ import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 
 const {
   useVersionsMock,
@@ -96,10 +96,29 @@ function version(versionNo: number) {
   };
 }
 
-function renderSheet() {
+function renderSheet(props: Record<string, unknown> = {}) {
   return render(
-    <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
+    <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} {...props} />
   );
+}
+
+/**
+ * The row the panel's title sits in, located from the title itself.
+ *
+ * The close control's LOCATION is the property under test, not merely its
+ * existence: a control that lives in the footer's action row is the defect,
+ * because that row gains three compare buttons on selection and wraps at this
+ * width, carrying the only exit off-screen. So the tests ask which region
+ * holds the control. Scoping by the title's own row rather than by a class
+ * keeps the assertion about structure the reader can see.
+ */
+function titleRow(): HTMLElement {
+  const title = screen.getByRole("heading", {
+    name: /^(Version history|Version \d+)$/,
+  });
+  const row = title.closest("div");
+  if (!row) throw new Error("panel title row not found");
+  return row;
 }
 
 /**
@@ -681,6 +700,43 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
       expect(
         screen.getByRole("button", { name: /Version 3/ })
       ).not.toHaveAttribute("aria-current", "true")
+    );
+  });
+
+  it("closes from a control beside its title", async () => {
+    const onOpenChange = vi.fn();
+    renderSheet({ onOpenChange });
+
+    // The sheet primitive renders no close icon of its own, so the panel has
+    // to supply one. Beside the title is where a dismissible surface keeps it.
+    const close = within(titleRow()).getByRole("button", { name: /close/i });
+    await userEvent.click(close);
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps the close control beside the title once a version is selected", async () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(2), version(1)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    renderSheet();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+
+    // Selecting adds the compare actions to the footer. The exit must not be
+    // among them: that row wraps at this width, which is what put the only
+    // close control off-screen. Exactly one close control, and it is beside
+    // the title.
+    const closes = screen.getAllByRole("button", { name: /close/i });
+    expect(closes).toHaveLength(1);
+    expect(within(titleRow()).getByRole("button", { name: /close/i })).toBe(
+      closes[0]
     );
   });
 });

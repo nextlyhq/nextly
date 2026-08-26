@@ -14,6 +14,7 @@
  * @module components/features/versions/VersionHistorySheet
  */
 
+import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -21,6 +22,7 @@ import {
   AlertDescription,
   Button,
   Sheet,
+  SheetClose,
   SheetContent,
   SheetDescription,
   SheetHeader,
@@ -429,18 +431,35 @@ export function VersionHistorySheet({
                 already locale-fixed) and only for a document whose own history
                 carries locales — so it never appears on a non-localized
                 document in an otherwise localized app. */}
-            {selected === null && isLocalizedDocument && (
-              <VersionLocaleFilter
-                value={localeFilter}
-                onChange={locale => {
-                  // Changing the visible locale set can drop the previewed or
-                  // compared version out of view, so clear both modes.
-                  setLocaleFilter(locale);
-                  setSelected(null);
-                  setComparing(null);
-                }}
-              />
-            )}
+            <div className="flex items-center gap-1">
+              {selected === null && isLocalizedDocument && (
+                <VersionLocaleFilter
+                  value={localeFilter}
+                  onChange={locale => {
+                    // Changing the visible locale set can drop the previewed or
+                    // compared version out of view, so clear both modes.
+                    setLocaleFilter(locale);
+                    setSelected(null);
+                    setComparing(null);
+                  }}
+                />
+              )}
+              {/* The sheet primitive renders no close icon of its own, so the
+                  panel supplies one. It sits beside the title rather than in
+                  the footer because the footer's action row gains the compare
+                  controls once a version is selected and wraps at this width,
+                  which carried the only exit off-screen. */}
+              <SheetClose asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 shrink-0 p-0"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </SheetClose>
+            </div>
           </div>
           <SheetDescription className="sr-only">
             Past versions of this document, newest first.
@@ -553,58 +572,62 @@ export function VersionHistorySheet({
           )}
         </div>
 
-        <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
-          {selected !== null ? (
-            <>
+        {/* The action row exists only while a version is selected. Rendering it
+            unconditionally left an empty bordered strip below the list once the
+            close control moved to the header, since these actions are the only
+            other thing it ever held.
+
+            It wraps, which is safe now and was not before. These three controls
+            exceed 480px, so they either wrap or scroll; wrapping puts the
+            overflow on a second visible line, while a horizontal scroll leaves
+            the last control half-drawn at the panel's edge and reachable only
+            by a gesture nothing advertises. What made wrapping unusable before
+            was the close control sitting here with `ml-auto`: it landed alone
+            on the wrapped line, against the panel edge, where the viewport
+            clipped it. With the exit in the header, a second line costs
+            nothing. */}
+        {selected !== null ? (
+          <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSelected(null)}
+            >
+              Back to history
+            </Button>
+            {/* Compare is offered from the preview, where a version is already
+                  chosen: against the one before it, and against the current. */}
+            {canComparePrevious && previousVersionNo !== null ? (
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setSelected(null)}
+                onClick={() =>
+                  setComparing({ from: previousVersionNo, to: selected })
+                }
               >
-                Back to history
+                Compare with previous
               </Button>
-              {/* Compare is offered from the preview, where a version is already
-                  chosen: against the one before it, and against the current. */}
-              {canComparePrevious && previousVersionNo !== null ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    setComparing({ from: previousVersionNo, to: selected })
-                  }
-                >
-                  Compare with previous
-                </Button>
-              ) : null}
-              {canCompareCurrent && latestVersionNo !== null ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    setComparing({ from: selected, to: latestVersionNo })
-                  }
-                >
-                  Compare with current
-                </Button>
-              ) : null}
-              {/* Restoring is offered in the BANNER over the version being
+            ) : null}
+            {canCompareCurrent && latestVersionNo !== null ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setComparing({ from: selected, to: latestVersionNo })
+                }
+              >
+                Compare with current
+              </Button>
+            ) : null}
+            {/* Restoring is offered in the BANNER over the version being
                   read, not here. The panel only ever offered it while a
                   version was selected, which is exactly when the banner is on
                   screen — so a button here would be a second control with the
                   same label, and the further one from what it acts on. This
                   component still owns the mutation and its confirmation; the
                   banner holds the trigger. */}
-            </>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto"
-            onClick={() => onOpenChange(false)}
-          >
-            Close
-          </Button>
-        </div>
+          </div>
+        ) : null}
       </SheetContent>
 
       {/* Rendered inside the sheet but outside its content, so its own portal
