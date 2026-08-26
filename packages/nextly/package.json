@@ -47,6 +47,10 @@
       "types": "./dist/field-catalog.d.ts",
       "import": "./dist/collections/fields/catalog.mjs"
     },
+    "./query": {
+      "types": "./dist/query/index.d.ts",
+      "import": "./dist/query/index.mjs"
+    },
     "./observability": {
       "types": "./dist/observability/index.d.ts",
       "import": "./dist/observability/index.mjs"

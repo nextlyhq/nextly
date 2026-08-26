@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import { encodeSelectParam } from "nextly/query";
 import { useEffect, useState } from "react";
 
 import {
@@ -95,10 +96,16 @@ export function selectFieldsFor(useAsTitle?: string): readonly string[] {
   return [...labelFieldsFor(useAsTitle), "status", "firstPublishedAt"];
 }
 
+/**
+ * The `select` parameter, ready to sit in a hand-built query string.
+ *
+ * The format itself comes from core rather than from here. This module once
+ * spelled it out, having first shipped a comma list the server accepted and
+ * discarded — every field of up to fifty documents per collection, to fill a
+ * dropdown reading five.
+ */
 export function selectParam(fields: readonly string[]): string {
-  return encodeURIComponent(
-    JSON.stringify(Object.fromEntries(fields.map(field => [field, true])))
-  );
+  return encodeURIComponent(encodeSelectParam(fields));
 }
 
 /** One selectable document, reduced to what the control shows and stores. */
