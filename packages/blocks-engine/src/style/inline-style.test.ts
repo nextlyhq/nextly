@@ -146,6 +146,14 @@ describe("a repeated property whose later value is unusable", () => {
      * Deduplicating on POSITION alone loses it. Judging the VALUE recovers it.
      */
     expect(read("color: red; color: not-a-color")["color"]).toBe("red");
+    /*
+     * `banana` and not only `not-a-color`, because the two are refused by
+     * DIFFERENT things and only one of them was ever the point. `not-a-color` is
+     * hyphenated, so it failed the old alphabetic pattern by accident of its
+     * spelling — the test passed while an unknown NAME still deleted its
+     * fallback. This is the value that separates the two implementations.
+     */
+    expect(read("color: red; color: banana")["color"]).toBe("red");
   });
 
   it("still lets a later VALID colour win", () => {

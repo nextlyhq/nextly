@@ -18,6 +18,8 @@
  * @module style/css-color
  */
 
+import { checkColorValue } from "./css-value";
+
 /**
  * Value shapes that must never reach a stylesheet, whatever else they look like.
  *
@@ -42,47 +44,6 @@ const CSS_INJECTION_PATTERNS: readonly RegExp[] = [
   /@import/i, // Loads an external stylesheet
   /@font-face/i, // Exfiltrates via a font request
   /var\s*\(/i, // A custom property can carry an attack set up elsewhere
-];
-
-const HEX_COLOR =
-  /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-
-const NUM = String.raw`\d{1,3}%?`;
-const HUE = String.raw`[\d.]+(?:deg|rad|grad|turn)?`;
-const PCT = String.raw`\d{1,3}%`;
-
-/**
- * The syntaxes a stored colour may be written in.
- *
- * Both the comma and the space form of every function, because a browser's own
- * colour picker writes one and an imported document may carry the other.
- */
-const COLOR_PATTERNS: readonly RegExp[] = [
-  HEX_COLOR,
-  new RegExp(`^rgb\\(\\s*${NUM}\\s*,\\s*${NUM}\\s*,\\s*${NUM}\\s*\\)$`),
-  new RegExp(
-    `^rgb\\(\\s*${NUM}\\s+${NUM}\\s+${NUM}\\s*(?:\\/\\s*[\\d.]+%?\\s*)?\\)$`
-  ),
-  new RegExp(
-    `^rgba\\(\\s*${NUM}\\s*,\\s*${NUM}\\s*,\\s*${NUM}\\s*,\\s*[\\d.]+%?\\s*\\)$`
-  ),
-  new RegExp(
-    `^rgba\\(\\s*${NUM}\\s+${NUM}\\s+${NUM}\\s*\\/\\s*[\\d.]+%?\\s*\\)$`
-  ),
-  new RegExp(`^hsl\\(\\s*${HUE}\\s*,\\s*${PCT}\\s*,\\s*${PCT}\\s*\\)$`),
-  new RegExp(
-    `^hsl\\(\\s*${HUE}\\s+${PCT}\\s+${PCT}\\s*(?:\\/\\s*[\\d.]+%?\\s*)?\\)$`
-  ),
-  new RegExp(
-    `^hsla\\(\\s*${HUE}\\s*,\\s*${PCT}\\s*,\\s*${PCT}\\s*,\\s*[\\d.]+%?\\s*\\)$`
-  ),
-  new RegExp(
-    `^hsla\\(\\s*${HUE}\\s+${PCT}\\s+${PCT}\\s*\\/\\s*[\\d.]+%?\\s*\\)$`
-  ),
-  // A named colour. Anything alphabetic reaches here, `banana` included — an
-  // unknown name is a declaration the browser drops, which is the same outcome
-  // as refusing it here. The injection check above is what makes this safe.
-  /^[a-zA-Z]+$/,
 ];
 
 /**
@@ -139,7 +100,18 @@ export function cssColor(value: unknown): string | undefined {
   if (typeof value !== "string" || value === "") return undefined;
   if (hasCssInjection(value)) return undefined;
   const trimmed = value.trim();
-  return COLOR_PATTERNS.some(pattern => pattern.test(trimmed))
-    ? trimmed
-    : undefined;
+  /*
+   * WHETHER it is a colour is `checkColorValue`'s question, not this module's.
+   * That one parses the value with css-tree, decodes escapes, holds the CSS
+   * named colours as the closed set they are, and knows `oklch()` and
+   * `color-mix()` — where the hand-written patterns that used to be here
+   * accepted any alphabetic word as a colour, `banana` included, and refused
+   * every syntax added to CSS since they were written.
+   *
+   * The SAFETY question stays here, and is asked first. `checkColorValue`
+   * accepts `var(--x)` because a custom property may legitimately hold a
+   * colour; this module refuses it, because a value assembled elsewhere is
+   * exactly what a stored style should not be able to pull into a page.
+   */
+  return checkColorValue(trimmed) === null ? trimmed : undefined;
 }

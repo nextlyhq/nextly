@@ -62,6 +62,47 @@ describe("cssColor", () => {
     expect(cssColor(value)).toBeUndefined();
   });
 
+  it("refuses a word that is not a colour", () => {
+    /*
+     * `/^[a-zA-Z]+$/` was here, and its comment argued that an unknown name is a
+     * declaration the browser drops anyway. True of a name ALONE, false the
+     * moment one follows another: `color: red; color: banana` renders RED,
+     * because the browser discards the second and keeps the first. A reader that
+     * ACCEPTS `banana` and drops the earlier declaration publishes no colour.
+     */
+    expect(cssColor("banana")).toBeUndefined();
+    expect(cssColor("notacolour")).toBeUndefined();
+  });
+
+  it.each([
+    "rebeccapurple",
+    "lightgoldenrodyellow",
+    "mediumspringgreen",
+    "transparent",
+    "currentcolor",
+  ])("keeps the keyword %s", keyword => {
+    // The population, and the reason it is not two names: a truncated paste of
+    // the list would still satisfy `red` and `blue`. These are late-alphabet,
+    // long, and one of them (`rebeccapurple`) is the most recent addition to
+    // CSS, so a stale list is caught rather than a short one.
+    expect(cssColor(keyword)).toBe(keyword);
+  });
+
+  it.each(["inherit", "initial", "unset", "revert", "revert-layer"])(
+    "keeps the CSS-wide keyword %s",
+    keyword => {
+      // `revert-layer` is the one the old rule got wrong in the other
+      // direction: it is hyphenated, so an alphabetic-only pattern REFUSED a
+      // perfectly legal value.
+      expect(cssColor(keyword)).toBe(keyword);
+    }
+  );
+
+  it("reads a keyword whatever its case, since an identifier has none", () => {
+    expect(cssColor("RED")).toBe("RED");
+    expect(cssColor("CurrentColor")).toBe("CurrentColor");
+  });
+
   it("refuses a value that is not a string, and an empty one", () => {
     expect(cssColor(undefined)).toBeUndefined();
     expect(cssColor(null)).toBeUndefined();
