@@ -174,6 +174,212 @@ export function nodeElements(root: HTMLElement): readonly Element[] {
   return found;
 }
 
+/**
+ * Report a box's real inline size to its owner whenever it changes.
+ *
+ * `ResizeObserver` rather than a resize listener on the window: the box changes
+ * width when the inspector opens, when a rail panel is toggled and when the
+ * pane is dragged, none of which resize the window. A window listener would
+ * report the same number across all three.
+ *
+ * `contentBoxSize` rather than `getBoundingClientRect().width`, because the
+ * editor applies a canvas zoom transform and the rect is the TRANSFORMED size —
+ * which is what a reader sees but not what the container queries resolve
+ * against. A container query asks the element's own layout size, so reporting
+ * the visual one would name the wrong tier at any zoom but 100%.
+ */
+function useReportedInlineWidth(
+  box: React.RefObject<HTMLElement | null>,
+  report: ((width: number | undefined) => void) | undefined
+): void {
+  useEffect(() => {
+    const element = box.current;
+    if (element === null || report === undefined) return;
+    // Guarded by CALLABILITY rather than presence: jsdom defines the global on
+    // some setups without a working constructor, so a property test passes and
+    // the construction throws.
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (entry === undefined) return;
+      const inline = entry.contentBoxSize[0]?.inlineSize;
+      report(typeof inline === "number" ? inline : undefined);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [box, report]);
+}
+
+/**
+ * The canvas root's own style: the container the sheet queries, and the width
+ * the box is being asked to show.
+ *
+ * A MAXIMUM with an auto inline margin rather than a fixed width, because the
+ * region may be narrower than the tier asked for — a wide breakpoint inside a
+ * half-width editor pane cannot be honoured, and stretching the box past its
+ * region would put the page under the inspector.
+ *
+ * Centred rather than left-aligned, which is what every builder surveyed does
+ * and is not merely cosmetic: an off-centre narrow box reads as a layout that
+ * has broken rather than as a viewport being simulated.
+ */
+function previewBoxStyle(
+  preview: CanvasPreview | undefined
+): React.CSSProperties {
+  if (preview === undefined) return {};
+  return {
+    ...previewContainerStyle(preview.container),
+    ...(preview.width === undefined
+      ? {}
+      : { maxWidth: `${preview.width}px`, marginInline: "auto" }),
+  };
+}
+
+/**
+ * Mark the selected elements on the rendered tree.
+ *
+ * Applied AFTER the renderer has produced them, rather than asked of
+ * `PageRenderer`. Which node an editor considers current is an editor's
+ * concern, and a published route renders the same document without one —
+ * pushing it into the renderer's contract would put editor state in the
+ * component that serves live pages.
+ *
+ * Ids are COMPARED in JavaScript rather than matched with a selector built from
+ * one. A node id reaches this from stored data, and interpolating it into
+ * `querySelector` makes any character CSS treats specially either throw or,
+ * worse, match something else.
+ *
+ * `page` is a dependency because the rendered tree is what carries the markers:
+ * a re-render replaces the elements, and an effect keyed on the selection alone
+ * would leave the new tree carrying none at all.
+ */
+function useSelectionMarkers(
+  box: React.RefObject<HTMLElement | null>,
+  marked: readonly string[],
+  selectedId: string | null,
+  page: React.ReactNode
+): void {
+  useEffect(() => {
+    const container = box.current;
+    if (container === null) return;
+    // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
+    // that declares its iterator, and this package compiles without one — so the
+    // loop that reads more naturally does not type-check here.
+    container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+      const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+      if (id === null || !marked.includes(id)) {
+        element.removeAttribute(SELECTED_ATTRIBUTE);
+        return;
+      }
+      // The VALUE carries which member the panels answer for. A boolean
+      // attribute could not, and a second attribute for the primary would be a
+      // state where a block is primary without being selected.
+      element.setAttribute(
+        SELECTED_ATTRIBUTE,
+        id === selectedId ? "primary" : ""
+      );
+    });
+  }, [box, selectedId, marked, page]);
+}
+
+/**
+ * Which ids to mark, given what the host supplied.
+ *
+ * The primary alone when a host has not adopted the set yet, which keeps every
+ * existing caller correct without a change. `[]` rather than `[null]` for an
+ * empty selection: the marker is applied by id, and a null in the set would
+ * match the elements carrying no id at all.
+ */
+function markedIds(
+  selectedIds: readonly string[] | undefined,
+  selectedId: string | null
+): readonly string[] {
+  if (selectedIds !== undefined) return selectedIds;
+  return selectedId === null ? [] : [selectedId];
+}
+
+/**
+ * The canvas's pointer handlers, which share one rule: chrome is not the page.
+ *
+ * Together rather than separately, because that rule is the whole of what they
+ * have in common and a version where each handler remembers it for itself is
+ * the version where the next one does not. Pressing a control drawn over the
+ * canvas would otherwise resolve to "no node" and deselect the very block that
+ * control acts on.
+ */
+function useCanvasPointer(
+  onSelect: ((id: string | null, mode: SelectionMode) => void) | undefined,
+  onDoubleClick: ((event: React.MouseEvent<HTMLDivElement>) => void) | undefined
+): {
+  onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
+} {
+  const click = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (onSelect === undefined || isChrome(event.target)) return;
+      // A click on the canvas background resolves to null, which CLEARS the
+      // selection rather than being ignored. Ignoring it leaves an inspector
+      // showing a node the author believes they have deselected.
+      onSelect(nodeIdFromEvent(event.target), selectionModeFor(event));
+    },
+    [onSelect]
+  );
+  const doubleClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (isChrome(event.target)) return;
+      onDoubleClick?.(event);
+    },
+    [onDoubleClick]
+  );
+  return { onClick: click, onDoubleClick: doubleClick };
+}
+
+/**
+ * A canvas showing the page inside a resizable box rather than at the browser's
+ * own width.
+ *
+ * The container is REQUIRED and the rest is not, because it is what makes the
+ * other two mean anything: the editor canvas is not an iframe, so the sheet is
+ * emitted into the admin document and `@media` asks the WINDOW. Only a sheet
+ * compiled against a container name has rules this box can answer.
+ */
+export interface CanvasPreview {
+  /**
+   * The container name the sheet was compiled against.
+   *
+   * Passed through {@link previewContainerStyle}, which supplies the
+   * `container-type` alongside the name: a named container left at the default
+   * `normal` is not a size-query container, so every rule the preview compile
+   * emitted stays inactive while the sheet is valid and the name matches.
+   */
+  container: string;
+  /**
+   * The width to constrain the box to, in CSS pixels, or absent to fill the
+   * region.
+   *
+   * A MAXIMUM rather than a fixed width, because the region may be narrower
+   * than the tier being asked for — a wide breakpoint inside a half-width
+   * editor pane cannot be honoured, and stretching the box past its region
+   * would put the page under the inspector instead.
+   */
+  width?: number;
+  /**
+   * The box's MEASURED inline size, reported whenever it changes.
+   *
+   * Reported rather than derived from {@link CanvasPreview.width}, because
+   * those are different numbers and only one of them decides anything. The
+   * requested width is a ceiling; what the container queries resolve against is
+   * the width the box actually got. A caller that assumed the request was
+   * honoured would name a tier the box is not showing — the same
+   * confident-wrong-answer this whole preview mechanism exists to remove.
+   *
+   * `undefined` until the first measurement, which is a real state rather than
+   * a default: nothing has been observed yet, and a caller must not report a
+   * tier as live on the strength of a box nobody has looked at.
+   */
+  onMeasured?: (width: number | undefined) => void;
+}
+
 export interface CanvasProps {
   /** The document being edited. */
   document: BlockDocument;
@@ -183,40 +389,17 @@ export interface CanvasProps {
    */
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>;
   /**
-   * The width to constrain the page box to, in CSS pixels, or `undefined` to
-   * fill the region.
+   * The preview box this canvas establishes, or absent to render at the
+   * region's own width against a published sheet.
    *
-   * A MAXIMUM rather than a fixed width, because the region may be narrower
-   * than the tier being asked for — a wide breakpoint inside a half-width
-   * editor pane cannot be honoured, and stretching the box past its region
-   * would put the page under the inspector instead.
+   * One object rather than three props, for the reason
+   * {@link CanvasProps.dragHandlers} is one: the set cannot then be PARTIALLY
+   * wired, and every partial wiring here fails silently. A width without a
+   * container resizes a box whose sheet still queries the window, so the page
+   * reflows and not one breakpoint changes. A container nobody observes leaves
+   * the surface that owns the box unable to say which tier is live.
    */
-  previewWidth?: number;
-  /**
-   * The container name this box establishes, when the sheet was compiled as a
-   * preview.
-   *
-   * Passed through {@link previewContainerStyle}, which supplies the
-   * `container-type` alongside the name: a named container left at the default
-   * `normal` is not a size-query container, so every rule the preview compile
-   * emitted stays inactive while the sheet is valid and the name matches.
-   */
-  previewContainer?: string;
-  /**
-   * The box's MEASURED inline size, reported whenever it changes.
-   *
-   * Reported rather than derived from {@link previewWidth}, because those are
-   * different numbers and only one of them decides anything. The requested
-   * width is a ceiling; what the container queries resolve against is the width
-   * the box actually got. A caller that assumed the request was honoured would
-   * name a tier the box is not showing — the same confident-wrong-answer this
-   * whole preview mechanism exists to remove.
-   *
-   * `undefined` until the first measurement, which is a real state rather than
-   * a default: nothing has been observed yet, and a caller must not report a
-   * tier as live on the strength of a box nobody has looked at.
-   */
-  onMeasuredWidth?: (width: number | undefined) => void;
+  preview?: CanvasPreview;
   /**
    * The PRIMARY selected node's id, or null when the selection is empty.
    *
@@ -301,65 +484,21 @@ export function Canvas({
   dragHandlers,
   onDoubleClick,
   overlay,
-  previewWidth,
-  previewContainer,
-  onMeasuredWidth,
+  preview,
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
 
-  /*
-   * The box's real inline size, observed rather than assumed.
-   *
-   * `ResizeObserver` rather than a resize listener on the window: the box
-   * changes width when the inspector opens, when a rail panel is toggled and
-   * when the pane is dragged, none of which resize the window. A window
-   * listener would report the same number across all three.
-   *
-   * `contentBoxSize` rather than `getBoundingClientRect().width`, because the
-   * editor applies a canvas zoom transform and the rect is the TRANSFORMED
-   * size — which is what a reader sees but not what the container queries
-   * resolve against. A container query asks the element's own layout size, so
-   * reporting the visual one would name the wrong tier at any zoom but 100%.
-   */
-  useEffect(() => {
-    const box = root.current;
-    if (box === null || onMeasuredWidth === undefined) return;
-    // Guarded by CALLABILITY rather than presence: jsdom defines the global on
-    // some setups without a working constructor, so a property test passes and
-    // the construction throws.
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
-      const entry = entries[0];
-      if (entry === undefined) return;
-      const inline = entry.contentBoxSize[0]?.inlineSize;
-      onMeasuredWidth(typeof inline === "number" ? inline : undefined);
-    });
-    observer.observe(box);
-    return () => observer.disconnect();
-  }, [onMeasuredWidth]);
+  useReportedInlineWidth(root, preview?.onMeasured);
 
   /*
    * What to mark. The primary alone when a host has not adopted the set yet,
    * which keeps every existing caller correct without a change.
    */
   const marked = useMemo(
-    () => selectedIds ?? (selectedId === null ? [] : [selectedId]),
+    () => markedIds(selectedIds, selectedId),
     [selectedIds, selectedId]
   );
-  const handleClick = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      if (!onSelect) return;
-      // Chrome is not the page. Pressing a button drawn over the canvas is not
-      // a click on the background, and treating it as one would deselect the
-      // block that button acts on.
-      if (isChrome(event.target)) return;
-      // A click on the canvas background resolves to null, which CLEARS the
-      // selection rather than being ignored. Ignoring it leaves an inspector
-      // showing a node the author believes they have deselected.
-      onSelect(nodeIdFromEvent(event.target), selectionModeFor(event));
-    },
-    [onSelect]
-  );
+  const pointer = useCanvasPointer(onSelect, onDoubleClick);
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
@@ -381,78 +520,25 @@ export function Canvas({
     [render, document, siteStyles]
   );
 
-  // Marked on the rendered element AFTER the renderer has produced it, rather
-  // than asked of `PageRenderer`. Which node an editor considers current is an
-  // editor's concern, and a published route renders the same document without
-  // one — pushing it into the renderer's contract would put editor state in the
-  // component that serves live pages.
-  //
-  // Compared in JavaScript rather than matched with a selector built from the
-  // id. A node id reaches this from stored data, and interpolating it into
-  // `querySelector` makes any character CSS treats specially either throw or,
-  // worse, match something else.
-  useEffect(() => {
-    const container = root.current;
-    if (container === null) return;
-    // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
-    // that declares its iterator, and this package compiles without one — so the
-    // loop that reads more naturally does not type-check here.
-    container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-      const id = element.getAttribute(NODE_ID_ATTRIBUTE);
-      const isSelected = id !== null && marked.includes(id);
-      if (!isSelected) {
-        element.removeAttribute(SELECTED_ATTRIBUTE);
-        return;
-      }
-      // The VALUE carries which member the panels answer for. A boolean
-      // attribute could not, and a second attribute for the primary would be a
-      // state where a block is primary without being selected.
-      element.setAttribute(
-        SELECTED_ATTRIBUTE,
-        id === selectedId ? "primary" : ""
-      );
-    });
-    // Re-marked whenever the rendered tree changes as well as when the
-    // selection does: a re-render replaces the elements, and an effect keyed on
-    // the selection alone would leave the new tree carrying no marker at all.
-  }, [selectedId, marked, page]);
+  useSelectionMarkers(root, marked, selectedId, page);
 
   return (
     <div
       ref={root}
       className={cn(CANVAS_ROOT_CLASS, className)}
-      /*
-       * The preview box: the container the sheet queries, and the width it is
-       * being asked to show.
-       *
-       * Centred rather than left-aligned, which is what every builder surveyed
-       * does and is not merely cosmetic — an off-centre narrow box reads as a
-       * layout that has broken rather than as a viewport being simulated.
-       *
-       * On the canvas ROOT rather than an inner wrapper, because the overlays
-       * are positioned in this element's own content coordinates: a box inside
-       * it would size the page while leaving the drop indicator and the
-       * selection chrome measuring the region instead.
-       */
-      style={{
-        ...previewContainerStyle(previewContainer),
-        ...(previewWidth === undefined
-          ? {}
-          : { maxWidth: `${previewWidth}px`, marginInline: "auto" }),
-      }}
+      // On the canvas ROOT rather than an inner wrapper, because the overlays
+      // are positioned in this element's own content coordinates: a box inside
+      // it would size the page while leaving the drop indicator and the
+      // selection chrome measuring the region instead.
+      style={previewBoxStyle(preview)}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and
       // a single name meaning both is the kind of thing that reads correctly
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
-      onClick={handleClick}
-      // Chrome is excluded for the same reason it is on click: a double-click
-      // on a control drawn over the page is not a double-click on the page.
-      onDoubleClick={event => {
-        if (isChrome(event.target)) return;
-        onDoubleClick?.(event);
-      }}
+      onClick={pointer.onClick}
+      onDoubleClick={pointer.onDoubleClick}
       // Spread rather than merged with a handler of this component's own: the
       // canvas has no pointer behaviour of its own apart from the drag, so
       // there is nothing to combine, and merging would create a second place

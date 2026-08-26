@@ -130,6 +130,29 @@ export { BreakpointManager } from "./breakpoint-manager";
 export type { BreakpointManagerProps } from "./breakpoint-manager";
 
 /**
+ * The control that sizes the canvas, and the derivations behind it.
+ *
+ * Published together because they are one answer read from two places. The
+ * switcher SETS a width; `editedBreakpointAtWidth` and `breakpointsAtWidth`
+ * turn the width the box actually got into the tier an edit lands in and the
+ * tiers that are live. A host given only the control would have to derive those
+ * itself, and a second derivation of "which tier is this box in" is exactly the
+ * disagreement between the canvas and the inspector that deriving from one
+ * width exists to make unrepresentable.
+ *
+ * On the CLIENT entry: the switcher is a component, and the derivations travel
+ * with it rather than from the root barrel so a host imports the pair from one
+ * place.
+ */
+export { BreakpointSwitcher } from "./breakpoint-switcher";
+export type { BreakpointSwitcherProps } from "./breakpoint-switcher";
+export {
+  breakpointsAtWidth,
+  editedBreakpointAtWidth,
+  widthForBreakpoint,
+} from "./canvas-width";
+
+/**
  * The editor's keyboard actions — moving, deleting, undoing — behind the same
  * client banner.
  *

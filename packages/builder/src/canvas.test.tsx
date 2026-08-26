@@ -468,7 +468,9 @@ describe("the preview box the canvas establishes", () => {
      * the sheet is valid and the name matches. Resizing the box then changes
      * nothing, with no error anywhere to say why.
      */
-    const { container } = boxed({ previewContainer: "nx-preview-viewport" });
+    const { container } = boxed({
+      preview: { container: "nx-preview-viewport" },
+    });
     const style = root(container).style;
 
     expect(style.containerName).toBe("nx-preview-viewport");
@@ -484,7 +486,7 @@ describe("the preview box the canvas establishes", () => {
      * would then follow the window while container tiers followed the box: a
      * hybrid neither mode intends.
      */
-    const { container } = boxed({ previewContainer: "none" });
+    const { container } = boxed({ preview: { container: "none" } });
     const style = root(container).style;
 
     expect(style.containerName).toBe("");
@@ -498,7 +500,9 @@ describe("the preview box the canvas establishes", () => {
      * width would push the page under the inspector rather than admitting the
      * request could not be met.
      */
-    const { container } = boxed({ previewWidth: 991 });
+    const { container } = boxed({
+      preview: { container: "nx-preview-viewport", width: 991 },
+    });
     const style = root(container).style;
 
     expect(style.maxWidth).toBe("991px");
@@ -519,5 +523,157 @@ describe("the preview box the canvas establishes", () => {
 
     expect(style.maxWidth).toBe("");
     expect(style.marginInline).toBe("");
+  });
+});
+
+describe("what the canvas reports about the box it got", () => {
+  /**
+   * A `ResizeObserver` that records what it was asked to watch and hands the
+   * test the callback, so a measurement can be delivered on demand.
+   *
+   * jsdom ships none at all, which is not merely an inconvenience: the canvas
+   * guards on the global being CALLABLE and silently reports nothing when it is
+   * not, so without a stub every assertion here would pass on absence.
+   */
+  class FakeResizeObserver {
+    static last: FakeResizeObserver | undefined;
+    readonly observed: Element[] = [];
+    disconnected = false;
+    constructor(readonly callback: ResizeObserverCallback) {
+      FakeResizeObserver.last = this;
+    }
+    observe(element: Element): void {
+      this.observed.push(element);
+    }
+    disconnect(): void {
+      this.disconnected = true;
+    }
+    unobserve(): void {}
+    /** Deliver one entry, as the browser would after a layout. */
+    deliver(entry: Partial<ResizeObserverEntry>): void {
+      this.callback([entry as ResizeObserverEntry], this as never);
+    }
+  }
+
+  const original = globalThis.ResizeObserver;
+
+  beforeAll(() => {
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver =
+      FakeResizeObserver;
+  });
+
+  afterAll(() => {
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = original;
+  });
+
+  afterEach(() => {
+    FakeResizeObserver.last = undefined;
+  });
+
+  /** A canvas previewing, with a reporter the test can read. */
+  function measured(onMeasured: (width: number | undefined) => void) {
+    return render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        preview={{ container: "nx-preview-viewport", onMeasured }}
+      />
+    );
+  }
+
+  it("reports the box's CONTENT-box inline size", () => {
+    /*
+     * `contentBoxSize` rather than the bounding rect, because the editor
+     * applies a canvas zoom and the rect is the TRANSFORMED size. A container
+     * query asks the element's own layout size, so at any zoom but 100% the
+     * visual number names a different tier than the one the browser is
+     * applying — and the canvas would look right while the inspector wrote to
+     * the wrong breakpoint.
+     *
+     * The two are given DIFFERENT values here deliberately: equal ones would
+     * let an implementation reading either satisfy this.
+     */
+    const onMeasured = vi.fn();
+    measured(onMeasured);
+
+    FakeResizeObserver.last?.deliver({
+      contentBoxSize: [{ inlineSize: 900, blockSize: 500 }],
+      contentRect: { width: 450 } as DOMRectReadOnly,
+    });
+
+    expect(onMeasured).toHaveBeenCalledWith(900);
+  });
+
+  it("observes the canvas ROOT, which is the box the sheet queries", () => {
+    /*
+     * The element carrying the container name is the element the queries
+     * resolve against. Observing anything else would report a width that
+     * decides nothing — and would do it convincingly, since the number moves
+     * whenever the editor is resized.
+     */
+    const onMeasured = vi.fn();
+    const { container } = measured(onMeasured);
+
+    expect(FakeResizeObserver.last?.observed).toEqual([
+      container.querySelector(`.${CANVAS_ROOT_CLASS}`),
+    ]);
+  });
+
+  it("says UNDEFINED rather than a number when the entry carries no size", () => {
+    /*
+     * An entry without `contentBoxSize` is a real answer from older engines,
+     * and `undefined` is what the caller must be told: it means nothing has
+     * been observed, which is the state where a caller must not name a tier.
+     * Reporting 0 instead would put the box in the narrowest tier the site
+     * defines.
+     */
+    const onMeasured = vi.fn();
+    measured(onMeasured);
+
+    FakeResizeObserver.last?.deliver({ contentBoxSize: [] });
+
+    expect(onMeasured).toHaveBeenCalledWith(undefined);
+  });
+
+  it("stops observing when the canvas goes away", () => {
+    /*
+     * The observer outlives the element otherwise, and reports into a caller
+     * whose surface has been unmounted.
+     */
+    const { unmount } = measured(vi.fn());
+    const observer = FakeResizeObserver.last;
+
+    unmount();
+
+    expect(observer?.disconnected).toBe(true);
+  });
+
+  it("observes NOTHING when no reporter was given", () => {
+    /*
+     * The control. Without it, an implementation that observed unconditionally
+     * would satisfy every case above while costing a `ResizeObserver` to every
+     * canvas that is not previewing.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        preview={{ container: "nx-preview-viewport" }}
+      />
+    );
+
+    expect(FakeResizeObserver.last).toBeUndefined();
   });
 });

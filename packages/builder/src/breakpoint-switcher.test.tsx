@@ -26,6 +26,16 @@ const site = (): BreakpointSet => ({
   container: [],
 });
 
+/*
+ * The tier indicator, read from the live region rather than by text.
+ *
+ * A text query would match the option BUTTON of the same name — "Tablet"
+ * appears on both — so an assertion phrased that way passes whether or not the
+ * indicator rendered at all, which is the one thing these cases are about.
+ */
+const appliedNote = (root: HTMLElement): HTMLElement | null =>
+  root.querySelector<HTMLElement>("[aria-live]");
+
 const options = (): HTMLElement[] => screen.getAllByRole("radio");
 const checked = (): HTMLElement[] =>
   options().filter(option => option.getAttribute("aria-checked") === "true");
@@ -136,7 +146,102 @@ describe("what the control reports as selected", () => {
     // The counterpart to the case above: selecting nothing must not mean saying
     // nothing. The width changed which declarations are live, and that is the
     // fact this control exists to make legible.
-    render(
+    const { container } = render(
+      <BreakpointSwitcher
+        breakpoints={site()}
+        width={700}
+        appliedWidth={700}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(appliedNote(container)?.textContent).toBe("700px · Tablet");
+  });
+
+  it("names the tier by its LABEL, not by its stored id", () => {
+    /*
+     * The id is an addressing detail an author never chose and may never have
+     * seen — a site is free to key its tablet tier `bp_2`. Reporting it here
+     * would put a string from the storage layer in front of the author at the
+     * one moment the control is explaining itself.
+     */
+    const { container } = render(
+      <BreakpointSwitcher
+        breakpoints={{
+          viewport: [{ id: "bp_2", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        }}
+        width={700}
+        appliedWidth={700}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(appliedNote(container)?.textContent).toBe("700px · Tablet");
+  });
+
+  it("reports the tier a NARROW REGION put the canvas in, at the widest option", () => {
+    /*
+     * The case the mount actually produces, and the one this indicator exists
+     * for. `undefined` width asks for the full region; a region narrower than
+     * the widest tier's bound hands the box less, and the narrower tier is then
+     * what the browser paints and what an edit lands in.
+     *
+     * Without this the author sees "Full width" selected, edits what they
+     * believe is the base tier, and every value silently goes to tablet — the
+     * exact "what you edit disagrees with what you see" state the founder's
+     * 2026-08-24 ruling deferred this control over.
+     *
+     * The selection is asserted alongside, because the honest answer is BOTH:
+     * the author did ask for the full width, and the box is in tablet.
+     */
+    const { container } = render(
+      <BreakpointSwitcher
+        breakpoints={site()}
+        width={undefined}
+        appliedWidth={900}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(checked()[0]?.getAttribute("aria-label")).toBe("Full width");
+    expect(appliedNote(container)?.textContent).toBe("900px · Tablet");
+  });
+
+  it("says NOTHING at the widest option when the region honoured it", () => {
+    /*
+     * The control on the case above, and Gutenberg's own finding: a badge at
+     * the widest tier is actively confusing, because edits there apply to every
+     * breakpoint rather than overriding one.
+     *
+     * Without this, a version that showed the indicator unconditionally would
+     * satisfy every assertion above.
+     */
+    const { container } = render(
+      <BreakpointSwitcher
+        breakpoints={site()}
+        width={undefined}
+        appliedWidth={1400}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(appliedNote(container)).toBeNull();
+  });
+
+  it("says nothing about a box that has NOT been measured", () => {
+    /*
+     * `appliedWidth` is undefined until the canvas reports its first
+     * measurement, and that is a real state rather than a missing default.
+     * Falling back to the REQUESTED width here would state a tier for a box
+     * nobody has looked at — and the request is a ceiling the region may not
+     * have honoured, so it is precisely the number that could be wrong.
+     */
+    const { container } = render(
       <BreakpointSwitcher
         breakpoints={site()}
         width={700}
@@ -145,8 +250,7 @@ describe("what the control reports as selected", () => {
       />
     );
 
-    expect(screen.getByText(/700px/)).toBeDefined();
-    expect(screen.getByText(/tablet/)).toBeDefined();
+    expect(appliedNote(container)).toBeNull();
   });
 
   it("selects the widest when the canvas is UNBOUNDED, which is the control", () => {

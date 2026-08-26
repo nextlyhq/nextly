@@ -7,9 +7,9 @@
  * which tiers the page is applying are both derived from that width by
  * `canvas-width.ts`, so this component holds no notion of a "current
  * breakpoint" that could disagree with the box on screen. Gutenberg arrived at
- * the same arrangement in PR #75121 by unifying a device menu and a resizable
- * canvas that had been mutually exclusive: canvas width became the single
- * source of truth and the device menu was demoted to a way of setting one.
+ * the same arrangement by unifying a device menu and a resizable canvas that
+ * had been mutually exclusive: canvas width became the single source of truth
+ * and the device menu was demoted to a way of setting one.
  *
  * The founder's 2026-08-24 ruling deferred this control until canvas width
  * simulation existed, on the grounds that a selector changing which values you
@@ -51,6 +51,19 @@ export interface BreakpointSwitcherProps {
    * the widest tier, filling whatever the region allows.
    */
   width: number | undefined;
+  /**
+   * The box's MEASURED inline size, or `undefined` before anything was
+   * observed.
+   *
+   * Separate from {@link BreakpointSwitcherProps.width}, because the two are
+   * different facts and only one of them is a choice. The request is a CEILING:
+   * an editor region narrower than the tier asked for hands the box less, and
+   * what the container queries resolve against is the width the box got. Fed
+   * back in as `width` it would unselect the option the author just clicked;
+   * left out entirely, this control would state a tier for a box nobody looked
+   * at.
+   */
+  appliedWidth?: number;
   /** Size the canvas. `undefined` releases it back to the full region. */
   onSelect: (width: number | undefined) => void;
   /**
@@ -82,6 +95,7 @@ export interface BreakpointSwitcherProps {
 export function BreakpointSwitcher({
   breakpoints,
   width,
+  appliedWidth,
   onSelect,
   status,
 }: BreakpointSwitcherProps): React.JSX.Element | null {
@@ -106,7 +120,20 @@ export function BreakpointSwitcher({
     return inCascadeOrder(authored.viewport);
   }, [breakpoints]);
 
-  const edited = editedBreakpointAtWidth(breakpoints, width);
+  /*
+   * The tier the box is APPLYING, and the tier the SELECTION claims.
+   *
+   * Two derivations rather than one, because they answer to different widths
+   * and the whole point of the indicator below is the case where they differ.
+   * `undefined` applied means nothing has been measured, which is a real state:
+   * this control then says nothing rather than describing a box nobody looked
+   * at.
+   */
+  const appliedTier =
+    appliedWidth === undefined
+      ? undefined
+      : editedBreakpointAtWidth(breakpoints, appliedWidth);
+  const claimedTier = editedBreakpointAtWidth(breakpoints, width);
   /*
    * Whether the width is one this control could have SET.
    *
@@ -175,6 +202,29 @@ export function BreakpointSwitcher({
   // Falls back to the widest, which always exists: a roving tabindex with no
   // stop at all removes the control from the tab order entirely.
   const activeIndex = matchedIndex >= 0 ? matchedIndex : 0;
+
+  /*
+   * Whether the selection already accounts for what is applying.
+   *
+   * Two ways it does not, and both need saying. An unmatched width — one no
+   * option could have set — leaves every option unselected, and selecting
+   * nothing must not mean saying nothing. And a matched option whose tier the
+   * box is not actually in is the narrow-region case: the author asked for the
+   * full width, the region handed the box less than the widest tier's bound,
+   * and their edits are landing in a narrower tier with nothing on screen to
+   * say so. That is the confusion the founder's 2026-08-24 ruling named, and
+   * the reason this indicator is not merely decorative.
+   */
+  const describedBySelection = matchedIndex >= 0 && appliedTier === claimedTier;
+  /*
+   * The tier's own label, never its id. A bounded tier is found among the
+   * options; anything else is the unconditional one, whose id a site may spell
+   * differently and which this control already names "Full width".
+   */
+  const appliedLabel =
+    options.find(
+      option => option.bound !== undefined && option.id === appliedTier
+    )?.label ?? "Full width";
 
   const move = (delta: number): void => {
     const next =
@@ -249,21 +299,22 @@ export function BreakpointSwitcher({
         );
       })}
       {/*
-       * What the canvas is APPLYING, which is not always what was selected.
+       * What the canvas is APPLYING, shown only when the selection does not
+       * already say it.
        *
-       * Announced politely rather than drawn silently: an author who resizes to
-       * a width between two bounds has changed which declarations are live, and
-       * that is exactly the fact this whole control exists to make legible.
-       * Hidden at the widest tier, where Gutenberg found a badge actively
-       * confusing — edits there apply to every breakpoint, so it is the default
-       * rather than an override, and labelling it as a tier suggests otherwise.
+       * Announced politely rather than drawn silently: which declarations are
+       * live has changed, and that is exactly the fact this whole control
+       * exists to make legible. Hidden when the selected option already
+       * describes the applying tier — which at the widest tier is the case
+       * Gutenberg found a badge actively confusing, since edits there apply to
+       * every breakpoint and labelling that as a tier suggests otherwise.
        */}
-      {ready && !exact && !atWidest ? (
+      {ready && appliedTier !== undefined && !describedBySelection ? (
         <span
           className="text-muted-foreground px-1 text-xs tabular-nums"
           aria-live="polite"
         >
-          {width}px · {edited}
+          {appliedWidth}px · {appliedLabel}
         </span>
       ) : null}
     </div>

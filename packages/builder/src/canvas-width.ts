@@ -16,10 +16,10 @@
  * than keeping the two in step.
  *
  * Gutenberg reached the same answer from the opposite direction: its device
- * dropdown and its resizable canvas were mutually exclusive surfaces until
- * PR #75121 unified them by treating canvas width as the source of truth, with
- * the device menu demoted to a way of SETTING a width and the viewport derived
- * from it as a range. An intermediate width then needs no preset to exist.
+ * dropdown and its resizable canvas were mutually exclusive surfaces until it
+ * unified them by treating canvas width as the source of truth, with the device
+ * menu demoted to a way of SETTING a width and the viewport derived from it as
+ * a range. An intermediate width then needs no preset to exist.
  *
  * ## Why this reads `maxWidth` and not the emitted query text
  *
