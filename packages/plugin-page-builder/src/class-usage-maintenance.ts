@@ -53,11 +53,7 @@
  *
  * @module class-usage-maintenance
  */
-import {
-  MAX_CLASSES_PER_NODE,
-  MAX_NODES,
-  isPlainRecord,
-} from "@nextlyhq/blocks-engine";
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import {
@@ -110,29 +106,26 @@ export interface ClassUsageIndexStore {
 const PAGE_SIZE = 200;
 
 /**
- * A runaway guard on the paging loop, deliberately NOT a claim about the data.
+ * A runaway guard on the paging loop, and NOT a claim about the data.
  *
- * Two earlier shapes were wrong in opposite directions. A round number chosen
- * by eye was low enough to reject a valid document, and every later maintenance
- * then threw forever. Deriving it from the limits the document is read under
- * NOW was worse in a subtler way: a host that LOWERS `maxNodes` does not
- * shorten the rows already written under the old bound, so the guard would
- * start rejecting rows that were legitimate when they were made — and
- * `forgetClassUsage` cannot even know what the historical bound was.
+ * Three earlier shapes were each wrong, and each was wrong the same way: it
+ * tried to make the bound MEAN something about how many rows a subject should
+ * have. A round number chosen by eye rejected a valid document. Deriving it
+ * from the current limits rejected rows written under different limits.
+ * Budgeting two row sets rejected a subject that had accumulated more, because
+ * repeated failed removals stack another set each time and the next pass does
+ * not necessarily clear the pair.
  *
- * So the bound is fixed, derived from the engine's own maxima rather than from
- * anything a host can change, and generous enough that reaching it means the
- * store's paging is broken rather than that the document is large. Its job is
- * to stop an endless loop, not to police row counts.
+ * Every one of those rejected the state the walk existed to repair, and the
+ * rejection is permanent: once a subject is past the bound, maintenance throws
+ * before reaching the reconciler that would have cleared it.
  *
- * Doubled because a subject can legitimately hold two full row sets at once.
- * Inserts are issued before removals, so a removal that fails part way leaves
- * the old set and the new one side by side until the next pass — and that pass
- * is the one that would clear them. A bound sized for one set would refuse to
- * read the very state it exists to repair.
+ * So the bound expresses nothing about rows. It is a flat, generous ceiling
+ * whose only job is to stop an unterminated loop, matching the one the
+ * document walk already uses, and reaching it is evidence about the STORE
+ * rather than about the site.
  */
-const MAX_PAGES =
-  Math.ceil((MAX_NODES * MAX_CLASSES_PER_NODE * 2) / PAGE_SIZE) + 1;
+const MAX_PAGES = 10_000;
 
 /** Whether a stored value could be a block document at all. */
 export function looksLikeBlockDocument(value: unknown): boolean {

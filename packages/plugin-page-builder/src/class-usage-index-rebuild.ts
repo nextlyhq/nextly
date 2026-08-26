@@ -155,7 +155,7 @@ async function rebuildOnePage(
     index: ClassUsageIndexStore;
     collection: string;
     field: string;
-    locale?: string;
+    locale: string;
     limits?: DocumentLimits;
   },
   visited: Set<string>
@@ -176,7 +176,7 @@ async function rebuildOnePage(
         entity: args.collection,
         entityKey: item.id,
         field: args.field,
-        locale: args.locale ?? "",
+        locale: args.locale,
       },
       document: item[args.field],
       limits: args.limits,
@@ -214,8 +214,24 @@ export async function rebuildClassUsageIndex(args: {
   collection: string;
   /** The blocks field on those documents. */
   field: string;
-  /** Which locale's documents these are, empty when the field is not localized. */
-  locale?: string;
+  /**
+   * Which locale to rebuild, or the empty string when the field is NOT
+   * localized.
+   *
+   * Required rather than optional, because the two sides read an omitted value
+   * differently and the disagreement is silent. `resolveRequestedLocale` treats
+   * `""` as the configured DEFAULT locale, so a localized field rebuilt without
+   * one reads the default translation — while the rows are filed under `""`,
+   * which this index uses to mean "not localized at all". A later rebuild
+   * naming a real locale then cannot see those rows to reconcile or sweep them,
+   * and they stay for ever.
+   *
+   * Making it required does not stop a caller passing `""` for a localized
+   * field, and nothing here can: only the caller knows whether the field is
+   * localized. What it does is force that to be a decision rather than an
+   * omission.
+   */
+  locale: string;
   /**
    * The bounds the documents are rendered under, when not the engine defaults.
    *
@@ -245,7 +261,7 @@ export async function rebuildClassUsageIndex(args: {
         sort: "id",
         // The SAME locale the rows are filed under. Reading one locale and
         // filing it as another is the whole of the defect this closes.
-        locale: args.locale ?? "",
+        locale: args.locale,
       }),
     onPage: async items => {
       const tally = await rebuildOnePage(items, args, visited);
@@ -263,7 +279,7 @@ export async function rebuildClassUsageIndex(args: {
     scope: "collection",
     entity: args.collection,
     field: args.field,
-    locale: args.locale ?? "",
+    locale: args.locale,
     visited,
     // Asked only about a document the walk did not see, so a stable collection
     // costs nothing. A row survives unless the document is confirmed GONE —

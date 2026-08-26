@@ -246,3 +246,42 @@ describe("a row written before the locale column existed", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("a subject whose rows span several pages", () => {
+  it("collects every page before reconciling", async () => {
+    // The paging bound is a runaway guard and its VALUE asserts nothing about
+    // the data — deliberately, after three versions that each encoded an
+    // expectation and each rejected the state the walk existed to repair. What
+    // must hold is that the walk continues past the first page: reconciling a
+    // partial row set reads every unread row as a reference the document has
+    // dropped, and deletes it.
+    const pages = [
+      [{ ...page, id: "r1", classId: "hero" }],
+      [{ ...page, id: "r2", classId: "card" }],
+      [{ ...page, id: "r3", classId: "stale" }],
+    ];
+    const deletes: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async args => ({
+        items: pages[args.page - 1] ?? [],
+        meta: { hasNext: args.page < pages.length },
+      }),
+      create: async () => ({}),
+      delete: async args => {
+        deletes.push(args.id);
+        return {};
+      },
+    };
+
+    const report = await maintainClassUsage({
+      store,
+      subject: page,
+      document: documentUsing("hero", "card"),
+    });
+
+    // Only the row from the LAST page is stale. A walk that stopped early would
+    // have reported `card` as an insert and never seen `stale` at all.
+    expect(report).toEqual({ inserted: 0, removed: 1, undetermined: false });
+    expect(deletes).toEqual(["r3"]);
+  });
+});

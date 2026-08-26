@@ -81,6 +81,8 @@ describe("rebuilding the class-usage index", () => {
       index: index.store,
       collection: "pages",
       field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
     });
 
     expect(report).toEqual({
@@ -106,6 +108,8 @@ describe("rebuilding the class-usage index", () => {
       index: indexStore().store,
       collection: "pages",
       field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
     });
 
     expect(docs.calls).toEqual(["find:page=1:sort=id:locale="]);
@@ -135,6 +139,8 @@ describe("rebuilding the class-usage index", () => {
       index: index.store,
       collection: "pages",
       field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
     });
 
     expect(report).toEqual({
@@ -196,6 +202,8 @@ describe("rebuilding the class-usage index", () => {
       index: index.store,
       collection: "pages",
       field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
     });
 
     expect(report).toEqual({
@@ -223,6 +231,8 @@ describe("rebuilding the class-usage index", () => {
         index: indexStore().store,
         collection: "pages",
         field: "content",
+        // Not localized, which is what the empty string means here.
+        locale: "",
       })
     ).rejects.toThrow(/stopped after \d+ pages/);
   });
@@ -304,6 +314,8 @@ describe("rows whose document no longer exists", () => {
       index,
       collection: "pages",
       field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
     });
 
     // `page-1` was seen and agreed, so nothing was repaired. `deleted-page` was
@@ -362,6 +374,8 @@ describe("a document the walk missed but which still exists", () => {
       index,
       collection: "pages",
       field: "content",
+      // Not localized, which is what the empty string means here.
+      locale: "",
     });
 
     expect(report.orphansRemoved).toBe(0);
