@@ -31,6 +31,7 @@ import type {
 import {
   pruneRenderedPlaceholders,
   sharedStyleInputs,
+  statedBreakpoints,
   withoutStatedNulls,
 } from "./page-renderer";
 import { prepareDocumentReadStages } from "./prepare-document";
@@ -104,20 +105,11 @@ export function pageStyleTrace(
 ): PageStyleCascade | undefined {
   const shared = sharedStyleInputs(input.styleContext, input.site);
   /*
-   * A stated NULL is the site saying it defines no viewport tiers, which is an
-   * answer rather than an absence — `firstStated` keeps it, and it outranks a
-   * route context that has some. The compile context declares a set, so the
-   * null cannot be handed on as it stands; an empty set is the same statement
-   * in the shape the compiler declares and yields the same contexts.
-   *
-   * Not normalised inside the reconciler, which has to go on reporting what was
-   * stated: a caller asking which breakpoints a page compiles against needs to
-   * tell "the site said none" from "nobody said anything".
+   * ASKED of the renderer's own helper rather than computed here. This trace and
+   * the render must agree about what a stated null means, and two computations
+   * of one question agree until the day one of them changes.
    */
-  const stated =
-    shared.breakpoints === undefined
-      ? undefined
-      : (shared.breakpoints ?? { viewport: [], container: [] });
+  const stated = statedBreakpoints(shared.breakpoints);
   /*
    * The same construction the renderer uses, and for its reason: a route context
    * takes the shared inputs over the top, while a site tier alone can still

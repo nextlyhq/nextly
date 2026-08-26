@@ -1274,6 +1274,33 @@ function sourceLabel(source: BreakpointSource): string {
  * for everybody rather than for screen-reader users alone.
  */
 /**
+ * Whether a press can actually RUN the control it landed on.
+ *
+ * Only a press that will be followed by a click can, and two gestures report a
+ * pointer press while invoking nothing: a secondary press, and — on macOS — a
+ * primary press held with Control, which the platform treats as a context menu.
+ * Radix's own popover classifies that same pair as a right-click.
+ *
+ * It matters because the picker closes on any outside press. Read as an
+ * activation, a gesture that opens a context menu discards the colour an author
+ * was composing on behalf of a button that never ran: the value is gone and
+ * nothing replaced it, which is the worst of the outcomes available.
+ *
+ * This narrows the gap rather than closing it, and the remainder is stated
+ * rather than left to be discovered: a primary press that DRAGS OFF the control
+ * and releases elsewhere fires no click either, and is still read here as an
+ * activation. Closing that needs the write to confirm the discard instead of
+ * the press predicting it — either holding the draft for a later signal, which
+ * is the timer this module removed and whose cancellation cost a race, or
+ * routing the marked control's write back through this field, which the
+ * declaration exists to avoid. A context menu is unambiguous; a drag-away is
+ * not.
+ */
+function activates(event: PointerEvent): boolean {
+  return event.button === 0 && !event.ctrlKey;
+}
+
+/**
  * Which field a control writes the value of, when it is not that field.
  *
  * The colour picker commits its gesture when the popover closes, and pressing
@@ -2623,28 +2650,9 @@ function ColourPicker({
          * everywhere else in this panel, the text fields included.
          */
         onPointerDownOutside={event => {
-          /*
-           * A PRIMARY press, because only that one can run the control.
-           *
-           * A right-click opens a context menu and invokes nothing, so reading
-           * it as a supersede discards the gesture an author was composing on
-           * behalf of a button that never ran — the colour is gone and nothing
-           * replaced it.
-           *
-           * This narrows the gap rather than closing it, and the remainder is
-           * stated rather than left to be discovered: a primary press that then
-           * DRAGS OFF the control and releases elsewhere fires no click either,
-           * and is still read here as a supersede. Closing that needs the write
-           * to confirm the discard instead of the press predicting it, which
-           * means either holding the draft until a later signal — the timer
-           * this module removed, whose cancellation cost a race — or routing
-           * the marked control's write back through this field, which the
-           * declaration exists precisely to avoid. Neither is worth an
-           * ambiguous gesture; a context menu is not ambiguous.
-           */
+          // Only a press that can RUN the control supersedes. See `activates`.
           superseded.current =
-            event.detail.originalEvent.button === 0 &&
-            supersededBy(event.target);
+            activates(event.detail.originalEvent) && supersededBy(event.target);
         }}
       >
         {unrepresented ? (

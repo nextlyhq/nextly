@@ -1160,6 +1160,28 @@ describe("a Reset beside a picker mid-gesture", () => {
     expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
   });
 
+  it("keeps a gesture when the Reset is CONTROL-clicked on a Mac", async () => {
+    /*
+     * Control held with the primary button is a context-menu gesture on macOS,
+     * and the pointer event still reports `button === 0` — so a check on the
+     * button alone lets it through. Radix's own popover classifies the same
+     * pair as a right-click.
+     *
+     * The consequence is the same as a right-click's: the picker closes, the
+     * Reset's handler never runs, and the colour the author was composing is
+     * discarded on behalf of a button that did nothing.
+     */
+    const editor = mountWithResets([{ property: "color" }]);
+    await dragTo("#ff0000");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(resetFor("Color"), { button: 0, ctrlKey: true });
+    await settle();
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
+  });
+
   it("keeps a gesture ANOTHER control's Reset does not replace", async () => {
     /*
      * The supersede is scoped to the field whose value the press writes. A

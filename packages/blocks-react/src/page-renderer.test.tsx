@@ -5965,7 +5965,31 @@ describe("a stated NULL among the reconciled inputs", () => {
       previewContainer: null,
     });
 
-    expect(Object.keys(stripped)).toEqual([]);
+    /*
+     * Present and `undefined`, not absent. This patch is spread OVER a route
+     * context, and an absent key leaves the route's own value standing — so a
+     * site's null would silently fail to override the value it was stated to
+     * beat, which is the whole reason `firstStated` keeps it.
+     */
+    expect(Object.keys(stripped).sort()).toEqual([
+      "blockBases",
+      "namedClasses",
+      "previewContainer",
+      "tokenPrefix",
+    ]);
+    expect(Object.values(stripped).every(v => v === undefined)).toBe(true);
+  });
+
+  it("OVERRIDES a lower tier's value when spread over it", () => {
+    /*
+     * The property the shape above exists for, asserted as the merge rather
+     * than as the patch: a route context supplying a prefix, and a site stating
+     * null, must compile with no prefix at all.
+     */
+    const route = { tokenPrefix: "route" };
+    const merged = { ...route, ...withoutStatedNulls({ tokenPrefix: null }) };
+
+    expect(merged.tokenPrefix).toBeUndefined();
   });
 
   it("KEEPS a value that was actually stated", () => {
@@ -5980,18 +6004,18 @@ describe("a stated NULL among the reconciled inputs", () => {
       previewContainer: "nx-preview-viewport",
     });
 
-    expect(kept).toEqual({
-      namedClasses: [],
-      tokenPrefix: "nx",
-      previewContainer: "nx-preview-viewport",
-    });
+    expect(kept.namedClasses).toEqual([]);
+    expect(kept.tokenPrefix).toBe("nx");
+    expect(kept.previewContainer).toBe("nx-preview-viewport");
   });
 
   it("does not confuse a stated null with an unstated field", () => {
     // Both end up absent from a compile, and they are different statements —
     // the distinction lives in what the reconciler REPORTS, which is why it
     // keeps the null rather than normalising at source.
-    expect(withoutStatedNulls({ tokenPrefix: null })).toEqual({});
-    expect(withoutStatedNulls({})).toEqual({});
+    expect(
+      withoutStatedNulls({ tokenPrefix: null }).tokenPrefix
+    ).toBeUndefined();
+    expect(withoutStatedNulls({}).tokenPrefix).toBeUndefined();
   });
 });

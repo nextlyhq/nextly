@@ -249,10 +249,11 @@ type ResolvedShared = {
  * and dereferences a value the renderer explicitly supports.
  *
  * Stated separately from {@link ResolvedShared} rather than by widening it,
- * because that one describes what this module SPREADS into a compile context
- * and those slots are declared non-null. The two differ, and the difference is
- * a real gap rather than a modelling choice — see
- * `finding:renderer-spreads-stated-nulls-into-non-null-slots`.
+ * because the two answer different questions. This one describes what the
+ * reconciler RETURNS, nulls included; that one describes what may be spread
+ * into a compile context, whose slots are declared as values. Everything
+ * between them is {@link withoutStatedNulls}, which is where a stated null
+ * stops being a value and becomes an absence.
  *
  * Named distinctly from the cache stamp's input projection in
  * `shared-style-inputs.ts`, which is a different type for a different job and
@@ -283,28 +284,39 @@ export type ReconciledStyleInputs = Partial<{
  * whatever the route context carries, which is exactly what a stated null
  * exists to override. Its "none" is an empty set rather than an absence.
  */
+/**
+ * The reconciled inputs as a compile patch: every stated NULL turned into an
+ * absence, and every key present.
+ *
+ * `firstStated` keeps a stored `null` because it OUTRANKS a lower tier — a site
+ * stating null for a field is saying it has none, and that has to beat a route
+ * context which has some. That contest is over by the time these reach a
+ * compile; what is left is a value, and "the site has none" is `undefined`.
+ *
+ * EVERY key is returned, set to `undefined` where nothing was stated. That is
+ * what makes the override work: this is spread OVER a route context, and an
+ * absent key would leave the route's own value standing — so a site's null
+ * would silently fail to override the very value it was stated to beat.
+ *
+ * And it is what makes the exhaustiveness real. The return type is not
+ * `Partial`, so omitting a key does not compile: a field added to the
+ * reconciliation and forgotten here fails the build rather than disappearing
+ * from every compile. A `Partial` return accepts any subset, which is a promise
+ * this function cannot keep.
+ *
+ * `breakpoints` is excluded and handled by {@link statedBreakpoints}, because
+ * absent means something different for it: a compile context declares it as a
+ * set rather than an optional, so `undefined` is not a legal value there. Its
+ * "none" is an empty set.
+ */
 export function withoutStatedNulls(
   shared: ReconciledStyleInputs
-): Partial<Omit<ResolvedShared, "breakpoints">> {
-  /*
-   * Written out field by field rather than filtered from `Object.entries`.
-   *
-   * A filter returns a record keyed by string, so handing it back as this type
-   * needs an assertion — and an assertion here would be the one thing that
-   * could hide the very mismatch this function exists to remove. Naming the
-   * fields makes the compiler check each one, and makes a field added to the
-   * reconciliation and forgotten here a build failure rather than a silent
-   * omission from every compile.
-   */
+): Omit<ResolvedShared, "breakpoints"> {
   return {
-    ...(shared.namedClasses == null
-      ? {}
-      : { namedClasses: shared.namedClasses }),
-    ...(shared.blockBases == null ? {} : { blockBases: shared.blockBases }),
-    ...(shared.tokenPrefix == null ? {} : { tokenPrefix: shared.tokenPrefix }),
-    ...(shared.previewContainer == null
-      ? {}
-      : { previewContainer: shared.previewContainer }),
+    namedClasses: shared.namedClasses ?? undefined,
+    blockBases: shared.blockBases ?? undefined,
+    tokenPrefix: shared.tokenPrefix ?? undefined,
+    previewContainer: shared.previewContainer ?? undefined,
   };
 }
 
@@ -322,7 +334,7 @@ export function withoutStatedNulls(
  * page compiles against needs to tell "the site said none" from "nobody said
  * anything", and an empty set collapses those into one.
  */
-function statedBreakpoints(
+export function statedBreakpoints(
   set: BreakpointSet | null | undefined
 ): BreakpointSet | undefined {
   if (set === undefined) return undefined;

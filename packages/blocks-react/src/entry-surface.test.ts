@@ -256,7 +256,11 @@ const SOURCE_MODULES: ReadonlyArray<{
     // implementation of one pass, which is the drift the pass's own docblock
     // argues against — but it is an internal derivation rather than something a
     // host composes with, so it crosses a module boundary and stops there.
-    internal: ["pruneRenderedPlaceholders", "withoutStatedNulls"],
+    internal: [
+      "pruneRenderedPlaceholders",
+      "statedBreakpoints",
+      "withoutStatedNulls",
+    ],
   },
   {
     name: "prepare-document",
