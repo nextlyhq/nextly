@@ -3,6 +3,7 @@ import {
   Image,
   LayoutDashboard,
   Key,
+  Languages,
   Layers,
   Mail,
   Puzzle,
@@ -114,6 +115,17 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     icon: Image,
     category: "media",
     requiredPermission: "read-media",
+  },
+
+  // === TRANSLATIONS ===
+  // No `requiredPermission`: the page lists only what the caller may already
+  // read, and every row is filtered by the collection's own read rules. Gating
+  // the entry on a permission that does not exist would hide it from everyone.
+  {
+    title: "Translations",
+    href: ROUTES.TRANSLATIONS,
+    icon: Languages,
+    category: "main",
   },
 
   // === USERS (now filed under the settings section — no standalone Users icon) ===
