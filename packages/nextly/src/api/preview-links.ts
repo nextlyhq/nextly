@@ -219,6 +219,22 @@ function sharedRedirectDeps(declaration: PreviewDeclaration | undefined): {
  * {@link PreviewRefusalCause} is a type error here rather than silently taking
  * whichever branch happened to be last.
  */
+/**
+ * The word for the DOCUMENT, as against the word for the thing that DECLARES
+ * the preview.
+ *
+ * Two messages need it and an inline copy in each would drift, which for a
+ * one-word difference is the drift nobody notices: `noun` elsewhere in this map
+ * is the declaring object — a collection or a Single — and that is correct for
+ * a message about configuration. It is wrong for a message about a value on the
+ * document, because an entry's data belongs to the entry rather than to its
+ * collection, and a reader sent to look at "this collection" for a field goes
+ * to the wrong screen.
+ */
+function documentNoun(subject: "collection" | "single"): "entry" | "single" {
+  return subject === "single" ? "single" : "entry";
+}
+
 const REFUSALS: Record<
   PreviewRefusalCause,
   {
@@ -288,7 +304,7 @@ const REFUSALS: Record<
   },
   unavailable: {
     message: subject =>
-      `This ${subject === "single" ? "single" : "entry"} has no preview ` +
+      `This ${documentNoun(subject)} has no preview ` +
       "address yet, so a shared link would have nowhere to open. Filling in " +
       "the fields its preview URL is built from — usually the slug — makes " +
       "it shareable.",
@@ -299,17 +315,37 @@ const REFUSALS: Record<
       "field is empty, both mean 'not previewable yet'. A declaration that " +
       "threw or produced an unusable address is `declarationFailed` instead.",
   },
+  /*
+   * Deliberately neutral, and neutral in BOTH directions.
+   *
+   * A caught error cannot identify whether the declaration or this document's
+   * data caused it, so this names neither. Saying it is a developer's to
+   * investigate would be wrong whenever a field on this document is the cause,
+   * and it would send the one person who can fix it away from the fix.
+   *
+   * The DOCUMENT noun rather than `noun`: `noun` is the thing that DECLARES the
+   * preview — a collection or a Single — which is right for a message about
+   * configuration and wrong here, because an entry's data belongs to the entry
+   * rather than to its collection.
+   */
   declarationFailed: {
-    message: (_subject, noun) =>
-      `This ${noun}'s preview URL could not be built, so a shared link would ` +
-      "have nowhere to open. Nothing on the document can fix it — a developer " +
-      "needs to correct the preview declaration.",
+    message: subject =>
+      `This ${documentNoun(subject)}'s preview URL could not be built: the ` +
+      "preview declaration failed while producing an address. That can be a " +
+      "fault in the declaration, or a value on this " +
+      `${documentNoun(subject)} it did not expect — the error does not say ` +
+      "which, so it is worth checking this " +
+      `${documentNoun(subject)}'s fields as well as raising it with a ` +
+      "developer.",
     reason: "preview-declaration-failed",
     remedy:
       "The declaration threw while running, or returned pieces that do not " +
-      "compose into a URL under the site. Both are faults in " +
-      "`admin.preview.url` / `admin.preview.urlTemplate` rather than in this " +
-      "document, so they reproduce for every document in the collection.",
+      "compose into a URL under the site. Whether it fails for EVERY document " +
+      "or only for this one is NOT observable from a caught throw — a " +
+      "declaration reading a field this document never filled in raises the " +
+      "same error a broken one does — so this names neither. Check " +
+      "`admin.preview.url` / `admin.preview.urlTemplate` and the fields it " +
+      "reads.",
   },
   foreignOrigin: {
     message: (_subject, noun) =>

@@ -624,6 +624,42 @@ describe("mintPreviewLink: a collection with nowhere to send a reviewer", () => 
     expect(message(collectionBody)).toMatch(/developer/i);
   });
 
+  it("names the ENTRY when a declaration throws, not the collection that declares it", async () => {
+    /*
+     * The message points at a value the reader should go and look at, and that
+     * value lives on the DOCUMENT. Naming the collection sends them to the
+     * wrong screen — there is no field there to check.
+     *
+     * The refusal's other noun, used for a message about CONFIGURATION, is
+     * correctly the collection. This is why the two are derived separately
+     * rather than sharing one word.
+     */
+    previewDeclaration.mockResolvedValue({
+      url: () => {
+        throw new Error("author bug");
+      },
+    });
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+    const text = String(
+      (body.error as { message?: string } | undefined)?.message ?? ""
+    );
+
+    expect(text).toMatch(/this entry/i);
+    expect(text).not.toMatch(/this collection/i);
+
+    /*
+     * And it does not hand the whole thing to a developer. A caught error
+     * cannot tell a broken declaration from a field this document never filled
+     * in, so a message that blames the declaration alone is wrong exactly when
+     * the reader is the one person who could fix it.
+     */
+    expect(text).toMatch(/this entry's fields/i);
+    expect(text).toMatch(/developer/i);
+  });
+
   it("mints normally once the collection declares one", async () => {
     previewDeclaration.mockResolvedValue({ url: () => "/somewhere" });
 
