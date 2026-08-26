@@ -11,8 +11,8 @@ import { describe, expect, it } from "vitest";
  * sheet is loaded beside a design system applying Preflight, which strips a
  * bare `<button>` to text — so a missing selector does not throw, does not fail
  * a render assertion, and ships an interactive control an author cannot tell
- * apart from the sentence beside it. Measured on this PR: the buttons were
- * added with no selector anywhere and every other gate stayed green.
+ * apart from the sentence beside it. Every other gate stays green while it
+ * happens, which is why this one exists.
  *
  * Read from the SOURCE stylesheet rather than the built one: `dist` is
  * gitignored, so a check against it answers differently before and after a

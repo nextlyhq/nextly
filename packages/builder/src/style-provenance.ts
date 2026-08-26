@@ -519,10 +519,49 @@ export function breakpointSource(
      * the same list the switcher builds its options from, so "a tier a canvas
      * can be taken to" has one definition rather than two.
      */
+    /*
+     * The unconditional VIEWPORT tier is reachable — releasing the canvas is
+     * how it is shown. An unbounded CONTAINER definition is not: it has no
+     * `maxWidth` either, but `offeredTiers` and `widthForBreakpoint` exclude
+     * the container axis entirely, so a jump would hand the host `undefined`
+     * and release the canvas as though base had been chosen. Sizing a canvas
+     * cannot put an element's own query container at a width, whatever the
+     * definition looks like.
+     */
     selectable:
-      !isUsableWidth(context.maxWidth) ||
-      offeredTiers(breakpoints).some(tier => tier.id === breakpoint),
+      context.axis !== "container" &&
+      (!isUsableWidth(context.maxWidth) ||
+        offeredTiers(breakpoints).some(tier => tier.id === breakpoint)),
   };
+}
+
+/**
+ * The badge for a value that won from somewhere other than the edited address.
+ *
+ * Its own function because the question is one word — is this THIS control at
+ * another breakpoint? — and the answer needs the whole address checked.
+ * `styleOrigin` deliberately returns declarations from an enclosing node, from
+ * another state, and from a less specific sibling control, so a bare `node`
+ * origin proves none of what the action promises.
+ */
+function inheritedBadge(
+  query: StyleProvenanceQuery,
+  provenance: Extract<StyleProvenance, { kind: "inherited" }>,
+  breakpoints: BreakpointSet | undefined
+): BreakpointBadge {
+  const { from, entry } = provenance;
+  const sameAddress =
+    from.kind === "node" &&
+    from.id === query.subject.nodeId &&
+    entry.state === query.state &&
+    normalizeDescendant(entry.descendant) ===
+      normalizeDescendant(query.descendant);
+  if (!sameAddress) return { kind: "none" };
+  if (entry.breakpoint === query.breakpoint) return { kind: "none" };
+  const source = breakpointSource(entry.breakpoint, breakpoints);
+  return source === undefined
+    ? { kind: "none" }
+    : { kind: "inherited", source };
 }
 
 /**
@@ -558,20 +597,7 @@ export function breakpointBadge(
     return { kind: "none" };
   }
   if (provenance.kind === "inherited") {
-    /*
-     * A different TIER is the dot's answer, not this one. Only a value this
-     * node authored at another breakpoint belongs here — anything from a class,
-     * the block type or the page is reported by the origin dot, and repeating
-     * it as a breakpoint badge would say the same thing twice in two
-     * vocabularies.
-     */
-    if (provenance.from.kind !== "node") return { kind: "none" };
-    if (provenance.entry.breakpoint === query.breakpoint)
-      return { kind: "none" };
-    const source = breakpointSource(provenance.entry.breakpoint, breakpoints);
-    return source === undefined
-      ? { kind: "none" }
-      : { kind: "inherited", source };
+    return inheritedBadge(query, provenance, breakpoints);
   }
   /*
    * Authored here. What a reset would reveal is whatever wins once the

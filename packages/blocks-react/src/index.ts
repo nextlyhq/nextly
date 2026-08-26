@@ -67,6 +67,25 @@ export type {
   TokenKind,
 } from "@nextlyhq/blocks-engine";
 
+/**
+ * How this renderer reconciles a route context and a stored site tier.
+ *
+ * Published because a surface deciding anything from "the breakpoints this page
+ * compiles against" must read the SAME answer the render will use, and the
+ * precedences are not guessable from the inputs: the site tier wins for
+ * `breakpoints` and `blockBases`, the route wins for `namedClasses` and
+ * `previewContainer`, and each skips only `undefined` — so a stored `null`
+ * survives and means something.
+ *
+ * A parallel implementation of a reconciliation is a second answer that agrees
+ * until the day it does not, and this rule offers three separate ways to
+ * disagree — an inverted precedence, a wrong fallthrough, and a stated `null`
+ * discarded by a nullish coalesce. None of them is visible from the inputs, so
+ * a caller that reads the rule carefully and rewrites it is no safer than one
+ * that guesses.
+ */
+export { sharedStyleInputs, type ReconciledStyleInputs } from "./page-renderer";
+
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the
 // attribute must not hard-code its spelling, or the renderer and the editor hold

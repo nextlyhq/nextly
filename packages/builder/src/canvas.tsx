@@ -38,6 +38,7 @@ import {
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   previewContainerStyle,
+  sharedStyleInputs,
 } from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { cn } from "@nextlyhq/ui/utils";
@@ -445,44 +446,31 @@ export interface CanvasPreview {
  * The breakpoints the compile will actually run against, or `undefined` when
  * nothing will be compiled at all.
  *
- * The SITE's when it has them, and the route context's otherwise — which is the
- * precedence `sharedStyleInputs` applies, in its own words because "the site
- * tier is the stored one, and stored overrides code, which is the layering
- * every global-styles system uses". Read the other way round, a route context
- * carrying viewport tiers beside a container-only stored set would turn preview
- * ON, and the compile that actually ran would then disable every container-axis
- * rule as `nx-not-previewable` with no viewport tier to show for it.
+ * ASKED of the renderer rather than worked out here. `sharedStyleInputs` is the
+ * function `PageRenderer` itself reconciles with, so this reads the answer the
+ * render will use instead of a second one that happens to agree.
  *
- * Deciding from the same reconciled inputs the renderer compiles is the point:
- * this is not a second opinion about which breakpoints matter, it is a reading
- * of the one the renderer will use.
+ * That distinction is not theoretical, because the rule has more in it than it
+ * looks. The site tier wins for `breakpoints`, the route wins for
+ * `previewContainer`, and both skip only `undefined` — so a stated `null`
+ * survives, where a nullish coalesce would discard it. Three separate ways to
+ * be wrong, none of them visible from the inputs, and each one produces a
+ * canvas that compiles against a different set of tiers than the page does.
  *
- * `undefined` is the state where a caller has neither binding site:
- * `siteStyles={false}` opts out of the shared sheet, and a stored artifact
- * arrives with no style context.
+ * `undefined` still means exactly what it did: neither binding site stated a
+ * set, which is `siteStyles={false}` beside a stored artifact carrying no style
+ * context.
  */
 function compiledBreakpoints(
   render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>
 ): BreakpointSet | undefined {
-  /*
-   * `firstStated`, not "the site if it has a sheet": that helper SKIPS an
-   * absent value, so a site sheet carrying no breakpoints falls through to the
-   * route context rather than answering `undefined` for both. Reading it as
-   * "site wins whenever a sheet exists" turns a stated route set into no set at
-   * all, and a canvas that should preview stays published.
-   */
-  const stored =
-    typeof siteStyles === "object" ? siteStyles.breakpoints : undefined;
-  /*
-   * `=== undefined`, never `??`. `firstStated` is `find(tier => tier !== undefined)`,
-   * so a stored `null` — which runtime or imported data can supply — is KEPT by
-   * the renderer and read as defining no viewport tiers. Nullish coalescing
-   * falls through to the route set instead, turning preview on for a canvas the
-   * renderer left on the unconditional tier: the box then measures and selects
-   * a route tier that is not on screen.
-   */
-  return stored === undefined ? render?.styleContext?.breakpoints : stored;
+  return sharedStyleInputs(
+    render?.styleContext,
+    // `false` is a host serving no site sheet, which states no breakpoints —
+    // not a sheet whose breakpoints are absent.
+    typeof siteStyles === "object" ? siteStyles : undefined
+  ).breakpoints;
 }
 
 /**
