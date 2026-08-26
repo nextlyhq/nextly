@@ -1,5 +1,4 @@
 ---
-
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-postgres": patch
@@ -25,6 +24,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
+---
 
 Nextly can now run work in the background — reliably, at a chosen time, and as
 a chosen person. This is the foundation the scheduled-publishing work needs, and
