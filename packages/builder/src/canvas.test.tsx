@@ -830,6 +830,102 @@ describe("what the canvas reports about the box it got", () => {
     clearBlocks();
   });
 
+  it("compiles the SITE sheet against the box as well as the page's", () => {
+    /*
+     * Two tiers emit breakpoint rules, not one: the page's node styles and the
+     * site's named classes. Bound on only the page tier, a class's tablet rule
+     * stays an `@media` answered by the WINDOW while the node's tablet rule
+     * became a `@container` answered by the box — so narrowing the canvas moves
+     * one and not the other, and a block styled by a class does not respond at
+     * all.
+     *
+     * Driven through `siteStyles` with NO `render.styleContext`, which is the
+     * stored-artifact path a host can legitimately use, and the branch the page
+     * tier's coupling skips.
+     */
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={
+          {
+            breakpoints: {
+              viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+              container: [],
+            },
+            classes: [
+              {
+                id: "c1",
+                slug: "card",
+                styles: { base: { tablet: { color: "#f00" } } },
+              },
+            ],
+          } as never
+        }
+        preview={{ container: "nx-preview-box" }}
+      />
+    );
+
+    const sheets: string[] = [];
+    container.querySelectorAll("style").forEach(node => {
+      sheets.push(node.textContent ?? "");
+    });
+    const sheet = sheets.join("\n");
+
+    expect(sheet).toContain("@container nx-preview-box");
+    // The published form must NOT survive beside it: a sheet carrying both
+    // would answer the same tier from two different boxes.
+    expect(sheet).not.toContain("@media (max-width: 991px)");
+  });
+
+  it("leaves the SITE sheet alone when the canvas is not previewing", () => {
+    /*
+     * The control. Without it, a canvas that rewrote the site sheet
+     * unconditionally would satisfy the case above while turning every
+     * published canvas into a preview one.
+     */
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={
+          {
+            breakpoints: {
+              viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+              container: [],
+            },
+            classes: [
+              {
+                id: "c1",
+                slug: "card",
+                styles: { base: { tablet: { color: "#f00" } } },
+              },
+            ],
+          } as never
+        }
+      />
+    );
+
+    const sheets: string[] = [];
+    container.querySelectorAll("style").forEach(node => {
+      sheets.push(node.textContent ?? "");
+    });
+    const sheet = sheets.join("\n");
+
+    expect(sheet).toContain("@media (max-width: 991px)");
+    expect(sheet).not.toContain("@container");
+  });
+
   it("observes NOTHING when no reporter was given", () => {
     /*
      * The control. Without it, an implementation that observed unconditionally

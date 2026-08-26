@@ -417,6 +417,61 @@ export interface CanvasPreview {
   onMeasured?: (width: number | undefined) => void;
 }
 
+/**
+ * The renderer's inputs, made to agree with the box the canvas establishes.
+ *
+ * BOTH tiers, from one hook, because they are one decision read twice. A page's
+ * node styles and a site's named classes each emit their own breakpoint rules
+ * and each carry their own `previewContainer`; bound on only one, a class's
+ * tablet rule stays an `@media` answered by the WINDOW while the node's tablet
+ * rule became a `@container` answered by the box — so narrowing the canvas
+ * moves one and not the other, and a block styled by a class does not respond.
+ *
+ * The container is written IN rather than asked for: it and the container this
+ * element establishes are the same fact, and a caller holding two places to say
+ * it has two chances to say it differently. Overwritten rather than defaulted,
+ * so a host supplying a different name is corrected instead of believed.
+ */
+function usePreviewedInputs(
+  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  siteStyles: NonNullable<PageRendererProps["siteStyles"]>,
+  preview: CanvasPreview | undefined
+): {
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
+  sheet: NonNullable<PageRendererProps["siteStyles"]>;
+} {
+  return useMemo(() => {
+    if (preview === undefined) return { rendered: render, sheet: siteStyles };
+    return {
+      /*
+       * `styleContext` absent is left alone: without it the renderer compiles
+       * no per-node sheet, so there are no page rules for a container to
+       * answer.
+       */
+      rendered:
+        render?.styleContext === undefined
+          ? render
+          : {
+              ...render,
+              styleContext: {
+                ...render.styleContext,
+                previewContainer: preview.container,
+              },
+            },
+      /*
+       * `false` is a real value — a host saying it serves NO site sheet — and
+       * spreading it would turn that refusal into an object carrying a
+       * container name and nothing else, compiling an empty sheet where the
+       * caller asked for none.
+       */
+      sheet:
+        typeof siteStyles === "object"
+          ? { ...siteStyles, previewContainer: preview.container }
+          : siteStyles,
+    };
+  }, [render, siteStyles, preview]);
+}
+
 export interface CanvasProps {
   /** The document being edited. */
   document: BlockDocument;
@@ -544,41 +599,14 @@ export function Canvas({
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
-  /*
-   * The compile is MADE to agree with the box, not trusted to.
-   *
-   * The container the sheet is compiled against and the container this element
-   * establishes are the same fact, and a caller holding two places to say it
-   * has two chances to say it differently. Passing `preview.container` without
-   * the matching compile option leaves the box observing and constraining a
-   * query container while the sheet still emits `@media` — so the window
-   * decides which tier is rendered and the measured width decides which tier
-   * the caller reports, with nothing anywhere reading as wrong.
-   *
-   * Overwritten rather than defaulted, so a host that supplies a DIFFERENT name
-   * is corrected instead of silently believed. `styleContext` absent is left
-   * alone: without it the renderer compiles no per-node sheet at all, so there
-   * are no preview rules for a container to answer.
-   */
-  const rendered = useMemo(() => {
-    if (preview === undefined || render?.styleContext === undefined) {
-      return render;
-    }
-    return {
-      ...render,
-      styleContext: {
-        ...render.styleContext,
-        previewContainer: preview.container,
-      },
-    };
-  }, [render, preview]);
+  const { rendered, sheet } = usePreviewedInputs(render, siteStyles, preview);
 
   const page = useMemo(
     () => (
       <PageRenderer
         {...rendered}
         document={document}
-        siteStyles={siteStyles}
+        siteStyles={sheet}
         // What makes the hit-testing above possible at all. The renderer emits
         // the node attribute only when asked, because a PUBLISHED page should
         // not carry an editor's addressing — so the canvas asks and a route
@@ -588,7 +616,7 @@ export function Canvas({
         nodeAttribute
       />
     ),
-    [rendered, document, siteStyles]
+    [rendered, document, sheet]
   );
 
   useSelectionMarkers(root, marked, selectedId, page);

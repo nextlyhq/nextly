@@ -371,3 +371,61 @@ describe("a width the site stops offering", () => {
     expect(box().width).toBe(991);
   });
 });
+
+describe("a site with nothing to simulate", () => {
+  it("stays PUBLISHED when no viewport tier is emitted", () => {
+    /*
+     * A preview compile rewrites every CONTAINER-axis rule to
+     * `@container nx-not-previewable (width < 0px)`, which matches nothing.
+     * That is the engine refusing to answer a question a preview box cannot —
+     * a container query resolves against an element's own query container —
+     * and it is the right trade when there are viewport tiers to gain.
+     *
+     * With none, the same price is paid for nothing: a site whose only
+     * breakpoints are container ones would have every one of them silently
+     * stop matching on the canvas while they keep working on the published
+     * page.
+     */
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [],
+          container: [{ id: "narrow", label: "Narrow", maxWidth: 400 }],
+        },
+      },
+    };
+
+    openEditor();
+
+    const context = (
+      seen.canvas?.render as { styleContext?: { previewContainer?: string } }
+    )?.styleContext;
+    expect(context?.previewContainer).toBeUndefined();
+    expect(seen.canvas?.preview).toBeUndefined();
+    expect(seen.inspector?.previewContainer).toBeUndefined();
+  });
+
+  it("PREVIEWS when the site emits a viewport tier alongside a container one", () => {
+    /*
+     * The control. Without it, a mount that never previewed would satisfy the
+     * case above — and the whole feature would be off with every assertion
+     * about it still green.
+     */
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [{ id: "narrow", label: "Narrow", maxWidth: 400 }],
+        },
+      },
+    };
+
+    openEditor();
+
+    const context = (
+      seen.canvas?.render as { styleContext?: { previewContainer?: string } }
+    )?.styleContext;
+    expect(context?.previewContainer).toBeTypeOf("string");
+    expect(box().container).toBe(context?.previewContainer);
+  });
+});

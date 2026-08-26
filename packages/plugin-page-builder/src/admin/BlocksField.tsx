@@ -794,6 +794,27 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * make one.
    */
   const canvasBoxId = useId();
+  /*
+   * The name this canvas would establish, and whether it establishes one AT
+   * ALL.
+   *
+   * Previewing is not free: a preview compile rewrites every CONTAINER-axis
+   * rule to `@container nx-not-previewable (width < 0px)`, which matches
+   * nothing. That is the engine refusing to answer a question it cannot — a
+   * container query resolves against an element's own query container, which a
+   * preview box is not — and it is the right refusal when there are viewport
+   * tiers to gain in exchange.
+   *
+   * With NO emitted viewport tier there is nothing to gain and the same price
+   * is paid: a site whose only breakpoints are container ones would have every
+   * one of them silently stop matching on the canvas while they keep working on
+   * the published page. So a canvas with nothing to simulate stays published,
+   * which is also what it looked like before any of this existed.
+   *
+   * `offeredTiers` rather than a second reading of the set, because it is
+   * already the answer to "which tiers can this canvas be sized to" — and if
+   * none can, there is no width to simulate.
+   */
   const previewContainer = useMemo(
     () => previewContainerFor(canvasBoxId),
     [canvasBoxId]
@@ -820,6 +841,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     undefined
   );
 
+  const canvasPreviewContainer = useMemo(
+    () =>
+      offeredTiers(siteBreakpoints(canvasSiteStyle)).length === 0
+        ? undefined
+        : previewContainer,
+    [canvasSiteStyle, previewContainer]
+  );
+
   const canvasRender = useMemo(
     () => ({
       styleContext: {
@@ -833,13 +862,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
          * admin WINDOW instead — a wide window around a narrow canvas reports
          * the desktop tier live while the box paints the tablet one.
          */
-        previewContainer,
+        ...(canvasPreviewContainer === undefined
+          ? {}
+          : { previewContainer: canvasPreviewContainer }),
       },
       ...(remotePatterns === undefined
         ? {}
         : { hostPolicy: { remotePatterns } }),
     }),
-    [canvasSiteStyle, remotePatterns, previewContainer]
+    [canvasSiteStyle, remotePatterns, canvasPreviewContainer]
   );
 
   /*
@@ -882,12 +913,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * re-subscribes on the reporter's identity.
    */
   const canvasPreview = useMemo(
-    () => ({
-      container: previewContainer,
-      ...(requestedWidth === undefined ? {} : { width: requestedWidth }),
-      onMeasured: setMeasuredWidth,
-    }),
-    [previewContainer, requestedWidth]
+    () =>
+      canvasPreviewContainer === undefined
+        ? undefined
+        : {
+            container: canvasPreviewContainer,
+            ...(requestedWidth === undefined ? {} : { width: requestedWidth }),
+            onMeasured: setMeasuredWidth,
+          },
+    [canvasPreviewContainer, requestedWidth]
   );
 
   const liveBreakpoints = useMemo(
@@ -1086,7 +1120,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // can observe them. The container name travels with them because
             // that is what tells the panel the window is not the authority.
             breakpoint={editedBreakpoint}
-            previewContainer={previewContainer}
+            previewContainer={canvasPreviewContainer}
             liveBreakpoints={liveBreakpoints}
             tokens={offerableTokens(
               canvasSiteStyle,
