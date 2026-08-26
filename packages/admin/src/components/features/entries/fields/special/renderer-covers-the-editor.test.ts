@@ -289,6 +289,65 @@ function constMembers(source: string, name: string): string[] {
   return [...match[1].matchAll(/"([a-z0-9-]+)"/g)].map(m => m[1] ?? "");
 }
 
+/**
+ * Types the renderer draws as PHRASING content, and what each draws as.
+ *
+ * The counterpart to `BLOCK_LEVEL_NODES` in the renderer, and the reason a new
+ * dispatch key cannot be added without someone deciding which it is. A `<p>` may
+ * hold only phrasing content, and every one of this editor's decorator nodes is
+ * inline — `DecoratorNode.isInline()` returns true and none of them overrides
+ * it — so an image or a button really does become a child of the paragraph the
+ * caret was in. Drawn there as a block element, the browser closes the `<p>`
+ * early and the DOM stops matching the tree React rendered.
+ *
+ * An entry is a DECISION, in the same sense as `DECLARED_UNRENDERED` above.
+ */
+const DECLARED_PHRASING: Readonly<Record<string, string>> = {
+  link: "an <a> around its children",
+  autolink: "the same <a>",
+  linebreak: "a <br>",
+  "code-highlight": "a <span> carrying one token's class",
+};
+
+describe("what a paragraph may contain", () => {
+  const renderer = readFileSync(RENDERER, "utf8");
+  const block = new Set(constMembers(renderer, "BLOCK_LEVEL_NODES"));
+  const drawn = renderedTypes(renderer);
+
+  it("reads both sides, so two empty lists cannot agree", () => {
+    // The population. A renamed constant or a reformatted array yields an empty
+    // set, and an empty set contains no unclassified type at all.
+    expect(block.size).toBeGreaterThan(1);
+    expect(drawn.size).toBeGreaterThan(1);
+  });
+
+  it("classifies every type the renderer draws", () => {
+    // The check itself: a new dispatch key is block content or it is declared
+    // phrasing, and there is no third answer that leaves it unconsidered.
+    const unclassified = [...drawn].filter(
+      type => !block.has(type) && !Object.hasOwn(DECLARED_PHRASING, type)
+    );
+    expect(unclassified).toEqual([]);
+  });
+
+  it("puts no type in both lists", () => {
+    // Contradictory answers would let whichever list is read first decide.
+    expect(
+      [...block].filter(type => Object.hasOwn(DECLARED_PHRASING, type))
+    ).toEqual([]);
+  });
+
+  it("keeps no classification for a type nothing draws", () => {
+    // Stale on either side is a reason nobody can check, kept alive by nothing
+    // looking at it — the same failure the declarations above are held to.
+    const orphaned = [
+      ...[...block].filter(type => !drawn.has(type)),
+      ...Object.keys(DECLARED_PHRASING).filter(type => !drawn.has(type)),
+    ];
+    expect(orphaned).toEqual([]);
+  });
+});
+
 describe("richTextValueVocabulariesAgree", () => {
   const renderer = readFileSync(RENDERER, "utf8");
   const buttonSource = readFileSync(join(HERE, "ButtonLinkNode.tsx"), "utf8");

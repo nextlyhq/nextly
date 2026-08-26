@@ -148,6 +148,61 @@ const SIMPLE_ELEMENTS: Readonly<
   tablerow: "tr",
 };
 
+/**
+ * The types this renderer draws as something a `<p>` may not contain.
+ *
+ * Lexical's `DecoratorNode` is INLINE unless a node overrides `isInline()`, and
+ * at lexical 0.47.0 not one of this editor's five decorator nodes does — image,
+ * gallery, video, button-link and button-group are all inline, so inserting one
+ * with a caret in a paragraph makes it a CHILD of that paragraph. Drawing a
+ * `<figure>`, a `<ul>` or a flex row inside `<p>` then publishes markup a
+ * browser will not parse as written: `<p>` is closed at any of them, so the DOM
+ * that results is not the tree React rendered, and every page carrying one
+ * hydrates mismatched.
+ *
+ * Naming the BLOCK types rather than the phrasing ones is deliberate. A type no
+ * list here has heard of is drawn by the unknown-node fallback, which emits no
+ * element of its own, so phrasing is the correct answer for it.
+ *
+ * A LIST rather than a set literal, because the admin's conformance test reads
+ * it with the same `constMembers` it already uses for the button vocabularies,
+ * and holds every dispatch key to being classified here or declared phrasing
+ * there. A new decorator added to {@link NODE_VIEWS} and forgotten here fails
+ * that check instead of silently publishing a `<figure>` inside a `<p>`.
+ */
+const BLOCK_LEVEL_NODES = [
+  "paragraph",
+  "heading",
+  "quote",
+  "list",
+  "listitem",
+  "code",
+  "horizontalrule",
+  "table",
+  "tablerow",
+  "tablecell",
+  "collapsible-container",
+  "collapsible-title",
+  "collapsible-content",
+  "image",
+  "gallery",
+  "button-link",
+  "button-group",
+] as const;
+
+const BLOCK_LEVEL: ReadonlySet<string> = new Set(BLOCK_LEVEL_NODES);
+
+/** Whether any child of a container is drawn as block content. */
+function holdsBlockContent(
+  nodes: readonly RichTextNode[] | undefined
+): boolean {
+  // Array-checked for the reason {@link children} gives: this is stored JSON.
+  if (!Array.isArray(nodes)) return false;
+  return nodes.some(
+    child => isRichTextNode(child) && BLOCK_LEVEL.has(child.type)
+  );
+}
+
 /** Heading levels Lexical serializes; anything else is a document from a version this does not know. */
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 
@@ -347,6 +402,33 @@ function ImageView({
 /** The column counts the editor offers; anything else is a document it did not write. */
 const GALLERY_COLUMNS = ["2", "3", "4"] as const;
 
+/** The custom property {@link GALLERY_NARROW_CSS} lowers on a narrow screen. */
+const GALLERY_COLUMN_VAR = "--nx-rich-text-gallery-columns";
+
+/** The dedupe key for the one gallery rule set a page needs. */
+const GALLERY_STYLE_KEY = "nextly-rich-text-gallery";
+
+/**
+ * Two columns below the editor's `sm`, which is what the editor SHOWS.
+ *
+ * `GalleryNode` previews three columns as `grid-cols-2 sm:grid-cols-3` and four
+ * as `grid-cols-2 sm:grid-cols-4`, so below that breakpoint an author is shown
+ * two columns whatever they picked. Published without this, a four-column
+ * gallery squeezes four images across a phone — a layout the author was never
+ * offered and cannot preview.
+ *
+ * `not all and (min-width: 40rem)` is the EXACT complement of Tailwind's `sm:`,
+ * whose `--breakpoint-sm` is `40rem` and is overridden nowhere in this repo. A
+ * `max-width` written beside it leaves a gap or an overlap at the boundary
+ * depending on how the value is rounded, and the boundary is the one width
+ * where being wrong is visible.
+ *
+ * Written as a CHILD rather than through `dangerouslySetInnerHTML`, which is
+ * safe only because this text contains no character React escapes. A test
+ * asserts the rendered bytes to keep that true.
+ */
+const GALLERY_NARROW_CSS = `@media not all and (min-width: 40rem){.nextly-rich-text-gallery-items{${GALLERY_COLUMN_VAR}:2}}`;
+
 /**
  * A gallery of images, as a list.
  *
@@ -400,7 +482,12 @@ function GalleryView({
   // precedent for a property this file must guarantee.
   const layout: CSSProperties = {
     display: "grid",
-    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+    // The count is read through a CUSTOM PROPERTY whose fallback is the
+    // author's choice, so the narrow-screen rule can lower it without
+    // `!important` and without the inline value having to know that rule
+    // exists. If the stylesheet never arrives, the fallback is what applies and
+    // the gallery draws exactly the columns the author picked.
+    gridTemplateColumns: `repeat(var(${GALLERY_COLUMN_VAR}, ${columns}), minmax(0, 1fr))`,
     // The list's own presentation, reset here for the same reason the columns
     // are set here: a `<ul>` in a grid still carries markers, padding and
     // margins from the browser, so a host with no rule for this class publishes
@@ -419,6 +506,20 @@ function GalleryView({
   };
   return (
     <figure className="nextly-rich-text-gallery">
+      {/*
+       * HOISTED and DEDUPED by React: `href` plus `precedence` lifts this out
+       * of the figure and collapses every gallery on the page to one copy —
+       * measured, under `renderToStaticMarkup` as well as `renderToString`.
+       *
+       * A media query is the only reason a rule set exists here at all.
+       * Everything else this file guarantees fits in an inline style, but a
+       * breakpoint cannot, and `auto-fit` track sizing cannot stand in for one:
+       * a jump from two columns to four is unreachable at any basis, because
+       * the basis that fits four at the breakpoint also fits three below it.
+       */}
+      <style href={GALLERY_STYLE_KEY} precedence="default">
+        {GALLERY_NARROW_CSS}
+      </style>
       <ul
         className="nextly-rich-text-gallery-items"
         data-columns={columns}
@@ -454,6 +555,15 @@ function GalleryView({
  * may not reach the admin — so they are restated and CHECKED rather than
  * restated and hoped for.
  */
+/**
+ * What a filled button falls back to when the author chose no colours.
+ *
+ * The CMS's HTML serializer already answers this for the same stored node, and
+ * these are its answers. See {@link buttonStyle}.
+ */
+const FILLED_BACKGROUND = "#000";
+const FILLED_FOREGROUND = "#fff";
+
 const BUTTON_VARIANTS = ["filled", "outline"] as const;
 const BUTTON_SIZES = ["sm", "md", "lg"] as const;
 const BUTTON_ALIGNMENTS = ["left", "center", "right"] as const;
@@ -517,8 +627,23 @@ function buttonStyle(
           ...(foreground === "" ? {} : { color: foreground }),
         }
       : {
-          ...(background === "" ? {} : { backgroundColor: background }),
-          ...(foreground === "" ? {} : { color: foreground }),
+          // A filled button with NO colours still has to look filled. Both
+          // fields are optional — `ButtonLinkNode`'s constructor defaults them
+          // to `undefined` and its HTML-import path leaves them unset — so a
+          // legacy, imported or programmatically built button arrives here with
+          // neither, and emitting nothing publishes a padded but otherwise
+          // plain anchor. This package ships no stylesheet for the class, so
+          // there is nothing behind it to fall back on.
+          //
+          // Black on white rather than a token, because it is what the CMS's
+          // own serializer already puts on a published page: `rich-text-html`
+          // writes the background as `safeBg || "#000"` and the foreground as
+          // `safeText || "#fff"`, and two published renderings of one document
+          // have to agree. A `var(--nx-*)` would not — that is an ADMIN token a
+          // site has no reason to define, so the page would carry a broken
+          // `var()` where the button should be.
+          backgroundColor: background === "" ? FILLED_BACKGROUND : background,
+          color: foreground === "" ? FILLED_FOREGROUND : foreground,
         }),
   };
 }
@@ -746,7 +871,12 @@ function RichTextNodeView({
   // function — used as a JSX element type, or called as a view — and throw,
   // instead of taking the unknown-node fallback that exists for exactly this.
   if (Object.hasOwn(SIMPLE_ELEMENTS, node.type)) {
-    const Element = SIMPLE_ELEMENTS[node.type] as "p";
+    const declared = SIMPLE_ELEMENTS[node.type] as "p";
+    // Only `p` is narrowed, because only `p` is barred from holding block
+    // content. `li`, `blockquote`, `summary` and `div` all take flow content, so
+    // a figure or a grid inside one of them is valid exactly as it stands.
+    const Element =
+      declared === "p" && holdsBlockContent(node.children) ? "div" : declared;
     return <Element>{children(node.children, policy)}</Element>;
   }
 

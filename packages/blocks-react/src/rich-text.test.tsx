@@ -813,8 +813,14 @@ describe("rich-text media leaves", () => {
 
     expect(twoStyle).toContain("grid");
     expect(twoStyle).not.toBe(fourStyle);
-    expect(twoStyle).toContain("repeat(2");
-    expect(fourStyle).toContain("repeat(4");
+    // The count now reaches the page as the FALLBACK of a custom property, so
+    // the narrow-screen rule set can lower it without `!important`. It is still
+    // the author's number and it still applies when no stylesheet arrives,
+    // which is what this test has always been about.
+    expect(twoStyle).toContain("repeat(var(--nx-rich-text-gallery-columns, 2)");
+    expect(fourStyle).toContain(
+      "repeat(var(--nx-rich-text-gallery-columns, 4)"
+    );
   });
 
   it("drops a nonpositive dimension instead of drawing a 1x1 image", () => {
@@ -1069,5 +1075,207 @@ describe("rich-text media leaves", () => {
     const { container } = render(<RichText value={value} />);
     const rel = container.querySelector("a")?.getAttribute("rel") ?? "";
     expect(rel).toContain("noopener");
+  });
+});
+
+describe("rich-text block leaves inside a paragraph", () => {
+  /**
+   * What a BROWSER makes of the markup, which is the thing that goes wrong.
+   *
+   * Every one of this editor's decorator nodes is inline — `DecoratorNode`
+   * returns `true` from `isInline()` and none of them overrides it — so a
+   * caret-position insert makes an image or a button a CHILD of the paragraph
+   * it was typed into. A `<p>` is closed by the parser at any block start tag,
+   * so drawing one there produces a DOM that is not the tree React rendered.
+   *
+   * Reparsing is the oracle rather than a string match on the emitted tags,
+   * because the string is what React believes and the DOM is what the visitor
+   * gets. Asserting the tag name would still pass on markup a browser takes
+   * apart.
+   */
+  const reparse = (html: string): HTMLElement => {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    return host;
+  };
+
+  const nested = (child: Record<string, unknown>): RichTextValue =>
+    doc([
+      { type: "paragraph", children: [child] },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  /**
+   * Each leaf with the element it draws.
+   *
+   * The leaf is found by its OWN selector rather than by taking the first child
+   * of the host: a gallery's rule set is hoisted ahead of the content, so the
+   * first element is a `<style>` and an assertion on it would report the fix
+   * missing when it is present.
+   */
+  const LEAVES: readonly (readonly [
+    string,
+    Record<string, unknown>,
+    string,
+  ])[] = [
+    [
+      "image",
+      {
+        type: "image",
+        version: 1,
+        src: "https://cdn.example.com/a.jpg",
+        altText: "A",
+      },
+      "figure",
+    ],
+    [
+      "gallery",
+      {
+        type: "gallery",
+        version: 1,
+        columns: 3,
+        images: [{ src: "https://cdn.example.com/a.jpg", alt: "A" }],
+      },
+      "figure.nextly-rich-text-gallery",
+    ],
+    [
+      "button-link",
+      {
+        type: "button-link",
+        version: 1,
+        url: "https://example.com",
+        text: "Buy",
+      },
+      "p.nextly-rich-text-buttons",
+    ],
+    [
+      "button-group",
+      {
+        type: "button-group",
+        version: 1,
+        buttons: [{ url: "https://example.com", text: "Buy" }],
+      },
+      "p.nextly-rich-text-buttons",
+    ],
+  ];
+
+  it("keeps a plain paragraph a paragraph", () => {
+    // The POPULATION before the property. Without this, a change that made
+    // every paragraph a `div` would satisfy every assertion below.
+    const host = reparse(renderToStaticMarkup(<RichText value={para("Hi")} />));
+    expect(host.firstElementChild?.tagName).toBe("P");
+    expect(host.firstElementChild?.textContent).toBe("Hi");
+  });
+
+  it.each(LEAVES)(
+    "survives a browser reparse around %s",
+    (name, child, selector) => {
+      const html = renderToStaticMarkup(<RichText value={nested(child)} />);
+      const host = reparse(html);
+      const leaf = host.querySelector(selector);
+
+      // The leaf drew at all — the population, before any claim about where it
+      // sits. A selector that matched nothing would satisfy every assertion
+      // below by vacuum.
+      expect(leaf, name).not.toBeNull();
+      // Its wrapper is not a `p`, which is the whole fix, and the wrapper is
+      // still its PARENT after the parser has had its say. When the wrapper was
+      // a `<p>` the parser closed it early and left the leaf as a SIBLING, so
+      // containment is what actually distinguishes the two outcomes.
+      expect(leaf?.parentElement?.tagName, name).toBe("DIV");
+      expect(leaf?.parentElement?.parentElement, name).toBe(host);
+      // The empty `<p></p>` a browser leaves behind when it closes one early is
+      // the visible artefact: it keeps its margins and opens a gap in the prose.
+      expect(host.querySelectorAll("p:empty").length, name).toBe(0);
+    }
+  );
+});
+
+describe("rich-text gallery columns follow the editor", () => {
+  const gallery = (columns: number): RichTextValue =>
+    doc([
+      {
+        type: "gallery",
+        version: 1,
+        columns,
+        images: [
+          { src: "https://cdn.example.com/a.jpg", alt: "A" },
+          { src: "https://cdn.example.com/b.jpg", alt: "B" },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  // The BYTES, not a substring of them. This rule set is emitted as a text
+  // child, which React escapes — it is safe only while the text contains no
+  // character that escaping would touch, and asserting the whole literal is
+  // what makes adding one a failing test rather than a broken stylesheet.
+  const RULE =
+    "@media not all and (min-width: 40rem)" +
+    "{.nextly-rich-text-gallery-items{--nx-rich-text-gallery-columns:2}}";
+
+  it("publishes the narrow-screen rule unescaped", () => {
+    expect(renderToStaticMarkup(<RichText value={gallery(4)} />)).toContain(
+      RULE
+    );
+  });
+
+  it("reads the author's count as the fallback, so the rule can lower it", () => {
+    // The author's choice stays in the INLINE style as the fallback: if the
+    // rule set never arrives the gallery still draws four columns, which is the
+    // behaviour this replaced rather than a regression from it.
+    expect(renderToStaticMarkup(<RichText value={gallery(4)} />)).toContain(
+      "repeat(var(--nx-rich-text-gallery-columns, 4), minmax(0, 1fr))"
+    );
+  });
+
+  it("emits one rule set however many galleries a document holds", () => {
+    const two = doc([...gallery(3).root.children, ...gallery(4).root.children]);
+    const html = renderToStaticMarkup(<RichText value={two} />);
+    // Both galleries drew, and there is still exactly one stylesheet. Counted
+    // on `data-columns` rather than the class, because the RULE SET names the
+    // class too and a count of three would read as a third gallery.
+    expect(html.split("data-columns=").length - 1).toBe(2);
+    expect(html.split("<style").length - 1).toBe(1);
+  });
+});
+
+describe("rich-text filled buttons stay visible", () => {
+  const button = (extra: Record<string, unknown> = {}): RichTextValue =>
+    doc([
+      {
+        type: "button-link",
+        version: 1,
+        url: "https://example.com/buy",
+        text: "Buy",
+        ...extra,
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("gives a filled button with no colours the CMS's own default", () => {
+    // `bgColor` and `textColor` are optional on the node and its HTML-import
+    // path leaves both unset, so this is the shape a legacy or imported button
+    // actually has. The values are the ones `rich-text-html` already publishes
+    // for the same document.
+    const html = renderToStaticMarkup(<RichText value={button()} />);
+    expect(html).toContain("background-color:#000");
+    expect(html).toContain("color:#fff");
+  });
+
+  it("does not overwrite colours the author chose", () => {
+    const html = renderToStaticMarkup(
+      <RichText value={button({ bgColor: "#0a7", textColor: "#fee" })} />
+    );
+    expect(html).toContain("background-color:#0a7");
+    expect(html).toContain("color:#fee");
+    expect(html).not.toContain("#000");
+  });
+
+  it("leaves an outline button transparent", () => {
+    // The default belongs to `filled` alone: an outline button with no colours
+    // is meant to take the surrounding text's, which is what `currentColor` on
+    // its border already does.
+    const html = renderToStaticMarkup(
+      <RichText value={button({ variant: "outline" })} />
+    );
+    expect(html).not.toContain("background-color");
   });
 });
