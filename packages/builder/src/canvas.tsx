@@ -440,6 +440,37 @@ export interface CanvasPreview {
 }
 
 /**
+ * Whether this canvas is previewing at all, and under what name.
+ *
+ * Asked once, here, so the sheet, the box and the measurement cannot disagree
+ * about it. Two things make a preview inert despite a caller asking for one,
+ * and they fail the same way — the box constrains and measures while the rules
+ * still answer to the WINDOW, so a caller deriving an edit target from the
+ * measurement writes to a tier the canvas is not displaying.
+ *
+ * A REFUSED name is the first: `previewContainerName` turns down an empty,
+ * reserved, malformed or oversized value, and the compile falls back to
+ * published `@media`.
+ *
+ * NOWHERE TO BIND is the second, and the name is perfectly good in that one.
+ * There are exactly two binding sites — the page tier's style context and the
+ * site tier's sheet — and a caller can legitimately have neither:
+ * `siteStyles={false}` opts out of the shared sheet, and a stored artifact
+ * arrives with no style context.
+ */
+function activePreview(
+  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  siteStyles: NonNullable<PageRendererProps["siteStyles"]>,
+  preview: CanvasPreview | undefined
+): CanvasPreview | undefined {
+  const container = previewContainerName(preview?.container);
+  if (preview === undefined || container === undefined) return undefined;
+  const bindable =
+    render?.styleContext !== undefined || typeof siteStyles === "object";
+  return bindable ? { ...preview, container } : undefined;
+}
+
+/**
  * The renderer's inputs, made to agree with the box the canvas establishes.
  *
  * BOTH tiers, from one hook, because they are one decision read twice. A page's
@@ -478,11 +509,10 @@ function usePreviewedInputs(
   active: CanvasPreview | undefined;
 } {
   return useMemo(() => {
-    const container = previewContainerName(preview?.container);
-    if (preview === undefined || container === undefined) {
+    const active = activePreview(render, siteStyles, preview);
+    if (active === undefined) {
       return { rendered: render, sheet: siteStyles, active: undefined };
     }
-    const active = { ...preview, container };
     return {
       active,
       /*
@@ -497,7 +527,7 @@ function usePreviewedInputs(
               ...render,
               styleContext: {
                 ...render.styleContext,
-                previewContainer: container,
+                previewContainer: active.container,
               },
             },
       /*
@@ -508,7 +538,7 @@ function usePreviewedInputs(
        */
       sheet:
         typeof siteStyles === "object"
-          ? { ...siteStyles, previewContainer: container }
+          ? { ...siteStyles, previewContainer: active.container }
           : siteStyles,
     };
   }, [render, siteStyles, preview]);

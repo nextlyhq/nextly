@@ -1039,6 +1039,46 @@ describe("what the canvas reports about the box it got", () => {
     expect(first).not.toHaveBeenCalledWith(undefined);
   });
 
+  it("does not preview when there is nowhere to BIND the container", () => {
+    /*
+     * A preview has exactly two binding sites: the page tier's style context
+     * and the site tier's sheet. `siteStyles={false}` opts out of the shared
+     * sheet and no `styleContext` is the stored-artifact path — so nothing is
+     * compiled against this box, its viewport rules stay `@media` and follow
+     * the window, and a box that established a container and reported its width
+     * anyway would have a caller deriving edits for a tier the canvas is not
+     * displaying.
+     *
+     * The name here is perfectly VALID, which is what separates this from the
+     * refused-name case: the failure is having nowhere to put it.
+     */
+    const onMeasured = vi.fn();
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={false as never}
+        preview={{
+          container: "nx-preview-viewport",
+          width: 991,
+          onMeasured,
+        }}
+      />
+    );
+
+    const style = (
+      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
+    )?.style;
+    expect(style?.containerName).toBe("");
+    expect(style?.maxWidth).toBe("");
+    expect(FakeResizeObserver.last).toBeUndefined();
+  });
+
   it("observes NOTHING when no reporter was given", () => {
     /*
      * The control. Without it, an implementation that observed unconditionally
