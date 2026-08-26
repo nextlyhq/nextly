@@ -2248,7 +2248,7 @@ describe("the action a control's breakpoint provenance earns", () => {
     expect(label).toContain("Reset");
   });
 
-  it("declares that it writes for itself, so a picker does not write twice", () => {
+  it("declares WHICH field it writes, so a picker does not write twice", () => {
     /*
      * The colour picker commits its draft when the popover closes, and pressing
      * anything outside it closes the popover first. Without this declaration
@@ -2256,13 +2256,25 @@ describe("the action a control's breakpoint provenance earns", () => {
      * then the clear — and the first undo restores the very colour they pressed
      * Reset to be rid of.
      *
-     * The MECHANISM is covered behaviourally by the token-clear supersede cases
-     * in `style-colour-panel.test.tsx`, which drive a real picker. What is only
-     * true here is that Reset makes the same promise.
+     * The field is NAMED rather than the promise being made bare, because a
+     * bare one is made to every picker in the panel: a Reset on one control
+     * would then discard an unfinished gesture on another that it replaces
+     * nothing of.
+     *
+     * The MECHANISM is covered behaviourally in `style-colour-panel.test.tsx`,
+     * which drives a real picker against both a Reset on its own control and a
+     * Reset on a different one. What is only true here is that Reset names the
+     * control it is drawn beside.
      */
     mount({ stored: BASE_BREAKPOINT, entries: [entryAt(BASE_BREAKPOINT)] });
 
-    expect(action("reset")?.hasAttribute("data-nx-commits-itself")).toBe(true);
+    const field = document.querySelector(
+      '[data-property="color"] input'
+    ) as HTMLInputElement | null;
+    expect(field?.id).toBeTruthy();
+    expect(action("reset")?.getAttribute("data-nx-commits-for")).toBe(
+      field?.id
+    );
   });
 
   it("names the AXIS in the reset fallback, as the jump does", () => {
