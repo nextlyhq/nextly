@@ -1160,26 +1160,88 @@ describe("a Reset beside a picker mid-gesture", () => {
     expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
   });
 
-  it("keeps a gesture when the Reset is CONTROL-clicked on a Mac", async () => {
+  /**
+   * Pretend to be a platform, for the duration of one case.
+   *
+   * `navigator.platform` is the only signal that separates a macOS context-menu
+   * gesture from an ordinary Control-click, so a case about that distinction
+   * has to state which platform it is on. Restored afterwards, because a
+   * leaked value would silently decide every later case in the file.
+   */
+  function onPlatform(name: string): () => void {
+    const original = Object.getOwnPropertyDescriptor(
+      window.navigator,
+      "platform"
+    );
+    Object.defineProperty(window.navigator, "platform", {
+      value: name,
+      configurable: true,
+    });
+    return () => {
+      if (original === undefined) return;
+      Object.defineProperty(window.navigator, "platform", original);
+    };
+  }
+
+  it("keeps a gesture when the Reset is CONTROL-clicked on a MAC", async () => {
     /*
      * Control held with the primary button is a context-menu gesture on macOS,
      * and the pointer event still reports `button === 0` — so a check on the
-     * button alone lets it through. Radix's own popover classifies the same
-     * pair as a right-click.
-     *
-     * The consequence is the same as a right-click's: the picker closes, the
-     * Reset's handler never runs, and the colour the author was composing is
-     * discarded on behalf of a button that did nothing.
+     * button alone lets it through. No click follows, so the Reset's handler
+     * never runs and the colour the author was composing would be discarded on
+     * behalf of a button that did nothing.
      */
-    const editor = mountWithResets([{ property: "color" }]);
-    await dragTo("#ff0000");
-    expect(editor.applyAll).not.toHaveBeenCalled();
+    const restore = onPlatform("MacIntel");
+    try {
+      const editor = mountWithResets([{ property: "color" }]);
+      await dragTo("#ff0000");
+      expect(editor.applyAll).not.toHaveBeenCalled();
 
-    fireEvent.pointerDown(resetFor("Color"), { button: 0, ctrlKey: true });
-    await settle();
+      // No click: on this platform the press opens a menu instead.
+      fireEvent.pointerDown(resetFor("Color"), { button: 0, ctrlKey: true });
+      await settle();
 
-    expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("#ff0000");
+      expect(editor.applyAll).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain(
+        "#ff0000"
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("writes ONCE for a Control-click anywhere else, where it is an ordinary click", async () => {
+    /*
+     * The control on the case above, and the reason the platform is asked at
+     * all rather than the modifier alone. On Windows and Linux a Control-click
+     * IS an ordinary modified click: the button runs, so treating it as a
+     * context menu commits the picker's draft on dismissal AND lets the Reset
+     * write — one gesture becoming two edits, and the first undo restoring the
+     * colour the author pressed Reset to be rid of.
+     *
+     * The click is dispatched here and deliberately NOT in the case above: a
+     * case that sends only `pointerDown` cannot observe the platform's ensuing
+     * click, so it would pass on both platforms and separate nothing.
+     */
+    const restore = onPlatform("Win32");
+    try {
+      const editor = mountWithResets([{ property: "color" }]);
+      await dragTo("#ff0000");
+
+      const reset = resetFor("Color");
+      fireEvent.pointerDown(reset, { button: 0, ctrlKey: true });
+      fireEvent.click(reset, { ctrlKey: true });
+      await settle();
+
+      // The clear alone. Two calls would be the draft and the reset both
+      // landing, which is the defect the supersede exists to prevent.
+      expect(editor.applyAll).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(editor.applyAll.mock.calls[0])).not.toContain(
+        "#ff0000"
+      );
+    } finally {
+      restore();
+    }
   });
 
   it("keeps a gesture ANOTHER control's Reset does not replace", async () => {

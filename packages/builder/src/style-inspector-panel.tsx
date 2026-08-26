@@ -1274,30 +1274,57 @@ function sourceLabel(source: BreakpointSource): string {
  * for everybody rather than for screen-reader users alone.
  */
 /**
+ * Whether Control held with a primary press means a CONTEXT MENU here.
+ *
+ * It does on macOS and nowhere else: there the platform opens a menu and no
+ * click follows, while on Windows and Linux a Control-click is an ordinary
+ * modified click and the button runs exactly as it always does.
+ *
+ * So this cannot be answered without asking the platform, and the platform is
+ * asked by NAME because nothing else decides it. There is no structural probe
+ * for "will a click follow this press" that can be run before the click either
+ * arrives or does not — which is the same reason the whole supersede is
+ * predicted at press time rather than confirmed.
+ *
+ * `userAgentData` first because `platform` is deprecated, and both because the
+ * modern one is Chromium-only. Neither present — a non-browser runtime —
+ * answers `false`, which is the ordinary-click reading and the one that keeps
+ * the two-write defect closed.
+ */
+function contextMenuModifier(): boolean {
+  const agent: { platform?: string } | undefined = (
+    navigator as Navigator & { userAgentData?: { platform?: string } }
+  ).userAgentData;
+  const name = agent?.platform ?? navigator.platform ?? "";
+  return /mac/i.test(name);
+}
+
+/**
  * Whether a press can actually RUN the control it landed on.
  *
  * Only a press that will be followed by a click can, and two gestures report a
- * pointer press while invoking nothing: a secondary press, and — on macOS — a
- * primary press held with Control, which the platform treats as a context menu.
- * Radix's own popover classifies that same pair as a right-click.
+ * pointer press while invoking nothing: a secondary press anywhere, and a
+ * Control-held primary press on macOS.
  *
- * It matters because the picker closes on any outside press. Read as an
- * activation, a gesture that opens a context menu discards the colour an author
- * was composing on behalf of a button that never ran: the value is gone and
- * nothing replaced it, which is the worst of the outcomes available.
+ * Both directions cost something, which is why the platform is asked rather
+ * than the modifier alone. Reading a context menu as an activation discards the
+ * colour an author was composing on behalf of a button that never ran. Reading
+ * an ordinary Control-click as a context menu does the opposite: the picker
+ * commits its draft on dismissal AND the button's click writes, so one gesture
+ * becomes two edits and the first undo restores the colour they pressed Reset
+ * to be rid of — the defect the supersede exists to prevent, reintroduced.
  *
- * This narrows the gap rather than closing it, and the remainder is stated
- * rather than left to be discovered: a primary press that DRAGS OFF the control
- * and releases elsewhere fires no click either, and is still read here as an
- * activation. Closing that needs the write to confirm the discard instead of
- * the press predicting it — either holding the draft for a later signal, which
- * is the timer this module removed and whose cancellation cost a race, or
- * routing the marked control's write back through this field, which the
- * declaration exists to avoid. A context menu is unambiguous; a drag-away is
- * not.
+ * The remainder is stated rather than left to be discovered: a primary press
+ * that DRAGS OFF the control and releases elsewhere fires no click either, and
+ * is still read here as an activation. Closing that needs the write to confirm
+ * the discard instead of the press predicting it — either holding the draft for
+ * a later signal, which is the timer this module removed and whose cancellation
+ * cost a race, or routing the marked control's write back through this field,
+ * which the declaration exists to avoid.
  */
 function activates(event: PointerEvent): boolean {
-  return event.button === 0 && !event.ctrlKey;
+  if (event.button !== 0) return false;
+  return !(event.ctrlKey && contextMenuModifier());
 }
 
 /**
