@@ -240,4 +240,28 @@ describe("the element's CHILDREN", () => {
 
     expect(element.innerHTML).toBe(before);
   });
+
+  it("are the SAME nodes, not freshly parsed copies of them", async () => {
+    /*
+     * The caller is React: it rendered those children and its fibers still hold
+     * the exact node objects. Reinserting parsed copies compares equal as
+     * markup and is still wrong — the fibers then address nodes that are no
+     * longer in the document, so the next render writes the new passage into
+     * detached nodes while the canvas goes on showing the stale copies.
+     *
+     * Identity is the only thing that separates the two, which is why the
+     * markup assertion above cannot stand in for this one.
+     */
+    const editor = await loadInlineRichTextEditor();
+    const element = host();
+    const original = element.firstChild;
+
+    const session = attached(editor, element, passage("Hello"));
+    // Meaningful only if the editor actually took the children away first.
+    expect(element.firstChild).not.toBe(original);
+
+    session.detach();
+
+    expect(element.firstChild).toBe(original);
+  });
 });

@@ -310,14 +310,28 @@ describe("the canvas going away mid-edit", () => {
      * a pending promise could never see a detach because nothing ever attached.
      */
     const detach = vi.fn();
-    const session = { focus: vi.fn(), read: vi.fn(() => undefined), detach };
+    const typed = {
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: [{ type: "text", text: "TYPED" }] },
+        ],
+      },
+    };
+    // Reads the untouched passage first (the baseline taken at attach), then
+    // what the author left behind — so the two differ and there is a real edit
+    // to preserve.
+    const read = vi
+      .fn()
+      .mockReturnValueOnce({ root: { type: "root", children: [] } })
+      .mockReturnValue(typed);
+    const session = { focus: vi.fn(), read, detach };
     const load = vi.fn(() => Promise.resolve({ attach: vi.fn(() => session) }));
 
     registerArticle();
     paint();
-    const { result, unmount } = renderHook(() =>
-      useInlineEditing(editorState(), load)
-    );
+    const state = editorState();
+    const { result, unmount } = renderHook(() => useInlineEditing(state, load));
 
     await act(async () => {
       result.current.onDoubleClick(doubleClickOn("content"));
@@ -328,6 +342,60 @@ describe("the canvas going away mid-edit", () => {
     unmount();
 
     expect(detach).toHaveBeenCalled();
+    /*
+     * WRITTEN, not merely released. Rich keystrokes live in the editor's own
+     * history and never reach the document until an edit finishes, so the
+     * canvas op history the unsaved-work guard reads is still at zero while a
+     * passage is being typed. Detaching without writing loses the words AND
+     * leaves the guard silent, so nothing warns before the navigation that
+     * takes them.
+     */
+    expect(state.apply).toHaveBeenCalled();
+  });
+});
+
+describe("which element a pointer gesture edits", () => {
+  it("edits the one that was CLICKED, not the first with that id on the page", async () => {
+    /*
+     * Two canvases showing one document carry the same node ids, so searching
+     * the page for `[data-nx-node="a"]` answers with whichever comes first —
+     * which can be the other canvas. The result is an editor attached over
+     * there while the commit lands in the editor state over here.
+     *
+     * The gesture already knows the element; passing it is what removes the
+     * search rather than trying to make the search cleverer.
+     */
+    // Typed parameters, so the recorded call carries the element it was given:
+    // an untyped `vi.fn(() => …)` records an empty argument tuple and the
+    // assertion below could not reach it.
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus: vi.fn(),
+      read: vi.fn(() => undefined),
+      detach: vi.fn(),
+    }));
+    const load = vi.fn(() => Promise.resolve({ attach }));
+
+    registerArticle();
+    document.body.innerHTML = `
+      <div id="first" data-nx-node="a">
+        <div data-nx-prop="content"><p>the other canvas</p></div>
+      </div>
+      <div id="second" data-nx-node="a">
+        <div data-nx-prop="content"><p>the one clicked</p></div>
+      </div>`;
+    const { result } = renderHook(() =>
+      useInlineEditing(editorState(), load as never)
+    );
+
+    const clicked = document
+      .querySelector("#second")
+      ?.querySelector("[data-nx-prop]");
+    await act(async () => {
+      result.current.onDoubleClick({ target: clicked ?? null });
+    });
+
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(attach.mock.calls[0]?.[0]).toBe(clicked);
   });
 });
 

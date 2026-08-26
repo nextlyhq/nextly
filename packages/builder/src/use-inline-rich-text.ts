@@ -56,8 +56,14 @@ export interface UseInlineRichTextResult {
    *
    * `prop` defaults to the block's FIRST declared rich value, which is what a
    * keyboard caller wants: it has a selected block and no element.
+   *
+   * `element` is the one a pointer landed on. A caller that has it should pass
+   * it: finding the element again from the document alone searches the whole
+   * page, and two canvases showing one document carry the same node ids — so
+   * the search can answer with the other canvas's passage, attaching there
+   * while committing here.
    */
-  begin: (nodeId: string, prop?: string) => boolean;
+  begin: (nodeId: string, prop?: string, element?: HTMLElement) => boolean;
   /** Finish, writing whatever the author left behind. */
   commit: () => void;
   /** Finish, discarding it. */
@@ -108,6 +114,15 @@ export function useInlineRichText(
   const editingRef = useRef(editing);
   editingRef.current = editing;
 
+  /**
+   * The element a pointer handed over, used in place of searching for one.
+   *
+   * A ref rather than state: it is read once by the effect that follows the
+   * `begin` it came with, and re-rendering for it would be a render nobody
+   * needs.
+   */
+  const handed = useRef<HTMLElement | null>(null);
+
   /** The live editor, the element it holds, and what to put back. */
   const mounted = useRef<{
     session: EditorSession;
@@ -157,13 +172,14 @@ export function useInlineRichText(
   }, [release]);
 
   const begin = useCallback(
-    (nodeId: string, prop?: string) => {
+    (nodeId: string, prop?: string, element?: HTMLElement) => {
       if (load === undefined) return false;
       const target = namedTarget(
         richInlineTargets(editorRef.current.document, nodeId),
         prop
       );
       if (target === undefined) return false;
+      handed.current = element ?? null;
       setEditing({ nodeId: target.nodeId, prop: target.prop });
       return true;
     },
@@ -200,7 +216,11 @@ export function useInlineRichText(
   useEffect(() => {
     if (editing === null || load === undefined) return;
     if (globalThis.document === undefined) return;
-    const element = editableElement(globalThis.document, editing);
+    // The element the gesture landed on, when there was one. Searching the
+    // document is the fallback for a keyboard caller, which has no element.
+    const element =
+      handed.current ?? editableElement(globalThis.document, editing);
+    handed.current = null;
     if (element === null) {
       // Nothing on screen carries this passage. The node may have been removed
       // between the request and this effect; dropping the edit is the honest
@@ -218,9 +238,18 @@ export function useInlineRichText(
 
     void load().then(
       live => {
-        // The author may have left before the chunk arrived. Attaching then
-        // would put a caret into a passage they are no longer editing.
+        /*
+         * The author may have left before the chunk arrived. Attaching then
+         * would put a caret into a passage they are no longer editing.
+         *
+         * All three conditions are asked, because `cancelled` alone is not
+         * enough: it is set by an effect CLEANUP, and this callback can run
+         * before React has flushed that — so a selection that has already moved
+         * is visible here while the cleanup that would record it has not run.
+         */
         if (cancelled) return;
+        if (editingRef.current !== editing) return;
+        if (editorRef.current.selectedId !== editing.nodeId) return;
         const session = live.attach(element, value);
         if (session === null) {
           /*
@@ -294,12 +323,15 @@ export function useInlineRichText(
        * detached tree, holding its listeners and its state, until some later
        * passage displaced it.
        */
-      const live = mounted.current;
-      if (live !== null) {
-        mounted.current = null;
-        live.session.detach();
-        live.element.removeAttribute(EDITING_ATTRIBUTE);
-      }
+      /*
+       * COMMITTED, not discarded. Rich keystrokes go into the editor's own
+       * history and never touch the document until an edit finishes, so the
+       * canvas op history — which is what the unsaved-work guard reads — is
+       * still at zero while a passage is being typed. Detaching without writing
+       * would drop the words AND leave the guard silent about it, so a
+       * navigation nobody warned about takes the work with it.
+       */
+      if (mounted.current !== null) commit();
       element.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("blur", onBlur);
       element.removeEventListener("pointerdown", swallow);

@@ -60,6 +60,7 @@ export interface UseInlineEditingResult {
 function markedAt(target: EventTarget | null): {
   nodeId: string;
   prop: string;
+  element: HTMLElement;
 } | null {
   if (!(target instanceof Element)) return null;
   const element = target.closest<HTMLElement>("[data-nx-prop]");
@@ -69,7 +70,7 @@ function markedAt(target: EventTarget | null): {
     .closest("[data-nx-node]")
     ?.getAttribute("data-nx-node");
   if (prop === null || nodeId === null || nodeId === undefined) return null;
-  return { nodeId, prop };
+  return { nodeId, prop, element };
 }
 
 /**
@@ -105,11 +106,16 @@ export function useInlineEditing(
    * ending up somewhere they were not looking.
    */
   const openOn = useCallback(
-    (kind: InlinePropKind, nodeId: string, prop: string) => {
+    (
+      kind: InlinePropKind,
+      nodeId: string,
+      prop: string,
+      element?: HTMLElement
+    ) => {
       plain.commit();
       rich.commit();
       return kind === "rich"
-        ? rich.begin(nodeId, prop)
+        ? rich.begin(nodeId, prop, element)
         : plain.begin(nodeId, prop);
     },
     [plain, rich]
@@ -151,7 +157,10 @@ export function useInlineEditing(
       const found = markedAt(event.target);
       if (found === null) return;
       if (kindOf(found.nodeId, found.prop) === "rich") {
-        openOn("rich", found.nodeId, found.prop);
+        // The element the gesture landed on is passed rather than looked up
+        // again: two canvases showing one document carry the same node ids, so
+        // a search of the page can answer with the other one's passage.
+        openOn("rich", found.nodeId, found.prop, found.element);
         return;
       }
       // Finished for the same reason `openOn` does it, then delegated: the

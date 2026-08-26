@@ -199,15 +199,22 @@ interface RootMarks {
   readonly style: string | null;
   readonly lexical: string | null;
   /**
-   * The markup the element arrived with.
+   * The child NODES the element arrived with — the nodes themselves, not their
+   * markup.
    *
-   * `setRootElement` REPLACES the root's children with the editor's own
+   * `setRootElement` replaces the root's children with the editor's own
    * reconciled output, and passing `null` clears them rather than putting the
    * originals back. Restoring only attributes would leave a caller that edited
-   * nothing holding an empty element — and this module is what promises to give
-   * it back as it was received.
+   * nothing holding an empty element.
+   *
+   * Reparsing the markup would look identical and be wrong. The caller here is
+   * React: it rendered those children and its fibers still point at the exact
+   * node objects. Reinserting freshly-parsed copies leaves those fibers
+   * addressing nodes that are no longer in the document, so the next render
+   * updates detached nodes while the canvas keeps showing the stale copies —
+   * and nothing reports it, because the markup compares equal.
    */
-  readonly markup: string;
+  readonly children: readonly ChildNode[];
 }
 
 function markRoot(element: HTMLElement): RootMarks {
@@ -215,7 +222,7 @@ function markRoot(element: HTMLElement): RootMarks {
     contentEditable: element.getAttribute("contenteditable"),
     style: element.getAttribute("style"),
     lexical: element.getAttribute("data-lexical-editor"),
-    markup: element.innerHTML,
+    children: [...element.childNodes],
   };
   element.setAttribute("contenteditable", "true");
   return marks;
@@ -228,7 +235,8 @@ function restore(element: HTMLElement, name: string, was: string | null): void {
 }
 
 function unmarkRoot(element: HTMLElement, marks: RootMarks): void {
-  element.innerHTML = marks.markup;
+  // The original node objects, not copies of them — see {@link RootMarks}.
+  element.replaceChildren(...marks.children);
   restore(element, "contenteditable", marks.contentEditable);
   restore(element, "style", marks.style);
   restore(element, "data-lexical-editor", marks.lexical);
