@@ -361,22 +361,6 @@
 }
 
 /*
- * The author asked to see the page as a visitor will.
- *
- * `revert-layer` rather than restating the published values: the published
- * appearance of a container is whatever the site stylesheet and the block's
- * own base styles say, which this file does not know and must not guess.
- */
-.nx-builder-chrome[data-nx-empty-elements="hidden"]
-  .nx-canvas
-  [data-nx-slots]:empty {
-  min-height: revert-layer;
-  border: revert-layer;
-  border-radius: revert-layer;
-  background: revert-layer;
-}
-
-/*
  * Available to assistive technology, absent from the page.
  *
  * `display: none` and `visibility: hidden` both remove an element from the
