@@ -8,7 +8,7 @@
  * window while editing a record was framed and capped at the form measure while
  * creating one.
  */
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { useEffect, useState } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -16,6 +16,9 @@ import {
   ChromeSuppressionProvider,
   useSuppressAdminChrome,
 } from "./ChromeSuppression";
+
+import { CONTENT_PAGE_MEASURE } from "./content-measure";
+import { PageContainer } from "./page-container";
 
 import { MeasuredPageFrame } from "./MeasuredPageFrame";
 
@@ -52,6 +55,11 @@ describe("MeasuredPageFrame", () => {
     expect(container.className).toContain("nx-page-shell");
     expect(container.className).not.toContain("contents");
     expect(container.style.getPropertyValue("--nx-shell-measure")).toBe(
+      "var(--nx-measure-wide)"
+    );
+    // The control for the line above: asserting only that SOME measure is set
+    // would pass on a frame that had silently kept the settings measure.
+    expect(container.style.getPropertyValue("--nx-shell-measure")).not.toBe(
       "var(--nx-measure-form)"
     );
   });
@@ -127,7 +135,7 @@ describe("MeasuredPageFrame", () => {
     // `BlocksField` asks from INSIDE the form rather than as a registered
     // view, so the default branch has to honour the request too. A page that
     // declared a measure without honouring it would hand the page builder a
-    // 56rem column to work in.
+    // measured column to work in.
     function FormWithTakeoverField() {
       useSuppressAdminChrome({ layers: ["pageFrame"], canExit: false });
       return <p>builder canvas</p>;
@@ -161,5 +169,36 @@ describe("MeasuredPageFrame", () => {
 
     const trail = screen.getByTestId("page-container").firstElementChild;
     expect(trail?.className).toBe("");
+  });
+});
+
+describe("the content measure is declared once", () => {
+  it("renders whatever the shared constant says, not a literal of its own", () => {
+    // Both sides derive from `CONTENT_PAGE_MEASURE`, so this proves only that
+    // the FRAME reads it — a skeleton that drifted back to its own literal is
+    // invisible here, because no route state is rendered. That property is
+    // covered by `__tests__/content-measure-wiring.test.ts`, which reads the
+    // route sources; this one guards the frame's own half.
+    render(
+      <ChromeSuppressionProvider>
+        <MeasuredPageFrame>
+          <p>body</p>
+        </MeasuredPageFrame>
+      </ChromeSuppressionProvider>
+    );
+    const framed = screen.getByTestId("page-container");
+
+    cleanup();
+    render(
+      <PageContainer width={CONTENT_PAGE_MEASURE}>reference</PageContainer>
+    );
+    const reference = screen.getByTestId("page-container");
+
+    // The frame and a direct container must resolve to one measure, so a page
+    // whose states use both routes to the same width.
+    expect(framed.style.getPropertyValue("--nx-shell-measure")).toBe(
+      reference.style.getPropertyValue("--nx-shell-measure")
+    );
+    expect(reference.style.getPropertyValue("--nx-shell-measure")).not.toBe("");
   });
 });

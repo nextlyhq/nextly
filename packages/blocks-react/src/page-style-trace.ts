@@ -28,7 +28,12 @@ import type {
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
-import { pruneRenderedPlaceholders, sharedStyleInputs } from "./page-renderer";
+import {
+  pruneRenderedPlaceholders,
+  sharedStyleInputs,
+  statedBreakpoints,
+  withoutStatedNulls,
+} from "./page-renderer";
 import { prepareDocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import { registeredBlocks } from "./resolver";
@@ -100,6 +105,12 @@ export function pageStyleTrace(
 ): PageStyleCascade | undefined {
   const shared = sharedStyleInputs(input.styleContext, input.site);
   /*
+   * ASKED of the renderer's own helper rather than computed here. This trace and
+   * the render must agree about what a stated null means, and two computations
+   * of one question agree until the day one of them changes.
+   */
+  const stated = statedBreakpoints(shared.breakpoints);
+  /*
    * The same construction the renderer uses, and for its reason: a route context
    * takes the shared inputs over the top, while a site tier alone can still
    * compile provided it named the breakpoints — the one field a compile cannot
@@ -107,12 +118,18 @@ export function pageStyleTrace(
    */
   const merged: StyleCompileContext | undefined =
     input.styleContext !== undefined
-      ? { ...input.styleContext, ...shared }
-      : shared.breakpoints === undefined
+      ? {
+          ...input.styleContext,
+          ...withoutStatedNulls(shared),
+          // Spread LAST, so the normalised set replaces the null the spread
+          // above would otherwise carry into a slot declared as a set.
+          breakpoints: stated ?? input.styleContext.breakpoints,
+        }
+      : stated === undefined
         ? undefined
         : {
-            ...shared,
-            breakpoints: shared.breakpoints,
+            ...withoutStatedNulls(shared),
+            breakpoints: stated,
             /*
              * The site's OWN predicate, copied exactly as the renderer's
              * site-only construction copies it. Dropped, a `url(...)` the site
