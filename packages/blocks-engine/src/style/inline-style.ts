@@ -343,11 +343,22 @@ function usableDeclaration(
    * the later one on position alone loses the colour the author would see, and
    * the CMS used to emit both and get this right.
    *
-   * Judging the VALUE recovers it for every property whose value this package
-   * can decide, and only a colour qualifies today: the rest of the list takes
-   * lengths, keywords and shorthands whose validity is a CSS property database,
-   * not something to guess at here. For those the later declaration still wins,
-   * which is what a browser does whenever the later one is valid.
+   * Judging the VALUE recovers it wherever this package can decide the value.
+   * A colour keyword and a hex are decidable, so `banana` keeps its fallback.
+   *
+   * A colour FUNCTION is not. Deciding `rgb(banana)` from `oklch(0.7 0.1 200)`
+   * needs a CSS grammar, and the only one available is css-tree's lexer, which
+   * this package deliberately does not load: `css-tree-subpaths.d.ts` records
+   * that its root entry pulls MDN reference data and `node:module` with it,
+   * which a runtime-free package cannot take. Measured, that lexer is also two
+   * years stale — it rejects `oklch()` and `color-mix()` outright — so adopting
+   * it would trade a rare malformed value for every modern colour syntax.
+   *
+   * So an undecidable value REPLACES, rather than being refused. The
+   * undecidable set is dominated by syntax newer than our data rather than by
+   * garbage, which is the same reason the lexer cannot read it; and a fallback
+   * chain written for a new syntax is the case that actually occurs. Lengths
+   * and shorthands are undecidable for the same reason and behave the same way.
    */
   if (COLOR_VALUED.has(property) && cssColor(declared) === undefined) {
     return undefined;

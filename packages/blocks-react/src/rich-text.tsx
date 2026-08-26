@@ -193,13 +193,28 @@ function formatted(
     Object.keys(declared).length === 0 ? (
       text
     ) : (
-      // KEYED on the declaration order, so a value that changes only the order
-      // of the same properties still reaches the DOM. React diffs a style
-      // object property by property: with identical keys and values it writes
-      // nothing, and the element keeps whichever shorthand won before — so a
-      // client preview would go on showing the previous cascade until something
-      // else remounted it.
-      <span key={Object.keys(declared).join("|")} style={declared}>
+      /*
+       * KEYED on the whole declaration list — every property AND its value.
+       *
+       * React diffs a style object property by property, and two of its
+       * outcomes are wrong here. Identical keys and values in a different order
+       * produce no writes at all, so the element keeps whichever shorthand won
+       * before. And where a SHORTHAND and one of its longhands are both
+       * present, changing only the shorthand writes only that: assigning
+       * `text-decoration` resets `text-decoration-color`, so the longhand the
+       * diff skipped as unchanged is silently undone and the client drifts from
+       * what a fresh render and the CMS both produce.
+       *
+       * Keying on the values costs a remount whenever any of them changes,
+       * which for static published text is a span being replaced. Ordering
+       * alone was cheaper and did not cover the shorthand case.
+       */
+      <span
+        key={Object.entries(declared)
+          .map(([property, written]) => `${property}:${String(written)}`)
+          .join(";")}
+        style={declared}
+      >
         {text}
       </span>
     );

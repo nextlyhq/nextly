@@ -2082,3 +2082,94 @@ describe("rich-text a decoration the style already draws", () => {
     expect(html).toContain("<s>");
   });
 });
+
+describe("rich-text an updated node matches a fresh one", () => {
+  const styled = (style: string): RichTextValue =>
+    doc([
+      { type: "paragraph", children: [{ type: "text", text: "Hi", style }] },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  const attributeOf = (container: HTMLElement): string =>
+    container.querySelector("span")?.getAttribute("style") ?? "";
+
+  it.each([
+    [
+      "only the declaration order changes",
+      "text-decoration-color: green; text-decoration: underline",
+      "text-decoration: underline; text-decoration-color: green",
+    ],
+    [
+      "only a shorthand beside its own longhand changes",
+      "text-decoration: underline blue; text-decoration-color: green",
+      "text-decoration: underline red; text-decoration-color: green",
+    ],
+    ["only a value changes", "color: #ff0000", "color: #00ff00"],
+  ])("after %s", (_label, before, after) => {
+    /*
+     * The property, stated as the thing that actually matters: a node the
+     * client UPDATED must look like one the client rendered fresh — which is
+     * also what the CMS serializer produces for the same stored value.
+     *
+     * Asserted this way rather than against a specific declaration, because
+     * React's diff fails here in more than one way and each has its own
+     * symptom. Identical keys and values in a new order produce no writes at
+     * all. A changed SHORTHAND beside an unchanged longhand writes only the
+     * shorthand, and assigning `text-decoration` resets
+     * `text-decoration-color` — so the longhand the diff skipped is undone.
+     * Comparing against a fresh render catches both without this test having to
+     * model the browser's shorthand expansion, which jsdom may not implement.
+     */
+    const updated = render(<RichText value={styled(before)} />);
+    updated.rerender(<RichText value={styled(after)} />);
+    const afterUpdate = attributeOf(updated.container);
+    cleanup();
+
+    const fresh = render(<RichText value={styled(after)} />);
+    const afterFresh = attributeOf(fresh.container);
+
+    // The population first: two empty attributes would compare equal and pass.
+    expect(afterFresh).not.toBe("");
+    expect(afterUpdate).toBe(afterFresh);
+  });
+
+  it.each([
+    [
+      "a shorthand beside its own longhand",
+      "text-decoration: underline blue; text-decoration-color: green",
+      "text-decoration: underline red; text-decoration-color: green",
+    ],
+    ["a plain value", "color: #ff0000", "color: #00ff00"],
+  ])("replaces the element when %s changes", (_label, before, after) => {
+    /*
+     * The MECHANISM, because the outcome is not observable here. Assigning
+     * `text-decoration` resets `text-decoration-color` in a browser, so React
+     * writing only the changed shorthand undoes the longhand it skipped as
+     * unchanged — but jsdom does not implement shorthand expansion, so that
+     * reset never happens and the resulting attribute matches a fresh render
+     * either way. Measured: with the key on property order alone, every
+     * assertion above still passes.
+     *
+     * What the key actually buys is a REPLACEMENT rather than a diff, and that
+     * is observable: the DOM node itself changes. Asserting it here is
+     * asserting the thing this file controls, rather than a browser behaviour
+     * this environment declines to model.
+     */
+    const view = render(<RichText value={styled(before)} />);
+    const first = view.container.querySelector("span");
+    expect(first, "the population: a styled span drew at all").not.toBeNull();
+    view.rerender(<RichText value={styled(after)} />);
+    const second = view.container.querySelector("span");
+
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+  });
+
+  it("does not replace the element when nothing changed", () => {
+    // The control on the other side: a key that varied on every render would
+    // satisfy both assertions above while throwing the node away on each pass.
+    const view = render(<RichText value={styled("color: #ff0000")} />);
+    const first = view.container.querySelector("span");
+    view.rerender(<RichText value={styled("color: #ff0000")} />);
+    expect(view.container.querySelector("span")).toBe(first);
+  });
+});
