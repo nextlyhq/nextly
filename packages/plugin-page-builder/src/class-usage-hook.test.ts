@@ -192,41 +192,58 @@ describe("the draft split it asks for", () => {
 });
 
 describe("failure, on a write that has already committed", () => {
-  it("does not throw when the config read fails", async () => {
-    const { fire, errors } = harness({
+  // `after*` is a SIDE-EFFECT phase, and the hook registry already handles a
+  // throw from one: it keeps the committed write, logs, runs the remaining
+  // handlers, and records a warning the REST and Direct API responses carry
+  // back. Raising is therefore how a caller learns the safety index is stale.
+  //
+  // Swallowing would bypass all of it — the operation would report plain
+  // success, and a stale index is exactly the state in which a class a page
+  // still renders reads as unused and can be deleted.
+
+  it("RAISES when the config read fails, so the caller is told", async () => {
+    const { fire } = harness({
       getCollection: async () => {
         throw new Error("registry unavailable");
       },
     });
 
-    await expect(fire()).resolves.toBeUndefined();
-    expect(errors).toHaveLength(1);
+    await expect(fire()).rejects.toThrow("registry unavailable");
   });
 
-  it("does not throw when the draft-split question fails", async () => {
-    const { fire, errors } = harness({
+  it("RAISES when the draft-split question fails", async () => {
+    const { fire } = harness({
       draftSplit: async () => {
         throw new Error("component registry unavailable");
       },
     });
 
-    await expect(fire()).resolves.toBeUndefined();
+    await expect(fire()).rejects.toThrow("component registry unavailable");
+  });
+
+  it("attempts EVERY subject before raising, and says how many failed", async () => {
+    // Reconciliation is per-subject and idempotent, so stopping at the first
+    // failure would leave the later subjects stale as well as the failed one.
+    const { fire, api, errors } = harness({
+      draftSplit: async () => ({ eligible: true }),
+    });
+    api.find.mockRejectedValueOnce(new Error("index unavailable"));
+
+    await expect(fire()).rejects.toThrow(/1 of 2 subject\(s\)/);
+
+    // Both subjects were read, so the second was not skipped by the first
+    // failing.
+    expect(api.findByID).toHaveBeenCalledTimes(2);
+    // And the detail reaches the logger, which the thrown summary cannot carry.
     expect(errors).toHaveLength(1);
   });
 
-  it("reports a per-subject failure without throwing", async () => {
-    // A subject's rows are left disagreeing with the document until a rebuild.
-    // That is recoverable; telling the author their committed save failed is
-    // not, so it reaches the logger and nothing else.
-    const { fire, api, errors } = harness();
-    api.find.mockRejectedValueOnce(new Error("index unavailable"));
+  it("does NOT raise when every subject reconciles", async () => {
+    // The control: a handler that always threw would satisfy the three cases
+    // above while failing every ordinary save.
+    const { fire } = harness();
 
     await expect(fire()).resolves.toBeUndefined();
-
-    expect(errors).toHaveLength(1);
-    expect(String((errors[0] as { message: string }).message)).toContain(
-      "disagrees with the document"
-    );
   });
 });
 

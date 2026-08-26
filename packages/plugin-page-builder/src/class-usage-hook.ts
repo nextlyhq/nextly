@@ -8,17 +8,23 @@
  * that matter most. The wildcard is resolved when the hook executes, and the
  * filter is applied inside against the collection's LIVE configuration.
  *
- * ## Why every failure is swallowed
+ * ## How a failure is reported
  *
- * Collection `after*` hooks run once the write has COMMITTED. A throw here is
- * reported to the caller as a failed save for a document that is already on
- * disk, so an author is told their work was lost when it was not. An index that
- * disagrees with a document is recoverable by a rebuild; that false error is
- * not recoverable at all.
+ * By RAISING it, which is the supported way. `after*` is a side-effect phase,
+ * and the hook registry already knows what that means: it catches the throw,
+ * keeps the committed write, logs, runs the remaining handlers, and records a
+ * warning the REST and Direct API responses carry back to the caller
+ * (`hook-registry.ts:794`, `side-effect-warnings.ts`).
  *
- * Nothing therefore escapes, including the failures that are this module's own
- * fault. They are handed to the logger, which is the only channel a hook has
- * that cannot fail the write.
+ * So the caller learns the safety index is stale and can act on it. Swallowing
+ * the failure here would bypass all of that: the operation would report plain
+ * success, and a stale index is precisely the state in which a class a page
+ * still renders reads as unused and can be deleted.
+ *
+ * The reason a throw is safe is the reason this only runs on the post-commit
+ * path at all — see the transaction guard below. On the transactional path the
+ * hook runs BEFORE the caller commits, where a throw would mean something else
+ * entirely, and maintenance does not run there.
  *
  * @module class-usage-hook
  */
@@ -122,19 +128,23 @@ async function maintain(
   args: Parameters<typeof registerClassUsageMaintenance>[0],
   context: UnknownRecord
 ): Promise<void> {
-  try {
-    const work = await planMaintenance(args, context);
-    if (work === null) return;
-    const report = await reconcileWrittenDocument(work);
-    reportFailures(args.ctx.logger, report);
-  } catch (error) {
-    // Including anything this module got wrong. The write has committed, so the
-    // only alternative to swallowing is telling the author their save failed.
-    args.ctx.logger?.error?.(
-      "[page-builder] class-usage maintenance did not run for this write",
-      { error }
-    );
-  }
+  const work = await planMaintenance(args, context);
+  if (work === null) return;
+
+  const report = await reconcileWrittenDocument(work);
+  if (report.failures.length === 0) return;
+
+  // Every subject is attempted before this raises. Reconciliation is
+  // per-subject and idempotent, so stopping at the first failure would leave
+  // the later subjects stale as well as the failed one — turning one
+  // recoverable disagreement into several for no gain.
+  reportFailures(args.ctx.logger, report);
+  throw new Error(
+    `[page-builder] class-usage maintenance failed for ` +
+      `${report.failures.length} of ${report.subjects} subject(s) on ` +
+      `"${work.collection.slug}" ${work.documentId}. The index disagrees with ` +
+      `the document until a rebuild runs.`
+  );
 }
 
 /**

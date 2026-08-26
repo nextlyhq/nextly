@@ -49,11 +49,17 @@ or omits the classes only a draft applies.
 The plugin's own index table is skipped. Every row it inserts is a create on that collection,
 which fires this same hook - so without the guard the first maintained save recurses.
 
-Nothing escapes. Collection `after*` hooks run once the write has COMMITTED, so a throw is
-reported to the caller as a failed save for a document already on disk - the author is told
-their work was lost when it was not. Every failure reaches the logger instead, including the
-ones this code is responsible for. An index that disagrees with a document is recoverable by a
-rebuild; that false error is not recoverable at all.
+A failure is RAISED, which is the supported way to report one from a side-effect phase. The
+hook registry already knows what `after*` means: it catches the throw, keeps the committed
+write, logs, runs the remaining handlers, and records a warning the REST and Direct API
+responses carry back. So the caller learns the safety index is stale and can act on it.
+Swallowing would bypass all of that - the operation would report plain success, and a stale
+index is exactly the state in which a class a page still renders reads as unused and can be
+deleted.
+
+Every subject is attempted before it raises, and the message says how many of how many failed.
+Reconciliation is per-subject and idempotent, so stopping at the first failure would leave the
+later subjects stale as well as the failed one.
 
 A write inside a CALLER-OWNED transaction is skipped. Core runs the after-hook before that
 transaction commits and binds its executor onto the hook context to say so; maintenance reaches
