@@ -84,6 +84,16 @@
   //     colour control cannot drop the import: it is the WRITING half of hex
   //     and `blocks-engine` owns the reading half, so composing the notation
   //     inside `packages/builder` would put a third colour parser in the tree.
+  //   @nextlyhq/ui/utils = the same shape a third time, resolving to
+  //     `./dist/utils.mjs`, and measured the same way: `unresolved_imports: 0`
+  //     locally after a build, one error-severity finding in CI. Six files in
+  //     `packages/builder` already import it and none had been CHANGED in a
+  //     pull request before, so the gate — which reports introduced findings
+  //     only — had never had cause to name it. The import is `cn`, which is
+  //     `twMerge(clsx(...))`: dropping it does not merely lose a convenience,
+  //     it leaves conflicting Tailwind classes both present, so a conditional
+  //     `text-foreground` no longer overrides the `text-muted-foreground`
+  //     beside it and the selected state stops rendering as selected.
   //
   // Every entry is an exact specifier rather than a prefix. These match the
   // raw import string, so `../dist/**` would also swallow a typo like
@@ -96,6 +106,7 @@
     "../dist/render/index.js",
     "@nextlyhq/ui/styles.css",
     "@nextlyhq/ui/color",
+    "@nextlyhq/ui/utils",
     "@nextlyhq/builder/styles.css",
   ],
 
