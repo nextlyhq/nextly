@@ -298,12 +298,21 @@ export function EntrySystemHeader({
   } = useLocalization();
   const defaultLocaleLabel = getLocale(defaultLocale)?.label ?? defaultLocale;
   /*
-   * The pane toggle reads its label into a sentence — "Show X" — so its default
-   * is the lowercase noun, where `PreviewActions` defaults to "Preview" as a
-   * button's name. Two defaults for one value, which is why the prop carries
-   * neither and each control states the one its own sentence needs.
+   * A declared label is used VERBATIM, not built into a sentence.
+   *
+   * `previewLabel` is a complete button label, not a noun: collections
+   * legitimately name one "View page", and "Show View page" is not English.
+   * Where the author supplied nothing there is no such risk and the control
+   * keeps its own wording, which says what the click will do.
+   *
+   * Losing "Show"/"Hide" for a declared label costs nothing that is not carried
+   * elsewhere — `aria-pressed` states it for assistive technology and the
+   * variant states it visually, which is how a toggle button reports itself.
    */
-  const previewPaneNoun = previewLabel ?? "preview";
+  const previewToggleLabel =
+    previewLabel ?? (previewPaneOpen ? "Hide preview" : "Show preview");
+  const previewToggleTitle =
+    previewLabel ?? (previewPaneOpen ? "Hide the preview" : "Show the preview");
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which both consumers below
   // treat as "nothing to report" rather than as zero progress.
@@ -540,17 +549,11 @@ export function EntrySystemHeader({
               onClick={onTogglePreviewPane}
               disabled={isSubmitting}
               aria-pressed={previewPaneOpen}
-              title={
-                previewPaneOpen
-                  ? `Hide the ${previewPaneNoun}`
-                  : `Show the ${previewPaneNoun}`
-              }
+              title={previewToggleTitle}
             >
               <PanelRight className="h-4 w-4" aria-hidden="true" />
               <ToolbarLabel priority="secondary">
-                {previewPaneOpen
-                  ? `Hide ${previewPaneNoun}`
-                  : `Show ${previewPaneNoun}`}
+                {previewToggleLabel}
               </ToolbarLabel>
             </Button>
           )}

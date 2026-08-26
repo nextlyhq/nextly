@@ -1,5 +1,7 @@
 // Entity type definitions for the admin app
 
+import type { SinglePreviewConfig } from "nextly/config";
+
 import type { FieldDefinition } from "./collection";
 
 export interface Permission {
@@ -243,29 +245,18 @@ export interface SingleAdminOptions {
   /**
    * This Single's preview, as much of it as SURVIVES being stored.
    *
-   * The declaration's `url` is a FUNCTION, so it never reaches the browser and
-   * nothing here should imply it does — resolving an address is the server's
-   * job, and the admin asks for one rather than building it. `breakpoints` is
-   * absent for the same reason in its function form, and because the resolved
-   * list travels on the mint response instead of on a schema.
+   * Derived from the core config type by NAMING the fields that survive, rather
+   * than by omitting the one that does not. The difference matters as the core
+   * type grows: `Omit<SinglePreviewConfig, "url">` keeps every future option,
+   * and the next one may be no more storable than `url` — `breakpoints`, added
+   * alongside this, accepts a FUNCTION and its resolved list travels on the
+   * mint response instead of on a schema. Omission would have promised the
+   * browser a field this payload never carries.
    *
-   * What remains is the JSON-shaped part, listed rather than derived from the
-   * core config type: `Omit<SinglePreviewConfig, "url">` would keep
-   * `breakpoints` and so promise a field this payload never carries.
+   * `Pick` still couples the two: the field types come from core, so a change
+   * to either breaks here loudly instead of drifting.
    */
-  preview?: {
-    /** Custom label for the preview button and pane. @default "Preview" */
-    label?: string;
-
-    /**
-     * Whether the preview opens in a new browser tab. @default true
-     *
-     * A boolean, so unlike `url` it is stored and returned. The collection side
-     * has always read it; omitting it here made the type disagree with the
-     * payload, and a caller with a stored value could not reach it.
-     */
-    openInNewTab?: boolean;
-  };
+  preview?: Pick<SinglePreviewConfig, "label" | "openInNewTab">;
 }
 
 /**

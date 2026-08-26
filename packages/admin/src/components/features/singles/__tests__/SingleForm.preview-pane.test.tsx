@@ -214,6 +214,39 @@ describe("SingleForm offers the preview pane", () => {
     expect(lastHeaderProps().previewLabel).toBe("Landing preview");
   });
 
+  it("reads a padded or blank label the SAME way for pane and opener", () => {
+    /*
+     * The two surfaces default differently, so they must not also disagree
+     * about what counts as declared. Normalising in two places made a
+     * whitespace-only label absent for the opener and present — as a blank
+     * title — for the pane, and a padded one arrived trimmed at one and raw at
+     * the other.
+     */
+    renderForm({
+      schema: {
+        ...(schema as unknown as Record<string, unknown>),
+        admin: { preview: { label: "  Landing preview  " } },
+      } as never,
+    });
+
+    expect(lastPaneProps().label).toBe("Landing preview");
+    expect(lastHeaderProps().previewLabel).toBe("Landing preview");
+  });
+
+  it("treats a whitespace-only label as no label, on BOTH surfaces", () => {
+    // A label of spaces is a field an author left empty. The pane falls back to
+    // its word and the opener to its sentence; neither renders the spaces.
+    renderForm({
+      schema: {
+        ...(schema as unknown as Record<string, unknown>),
+        admin: { preview: { label: "   " } },
+      } as never,
+    });
+
+    expect(lastPaneProps().label).toBe("Preview");
+    expect(lastHeaderProps().previewLabel).toBeUndefined();
+  });
+
   it("hands the header NO label when the Single declares none", () => {
     /*
      * The control, and the reason the declared value is passed rather than the

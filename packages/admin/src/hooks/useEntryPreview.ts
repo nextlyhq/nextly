@@ -61,6 +61,26 @@ const SELF_PREVIEW_TTL_SECONDS = 15 * 60;
  * What the panel needs is whether to draw a button and how to label it.
  */
 /**
+ * The label a declaration actually states, or nothing.
+ *
+ * One reader for the raw field, because the surfaces that need it disagree
+ * about the DEFAULT and must not disagree about anything else. A pane needs a
+ * word for its title; a button reads the label into its own sentence and would
+ * rather have nothing than a placeholder. Normalising in two places meant a
+ * whitespace-only label counted as declared for one and absent for the other,
+ * and a padded one arrived trimmed at one surface and raw at the other.
+ *
+ * Blank is undeclared. A label of spaces is a field an author left empty, and
+ * showing it would title a pane with nothing visible.
+ */
+export function declaredPreviewLabel(config?: {
+  label?: string;
+}): string | undefined {
+  const declared = config?.label?.trim();
+  return declared === undefined || declared === "" ? undefined : declared;
+}
+
+/**
  * What to call the preview, on a button or a pane.
  *
  * Exported and shared rather than inlined at each surface: entries and Singles
@@ -69,7 +89,7 @@ const SELF_PREVIEW_TTL_SECONDS = 15 * 60;
  * — a declaration that names no label is the common case.
  */
 export function previewLabel(config?: { label?: string }): string {
-  return config?.label || "Preview";
+  return declaredPreviewLabel(config) ?? "Preview";
 }
 
 export interface PreviewConfig {
