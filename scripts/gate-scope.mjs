@@ -36,33 +36,69 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-/** Where workspace packages live, and the segment index their directory sits at. */
-const PACKAGE_ROOT = "packages";
-
 /**
- * The package directories a set of changed paths touches.
+ * The workspace directory a path belongs to, for each declared root.
  *
- * Paths outside `packages/` are dropped rather than mapped to a nearest
- * package: a change to `scripts/` or `.github/` belongs to a root task, and
- * inventing a package for it would gate the wrong thing while reporting
- * coverage.
+ * The roots are READ from `pnpm-workspace.yaml` rather than assumed to be
+ * `packages/`. This repository declares `apps/*`, `packages/*` and a bare
+ * `e2e` — a browser suite that is under neither — so a mapper that knew only
+ * `packages/` would drop a change to an app or to that suite in silence, which
+ * is the exact failure this module exists to remove.
  */
-export function changedPackageDirs(paths) {
-  const dirs = paths.map(packageDirOf).filter(dir => dir !== null);
-  return [...new Set(dirs)].sort();
+export function workspaceDirsOf(paths, globs) {
+  const dirs = paths.map(path => workspaceDirOf(String(path), globs));
+  return [...new Set(dirs.filter(dir => dir !== null))].sort();
+}
+
+/** The one workspace directory a path names, or null. */
+function workspaceDirOf(path, globs) {
+  const segments = path.split("/");
+  for (const glob of globs) {
+    const dir = matchGlob(segments, glob);
+    if (dir !== null) return dir;
+  }
+  return null;
 }
 
 /**
- * The package directory one path names, or null when it names none.
+ * A path's directory under one workspace glob, or null.
  *
- * A path of exactly `packages/x` is a directory entry rather than a file inside
- * a package, so it names no manifest and answers null like any other miss.
+ * Two forms, because those are the two pnpm declares here, and each is its own
+ * decision: a wildcard root matches one directory beneath it, and a literal
+ * entry matches that directory itself.
  */
-function packageDirOf(path) {
-  const segments = String(path).split("/");
-  if (segments[0] !== PACKAGE_ROOT) return null;
-  if (segments.length < 3) return null;
-  return segments[1] || null;
+function matchGlob(segments, glob) {
+  return glob.endsWith("/*")
+    ? matchWildcardRoot(segments, glob.slice(0, -2))
+    : matchLiteralDir(segments, glob);
+}
+
+/**
+ * `<root>/*` — one directory beneath a root.
+ *
+ * Requires a segment AFTER that directory, since a path naming the directory
+ * alone names no file inside it and so names no manifest to gate.
+ */
+function matchWildcardRoot(segments, root) {
+  if (segments[0] !== root) return null;
+  if (segments.length < 3 || !segments[1]) return null;
+  return `${root}/${segments[1]}`;
+}
+
+/** A bare `<dir>` entry — the directory itself, which is its own package. */
+function matchLiteralDir(segments, dir) {
+  if (segments[0] !== dir || segments.length < 2) return null;
+  return dir;
+}
+
+/**
+ * Kept as the narrow form for callers that only care about published packages.
+ *
+ * Expressed through {@link workspaceDirsOf} rather than reimplemented, so the
+ * two cannot disagree about what a package directory is.
+ */
+export function changedPackageDirs(paths) {
+  return workspaceDirsOf(paths, ["packages/*"]).map(dir => dir.split("/")[1]);
 }
 
 /**
@@ -142,22 +178,54 @@ function unreadableSection(unreadable) {
   ].join("\n");
 }
 
-/** Read the manifest of one package directory. */
+/** The workspace globs pnpm declares, so the roots are read rather than assumed. */
+export function workspaceGlobs(yaml) {
+  return yaml
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("- "))
+    .map(line => line.slice(2).trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
+}
+
+/** Read the manifest of one workspace directory. */
 function manifestReader(cwd) {
-  return dir =>
-    JSON.parse(readFileSync(`${cwd}/${PACKAGE_ROOT}/${dir}/package.json`, "utf8"));
+  return dir => JSON.parse(readFileSync(`${cwd}/${dir}/package.json`, "utf8"));
+}
+
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8" });
 }
 
 function main() {
   const base = process.argv[2] ?? "origin/main";
   const cwd = process.cwd();
-  const output = execFileSync(
-    "git",
-    ["diff", "--name-only", `${base}...HEAD`],
-    { cwd, encoding: "utf8" }
+
+  // The MERGE BASE, and a two-dot diff against the WORKING TREE.
+  //
+  // `base...HEAD` compares two commits, so everything still uncommitted is
+  // invisible — and this runs before a commit, which is exactly when the files
+  // being gated are uncommitted. It fails in the dangerous direction: it names
+  // FEWER packages than the branch touches, for precisely the files under
+  // active edit, while reading as though it ran.
+  //
+  // Diffing `base` directly instead over-reports: it sweeps in everything the
+  // base gained since this branch left it, which on a busy day is dozens of
+  // other lanes' packages.
+  const mergeBase = git(cwd, ["merge-base", base, "HEAD"]).trim();
+  // Tracked changes AND untracked additions. `git diff` reports neither an
+  // untracked file nor its directory, and a NEW file is what a new module or a
+  // new test is — so a branch that only ADDS files would derive an empty scope
+  // and gate nothing, while printing a report that reads as though it looked.
+  const paths = [
+    ...git(cwd, ["diff", "--name-only", mergeBase]).split("\n"),
+    ...git(cwd, ["ls-files", "--others", "--exclude-standard"]).split("\n"),
+  ].filter(Boolean);
+
+  const globs = workspaceGlobs(
+    readFileSync(`${cwd}/pnpm-workspace.yaml`, "utf8")
   );
-  const paths = output.split("\n").filter(Boolean);
-  const dirs = changedPackageDirs(paths);
+  const dirs = workspaceDirsOf(paths, globs);
   const { filters, unreadable } = packageFilters(dirs, manifestReader(cwd));
   console.log(report({ filters, unreadable, scripts: touchesScripts(paths) }));
 }

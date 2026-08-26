@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   changedPackageDirs,
+  workspaceDirsOf,
+  workspaceGlobs,
   packageFilters,
   report,
   touchesScripts,
@@ -135,5 +137,61 @@ describe("the report", () => {
     expect(
       report({ filters: [], unreadable: ["ghost"], scripts: false })
     ).toContain("packages/ghost");
+  });
+});
+
+describe("the workspace roots, which are not only packages/", () => {
+  // `pnpm-workspace.yaml` declares `apps/*`, `packages/*` and the bare `e2e`.
+  // A mapper that knows only `packages/` drops a change to an app or to the
+  // browser suite silently — and silence is the failure this module exists to
+  // remove.
+  const GLOBS = ["apps/*", "packages/*", "e2e"];
+
+  it("maps a packages/ path", () => {
+    expect(workspaceDirsOf(["packages/ui/src/x.ts"], GLOBS)).toEqual([
+      "packages/ui",
+    ]);
+  });
+
+  it("maps an apps/ path", () => {
+    expect(workspaceDirsOf(["apps/playground/app/page.tsx"], GLOBS)).toEqual([
+      "apps/playground",
+    ]);
+  });
+
+  it("maps a BARE workspace entry that has no wildcard", () => {
+    expect(workspaceDirsOf(["e2e/tests/a.spec.ts"], GLOBS)).toEqual(["e2e"]);
+  });
+
+  it("drops a path in no workspace root", () => {
+    // The control. A mapper that returned something for every path would
+    // satisfy the three cases above and name a package for `README.md`.
+    expect(workspaceDirsOf(["README.md", "scripts/x.mjs"], GLOBS)).toEqual([]);
+  });
+
+  it("ignores a bare root entry naming no file", () => {
+    expect(workspaceDirsOf(["packages/ui", "packages"], GLOBS)).toEqual([]);
+  });
+});
+
+describe("reading the workspace roots from pnpm-workspace.yaml", () => {
+  it("takes every list entry, quoted or bare", () => {
+    expect(
+      workspaceGlobs(
+        [
+          "packages:",
+          '  - "apps/*"',
+          '  - "packages/*"',
+          "  # a comment, and the bare entry below it",
+          "  - e2e",
+        ].join("\n")
+      )
+    ).toEqual(["apps/*", "packages/*", "e2e"]);
+  });
+
+  it("returns nothing for a file that declares no list", () => {
+    // Must be EMPTY rather than defaulting to `packages/*`: a silent default
+    // is how the mapper came to know one root and drop the other two.
+    expect(workspaceGlobs("packages:\n")).toEqual([]);
   });
 });
