@@ -217,7 +217,27 @@ export function BreakpointSwitcher({
    * nothing while the tier indicator still reports what is applying. Gutenberg
    * needed the same distinction once it allowed free resizing.
    */
-  const exact = tiers.some(tier => tier.bound === width);
+  /*
+   * Built from {@link selectableTiers}, which is also what the HOST checks a
+   * requested width against. Composed here instead, the two lists drift — and
+   * the way they drifted was silent: the host cleared the unconditional tier's
+   * width on the render after it was chosen, so the option existed, responded,
+   * and did nothing.
+   */
+  const selectable = React.useMemo(
+    () => selectableTiers(breakpoints),
+    [breakpoints]
+  );
+  /*
+   * Asked of every SELECTABLE width, not of the bounded ones.
+   *
+   * The unconditional tier now has a width of its own, and it is no tier's
+   * bound. Measured against the bounded list alone this was false the moment an
+   * author chose that tier: the canvas sized correctly and edited base, while
+   * every radio reported `aria-checked="false"` and the control read as having
+   * no selection at all.
+   */
+  const exact = selectable.some(tier => tier.maxWidth === width);
   const atWidest = width === undefined;
 
   /*
@@ -243,19 +263,9 @@ export function BreakpointSwitcher({
    * offer rather than a stand-in for one.
    */
   /*
-   * Built from {@link selectableTiers}, which is also what the HOST checks a
-   * requested width against. Composed here instead, the two lists drift — and
-   * the way they drifted was silent: the host cleared the unconditional tier's
-   * width on the render after it was chosen, so the option existed, responded,
-   * and did nothing.
-   *
-   * Labels stay here because a tier carries none and naming is this control's
-   * job; the WIDTHS are the shared answer.
+   * Labels stay in this component because a tier carries none and naming is
+   * this control's job; the WIDTHS are the shared answer, taken above.
    */
-  const selectable = React.useMemo(
-    () => selectableTiers(breakpoints),
-    [breakpoints]
-  );
   const labels = new Map(tiers.map(tier => [tier.id, tier.label]));
   const options: Array<{
     id: BreakpointId;

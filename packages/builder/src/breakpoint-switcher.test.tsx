@@ -291,6 +291,33 @@ describe("what the control reports as selected", () => {
     expect(appliedNote(container)).not.toBeNull();
   });
 
+  it("stays SELECTED after choosing the unconditional tier's own width", () => {
+    /*
+     * Choosing that option sets a real width now, and it is no tier's BOUND —
+     * so a match computed from the bounded tiers is false the moment it is
+     * pressed. The canvas sizes correctly and edits base; the control reports
+     * `aria-checked="false"` on every radio and reads as having no selection.
+     *
+     * A press that visibly deselects everything is worse than one that does
+     * nothing: it says the choice was refused while the edit it enabled is
+     * quietly landing where the author wanted.
+     */
+    render(
+      <BreakpointSwitcher
+        breakpoints={site()}
+        width={992}
+        appliedWidth={992}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(checked()).toHaveLength(1);
+    expect(checked()[0]?.getAttribute("aria-label")).toBe(
+      "Full width, from 992 pixels"
+    );
+  });
+
   it("selects the widest when the canvas is UNBOUNDED, which is the control", () => {
     /*
      * Without this, a control that selected nothing under every circumstance
