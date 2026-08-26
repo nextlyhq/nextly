@@ -39,6 +39,7 @@ import {
   type NestingVerdict,
 } from "@nextlyhq/blocks-engine";
 
+import { emptySlotOf } from "./empty-slot";
 import { positionOf, type OpPosition } from "./ops";
 
 /**
@@ -464,18 +465,13 @@ export function insertionPointFor(
   // to it is done by selecting the second and inserting after that — so both
   // placements stay available without a second affordance to discover.
   const selected = findNode(document.nodes, selectedId);
-  const declared =
-    selected === undefined ? undefined : slots?.slotsOf(selected.type);
-  const firstSlot = declared?.[0];
-  if (
-    selected !== undefined &&
-    firstSlot !== undefined &&
-    (selected.slots?.[firstSlot]?.length ?? 0) === 0
-  ) {
+  const emptySlot =
+    selected === undefined ? null : emptySlotOf(selected, slots);
+  if (selected !== undefined && emptySlot !== null) {
     return {
       kind: "inside-selection",
-      at: { parentId: selected.id, slot: firstSlot, index: 0 },
-      target: { at: "slot", parentType: selected.type, slot: firstSlot },
+      at: { parentId: selected.id, slot: emptySlot, index: 0 },
+      target: { at: "slot", parentType: selected.type, slot: emptySlot },
     };
   }
 
