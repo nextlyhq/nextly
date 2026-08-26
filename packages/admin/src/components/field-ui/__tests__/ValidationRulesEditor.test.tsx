@@ -110,7 +110,11 @@ describe("ValidationRulesEditor — what it reports", () => {
     expect(reported).not.toHaveProperty("errorMessage");
   });
 
-  it("says the message describes the pattern only when one is offered", () => {
+  it("does not claim the message describes the pattern, even beside one", () => {
+    // Whether the message covers that one rule or every rule is the caller's
+    // semantics, and this component cannot see them: the form runtime hands
+    // the same string to required, length and format failures, so copy naming
+    // the pattern would be shown for failures it does not describe.
     render(
       <ValidationRulesEditor
         allowed={["pattern", "message"]}
@@ -118,7 +122,10 @@ describe("ValidationRulesEditor — what it reports", () => {
         onChange={vi.fn()}
       />
     );
-    expect(screen.getByText(/fails the Pattern above/i)).toBeInTheDocument();
+    expect(screen.queryByText(/the Pattern above/i)).not.toBeInTheDocument();
+    // The control: the help text is present and general, so the assertion
+    // above is about what it SAYS rather than about it having gone missing.
+    expect(screen.getByText(/fails validation/i)).toBeInTheDocument();
   });
 });
 

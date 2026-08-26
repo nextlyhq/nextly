@@ -190,7 +190,6 @@ export function ValidationRulesEditor({
         <MessageRow
           value={value.message}
           disabled={disabled}
-          describesPattern={permits.has("pattern")}
           onChange={message => onChange({ message })}
         />
       )}
@@ -228,12 +227,10 @@ function PatternRow({
 function MessageRow({
   value,
   disabled,
-  describesPattern,
   onChange,
 }: {
   value: string | undefined;
   disabled?: boolean;
-  describesPattern: boolean;
   onChange: (v: string) => void;
 }) {
   const id = useId();
@@ -246,13 +243,15 @@ function MessageRow({
         disabled={disabled}
         onChange={e => onChange(e.target.value)}
       />
-      {/* Named for what it governs: a message beside a pattern explains that
-          pattern, and one without explains the field's other rules. Saying
-          which keeps the author from writing copy for the wrong failure. */}
+      {/* Deliberately does NOT name the Pattern, even when one is offered
+          beside it. Whether the message describes that rule alone or every
+          rule is the CALLER's semantics, and this component cannot see them:
+          the form runtime hands the same string to required, length and
+          format failures too, so copy written for a pattern would be shown
+          for unrelated ones. The general wording is true whichever it is. */}
       <p className="text-xs text-muted-foreground">
-        {describesPattern
-          ? "Shown when the value fails the Pattern above. Falls back to a default message if blank."
-          : "Shown when the value fails validation. Falls back to a default message if blank."}
+        Shown when the value fails validation. Falls back to a default message
+        if blank.
       </p>
     </div>
   );
