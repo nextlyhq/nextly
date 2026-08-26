@@ -339,6 +339,30 @@ export {
 } from "@nextlyhq/ui";
 export { Stack, Grid, Stat } from "@nextlyhq/ui";
 export type { StackProps, GridProps, StatProps } from "@nextlyhq/ui";
+
+/**
+ * Form scaffolding, forwarded so `plugin-sdk/admin` can reach it.
+ *
+ * These are the pieces a settings form cannot be assembled without: a label, a
+ * field's row and description, a titled group, and the single action bar. They
+ * were reachable from `@nextlyhq/ui` but not from here, so a plugin author
+ * composing a form ran out of parts and fell through to a stylesheet of their
+ * own — which is the one place the design linter does not run.
+ *
+ * `FieldShell`, `FormSection` and `FormActions` carry `@experimental` in `ui`
+ * and keep it here: forwarding a component does not settle its API.
+ */
+export { Label } from "@nextlyhq/ui";
+/** @experimental */
+export { FieldShell, FormSection, FormActions } from "@nextlyhq/ui";
+/** @experimental */
+export type {
+  FieldShellProps,
+  FieldShellRenderProps,
+  FieldWidth,
+  FormSectionProps,
+  FormActionsProps,
+} from "@nextlyhq/ui";
 /**
  * Immersive surfaces ask for admin chrome to be hidden while they are mounted.
  * Exported for `plugin-sdk/admin`, which is the only admin surface a plugin (and
