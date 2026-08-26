@@ -34,9 +34,9 @@
 
 import { renderedType } from "../sql-templates/create-table-body";
 
+import { typesDiffer } from "./declared-size";
 import { indexKey, isManagedIndexName } from "./index-util";
 import { normalizeDefault } from "./normalize-default";
-import { normalizeType } from "./normalize-type";
 import type {
   AddColumnOp,
   AddTableOp,
@@ -218,19 +218,24 @@ function diffColumns(
     }
     if (prevC && curC) {
       // Column present in both - check for changes.
-      // Compare normalised type tokens — the live side reads PG's `udt_name`
-      // (`int4`, `bool`, `varchar` without length) while the desired side
-      // authors SQL names (`integer`, `boolean`, `varchar(255)`). A raw
-      // string compare flags every core column as a "type change" and makes
-      // `nextly migrate` refuse every existing Postgres DB. See
-      // ./normalize-type.ts. The op carries the original, un-normalised names.
-      if (normalizeType(prevC.type) !== normalizeType(curC.type)) {
+      // Compared as normalised token PLUS declared size — the live side reads
+      // PG's `udt_name` (`int4`, `bool`, `varchar` without length) while the
+      // desired side authors SQL names (`integer`, `boolean`,
+      // `varchar(255)`). A raw string compare flags every core column as a
+      // "type change" and makes `nextly migrate` refuse every existing
+      // Postgres DB; comparing the token ALONE went the other way and let a
+      // narrowing through unseen, because `numeric(10,2)` and `numeric(5,1)`
+      // reduce to one token. See ./declared-size.ts.
+      if (typesDiffer(prevC, curC)) {
         typeChanges.push({
           type: "change_column_type",
           tableName,
           columnName: name,
-          fromType: prevC.type,
-          toType: curC.type,
+          // The DECLARATIONS, so the ALTER states the size it is moving to.
+          // Reporting `type` alone would cast a narrowing target back to an
+          // unbounded column and quietly undo the change being made.
+          fromType: renderedType(prevC),
+          toType: renderedType(curC),
         });
       }
       // A primary key's nullability is not an independent attribute: it

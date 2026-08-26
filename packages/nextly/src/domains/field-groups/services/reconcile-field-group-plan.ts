@@ -33,6 +33,7 @@ import {
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../i18n/migration/generate-up";
 import { buildDesiredTableFromComponentFields } from "../../schema/pipeline/diff/build-from-fields";
+import { sizeFromDeclaration } from "../../schema/pipeline/diff/declared-size";
 import { normalizeDefault } from "../../schema/pipeline/diff/normalize-default";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type {
@@ -298,11 +299,7 @@ function mainSkeleton(
  * decides whether the comparison is meaningful, and a dialect list would be a second opinion about
  * which introspector preserves widths.
  */
-function typeModifier(type: string | undefined): string | undefined {
-  const match = /\(([^)]*)\)/.exec(type ?? "");
-  const inner = match?.[1];
-  return inner === undefined ? undefined : inner.replace(/\s+/g, "");
-}
+const typeModifier = sizeFromDeclaration;
 
 /**
  * Whether a live table carries an index covering exactly these columns, in this order.
