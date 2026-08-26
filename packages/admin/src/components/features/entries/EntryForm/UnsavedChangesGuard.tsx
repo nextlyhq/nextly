@@ -21,7 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@nextlyhq/ui";
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useRef, type ReactNode } from "react";
 
 import { useUnsavedChanges } from "@admin/hooks/useUnsavedChanges";
 
@@ -57,6 +57,25 @@ export interface UnsavedChangesGuardProps {
    * Use this to perform any cleanup before navigation.
    */
   onDiscard?: () => void;
+
+  /**
+   * Callback fired when the author declines to leave — "Keep Editing", or
+   * dismissing the dialog.
+   *
+   * The counterpart to `onDiscard`, and needed for the same reason: a caller
+   * that recorded an intent alongside the navigation has to know the navigation
+   * did not happen. Without it the intent survives the refusal, and fires later
+   * if the author reaches that destination by some other route.
+   */
+  /*
+   * Explicitly nullable rather than merely optional, which is not a style
+   * choice: under `exactOptionalPropertyTypes` an optional prop cannot be
+   * handed a `T | undefined`, so every caller holding one has to spread it
+   * conditionally — and each of those spreads is a branch in a component that
+   * already has plenty. Widening the contract here costs nothing; the callers
+   * pass the value they hold.
+   */
+  onCancel?: (() => void) | undefined;
 
   /**
    * Whether to disable the guard.
@@ -118,6 +137,7 @@ export interface UnsavedChangesGuardProps {
 export function UnsavedChangesGuard({
   isDirty,
   onDiscard,
+  onCancel,
   disabled = false,
   children,
 }: UnsavedChangesGuardProps) {
@@ -128,14 +148,41 @@ export function UnsavedChangesGuard({
       disabled,
     });
 
+  /*
+   * Every exit from this dialog is funnelled through `onOpenChange`, and
+   * whether it was a refusal is decided by ONE fact recorded on the way out.
+   *
+   * Wiring the refusal to the Cancel button instead looks equivalent and is
+   * not, in two ways that only a test shows. The button also closes the dialog,
+   * so the refusal fires twice. And confirming closes it too — so "Discard
+   * changes" reported a refusal as well, dropping the very intent the
+   * navigation was carrying, at the one moment it was supposed to be honoured.
+   *
+   * A ref rather than state: it is read during the close that the same gesture
+   * causes, and a state update would not have landed by then.
+   */
+  const confirmed = useRef(false);
+
+  const handleOpenChange = (open: boolean): void => {
+    if (open) {
+      confirmed.current = false;
+      return;
+    }
+    if (confirmed.current) return;
+    cancelLeave();
+    onCancel?.();
+  };
+
+  const handleConfirm = (): void => {
+    confirmed.current = true;
+    confirmLeave();
+  };
+
   return (
     <LeaveWithoutWarningContext.Provider value={leaveWithoutWarning}>
       {children}
 
-      <AlertDialog
-        open={showDialog}
-        onOpenChange={open => !open && cancelLeave()}
-      >
+      <AlertDialog open={showDialog} onOpenChange={handleOpenChange}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
@@ -145,16 +192,16 @@ export function UnsavedChangesGuard({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={cancelLeave}>
-              Keep Editing
-            </AlertDialogCancel>
+            {/* No handler: closing IS the refusal, and it is reported once
+                from `onOpenChange` rather than from both places. */}
+            <AlertDialogCancel>Keep Editing</AlertDialogCancel>
             {/* Hover darkens the fill by one ramp step, not two.
                 `destructive-700` drops the on-color label to 3.70:1 in dark
                 mode, under the 4.5:1 text minimum; `destructive-600` holds
                 5.67:1 dark and 5.92:1 light and still reads as a state change
                 against the resting fill. */}
             <AlertDialogAction
-              onClick={confirmLeave}
+              onClick={handleConfirm}
               className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
             >
               Discard Changes

@@ -93,6 +93,57 @@ describe("UnsavedChangesGuard", () => {
     expect(window.location.pathname).toBe(START);
   });
 
+  it("says so when the author refuses to leave", async () => {
+    // The counterpart to `onDiscard`. A caller that recorded an intent
+    // alongside the navigation — "switch language AND fill it from this one" —
+    // has to learn the navigation did not happen, or the intent outlives the
+    // refusal and fires when that destination is reached by some other route.
+    const onCancel = vi.fn();
+    render(
+      <UnsavedChangesGuard isDirty onCancel={onCancel}>
+        <GoElsewhere />
+      </UnsavedChangesGuard>
+    );
+    await userEvent.click(screen.getByRole("button", { name: "go" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /keep editing/i })
+    );
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe(START);
+  });
+
+  it("says so when the author dismisses the question rather than answering it", async () => {
+    // Escape is a refusal too. Wiring only the button would leave the intent
+    // alive for anyone who closes the dialog the other way — which is the more
+    // common gesture, not the rarer one.
+    const onCancel = vi.fn();
+    render(
+      <UnsavedChangesGuard isDirty onCancel={onCancel}>
+        <GoElsewhere />
+      </UnsavedChangesGuard>
+    );
+    await userEvent.click(screen.getByRole("button", { name: "go" }));
+    await screen.findByRole("button", { name: /keep editing/i });
+    await userEvent.keyboard("{Escape}");
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report a refusal when the author confirmed", async () => {
+    // The separating case: `onCancel` must not fire on the path that DID
+    // navigate, or the intent is dropped exactly when it should be honoured.
+    const onCancel = vi.fn();
+    render(
+      <UnsavedChangesGuard isDirty onCancel={onCancel}>
+        <GoElsewhere />
+      </UnsavedChangesGuard>
+    );
+    await userEvent.click(screen.getByRole("button", { name: "go" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /discard/i })
+    );
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
   it("completes the navigation the author confirmed", async () => {
     const onDiscard = vi.fn();
     render(
