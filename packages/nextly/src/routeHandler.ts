@@ -346,6 +346,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "previewUrl",
   "imageSizes",
   "dashboard",
+  "translations",
   "schema",
   "email",
 ]);

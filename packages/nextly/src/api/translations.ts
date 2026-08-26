@@ -18,10 +18,15 @@
 
 import { container } from "../di";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
-import type { UserContext } from "../domains/collections/services/collection-types";
-import type { TranslationFilterState } from "../domains/i18n/companion-join";
+import {
+  TRANSLATION_FILTER_STATES,
+  type TranslationFilterState,
+} from "../domains/i18n/companion-join";
+import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { isValidLocale } from "../domains/i18n/resolve-locale";
 import {
   byMostRecentlyUpdated,
+  eligibleCollections,
   planWorklistFanOut,
   translatedFilter,
   worklistId,
@@ -33,9 +38,14 @@ import {
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { CollectionsHandler } from "../services/collections-handler";
+import {
+  isSuperAdmin,
+  listEffectivePermissions,
+} from "../services/lib/permissions";
 
 import {
   authenticatedRead,
+  readCaller,
   PRIVATE_NO_STORE_HEADERS,
 } from "./authenticated-read";
 import { respondData } from "./response-shapes";
@@ -44,33 +54,19 @@ import { withErrorHandler } from "./with-error-handler";
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
-/**
- * The states a worklist may be asked for.
- *
- * The SAME four the entry table's language filter already offers, read from the
- * one place that defines them. A worklist with a vocabulary of its own would
- * describe the same document differently depending on which screen asked.
- */
-const WORKLIST_STATES: readonly TranslationFilterState[] = [
-  "missing",
-  "translated",
-  "draft",
-  "published",
-];
-
 function parseState(raw: string | null): TranslationFilterState {
   // Defaulted rather than required: "what is missing" is the question the
   // worklist exists for, and asking a translator to name a state before they
   // can see any work is a form to fill in before a list.
   if (raw === null || raw === "") return "missing";
-  const match = WORKLIST_STATES.find(s => s === raw);
+  const match = TRANSLATION_FILTER_STATES.find(s => s === raw);
   if (match === undefined) {
     throw NextlyError.validation({
       errors: [
         {
           path: "state",
           code: "invalid_state",
-          message: `Unknown translation state "${raw}". Expected one of: ${WORKLIST_STATES.join(", ")}.`,
+          message: `Unknown translation state "${raw}". Expected one of: ${TRANSLATION_FILTER_STATES.join(", ")}.`,
         },
       ],
     });
@@ -86,22 +82,79 @@ function parseLimit(raw: string | null): number {
 }
 
 /**
- * The caller, in the shape the access rules read.
+ * Which collections this caller may read at all, or `undefined` for a
+ * super-admin (meaning "no filter").
  *
- * `roles` carries through because a role-based read rule matches on it. It is
- * the difference between a worklist that is short because the work is done and
- * one that is short because nothing matched.
+ * Coarse on purpose. It decides which collections are worth QUERYING; the
+ * per-row rules inside `listEntries` still decide which documents come back.
+ * Both are needed — this one keeps unreadable collections from consuming the
+ * cap, and the per-row one keeps another author's titles out of the answer.
  */
-function worklistUser(auth: { userId: string; roles?: string[] }): UserContext {
-  return {
-    id: auth.userId,
-    ...(auth.roles === undefined ? {} : { roles: auth.roles }),
-  };
+async function readableCollections(
+  userId: string
+): Promise<Set<string> | undefined> {
+  if (await isSuperAdmin(userId)) return undefined;
+  const pairs = await listEffectivePermissions(userId);
+  return new Set(
+    pairs.filter(p => p.endsWith(":read")).map(p => p.split(":")[0] ?? "")
+  );
+}
+
+/**
+ * The app's configured languages, or `undefined` where localization is off.
+ *
+ * Read from the registered service config the same way the entity guards read
+ * it, so "which languages exist" has one answer.
+ */
+function configuredLocalization(): SanitizedLocalizationConfig | undefined {
+  if (!container.has("config")) return undefined;
+  return container.get<{ localization?: SanitizedLocalizationConfig }>("config")
+    .localization;
+}
+
+/**
+ * Refuse a language the app does not have.
+ *
+ * Not pedantry: an unconfigured code has no rows in any companion table, so the
+ * `NOT EXISTS` predicate matches EVERYTHING. `locale=esp` would report every
+ * document on the site as untranslated — a typo rendered as a full backlog,
+ * which is both alarming and completely wrong, and nothing in the response
+ * would hint that the language was the problem.
+ */
+function assertConfiguredLocale(locale: string): void {
+  const localization = configuredLocalization();
+  if (localization === undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "locale",
+          code: "localization_not_configured",
+          message: "This app has no localization configured.",
+        },
+      ],
+    });
+  }
+  if (!isValidLocale(localization, locale)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "locale",
+          code: "unknown_locale",
+          message: `Unknown locale "${locale}". Configured: ${localization.locales
+            .map(l => l.code)
+            .join(", ")}.`,
+        },
+      ],
+    });
+  }
 }
 
 /** Every collection that HAS a language dimension, with what the list needs to name it. */
 async function localizedCollections(): Promise<
-  (LocalizedCollectionRef & { useAsTitle: string | undefined })[]
+  (LocalizedCollectionRef & {
+    useAsTitle: string | undefined;
+    hasStatus: boolean;
+  })[]
 > {
   const registry = container.get<CollectionRegistryService>(
     "collectionRegistryService"
@@ -113,6 +166,7 @@ async function localizedCollections(): Promise<
       slug: c.slug,
       label: c.labels?.plural ?? c.slug,
       useAsTitle: c.admin?.useAsTitle,
+      hasStatus: c.status === true,
     }));
 }
 
@@ -125,8 +179,7 @@ async function localizedCollections(): Promise<
  *   - limit:  1..200 (default: 50)
  */
 export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
-  const auth = await authenticatedRead(req);
-  const { searchParams } = auth;
+  const { auth, searchParams } = await authenticatedRead(req);
   const locale = searchParams.get("locale");
   // Required, and refused rather than defaulted to the site default: a worklist
   // for a language nobody asked about is a list of work that is not theirs.
@@ -146,10 +199,29 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   const limit = parseLimit(searchParams.get("limit"));
 
   await getCachedNextly();
+  assertConfiguredLocale(locale);
   const handler = container.get<CollectionsHandler>("collectionsHandler");
-  const collections = await localizedCollections();
-  const { queried, skippedCollections } = planWorklistFanOut(collections);
-  const bySlug = new Map(collections.map(c => [c.slug, c]));
+  const caller = await readCaller(auth);
+
+  // Narrowed BEFORE the cap, in two steps, and the order is the point.
+  //
+  // A lifecycle state is a question a statusless collection cannot answer:
+  // `buildTranslationStatusCondition` deliberately produces no condition there,
+  // so the query returns every document and the worklist presents all of them
+  // as being in the state that was asked for.
+  //
+  // And capping the raw registry list lets collections the caller cannot read
+  // consume the alphabetically-first slots, pushing a readable collection into
+  // `skippedCollections` — where its work is never queried AND its slug is
+  // named back to someone with no right to know it exists.
+  const readable = await readableCollections(auth.userId);
+  const eligible = eligibleCollections(
+    await localizedCollections(),
+    state,
+    readable
+  );
+  const { queried, skippedCollections } = planWorklistFanOut(eligible);
+  const bySlug = new Map(eligible.map(c => [c.slug, c]));
 
   const perCollection = await Promise.all(
     queried.map(async coll => {
@@ -161,7 +233,10 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
         // "fully translated" — a silent, reassuring lie rather than an error.
         // Filtering by collection alone (the dashboard's model) would go the
         // other way and list every author's titles to a self-scoped role.
-        user: worklistUser(auth),
+        user: caller.user,
+        ...(caller.authenticatedScope === undefined
+          ? {}
+          : { authenticatedScope: caller.authenticatedScope }),
         // The reserved key is not part of `WhereFilter`'s published shape — the
         // list extractor pulls it off the top level before the clause is typed —
         // so the cast is at the ONE call site that knows that, not in the helper.

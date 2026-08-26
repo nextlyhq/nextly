@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   MAX_WORKLIST_COLLECTIONS,
   byMostRecentlyUpdated,
+  eligibleCollections,
   planWorklistFanOut,
   translatedFilter,
   worklistId,
@@ -98,10 +99,78 @@ describe("byMostRecentlyUpdated", () => {
   });
 });
 
+describe("eligibleCollections", () => {
+  const coll = (slug: string, hasStatus = true) => ({
+    slug,
+    label: slug,
+    hasStatus,
+  });
+
+  it("drops collections the caller cannot read", () => {
+    const out = eligibleCollections(
+      [coll("posts"), coll("secrets"), coll("pages")],
+      "missing",
+      new Set(["posts", "pages"])
+    );
+    expect(out.map(c => c.slug)).toEqual(["posts", "pages"]);
+  });
+
+  it("treats an absent readable set as super-admin, not as nothing readable", () => {
+    const out = eligibleCollections([coll("posts")], "missing", undefined);
+    expect(out.map(c => c.slug)).toEqual(["posts"]);
+  });
+
+  it("excludes a statusless collection from a LIFECYCLE state", () => {
+    // The companion condition is deliberately absent for a collection with no
+    // status, so the query returns EVERY document — and the worklist would
+    // present all of them as being in the state that was asked for.
+    for (const state of ["draft", "published"] as const) {
+      const out = eligibleCollections(
+        [coll("posts", true), coll("tags", false)],
+        state,
+        undefined
+      );
+      expect(out.map(c => c.slug)).toEqual(["posts"]);
+    }
+  });
+
+  it("keeps a statusless collection for states that do not need status", () => {
+    // "missing" and "translated" are answerable without a lifecycle, and
+    // excluding those collections would hide real outstanding work.
+    for (const state of ["missing", "translated"] as const) {
+      const out = eligibleCollections(
+        [coll("posts", true), coll("tags", false)],
+        state,
+        undefined
+      );
+      expect(out.map(c => c.slug)).toEqual(["posts", "tags"]);
+    }
+  });
+
+  it("narrows BEFORE the cap, so an unreadable collection cannot consume a slot", () => {
+    // The ordering property, stated as one test. `a`-prefixed unreadable
+    // collections would otherwise fill every slot alphabetically and push the
+    // readable one into `skippedCollections` — where its work is never queried
+    // and its slug is named to someone with no right to know it exists.
+    const all = [
+      ...Array.from({ length: MAX_WORKLIST_COLLECTIONS }, (_, i) =>
+        coll(`a${String(i).padStart(3, "0")}`)
+      ),
+      coll("zebra"),
+    ];
+    const plan = planWorklistFanOut(
+      eligibleCollections(all, "missing", new Set(["zebra"]))
+    );
+    expect(plan.queried.map(c => c.slug)).toEqual(["zebra"]);
+    expect(plan.skippedCollections).toEqual([]);
+  });
+});
+
 describe("planWorklistFanOut", () => {
   const many = Array.from({ length: MAX_WORKLIST_COLLECTIONS + 3 }, (_, i) => ({
     slug: `c${String(i).padStart(3, "0")}`,
     label: `C${i}`,
+    hasStatus: true,
   }));
 
   it("names what the cap excluded rather than dropping it", () => {

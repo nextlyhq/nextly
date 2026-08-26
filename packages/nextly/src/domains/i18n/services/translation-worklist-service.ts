@@ -78,6 +78,8 @@ export interface TranslationWorklistResult {
 export interface LocalizedCollectionRef {
   slug: string;
   label: string;
+  /** Whether it has the draft/published lifecycle at all. */
+  hasStatus: boolean;
 }
 
 /**
@@ -147,6 +149,36 @@ export function byMostRecentlyUpdated(
   if (!aOk) return 1;
   if (!bOk) return -1;
   return bt - at;
+}
+
+/**
+ * Which collections can honestly answer this question, before the cap sees them.
+ *
+ * Two exclusions, and both must happen BEFORE `planWorklistFanOut` rather than
+ * after.
+ *
+ * A collection the caller cannot read must not consume one of the capped slots.
+ * If it does, a readable collection further down the alphabet is pushed into
+ * `skippedCollections` — where its outstanding work is never queried, and where
+ * its slug is reported back to someone with no right to know it exists.
+ *
+ * And a lifecycle state is a question a statusless collection cannot answer:
+ * the companion condition is deliberately absent there, so the query returns
+ * EVERY document and the worklist presents all of them as being in the state
+ * that was asked for. Contributing nothing is the truthful answer; contributing
+ * everything is the worst available one.
+ */
+export function eligibleCollections<T extends LocalizedCollectionRef>(
+  localized: readonly T[],
+  state: TranslationFilterState,
+  readable: ReadonlySet<string> | undefined
+): T[] {
+  const wantsLifecycle = state === "draft" || state === "published";
+  return localized.filter(
+    c =>
+      (readable === undefined || readable.has(c.slug)) &&
+      (!wantsLifecycle || c.hasStatus)
+  );
 }
 
 /**

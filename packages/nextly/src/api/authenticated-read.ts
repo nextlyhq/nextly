@@ -15,14 +15,26 @@
  * @module api/authenticated-read
  */
 
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { buildUserContext } from "../auth/user-context";
+import type { UserContext } from "../domains/collections/services/collection-types";
+import { resolveRoleSlugs } from "../services/lib/permissions";
 
-/** Who is asking, and what they asked for. */
+/**
+ * Who is asking, and what they asked for.
+ *
+ * The auth context is carried WHOLE rather than reduced to an id. Everything a
+ * later access decision needs lives on it — the method the caller
+ * authenticated by, an API key's own stamped permissions, and the custom claims
+ * a claim-based rule reads — and each of them is invisible once dropped: the
+ * request still succeeds, it simply answers as somebody with fewer rights, or
+ * with more.
+ */
 export interface AuthenticatedRead {
-  userId: string;
-  /** Role ids, needed wherever a role-based access rule is evaluated. */
-  roles?: string[] | undefined;
+  auth: AuthContext;
   searchParams: URLSearchParams;
 }
 
@@ -51,9 +63,46 @@ export async function authenticatedRead(
 ): Promise<AuthenticatedRead> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+  return { auth, searchParams: new URL(req.url).searchParams };
+}
+
+/**
+ * The caller, in the two shapes an access decision reads.
+ *
+ * `roles` must be RESOLVED rather than forwarded: session auth carries role
+ * IDs and API-key auth carries slugs, and a role-based rule matches on slugs.
+ * Handing it the ids matches nothing — so a collection guarded by a role rule
+ * returns no rows, and a read that should have been full comes back empty
+ * without an error anywhere to say why.
+ *
+ * `authenticatedScope` exists so an API KEY is judged on its own stamped grant
+ * rather than on the roles of whoever minted it. Without it a narrowly scoped
+ * key issued by a super-admin inherits the owner's reach.
+ *
+ * `versions-access` and `preview-links` each grew their own copy of this before
+ * there was a shared one; they are left as they are, and new read endpoints
+ * should call this.
+ */
+export async function readCaller(
+  auth: AuthContext
+): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
+  const roles = await resolveRoleSlugs(auth);
+  const user = buildUserContext({
+    claims: auth.claims,
+    id: auth.userId,
+    name: auth.userName,
+    email: auth.userEmail,
+    roles,
+  });
   return {
-    userId: auth.userId,
-    roles: auth.roles,
-    searchParams: new URL(req.url).searchParams,
+    user,
+    ...(auth.authMethod === "api-key"
+      ? {
+          authenticatedScope: {
+            actorType: "apiKey" as const,
+            permissions: auth.permissions,
+          },
+        }
+      : {}),
   };
 }
