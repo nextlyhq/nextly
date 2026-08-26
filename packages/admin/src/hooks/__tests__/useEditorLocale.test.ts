@@ -82,10 +82,9 @@ describe("useEditorLocale", () => {
     expect(result.current.seedFromLocale).toBe("en");
   });
 
-  it("never offers a seed for a switch that was abandoned", () => {
-    // The other half of the same rule. If the author cancels instead of
-    // discarding, the intent must not survive to fire against some later
-    // language they did choose.
+  it("never offers a seed for a switch that went somewhere else", () => {
+    // The other half of the same rule. If the author ends up in a different
+    // language, the intent must not fire against the one they did choose.
     go("?locale=en");
     const { result, rerender } = renderHook(() => useEditorLocale());
 
@@ -94,6 +93,28 @@ describe("useEditorLocale", () => {
     rerender();
 
     expect(result.current.locale).toBe("fr");
+    expect(result.current.seedFromLocale).toBeUndefined();
+  });
+
+  it("drops a seed whose switch was refused, even if the target is reached later", () => {
+    // The case the previous test does NOT cover, because it stops at a third
+    // language and never returns. Decline the switch, then arrive at the same
+    // target by another route — browser history, or a later switch after
+    // saving — and a retained pair would offer a copy the author declined
+    // minutes earlier, with no memory of having asked.
+    go("?locale=en");
+    const { result, rerender } = renderHook(() => useEditorLocale());
+
+    act(() => result.current.changeLocale("de", { seedFrom: "en" }));
+    // The guard asked; the author chose "Keep Editing", so the editor stays put
+    // and tells the hook the intent is over.
+    act(() => result.current.clearSeed());
+
+    // Later, the same mounted page reaches German anyway.
+    go("?locale=de");
+    rerender();
+
+    expect(result.current.locale).toBe("de");
     expect(result.current.seedFromLocale).toBeUndefined();
   });
 
