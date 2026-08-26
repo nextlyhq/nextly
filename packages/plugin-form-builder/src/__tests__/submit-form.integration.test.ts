@@ -386,21 +386,43 @@ describe("what a form that is not taking submissions says", () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe(
-      "This form is not currently accepting submissions"
-    );
+    expect(result.error).toBe(HIDDEN);
   });
 
-  it("says nothing specific about a DRAFT", async () => {
-    // A draft has never been public. There is no author intent to relay, and
-    // nothing here should distinguish it from a form that does not exist.
+  // What a caller is told about a form they may not be entitled to know exists.
+  // Named once here so the tests below compare against the same sentence a
+  // missing row produces, rather than each restating a literal that could drift
+  // apart from it.
+  const HIDDEN = "Form not found";
+
+  it("answers a slug nobody used with that sentence", async () => {
+    // The anchor the two tests below are measured against. Without it they
+    // assert a literal, and a literal cannot tell you the two answers MATCH.
+    const fb = formBuilder({
+      spamProtection: { honeypot: false, recaptcha: { enabled: false } },
+    });
+    const probe = contextProbe("@test/fb-missing");
+    current = await createTestNextly({ plugins: [fb.plugin, probe.plugin] });
+
+    const result = await submitForm(
+      { formSlug: "no-such-form", data: { message: "hello" } },
+      { pluginContext: probe.get(), pluginConfig: fb.config }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(HIDDEN);
+  });
+
+  it("answers a DRAFT exactly as it answers a slug nobody used", async () => {
+    // A draft has never been public. Saying "not currently accepting
+    // submissions" would confirm it exists, which is the enumeration this
+    // reading exists to prevent — and this path said exactly that while its
+    // own comment claimed it did not.
     const result = await submitTo("draft", {
       closedMessage: "Applications closed on 31 March.",
     });
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe(
-      "This form is not currently accepting submissions"
-    );
+    expect(result.error).toBe(HIDDEN);
   });
 });

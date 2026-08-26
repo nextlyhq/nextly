@@ -8,7 +8,7 @@
  * @since 0.1.0
  */
 
-import { formAvailability, GENERIC_REFUSAL } from "nextly";
+import { formAvailability } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -93,6 +93,9 @@ export interface SubmitFormContext {
 // Main Submission Handler
 // ============================================================
 
+/** What a caller is told about a form they may not be entitled to know exists. */
+const NO_SUCH_FORM = "Form not found";
+
 /**
  * Process a form submission.
  *
@@ -151,10 +154,7 @@ export async function submitForm(
       logger.warn?.("Form submission attempted for non-existent form", {
         formSlug,
       });
-      return {
-        success: false,
-        error: "Form not found",
-      };
+      return { success: false, error: NO_SUCH_FORM };
     }
 
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
@@ -167,12 +167,15 @@ export async function submitForm(
         status: form.status,
         availability: availability.kind,
       });
+      // `absent` answers exactly as a slug nobody used does. Saying "not
+      // currently accepting submissions" here would confirm the form exists,
+      // which is the enumeration this whole reading exists to prevent — and it
+      // would disagree with the REST and Direct API paths, which is how the
+      // four came to give four different answers in the first place.
       return {
         success: false,
         error:
-          availability.kind === "closed"
-            ? availability.message
-            : GENERIC_REFUSAL,
+          availability.kind === "closed" ? availability.message : NO_SUCH_FORM,
       };
     }
 
