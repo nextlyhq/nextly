@@ -61,29 +61,50 @@ export function useEditorLocale(): EditorLocale {
   // consumed on arrival, not a property of the page: in the URL it would
   // survive a reload and re-offer a copy the author asked for once, and it
   // would be carried into any link they shared.
-  const [seedFromLocale, setSeedFromLocale] = useState<string | undefined>(
-    undefined
-  );
+  //
+  // It records the TARGET as well as the source, and that pair is what makes it
+  // survive an interrupted switch. Asking for the URL change does not perform
+  // it: on a dirty form `UnsavedChangesGuard` holds the navigation until the
+  // author answers, and through that whole wait the language being edited is
+  // still the SOURCE. A seed stored as a bare source is indistinguishable from
+  // "copy this language onto itself" during that window, and the consumer
+  // rightly discards it — so the copy the author was promised never arrived
+  // once they chose "Discard changes".
+  const [seed, setSeed] = useState<
+    { target: string; from: string } | undefined
+  >(undefined);
 
   // Set together, deliberately: a switch either carries a seed or clears the
   // previous one. Leaving a stale seed behind would re-offer a copy the author
   // asked for two languages ago.
   const changeLocale = useCallback(
     (code: string, options?: { seedFrom?: string }) => {
-      setSeedFromLocale(options?.seedFrom);
+      setSeed(
+        options?.seedFrom === undefined
+          ? undefined
+          : { target: code, from: options.seedFrom }
+      );
       setSearchParam(LOCALE_PARAM, code);
     },
     []
   );
 
+  // Offered only once the switch has LANDED. An abandoned navigation leaves the
+  // pair in state where it is invisible and harmless, replaced by the next
+  // switch; and because the target is the language now being edited, the source
+  // can never equal it, so the consumer's self-copy guard is a safety net
+  // rather than the thing that swallows the intent.
+  const seedFromLocale =
+    seed !== undefined && seed.target === locale ? seed.from : undefined;
+
   // Drops the seed too: a pending copy names a target language that is no
   // longer the one being edited.
   const resetLocale = useCallback(() => {
-    setSeedFromLocale(undefined);
+    setSeed(undefined);
     setSearchParam(LOCALE_PARAM, null);
   }, []);
 
-  const clearSeed = useCallback(() => setSeedFromLocale(undefined), []);
+  const clearSeed = useCallback(() => setSeed(undefined), []);
 
   return { locale, changeLocale, resetLocale, seedFromLocale, clearSeed };
 }

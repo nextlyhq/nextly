@@ -28,6 +28,7 @@ import { useEffect, useMemo, useCallback, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
@@ -658,178 +659,183 @@ export function SingleForm({
               >
                 <div className={cn("space-y-0", className)}>
                   <EntryFormProvider form={form} onSubmit={handleSubmit}>
-                    <FormErrorSummary
-                      errors={errors}
-                      submitCount={submitCount}
-                      className="mx-6 mt-3"
-                    />
+                    <CopyFromLanguageScope>
+                      <FormErrorSummary
+                        errors={errors}
+                        submitCount={submitCount}
+                        className="mx-6 mt-3"
+                      />
 
-                    <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
-                      {/* Main column */}
-                      <div className="flex-1 min-w-0 flex flex-col">
-                        {/* No horizontal compensation here, and none needed. The
+                      <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
+                        {/* Main column */}
+                        <div className="flex-1 min-w-0 flex flex-col">
+                          {/* No horizontal compensation here, and none needed. The
                 parent's `-my-8` cancels the page's VERTICAL inset only; the
                 horizontal inset is spent as grid columns on a measured page and
                 is not a padding any margin can pull back from. A horizontal one here
                 would not cancel anything — it would push the header and meta
                 strip past the content column, which is what it did when the
                 parent still cancelled both axes. */}
-                        <EntrySystemHeader
-                          autosaveEnabled={autosaveScope !== null}
-                          autosaveStatus={autosave.status}
-                          autosaveLastSavedAt={autosave.lastSavedAt}
-                          mode="edit"
-                          titleField={titleField}
-                          historyFields={schema.fields}
-                          historyEnabled={historyEnabledFrom(schema)}
-                          hasStatus={hasStatus}
-                          isSubmitting={isSubmitting}
-                          isDirty={isDirty}
-                          entry={entryLike}
-                          collectionSlug={schema.slug}
-                          /* The active language, which the header reads to decide
+                          <EntrySystemHeader
+                            autosaveEnabled={autosaveScope !== null}
+                            autosaveStatus={autosave.status}
+                            autosaveLastSavedAt={autosave.lastSavedAt}
+                            mode="edit"
+                            titleField={titleField}
+                            historyFields={schema.fields}
+                            historyEnabled={historyEnabledFrom(schema)}
+                            hasStatus={hasStatus}
+                            isSubmitting={isSubmitting}
+                            isDirty={isDirty}
+                            entry={entryLike}
+                            collectionSlug={schema.slug}
+                            /* The active language, which the header reads to decide
                              which row's status its save buttons act on — a
                              localized single's default row and its translations
                              can be in different publish states. Switching
                              language is the language panel's job, so no handler
                              is forwarded here. */
-                          locale={locale}
-                          localized={schema.localized === true}
-                          /* A Single has a draft lifecycle, so it has drafts worth
+                            locale={locale}
+                            localized={schema.localized === true}
+                            /* A Single has a draft lifecycle, so it has drafts worth
                    sharing. The control is offered whenever the Single carries
                    that lifecycle; whether a link can actually be minted is the
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
-                          isLinkAvailable={previewLink.isAvailable}
-                          onCopyLink={previewLink.copy}
-                          isCopyingLink={previewLink.isCopying}
-                          /* The pane is offered on exactly the terms the
+                            isLinkAvailable={previewLink.isAvailable}
+                            onCopyLink={previewLink.copy}
+                            isCopyingLink={previewLink.isCopying}
+                            /* The pane is offered on exactly the terms the
                            shareable link is: a Single with a draft lifecycle
                            and a resolvable language. Withheld in translation
                            mode, where the pane itself is withheld — a button
                            that toggles a flag nothing reads is worse than no
                            button. */
-                          {...previewPane.toggle}
-                          toolbarSlot={
-                            <EntryFormToolbarSlots
-                              context="single"
-                              controllerField={controllerNames[0]}
-                            />
-                          }
-                          onSaveDraft={() => {
-                            void handleSubmit(undefined, "save-draft");
-                          }}
-                          onPublish={() => {
-                            void handleSubmit(undefined, "publish");
-                          }}
-                          onSaveChanges={() => {
-                            void handleSubmit(undefined, "save-changes");
-                          }}
-                          /* The draft/published split. Without this the header
+                            {...previewPane.toggle}
+                            toolbarSlot={
+                              <EntryFormToolbarSlots
+                                context="single"
+                                controllerField={controllerNames[0]}
+                              />
+                            }
+                            onSaveDraft={() => {
+                              void handleSubmit(undefined, "save-draft");
+                            }}
+                            onPublish={() => {
+                              void handleSubmit(undefined, "publish");
+                            }}
+                            onSaveChanges={() => {
+                              void handleSubmit(undefined, "save-changes");
+                            }}
+                            /* The draft/published split. Without this the header
                    takes its `draftsEnabled: false` branch, whose Save names the
                    status — and a write that names one is never held, so the
                    engine's pending-change support stayed dark for every Single.
                    The label is the visible tell: "Save changes" rather than
                    "Save". */
-                          draftsEnabled={schema.draftsEnabled === true}
-                          onSaveWorkingDraft={() => {
-                            void handleSubmit(undefined, "save-working-draft");
-                          }}
-                          onUnpublish={() => {
-                            void handleSubmit(undefined, "unpublish");
-                          }}
-                          onDiscardWorkingDraft={async () => {
-                            await discardMutation.mutateAsync();
-                          }}
-                          onCancel={handleCancel}
-                          onViewApi={onViewApi}
-                          /* Why: Singles share the Show JSON dialog with collections,
+                            draftsEnabled={schema.draftsEnabled === true}
+                            onSaveWorkingDraft={() => {
+                              void handleSubmit(
+                                undefined,
+                                "save-working-draft"
+                              );
+                            }}
+                            onUnpublish={() => {
+                              void handleSubmit(undefined, "unpublish");
+                            }}
+                            onDiscardWorkingDraft={async () => {
+                              await discardMutation.mutateAsync();
+                            }}
+                            onCancel={handleCancel}
+                            onViewApi={onViewApi}
+                            /* Why: Singles share the Show JSON dialog with collections,
                  but at the /api/singles/{slug} URL pattern. Passing
                  `scope="single"` routes the dialog through singleApi
                  instead of entryApi. */
-                          scope="single"
-                          lockIdentity
-                          isRailCollapsed={railCollapsed}
-                          onToggleRail={toggleRail}
-                        />
-                        <EntryMetaStrip
-                          slugField={slugField}
-                          hasStatus={hasStatus}
-                          status={documentStatus}
-                          isRailCollapsed={railCollapsed}
-                          lockSlug
-                        />
+                            scope="single"
+                            lockIdentity
+                            isRailCollapsed={railCollapsed}
+                            onToggleRail={toggleRail}
+                          />
+                          <EntryMetaStrip
+                            slugField={slugField}
+                            hasStatus={hasStatus}
+                            status={documentStatus}
+                            isRailCollapsed={railCollapsed}
+                            lockSlug
+                          />
 
-                        {/* Inside the main column, below the header, matching the entry
+                          {/* Inside the main column, below the header, matching the entry
                   editor. Placed above the flex row it sat UNDER the sticky
                   header, which intercepted pointer events: the offer was
                   visible and its buttons were not clickable. */}
-                        {recovery.offer ? (
-                          <AutosaveRecoveryBanner
-                            savedAt={recovery.offer.savedAt}
-                            onRestore={restoreRecovery}
-                            onDismiss={recovery.dismiss}
-                            className="mx-6 mt-3"
-                          />
-                        ) : null}
+                          {recovery.offer ? (
+                            <AutosaveRecoveryBanner
+                              savedAt={recovery.offer.savedAt}
+                              onRestore={restoreRecovery}
+                              onDismiss={recovery.dismiss}
+                              className="mx-6 mt-3"
+                            />
+                          ) : null}
 
-                        {/* The language panel, inline. The rail that otherwise carries it
+                          {/* The language panel, inline. The rail that otherwise carries it
                   is `hidden @4xl/content:flex`, so this is the exact
                   complement: shown only where the rail is not, and rendered
                   unconditionally once the author collapses the rail. Without
                   it a single loses its language workflow entirely at narrow
                   widths, which is the failure this panel exists to remove. */}
-                        {localizationEnabled && (
-                          <div
-                            className={cn(
-                              "px-6 pt-4",
-                              !railCollapsed && "@4xl/content:hidden"
-                            )}
-                          >
-                            <LanguagePanel
-                              {...(singleTranslations === undefined
-                                ? {}
-                                : { translations: singleTranslations })}
-                              {...(locale === undefined
-                                ? {}
-                                : { activeLocale: locale })}
-                              {...(onLocaleChange === undefined
-                                ? {}
-                                : { onSelect: onLocaleChange })}
-                              hasStatus={hasStatus}
-                            />
-                          </div>
-                        )}
+                          {localizationEnabled && (
+                            <div
+                              className={cn(
+                                "px-6 pt-4",
+                                !railCollapsed && "@4xl/content:hidden"
+                              )}
+                            >
+                              <LanguagePanel
+                                {...(singleTranslations === undefined
+                                  ? {}
+                                  : { translations: singleTranslations })}
+                                {...(locale === undefined
+                                  ? {}
+                                  : { activeLocale: locale })}
+                                {...(onLocaleChange === undefined
+                                  ? {}
+                                  : { onSelect: onLocaleChange })}
+                                hasStatus={hasStatus}
+                              />
+                            </div>
+                          )}
 
-                        {mainFields.length > 0 && (
-                          <div className="@4xl/content:p-8 pt-6">
-                            <EntryFormContent
-                              fields={mainFields}
-                              disabled={isSubmitting}
-                              withCard
-                            />
+                          {mainFields.length > 0 && (
+                            <div className="@4xl/content:p-8 pt-6">
+                              <EntryFormContent
+                                fields={mainFields}
+                                disabled={isSubmitting}
+                                withCard
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Rail (collapsible). Same shape and width as collections. */}
+                        {!railCollapsed && (
+                          <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+                            <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                              <EntryFormSidebar
+                                mode="edit"
+                                entry={entryLike}
+                                hasStatus={hasStatus}
+                                isDirty={isDirty}
+                                {...(locale === undefined ? {} : { locale })}
+                                {...(onLocaleChange === undefined
+                                  ? {}
+                                  : { onLocaleChange })}
+                              />
+                            </div>
                           </div>
                         )}
                       </div>
-
-                      {/* Rail (collapsible). Same shape and width as collections. */}
-                      {!railCollapsed && (
-                        <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-                          <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                            <EntryFormSidebar
-                              mode="edit"
-                              entry={entryLike}
-                              hasStatus={hasStatus}
-                              isDirty={isDirty}
-                              {...(locale === undefined ? {} : { locale })}
-                              {...(onLocaleChange === undefined
-                                ? {}
-                                : { onLocaleChange })}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    </CopyFromLanguageScope>
                   </EntryFormProvider>
                 </div>
               </TranslationPanes>

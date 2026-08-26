@@ -83,7 +83,25 @@ export function untranslatedLocales(
 }
 
 /** The state a language is in for one document. */
-export type LanguageState = "missing" | "draft" | "translated" | "published";
+/**
+ * Every state a language can be in, ordered as a language moves through them —
+ * and the single source both the type and every legend derive from.
+ *
+ * A tuple rather than a union so the ORDER is part of the vocabulary and a list
+ * of the states cannot be maintained by hand somewhere else. A hand-kept list
+ * typed `readonly LanguageState[]` only proves the entries it contains are
+ * valid; it says nothing about the ones it forgot, so a new state would ship a
+ * dot that the legend explaining the dots cannot explain — and any test
+ * asserting a hard-coded length stays green while it happens.
+ */
+export const LANGUAGE_STATES = [
+  "published",
+  "translated",
+  "draft",
+  "missing",
+] as const;
+
+export type LanguageState = (typeof LANGUAGE_STATES)[number];
 
 /**
  * Resolve a locale's state from its translation meta.

@@ -30,8 +30,8 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { CompletenessMeter } from "./CompletenessMeter";
-import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
 import { CopyFromLanguageMenu } from "./CopyFromLanguageMenu";
+import { useCopyFromLanguageScope } from "./CopyFromLanguageScope";
 import { useEntryLocale } from "./EntryLocaleContext";
 import { StateDot } from "./LanguageStateDot";
 import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
@@ -39,15 +39,13 @@ import {
   languageState,
   languageStateLabel,
   translationCounts,
+  LANGUAGE_STATES,
   LANGUAGE_STATE_LABEL,
   type LanguageState,
   type LocaleTranslationMeta,
   type TranslationCounts,
 } from "./translation-meta";
-import {
-  useCopyFromLanguage,
-  type CopyFromLanguage,
-} from "./useCopyFromLanguage";
+import type { CopyFromLanguage } from "./useCopyFromLanguage";
 import { usePublishAllLanguages } from "./usePublishAllLanguages";
 
 export interface LanguagePanelProps {
@@ -104,14 +102,6 @@ function matchesQuery(
   );
 }
 
-/** The states a dot can encode, in the order a language moves through them. */
-const LEGEND_STATES: readonly LanguageState[] = [
-  "published",
-  "translated",
-  "draft",
-  "missing",
-];
-
 /**
  * What the dots mean, on request.
  *
@@ -140,7 +130,7 @@ function StateLegend() {
         aria-label="Language states"
         className="mt-2 flex flex-col gap-1"
       >
-        {LEGEND_STATES.map(state => (
+        {LANGUAGE_STATES.map(state => (
           <span key={state} className="flex items-center gap-1.5">
             <StateDot state={state} />
             <span className="first-letter:uppercase">
@@ -178,8 +168,19 @@ function PanelHeader({
   onPublishAll,
   offersTranslate,
   onTranslate,
+  copy,
+  activeLabel,
+  activeState,
+  metaKnown,
 }: {
   counts: TranslationCounts;
+  /** The document's one copy-from state, or undefined where it does not apply. */
+  copy: CopyFromLanguage | undefined;
+  /** The language being edited — the target the header's picker fills. */
+  activeLabel: string;
+  /** Its state, which chooses the verb. */
+  activeState: LanguageState;
+  metaKnown: boolean;
   actionsDisabled: boolean;
   canPublishAll: boolean;
   publishPending: boolean;
@@ -197,6 +198,20 @@ function PanelHeader({
         {counts.translated} of {counts.total} translated
       </span>
       <span className="flex-1" />
+      {/* Filling the language being EDITED lives here rather than on its row.
+          Every other row implies its source — the author is standing in one
+          language and acting on another — but this one is where they are
+          standing, so the source has to be named. The header is where the
+          panel's document-scoped actions already are, and unlike the row it
+          wraps, so the control cannot be pushed out of reach. */}
+      {copy !== undefined && (
+        <CopyFromLanguageMenu
+          copy={copy}
+          verb={seedVerb(activeState, metaKnown)}
+          targetLabel={activeLabel}
+          disabled={actionsDisabled}
+        />
+      )}
       {offersTranslate && (
         <Button
           type="button"
@@ -239,7 +254,8 @@ function LanguageRows({
   translations,
   defaultLocale,
   active,
-  copy,
+  canSeed,
+  metaKnown,
   actionsDisabled,
   onSelect,
 }: {
@@ -256,8 +272,9 @@ function LanguageRows({
   translations: Record<string, LocaleTranslationMeta> | undefined;
   defaultLocale: string;
   active: string;
-  /** The one copy-from state, owned by the panel and shared by every row. */
-  copy: CopyFromLanguage;
+  canSeed: boolean;
+  /** Whether `translations` was supplied at all — see `seedVerb`. */
+  metaKnown: boolean;
   actionsDisabled: boolean;
   onSelect:
     | ((code: string, options?: { seedFrom?: string }) => void)
@@ -286,7 +303,8 @@ function LanguageRows({
           state={languageState(translations?.[locale.code])}
           pendingChange={translations?.[locale.code]?.pendingChange}
           isActive={locale.code === active}
-          copy={copy}
+          canSeed={canSeed}
+          metaKnown={metaKnown}
           {...(onSelect === undefined ? {} : { onSelect })}
           onSeed={() => {
             // The row clicked is the target and the language being edited is
@@ -328,7 +346,68 @@ function LanguageRows({
  * button and the active row's source picker can never drift into two names for
  * the same thing — which is the failure this whole panel exists to undo.
  */
-function seedVerb(state: LanguageState): string {
+/**
+ * What the header needs to know about the language being edited.
+ *
+ * Three readings of the same subject — its name, its state, and whether we were
+ * told anything about it — resolved together because they are one question and
+ * because the panel that renders them has no room left for three more
+ * expressions of its own.
+ */
+function activeLanguageView(
+  locales: readonly { code: string; label: string }[],
+  translations: Record<string, LocaleTranslationMeta> | undefined,
+  active: string
+): { label: string; state: LanguageState; metaKnown: boolean } {
+  return {
+    label: locales.find(l => l.code === active)?.label ?? active,
+    state: languageState(translations?.[active]),
+    // An absent map is not an empty document — see `seedVerb`.
+    metaKnown: translations !== undefined,
+  };
+}
+
+/**
+ * How many languages hold a saved change nobody has published.
+ *
+ * Stated in the publish-all confirm, because publishing every language is the
+ * one action in this panel that can put another person's held edit on the
+ * public site.
+ */
+function pendingLanguageCount(
+  locales: readonly { code: string }[],
+  translations: Record<string, LocaleTranslationMeta> | undefined
+): number {
+  return locales.filter(l => translations?.[l.code]?.pendingChange).length;
+}
+
+/**
+ * Whether entering translation mode applies to what is on screen.
+ *
+ * Three conditions that only mean something together: the editor must offer the
+ * mode at all, the language being edited must not be the source it would be
+ * translated from, and there has to BE a source. Named once so the header reads
+ * as one decision rather than three.
+ */
+function offersTranslateMode(
+  onEnterTranslationMode: ((source: string) => void) | undefined,
+  isNonDefaultLocale: boolean,
+  defaultLocale: string
+): boolean {
+  return (
+    onEnterTranslationMode !== undefined &&
+    isNonDefaultLocale &&
+    defaultLocale !== ""
+  );
+}
+
+function seedVerb(state: LanguageState, metaKnown: boolean): string {
+  // Unknown metadata is NOT an empty language. With no `_translations` map every
+  // locale reads `missing`, which is a supported state for this panel — and
+  // "Start from…" would then promise a fill with nothing to lose immediately
+  // before the confirm step explains what it overwrites. When we do not know,
+  // say the destructive thing.
+  if (!metaKnown) return "Replace";
   return state === "missing" ? "Start" : "Replace";
 }
 
@@ -350,7 +429,8 @@ function LanguageRow({
   state,
   pendingChange,
   isActive,
-  copy,
+  canSeed,
+  metaKnown,
   onSelect,
   onSeed,
   actionsDisabled,
@@ -363,7 +443,8 @@ function LanguageRow({
   /** Whether this language holds a saved change nobody has published. */
   pendingChange?: boolean;
   isActive: boolean;
-  copy: CopyFromLanguage;
+  canSeed: boolean;
+  metaKnown: boolean;
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
   onSeed?: () => void;
   actionsDisabled: boolean;
@@ -416,21 +497,16 @@ function LanguageRow({
           {LANGUAGE_STATE_LABEL[state]}
         </span>
       </div>
+      {/* The active row carries NO action. Filling the language being edited is
+          offered from the panel header instead, because this row cannot hold
+          it: measured in a 277px rail, adding a 100px control here drove the
+          non-shrinking half of the row 32px into it for a label as short as
+          "English", and 120px for "Brazilian Portuguese". The row's describing
+          half is already the part that gives way, and it had no more to give. */}
       {isActive ? (
-        <div className="flex shrink-0 items-center gap-1.5">
-          <span className="text-xs text-muted-foreground">editing now</span>
-          {/* The one row whose source cannot be implied. Every other row is
-              filled from wherever the author is standing; this row IS where
-              they are standing, so the source gets named here. Withholding it
-              was what made a populated language unfillable from anywhere once
-              the header's Languages menu was deleted. */}
-          <CopyFromLanguageMenu
-            copy={copy}
-            verb={seedVerb(state)}
-            targetLabel={label}
-            disabled={actionsDisabled}
-          />
-        </div>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          editing now
+        </span>
       ) : (
         <div className="flex shrink-0 items-center gap-1.5">
           {/* Offered on EVERY language, not only an empty one. Filling a
@@ -438,7 +514,7 @@ function LanguageRow({
               start, which is what the verb reports and what the confirm step
               then spells out; refusing the action instead left it reachable
               from nowhere. */}
-          {copy.available && onSeed && (
+          {canSeed && onSeed && (
             <Button
               type="button"
               variant="outline"
@@ -448,10 +524,10 @@ function LanguageRow({
               // Named for the language it acts on. Read out of context — a
               // screen reader listing this panel's controls — three buttons
               // all saying "Start from…" name no language at all.
-              aria-label={`${seedVerb(state)} ${label} from another language`}
+              aria-label={`${seedVerb(state, metaKnown)} ${label} from another language`}
               onClick={onSeed}
             >
-              {seedVerb(state)} from…
+              {seedVerb(state, metaKnown)} from…
             </Button>
           )}
           {onSelect && (
@@ -491,7 +567,7 @@ export function LanguagePanel({
   const { enabled, locales, defaultLocale } = useLocalization();
   const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
     useEntryLocale();
-  const copy = useCopyFromLanguage();
+  const copy = useCopyFromLanguageScope();
   const publish = usePublishAllLanguages(
     hasStatus === undefined ? {} : { hasStatus }
   );
@@ -505,12 +581,7 @@ export function LanguagePanel({
   if (!enabled || !collectionLocalized || locales.length < 2) return null;
 
   const active = activeLocale ?? defaultLocale;
-  // How many languages hold work nobody has published. Stated in the confirm
-  // below, because publishing all of them is the one action here that can put
-  // another person's held edit on the public site.
-  const pendingCount = locales.filter(
-    l => translations?.[l.code]?.pendingChange
-  ).length;
+  const pendingCount = pendingLanguageCount(locales, translations);
   const counts = translationCounts(
     translations,
     locales.map(l => l.code),
@@ -518,20 +589,25 @@ export function LanguagePanel({
   );
 
   const { offersFilter, shown } = filteredLanguages(locales, filter);
+  const activeLanguage = activeLanguageView(locales, translations, active);
 
   return (
     <div className={cn("rounded-md border border-border", className)}>
       <PanelHeader
         counts={counts}
+        copy={copy}
+        activeLabel={activeLanguage.label}
+        activeState={activeLanguage.state}
+        metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
         canPublishAll={publish.available}
         publishPending={publish.pending}
         onPublishAll={() => setConfirmPublishAll(true)}
-        offersTranslate={
-          onEnterTranslationMode !== undefined &&
-          isNonDefaultLocale &&
-          defaultLocale !== ""
-        }
+        offersTranslate={offersTranslateMode(
+          onEnterTranslationMode,
+          isNonDefaultLocale,
+          defaultLocale
+        )}
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
 
@@ -569,12 +645,12 @@ export function LanguagePanel({
         translations={translations}
         defaultLocale={defaultLocale}
         active={active}
-        copy={copy}
+        canSeed={copy?.available ?? false}
+        metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
         onSelect={onSelect}
       />
       <StateLegend />
-      <CopyFromLanguageDialog copy={copy} />
     </div>
   );
 }

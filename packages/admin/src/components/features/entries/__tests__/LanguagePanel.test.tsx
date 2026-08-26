@@ -7,6 +7,8 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "../EntryLocaleContext";
+import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
+import { LANGUAGE_STATES, LANGUAGE_STATE_LABEL } from "../translation-meta";
 import { LanguagePanel, type LanguagePanelProps } from "../LanguagePanel";
 
 const useBranding = vi.fn();
@@ -26,9 +28,31 @@ const publishState = vi.fn();
 vi.mock("../usePublishAllLanguages", () => ({
   usePublishAllLanguages: () => publishState(),
 }));
+// Counted rather than stubbed to null: how MANY of these exist is the point of
+// one of the tests below, and a stub that renders nothing cannot answer it.
 vi.mock("../CopyFromLanguageDialog", () => ({
-  CopyFromLanguageDialog: () => null,
+  CopyFromLanguageDialog: () => <span data-testid="copy-dialog-mount" />,
 }));
+
+function dialogMounts(): number {
+  return screen.queryAllByTestId("copy-dialog-mount").length;
+}
+
+/**
+ * The panel drew nothing.
+ *
+ * Asserted on the panel's own output rather than on an empty container: the
+ * copy-from scope around it always mounts its confirm dialog, so "the container
+ * is empty" would be a claim about the harness. What matters is that no part of
+ * the panel — its list, its header, its legend — reached the screen.
+ */
+function expectPanelAbsent(): void {
+  expect(
+    screen.queryByRole("list", { name: "Languages in this document" })
+  ).toBeNull();
+  expect(screen.queryByText("Languages")).toBeNull();
+  expect(screen.queryByRole("group", { name: /language states/i })).toBeNull();
+}
 
 const LOCALES = {
   defaultLocale: "en",
@@ -79,7 +103,9 @@ function renderPanel(
 ) {
   return render(
     <EntryLocaleProvider value={ctx}>
-      <LanguagePanel {...props} />
+      <CopyFromLanguageScope>
+        <LanguagePanel {...props} />
+      </CopyFromLanguageScope>
     </EntryLocaleProvider>
   );
 }
@@ -152,16 +178,24 @@ describe("LanguagePanel", () => {
 
     it("names every state the dots can encode, with none left undecodable", () => {
       /*
-       * The separating property against a legend that drifts from the states in
-       * use. It is derived from the same `LANGUAGE_STATE_LABEL` the rows read,
-       * so a state added there without a legend entry would fail here rather
-       * than shipping a dot nothing explains.
+       * Counted against the CANONICAL vocabulary rather than a literal. A
+       * hard-coded 4 stays green for exactly the change it exists to catch: add
+       * a state, forget the legend, and both the list and the assertion keep
+       * agreeing with each other while the dot goes unexplained. Reading
+       * `LANGUAGE_STATES` here means the number cannot be right by accident.
        */
       useBranding.mockReturnValue({ locales: LOCALES });
       renderPanel({ translations: TRANSLATIONS });
 
       const states = screen.getByRole("group", { name: /language states/i });
-      expect(within(states).getAllByText(/\S/)).toHaveLength(4);
+      expect(within(states).getAllByText(/\S/)).toHaveLength(
+        LANGUAGE_STATES.length
+      );
+      for (const state of LANGUAGE_STATES) {
+        expect(
+          within(states).getByText(LANGUAGE_STATE_LABEL[state])
+        ).toBeInTheDocument();
+      }
     });
   });
 
@@ -305,8 +339,8 @@ describe("LanguagePanel", () => {
 
   it("renders nothing when localization is not configured", () => {
     useBranding.mockReturnValue({ locales: undefined });
-    const { container } = renderPanel();
-    expect(container).toBeEmptyDOMElement();
+    renderPanel();
+    expectPanelAbsent();
   });
 
   it("renders nothing on a document that is not localized", () => {
@@ -315,19 +349,19 @@ describe("LanguagePanel", () => {
     // Spanish is "not translated" for content that has no language dimension
     // at all — work that does not exist rather than work outstanding.
     useBranding.mockReturnValue({ locales: LOCALES });
-    const { container } = renderPanel(
+    renderPanel(
       { translations: TRANSLATIONS },
       { ...LOCALIZED_CTX, collectionLocalized: false }
     );
-    expect(container).toBeEmptyDOMElement();
+    expectPanelAbsent();
   });
 
   it("renders nothing with a single language, which has no workflow to show", () => {
     useBranding.mockReturnValue({
       locales: { ...LOCALES, locales: [LOCALES.locales[0]] },
     });
-    const { container } = renderPanel();
-    expect(container).toBeEmptyDOMElement();
+    renderPanel();
+    expectPanelAbsent();
   });
 
   it("gives every configured language a row carrying its state as text", () => {
@@ -416,17 +450,23 @@ describe("LanguagePanel", () => {
     expect(onSelect).toHaveBeenCalledWith("en", { seedFrom: "de" });
   });
 
-  it("lets the language being edited name its own source", async () => {
-    // The one row whose source cannot be implied: it IS where the author is
-    // standing. Before this the action lived in the header's Languages menu,
-    // and deleting that menu left a populated language fillable from nowhere.
+  it("lets the language being edited name its own source, from the header", async () => {
+    // The one target whose source cannot be implied: it IS where the author is
+    // standing. It lives in the HEADER rather than on the active row, because
+    // the row cannot hold it — a 100px control there drove the row's
+    // non-shrinking half 32px into it for a label as short as "English".
     useBranding.mockReturnValue({ locales: LOCALES });
     const onSelect = vi.fn();
     renderPanel({ translations: TRANSLATIONS, activeLocale: "de", onSelect });
 
+    // Not on the row.
     const [, de] = rows();
+    expect(
+      within(de).queryByRole("button", { name: /from another language/ })
+    ).toBeNull();
+
     await userEvent.click(
-      within(de).getByRole("button", {
+      screen.getByRole("button", {
         name: "Replace German from another language",
       })
     );
@@ -438,6 +478,58 @@ describe("LanguagePanel", () => {
     // showing the target, so switching would be a trip back to where it is.
     expect(requestCopy).toHaveBeenCalledWith("en");
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("will not call an unknown target a start", () => {
+    // With no `_translations` at all, every locale reads `missing` — which is a
+    // supported state for this panel, not a claim that the document is empty.
+    // Saying "Start from…" there promises a fill with nothing to lose, moments
+    // before the confirm step explains what it overwrites. Where we do not
+    // know, the destructive word is the honest one.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({ activeLocale: "de", onSelect: vi.fn() });
+
+    expect(
+      screen.getByRole("button", {
+        name: "Replace Arabic from another language",
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Start Arabic from another language",
+      })
+    ).toBeNull();
+  });
+
+  it("opens ONE confirm dialog however many panels are mounted", async () => {
+    // The panel renders twice by design — rail and inline — and the inline one
+    // is hidden with CSS rather than unmounted, so at a wide width both are
+    // live. Two copy-from states would each observe the same seed and stack two
+    // confirmations for one action, and the author would answer twice.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    render(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel
+            translations={TRANSLATIONS}
+            activeLocale="de"
+            onSelect={vi.fn()}
+          />
+          <LanguagePanel
+            translations={TRANSLATIONS}
+            activeLocale="de"
+            onSelect={vi.fn()}
+          />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+
+    // Both panels rendered, so the test is about sharing rather than absence.
+    expect(
+      screen.getAllByRole("list", { name: "Languages in this document" })
+    ).toHaveLength(2);
+    // ...and exactly one dialog mount serves them.
+    expect(dialogMounts()).toBe(1);
   });
 
   it("withholds seeding entirely when copy-from does not apply", () => {

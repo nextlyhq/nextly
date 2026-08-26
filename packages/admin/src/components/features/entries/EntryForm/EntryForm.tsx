@@ -47,6 +47,7 @@ import {
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
+import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
 import { collectionSourceFetcher } from "../entry-locale-source";
 import { EntryLocaleProvider } from "../EntryLocaleContext";
 import { LanguagePanel } from "../LanguagePanel";
@@ -778,13 +779,14 @@ export function EntryForm({
                 >
                   <div className={cn("space-y-0", className)}>
                     <EntryFormProvider form={form} onSubmit={handleSubmit}>
-                      <FormErrorSummary
-                        errors={errors}
-                        submitCount={submitCount}
-                        className="mx-6 mt-3"
-                      />
+                      <CopyFromLanguageScope>
+                        <FormErrorSummary
+                          errors={errors}
+                          submitCount={submitCount}
+                          className="mx-6 mt-3"
+                        />
 
-                      {/* Vertical only, not both axes. The vertical half still cancels
+                        {/* Vertical only, not both axes. The vertical half still cancels
                           `PageContainer`'s `py-8` so the editor's two columns
                           reach the top and bottom of the panel. The horizontal
                           half cancelled its `px-8`, and there is none left to
@@ -794,244 +796,244 @@ export function EntryForm({
                           rather than back to the panel edge. Measured at a
                           1600px viewport: 960px of editor in an 896px column.
                           The two modal callers never had that padding either. */}
-                      <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
-                        {/* Main column */}
-                        <div className="flex-1 min-w-0 flex flex-col">
-                          {/* No horizontal negative inset here. These bands fill the Main column,
+                        <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
+                          {/* Main column */}
+                          <div className="flex-1 min-w-0 flex flex-col">
+                            {/* No horizontal negative inset here. These bands fill the Main column,
                     which is already as wide as the content column allows;
                     pulling them wider pushed both ~32px past the page edges
                     and clipped the title's first character on the left and
                     the rail toggle on the right. */}
-                          <EntrySystemHeader
-                            mode={mode}
-                            titleField={titleField}
-                            hasStatus={hasStatus}
-                            draftsEnabled={collection.draftsEnabled === true}
-                            isSubmitting={isSubmitting}
-                            isDirty={isDirty}
-                            autosaveEnabled={autosaveScope !== null}
-                            autosaveStatus={autosave.status}
-                            autosaveLastSavedAt={autosave.lastSavedAt}
-                            entry={entry}
-                            collectionSlug={collection.name}
-                            historyFields={getCollectionFields(collection)}
-                            historyEnabled={historyEnabledFrom(collection)}
-                            locale={locale}
-                            localized={collection.localized === true}
-                            isPreviewAvailable={canPreview}
-                            {...(entryPreview.declaredLabel === undefined
-                              ? {}
-                              : { previewLabel: entryPreview.declaredLabel })}
-                            {...(canPreview &&
-                            translationMode.source === undefined
-                              ? {
-                                  onTogglePreviewPane: () =>
-                                    setPreviewOpen(open => !open),
-                                  previewPaneOpen: previewOpen,
-                                }
-                              : {})}
-                            {...(canPreview
-                              ? { onPreview: entryPreview.openPreview }
-                              : {})}
-                            // Withheld while the language is unknown as well as while
-                            // the entry is unsaved: a link minted without a resolvable
-                            // locale is either refused by the mint route or, if the claim
-                            // were dropped to avoid that, a grant over every translation.
-                            isLinkAvailable={
-                              savedEntryId !== "" &&
-                              linkLocale.kind !== "unresolved"
-                            }
-                            {...(savedEntryId === ""
-                              ? {}
-                              : {
-                                  onCopyLink: () => {
-                                    previewLink.mutate();
-                                  },
-                                })}
-                            isCopyingLink={previewLink.isPending}
-                            toolbarSlot={
-                              <EntryFormToolbarSlots
-                                context="collection"
-                                controllerField={controllerNames[0]}
-                              />
-                            }
-                            onSaveDraft={() => {
-                              void handleSubmit(undefined, "save-draft");
-                            }}
-                            onPublish={() => {
-                              void handleSubmit(undefined, "publish");
-                            }}
-                            onSaveChanges={() => {
-                              void handleSubmit(undefined, "save-changes");
-                            }}
-                            onSaveWorkingDraft={() => {
-                              void handleSubmit(
-                                undefined,
-                                "save-working-draft"
-                              );
-                            }}
-                            onUnpublish={() => {
-                              void handleSubmit(undefined, "unpublish");
-                            }}
-                            onCancel={handleCancel}
-                            onDelete={handleDelete}
-                            onDiscardWorkingDraft={handleDiscardWorkingDraft}
-                            isRailCollapsed={railCollapsed}
-                            onToggleRail={
-                              mode === "edit" ? toggleRail : undefined
-                            }
-                          />
-                          {/* Above the fields and below the header: the reader sees
+                            <EntrySystemHeader
+                              mode={mode}
+                              titleField={titleField}
+                              hasStatus={hasStatus}
+                              draftsEnabled={collection.draftsEnabled === true}
+                              isSubmitting={isSubmitting}
+                              isDirty={isDirty}
+                              autosaveEnabled={autosaveScope !== null}
+                              autosaveStatus={autosave.status}
+                              autosaveLastSavedAt={autosave.lastSavedAt}
+                              entry={entry}
+                              collectionSlug={collection.name}
+                              historyFields={getCollectionFields(collection)}
+                              historyEnabled={historyEnabledFrom(collection)}
+                              locale={locale}
+                              localized={collection.localized === true}
+                              isPreviewAvailable={canPreview}
+                              {...(entryPreview.declaredLabel === undefined
+                                ? {}
+                                : { previewLabel: entryPreview.declaredLabel })}
+                              {...(canPreview &&
+                              translationMode.source === undefined
+                                ? {
+                                    onTogglePreviewPane: () =>
+                                      setPreviewOpen(open => !open),
+                                    previewPaneOpen: previewOpen,
+                                  }
+                                : {})}
+                              {...(canPreview
+                                ? { onPreview: entryPreview.openPreview }
+                                : {})}
+                              // Withheld while the language is unknown as well as while
+                              // the entry is unsaved: a link minted without a resolvable
+                              // locale is either refused by the mint route or, if the claim
+                              // were dropped to avoid that, a grant over every translation.
+                              isLinkAvailable={
+                                savedEntryId !== "" &&
+                                linkLocale.kind !== "unresolved"
+                              }
+                              {...(savedEntryId === ""
+                                ? {}
+                                : {
+                                    onCopyLink: () => {
+                                      previewLink.mutate();
+                                    },
+                                  })}
+                              isCopyingLink={previewLink.isPending}
+                              toolbarSlot={
+                                <EntryFormToolbarSlots
+                                  context="collection"
+                                  controllerField={controllerNames[0]}
+                                />
+                              }
+                              onSaveDraft={() => {
+                                void handleSubmit(undefined, "save-draft");
+                              }}
+                              onPublish={() => {
+                                void handleSubmit(undefined, "publish");
+                              }}
+                              onSaveChanges={() => {
+                                void handleSubmit(undefined, "save-changes");
+                              }}
+                              onSaveWorkingDraft={() => {
+                                void handleSubmit(
+                                  undefined,
+                                  "save-working-draft"
+                                );
+                              }}
+                              onUnpublish={() => {
+                                void handleSubmit(undefined, "unpublish");
+                              }}
+                              onCancel={handleCancel}
+                              onDelete={handleDelete}
+                              onDiscardWorkingDraft={handleDiscardWorkingDraft}
+                              isRailCollapsed={railCollapsed}
+                              onToggleRail={
+                                mode === "edit" ? toggleRail : undefined
+                              }
+                            />
+                            {/* Above the fields and below the header: the reader sees
                       the document it refers to without the offer covering it. */}
-                          {recovery.offer ? (
-                            <AutosaveRecoveryBanner
-                              savedAt={recovery.offer.savedAt}
-                              onRestore={restoreRecovery}
-                              onDismiss={recovery.dismiss}
-                            />
-                          ) : null}
-                          {viewingVersion ? (
-                            <HistoricalDocumentBanner
-                              versionNo={viewingVersion.versionNo}
-                              locale={viewingVersion.locale}
-                              // Routed through the panel when one is mounted, so its
-                              // selection clears with the shared state. The direct
-                              // fallback keeps the banner working without a panel.
-                              onReturnToCurrent={
-                                restoreAffordance?.returnToCurrent ??
-                                (() => setViewingVersion(null))
+                            {recovery.offer ? (
+                              <AutosaveRecoveryBanner
+                                savedAt={recovery.offer.savedAt}
+                                onRestore={restoreRecovery}
+                                onDismiss={recovery.dismiss}
+                              />
+                            ) : null}
+                            {viewingVersion ? (
+                              <HistoricalDocumentBanner
+                                versionNo={viewingVersion.versionNo}
+                                locale={viewingVersion.locale}
+                                // Routed through the panel when one is mounted, so its
+                                // selection clears with the shared state. The direct
+                                // fallback keeps the banner working without a panel.
+                                onReturnToCurrent={
+                                  restoreAffordance?.returnToCurrent ??
+                                  (() => setViewingVersion(null))
+                                }
+                                // Offered only when the panel says this caller may write.
+                                onRestore={
+                                  restoreAffordance?.canRestore
+                                    ? restoreAffordance.request
+                                    : undefined
+                                }
+                                // And only once the version is actually on screen:
+                                // restoring from a skeleton, or from a failed read, is a
+                                // decision made without having seen what is being chosen.
+                                restoreDisabled={!versionOnScreen}
+                              />
+                            ) : null}
+                            <EntryMetaStrip
+                              slugField={slugField}
+                              hasStatus={hasStatus}
+                              // The pill reports the language being edited, matching the header's submit
+                              // affordances. Reading the main row instead would show "Published" beside a
+                              // Publish button whenever a translation lags its default language.
+                              status={
+                                effectiveEntryStatus(
+                                  entry,
+                                  locale,
+                                  defaultLocale
+                                ) ?? "draft"
                               }
-                              // Offered only when the panel says this caller may write.
-                              onRestore={
-                                restoreAffordance?.canRestore
-                                  ? restoreAffordance.request
-                                  : undefined
-                              }
-                              // And only once the version is actually on screen:
-                              // restoring from a skeleton, or from a failed read, is a
-                              // decision made without having seen what is being chosen.
-                              restoreDisabled={!versionOnScreen}
+                              hasWorkingDraft={hasPendingWorkingDraft(entry)}
+                              isRailCollapsed={railCollapsed}
+                              hasPublicAddress={hasPublicAddress}
                             />
-                          ) : null}
-                          <EntryMetaStrip
-                            slugField={slugField}
-                            hasStatus={hasStatus}
-                            // The pill reports the language being edited, matching the header's submit
-                            // affordances. Reading the main row instead would show "Published" beside a
-                            // Publish button whenever a translation lags its default language.
-                            status={
-                              effectiveEntryStatus(
-                                entry,
-                                locale,
-                                defaultLocale
-                              ) ?? "draft"
-                            }
-                            hasWorkingDraft={hasPendingWorkingDraft(entry)}
-                            isRailCollapsed={railCollapsed}
-                            hasPublicAddress={hasPublicAddress}
-                          />
 
-                          {/* The language panel, inline. Its rail mount is
+                            {/* The language panel, inline. Its rail mount is
                         `hidden @4xl/content:flex`, so this is the exact
                         complement: shown only where the rail is not. When the
                         rail cannot carry it at all — create mode, or the author
                         collapsed it — the panel renders unconditionally instead,
                         because "the actions live in the rail" is precisely the
                         failure this stage removes. */}
-                          {localizationEnabled && (
-                            <div
-                              className={cn(
-                                "px-6 pt-4",
-                                mode === "edit" &&
-                                  !railCollapsed &&
-                                  "@4xl/content:hidden"
-                              )}
-                            >
-                              <LanguagePanel
-                                {...(entry?._translations === undefined
-                                  ? {}
-                                  : {
-                                      translations:
-                                        entry._translations as Record<
-                                          string,
-                                          {
-                                            translated: boolean;
-                                            status?: string;
-                                          }
-                                        >,
-                                    })}
-                                {...(locale === undefined
-                                  ? {}
-                                  : { activeLocale: locale })}
-                                {...(onLocaleChange === undefined
-                                  ? {}
-                                  : { onSelect: onLocaleChange })}
-                                hasStatus={hasStatus}
-                                actionsDisabled={viewingVersion !== null}
-                              />
-                            </div>
-                          )}
+                            {localizationEnabled && (
+                              <div
+                                className={cn(
+                                  "px-6 pt-4",
+                                  mode === "edit" &&
+                                    !railCollapsed &&
+                                    "@4xl/content:hidden"
+                                )}
+                              >
+                                <LanguagePanel
+                                  {...(entry?._translations === undefined
+                                    ? {}
+                                    : {
+                                        translations:
+                                          entry._translations as Record<
+                                            string,
+                                            {
+                                              translated: boolean;
+                                              status?: string;
+                                            }
+                                          >,
+                                      })}
+                                  {...(locale === undefined
+                                    ? {}
+                                    : { activeLocale: locale })}
+                                  {...(onLocaleChange === undefined
+                                    ? {}
+                                    : { onSelect: onLocaleChange })}
+                                  hasStatus={hasStatus}
+                                  actionsDisabled={viewingVersion !== null}
+                                />
+                              </div>
+                            )}
 
-                          {/* Reading a past version replaces the document rather than
+                            {/* Reading a past version replaces the document rather than
                       opening beside it: the question an editor is asking is how
                       this page read then, and that is answered by the page. The
                       live form stays mounted underneath — the historical values
                       are rendered against a form of their own, so nothing typed
                       here is disturbed and nothing historical can reach a save. */}
-                          {viewingVersion ? (
-                            <div className="@4xl/content:p-8 pt-6">
-                              {viewingVersion.error ? (
-                                // A failed read must not render as an empty document:
-                                // that is a different and wrong claim about the version.
-                                <Alert variant="destructive">
-                                  <AlertDescription>
-                                    This version could not be loaded.
-                                  </AlertDescription>
-                                </Alert>
-                              ) : !versionOnScreen ? (
-                                <div
-                                  className="flex flex-col gap-4"
-                                  aria-busy="true"
-                                >
-                                  <span className="sr-only" role="status">
-                                    Loading version {viewingVersion.versionNo}
-                                  </span>
-                                  {[0, 1, 2, 3].map(i => (
-                                    <div
-                                      key={i}
-                                      className="flex flex-col gap-1"
-                                    >
-                                      <Skeleton className="h-3 w-24" />
-                                      <Skeleton className="h-9 w-full" />
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <VersionSnapshotForm
-                                  fields={historicalFields ?? mainFields}
-                                  snapshot={viewingVersion.snapshot}
-                                />
-                              )}
-                            </div>
-                          ) : (
-                            mainFields.length > 0 && (
+                            {viewingVersion ? (
                               <div className="@4xl/content:p-8 pt-6">
-                                {/* Forward the form mode: in edit mode a blank password
+                                {viewingVersion.error ? (
+                                  // A failed read must not render as an empty document:
+                                  // that is a different and wrong claim about the version.
+                                  <Alert variant="destructive">
+                                    <AlertDescription>
+                                      This version could not be loaded.
+                                    </AlertDescription>
+                                  </Alert>
+                                ) : !versionOnScreen ? (
+                                  <div
+                                    className="flex flex-col gap-4"
+                                    aria-busy="true"
+                                  >
+                                    <span className="sr-only" role="status">
+                                      Loading version {viewingVersion.versionNo}
+                                    </span>
+                                    {[0, 1, 2, 3].map(i => (
+                                      <div
+                                        key={i}
+                                        className="flex flex-col gap-1"
+                                      >
+                                        <Skeleton className="h-3 w-24" />
+                                        <Skeleton className="h-9 w-full" />
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <VersionSnapshotForm
+                                    fields={historicalFields ?? mainFields}
+                                    snapshot={viewingVersion.snapshot}
+                                  />
+                                )}
+                              </div>
+                            ) : (
+                              mainFields.length > 0 && (
+                                <div className="@4xl/content:p-8 pt-6">
+                                  {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
                         required-field violation (see note on the layout form
                         above). */}
-                                <EntryFormContent
-                                  fields={mainFields}
-                                  disabled={isSubmitting}
-                                  withCard
-                                  mode={mode}
-                                />
-                              </div>
-                            )
-                          )}
-                        </div>
+                                  <EntryFormContent
+                                    fields={mainFields}
+                                    disabled={isSubmitting}
+                                    withCard
+                                    mode={mode}
+                                  />
+                                </div>
+                              )
+                            )}
+                          </div>
 
-                        {/* Rail (collapsible). Width 320px. Hidden until the content panel
+                          {/* Rail (collapsible). Width 320px. Hidden until the content panel
                   is wide enough (@4xl) to fit it beside the main column, until a
                   future mobile sheet ships.
 
@@ -1040,24 +1042,25 @@ export function EntryForm({
                   nothing to show. Rendering it anyway left an empty 320px
                   strip down the right side of the page, which reads as a
                   failed load rather than as an absence. */}
-                        {mode === "edit" && !railCollapsed && (
-                          <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-                            <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                              <EntryFormSidebar
-                                mode={mode}
-                                entry={entry}
-                                hasStatus={hasStatus}
-                                {...(locale === undefined ? {} : { locale })}
-                                {...(onLocaleChange === undefined
-                                  ? {}
-                                  : { onLocaleChange })}
-                                actionsDisabled={viewingVersion !== null}
-                                isDirty={isDirty}
-                              />
+                          {mode === "edit" && !railCollapsed && (
+                            <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+                              <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                                <EntryFormSidebar
+                                  mode={mode}
+                                  entry={entry}
+                                  hasStatus={hasStatus}
+                                  {...(locale === undefined ? {} : { locale })}
+                                  {...(onLocaleChange === undefined
+                                    ? {}
+                                    : { onLocaleChange })}
+                                  actionsDisabled={viewingVersion !== null}
+                                  isDirty={isDirty}
+                                />
+                              </div>
                             </div>
-                          </div>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      </CopyFromLanguageScope>
                     </EntryFormProvider>
                   </div>
                 </EntryFormContextProvider>
