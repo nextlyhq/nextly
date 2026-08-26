@@ -241,6 +241,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     // build a compile context: `compileContextFor` remains the only one of
     // those, and this returns a patch of already-reconciled inputs.
     //
+    // `withoutStatedNulls` stays internal for the same reason: it crosses a
+    // module boundary so `page-style-trace` and this module do not each decide
+    // what a stated null means at a compile boundary, and a host composing a
+    // context has no use for it — it exists to DELETE a copy rather than to
+    // offer an API.
+    //
     // `pruneRenderedPlaceholders` is the case that stays internal, and the
     // contrast is the point. It answers "which tree does this page's sheet
     // describe" for the nodes a placeholder replaced, and the editor's cascade
@@ -250,7 +256,11 @@ const SOURCE_MODULES: ReadonlyArray<{
     // implementation of one pass, which is the drift the pass's own docblock
     // argues against — but it is an internal derivation rather than something a
     // host composes with, so it crosses a module boundary and stops there.
-    internal: ["pruneRenderedPlaceholders"],
+    internal: [
+      "pruneRenderedPlaceholders",
+      "statedBreakpoints",
+      "withoutStatedNulls",
+    ],
   },
   {
     name: "prepare-document",

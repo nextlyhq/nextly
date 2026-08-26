@@ -616,12 +616,27 @@ function compiledBreakpoints(
   render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>
 ): BreakpointSet | undefined {
-  return sharedStyleInputs(
+  const stated = sharedStyleInputs(
     render?.styleContext,
     // `false` is a host serving no site sheet, which states no breakpoints —
     // not a sheet whose breakpoints are absent.
     typeof siteStyles === "object" ? siteStyles : undefined
   ).breakpoints;
+  /*
+   * A stated NULL collapses to `undefined` HERE, and only here.
+   *
+   * It had to survive the reconciliation, which is where it means something: a
+   * site stating null defines no viewport tiers, and that outranks a route
+   * context which has some. By this line that contest is over, and what is left
+   * is a canvas asking whether there are tiers to preview. There are not, which
+   * is what `undefined` says to every reader below.
+   *
+   * Collapsed any EARLIER — inside the reconciler, or with a nullish coalesce
+   * over the two tiers — the null loses to the route's set and the canvas
+   * previews a tier the renderer left on base. That is the defect this
+   * function's own docblock names, and it is why the null reaches this far.
+   */
+  return stated ?? undefined;
 }
 
 /**
