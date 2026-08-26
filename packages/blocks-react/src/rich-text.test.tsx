@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
-import { TEXT_FORMAT, type RichTextValue } from "@nextlyhq/blocks-engine";
+import {
+  INLINE_STYLE_PROPERTIES,
+  TEXT_FORMAT,
+  type RichTextValue,
+} from "@nextlyhq/blocks-engine";
 import { render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup } from "@testing-library/react";
@@ -1714,5 +1718,495 @@ describe("rich-text media wrappers carry what no stylesheet will", () => {
     // `width:100%` — a substring refusal passes on the very output it is meant
     // to reject, and passed on the correct output here too.
     expect(html).toContain('style="max-width:100%;height:auto"');
+  });
+});
+
+describe("rich-text inline styles reach the page", () => {
+  const styled = (style: string, format?: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "text",
+            text: "Hi",
+            style,
+            ...(format === undefined ? {} : { format }),
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("draws the font, size, colour and highlight an author chose", () => {
+    /*
+     * The defect: Lexical keeps these on the text node's `style` string, the
+     * renderer read the text and the format bitfield and never opened it, so
+     * every one of these choices published as plain prose. Silent in both
+     * directions — the author saw it in the editor, the visitor saw nothing
+     * missing.
+     */
+    const html = renderToStaticMarkup(
+      <RichText
+        value={styled(
+          "font-family: Georgia; font-size: 24px; color: #ff0000; background-color: #00ff00"
+        )}
+      />
+    );
+    expect(html).toContain(
+      '<span style="font-family:Georgia;font-size:24px;color:#ff0000;background-color:#00ff00">Hi</span>'
+    );
+  });
+
+  it("wraps nothing when there is nothing to put on it", () => {
+    // The control, and a real cost rather than tidiness: a `<span>` around every
+    // text node in a document is bytes on every page and a hook a stylesheet can
+    // catch on. Plain text must stay plain text.
+    expect(renderToStaticMarkup(<RichText value={para("Hi")} />)).toBe(
+      "<p>Hi</p>"
+    );
+  });
+
+  it.each([...INLINE_STYLE_PROPERTIES])(
+    "carries %s through to the page",
+    property => {
+      /*
+       * Behavioural rather than a read of the renderer's name map: what matters
+       * is that the property ARRIVES, and a test that compared two lists would
+       * pass while a wrong camel-case name dropped it silently — React ignores a
+       * key it does not know and says nothing.
+       *
+       * `inherit` because it is legal for every one of these, so one fixture
+       * serves the whole list without inventing a value per property.
+       */
+      const html = renderToStaticMarkup(
+        <RichText value={styled(`${property}: inherit`)} />
+      );
+      expect(html).toContain(`${property}:inherit`);
+    }
+  );
+
+  it("refuses a declaration that would break out of the style attribute", () => {
+    // Same boundary the button colours cross. React does not escape a style
+    // value, so a stored `;` ends the declaration and starts another.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={styled(
+          "color: red;position:fixed;background-image:url(https://attacker.test/x)"
+        )}
+      />
+    );
+    expect(html).toContain("color:red");
+    expect(html).not.toContain("position:fixed");
+    expect(html).not.toContain("attacker.test");
+  });
+
+  it("lets the format bit win a disagreement about case", () => {
+    // The bit is a button pressed on this selection; a `text-transform` in the
+    // style string is whatever the document arrived carrying.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={styled("text-transform: lowercase", TEXT_FORMAT.UPPERCASE)}
+      />
+    );
+    expect(html).toContain("text-transform:uppercase");
+    expect(html).not.toContain("text-transform:lowercase");
+  });
+});
+
+describe("rich-text authored colours beat the format element's own", () => {
+  const styled = (style: string, format: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style, format }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("puts the author's colours inside the highlight, not around it", () => {
+    /*
+     * A format element carries colours of its own: `<mark>` is painted by the
+     * UA with `Mark` and `MarkText`, and the CMS gives it a class setting both
+     * explicitly. A colour on an OUTER span only inherits, so the mark's own
+     * paint wins — an author who highlighted a phrase and then picked a text
+     * colour published the mark's colours instead of theirs.
+     *
+     * Asserted as containment rather than as a string of the whole element, so
+     * it still holds when another format bit adds a wrapper between them.
+     */
+    const { container } = render(
+      <RichText
+        value={styled(
+          "color: #ff0000; background-color: #00ff00",
+          TEXT_FORMAT.HIGHLIGHT
+        )}
+      />
+    );
+    const span = container.querySelector("span");
+    expect(span, "the style span drew at all").not.toBeNull();
+    expect(span?.closest("mark"), "it sits inside the mark").not.toBeNull();
+  });
+
+  it("puts them inside a bold wrapper too", () => {
+    // The sibling. `<strong>` carries no colour of its own, so this one is not
+    // about winning a cascade — it is that ONE rule decides the nesting, rather
+    // than a special case for the element that happened to be reported.
+    const { container } = render(
+      <RichText value={styled("color: #ff0000", TEXT_FORMAT.BOLD)} />
+    );
+    expect(container.querySelector("strong > span")).not.toBeNull();
+  });
+
+  it("adds no span to a formatted run that declares nothing", () => {
+    // The control. A rule that always emitted the span would satisfy both
+    // assertions above and put an empty element around every formatted word.
+    expect(
+      renderToStaticMarkup(
+        <RichText
+          value={doc([
+            {
+              type: "paragraph",
+              children: [
+                { type: "text", text: "Hi", format: TEXT_FORMAT.BOLD },
+              ],
+            },
+          ] as unknown as RichTextValue["root"]["children"])}
+        />
+      )
+    ).toBe("<p><strong>Hi</strong></p>");
+  });
+});
+
+describe("rich-text carries the editor's own font values to the page", () => {
+  /*
+   * The end of the chain, asserted where it ends. The engine's tests prove its
+   * reader keeps every family and size the toolbar offers, and the admin's
+   * conformance test proves that list IS the toolbar's — but neither renders
+   * anything. A renderer that dropped values containing a space, or lost a
+   * property's React name, would leave both of those green while the page
+   * published the font as plain prose.
+   *
+   * `inherit` is what the per-property test above uses, and it is legal for all
+   * of them, which is exactly why it cannot catch this: a real family carries a
+   * space and a real size carries a unit.
+   */
+  const styled = (style: string): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it.each(["Courier New", "Times New Roman", "Georgia"])(
+    "publishes the family %s",
+    family => {
+      expect(
+        renderToStaticMarkup(
+          <RichText value={styled(`font-family: ${family}`)} />
+        )
+      ).toContain(`font-family:${family}`);
+    }
+  );
+
+  it.each(["10px", "24px", "72px"])("publishes the size %s", size => {
+    expect(
+      renderToStaticMarkup(<RichText value={styled(`font-size: ${size}`)} />)
+    ).toContain(`font-size:${size}`);
+  });
+});
+
+describe("rich-text a format bit beats a style that would cancel it", () => {
+  const node = (style: string, format: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style, format }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("keeps a bold run bold when the style says otherwise", () => {
+    // The style span sits INSIDE `<strong>` so an author's colour can beat
+    // `<mark>`, which means a `font-weight: normal` in there would cancel the
+    // bold by being nested deeper. The engine drops it instead, so the nesting
+    // no longer decides — and the CMS, which nests the other way round, reaches
+    // the same answer from the same reader.
+    const html = renderToStaticMarkup(
+      <RichText value={node("font-weight: normal", TEXT_FORMAT.BOLD)} />
+    );
+    expect(html).not.toContain("font-weight");
+    expect(html).toContain("<strong>");
+  });
+
+  it("still lets the author colour that same bold run", () => {
+    // The control: only the contradicted property goes.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={node("font-weight: normal; color: #ff0000", TEXT_FORMAT.BOLD)}
+      />
+    );
+    expect(html).toContain("color:#ff0000");
+    expect(html).not.toContain("font-weight");
+  });
+
+  it("reapplies a style whose declarations only changed order", () => {
+    /*
+     * React diffs a style object property by property. Two objects with the
+     * same keys and values in a different order produce no writes at all, so an
+     * already-mounted node would keep whichever shorthand won before — the
+     * cascade fix would hold on a fresh render and silently not on an update.
+     *
+     * The span is keyed on the declaration order for that reason, which forces
+     * a replacement rather than a diff.
+     */
+    const first = doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "text",
+            text: "Hi",
+            style: "text-decoration-color: green; text-decoration: underline",
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+    const second = doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "text",
+            text: "Hi",
+            style: "text-decoration: underline; text-decoration-color: green",
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const { container, rerender } = render(<RichText value={first} />);
+    const before = container.querySelector("span")?.getAttribute("style") ?? "";
+    rerender(<RichText value={second} />);
+    const after = container.querySelector("span")?.getAttribute("style") ?? "";
+
+    // The population: both renders produced a styled span at all.
+    expect(before).not.toBe("");
+    expect(after).not.toBe("");
+    // And the DOM followed the stored order rather than keeping the first.
+    expect(before).not.toBe(after);
+    expect(after.indexOf("text-decoration:")).toBeLessThan(
+      after.indexOf("text-decoration-color:")
+    );
+  });
+});
+
+describe("rich-text a decoration the style already draws", () => {
+  const mk = (style: string, format: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style, format }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("drops the wrapper rather than drawing a second line", () => {
+    /*
+     * A text decoration PROPAGATES to descendants instead of being replaced by
+     * theirs, and a descendant cannot remove it. So `<u>` around a span
+     * declaring `underline wavy red` draws two underlines — the wrapper's plain
+     * one and the span's on top.
+     *
+     * The declaration is the richer of the two, carrying a style and a colour
+     * the wrapper cannot express, so the WRAPPER is what goes.
+     */
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk("text-decoration: underline wavy red", TEXT_FORMAT.UNDERLINE)}
+      />
+    );
+    expect(html).toContain("text-decoration:underline wavy red");
+    expect(html).not.toContain("<u>");
+  });
+
+  it("keeps a wrapper the style does not draw", () => {
+    // The control that matters most: only the bit whose line is already drawn
+    // loses its wrapper. Bold is not a decoration and accumulates with nothing.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk(
+          "text-decoration: underline wavy red",
+          TEXT_FORMAT.UNDERLINE | TEXT_FORMAT.BOLD
+        )}
+      />
+    );
+    expect(html).toContain("<strong>");
+    expect(html).not.toContain("<u>");
+  });
+
+  it("keeps a wrapper for a format that does NOT accumulate", () => {
+    /*
+     * Only a decoration accumulates. A `font-weight: 900` inside a `<strong>`
+     * simply wins — there is one weight — so dropping the `<strong>` would
+     * discard its semantics for no benefit, and a screen reader would stop
+     * announcing the emphasis.
+     *
+     * This case exists because break-verifying the decoration-only filter
+     * changed NOTHING: with every format treated as accumulating, no test
+     * failed, because none of them paired a bit with a reinforcing value of its
+     * own property.
+     */
+    const html = renderToStaticMarkup(
+      <RichText value={mk("font-weight: 900", TEXT_FORMAT.BOLD)} />
+    );
+    expect(html).toContain("<strong>");
+    expect(html).toContain("font-weight:900");
+  });
+
+  it("keeps the wrapper when the style contradicts it instead", () => {
+    // `none` beside the bit is a contradiction, not a richer decoration: the
+    // declaration goes and the wrapper stays, which is the other branch.
+    const html = renderToStaticMarkup(
+      <RichText value={mk("text-decoration: none", TEXT_FORMAT.UNDERLINE)} />
+    );
+    expect(html).toContain("<u>");
+    expect(html).not.toContain("text-decoration");
+  });
+
+  it("keeps a wrapper whose own line the style does not assert", () => {
+    // An underline declaration beside STRIKETHROUGH asserts the wrong line, so
+    // it is dropped as a contradiction and the `<s>` survives.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk("text-decoration: underline", TEXT_FORMAT.STRIKETHROUGH)}
+      />
+    );
+    expect(html).toContain("<s>");
+  });
+});
+
+describe("rich-text an updated node matches a fresh one", () => {
+  const styled = (style: string): RichTextValue =>
+    doc([
+      { type: "paragraph", children: [{ type: "text", text: "Hi", style }] },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  const attributeOf = (container: HTMLElement): string =>
+    container.querySelector("span")?.getAttribute("style") ?? "";
+
+  it.each([
+    [
+      "only the declaration order changes",
+      "text-decoration-color: green; text-decoration: underline",
+      "text-decoration: underline; text-decoration-color: green",
+    ],
+    [
+      "only a shorthand beside its own longhand changes",
+      "text-decoration: underline blue; text-decoration-color: green",
+      "text-decoration: underline red; text-decoration-color: green",
+    ],
+    ["only a value changes", "color: #ff0000", "color: #00ff00"],
+  ])("after %s", (_label, before, after) => {
+    /*
+     * The property, stated as the thing that actually matters: a node the
+     * client UPDATED must look like one the client rendered fresh — which is
+     * also what the CMS serializer produces for the same stored value.
+     *
+     * Asserted this way rather than against a specific declaration, because
+     * React's diff fails here in more than one way and each has its own
+     * symptom. Identical keys and values in a new order produce no writes at
+     * all. A changed SHORTHAND beside an unchanged longhand writes only the
+     * shorthand, and assigning `text-decoration` resets
+     * `text-decoration-color` — so the longhand the diff skipped is undone.
+     * Comparing against a fresh render catches both without this test having to
+     * model the browser's shorthand expansion, which jsdom may not implement.
+     */
+    const updated = render(<RichText value={styled(before)} />);
+    updated.rerender(<RichText value={styled(after)} />);
+    const afterUpdate = attributeOf(updated.container);
+    cleanup();
+
+    const fresh = render(<RichText value={styled(after)} />);
+    const afterFresh = attributeOf(fresh.container);
+
+    // The population first: two empty attributes would compare equal and pass.
+    expect(afterFresh).not.toBe("");
+    expect(afterUpdate).toBe(afterFresh);
+  });
+
+  it.each([
+    [
+      "a shorthand beside its own longhand",
+      "text-decoration: underline blue; text-decoration-color: green",
+      "text-decoration: underline red; text-decoration-color: green",
+    ],
+    ["a plain value", "color: #ff0000", "color: #00ff00"],
+  ])("replaces the element when %s changes", (_label, before, after) => {
+    /*
+     * The MECHANISM, because the outcome is not observable here. Assigning
+     * `text-decoration` resets `text-decoration-color` in a browser, so React
+     * writing only the changed shorthand undoes the longhand it skipped as
+     * unchanged — but jsdom does not implement shorthand expansion, so that
+     * reset never happens and the resulting attribute matches a fresh render
+     * either way. Measured: with the key on property order alone, every
+     * assertion above still passes.
+     *
+     * What the key actually buys is a REPLACEMENT rather than a diff, and that
+     * is observable: the DOM node itself changes. Asserting it here is
+     * asserting the thing this file controls, rather than a browser behaviour
+     * this environment declines to model.
+     */
+    const view = render(<RichText value={styled(before)} />);
+    const first = view.container.querySelector("span");
+    expect(first, "the population: a styled span drew at all").not.toBeNull();
+    view.rerender(<RichText value={styled(after)} />);
+    const second = view.container.querySelector("span");
+
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+  });
+
+  it("does not replace the element when nothing changed", () => {
+    // The control on the other side: a key that varied on every render would
+    // satisfy both assertions above while throwing the node away on each pass.
+    const view = render(<RichText value={styled("color: #ff0000")} />);
+    const first = view.container.querySelector("span");
+    view.rerender(<RichText value={styled("color: #ff0000")} />);
+    expect(view.container.querySelector("span")).toBe(first);
+  });
+});
+
+describe("rich-text a decoration that adds a second line", () => {
+  const mk = (style: string, format: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style, format }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("keeps the wrapper AND the declaration when they draw different lines", () => {
+    // A decoration accumulates rather than replacing an ancestor's, so a
+    // strike and an authored underline are both wanted. Dropping either loses
+    // something the author wrote.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk(
+          "text-decoration: underline wavy red",
+          TEXT_FORMAT.STRIKETHROUGH
+        )}
+      />
+    );
+    expect(html).toContain("<s>");
+    expect(html).toContain("text-decoration:underline wavy red");
+  });
+
+  it("drops the wrapper when they draw the SAME line", () => {
+    // The other branch, unchanged: same line means the two would double up.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={mk("text-decoration: underline wavy red", TEXT_FORMAT.UNDERLINE)}
+      />
+    );
+    expect(html).not.toContain("<u>");
+    expect(html).toContain("text-decoration:underline wavy red");
   });
 });

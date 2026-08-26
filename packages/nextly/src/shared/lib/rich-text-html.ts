@@ -11,6 +11,7 @@
 import {
   codeTokenClass,
   isRichTextValue,
+  formatsDrawnByStyle,
   TEXT_FORMAT,
 } from "@nextlyhq/blocks-engine";
 
@@ -174,8 +175,10 @@ function isUrlSafe(url: string): boolean {
 // Node Serializers
 // ============================================================
 
-function applyTextFormat(text: string, format: number): string {
-  let result = escapeHtml(text);
+function applyTextFormat(content: string, format: number): string {
+  // Takes content that is ALREADY escaped, because the style span now sits
+  // inside these wrappers and has to be built before they are applied.
+  let result = content;
 
   if (format & TEXT_FORMAT.CODE) {
     // Class, not an inline style: the site owns how its code reads, and an
@@ -220,17 +223,25 @@ function serializeTextNode(node: LexicalSerializedNode): string {
     return "";
   }
 
-  let result = applyTextFormat(text, format);
-
-  // Validate and sanitize inline styles before rendering (CSS injection prevention)
+  // The style span goes INSIDE the format wrappers, and the format is handed to
+  // the sanitizer so a declaration the bit already decided is dropped rather
+  // than left to win by being nested deeper. Both surfaces do this the same
+  // way; the point of sharing the reader is that they cannot differ.
+  let inner = escapeHtml(text);
   if (node.style && typeof node.style === "string" && node.style.trim()) {
-    const safeStyle = sanitizeInlineStyle(node.style);
+    const safeStyle = sanitizeInlineStyle(node.style, format);
     if (safeStyle) {
-      result = `<span style="${escapeHtml(safeStyle)}">${result}</span>`;
+      inner = `<span style="${escapeHtml(safeStyle)}">${inner}</span>`;
     }
   }
 
-  return result;
+  // The same question the React renderer asks, from the same module: a wrapper
+  // whose line the style already draws would add a second one, because a text
+  // decoration propagates rather than being replaced.
+  return applyTextFormat(
+    inner,
+    format & ~formatsDrawnByStyle(node.style, format)
+  );
 }
 
 function serializeLineBreakNode(): string {
