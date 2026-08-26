@@ -59,8 +59,18 @@ import type { EditorState, LexicalNode } from "lexical";
 
 /** One consumer's hold on the shared editor, for as long as it owns it. */
 export interface InlineRichTextSession {
-  /** Put the caret in the attached element. */
-  focus(): void;
+  /**
+   * Put the caret in the attached element.
+   *
+   * `at` is a character offset into the passage's text — where the author's
+   * gesture landed. Without one the caret goes wherever the editor puts it,
+   * which is the END of the passage: `focus()` calls `root.selectEnd()` when
+   * the state carries no selection, and a freshly parsed state never does. So
+   * a caller that knows where the author clicked must say so, or their first
+   * keystroke appends to the end of the passage instead of editing the word
+   * they double-clicked.
+   */
+  focus(at?: number): void;
   /**
    * The passage as it now stands, in the stored shape.
    *
@@ -244,13 +254,15 @@ function unmarkRoot(element: HTMLElement, marks: RootMarks): void {
 
 async function build(): Promise<InlineRichTextEditor> {
   const [
-    { createEditor, $isDecoratorNode, $isElementNode, $getRoot },
+    { createEditor, $isDecoratorNode, $isElementNode, $isTextNode, $getRoot },
     { registerRichText },
+    { registerList },
     history,
     kit,
   ] = await Promise.all([
     import("lexical"),
     import("@lexical/rich-text"),
+    import("@lexical/list"),
     import("@lexical/history"),
     import("@admin/components/features/entries/fields/special/rich-text-kit"),
   ]);
@@ -288,6 +300,44 @@ async function build(): Promise<InlineRichTextEditor> {
       }
       return false;
     });
+
+  /**
+   * Puts the caret at a character offset into the passage.
+   *
+   * Counted across the passage's text rather than addressed as a DOM position,
+   * because attaching REBUILDS the element's subtree — a range captured before
+   * the handover points at nodes that are no longer in the document by the time
+   * there is an editor to give it to. A character offset survives that, and it
+   * is what the author's gesture meant anyway.
+   *
+   * An offset past the end simply leaves the caret wherever the walk ran out,
+   * which is the end — the same place it would have gone with no offset at all.
+   */
+  const placeCaret = (offset: number): void => {
+    editor.update(() => {
+      let remaining = offset;
+      const stack: LexicalNode[] = [$getRoot()];
+      while (stack.length > 0) {
+        const node = stack.pop();
+        if (node === undefined) continue;
+        if ($isTextNode(node)) {
+          const size = node.getTextContentSize();
+          if (remaining <= size) {
+            node.select(remaining, remaining);
+            return;
+          }
+          remaining -= size;
+          continue;
+        }
+        if (!$isElementNode(node)) continue;
+        const kids = node.getChildren();
+        for (let i = kids.length - 1; i >= 0; i--) {
+          const kid = kids[i];
+          if (kid !== undefined) stack.push(kid);
+        }
+      }
+    });
+  };
 
   let reportedError = false;
 
@@ -354,6 +404,15 @@ async function build(): Promise<InlineRichTextEditor> {
       editor.setEditorState(parsed);
       editor.setRootElement(element);
       const stopRichText = registerRichText(editor);
+      /*
+       * Lists behave like lists, which the generic handler alone does not give.
+       * Without it Enter on an empty list item asks `ListItemNode` to insert
+       * another one, so an author cannot leave a list by the gesture every
+       * editor uses — and list nodes ARE accepted here, so a stored list is
+       * reachable. The field editor mounts `ListPlugin` for the same reason;
+       * this is that plugin's imperative half.
+       */
+      const stopList = registerList(editor);
       const stopHistory = history.registerHistory(
         editor,
         history.createEmptyHistoryState(),
@@ -361,6 +420,7 @@ async function build(): Promise<InlineRichTextEditor> {
       );
       release = () => {
         stopRichText();
+        stopList();
         stopHistory();
         editor.setRootElement(null);
         unmarkRoot(element, marks);
@@ -368,8 +428,12 @@ async function build(): Promise<InlineRichTextEditor> {
 
       const owns = (): boolean => owner === token;
       return {
-        focus() {
-          if (owns()) editor.focus();
+        focus(at) {
+          if (!owns()) return;
+          // Placed BEFORE focusing: `focus()` keeps a selection that already
+          // exists and invents one at the end only when there is none.
+          if (at !== undefined) placeCaret(at);
+          editor.focus();
         },
         read() {
           // Nothing rather than another passage's state. A superseded session

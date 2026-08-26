@@ -452,3 +452,55 @@ describe("walking away while the editor is still loading", () => {
     expect(attach).not.toHaveBeenCalled();
   });
 });
+
+describe("where the caret lands in a passage", () => {
+  it("hands the editor the offset the author clicked at", async () => {
+    /*
+     * The editor puts the caret at the END of the passage when the state it
+     * loaded carries no selection — `focus()` calls `root.selectEnd()`, and a
+     * freshly parsed state never carries one. So double-clicking a word in the
+     * middle and typing appended to the end of the passage instead of editing
+     * the word under the pointer.
+     *
+     * The offset is read from the DOM BEFORE the handover, because attaching
+     * rebuilds the subtree: a range captured afterwards points at nodes that
+     * are no longer in the document.
+     *
+     * What this asserts is the WIRING — that the gesture's position reaches the
+     * editor at all, which is what was missing. Where the caret physically ends
+     * up cannot be asserted here: jsdom does not reflect Lexical's selection
+     * back into the DOM (`rangeCount` stays 0), so that half needs a browser.
+     */
+    const focus = vi.fn();
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus,
+      read: vi.fn(() => undefined),
+      detach: vi.fn(),
+    }));
+    const load = vi.fn(() => Promise.resolve({ attach }));
+
+    registerArticle();
+    paint();
+    const passage = document.querySelector('[data-nx-prop="content"]');
+    const words = passage?.firstChild?.firstChild;
+
+    // The caret the double-click left, six characters into "A passage".
+    const range = document.createRange();
+    if (words !== null && words !== undefined) {
+      range.setStart(words, 6);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+
+    const { result } = renderHook(() =>
+      useInlineEditing(editorState(), load as never)
+    );
+    await act(async () => {
+      result.current.onDoubleClick({ target: passage ?? null });
+    });
+
+    expect(focus).toHaveBeenCalledWith(6);
+  });
+});

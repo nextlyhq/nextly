@@ -42,6 +42,29 @@ import { richInlineTargets, richInlineTextOp } from "./inline-rich-text";
 import { namedTarget } from "./inline-target";
 import { editableElement, EDITING_ATTRIBUTE } from "./use-inline-text";
 
+/**
+ * Where the caret sits inside an element, as a character offset into its text.
+ *
+ * Counted rather than kept as a DOM range, because attaching REBUILDS the
+ * subtree: a range captured now points at nodes that will not be in the
+ * document by the time there is an editor to hand it to. An offset survives
+ * that, and it is what the gesture meant.
+ *
+ * `undefined` when there is no selection, when it is not inside this element,
+ * or when the runtime has no selection at all — every one of which means "no
+ * better answer than the editor's own", not an error.
+ */
+function caretOffsetIn(element: HTMLElement): number | undefined {
+  const selection = element.ownerDocument.defaultView?.getSelection();
+  if (!selection || selection.rangeCount === 0) return undefined;
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.startContainer)) return undefined;
+  const upToCaret = range.cloneRange();
+  upToCaret.selectNodeContents(element);
+  upToCaret.setEnd(range.startContainer, range.startOffset);
+  return upToCaret.toString().length;
+}
+
 /** Which passage is being edited. */
 export interface InlineRichTextEditing {
   readonly nodeId: string;
@@ -72,7 +95,7 @@ export interface UseInlineRichTextResult {
 
 /** One consumer's hold on the shared editor, as this module uses it. */
 interface EditorSession {
-  focus(): void;
+  focus(at?: number): void;
   read(): unknown;
   detach(): void;
 }
@@ -230,6 +253,9 @@ export function useInlineRichText(
     }
 
     let cancelled = false;
+    // Read now, while the element still holds what the page rendered. The
+    // editor replaces this subtree, so afterwards there is nothing to measure.
+    const caret = caretOffsetIn(element);
     const targets = richInlineTargets(
       editorRef.current.document,
       editing.nodeId
@@ -262,7 +288,7 @@ export function useInlineRichText(
           return;
         }
         element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
-        session.focus();
+        session.focus(caret);
         mounted.current = {
           session,
           element,
