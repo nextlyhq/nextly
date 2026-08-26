@@ -20,6 +20,10 @@ const base = {
   componentSchemas: undefined,
   hasSlug: true,
   hasTitle: true,
+  // These cases are about the PRUNE. `false` keeps the stored strings as
+  // strings, so what each assertion below reads is unchanged by the
+  // rehydration that was added alongside this parameter.
+  rehydrateSystemTimestampsToDate: false,
 };
 
 describe("shapeDraftSnapshot", () => {

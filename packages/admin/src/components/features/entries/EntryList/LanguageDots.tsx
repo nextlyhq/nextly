@@ -23,7 +23,7 @@
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
-import { StateDot } from "../LanguageControl";
+import { StateDot } from "../LanguageStateDot";
 import {
   LANGUAGE_STATE_LABEL,
   languageState,

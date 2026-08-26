@@ -81,14 +81,30 @@ function isUniqueViolationShape(err: unknown): boolean {
 }
 
 /**
- * True when `err` (or its immediate `cause`) is a unique-constraint violation.
- * The one-level `cause` walk covers repo/driver wrappers that nest the original
- * error.
+ * True when `err`, or anything in its `cause` chain, is a unique-constraint
+ * violation.
+ *
+ * The walk is depth-bounded rather than one level deep, matching
+ * {@link findVersionConflict} below. One level is not enough for the ordinary
+ * case: a failed query arrives as the adapter's `DatabaseError` wrapping a
+ * `DrizzleQueryError` wrapping the driver's error, so the only object carrying
+ * `SQLITE_CONSTRAINT_UNIQUE` sits at depth TWO. This returned `false` for a
+ * real duplicate key until that was measured.
+ *
+ * The existing caller was unaffected because version capture catches at the
+ * tx-insert site, where the driver error is still near the surface — which is
+ * why the gap stayed latent rather than harmless.
+ *
+ * The bound also guards a cyclic chain: an error whose `cause` points back at
+ * itself would otherwise hang the check.
  */
 export function isUniqueViolation(err: unknown): boolean {
-  if (isUniqueViolationShape(err)) return true;
-  const cause = (err as { cause?: unknown } | null)?.cause;
-  return cause !== undefined && isUniqueViolationShape(cause);
+  let cursor: unknown = err;
+  for (let depth = 0; depth < 10 && cursor != null; depth++) {
+    if (isUniqueViolationShape(cursor)) return true;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**

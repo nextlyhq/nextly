@@ -177,6 +177,62 @@ export type {
 } from "@nextlyhq/admin";
 
 /**
+ * The controls a form is built from (@experimental).
+ *
+ * Layout primitives alone left an author with a `Card` and a `Grid` and nothing
+ * to put inside them, so the escalation path above — layout, then the Layer-2
+ * safelist, then the plugin's own `admin.styles` — sent every plugin needing a
+ * button to its last step. That step is the one surface the design linter
+ * cannot see: it runs over this repository, not over a third party's
+ * stylesheet. So the tokens and the linter were being defended everywhere
+ * except at the door plugin authors actually use.
+ *
+ * The set is what an ordinary settings form cannot be assembled without, which
+ * is why it stops where it does. It is not the whole component library:
+ * exporting a component makes its props public API, and a name added later is
+ * a smaller event than a name withdrawn.
+ *
+ * Routed through `@nextlyhq/admin` rather than `@nextlyhq/ui`, as every block
+ * in this file is. That is not a formality — `plugin-sdk` peers on `admin` and
+ * does not depend on `ui` at all, and `ui`'s root barrel carries a
+ * `"use client"` banner that the layering guard admits only by subpath.
+ */
+export {
+  Button,
+  Input,
+  Textarea,
+  Checkbox,
+  Switch,
+  Label,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  FieldShell,
+  FormSection,
+  FormActions,
+} from "@nextlyhq/admin";
+export type {
+  FieldShellProps,
+  FieldShellRenderProps,
+  FieldWidth,
+  FormSectionProps,
+  FormActionsProps,
+} from "@nextlyhq/admin";
+
+/**
  * Ask the admin to hide its own chrome while an immersive surface is mounted
  * (@experimental) — a full-bleed editor, a media browser, a preview mode.
  *
@@ -234,6 +290,10 @@ export type {
  *   values, CSV/JSON import, and whole-batch duplicate reporting;
  *   `withOptionIds` seeds drag ids onto plain `{label,value}` data.
  * - `FieldDefaultValueInput` — a type-aware default-value input.
+ * - `ValidationRulesEditor` — the whole set of validation rules a field
+ *   accepts, drawn from an allowed list the caller ASKS core for rather than
+ *   deriving from type names. `drawsAnyValidationRule` answers whether it would
+ *   render anything, so a surface never restates which types have no options.
  * - `ValidationNumberField` — one numeric validation bound, owning the
  *   empty-means-unset coercion, the whole/non-negative constraint for bounds
  *   that count things, and its own id.
@@ -260,6 +320,9 @@ export {
   operatorsForType,
   operatorTakesValue,
   ValidationNumberField,
+  ValidationRulesEditor,
+  drawsAnyValidationRule,
+  EDITABLE_VALIDATION_RULES,
 } from "@nextlyhq/admin";
 
 /**
@@ -333,6 +396,8 @@ export type {
   ConditionSourceOption,
   ConditionValue,
   ValidationNumberFieldProps,
+  ValidationRulesEditorProps,
+  ValidationRuleValues,
 } from "@nextlyhq/admin";
 
 // The declarative `contributes.admin` contract types (the same ones exported

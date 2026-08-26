@@ -60,3 +60,17 @@ export type {
 // control independently disagreed about.
 export { ValidationNumberField } from "./ValidationNumberField";
 export type { ValidationNumberFieldProps } from "./ValidationNumberField";
+
+// The whole set of validation rules a field accepts, drawn from an allowed list
+// the caller ASKS core for rather than deriving from type names — the defect
+// that offered a plugin-contributed type no rules at all. Neutral about storage:
+// the two surfaces name the custom message differently and each maps its own.
+export {
+  drawsAnyValidationRule,
+  EDITABLE_VALIDATION_RULES,
+  ValidationRulesEditor,
+} from "./ValidationRulesEditor";
+export type {
+  ValidationRuleValues,
+  ValidationRulesEditorProps,
+} from "./ValidationRulesEditor";

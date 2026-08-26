@@ -15,6 +15,7 @@ import { VersionCaptureService } from "../version-capture-service";
 import {
   VersionConflictError,
   hasVersionConflict,
+  isUniqueViolation,
   withVersionConflictRetry,
 } from "../version-conflict";
 
@@ -174,5 +175,61 @@ describe("VersionConflictError — NextlyError contract", () => {
     const wrapped = new Error("transaction aborted");
     (wrapped as { cause?: unknown }).cause = new VersionConflictError();
     expect(hasVersionConflict(wrapped)).toBe(true);
+  });
+});
+
+/**
+ * `isUniqueViolation` had no coverage at all, which is how a one-level `cause`
+ * walk survived: its only caller catches at the tx-insert site, where the
+ * driver error is still near the surface. Anywhere else — the job queue was the
+ * first — the driver error sits deeper and the answer came back `false` for a
+ * real duplicate key.
+ */
+describe("isUniqueViolation across the wrapping the adapter actually does", () => {
+  const driverError = () =>
+    Object.assign(
+      new Error("UNIQUE constraint failed: nextly_jobs.dedupe_key"),
+      {
+        code: "SQLITE_CONSTRAINT_UNIQUE",
+      }
+    );
+
+  it("finds a raw driver error", () => {
+    expect(isUniqueViolation(driverError())).toBe(true);
+  });
+
+  it("finds one wrapped a single level down", () => {
+    expect(
+      isUniqueViolation(new Error("wrapper", { cause: driverError() }))
+    ).toBe(true);
+  });
+
+  it("finds one wrapped TWO levels down, which is what a real query error is", () => {
+    // Measured shape, not invented: an adapter DatabaseError wraps a
+    // DrizzleQueryError, which wraps the driver's error. Two levels is the
+    // ordinary case for any query, not an edge case.
+    const wrapped = new Error("DatabaseError", {
+      cause: new Error("DrizzleQueryError", { cause: driverError() }),
+    });
+    expect(isUniqueViolation(wrapped)).toBe(true);
+  });
+
+  it("still says no when nothing in the chain is a duplicate key", () => {
+    // The control. A walk that returned true for everything would satisfy every
+    // assertion above while detecting nothing.
+    const wrapped = new Error("outer", {
+      cause: new Error("middle", {
+        cause: Object.assign(new Error("disk full"), { code: "SQLITE_FULL" }),
+      }),
+    });
+    expect(isUniqueViolation(wrapped)).toBe(false);
+  });
+
+  it("terminates on a cyclic cause chain instead of hanging", () => {
+    const a = new Error("a") as Error & { cause?: unknown };
+    const b = new Error("b") as Error & { cause?: unknown };
+    a.cause = b;
+    b.cause = a;
+    expect(isUniqueViolation(a)).toBe(false);
   });
 });

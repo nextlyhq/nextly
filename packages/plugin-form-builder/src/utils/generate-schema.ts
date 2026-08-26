@@ -8,6 +8,7 @@
  * @since 0.1.0
  */
 
+import type { FieldValidationRule } from "nextly/field-catalog";
 import { z } from "zod";
 
 import { isKnownFormField } from "../types";
@@ -132,6 +133,29 @@ function generateFieldSchema(field: FormField): z.ZodTypeAny | null {
       return z.unknown();
   }
 }
+
+/**
+ * The validation rules this generator actually enforces.
+ *
+ * Declared beside the code that implements them so an editor can ASK rather
+ * than guess. Core's `validationRulesForFieldType` answers what a field type
+ * MEANS — which is a larger set than any one runtime honours: it offers a
+ * textarea `minRows`/`maxRows`, which the schema below has no clause for. An
+ * editor offering those would store a bound nothing reads, which is worse than
+ * not offering it, because the author believes the rule is in force.
+ *
+ * A test asserts each of these actually changes the generated schema, so a rule
+ * listed here and never implemented fails rather than silently becoming an
+ * inert control.
+ */
+export const ENFORCED_VALIDATION_RULES = [
+  "minLength",
+  "maxLength",
+  "pattern",
+  "min",
+  "max",
+  "message",
+] as const satisfies readonly FieldValidationRule[];
 
 /**
  * Generate schema for text field.
