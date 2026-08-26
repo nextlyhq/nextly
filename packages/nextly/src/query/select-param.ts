@@ -49,47 +49,103 @@ export function encodeSelectParam(fields: readonly string[]): string {
 }
 
 /**
- * Read the parameter's value, saying which of the three answers it is.
+ * Characters that cannot occur in a field name and do occur in the other
+ * spellings of this parameter.
  *
- * `false` values are dropped rather than honoured. The read path filters them
- * out before applying the projection, so `{"title":false}` selected nothing
- * while still counting as a selection — and a projection that selects nothing
- * returns the whole document. A caller who wrote it meaning "everything except
- * the title" got the exact opposite.
+ * A rejection set rather than an acceptance pattern, deliberately. Three
+ * different field-name patterns already exist in this repository and one of
+ * them disagrees with the other two, so a fourth would be a fourth thing to
+ * drift — and the direction that drift fails in matters here: this reader
+ * REFUSES what it does not accept, so a pattern stricter than the config
+ * validator's would reject a select naming a field the config allows. A set of
+ * characters no field name can contain cannot make that mistake.
  */
-export function readSelectParam(raw: string | undefined): SelectRequest {
-  if (raw === undefined || raw.trim() === "") return { kind: "all" };
+const NOT_IN_A_FIELD_NAME = /[{}[\]":\s]/;
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return {
-      kind: "unreadable",
-      reason:
-        'select must be a JSON object naming fields, such as {"title":true}',
-    };
+function unreadable(reason: string): SelectRequest {
+  return { kind: "unreadable", reason };
+}
+
+/**
+ * The comma-separated form, which is the one the REST reference documents:
+ * `?select=id,title,publishedAt`.
+ *
+ * It has never worked. The reader accepted only a JSON object, so the
+ * documented request was parsed as nothing, discarded, and answered with every
+ * field — which is why the one caller that followed the documentation shipped a
+ * projection that projected nothing, and why the admin's API Playground had to
+ * probe a running server to find the form that does work.
+ */
+function fromCommaList(value: string): SelectRequest {
+  const names = value.split(",").map(name => name.trim());
+  if (names.some(name => name === "" || NOT_IN_A_FIELD_NAME.test(name))) {
+    return unreadable(
+      "select must be a comma-separated list of field names, such as " +
+        '"id,title", or a JSON object naming them, such as {"title":true}'
+    );
   }
+  return {
+    kind: "fields",
+    fields: Object.fromEntries(names.map(n => [n, true])),
+  };
+}
 
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return {
-      kind: "unreadable",
-      reason:
-        'select must be a JSON OBJECT naming fields, such as {"title":true}',
-    };
-  }
-
+/**
+ * The JSON object form: `{"title":true}`.
+ *
+ * EVERY entry has to be a boolean. Skipping the ones that are not would accept
+ * `{"title":true,"body":"yes"}` as a valid projection over `title` alone —
+ * quietly answering a different question than the caller asked, which is the
+ * defect this module exists to remove rather than relocate.
+ */
+function fromFieldMap(map: Record<string, unknown>): SelectRequest {
   const fields: Record<string, true> = {};
-  for (const [name, wanted] of Object.entries(parsed)) {
-    if (wanted === true) fields[name] = true;
+  for (const [name, wanted] of Object.entries(map)) {
+    if (typeof wanted !== "boolean") {
+      return unreadable(
+        `select values must be true or false; the value for "${name}" is neither`
+      );
+    }
+    if (wanted) fields[name] = true;
   }
 
   if (Object.keys(fields).length === 0) {
-    return {
-      kind: "unreadable",
-      reason: "select named no fields to return; omit it to return every field",
-    };
+    return unreadable(
+      "select named no fields to return; omit it to return every field"
+    );
+  }
+  return { kind: "fields", fields };
+}
+
+/**
+ * Read the parameter's value, saying which of the three answers it is.
+ *
+ * Both documented spellings are accepted. Which one a value is gets decided by
+ * whether it is JSON at all, rather than by looking for a comma: a JSON object
+ * containing one is still JSON.
+ *
+ * `false` entries select nothing, because the read path filters them out before
+ * applying the projection — so `{"title":false}` counted as a selection, chose
+ * no field, and a projection choosing nothing returns the whole document. A
+ * caller who wrote it meaning "everything except the title" got the opposite.
+ */
+export function readSelectParam(raw: string | undefined): SelectRequest {
+  if (raw === undefined || raw.trim() === "") return { kind: "all" };
+  const value = raw.trim();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return fromCommaList(value);
   }
 
-  return { kind: "fields", fields };
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return unreadable(
+      "select must be a comma-separated list of field names, such as " +
+        '"id,title", or a JSON object naming them, such as {"title":true}'
+    );
+  }
+
+  return fromFieldMap(parsed as Record<string, unknown>);
 }

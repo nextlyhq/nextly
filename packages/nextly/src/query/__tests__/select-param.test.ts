@@ -33,14 +33,41 @@ describe("readSelectParam - what a caller is actually asking", () => {
     expect(readSelectParam("   ")).toEqual({ kind: "all" });
   });
 
-  it("refuses a comma list rather than ignoring it", () => {
-    // What the form builder shipped. It was accepted and discarded, so the
-    // response looked correct and carried every field of every row.
-    expect(readSelectParam("id,title,slug").kind).toBe("unreadable");
+  it("reads the comma-separated form the REST reference documents", () => {
+    // `?select=id,title,publishedAt` is the ONLY form the documentation shows,
+    // and it never worked: the reader took JSON objects alone, so a caller
+    // following the docs had their projection discarded and was answered with
+    // every field. That is why the one caller that followed them shipped a
+    // select that selected nothing.
+    expect(readSelectParam("id,title,slug")).toEqual({
+      kind: "fields",
+      fields: { id: true, title: true, slug: true },
+    });
   });
 
-  it("refuses a bare field name", () => {
-    expect(readSelectParam("title").kind).toBe("unreadable");
+  it("reads a single field name", () => {
+    expect(readSelectParam("title")).toEqual({
+      kind: "fields",
+      fields: { title: true },
+    });
+  });
+
+  it("tolerates spacing around the commas", () => {
+    expect(readSelectParam("id, title")).toEqual({
+      kind: "fields",
+      fields: { id: true, title: true },
+    });
+  });
+
+  it("refuses a comma list with an empty segment", () => {
+    expect(readSelectParam("id,,title").kind).toBe("unreadable");
+  });
+
+  it("refuses debris that is neither spelling", () => {
+    // Truncated JSON does not parse, so it reaches the comma reader — where,
+    // without a guard, `{not json` would be accepted as the name of a field.
+    expect(readSelectParam("{not json").kind).toBe("unreadable");
+    expect(readSelectParam('{"title":').kind).toBe("unreadable");
   });
 
   it("refuses an array", () => {
@@ -59,19 +86,31 @@ describe("readSelectParam - what a caller is actually asking", () => {
     expect(readSelectParam('{"title":1}').kind).toBe("unreadable");
   });
 
+  it("refuses a map whose bad entry sits beside a good one", () => {
+    // The separating case. Skipping what it cannot read would accept this as a
+    // projection over `title` alone — answering a different question than the
+    // caller asked, quietly, which is the defect this module removes rather
+    // than relocates. A map with NO valid sibling is refused by a weaker rule
+    // and cannot tell the two implementations apart.
+    expect(readSelectParam('{"title":true,"body":"yes"}').kind).toBe(
+      "unreadable"
+    );
+  });
+
   it("keeps the fields a caller did ask for alongside ones it did not", () => {
-    // A mixed map is readable: the `true` entries are a real request, and the
-    // `false` entries never did anything.
+    // The control for the case above: `false` IS a boolean, so a map mixing
+    // wanted and unwanted fields is a readable request, not a malformed one.
     expect(readSelectParam('{"title":true,"body":false}')).toEqual({
       kind: "fields",
       fields: { title: true },
     });
   });
 
-  it("says why, in words a caller can act on", () => {
-    const answer = readSelectParam("id,title");
+  it("says both accepted spellings when it refuses one", () => {
+    const answer = readSelectParam('["title"]');
     expect(answer.kind).toBe("unreadable");
     if (answer.kind === "unreadable") {
+      expect(answer.reason).toContain("id,title");
       expect(answer.reason).toContain('{"title":true}');
     }
   });

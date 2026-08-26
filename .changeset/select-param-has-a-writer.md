@@ -26,12 +26,12 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The `select` query parameter has a writer, and a request it cannot read is refused rather than answered with every field.
+The `select` query parameter now does what the documentation says, and a request it cannot read is refused rather than answered with every field.
 
-`select` accepts a JSON object naming the fields you want — `{"title":true}` — and nothing else. That was never written down anywhere a caller could find, and only the reader existed, so every caller worked the format out for itself. The API Playground rediscovered it by probing a running server and recorded the answer in a comment; the form builder guessed a comma list and shipped it, downloading every field of up to fifty documents per collection to fill a dropdown that reads five.
+The REST reference documents one spelling — `?select=id,title,publishedAt` — and it has never worked. The reader accepted a JSON object and nothing else, so the documented request was parsed as nothing, discarded, and answered with the whole document. A caller following the documentation got a response that looked correct and carried every field of every row; the admin's API Playground had to probe a running server to find the form that does work, and recorded the answer in a comment.
 
-Neither caller was told. Anything the reader could not understand — a comma list, a bare field name, an array, an empty object — returned the whole document, which is exactly what a request asking for the whole document returns. `{"title":false}` was worse: it counted as a projection, then selected no field, and a projection selecting nothing is answered with every field. An author writing it to mean "everything except the title" got the opposite.
+Both spellings are now accepted, and both are documented. `?select=id,title` and `?select={"id":true,"title":true}` do the same thing.
 
-`nextly/query` now exports `encodeSelectParam` and `readSelectParam`, so a caller writes the parameter with the same code the server reads it with, and the reader distinguishes "no projection was asked for" from "I could not read your projection". The second is a 400 naming the format, instead of a correct-looking response carrying every row in full.
+Anything the reader still cannot understand is a 400 naming the format, instead of a response carrying every field. That covers the shapes that used to pass silently: an array, a truncated fragment, a map whose values are not booleans, and a map naming no fields at all — including `{"title":false}`, which counted as a projection, selected nothing, and was therefore answered with everything, the opposite of what its author meant.
 
-It is a leaf entry point rather than a root export: the admin's API Playground and plugin admin components import it from the browser, and the root entry would bring the server graph with it.
+`nextly/query` exports `encodeSelectParam` and `readSelectParam`, so a caller writes the parameter with the same code the server reads it with. It is a leaf entry point rather than a root export: the admin's API Playground and plugin admin components import it from the browser, and the root entry would bring the server graph with it.

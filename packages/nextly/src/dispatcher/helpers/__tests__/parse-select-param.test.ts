@@ -23,6 +23,12 @@ describe("parseSelectParam - a select the layer can honour", () => {
     });
   });
 
+  it("honours the comma-separated form the REST reference documents", () => {
+    // It reached this layer, was discarded, and the read proceeded unprojected
+    // — so a caller following the documentation was answered with every field.
+    expect(parseSelectParam("id,title")).toEqual({ id: true, title: true });
+  });
+
   it("returns nothing when no projection was asked for", () => {
     // The one case that legitimately reads as "send every field".
     expect(parseSelectParam(undefined)).toBeUndefined();
@@ -40,16 +46,6 @@ describe("parseSelectParam - a select the layer cannot honour", () => {
     return undefined;
   };
 
-  it("refuses a comma list instead of answering with every field", () => {
-    // The spelling the form builder shipped. It was accepted and discarded, so
-    // the response looked correct and carried the whole document.
-    expect(refused("id,title")).toMatchObject({ code: "INVALID_INPUT" });
-  });
-
-  it("refuses a bare field name", () => {
-    expect(refused("title")).toMatchObject({ code: "INVALID_INPUT" });
-  });
-
   it("refuses an array", () => {
     expect(refused('["title"]')).toMatchObject({ code: "INVALID_INPUT" });
   });
@@ -65,9 +61,7 @@ describe("parseSelectParam - a select the layer cannot honour", () => {
   });
 
   it("says what the format is, in the message the caller receives", () => {
-    // The reason a caller could not find anywhere else: the format was never
-    // documented and had no encoder to read.
-    const error = refused("id,title") as { publicMessage?: string };
+    const error = refused('["title"]') as { publicMessage?: string };
     expect(error.publicMessage).toContain('{"title":true}');
   });
 });
