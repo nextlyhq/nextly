@@ -1,29 +1,25 @@
 /**
  * Which fields are addressable at a level, with presentational groups flattened.
  *
- * CORE's implementation, in one place, and reachable. It answered the same
- * question in two — `domains/versions/tag-component-types.ts` and the
- * page-builder plugin's own copy — and the second existed because this one was
- * exported from its module and from no public entry, so a plugin could only
- * reach it by importing core's file layout.
+ * Core's implementation, and the one plugins may call. It was exported from its
+ * module and from no public entry, so a plugin needing this answer could only
+ * reach it by importing core's file layout — or write the walk again, which is
+ * what happened.
  *
- * The plugin's copy is NOT deleted by this change and that is not an oversight:
- * it lives in another lane's package, on its open branch, and the two walks do
- * not yet agree. This one descends any unnamed field carrying an array of
- * `fields` — which is exactly what core's previous version did, and what core's
- * five call sites still expect. The plugin's additionally requires
- * `type === "group"`, deliberately, because descending an unnamed repeater
- * would file index rows per row that no rebuild can reconcile or sweep.
+ * This descends any unnamed field carrying an array of `fields`. That is
+ * deliberate and is what core's five call sites expect: a field is addressable
+ * here if its value is stored at this level, and an unnamed container stores
+ * its children at the level it sits in whatever its `type` says.
  *
- * So converging them is a behavioural decision for that lane, not a deletion:
- * adopting this walk unchanged widens what they descend into. Until they make
- * it, this is published and theirs is not — which is the half that stops a
- * THIRD copy being written, and the half worth having first.
+ * A caller that must NOT descend some of those — an index keyed per stored row,
+ * for instance, where descending an unnamed repeater would file rows per row
+ * that no rebuild can reconcile — filters the result rather than walking again.
+ * Filtering is visible; a second traversal is a second answer to this question,
+ * and the two drift silently because both look correct.
  *
  * @module shared/addressable-fields
  */
 
-import type { FieldConfig } from "../collections/fields/types";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 
 /**
@@ -58,27 +54,20 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
  * where a schema is WRITTEN, not in the type every internal reader shares, and
  * core's own callers would start seeing `{} | null` on ordinary property reads.
  *
- * Two concrete signatures rather than a generic, because a generic cannot be
- * sound here and saying so in a comment was not enough. A group's children are
- * typed `GroupFieldConfig_FieldConfig` — a deliberately open `@internal` bag
- * with an `any` index signature — so a field list is NOT homogeneous with its
- * nested lists at the type level, and `<T extends object>` let
- * `addressableFields([group({ fields: [text(...)] })])` infer
- * `GroupFieldConfig[]` while returning the text child. A caller could then read
- * `.fields` off a text field and compile.
+ * ONE signature, returning the widest union a field can be. Two narrower
+ * overloads were wrong for the same reason a generic was: what comes out is not
+ * only the top-level elements. A group's children are typed
+ * `GroupFieldConfig_FieldConfig` — a deliberately open bag with an `any` index
+ * signature — so a group may legitimately contain a CONTRIBUTED field, and
+ * flattening it returns something no built-in union describes. Promising
+ * `FieldConfig[]` for a `FieldConfig[]` input therefore narrowed a plugin's own
+ * field to `never` the moment its owner tried to recognise it.
  *
- * Naming the two unions that are actually passed fixes that by construction: a
- * narrower element type widens to whichever union contains it, which is the
- * honest answer, and `.fields` on the result is a type error again unless the
- * caller narrows first.
+ * The cost lands on core's callers, which now receive the wider union. That is
+ * the honest place for it: every one of them already reads properties through a
+ * cast (`component`, `components`, `name`), so none was relying on the narrow
+ * union for anything the checker was enforcing.
  */
-export function addressableFields(
-  fields: readonly FieldConfig[]
-): FieldConfig[];
-export function addressableFields(
-  fields: readonly AuthorableFieldConfig[]
-): AuthorableFieldConfig[];
-export function addressableFields(fields: unknown): AuthorableFieldConfig[];
 export function addressableFields(fields: unknown): AuthorableFieldConfig[] {
   const out: AuthorableFieldConfig[] = [];
   if (!Array.isArray(fields)) return out;

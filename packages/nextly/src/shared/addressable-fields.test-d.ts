@@ -30,6 +30,7 @@ declare function assertType<T extends true>(proof: T): void;
 declare const builtIn: FieldConfig[];
 declare const contributed: PluginDataFieldConfig[];
 declare const mixed: AuthorableFieldConfig[];
+declare const narrow: GroupFieldConfig[];
 declare const unvalidated: unknown;
 
 // Asserted through real CALLS rather than by instantiating a signature, because
@@ -39,30 +40,30 @@ declare const unvalidated: unknown;
 const _fromBuiltIn = addressableFields(builtIn);
 const _fromContributed = addressableFields(contributed);
 const _fromMixed = addressableFields(mixed);
+const _fromNarrow = addressableFields(narrow);
 const _fromUnknown = addressableFields(unvalidated);
 
-assertType<Exact<typeof _fromBuiltIn, FieldConfig[]>>(true);
-// A plugin's own array widens to the union that CONTAINS its type, which is the
-// honest answer — the flattened element may be a built-in child. What matters is
-// that narrowing back to the contributed type is possible; `never` was the
-// defect, not width.
+// Every caller is told the same thing, and it is the widest a field can be.
+// Narrower would be convenient and false: a built-in list whose group contains
+// a contributed child returns that child.
+assertType<Exact<typeof _fromBuiltIn, AuthorableFieldConfig[]>>(true);
 assertType<Exact<typeof _fromContributed, AuthorableFieldConfig[]>>(true);
+assertType<Exact<typeof _fromMixed, AuthorableFieldConfig[]>>(true);
+assertType<Exact<typeof _fromNarrow, AuthorableFieldConfig[]>>(true);
+assertType<Exact<typeof _fromUnknown, AuthorableFieldConfig[]>>(true);
+
+// The property that matters, and the one three earlier signatures broke: a
+// contributed field is RECOVERABLE from the result. `never` here is the defect
+// — a plugin receiving its own field at runtime and unable to recognise it.
 assertType<
   Exact<
-    Extract<(typeof _fromContributed)[number], PluginDataFieldConfig>,
+    Extract<(typeof _fromBuiltIn)[number], PluginDataFieldConfig>,
     PluginDataFieldConfig
   >
 >(true);
-assertType<Exact<typeof _fromMixed, AuthorableFieldConfig[]>>(true);
 
-// A caller with no type at all is told the widest thing that is honest, rather
-// than refused: this runs on author-written config, before validation on some
-// paths.
-assertType<Exact<typeof _fromUnknown, AuthorableFieldConfig[]>>(true);
-
-// The case that made the previous generic unsound: a list whose inferred
-// element type is NARROWER than the union. It must widen to the union that
-// contains it, because the element actually returned is the group's child.
-declare const narrow: GroupFieldConfig[];
-const _fromNarrow = addressableFields(narrow);
-assertType<Exact<typeof _fromNarrow, FieldConfig[]>>(true);
+// And a built-in is still recoverable, so widening did not trade one erasure
+// for the other.
+assertType<
+  Exact<Extract<(typeof _fromMixed)[number], FieldConfig>, FieldConfig>
+>(true);
