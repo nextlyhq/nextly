@@ -53,7 +53,7 @@ import {
   readCaller,
   PRIVATE_NO_STORE_HEADERS,
 } from "./authenticated-read";
-import { respondData } from "./response-shapes";
+import { respondList } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
 const DEFAULT_LIMIT = 50;
@@ -297,8 +297,33 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   // server: ordered across collections rather than within each one.
   const rows = perCollection.flat().sort(byMostRecentlyUpdated).slice(0, limit);
 
-  return respondData(
-    { rows, skippedCollections, locale, state },
+  // The canonical list envelope, with synthetic single-page meta — the same
+  // shape `webhooks` uses for a list its service does not paginate. This read
+  // is capped rather than paged, so `page`/`totalPages` are 1 and there is no
+  // next page to offer.
+  //
+  // `total` is the number of rows RETURNED, which is all this request can
+  // honestly claim: the fan-out is capped per collection and across
+  // collections, so more outstanding work may exist than was counted. That is
+  // exactly what `hasNext` reports here — not "there is another page to
+  // request", but "this answer is known to be incomplete" — and it is why
+  // `skippedCollections` is carried in the row set's own metadata rather than
+  // left for the caller to infer from a number.
+  return respondList(
+    rows,
+    {
+      total: rows.length,
+      page: 1,
+      limit,
+      totalPages: 1,
+      hasNext: rows.length === limit || skippedCollections.length > 0,
+      hasPrev: false,
+      // Named, so the screen can say WHICH. Omitted entirely when the fan-out
+      // reached everything, so the field's presence is itself the signal.
+      ...(skippedCollections.length === 0
+        ? {}
+        : { notConsulted: skippedCollections }),
+    },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );
 });

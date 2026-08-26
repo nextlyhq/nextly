@@ -37,6 +37,20 @@ export type PaginationMeta = {
   totalPages: number;
   hasNext: boolean;
   hasPrev: boolean;
+  /**
+   * Sources this read did not consult, named rather than dropped.
+   *
+   * Optional, and omitted by every read that consults everything — which is
+   * most of them — so it costs existing responses nothing.
+   *
+   * It exists because `hasNext` cannot carry the difference that matters. "More
+   * exists" and "these particular places were not looked at" prompt opposite
+   * reactions: the first is a paging affordance, the second is a caveat the
+   * screen has to state, because a list that quietly omits a source reads as
+   * that source having nothing in it — which is indistinguishable from the
+   * truth at a glance and is the one way such a list can lie.
+   */
+  notConsulted?: string[];
 };
 
 /**
