@@ -34,6 +34,7 @@ import type { ApiError } from "@admin/lib/api/parseApiError";
 import {
   previewLinkApi,
   type PreviewLinkRequest,
+  type PreviewViewport,
 } from "@admin/services/previewLinkApi";
 
 /**
@@ -59,6 +60,38 @@ const SELF_PREVIEW_TTL_SECONDS = 15 * 60;
  * `urlTemplate` is the server's resolution input, so neither belongs here.
  * What the panel needs is whether to draw a button and how to label it.
  */
+/**
+ * The label a declaration actually states, or nothing.
+ *
+ * One reader for the raw field, because the surfaces that need it disagree
+ * about the DEFAULT and must not disagree about anything else. A pane needs a
+ * word for its title; a button reads the label into its own sentence and would
+ * rather have nothing than a placeholder. Normalising in two places meant a
+ * whitespace-only label counted as declared for one and absent for the other,
+ * and a padded one arrived trimmed at one surface and raw at the other.
+ *
+ * Blank is undeclared. A label of spaces is a field an author left empty, and
+ * showing it would title a pane with nothing visible.
+ */
+export function declaredPreviewLabel(config?: {
+  label?: string;
+}): string | undefined {
+  const declared = config?.label?.trim();
+  return declared === undefined || declared === "" ? undefined : declared;
+}
+
+/**
+ * What to call the preview, on a button or a pane.
+ *
+ * Exported and shared rather than inlined at each surface: entries and Singles
+ * both need it, and a second `?? "Preview"` elsewhere would silently keep the
+ * default after someone changed this one. The fallback is the whole value here
+ * — a declaration that names no label is the common case.
+ */
+export function previewLabel(config?: { label?: string }): string {
+  return declaredPreviewLabel(config) ?? "Preview";
+}
+
 export interface PreviewConfig {
   /**
    * Whether this collection previews at all, decided when the config synced.
@@ -214,6 +247,8 @@ export type PreviewOutcome =
        * cookie it cannot see.
        */
       embeddable: boolean;
+      /** The viewports this preview offers, resolved by the server. */
+      viewports: PreviewViewport[];
     }
   | { kind: "report"; reason: PreviewUnavailableReason };
 
@@ -356,6 +391,7 @@ export async function mintSelfPreview(
       url: link.url,
       expiresAt: link.expiresAt,
       embeddable: link.embeddable,
+      viewports: link.viewports,
     };
   } catch (error) {
     return { kind: "report", reason: reasonForRefusal(error) };
@@ -397,8 +433,18 @@ export interface UseEntryPreviewResult {
   isPreviewAvailable: boolean;
   /** Resolve and open. Asynchronous: the URL comes from the server. */
   openPreview: () => Promise<void>;
-  /** Label for the preview button. */
+  /** Label for the preview button, defaulted where none was declared. */
   label: string;
+  /**
+   * The label the collection actually DECLARED, or nothing.
+   *
+   * Carried beside the defaulted one because the surfaces that show it default
+   * differently: a button is named "Preview", while a pane toggle reads its
+   * label into "Show ..." and wants the sentence instead. Handing the defaulted
+   * value to both made the toggle say "Preview" in either state, which is the
+   * one wording that reports nothing about what clicking does.
+   */
+  declaredLabel: string | undefined;
 }
 
 // ============================================================================
@@ -472,6 +518,7 @@ export function useEntryPreview({
   return {
     isPreviewAvailable,
     openPreview,
-    label: previewConfig?.label || "Preview",
+    label: previewLabel(previewConfig),
+    declaredLabel: declaredPreviewLabel(previewConfig),
   };
 }

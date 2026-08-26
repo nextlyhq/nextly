@@ -113,7 +113,15 @@ export interface EntrySystemHeaderProps {
   isPreviewAvailable?: boolean;
   /** Opens the preview using the editor's own session. May be asynchronous. */
   onPreview?: () => void | Promise<void>;
-  /** Label for the preview action. Defaults to "Preview". */
+  /**
+   * What this entry's preview is called, where it is not called "Preview".
+   *
+   * Names BOTH controls below — the open-in-a-tab action and the pane toggle —
+   * because they are one thing to an author, and a second prop for the second
+   * control is a second thing to keep in step. Absent rather than defaulted, so
+   * each control can apply the default its own sentence needs: "Preview" as a
+   * button's name, "preview" as a noun inside "Show preview".
+   */
   previewLabel?: string;
   /**
    * Opens and closes the preview PANE, which is a different action from opening
@@ -289,6 +297,22 @@ export function EntrySystemHeader({
     getLocale,
   } = useLocalization();
   const defaultLocaleLabel = getLocale(defaultLocale)?.label ?? defaultLocale;
+  /*
+   * A declared label is used VERBATIM, not built into a sentence.
+   *
+   * `previewLabel` is a complete button label, not a noun: collections
+   * legitimately name one "View page", and "Show View page" is not English.
+   * Where the author supplied nothing there is no such risk and the control
+   * keeps its own wording, which says what the click will do.
+   *
+   * Losing "Show"/"Hide" for a declared label costs nothing that is not carried
+   * elsewhere — `aria-pressed` states it for assistive technology and the
+   * variant states it visually, which is how a toggle button reports itself.
+   */
+  const previewToggleLabel =
+    previewLabel ?? (previewPaneOpen ? "Hide preview" : "Show preview");
+  const previewToggleTitle =
+    previewLabel ?? (previewPaneOpen ? "Hide the preview" : "Show the preview");
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which both consumers below
   // treat as "nothing to report" rather than as zero progress.
@@ -525,11 +549,11 @@ export function EntrySystemHeader({
               onClick={onTogglePreviewPane}
               disabled={isSubmitting}
               aria-pressed={previewPaneOpen}
-              title={previewPaneOpen ? "Hide the preview" : "Show the preview"}
+              title={previewToggleTitle}
             >
               <PanelRight className="h-4 w-4" aria-hidden="true" />
               <ToolbarLabel priority="secondary">
-                {previewPaneOpen ? "Hide preview" : "Show preview"}
+                {previewToggleLabel}
               </ToolbarLabel>
             </Button>
           )}

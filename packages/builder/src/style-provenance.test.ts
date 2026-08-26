@@ -2,12 +2,18 @@ import {
   compilePageCss,
   nodeClassName,
   type BlockDocument,
+  type BreakpointSet,
   type NodeStyles,
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { styleProvenance, type StyleProvenanceQuery } from "./style-provenance";
+import {
+  breakpointBadge,
+  styleProvenance,
+  type BreakpointBadge,
+  type StyleProvenanceQuery,
+} from "./style-provenance";
 
 /** One declaration the compiler wrote, with the fields the trace records. */
 function entry(over: Partial<StyleTraceEntry> = {}): StyleTraceEntry {
@@ -595,5 +601,325 @@ describe("a caller that states which states are live", () => {
       liveStates: ["hover"],
     });
     expect(result.kind).toBe("inherited");
+  });
+});
+
+/** The badge for a query, with the provenance the caller would already hold. */
+function badgeFor(
+  q: StyleProvenanceQuery,
+  set: BreakpointSet | undefined
+): BreakpointBadge {
+  return breakpointBadge(q, styleProvenance(q), set);
+}
+
+describe("the breakpoint dimension of a control's provenance", () => {
+  /*
+   * A site with both axes, so a badge naming a breakpoint without naming its
+   * axis would be ambiguous — which is the case the axis is carried for.
+   */
+  const site: BreakpointSet = {
+    viewport: [
+      { id: "tablet", label: "Tablet", maxWidth: 991 },
+      { id: "mobile", label: "Mobile", maxWidth: 575 },
+    ],
+    container: [{ id: "narrow", label: "Narrow card", maxWidth: 400 }],
+  };
+
+  it("says nothing when the control is unset", () => {
+    expect(badgeFor(query([]), site)).toEqual({ kind: "none" });
+  });
+
+  it("names the breakpoint a value was authored at, when it is not this one", () => {
+    /*
+     * The case the badge exists for. `StyleOrigin` records only the TIER, so
+     * this arrives as a bare `node` origin — indistinguishable from a value set
+     * right here, which is the one thing an author needs told apart because the
+     * next action differs.
+     */
+    const badge = badgeFor(
+      query([entry({ breakpoint: "tablet" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["tablet", "mobile"],
+      }),
+      site
+    );
+
+    expect(badge).toEqual({
+      kind: "inherited",
+      source: {
+        breakpoint: "tablet",
+        label: "Tablet",
+        axis: "viewport",
+        selectable: true,
+      },
+    });
+  });
+
+  it("says nothing when the value came from another TIER rather than another breakpoint", () => {
+    /*
+     * A class's value is the origin dot's answer, and repeating it as a
+     * breakpoint badge would say one thing twice in two vocabularies. This is
+     * also the control on the case above: without it, a badge that fired on
+     * every `inherited` provenance would satisfy that one.
+     */
+    const badge = badgeFor(
+      query(
+        [
+          entry({
+            origin: { kind: "class", id: "c1", slug: "card" },
+            breakpoint: "tablet",
+          }),
+        ],
+        {
+          breakpoint: "mobile",
+          liveBreakpoints: ["tablet", "mobile"],
+        }
+      ),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "none" });
+  });
+
+  it("names the CONTAINER axis rather than reporting a bare breakpoint", () => {
+    /*
+     * `breakpointContexts` emits over both axes and a container context carries
+     * a query even at its widest, so two tiers can be in play at once. A label
+     * that reads as precise and does not say which axis it means is worse than
+     * one that says less.
+     */
+    const badge = badgeFor(
+      query([entry({ breakpoint: "narrow" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["narrow", "mobile"],
+      }),
+      site
+    );
+
+    expect(badge).toEqual({
+      kind: "inherited",
+      source: {
+        breakpoint: "narrow",
+        label: "Narrow card",
+        axis: "container",
+        /*
+         * NOT selectable, and that is the honest answer: sizing the canvas
+         * cannot put an element's own query container at a width. Naming the
+         * tier is still right; offering to travel to it is not.
+         */
+        selectable: false,
+      },
+    });
+  });
+
+  it("reports a value authored HERE as resettable", () => {
+    const badge = badgeFor(
+      query([entry({ breakpoint: "mobile" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["mobile"],
+      }),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "authored" });
+  });
+
+  it("names what a reset would REVEAL, rather than assuming the base tier", () => {
+    /*
+     * In a desktop-first model values flow wider to narrower and a chain can
+     * hold values at several breakpoints, so what shows through is whatever the
+     * next one holding a value is — not necessarily base.
+     *
+     * Computed by asking the same question with this breakpoint out of the live
+     * set, which is the engine's own ranking rather than a hand-rolled "next
+     * wider" that would have to re-derive tier order, both axes and
+     * specificity.
+     */
+    const badge = badgeFor(
+      query(
+        [
+          entry({ breakpoint: "tablet", value: "16px" }),
+          entry({ breakpoint: "mobile", value: "8px" }),
+        ],
+        { breakpoint: "mobile", liveBreakpoints: ["tablet", "mobile"] }
+      ),
+      site
+    );
+
+    expect(badge).toEqual({
+      kind: "authored",
+      revealed: {
+        breakpoint: "tablet",
+        label: "Tablet",
+        axis: "viewport",
+        selectable: true,
+      },
+    });
+  });
+
+  it("reveals a LOWER-TIER value at the same breakpoint, which a reset does not clear", () => {
+    /*
+     * A reset clears ONE address — this node, this state, this breakpoint, this
+     * control. Everything else at that breakpoint survives, so a class value
+     * the node overrode at Mobile is exactly what appears afterwards.
+     *
+     * Simulating the reset by dropping the whole breakpoint from the live set
+     * discards that class declaration too, and the control then promises to
+     * leave the value unset while the class value is what the author will see.
+     */
+    const badge = badgeFor(
+      query(
+        [
+          entry({
+            origin: { kind: "class", id: "c1", slug: "card" },
+            breakpoint: "mobile",
+            value: "4px",
+          }),
+          entry({ breakpoint: "mobile", value: "8px" }),
+        ],
+        { breakpoint: "mobile", liveBreakpoints: ["mobile"] }
+      ),
+      site
+    );
+
+    expect(badge).toEqual({
+      kind: "authored",
+      revealed: {
+        breakpoint: "mobile",
+        label: "Mobile",
+        axis: "viewport",
+        selectable: true,
+      },
+    });
+  });
+
+  it("reveals NOTHING when this is the only breakpoint holding a value", () => {
+    /*
+     * The control on the case above: a version that always named some fallback
+     * would satisfy it while telling an author a reset restores a value that
+     * does not exist. Here the control simply becomes unset.
+     */
+    const badge = badgeFor(
+      query([entry({ breakpoint: "mobile" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["tablet", "mobile"],
+      }),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "authored" });
+  });
+
+  it("says nothing for a declaration two controls could have written", () => {
+    /*
+     * `background-image` is written by both `background.url` and
+     * `backgroundGradient`, on the node itself, with nothing in the trace to
+     * separate them. Offering a reset there would clear a control the author
+     * was not looking at, so the badge withholds rather than guesses — the same
+     * refusal the origin dot already makes.
+     */
+    const badge = badgeFor(
+      query([entry({ property: "background-image", value: "url(a.png)" })], {
+        cssProperty: "background-image",
+      }),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "none" });
+  });
+
+  it("says nothing when the value came from another STATE at this breakpoint", () => {
+    /*
+     * `inherited` does not mean "another breakpoint": a value can win from the
+     * same node at the SAME breakpoint in a different state. Reported as a
+     * breakpoint badge it would read "inherited from Mobile" while the author
+     * is editing Mobile — a label that is not merely unhelpful but false, and
+     * whose jump would go nowhere.
+     */
+    const badge = badgeFor(
+      query([entry({ breakpoint: "mobile", state: "hover" })], {
+        breakpoint: "mobile",
+        state: "base",
+        liveBreakpoints: ["mobile"],
+        liveStates: ["base", "hover"],
+      } as never),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "none" });
+  });
+
+  it("says nothing about a breakpoint the stored set no longer describes", () => {
+    /*
+     * A trace outlives an edit to the breakpoint set. Naming a tier the site
+     * does not define would offer a jump to a width nothing responds to, and
+     * the honest answer is that there is nothing to say.
+     */
+    const badge = badgeFor(
+      query([entry({ breakpoint: "watch" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["watch", "mobile"],
+      }),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "none" });
+  });
+
+  it("labels a shared id from the definition the compiler KEPT", () => {
+    /*
+     * Among rows sharing an id the compiler keeps the WIDEST, not the first
+     * stored, so a label looked up by id alone names the surviving tier after
+     * the row the sheet discarded. The discarded row is stored FIRST here, so a
+     * by-id lookup cannot pass by accident.
+     */
+    const badge = badgeFor(
+      query([entry({ breakpoint: "tablet" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["tablet", "mobile"],
+      }),
+      {
+        viewport: [
+          { id: "tablet", label: "Draft", maxWidth: 700 },
+          { id: "tablet", label: "Tablet", maxWidth: 991 },
+        ],
+        container: [],
+      }
+    );
+
+    expect(badge).toEqual({
+      kind: "inherited",
+      source: {
+        breakpoint: "tablet",
+        label: "Tablet",
+        axis: "viewport",
+        selectable: true,
+      },
+    });
+  });
+
+  it("falls back to the id when no definition carries that bound", () => {
+    /*
+     * A trace can name a breakpoint the stored set no longer describes. The id
+     * is not a good name, but inventing one, or borrowing another row's label,
+     * would attach a name to a tier it does not describe.
+     */
+    const badge = badgeFor(
+      query([entry({ breakpoint: "tablet" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["tablet", "mobile"],
+      }),
+      { viewport: [{ id: "tablet", maxWidth: 991 } as never], container: [] }
+    );
+
+    expect(badge).toEqual({
+      kind: "inherited",
+      source: {
+        breakpoint: "tablet",
+        label: "tablet",
+        axis: "viewport",
+        selectable: true,
+      },
+    });
   });
 });

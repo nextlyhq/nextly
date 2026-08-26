@@ -176,6 +176,97 @@ describe("SingleForm offers the preview pane", () => {
     expect(lastPaneProps().scope).toEqual(minted);
   });
 
+  it("calls the pane by the Single's OWN word for it", () => {
+    /*
+     * A declaration may name its preview, and the label is a string, so unlike
+     * the `url` function beside it the label does survive being stored as JSON
+     * and does reach the browser. The pane was calling every Single's preview
+     * "Preview" regardless.
+     */
+    renderForm({
+      schema: {
+        ...(schema as unknown as Record<string, unknown>),
+        admin: { preview: { label: "Landing preview" } },
+      } as never,
+    });
+
+    expect(lastPaneProps().label).toBe("Landing preview");
+  });
+
+  it("names the pane's OPENER with the same word, not a hardcoded one", () => {
+    /*
+     * The pane and the button that opens it are one thing to an author, so they
+     * cannot be named separately: renaming the pane while its opener still said
+     * "Show preview" left the declared label reachable only after clicking a
+     * control that disagreed with it.
+     *
+     * The header takes ONE label and gives it to both — the open-in-a-tab action
+     * and this toggle — rather than growing a second naming prop that could
+     * drift from the first.
+     */
+    renderForm({
+      schema: {
+        ...(schema as unknown as Record<string, unknown>),
+        admin: { preview: { label: "Landing preview" } },
+      } as never,
+    });
+
+    expect(lastHeaderProps().previewLabel).toBe("Landing preview");
+  });
+
+  it("reads a padded or blank label the SAME way for pane and opener", () => {
+    /*
+     * The two surfaces default differently, so they must not also disagree
+     * about what counts as declared. Normalising in two places made a
+     * whitespace-only label absent for the opener and present — as a blank
+     * title — for the pane, and a padded one arrived trimmed at one and raw at
+     * the other.
+     */
+    renderForm({
+      schema: {
+        ...(schema as unknown as Record<string, unknown>),
+        admin: { preview: { label: "  Landing preview  " } },
+      } as never,
+    });
+
+    expect(lastPaneProps().label).toBe("Landing preview");
+    expect(lastHeaderProps().previewLabel).toBe("Landing preview");
+  });
+
+  it("treats a whitespace-only label as no label, on BOTH surfaces", () => {
+    // A label of spaces is a field an author left empty. The pane falls back to
+    // its word and the opener to its sentence; neither renders the spaces.
+    renderForm({
+      schema: {
+        ...(schema as unknown as Record<string, unknown>),
+        admin: { preview: { label: "   " } },
+      } as never,
+    });
+
+    expect(lastPaneProps().label).toBe("Preview");
+    expect(lastHeaderProps().previewLabel).toBeUndefined();
+  });
+
+  it("hands the header NO label when the Single declares none", () => {
+    /*
+     * The control, and the reason the declared value is passed rather than the
+     * defaulted one: absent is what lets each control apply its own default —
+     * "Preview" as a button's name, "preview" as a noun inside "Show preview" —
+     * so an undeclared Single keeps the wording it has today.
+     */
+    renderForm();
+
+    expect(lastHeaderProps().previewLabel).toBeUndefined();
+  });
+
+  it("falls back to Preview when the Single names none", () => {
+    // The control: the label above comes from the declaration rather than from
+    // a rename that happens to match, and a Single without one is unaffected.
+    renderForm();
+
+    expect(lastPaneProps().label).toBe("Preview");
+  });
+
   it("keeps the pane closed until someone asks for it", () => {
     renderForm();
 

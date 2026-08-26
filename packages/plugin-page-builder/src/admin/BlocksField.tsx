@@ -38,6 +38,7 @@ import {
   hasBlock,
   registerBlocks,
   registryNestingSource,
+  previewContainerFor,
   type BlockDocument,
   type BreakpointSet,
   type SiteTokenSet,
@@ -49,6 +50,11 @@ import {
   authoredBreakpoints,
   BlockToolbar,
   BreakpointManager,
+  BreakpointSwitcher,
+  breakpointsAtWidth,
+  editedBreakpointAtWidth,
+  offeredTiers,
+  widthForBreakpoint,
   EditorCommandPalette,
   BuilderShell,
   Canvas,
@@ -73,7 +79,14 @@ import {
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   useController,
   useWatch,
@@ -766,14 +779,165 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * inline call handed the inspector a new object every render and the panel
    * re-subscribed a media query per breakpoint on every keystroke.
    */
-  const canvasRender = useMemo(
-    () => ({
-      styleContext: { breakpoints: siteBreakpoints(canvasSiteStyle) },
+  /*
+   * The name the canvas box establishes as a query container.
+   *
+   * The editor canvas is not an iframe — the renderer emits its sheet into the
+   * admin document — so `@media` asks the browser WINDOW and resizing the box
+   * cannot change which tier applies. Compiled against a container name, the
+   * viewport tiers become `@container` rules about THIS box, and the box's own
+   * width decides them.
+   *
+   * Minted from `useId` rather than spelled here, because the name identifies
+   * one mounted surface: two editors on a page sharing a literal would each
+   * answer the other's queries. `previewContainerFor` is what turns the seed
+   * into a name the compiler will accept, and it is the only supported way to
+   * make one.
+   */
+  const canvasBoxId = useId();
+  /*
+   * The name this canvas would establish, and whether it establishes one AT
+   * ALL.
+   *
+   * Previewing is not free: a preview compile rewrites every CONTAINER-axis
+   * rule to `@container nx-not-previewable (width < 0px)`, which matches
+   * nothing. That is the engine refusing to answer a question it cannot — a
+   * container query resolves against an element's own query container, which a
+   * preview box is not — and it is the right refusal when there are viewport
+   * tiers to gain in exchange.
+   *
+   * With NO emitted viewport tier there is nothing to gain and the same price
+   * is paid: a site whose only breakpoints are container ones would have every
+   * one of them silently stop matching on the canvas while they keep working on
+   * the published page. So a canvas with nothing to simulate stays published,
+   * which is also what it looked like before any of this existed.
+   *
+   * `offeredTiers` rather than a second reading of the set, because it is
+   * already the answer to "which tiers can this canvas be sized to" — and if
+   * none can, there is no width to simulate.
+   */
+  const previewContainer = useMemo(
+    () => previewContainerFor(canvasBoxId),
+    [canvasBoxId]
+  );
+
+  /*
+   * The two widths, which are two facts and not one.
+   *
+   * `requestedWidth` is what the author asked the switcher for — a ceiling, and
+   * `undefined` for the full region. `measuredWidth` is what the box actually
+   * got, reported by the canvas: the editor region may be narrower than the
+   * tier requested, and what the container queries resolve against is the width
+   * the box has, not the width it was offered.
+   *
+   * Only the MEASURED one decides which tier is edited. Deriving that from the
+   * request would tell an author they are editing the tier they picked while
+   * the box is in a narrower one, which is the disagreement between what you
+   * see and what you edit that this control exists to remove.
+   */
+  const [requestedWidth, setRequestedWidth] = useState<number | undefined>(
+    undefined
+  );
+  const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(
+    undefined
+  );
+
+  const canvasRender = useMemo(() => {
+    /*
+     * ONE read of the site's breakpoints, feeding both the context and the
+     * decision about whether to preview at all.
+     *
+     * Two calls returned equal sets today and would stop the day `siteBreakpoints`
+     * normalises or defaults anything — and then preview eligibility would be
+     * answering from a different set than the canvas renders, which is the
+     * box/compile mismatch this whole seam exists to make unrepresentable. The
+     * docblock above already says this about the context's THREE readers; the
+     * eligibility question is a fourth.
+     */
+    const breakpoints = siteBreakpoints(canvasSiteStyle);
+    return {
+      styleContext: {
+        breakpoints,
+        /*
+         * Carried on the SAME context the cascade and the inspector read, so
+         * all three describe one compile. Supplied unconditionally rather than
+         * only while a tier is selected: at the full width the box is still a
+         * box, and a region narrower than the widest tier is already showing a
+         * narrower tier's rules. Compiling `@media` there would answer for the
+         * admin WINDOW instead — a wide window around a narrow canvas reports
+         * the desktop tier live while the box paints the tablet one.
+         */
+        ...(offeredTiers(breakpoints).length === 0 ? {} : { previewContainer }),
+      },
       ...(remotePatterns === undefined
         ? {}
         : { hostPolicy: { remotePatterns } }),
-    }),
-    [canvasSiteStyle, remotePatterns]
+    };
+  }, [canvasSiteStyle, remotePatterns, previewContainer]);
+
+  /*
+   * What the canvas is previewing under, read back from the ONE context that
+   * decided it rather than recomputed. The box and the inspector must be told
+   * the same thing the sheet was compiled with, and a second derivation here
+   * would be a second chance to answer differently.
+   */
+  const canvasPreviewContainer = canvasRender.styleContext.previewContainer;
+
+  /*
+   * Which tier an edit lands in, and which tiers the box is applying.
+   *
+   * Both derived from the MEASURED width and from the one breakpoint set above,
+   * so the inspector cannot disagree with the canvas about either. Memoised
+   * because `breakpointsAtWidth` builds a fresh array: passed inline it would be
+   * a new identity every render, and the panel re-derives on it.
+   */
+  const editedBreakpoint = editedBreakpointAtWidth(
+    canvasRender.styleContext.breakpoints,
+    measuredWidth
+  );
+  /*
+   * Release a requested width the site no longer offers.
+   *
+   * The switcher renders nothing once a site defines no viewport tiers, and it
+   * cannot clear state it does not own — so an author who selects a tier and
+   * then deletes it, or deletes the last one, is left with a canvas pinned to a
+   * bound the stylesheet no longer has and no control on screen to release it.
+   * The only way out would be to close the editor and reopen it.
+   *
+   * Compared against `offeredTiers`, which is the same list the switcher builds
+   * its options from, so "a width this control could have set" has one
+   * definition rather than two that can disagree.
+   */
+  useEffect(() => {
+    if (requestedWidth === undefined) return;
+    const offered = offeredTiers(canvasRender.styleContext.breakpoints);
+    if (offered.some(tier => tier.maxWidth === requestedWidth)) return;
+    setRequestedWidth(undefined);
+  }, [requestedWidth, canvasRender]);
+
+  /*
+   * The box's own inputs, as one object.
+   *
+   * Memoised because the canvas takes them as a group: rebuilt inline it would
+   * be a fresh object every render, and the measurement effect behind it
+   * re-subscribes on the reporter's identity.
+   */
+  const canvasPreview = useMemo(
+    () =>
+      canvasPreviewContainer === undefined
+        ? undefined
+        : {
+            container: canvasPreviewContainer,
+            ...(requestedWidth === undefined ? {} : { width: requestedWidth }),
+            onMeasured: setMeasuredWidth,
+          },
+    [canvasPreviewContainer, requestedWidth]
+  );
+
+  const liveBreakpoints = useMemo(
+    () =>
+      breakpointsAtWidth(canvasRender.styleContext.breakpoints, measuredWidth),
+    [canvasRender, measuredWidth]
   );
 
   /*
@@ -916,6 +1080,26 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               onSave={saveBreakpoints}
               status={siteStyleStatus(siteStylePending, siteStyleError)}
             />
+            {/*
+             * Beside the manager, and gated on the same read for the same
+             * reason it is: until the stored style has answered, the set in
+             * hand is the host's config defaults, so this would size the canvas
+             * to a bound the site never chose and every edit made there would
+             * land in whichever tier that bound implies.
+             *
+             * It is handed BOTH widths. The requested one is what the author
+             * chose and is what the control reports as selected; the measured
+             * one is what the box got and is what it names a tier from. Fed
+             * only the measured width it would unselect the option just
+             * clicked whenever the region could not honour it.
+             */}
+            <BreakpointSwitcher
+              breakpoints={canvasRender.styleContext.breakpoints}
+              width={requestedWidth}
+              appliedWidth={measuredWidth}
+              onSelect={setRequestedWidth}
+              status={siteStyleStatus(siteStylePending, siteStyleError)}
+            />
           </>
         }
         // The shell owns the region; this fills it. Rendered unconditionally
@@ -939,6 +1123,35 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             policy={stylePolicy}
             cascade={styleCascade}
             breakpoints={canvasRender.styleContext.breakpoints}
+            // Which tier the Style tab writes to, and which tiers it may call
+            // live. Both are the canvas's answer rather than the panel's: the
+            // queries are about the preview box, and `matchMedia` cannot
+            // evaluate a container query, so only the surface that owns the box
+            // can observe them. The container name travels with them because
+            // that is what tells the panel the window is not the authority.
+            /*
+             * Going to a tier is SIZING THE CANVAS to it, never setting a
+             * second piece of state saying which tier is being edited. The
+             * edited tier is derived from the width the box gets, so a jump
+             * that wrote its own answer would put the two back in the
+             * disagreement deriving them from one width exists to remove.
+             *
+             * A tier the compiler emits no bound for resolves to `undefined`
+             * and releases the canvas to the region rather than pinning it to a
+             * number nothing responds to — which is also what the unconditional
+             * tier means.
+             */
+            onJumpToBreakpoint={target => {
+              setRequestedWidth(
+                widthForBreakpoint(
+                  canvasRender.styleContext.breakpoints,
+                  target
+                )
+              );
+            }}
+            breakpoint={editedBreakpoint}
+            previewContainer={canvasPreviewContainer}
+            liveBreakpoints={liveBreakpoints}
             tokens={offerableTokens(
               canvasSiteStyle,
               siteStylePending,
@@ -1058,6 +1271,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               // The style context and the host policy, derived above so both are
               // one object with one identity rather than rebuilt per render.
               render={canvasRender}
+              // The box the tiers are compiled against, the width it is asked
+              // to take, and the reporter that closes the loop: the request is
+              // a ceiling, and everything downstream is derived from what the
+              // box actually got rather than from what it was offered.
+              preview={canvasPreview}
               dragHandlers={drag.handlers}
               // The pointer route into typing a block's text. Its keyboard
               // counterpart is the Enter binding above, registered in the same

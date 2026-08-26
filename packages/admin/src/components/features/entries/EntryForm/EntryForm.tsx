@@ -820,7 +820,9 @@ export function EntryForm({
                             onLocaleChange={onLocaleChange}
                             localized={collection.localized === true}
                             isPreviewAvailable={canPreview}
-                            previewLabel={entryPreview.label}
+                            {...(entryPreview.declaredLabel === undefined
+                              ? {}
+                              : { previewLabel: entryPreview.declaredLabel })}
                             {...(canPreview &&
                             translationMode.source === undefined
                               ? {

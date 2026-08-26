@@ -76,6 +76,26 @@ export interface PreviewLink {
    * application's own `frame-ancestors` is invisible from the server.
    */
   embeddable: boolean;
+  /**
+   * The viewport widths this preview offers, already resolved.
+   *
+   * The server sends a LIST rather than a source, because a collection may
+   * declare its widths as a FUNCTION — a plugin holding the site's breakpoints
+   * supplies one that reads them — and a function can neither be stored nor
+   * sent. Resolving there is what lets the browser offer a site's own
+   * breakpoints without the admin depending on whatever owns them.
+   *
+   * Empty means none were declared, which is different from the key being
+   * absent: absent would leave a caller unable to tell "none" from "the server
+   * did not answer".
+   */
+  viewports: PreviewViewport[];
+}
+
+/** One offered viewport: a name an author picked, and a width in CSS pixels. */
+export interface PreviewViewport {
+  label: string;
+  width: number;
 }
 
 export const previewLinkApi = {

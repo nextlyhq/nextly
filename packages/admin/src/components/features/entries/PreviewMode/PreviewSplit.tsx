@@ -59,6 +59,16 @@ export interface PreviewSplitProps {
   preview: React.ReactNode;
   /** Names the divider for assistive technology. */
   label: string;
+  /**
+   * A viewport width the preview would like room for, or `null` for none.
+   *
+   * The split does not size the frame — it only stops standing in the way. When
+   * a width is asked for, the preview takes as much of the split as the minimum
+   * editor allows; whatever still does not fit is the frame's to scale. Giving
+   * the room first is what keeps the scaling as small as it can be, and on a
+   * wide enough window removes it entirely.
+   */
+  preferPreviewWidth?: number | null;
 }
 
 export function PreviewSplit({
@@ -66,6 +76,7 @@ export function PreviewSplit({
   children,
   preview,
   label,
+  preferPreviewWidth = null,
 }: PreviewSplitProps) {
   /*
    * Generated rather than fixed: the id is what `aria-controls` points at, and
@@ -137,6 +148,21 @@ export function PreviewSplit({
       dragPointer.current = null;
     };
   }, [open, moveTo]);
+
+  /*
+   * Asking for a width takes the room the split can give before anything is
+   * scaled. Clamped to the minimum EDITOR rather than to zero: the editor is
+   * what the author is typing into, and a preview that swallowed it would trade
+   * one unusable pane for another.
+   *
+   * Deliberately not restored when the request clears. Returning to the default
+   * split would undo a divider the author may have dragged since, and the split
+   * is theirs — this only ever moves it on an explicit request.
+   */
+  useEffect(() => {
+    if (preferPreviewWidth === null) return;
+    setEditorPercent(MIN_EDITOR_PERCENT);
+  }, [preferPreviewWidth]);
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     const step =

@@ -114,6 +114,67 @@ export interface BaseRegistryRecord {
  * @typeParam TRecord - The full record type (must extend BaseRegistryRecord)
  * @typeParam TMigrationStatus - The migration status union type for this domain
  */
+/**
+ * A value as a string that does not depend on how its keys were ordered.
+ *
+ * Postgres holds these columns as `jsonb`, which normalises key order rather
+ * than preserving what was written, so the row read back can spell the same
+ * value differently from the config that wrote it. Compared as plain JSON, such
+ * a resource re-syncs on every startup — on that adapter only, with every
+ * instrument reporting the write as legitimate work.
+ *
+ * Arrays keep their order. Order is part of an array's value, and sorting one
+ * here would stop a genuine reordering from being detected at all.
+ *
+ * Functions are dropped, as `JSON.stringify` always dropped them. That is what
+ * makes a code-first `preview.url` compare equal to the stored row it could
+ * never have been written into.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(withSortedKeys(value));
+}
+
+/** The same value with every object's keys in a fixed order. */
+function withSortedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withSortedKeys);
+  if (value === null || typeof value !== "object") return value;
+
+  const source = value as Record<string, unknown>;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(source).sort()) {
+    sorted[key] = withSortedKeys(source[key]);
+  }
+  return sorted;
+}
+
+/**
+ * Whether two config values are the same as far as storage is concerned.
+ *
+ * `?? null` on both sides because a column holding no value arrives as `null`
+ * while a config declaring none has `undefined`: they mean the same thing, and
+ * a comparison telling them apart would report a change on every boot — a write
+ * per startup, per resource, that nothing downstream would report as spurious.
+ */
+function sameStoredValue(a: unknown, b: unknown): boolean {
+  return canonicalJson(a ?? null) === canonicalJson(b ?? null);
+}
+
+/**
+ * The fields {@link BaseRegistryService.schemaSyncNeeded} compares.
+ *
+ * Structural rather than a union of the two record types, because the question
+ * is about these fields and nothing else: a registry gains a column without
+ * this having an opinion, and neither domain's record has to be imported here
+ * to ask it.
+ */
+export interface SchemaSyncSubject {
+  status?: boolean;
+  localized?: boolean;
+  versions?: unknown;
+  revalidate?: unknown;
+  webhooks?: unknown;
+}
+
 export abstract class BaseRegistryService<
   TRecord extends BaseRegistryRecord,
   TMigrationStatus extends string = string,
@@ -496,7 +557,53 @@ export abstract class BaseRegistryService<
     if (!codeAdmin || !existingAdmin) {
       return true;
     }
-    return JSON.stringify(codeAdmin) !== JSON.stringify(existingAdmin);
+    // Canonical for the reason `sameStoredValue` is: a `jsonb` column hands
+    // back its own key order, and an admin block that compared unequal on that
+    // alone would re-sync every resource on every boot.
+    return canonicalJson(codeAdmin) !== canonicalJson(existingAdmin);
+  }
+
+  /**
+   * Whether a code-first config differs from its stored row in a way that has
+   * to be written THROUGH the schema path.
+   *
+   * Shared by the collection and Single registries because it is one question,
+   * not two that resemble each other: each clause here either moves a column or
+   * changes how the row's document is read, so a write answering it also
+   * carries the schema hash and re-opens the migration bookkeeping. Two copies
+   * agreed until someone edited one, and the half that went unedited would then
+   * leave its domain silently stale.
+   *
+   * A caller with clauses of its own ORs them onto this — a collection's
+   * physical table name, say — rather than restating these.
+   *
+   * Naming (label, description, the admin block) is deliberately NOT here.
+   * Those move no column, and routing them through this path would flag a
+   * migration for an edit that touches none.
+   *
+   * The JSON-shaped columns go through {@link sameStoredValue}, which is where
+   * the absent-versus-null reading lives.
+   */
+  protected schemaSyncNeeded(
+    config: SchemaSyncSubject,
+    existing: SchemaSyncSubject,
+    /*
+     * Decided by the caller rather than here. Comparing the hashes is one `===`
+     * behind a named function that belongs to the schema domain, and reaching
+     * for it from `shared` would point a dependency the wrong way down the
+     * layering for no shared logic at all — while the five comparisons below
+     * are the part both registries were actually keeping in step by hand.
+     */
+    schemaHashChanged: boolean
+  ): boolean {
+    return (
+      schemaHashChanged ||
+      (config.status === true) !== (existing.status === true) ||
+      !sameStoredValue(config.versions, existing.versions) ||
+      !sameStoredValue(config.revalidate, existing.revalidate) ||
+      !sameStoredValue(config.webhooks, existing.webhooks) ||
+      (config.localized === true) !== (existing.localized === true)
+    );
   }
 
   // ============================================================

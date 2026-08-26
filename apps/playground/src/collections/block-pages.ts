@@ -1,9 +1,12 @@
+import { previewViewportsFromSiteStyle } from "@nextlyhq/plugin-page-builder";
 import {
   defineCollection,
   json,
   previewUrlFromTemplate,
   text,
 } from "nextly/config";
+
+import { SITE_STYLE_DEFAULTS } from "../lib/site-style-defaults";
 
 // Pages rendered by the code-first blocks renderer (`@nextlyhq/blocks-react`),
 // served at /blocks/<slug> by apps/playground/src/app/blocks/[[...slug]]/page.tsx.
@@ -41,7 +44,35 @@ export const BlockPages = defineCollection({
     // entry comparison would then refuse it. The helper applies the same
     // encoding a stored `urlTemplate` gets, so both spellings resolve one entry
     // to one address.
-    preview: { url: previewUrlFromTemplate("/blocks/{slug}") },
+    preview: {
+      url: previewUrlFromTemplate("/blocks/{slug}"),
+      /*
+       * The viewports the preview pane offers come from THIS SITE's own
+       * breakpoints rather than from a list invented here. A site whose tablet
+       * is 991px would otherwise be offered a "Tablet" preset that sizes the
+       * frame to 1024 and lands in a tier its stylesheet never uses.
+       *
+       * The reader is built HERE from the instance rather than taken from
+       * `site-content`, which would be a cycle: that module imports
+       * `nextly.config`, which imports this file. Deferring the import does not
+       * help — it defers execution, while the edge in the module graph is what
+       * a cycle check reads, and it is right to.
+       *
+       * `findSingle` is the whole of what reading a site style needs, so this
+       * is the interface rather than a cut-down copy of a bigger reader.
+       */
+      breakpoints: previewViewportsFromSiteStyle({
+        reader: async () => {
+          const { getCachedNextly } = await import("nextly");
+          // The CACHED instance, which takes no config: importing the config to
+          // build one is the cycle this is avoiding. By mint time an instance
+          // exists, because the request that is minting came through it.
+          const nextly = await getCachedNextly();
+          return { findSingle: args => nextly.findSingle(args) };
+        },
+        defaults: SITE_STYLE_DEFAULTS,
+      }),
+    },
   },
   fields: [
     text({ name: "title", required: true }),
