@@ -41,7 +41,7 @@ import type {
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
-import type { RequestActor } from "../../../auth/request-actor";
+import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
@@ -123,7 +123,11 @@ interface DrizzleTransactionLike {
   // caller that forgot the limit type-check.
   select(): {
     from(table: unknown): {
-      where(condition: unknown): Promise<Record<string, unknown>[]>;
+      // Awaitable as-is, and lockable where the dialect has row locks — the
+      // same shape the projected form carries below, for the same reason.
+      where(condition: unknown): Promise<Record<string, unknown>[]> & {
+        for(strength: "update"): Promise<Record<string, unknown>[]>;
+      };
     };
   };
   select(fields: unknown): {
@@ -1592,12 +1596,25 @@ export class UserMutationService extends BaseService {
         if (mediaExists) {
           // Read before writing: the event carries a before and an after, and
           // the ids cannot be recovered once the column naming them is null.
-          const detaching = (await txDb
+          // Under a row lock, for the same reason the canonical media write
+          // takes one before recording. Read unlocked, a concurrent
+          // `updateMedia` or `deleteMedia` can commit between this snapshot and
+          // the write below — and the events would then carry state already
+          // superseded: metadata a subscriber would roll back, or an update for
+          // a row that has since been deleted, which downstream reads as the
+          // file coming back. The lock makes the snapshot the rows are updated
+          // FROM the same one they are evented from.
+          //
+          // SQLite has no row lock and needs none: its write transaction
+          // serialises writers, which is the argument the preimage read above
+          // already makes.
+          const detachQuery = txDb
             .select()
             .from(media)
-            .where(
-              eq(media.uploadedBy as Column, userId)
-            )) as unknown[] as MediaRow[];
+            .where(eq(media.uploadedBy as Column, userId));
+          const detaching = (this.dialect === "sqlite"
+            ? await detachQuery
+            : await detachQuery.for("update")) as unknown[] as MediaRow[];
 
           if (detaching.length > 0) {
             const detachedAt = new Date();
@@ -1619,7 +1636,14 @@ export class UserMutationService extends BaseService {
                 data: { ...row, uploadedBy: null, updatedAt: detachedAt },
                 previous: row,
                 fields: [],
-                actor: actor ?? null,
+                // Normalised the way every canonical media write normalises
+                // it: a deletion reaching this without an explicit actor is a
+                // write nobody initiated, which `actorForWrite` represents as
+                // `system`. Passing null instead would attribute the same media
+                // change differently depending on whether it arrived here or
+                // through `updateMedia`, in the durable audit as well as to
+                // subscribers.
+                actor: actorForWrite(actor, null),
               });
             }
 

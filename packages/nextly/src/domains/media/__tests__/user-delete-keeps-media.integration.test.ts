@@ -21,6 +21,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { UsersService } from "../../../services/users";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -154,11 +155,18 @@ describe.each(getConfiguredTestDialects())(
 
       const events = (await handle.adapter.select("nextly_events", {
         where: { and: [{ column: "type", op: "=", value: "media.updated" }] },
-      })) as Array<{ type: string; resourceId?: string }>;
+      })) as Array<{ type: string; resourceId?: string; actorType?: string }>;
+      const detachEvent = events.find(event => event.resourceId === "evented");
       expect(
-        events.some(event => event.resourceId === "evented"),
+        detachEvent,
         "the detach must appear in the outbox as a media change"
-      ).toBe(true);
+      ).toBeDefined();
+
+      // Attributed the way every canonical media write attributes an
+      // uninitiated write. A null actor here would mean the same media change
+      // reaches subscribers and the audit differently depending on whether it
+      // came from an account deletion or from `updateMedia`.
+      expect(detachEvent?.actorType).toBe("system");
 
       const stampAfter = (
         (await handle.adapter.select("media", {
@@ -170,6 +178,43 @@ describe.each(getConfiguredTestDialects())(
       expect(new Date(stampAfter as string).getTime()).toBeGreaterThan(
         STORED_AT.getTime()
       );
+    });
+
+    it("attributes an uninitiated detach to the system, not to nobody", async () => {
+      // Driven through `userService.deleteUser(id)` with NO actor argument,
+      // which is the path the Direct API does not take: it resolves an actor
+      // before calling, so a test going through `nextly.users.delete` cannot
+      // tell a normalised actor from a forwarded one — the assertion passes
+      // either way and proves nothing. This is the internal path where the
+      // actor is genuinely absent.
+      current = await createTestNextly({ dialect });
+      const handle = current;
+
+      await handle.adapter.insert("users", {
+        id: "departing-4",
+        email: "departing-4@test.local",
+      });
+      await insertMediaOwnedBy(handle, "departing-4", "unattributed");
+
+      // Constructed the way an internal caller does, and called with no actor
+      // argument at all — `deleteUser(userId, actor?)` leaves it undefined.
+      const users = new UsersService(handle.adapter, console as never);
+      await users.deleteUser("departing-4");
+
+      const events = (await handle.adapter.select("nextly_events", {
+        where: { and: [{ column: "type", op: "=", value: "media.updated" }] },
+      })) as Array<{ resourceId?: string; actorType?: string | null }>;
+      const detachEvent = events.find(
+        event => event.resourceId === "unattributed"
+      );
+
+      // The control: the detach happened at all on this path.
+      expect(detachEvent, "the detach must be recorded").toBeDefined();
+
+      // The envelope keeps a null actor null — it applies no system default —
+      // so without normalisation at the call site the same media change is
+      // attributed to nobody here and to `system` through `updateMedia`.
+      expect(detachEvent?.actorType).toBe("system");
     });
 
     it("leaves another account's files attributed", async () => {
