@@ -350,10 +350,52 @@
  * otherwise — so the condition rides the SELECTOR rather than a value inside
  * the declaration block, and showing the box (the default) is the absence of
  * an attribute rather than a rule that has to negate one.
+ *
+ * `display: block` on top of whatever the author chose, and only while empty.
+ * `min-height` does not apply to a non-replaced INLINE box, so a container
+ * authored as `inline` (or `inline-block`/`inline-flex`/`inline-grid`) kept a
+ * target sized by inherited line-height instead of this rule's 44px — 23px in
+ * one measurement, smaller wherever the site's line-height is tighter, never
+ * the deliberate minimum this rule promises everywhere else. Measured in a
+ * real browser rather than assumed: a `::before` carrying the `min-height`
+ * instead of the container measured no better, because a non-replaced
+ * inline box's own fragment does not grow to fit a taller inline-level
+ * child — `elementFromPoint` swept across the extra height that child
+ * reserves in the surrounding line resolved to an ANCESTOR, never to the
+ * container, at every point past the line-height sliver. `block`, never
+ * `inline-block`: an EMPTY container has no children to lay out, so forcing
+ * `block` on one already `block`, `flex` or `grid` changes nothing
+ * observable (confirmed byte-identical box before and after, all three).
+ * `inline-block` does not have that property — it also switches the
+ * INLINE-direction sizing to shrink-to-content, which in the same
+ * measurement collapsed an already-working `block`-authored empty container
+ * from full width down to a few pixels.
+ *
+ * `!important`, because the author's own value does not reach this stylesheet
+ * as an ordinary class: this repository's block-style compiler doubles its
+ * page-scoping class on every rule it emits
+ * (`.nx-pb-page.nx-pb-page .nx-pb-<hash>`) specifically so a page's authored
+ * styles reliably outrank arbitrary host CSS — which also outranks an
+ * ordinary override written here. That selector shape belongs to a different
+ * package's compiler and can change without notice; racing it on specificity
+ * would be a second, silent implementation of a question that package already
+ * owns. `!important` wins regardless of a shape this stylesheet does not, and
+ * should not have to, know.
+ *
+ * The trade-off this accepts, rather than hides: for a container authored as
+ * `inline`, the canvas shows a full-width rectangle where the published page
+ * would show nothing at all, for as long as it stays empty. Bounded twice —
+ * gone the instant a child is added, since this rule stops matching `:empty`
+ * then; and absent entirely once the author asks to see the page as a
+ * visitor will, since the guard above already suppresses this whole rule,
+ * `display` included. A follow-up that draws a real positioned element over
+ * each empty container, rather than styling the container itself, closes
+ * this case by construction instead of by trade-off.
  */
 .nx-builder-chrome:not([data-nx-empty-elements="hidden"])
   .nx-canvas
   [data-nx-slots]:empty {
+  display: block !important;
   min-height: 2.75rem;
   border: 1px dashed var(--nx-border);
   border-radius: var(--radius-sm);
