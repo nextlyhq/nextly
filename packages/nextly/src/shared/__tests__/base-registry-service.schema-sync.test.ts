@@ -171,13 +171,27 @@ describe("BaseRegistryService.schemaSyncNeeded", () => {
     ).toBe(true);
   });
 
-  it("does not let a canonicalised value pollute Object.prototype", () => {
-    // The neighbouring risk in the same key. Nothing here writes through a
-    // prototype setter, and this is what would notice if that changed.
-    const declared = JSON.parse('{"__proto__":{"polluted":"yes"}}');
-    probe.ask({ ...same, versions: declared }, { ...same }, false);
+  it("sees a difference INSIDE `__proto__`, not merely its presence", () => {
+    /*
+     * The stronger half of the case above, and the one that pins the VALUE
+     * rather than the key. Both sides carry a `__proto__` key, so a comparison
+     * that merely noticed one side had it would answer "same" here; only a
+     * canonical form that carries what is under it can tell these apart.
+     *
+     * This replaces a test asserting that canonicalising does not pollute
+     * `Object.prototype`. That assertion was satisfied by absence: assigning
+     * `__proto__` to a plain `{}` sets that temporary object's prototype and
+     * never touches `Object.prototype`, so it passed against the broken
+     * implementation as readily as the fixed one — a permanently green
+     * assertion presented as coverage. Pollution is not a risk this code shape
+     * has; the dropped key is, and that is what these two tests measure.
+     */
+    const a = JSON.parse('{"drafts":true,"__proto__":{"max":10}}');
+    const b = JSON.parse('{"drafts":true,"__proto__":{"max":25}}');
 
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(
+      probe.ask({ ...same, versions: a }, { ...same, versions: b }, false)
+    ).toBe(true);
   });
 
   it("still sees a REORDERED ARRAY as a change", () => {
