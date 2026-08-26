@@ -309,10 +309,11 @@ export default function EditEntryPage({
   /**
    * The page's measure, on every branch.
    *
-   * `form` because an entry is a labelled form: an unbounded panel stretches a
-   * short text input across the whole of it. These early-return branches never
-   * reach `MeasuredPageFrame`, which carries the same reasoning for the branch
-   * that does, so they state it here rather than inheriting it.
+   * `CONTENT_PAGE_MEASURE` rather than a literal, and not the settings measure:
+   * an entry is a document rather than a short column of labelled controls, and
+   * it shares its column with the document rail. These early-return branches
+   * never reach `MeasuredPageFrame`, so they read the same constant it does
+   * rather than restating a width that could disagree with it.
    *
    * Every branch carries it — loading, each error state, and the editor —
    * because they are the SAME page at different moments. Measuring only the

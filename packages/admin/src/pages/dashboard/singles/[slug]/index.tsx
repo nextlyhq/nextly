@@ -214,10 +214,10 @@ export default function SingleEditPage({
   /**
    * The page's measure, on every branch.
    *
-   * `form` because a Single is a labelled form, and because it now shares the
-   * translation pane with entries: the pane stops padding where the editor goes
-   * edge-to-edge, so a Single rendering into an UNMEASURED page would be the
-   * one consumer still expecting that padding to be there.
+   * `CONTENT_PAGE_MEASURE` rather than a literal: a Single is a document, and
+   * it shares the translation pane with entries — the pane stops padding where
+   * the editor goes edge-to-edge, so a Single rendering into an UNMEASURED page
+   * would be the one consumer still expecting that padding to be there.
    *
    * Every branch carries it — loading, each error state, and the editor —
    * because they are the SAME page at different moments. Measuring only the
@@ -328,7 +328,7 @@ export default function SingleEditPage({
       {/* Through the shared frame rather than a bare container: translation
           mode asks to suppress `pageFrame` from inside the form, and only this
           component reacts to that. A page that declared its own measure here
-          would keep the two-pane translation surface inside a 56rem column
+          keep the two-pane translation surface inside the content measure
           while the entry editor beside it took the whole panel. */}
       <MeasuredPageFrame>
         <SingleForm

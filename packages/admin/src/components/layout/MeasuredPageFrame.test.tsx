@@ -174,9 +174,11 @@ describe("MeasuredPageFrame", () => {
 
 describe("the content measure is declared once", () => {
   it("renders whatever the shared constant says, not a literal of its own", () => {
-    // Reading the constant back is what makes this a wiring test rather than a
-    // restatement: change `CONTENT_PAGE_MEASURE` and this follows, while a
-    // frame that had drifted back to its own literal fails here.
+    // Both sides derive from `CONTENT_PAGE_MEASURE`, so this proves only that
+    // the FRAME reads it — a skeleton that drifted back to its own literal is
+    // invisible here, because no route state is rendered. That property is
+    // covered by `__tests__/content-measure-wiring.test.ts`, which reads the
+    // route sources; this one guards the frame's own half.
     render(
       <ChromeSuppressionProvider>
         <MeasuredPageFrame>
@@ -192,9 +194,8 @@ describe("the content measure is declared once", () => {
     );
     const reference = screen.getByTestId("page-container");
 
-    // A page's loading skeleton reaches the container directly while its loaded
-    // state reaches it through the frame. The two must resolve to one measure,
-    // or every field moves sideways when the data arrives.
+    // The frame and a direct container must resolve to one measure, so a page
+    // whose states use both routes to the same width.
     expect(framed.style.getPropertyValue("--nx-shell-measure")).toBe(
       reference.style.getPropertyValue("--nx-shell-measure")
     );
