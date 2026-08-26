@@ -388,6 +388,79 @@ function publishesForm(
  * answers for that page; a write that only publishes the form, or renames it,
  * inherits whatever is stored and must not be refused for it.
  */
+/**
+ * Whether two readings name the same document in the same field.
+ *
+ * `null` on either side is not a match: a reference this cannot read has not
+ * been shown to be the stored one.
+ */
+function sameTarget(
+  named: {
+    field: PickedDocumentField;
+    reference: { collection: string; id: string } | null;
+  },
+  stored: {
+    field: PickedDocumentField;
+    reference: { collection: string; id: string };
+  } | null
+): boolean {
+  if (!named.reference || !stored) return false;
+  return (
+    stored.field === named.field &&
+    stored.reference.collection === named.reference.collection &&
+    stored.reference.id === named.reference.id
+  );
+}
+
+/**
+ * What a write that NAMES a target is answering for.
+ *
+ * NAMING is not CHOOSING, and the refusal has to come after that distinction
+ * rather than before it. The admin's save sends the whole `settings` object on
+ * every write, so a rename carries the redirect it never touched — judging the
+ * mention meant a form whose collection had since been unconfigured could not
+ * be edited at all.
+ */
+function judgeNamedReference(
+  named: {
+    field: PickedDocumentField;
+    reference: { collection: string; id: string } | null;
+    configured: boolean;
+  },
+  stored: {
+    field: PickedDocumentField;
+    reference: { collection: string; id: string };
+  } | null
+): {
+  reference: { collection: string; id: string };
+  field: PickedDocumentField;
+  chosen: boolean;
+  configured: boolean;
+} {
+  if (sameTarget(named, stored) && named.reference) {
+    return {
+      reference: named.reference,
+      field: named.field,
+      chosen: false,
+      configured: named.configured,
+    };
+  }
+
+  // This write moved the target, so it answers for what it moved it to.
+  if (!named.reference || !named.configured) {
+    throw redirectRefusal(
+      "Choose a page to redirect to, or pick a different confirmation.",
+      named.field
+    );
+  }
+  return {
+    reference: named.reference,
+    field: named.field,
+    chosen: true,
+    configured: true,
+  };
+}
+
 function redirectReferenceForWrite(
   context: HookContext,
   patterns: RedirectRelationships
@@ -408,42 +481,7 @@ function redirectReferenceForWrite(
     patterns
   );
 
-  if (named) {
-    // NAMING a target is not CHOOSING one, and the refusal has to come AFTER
-    // that distinction rather than before it. The admin's save sends the whole
-    // `settings` object on every write, so a rename carries the redirect it
-    // never touched — and judging the mention meant a form whose collection
-    // had since been unconfigured could not be edited at all.
-    const unchanged =
-      named.reference !== null &&
-      stored !== null &&
-      stored.field === named.field &&
-      stored.reference.collection === named.reference.collection &&
-      stored.reference.id === named.reference.id;
-
-    if (unchanged && named.reference) {
-      return {
-        reference: named.reference,
-        field: named.field,
-        chosen: false,
-        configured: named.configured,
-      };
-    }
-
-    // This write moved the target, so it answers for what it moved it to.
-    if (!named.reference || !named.configured) {
-      throw redirectRefusal(
-        "Choose a page to redirect to, or pick a different confirmation.",
-        named.field
-      );
-    }
-    return {
-      reference: named.reference,
-      field: named.field,
-      chosen: true,
-      configured: true,
-    };
-  }
+  if (named) return judgeNamedReference(named, stored);
 
   // A write that REPLACES `settings` has answered the question: this form no
   // longer redirects to a page. Inheriting the old target there would refuse
