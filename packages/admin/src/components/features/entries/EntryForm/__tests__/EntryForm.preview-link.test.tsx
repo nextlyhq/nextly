@@ -205,6 +205,23 @@ describe("EntryForm wires the preview action into its header", () => {
     expect(lastHeaderProps().previewLabel).toBe("View page");
   });
 
+  it("hands the header NO label where the collection declares none", () => {
+    /*
+     * The header gives one label to both the open-in-a-tab action and the pane
+     * toggle, and the two default differently: "Preview" as a button's name,
+     * "Show preview" as a sentence saying what the click does. Passing the
+     * already-defaulted value made the toggle read "Preview" in BOTH states —
+     * the one wording that reports nothing about what clicking will do — and
+     * the fallback was unreachable for every ordinary collection.
+     *
+     * So the DECLARED value travels and absence is preserved, which is what
+     * lets each control apply the default its own sentence takes.
+     */
+    renderForm();
+
+    expect(lastHeaderProps().previewLabel).toBeUndefined();
+  });
+
   it("offers nothing for a collection that declares no preview", () => {
     // The negative control. Without it, a wiring that hardcoded `true` would
     // satisfy every assertion above.
