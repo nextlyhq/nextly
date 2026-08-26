@@ -112,6 +112,7 @@ import {
   propertiesWriting,
   styleProvenance,
   type BreakpointBadge,
+  type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
 import { styleSubjectFor } from "./style-subject";
@@ -1050,7 +1051,7 @@ function StyleControlField({
       />
       <BreakpointAction
         answer={answer}
-        label={label}
+        label={actionName}
         editing={editing}
         onReset={() => commit(null)}
       />
@@ -1161,8 +1162,16 @@ function provenanceReader({
      */
     const provenance = styleProvenance(query);
     const badge = breakpointBadge(query, provenance, breakpoints);
+    /*
+     * Offered only for a tier a canvas can actually be taken to. A declaration
+     * stored under an id that lost its bound still names a real tier — worth
+     * saying — but a jump to it cannot be honoured, and the host would read the
+     * absent width as the unconditional tier and release the canvas instead.
+     */
     const target =
-      badge.kind === "inherited" ? badge.source.breakpoint : undefined;
+      badge.kind === "inherited" && badge.source.selectable
+        ? badge.source.breakpoint
+        : undefined;
     return {
       provenance,
       badge,
@@ -1202,44 +1211,104 @@ function BreakpointAction({
   onReset,
 }: {
   answer: ProvenanceAnswer | undefined;
-  /** The property's own label, so several of these are told apart by name. */
+  /**
+   * The control's ACTION NAME — the containing property and the leaf together.
+   *
+   * The leaf label alone is not unique: `margin` and `padding` both have a
+   * block start, so two controls would offer buttons called "Reset Block start"
+   * and a screen-reader user could not tell which style each removes. The panel
+   * already computes this for exactly that reason, and `Clear` on a token value
+   * uses it.
+   */
   label: string;
   editing: EditedAddress;
   onReset: () => void;
 }): React.JSX.Element | null {
   const badge = answer?.badge;
-  const onJump = answer?.jump;
   // `none` is also refused below, by having no handler bound for it — this is
   // the readable exit rather than the load-bearing one.
   if (badge === undefined || badge.kind === "none") return null;
   if (badge.kind === "authored") {
-    /*
-     * What the reset REVEALS is named where there is one. "Reset" alone asks an
-     * author to guess whether the control becomes unset or falls back to a
-     * wider tier's value, and in a desktop-first cascade it is usually the
-     * second — but not always, and not always base.
-     */
-    const reveals =
-      badge.revealed === undefined
-        ? "leaving it unset"
-        : `showing the value from ${badge.revealed.label}`;
     return (
-      <button
-        type="button"
-        className="nx-style-inspector__breakpoint-action"
-        data-action="reset"
-        onClick={onReset}
-        aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
-      >
-        Reset
-      </button>
+      <ResetAction
+        revealed={badge.revealed}
+        label={label}
+        editing={editing}
+        onReset={onReset}
+      />
     );
   }
-  if (onJump === undefined) return null;
+  if (answer?.jump === undefined) return null;
+  return (
+    <JumpAction source={badge.source} label={label} onJump={answer.jump} />
+  );
+}
+
+/**
+ * Clear this control at the tier being edited, saying what will show through.
+ *
+ * "Reset" alone asks an author to guess whether the control becomes unset or
+ * falls back to a wider tier's value. In a desktop-first cascade it is usually
+ * the second, and not always base — so the fallback is named, in the accessible
+ * name AND in visible text, because computing it exists to remove that guess
+ * for everybody rather than for screen-reader users alone.
+ */
+function ResetAction({
+  revealed,
+  label,
+  editing,
+  onReset,
+}: {
+  revealed: BreakpointSource | undefined;
+  label: string;
+  editing: EditedAddress;
+  onReset: () => void;
+}): React.JSX.Element {
+  const reveals =
+    revealed === undefined
+      ? "leaving it unset"
+      : `showing the value from ${revealed.label}`;
+  return (
+    <button
+      type="button"
+      className="nx-style-inspector__breakpoint-action"
+      data-action="reset"
+      onClick={onReset}
+      aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
+    >
+      Reset
+      {/*
+       * `aria-hidden`, because the accessible name above already carries this
+       * sentence: read out twice it is a stutter rather than emphasis.
+       */}
+      <span
+        className="nx-style-inspector__breakpoint-reveals"
+        aria-hidden="true"
+      >
+        {revealed === undefined ? "to unset" : `to ${revealed.label}`}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Take the canvas to the tier this control's value was authored at.
+ *
+ * The AXIS is named beside the tier, since a site defining both makes a bare
+ * tier name ambiguous and the container axis is the one an author is least
+ * likely to be holding in mind.
+ */
+function JumpAction({
+  source,
+  label,
+  onJump,
+}: {
+  source: BreakpointSource;
+  label: string;
+  onJump: () => void;
+}): React.JSX.Element {
   const where =
-    badge.source.axis === "container"
-      ? `${badge.source.label} (container)`
-      : badge.source.label;
+    source.axis === "container" ? `${source.label} (container)` : source.label;
   return (
     <button
       type="button"

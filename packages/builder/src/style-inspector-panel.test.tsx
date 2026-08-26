@@ -2185,7 +2185,13 @@ describe("the action a control's breakpoint provenance earns", () => {
     });
 
     const label = action("reset")?.getAttribute("aria-label");
-    expect(label).toContain("Reset");
+    /*
+     * Named by the PROPERTY, not the leaf alone. `margin` and `padding` both
+     * have a block start, so two controls would offer buttons called "Reset
+     * Block start" and a screen-reader user could not tell which style each
+     * removes — the same reason the panel computes an action name for `Clear`.
+     */
+    expect(label).toContain("Color");
     /*
      * The tier a reset falls back to is NAMED, not left to be guessed. The
      * unconditional tier has no authored definition to take a label from, so it
@@ -2196,6 +2202,52 @@ describe("the action a control's breakpoint provenance earns", () => {
     expect(label).toContain("from base");
   });
 
+  it("names the action by its PROPERTY, not by the leaf alone", () => {
+    /*
+     * `margin` and `padding` both have a block start, so a button named from
+     * the leaf alone reads "Reset Block start" on both and a screen-reader user
+     * cannot tell which style each removes. The panel already computes an
+     * action name for exactly this — `Clear` on a token value uses it — and a
+     * simple property like `color` cannot show the difference, because there
+     * the property label and the leaf label are the same word.
+     */
+    register({ spacing: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { padding: { blockStart: "8px" } } },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={SITE}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT] as never}
+        cascade={
+          {
+            entries: [
+              {
+                origin: { kind: "node", id: "a" },
+                property: "padding-block-start",
+                value: "8px",
+                state: "base",
+                breakpoint: BASE_BREAKPOINT,
+              },
+            ],
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+
+    const label = document
+      .querySelector('[data-property="padding"] [data-action="reset"]')
+      ?.getAttribute("aria-label");
+
+    expect(label).toContain("Padding");
+    expect(label).toContain("Reset");
+  });
+
   it("offers a JUMP for a value that came from another tier", () => {
     mount({
       stored: BASE_BREAKPOINT,
@@ -2204,6 +2256,58 @@ describe("the action a control's breakpoint provenance earns", () => {
     });
 
     expect(action("jump")).not.toBeNull();
+  });
+
+  it("withholds the jump for a tier the canvas cannot be taken to", () => {
+    /*
+     * Two ids can carry one bound, and only the winner is offered as a choice —
+     * but a declaration stored under the loser can still be what a control is
+     * showing. A jump there cannot be honoured: the width lookup answers
+     * `undefined`, which the host reads as the unconditional tier and RELEASES
+     * the canvas, so the value the author was chasing can disappear.
+     *
+     * Naming the tier stays right; travelling to it does not.
+     */
+    register({ color: true });
+    const editor = editorFor(
+      documentOf({ base: { [BASE_BREAKPOINT]: { color: "#111" } } })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [
+              { id: "alpha", label: "Alpha", maxWidth: 991 },
+              { id: "beta", label: "Beta", maxWidth: 991 },
+            ],
+            container: [],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "alpha"] as never}
+        cascade={
+          {
+            entries: [
+              {
+                origin: { kind: "node", id: "a" },
+                property: "color",
+                value: "#111",
+                state: "base",
+                breakpoint: "alpha",
+              },
+            ],
+            nodes: editor.document.nodes,
+          } as never
+        }
+        onJumpToBreakpoint={(() => {}) as never}
+      />
+    );
+
+    // `beta` is the tier the compiler kept for 991, so `alpha` is unreachable.
+    expect(
+      document.querySelector('[data-property="color"] [data-action="jump"]')
+    ).toBeNull();
   });
 
   it("withholds the jump when the host cannot move the canvas", () => {

@@ -37,6 +37,9 @@ import {
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
+import { isUsableWidth } from "./breakpoints";
+import { offeredTiers } from "./canvas-width";
+
 /** What a control's dot reports. */
 export type StyleProvenance =
   /**
@@ -407,6 +410,20 @@ export interface BreakpointSource {
    * that reads as precise and is not.
    */
   readonly axis: BreakpointAxis;
+  /**
+   * Whether a canvas can actually be taken to this tier.
+   *
+   * Two ids can carry one bound, and only the tier that WINS is offered as a
+   * choice — but a declaration stored under the loser can still be what a
+   * control is showing, and would otherwise earn a "go to" that cannot be
+   * honoured: the width lookup answers `undefined` for it, which a host reads
+   * as the unconditional tier and releases the canvas instead. Naming the tier
+   * is still right; offering to travel to it is not.
+   *
+   * The unconditional tier IS selectable: releasing the canvas is how it is
+   * shown, so `undefined` means something there.
+   */
+  readonly selectable: boolean;
 }
 
 /**
@@ -496,6 +513,15 @@ export function breakpointSource(
     breakpoint,
     label: named?.label ?? breakpoint,
     axis: context.axis,
+    /*
+     * Unbounded is the unconditional tier and always reachable. A bounded tier
+     * is reachable only if it is the one `offeredTiers` kept for that width —
+     * the same list the switcher builds its options from, so "a tier a canvas
+     * can be taken to" has one definition rather than two.
+     */
+    selectable:
+      !isUsableWidth(context.maxWidth) ||
+      offeredTiers(breakpoints).some(tier => tier.id === breakpoint),
   };
 }
 
@@ -548,20 +574,34 @@ export function breakpointBadge(
       : { kind: "inherited", source };
   }
   /*
-   * Authored here. What a reset would reveal is whatever wins once this
-   * breakpoint is out of the live set.
+   * Authored here. What a reset would reveal is whatever wins once the
+   * declarations the reset ACTUALLY CLEARS are gone.
    *
-   * The edited breakpoint is removed rather than the entry: two declarations
-   * can share a breakpoint, and dropping the winning ENTRY would let the loser
-   * at the same breakpoint stand in for what a reset reveals — while a reset
-   * clears the stored value at that breakpoint, which removes both.
+   * Simulated by removing those declarations from the trace, not by removing
+   * the breakpoint from the live set. A reset clears one address — this node,
+   * this state, this breakpoint, this control's property and path — and leaves
+   * every other origin at that breakpoint standing. Dropping the whole
+   * breakpoint discards a class, block-type or page declaration that would
+   * survive, so a node value overriding a class value at Mobile was described
+   * as "leaving it unset" while the class value is what actually appears.
+   *
+   * The descendant is matched too: a rule on a more specific selector reaches
+   * this control without being written BY it, so this control's reset does not
+   * remove it.
    */
-  const revealedBy = styleProvenance({
-    ...query,
-    liveBreakpoints: query.liveBreakpoints.filter(
-      live => live !== query.breakpoint
-    ),
-  });
+  const cleared = query.trace.filter(
+    entry =>
+      !(
+        entry.origin.kind === "node" &&
+        entry.origin.id === query.subject.nodeId &&
+        entry.state === query.state &&
+        entry.breakpoint === query.breakpoint &&
+        entry.property === query.cssProperty &&
+        normalizeDescendant(entry.descendant) ===
+          normalizeDescendant(query.descendant)
+      )
+  );
+  const revealedBy = styleProvenance({ ...query, trace: cleared });
   if (revealedBy.kind === "unset" || revealedBy.kind === "ambiguous") {
     return { kind: "authored" };
   }

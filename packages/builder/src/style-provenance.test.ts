@@ -646,7 +646,12 @@ describe("the breakpoint dimension of a control's provenance", () => {
 
     expect(badge).toEqual({
       kind: "inherited",
-      source: { breakpoint: "tablet", label: "Tablet", axis: "viewport" },
+      source: {
+        breakpoint: "tablet",
+        label: "Tablet",
+        axis: "viewport",
+        selectable: true,
+      },
     });
   });
 
@@ -697,6 +702,12 @@ describe("the breakpoint dimension of a control's provenance", () => {
         breakpoint: "narrow",
         label: "Narrow card",
         axis: "container",
+        /*
+         * NOT selectable, and that is the honest answer: sizing the canvas
+         * cannot put an element's own query container at a width. Naming the
+         * tier is still right; offering to travel to it is not.
+         */
+        selectable: false,
       },
     });
   });
@@ -737,7 +748,48 @@ describe("the breakpoint dimension of a control's provenance", () => {
 
     expect(badge).toEqual({
       kind: "authored",
-      revealed: { breakpoint: "tablet", label: "Tablet", axis: "viewport" },
+      revealed: {
+        breakpoint: "tablet",
+        label: "Tablet",
+        axis: "viewport",
+        selectable: true,
+      },
+    });
+  });
+
+  it("reveals a LOWER-TIER value at the same breakpoint, which a reset does not clear", () => {
+    /*
+     * A reset clears ONE address — this node, this state, this breakpoint, this
+     * control. Everything else at that breakpoint survives, so a class value
+     * the node overrode at Mobile is exactly what appears afterwards.
+     *
+     * Simulating the reset by dropping the whole breakpoint from the live set
+     * discards that class declaration too, and the control then promises to
+     * leave the value unset while the class value is what the author will see.
+     */
+    const badge = badgeFor(
+      query(
+        [
+          entry({
+            origin: { kind: "class", id: "c1", slug: "card" },
+            breakpoint: "mobile",
+            value: "4px",
+          }),
+          entry({ breakpoint: "mobile", value: "8px" }),
+        ],
+        { breakpoint: "mobile", liveBreakpoints: ["mobile"] }
+      ),
+      site
+    );
+
+    expect(badge).toEqual({
+      kind: "authored",
+      revealed: {
+        breakpoint: "mobile",
+        label: "Mobile",
+        axis: "viewport",
+        selectable: true,
+      },
     });
   });
 
@@ -837,7 +889,12 @@ describe("the breakpoint dimension of a control's provenance", () => {
 
     expect(badge).toEqual({
       kind: "inherited",
-      source: { breakpoint: "tablet", label: "Tablet", axis: "viewport" },
+      source: {
+        breakpoint: "tablet",
+        label: "Tablet",
+        axis: "viewport",
+        selectable: true,
+      },
     });
   });
 
@@ -857,7 +914,12 @@ describe("the breakpoint dimension of a control's provenance", () => {
 
     expect(badge).toEqual({
       kind: "inherited",
-      source: { breakpoint: "tablet", label: "tablet", axis: "viewport" },
+      source: {
+        breakpoint: "tablet",
+        label: "tablet",
+        axis: "viewport",
+        selectable: true,
+      },
     });
   });
 });

@@ -716,6 +716,61 @@
 }
 
 /*
+ * The breakpoint actions on a control: reset here, or go to the tier a value
+ * came from.
+ *
+ * Styled at all because Preflight strips a bare button to text, and these sit
+ * beside explanatory copy — unstyled, an author cannot tell the one they can
+ * press from the sentence they cannot. Tokens rather than literals, so the pair
+ * follows the admin's light and dark themes like everything else in the panel.
+ *
+ * Quiet by default and only definite on hover or focus. The panel already
+ * carries a dot, a label and a value per control; an action drawn as a filled
+ * button would outweigh the value it acts on, and these appear on several
+ * controls at once.
+ */
+.nx-style-inspector__breakpoint-action {
+  align-self: flex-start;
+  margin-top: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--nx-muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.nx-style-inspector__breakpoint-action:hover {
+  color: var(--nx-foreground);
+  border-color: var(--nx-border);
+  background: var(--nx-muted);
+}
+
+/*
+ * A visible focus ring, not only a colour change. The panel is reachable by
+ * keyboard and these are the only controls in it that appear conditionally, so
+ * a focus a sighted keyboard user cannot locate is the failure that matters.
+ */
+.nx-style-inspector__breakpoint-action:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+  color: var(--nx-foreground);
+}
+
+/*
+ * What a reset falls back to, beside the button rather than only in its
+ * accessible name. The whole point of computing it is to remove a guess, and
+ * putting it in `aria-label` alone removes the guess for screen-reader users
+ * and leaves it for everyone else.
+ */
+.nx-style-inspector__breakpoint-reveals {
+  margin-left: 0.375rem;
+  font-size: 0.6875rem;
+  color: var(--nx-muted-foreground);
+}
+
+/*
  * The canvas root is the positioning context for editor chrome drawn over the
  * page.
  *
