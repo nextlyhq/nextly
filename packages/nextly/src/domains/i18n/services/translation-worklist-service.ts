@@ -200,6 +200,24 @@ export function planWorklistFanOut(
 }
 
 /**
+ * Everything this answer did not cover, named once and in one order.
+ *
+ * Two different reasons land here — a collection the fan-out cap never reached,
+ * and one whose read FAILED — and the screen makes the same statement about
+ * both: this answer did not cover that collection. Keeping them apart in the
+ * response would invite a caller to handle one and not the other, and the
+ * caller cannot act differently on them anyway.
+ *
+ * Sorted and de-duplicated so two identical requests describe the same site the
+ * same way; an order that varies reads as the content having changed.
+ */
+export function notConsultedSources(
+  ...groups: readonly (readonly string[])[]
+): string[] {
+  return [...new Set(groups.flat())].sort();
+}
+
+/**
  * The reserved filter the collection list already understands.
  *
  * Built here so the worklist and the entry table cannot come to disagree about

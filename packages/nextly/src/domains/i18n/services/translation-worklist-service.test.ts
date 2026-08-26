@@ -4,6 +4,7 @@ import {
   MAX_WORKLIST_COLLECTIONS,
   byMostRecentlyUpdated,
   eligibleCollections,
+  notConsultedSources,
   planWorklistFanOut,
   translatedFilter,
   worklistId,
@@ -196,6 +197,35 @@ describe("planWorklistFanOut", () => {
       forward.queried.map(c => c.slug)
     );
     expect(shuffled.skippedCollections).toEqual(forward.skippedCollections);
+  });
+});
+
+describe("notConsultedSources", () => {
+  it("gathers every reason a collection went uncovered into one list", () => {
+    // A collection the cap never reached and one whose read FAILED make the
+    // same statement to a reader: this answer did not cover that collection.
+    expect(notConsultedSources(["pages"], ["posts"])).toEqual([
+      "pages",
+      "posts",
+    ]);
+  });
+
+  it("names a collection once even when both reasons apply", () => {
+    expect(notConsultedSources(["posts"], ["posts"])).toEqual(["posts"]);
+  });
+
+  it("describes the same site the same way whatever order it arrives in", () => {
+    // An order that varies between two identical requests reads as the content
+    // having changed.
+    expect(notConsultedSources(["zebra"], ["alpha"])).toEqual(
+      notConsultedSources(["alpha"], ["zebra"])
+    );
+  });
+
+  it("is empty when the answer covered everything", () => {
+    // The field's PRESENCE is the signal, so it must not appear as an empty
+    // list on a complete answer.
+    expect(notConsultedSources([], [])).toEqual([]);
   });
 });
 

@@ -17,12 +17,13 @@
  */
 
 import {
-  apiKeyScopeAllows,
-  type AuthenticatedScope,
-} from "../auth/authenticated-scope";
+  canReadEntity,
+  type ReadAccessCaller,
+} from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { container } from "../di";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
+import type { UserContext } from "../domains/collections/services/collection-types";
 import {
   TRANSLATION_FILTER_STATES,
   type TranslationFilterState,
@@ -32,6 +33,7 @@ import { isValidLocale } from "../domains/i18n/resolve-locale";
 import {
   byMostRecentlyUpdated,
   eligibleCollections,
+  notConsultedSources,
   planWorklistFanOut,
   translatedFilter,
   worklistId,
@@ -43,10 +45,6 @@ import {
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { CollectionsHandler } from "../services/collections-handler";
-import {
-  isSuperAdmin,
-  listEffectivePermissions,
-} from "../services/lib/permissions";
 
 import {
   authenticatedRead,
@@ -87,36 +85,40 @@ function parseLimit(raw: string | null): number {
 }
 
 /**
- * Which collections this caller may read at all, or `undefined` for a
- * super-admin (meaning "no filter").
+ * Which of these collections this caller may read at all.
  *
- * Coarse on purpose. It decides which collections are worth QUERYING; the
- * per-row rules inside `listEntries` still decide which documents come back.
- * Both are needed — this one keeps unreadable collections from consuming the
- * cap, and the per-row one keeps another author's titles out of the answer.
+ * Asked of `canReadEntity`, which is the SAME decision the row read makes, and
+ * whose own docblock says reproducing any of it would be a second
+ * implementation to keep in step. That is exactly what a permission-only
+ * approximation is: `checkAccess` resolves a code-defined `access.read` — `true`
+ * or a callback — BEFORE falling back to stored grants, so a collection
+ * authorized purely in code has no `slug:read` pair to find. Filtering on those
+ * pairs removed it before the row read could allow it, and its outstanding work
+ * vanished from the worklist without any refusal being reported.
+ *
+ * Coarse only in WHAT it decides — whether a collection is worth querying at
+ * all. The per-row rules inside `listEntries` still decide which documents come
+ * back, and both are needed: this keeps unreadable collections out of the cap,
+ * that keeps another author's titles out of the answer.
  */
 async function readableCollections(
   auth: AuthContext,
-  scope: AuthenticatedScope | undefined,
+  caller: { user: UserContext },
   slugs: readonly string[]
-): Promise<Set<string> | undefined> {
-  // An API KEY is judged on its own stamped grants, in both directions: a key
-  // without the grant is denied however privileged its owner, and a key with it
-  // is allowed however unprivileged. Asking the owner's RBAC here — which is
-  // what this did — let collections outside the key's reach consume the capped
-  // slots and put their slugs in `skippedCollections`, while the per-row checks
-  // correctly refused their rows. The coarse filter and the row checks have to
-  // come from ONE decision or they disagree about what exists.
-  if (scope?.actorType === "apiKey") {
-    return new Set(
-      slugs.filter(slug => apiKeyScopeAllows(scope, "read", slug) === true)
-    );
-  }
-  if (await isSuperAdmin(auth.userId)) return undefined;
-  const pairs = await listEffectivePermissions(auth.userId);
-  return new Set(
-    pairs.filter(p => p.endsWith(":read")).map(p => p.split(":")[0] ?? "")
+): Promise<Set<string>> {
+  const readCaller: ReadAccessCaller = {
+    userId: auth.userId,
+    authMethod: auth.authMethod === "api-key" ? "api-key" : "session",
+    permissions: auth.permissions,
+    roles: caller.user.roles ?? [],
+  };
+  const verdicts = await Promise.all(
+    slugs.map(async slug => ({
+      slug,
+      allowed: await canReadEntity(slug, readCaller),
+    }))
   );
+  return new Set(verdicts.filter(v => v.allowed).map(v => v.slug));
 }
 
 /**
@@ -236,7 +238,7 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   const localized = await localizedCollections();
   const readable = await readableCollections(
     auth,
-    caller.authenticatedScope,
+    caller,
     localized.map(c => c.slug)
   );
   const eligible = eligibleCollections(localized, state, readable);
@@ -277,11 +279,19 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
         status: "all" as const,
       });
       const useAsTitle = bySlug.get(coll.slug)?.useAsTitle;
-      // A refused or failed read contributes nothing rather than failing the
-      // whole worklist: one collection the caller may not read must not empty
-      // the screen for every collection they may.
-      const docs = (result?.data?.docs ?? []) as Record<string, unknown>[];
-      return docs.map(
+      // A FAILED read is not an empty collection, and the difference is the
+      // whole point of this endpoint. `listEntries` answers a broken query or a
+      // throwing read hook with `{ success: false, data: null }`, and treating
+      // that as "no rows" reports the collection as having nothing outstanding
+      // — an absence standing in for an answer, on a screen whose only job is
+      // to say where the work is. The collection is named as unconsulted
+      // instead, and one failure does not empty the screen for every collection
+      // that answered.
+      if (result?.success !== true || result.data === null) {
+        return { slug: coll.slug, rows: [] as TranslationWorkRow[] };
+      }
+      const docs = (result.data.docs ?? []) as Record<string, unknown>[];
+      const rows = docs.map(
         (doc): TranslationWorkRow => ({
           collection: coll.slug,
           collectionLabel: coll.label,
@@ -290,39 +300,54 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
           updatedAt: worklistUpdatedAt(doc.updatedAt ?? doc.updated_at),
         })
       );
+      return { slug: null, rows };
     })
   );
 
+  // Named here rather than only at the cap, because both are the same claim:
+  // this answer did not cover that collection.
+  const unreadable = perCollection
+    .map(r => r.slug)
+    .filter((slug): slug is string => slug !== null);
+  const notConsulted = notConsultedSources(skippedCollections, unreadable);
+
   // Merged BEFORE the slice, which is the whole reason this fans out on the
   // server: ordered across collections rather than within each one.
-  const rows = perCollection.flat().sort(byMostRecentlyUpdated).slice(0, limit);
+  const merged = perCollection.flatMap(r => r.rows).sort(byMostRecentlyUpdated);
+  const rows = merged.slice(0, limit);
 
   // The canonical list envelope, with synthetic single-page meta — the same
-  // shape `webhooks` uses for a list its service does not paginate. This read
-  // is capped rather than paged, so `page`/`totalPages` are 1 and there is no
-  // next page to offer.
+  // shape `webhooks` uses for a list its service does not paginate.
   //
-  // `total` is the number of rows RETURNED, which is all this request can
-  // honestly claim: the fan-out is capped per collection and across
-  // collections, so more outstanding work may exist than was counted. That is
-  // exactly what `hasNext` reports here — not "there is another page to
-  // request", but "this answer is known to be incomplete" — and it is why
-  // `skippedCollections` is carried in the row set's own metadata rather than
-  // left for the caller to infer from a number.
+  // `total` is what the fan-out FOUND, before the slice, so a caller can see
+  // that the rows on screen are not all of them: fifty-one outstanding
+  // documents return fifty rows and a total of fifty-one, and the screen can
+  // say so. Reporting `rows.length` there instead would present a truncated
+  // backlog as a complete one — the same lie as an unconsulted collection,
+  // one level down.
+  //
+  // It is still a floor rather than a census: each collection is asked for at
+  // most `limit`, so a site far past that has more outstanding work than any
+  // single request can count. Naming a floor is honest; naming it as a total
+  // would not be, which is why the field the screen reads for completeness is
+  // `notConsulted` rather than this number.
   return respondList(
     rows,
     {
-      total: rows.length,
+      total: merged.length,
       page: 1,
       limit,
       totalPages: 1,
-      hasNext: rows.length === limit || skippedCollections.length > 0,
+      // FALSE, always. This endpoint takes no `page` and always returns the
+      // same first slice, so a consumer following `hasNext` would request a
+      // second page and receive the same rows forever. Incompleteness is a
+      // different fact from pagination and travels in `notConsulted`, which is
+      // why that field exists.
+      hasNext: false,
       hasPrev: false,
-      // Named, so the screen can say WHICH. Omitted entirely when the fan-out
-      // reached everything, so the field's presence is itself the signal.
-      ...(skippedCollections.length === 0
-        ? {}
-        : { notConsulted: skippedCollections }),
+      // Named, so the screen can say WHICH. Omitted entirely when the answer
+      // covered everything, so the field's presence is itself the signal.
+      ...(notConsulted.length === 0 ? {} : { notConsulted }),
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );
