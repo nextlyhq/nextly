@@ -79,14 +79,21 @@ beforeEach(() => {
 });
 
 describe("PreviewPanes when the pane is closed", () => {
-  it("generates no box of its own, so the page lays out as if it were absent", () => {
+  it("keeps a box on the OUTERMOST wrapper and none on the rest", () => {
     /*
-     * The wrapper elements now EXIST while closed — that is what keeps the
-     * editor mounted across a toggle — so the property can no longer be "there
-     * is no wrapper". It is that the wrappers contribute nothing to layout:
-     * `display: contents` removes the box without removing the element, which
-     * is the same mechanism `MeasuredPageFrame` uses to release the page
-     * measure.
+     * The wrapper elements EXIST while closed — that is what keeps the editor
+     * mounted across a toggle — so the property is about what they contribute
+     * to layout, and the two levels contribute differently.
+     *
+     * The outermost is a direct child of `.nx-page-shell`, whose `> *` rule
+     * places children in the content column. A boxless child gives that rule
+     * nothing to apply to and promotes ITS children into the grid, where they
+     * match no selector and auto-place from the gutter — so `display: contents`
+     * there mislays the ordinary closed editor while every wrapper still
+     * carries the expected class. `PageShell` warns about exactly this shape.
+     *
+     * Everything BELOW it is boxless, which is the same remedy that warning
+     * states: give the direct child a box, move the boxlessness inside it.
      */
     const { container } = render(
       <PreviewPanes {...props} open={false}>
@@ -102,9 +109,13 @@ describe("PreviewPanes when the pane is closed", () => {
       node = node.parentElement;
     }
 
-    // Control: there ARE wrappers to judge, so the loop below is not vacuous.
-    expect(wrappers.length).toBeGreaterThan(0);
-    for (const wrapper of wrappers) {
+    // Control: more than one wrapper, so "outermost" and "the rest" are
+    // different elements and the two assertions below cannot be the same one.
+    expect(wrappers.length).toBeGreaterThan(1);
+
+    const outermost = wrappers[wrappers.length - 1];
+    expect(outermost?.className ?? "").not.toContain("contents");
+    for (const wrapper of wrappers.slice(0, -1)) {
       expect(wrapper.className).toContain("contents");
     }
   });
