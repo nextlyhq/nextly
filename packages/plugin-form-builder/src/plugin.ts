@@ -433,6 +433,18 @@ export function formBuilder(
       // Per collection rather than in one call: a slug that cannot be read
       // must stay ABSENT from the map, and a single failing lookup would
       // otherwise take its readable siblings with it.
+      // Emptied first. `init` runs again on HMR and re-registration against the
+      // SAME config object, so a lookup that succeeded on the previous boot and
+      // fails on this one would leave its old answer standing while the catch
+      // below believes it left the slug absent. A stale `false` then reads a
+      // localized target as unreachable and drops its redirect; a stale `true`
+      // lets a plain draft target through.
+      for (const slug of Object.keys(
+        resolvedConfig.redirectTargetLocalization
+      )) {
+        delete resolvedConfig.redirectTargetLocalization[slug];
+      }
+
       // AWAITED, not fired and forgotten: a write reaching the save rule before
       // this resolves would find the map empty and read every target as
       // undecided, which is the refusal silently not happening.

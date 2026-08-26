@@ -239,6 +239,8 @@ function storedRedirectReference(
 ): {
   reference: { collection: string; id: string };
   field: PickedDocumentField;
+  /** Whether that collection is still a configured redirect target. */
+  configured: boolean;
 } | null {
   const picked = storedSettings(originalData?.settings);
   if (!picked) return null;
@@ -248,9 +250,18 @@ function storedRedirectReference(
     picked.settings[picked.field],
     collections
   );
-  return reference && collections.includes(reference.collection)
-    ? { reference, field: picked.field }
-    : null;
+  if (!reference) return null;
+
+  // A collection dropped from `redirectRelationships` since the form was saved
+  // is REPORTED, not discarded. Discarding it made the rule skip a form whose
+  // destination can no longer be built at all, so publishing succeeded and
+  // every submission afterwards resolved to no redirect — the silent version
+  // of the failure the rule exists to prevent.
+  return {
+    reference,
+    field: picked.field,
+    configured: collections.includes(reference.collection),
+  };
 }
 
 /**
@@ -381,6 +392,8 @@ function redirectReferenceForWrite(
   reference: { collection: string; id: string };
   field: PickedDocumentField;
   chosen: boolean;
+  /** Whether the target's collection is still a configured redirect target. */
+  configured: boolean;
 } | null {
   const named = assertRedirectTargetNamed(
     context.data,
@@ -403,7 +416,7 @@ function redirectReferenceForWrite(
       stored.field === named.field &&
       stored.reference.collection === named.reference.collection &&
       stored.reference.id === named.reference.id;
-    return { ...named, chosen: !unchanged };
+    return { ...named, chosen: !unchanged, configured: true };
   }
 
   // A write that REPLACES `settings` has answered the question: this form no
@@ -463,7 +476,28 @@ export async function assertRedirectTargetUsable(
 ) {
   const write = redirectReferenceForWrite(context, patterns);
   if (!write) return;
-  const { reference, field, chosen } = write;
+  const { reference, field, chosen, configured } = write;
+
+  // Nothing can be built for a collection that is no longer a redirect target,
+  // so there is nothing to read either. Only the write that makes the form
+  // reachable answers for it; an unrelated edit inherits the state as it does
+  // any other.
+  if (!configured) {
+    if (
+      publishesForm(
+        context.data as Record<string, unknown> | undefined,
+        context.originalData as Record<string, unknown> | undefined
+      )
+    ) {
+      throw redirectRefusal(
+        `This form redirects to "${reference.collection}", which is no longer ` +
+          `configured as a redirect target, so it has nowhere to send anyone. ` +
+          `Choose another page, or pick a different confirmation.`,
+        field
+      );
+    }
+    return;
+  }
 
   const nextly = context.req?.nextly;
   if (!nextly) return;

@@ -291,6 +291,59 @@ describe("assertRedirectTargetUsable", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("refuses publishing when the target's collection is no longer a redirect target", async () => {
+    // The stored reference names `archive`, which is not in `patterns` any
+    // more. Discarding it let the form publish while `urlForPickedDocument`
+    // found no pattern and returned no redirect for every submission — the
+    // silent version of the failure this rule exists to prevent.
+    await expect(
+      assertRedirectTargetUsable(
+        context(
+          {
+            operation: "update",
+            data: { status: "published" },
+            originalData: {
+              status: "draft",
+              settings: JSON.stringify({
+                confirmationType: "relationship",
+                redirectPage: { relationTo: "archive", value: "p1" },
+              }),
+            },
+          },
+          () => {
+            throw new Error("no read should happen for an unconfigured target");
+          }
+        ),
+        { pages: "/{slug}" },
+        { pages: false }
+      )
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "settings.redirectPage" }] },
+    });
+  });
+
+  it("lets an unrelated edit through when that collection is gone", async () => {
+    // The control: the exception survives configuration removal, so an author
+    // is not locked out of a form by a change to the site's config.
+    await expect(
+      assertRedirectTargetUsable(
+        context({
+          operation: "update",
+          data: { name: "Renamed" },
+          originalData: {
+            status: "published",
+            settings: JSON.stringify({
+              confirmationType: "relationship",
+              redirectPage: { relationTo: "archive", value: "p1" },
+            }),
+          },
+        }),
+        { pages: "/{slug}" },
+        { pages: false }
+      )
+    ).resolves.toBeUndefined();
+  });
+
   it("refuses when the write picks a page its pattern cannot describe", async () => {
     await expect(
       assertRedirectTargetUsable(
