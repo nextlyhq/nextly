@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   breakpointBadge,
   styleProvenance,
+  type BreakpointBadge,
   type StyleProvenanceQuery,
 } from "./style-provenance";
 
@@ -603,6 +604,14 @@ describe("a caller that states which states are live", () => {
   });
 });
 
+/** The badge for a query, with the provenance the caller would already hold. */
+function badgeFor(
+  q: StyleProvenanceQuery,
+  set: BreakpointSet | undefined
+): BreakpointBadge {
+  return breakpointBadge(q, styleProvenance(q), set);
+}
+
 describe("the breakpoint dimension of a control's provenance", () => {
   /*
    * A site with both axes, so a badge naming a breakpoint without naming its
@@ -617,7 +626,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
   };
 
   it("says nothing when the control is unset", () => {
-    expect(breakpointBadge(query([]), site)).toEqual({ kind: "none" });
+    expect(badgeFor(query([]), site)).toEqual({ kind: "none" });
   });
 
   it("names the breakpoint a value was authored at, when it is not this one", () => {
@@ -627,7 +636,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * right here, which is the one thing an author needs told apart because the
      * next action differs.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ breakpoint: "tablet" })], {
         breakpoint: "mobile",
         liveBreakpoints: ["tablet", "mobile"],
@@ -648,7 +657,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * also the control on the case above: without it, a badge that fired on
      * every `inherited` provenance would satisfy that one.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query(
         [
           entry({
@@ -674,7 +683,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * that reads as precise and does not say which axis it means is worse than
      * one that says less.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ breakpoint: "narrow" })], {
         breakpoint: "mobile",
         liveBreakpoints: ["narrow", "mobile"],
@@ -693,7 +702,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
   });
 
   it("reports a value authored HERE as resettable", () => {
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ breakpoint: "mobile" })], {
         breakpoint: "mobile",
         liveBreakpoints: ["mobile"],
@@ -715,7 +724,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * wider" that would have to re-derive tier order, both axes and
      * specificity.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query(
         [
           entry({ breakpoint: "tablet", value: "16px" }),
@@ -738,7 +747,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * would satisfy it while telling an author a reset restores a value that
      * does not exist. Here the control simply becomes unset.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ breakpoint: "mobile" })], {
         breakpoint: "mobile",
         liveBreakpoints: ["tablet", "mobile"],
@@ -757,7 +766,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * was not looking at, so the badge withholds rather than guesses — the same
      * refusal the origin dot already makes.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ property: "background-image", value: "url(a.png)" })], {
         cssProperty: "background-image",
       }),
@@ -775,7 +784,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * is editing Mobile — a label that is not merely unhelpful but false, and
      * whose jump would go nowhere.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ breakpoint: "mobile", state: "hover" })], {
         breakpoint: "mobile",
         state: "base",
@@ -794,7 +803,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * does not define would offer a jump to a width nothing responds to, and
      * the honest answer is that there is nothing to say.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ breakpoint: "watch" })], {
         breakpoint: "mobile",
         liveBreakpoints: ["watch", "mobile"],
@@ -812,7 +821,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * the row the sheet discarded. The discarded row is stored FIRST here, so a
      * by-id lookup cannot pass by accident.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ breakpoint: "tablet" })], {
         breakpoint: "mobile",
         liveBreakpoints: ["tablet", "mobile"],
@@ -838,7 +847,7 @@ describe("the breakpoint dimension of a control's provenance", () => {
      * is not a good name, but inventing one, or borrowing another row's label,
      * would attach a name to a tier it does not describe.
      */
-    const badge = breakpointBadge(
+    const badge = badgeFor(
       query([entry({ breakpoint: "tablet" })], {
         breakpoint: "mobile",
         liveBreakpoints: ["tablet", "mobile"],

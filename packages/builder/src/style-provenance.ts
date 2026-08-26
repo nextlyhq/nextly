@@ -511,9 +511,18 @@ function sourceOf(
  */
 export function breakpointBadge(
   query: StyleProvenanceQuery,
+  /**
+   * What {@link styleProvenance} already answered for this control.
+   *
+   * Taken rather than recomputed, because the badge is the breakpoint READING
+   * of a provenance and not a second opinion about it. A caller placing a dot
+   * has one in hand, and computing another here would be a second ranking of
+   * the same trace — the two would first disagree at exactly the boundaries the
+   * trace exists to settle.
+   */
+  provenance: StyleProvenance,
   breakpoints: BreakpointSet | undefined
 ): BreakpointBadge {
-  const provenance = styleProvenance(query);
   if (provenance.kind === "unset" || provenance.kind === "ambiguous") {
     return { kind: "none" };
   }
