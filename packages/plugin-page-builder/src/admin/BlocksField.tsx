@@ -46,7 +46,7 @@ import {
   type BreakpointId,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { registrySlotSource } from "@nextlyhq/builder";
+import { DEFAULT_PREFERENCES, registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   authoredBreakpoints,
@@ -195,6 +195,23 @@ const PLUGIN_SOURCE = "@nextlyhq/plugin-page-builder";
 function ensureCoreBlocksRegistered(): void {
   const missing = coreBlocks.filter(block => !hasBlock(block.name));
   if (missing.length > 0) registerBlocks(missing, { source: PLUGIN_SOURCE });
+}
+
+/**
+ * Whether the empty-container appender should be suppressed right now.
+ *
+ * Two independent reasons collapse into one boolean here, named, rather than
+ * inlined at the JSX call site: a drag in progress, where the document is
+ * mid-change, and the author having turned empty-container chrome off, where
+ * the container this control would sit over has collapsed to zero height. A
+ * bare `||` at the call site reads as one condition; naming it is what says
+ * these are two unrelated causes that happen to share an operator.
+ */
+function emptyContainerAppenderHidden(
+  draggingId: string | null,
+  showEmptyElements: boolean
+): boolean {
+  return draggingId !== null || !showEmptyElements;
 }
 
 /**
@@ -1062,6 +1079,21 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   }, []);
 
   /*
+   * Whether the author wants empty-container chrome showing at all, mirrored
+   * from the shell so the appender mounted below can answer the same question
+   * the dashed placeholder box's own CSS rule already answers.
+   *
+   * Starts at the preference's own default rather than an assumed `true`: the
+   * shell reports the real value once it has read it, but that report lands
+   * one render after this component's first — an assumed value would be a
+   * SECOND declaration of the default that goes stale the day the shell's own
+   * changes and this one does not.
+   */
+  const [showEmptyElements, setShowEmptyElements] = useState(
+    DEFAULT_PREFERENCES.showEmptyElements
+  );
+
+  /*
    * The editor takes the window: the shell draws its own rail, panels, top bar
    * and bottom bar, so admin chrome around it is a second set of the same
    * furniture, and the canvas is the one surface whose purpose is the space it
@@ -1097,6 +1129,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // which lives on the canvas below rather than beside the rail that
         // normally opens a panel.
         openInsertPanelToken={openInsertPanelToken}
+        // The read half of the same gap: mirrors the shell's own preference
+        // so the appender below can be suppressed by the SAME switch that
+        // already suppresses the placeholder box it sits over.
+        onShowEmptyElementsChange={setShowEmptyElements}
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
@@ -1368,12 +1404,21 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   the bands are: the document is mid-change, so a control
                   offering to fill a container names a shape that is about to
                   be different.
+                  ALSO suppressed while the author has turned empty-container
+                  chrome off: the dashed placeholder box collapses to zero
+                  height under the same preference (`builder-chrome.css`'s
+                  `[data-nx-slots]:empty` rule already matches it), and a "+"
+                  left floating over nothing after that would make the
+                  preference lie about what a visitor sees.
                 */}
                   <EmptyContainerAppenders
                     document={editor.document}
                     slots={slots}
                     blocks={blocks}
-                    hidden={drag.draggingId !== null}
+                    hidden={emptyContainerAppenderHidden(
+                      drag.draggingId,
+                      showEmptyElements
+                    )}
                     onAppend={nodeId => {
                       // Select first, then open. The inserter derives its
                       // target from the selection, so selecting the container
