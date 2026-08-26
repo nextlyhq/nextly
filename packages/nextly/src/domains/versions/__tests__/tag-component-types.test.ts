@@ -428,6 +428,43 @@ describe("resolveComponentFieldMap", () => {
     expect([...map.keys()].sort()).toEqual(["leaf", "wrapper"]);
   });
 
+  it("terminates when a group contains ITSELF, not only when slugs cycle", async () => {
+    // The slug cycle below is a different graph from this one. `slugsIn` walks
+    // `.fields` structurally, so a config whose unnamed group holds itself
+    // overflowed the call stack here — on the save path this runs BEFORE the
+    // tagging walk, so hardening only that one left the failure reachable one
+    // function earlier, after the row is already written.
+    const group: Record<string, unknown> = { fields: [] };
+    (group.fields as unknown[]).push(group);
+
+    const map = await resolveComponentFieldMap(
+      [group] as unknown as FieldConfig[],
+      async () => null
+    );
+
+    expect([...map.keys()]).toEqual([]);
+  });
+
+  it("collects slugs from a list wider than the argument limit", async () => {
+    // `push(...slugsIn(children))` threw past the engine's argument limit. The
+    // size is comfortably beyond any plausible one and deliberately does not
+    // assert where it is, that being a property of the day's engine.
+    const wide = {
+      fields: Array.from({ length: 200_000 }, (_, i) => ({
+        name: `f${i}`,
+        type: "component",
+        component: `c${i}`,
+      })),
+    };
+
+    const map = await resolveComponentFieldMap(
+      [wide] as unknown as FieldConfig[],
+      async () => null
+    );
+
+    expect(map.size).toBe(0);
+  });
+
   it("terminates on a cycle", async () => {
     const map = await resolveComponentFieldMap(
       [{ name: "hero", type: "component", component: "node" }] as FieldConfig[],

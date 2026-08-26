@@ -108,6 +108,21 @@ export type AddressableField =
  * cast (`component`, `components`, `name`), so none was relying on the narrow
  * union for anything the checker was enforcing.
  */
+/**
+ * An unnamed entry carrying a list of children.
+ *
+ * Everything about it is optional because this walk runs before validation on
+ * some paths: `{ fields: [] }` with no `type` reaches the caller's rule, so a
+ * rule written as `c => c.type.toUpperCase() === "GROUP"` would compile against
+ * a validated shape and throw on real input — defeating the non-throwing
+ * behaviour the `unknown` entry point exists to provide.
+ */
+export interface UnvalidatedContainer {
+  type?: unknown;
+  fields?: unknown;
+  [key: string]: unknown;
+}
+
 export interface AddressableFieldsOptions {
   /**
    * Whether this unnamed container's children are stored at ITS level, and so
@@ -117,7 +132,7 @@ export interface AddressableFieldsOptions {
    * named one stores its children under itself and is never descended. Default:
    * every such container is transparent, which is what core's callers expect.
    */
-  descendInto?: (container: AuthorableFieldConfig) => boolean;
+  descendInto?: (container: UnvalidatedContainer) => boolean;
 }
 
 /**
@@ -134,7 +149,7 @@ function childrenToFlatten(
 ): readonly unknown[] | null {
   const children = (field as { fields?: unknown }).fields;
   if (!Array.isArray(children)) return null;
-  if (descendInto && !descendInto(field as AuthorableFieldConfig)) return null;
+  if (descendInto && !descendInto(field as UnvalidatedContainer)) return null;
   return children;
 }
 

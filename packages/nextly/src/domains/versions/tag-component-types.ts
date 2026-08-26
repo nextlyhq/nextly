@@ -402,25 +402,54 @@ function stripNestedTags(
  * the save, which the caller can retry, than to store a version that restores
  * incorrectly.
  */
+/**
+ * The component slugs one field names, from either shape it can name them in.
+ *
+ * Separate from the walk that finds them because it answers a different
+ * question: this reads one field, the walk decides which fields to read.
+ */
+function componentSlugsOn(field: object): string[] {
+  const found: string[] = [];
+  const one = (field as { component?: unknown }).component;
+  if (typeof one === "string") found.push(one);
+
+  const many = (field as { components?: unknown }).components;
+  if (Array.isArray(many)) {
+    for (const slug of many) if (typeof slug === "string") found.push(slug);
+  }
+  return found;
+}
+
 export async function resolveComponentFieldMap(
   fields: FieldConfig[],
   getComponentFields: (slug: string) => Promise<FieldConfig[] | null>
 ): Promise<Map<string, FieldConfig[]>> {
   const resolved = new Map<string, FieldConfig[]>();
 
-  const slugsIn = (list: FieldConfig[]): string[] => {
+  // Iterative, with a visited set, for the same two reasons the addressable-
+  // fields walk is: a config whose group contains itself overflowed the call
+  // stack here, and a list wider than the engine's argument limit threw out of
+  // `push(...slugsIn(children))`. This runs BEFORE the tagging walk on the
+  // save path, so hardening only that one left both failures reachable one
+  // function earlier — a throw here reports a failed save for one that
+  // succeeded, since it happens after the row is written.
+  const slugsIn = (list: readonly unknown[]): string[] => {
     const found: string[] = [];
-    for (const field of list) {
-      const one = (field as { component?: unknown }).component;
-      const many = (field as { components?: unknown }).components;
-      if (typeof one === "string") found.push(one);
-      if (Array.isArray(many)) {
-        for (const slug of many) if (typeof slug === "string") found.push(slug);
-      }
+    const pending: unknown[] = [];
+    for (let i = list.length - 1; i >= 0; i--) pending.push(list[i]);
+    const walked = new WeakSet<object>();
+
+    while (pending.length > 0) {
+      const field = pending.pop();
+      if (typeof field !== "object" || field === null) continue;
+      if (walked.has(field)) continue;
+      walked.add(field);
+
+      for (const slug of componentSlugsOn(field)) found.push(slug);
+
       const children = (field as { fields?: unknown }).fields;
-      if (Array.isArray(children)) {
-        found.push(...slugsIn(children as FieldConfig[]));
-      }
+      if (!Array.isArray(children)) continue;
+      for (let i = children.length - 1; i >= 0; i--) pending.push(children[i]);
     }
     return found;
   };
