@@ -48,6 +48,17 @@ export const CLASS_USAGE_INDEX_SLUG = "nx_pb_class_usage";
  */
 export type ClassUsageScope = "collection" | "single";
 
+/**
+ * Which of a document's two stored forms a row was read from.
+ *
+ * A closed set rather than free text, for the same reason `scope` is one. Both
+ * are stored as text and both partition the index into subject families, so a
+ * value outside the set produces rows that no query built from a real subject
+ * can ever select — neither to reconcile nor to sweep. A typo does not fail, it
+ * accumulates.
+ */
+export type ClassUsageVariant = "published" | "draft";
+
 /** One reference: this document, through this field, uses this class. */
 export interface ClassUsageRow {
   scope: ClassUsageScope;
@@ -72,6 +83,37 @@ export interface ClassUsageRow {
   entityKey: string;
   /** The blocks field the reference was found in. */
   field: string;
+  /**
+   * Which locale's document the reference was found in, or empty when the field
+   * is not localized.
+   *
+   * A localized blocks field stores a DOCUMENT PER LOCALE, and each may apply a
+   * different set of classes. Without this column every locale would share one
+   * key, so maintaining one locale's document would remove the rows for classes
+   * only another locale uses — and a class still rendered by that other locale
+   * would read as unused, which is the answer that permits deleting it.
+   *
+   * Empty rather than null for the reason `entityKey` is: the columns have to
+   * form a total key, and a nullable member of a uniqueness constraint compares
+   * as unknown on most dialects.
+   */
+  locale: string;
+  /**
+   * Which stored variant of the document the reference was found in —
+   * `"published"` or `"draft"`.
+   *
+   * A collection with drafts holds TWO documents under one id, and they can
+   * apply different classes: a pure draft edit leaves the live row untouched,
+   * so the published page and the pending draft disagree until it is
+   * published. Without this column they share one key, and indexing either
+   * removes the rows the other justifies — so a class the published page still
+   * renders reads as unused because a draft dropped it.
+   *
+   * Both are worth counting rather than only the published one. The count
+   * answers "is this class safe to delete", and deleting a class an unpublished
+   * draft applies breaks that draft the moment somebody publishes it.
+   */
+  variant: ClassUsageVariant;
   /**
    * The named class's id, as stored in `node.classes`, or the marker id on a
    * marker row.
@@ -115,8 +157,16 @@ export function classUsageIndexCollection() {
     fields: [
       text({ name: "scope", label: "Scope" }),
       text({ name: "entity", label: "Entity" }),
-      text({ name: "entityKey", label: "Entity key" }),
+      // Indexed because every maintenance pass filters on it, and it is the
+      // most selective column in that filter: `scope` has two values and
+      // `entity` has one per collection, while a row id is unique to its
+      // document. A composite index over the whole subject would be better and
+      // cannot be declared — a collection's `indexes` never reach the schema
+      // pipeline, which builds a table's indexes from its FIELDS.
+      text({ name: "entityKey", label: "Entity key", index: true }),
       text({ name: "field", label: "Field" }),
+      text({ name: "locale", label: "Locale" }),
+      text({ name: "variant", label: "Variant" }),
       // Indexed because this is the column the library filters on: the count
       // is shown beside every class, so "which documents use this one" is asked
       // once per class per render rather than once per delete. Declared on the

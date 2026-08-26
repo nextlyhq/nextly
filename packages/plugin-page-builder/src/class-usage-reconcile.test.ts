@@ -27,6 +27,10 @@ const page: ClassUsageSubject = {
   entity: "pages",
   entityKey: "page-1",
   field: "content",
+  locale: "",
+  // The live row rather than a pending draft: a collection with drafts holds
+  // two documents under one id and they are separate subjects.
+  variant: "published",
 };
 
 /** A document whose single node applies the given classes. */
@@ -65,6 +69,8 @@ describe("deriving a document's index rows", () => {
       entity: "homepage",
       entityKey: "",
       field: "content",
+      locale: "",
+      variant: "published",
     };
 
     const derivation = deriveClassUsageRows(single, documentUsing("hero"));

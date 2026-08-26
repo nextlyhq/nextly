@@ -79,6 +79,16 @@ export type { SiteStyleReader } from "./site-style-storage";
 export { classUsageOf } from "./class-usage";
 export type { ClassUsage } from "./class-usage";
 export { rebuildClassUsage } from "./class-usage-rebuild";
+export {
+  rebuildClassUsageIndex,
+  type ClassUsageDocumentStore,
+  type ClassUsageRebuildReport,
+} from "./class-usage-index-rebuild";
+export type { ClassUsageIndexStore } from "./class-usage-maintenance";
+// Exported because a caller cannot implement `ClassUsageDocumentStore` or call
+// the rebuild without naming the variant, and a caller left to spell it as a
+// string can spell it wrong.
+export type { ClassUsageVariant } from "./collections/class-usage-index";
 export type { PageUsageStore, RebuildReport } from "./class-usage-rebuild";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.

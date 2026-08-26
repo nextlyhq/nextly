@@ -85,6 +85,8 @@ const SUBJECT_KEYS = Object.keys({
   entity: true,
   entityKey: true,
   field: true,
+  locale: true,
+  variant: true,
 } satisfies Record<
   keyof ClassUsageSubject,
   true
