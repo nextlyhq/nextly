@@ -743,6 +743,93 @@ describe("what the canvas reports about the box it got", () => {
     expect(onMeasured).toHaveBeenLastCalledWith(undefined);
   });
 
+  it("compiles the sheet against the container the BOX establishes", () => {
+    /*
+     * Registered here, because this describe does not otherwise need blocks and
+     * an UNregistered type renders as a placeholder whose styles never compile
+     * — which would leave this asserting against an empty sheet and passing on
+     * the `not.toContain` half alone.
+     */
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+      ] as never,
+      { source: "canvas-coupling-test" }
+    );
+    /*
+     * The two are one fact with two places to say it, and a caller saying it
+     * twice can say it differently. A box establishing `a` while the sheet was
+     * compiled against `b` observes and constrains a query container whose
+     * rules nothing wrote: the window decides what is rendered, the measured
+     * width decides what is reported, and nothing anywhere reads as wrong.
+     *
+     * Asserted against the EMITTED SHEET rather than against the props the
+     * canvas passed on, because the sheet is the artifact that either names
+     * this box or does not — comparing the canvas's own inputs to its own
+     * output would be two readings of one value.
+     *
+     * The host is given a DIFFERENT name deliberately, so this fails on a
+     * version that defaults rather than overwrites.
+     */
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "a",
+                type: "acme/leaf",
+                version: 1,
+                props: {},
+                styles: { base: { tablet: { color: "#f00" } } },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        preview={{ container: "nx-preview-box" }}
+        render={{
+          styleContext: {
+            breakpoints: {
+              viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+              container: [],
+            },
+            previewContainer: "nx-preview-somewhere-else",
+          },
+        }}
+      />
+    );
+
+    // `forEach` rather than spreading: a `NodeList` is only iterable under a
+    // lib this package does not compile with, which `canvas.tsx` records for
+    // the same reason. The suite transpiles without type checking, so the
+    // spread ran green here and failed only under `tsc`.
+    const sheets: string[] = [];
+    container.querySelectorAll("style").forEach(node => {
+      sheets.push(node.textContent ?? "");
+    });
+    const sheet = sheets.join("\n");
+
+    expect(sheet).toContain("@container nx-preview-box");
+    expect(sheet).not.toContain("nx-preview-somewhere-else");
+    // And the element the queries resolve against is the same one.
+    const box = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    expect((box as HTMLElement | null)?.style.containerName).toBe(
+      "nx-preview-box"
+    );
+    clearBlocks();
+  });
+
   it("observes NOTHING when no reporter was given", () => {
     /*
      * The control. Without it, an implementation that observed unconditionally

@@ -435,6 +435,11 @@ export interface CanvasProps {
    * container resizes a box whose sheet still queries the window, so the page
    * reflows and not one breakpoint changes. A container nobody observes leaves
    * the surface that owns the box unable to say which tier is live.
+   *
+   * The container also travels INTO the compile from here rather than being
+   * asked for twice: `render.styleContext.previewContainer` is overwritten with
+   * `container`, so the box the queries are written against and the box this
+   * element establishes cannot be different names.
    */
   preview?: CanvasPreview;
   /**
@@ -539,10 +544,39 @@ export function Canvas({
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
+  /*
+   * The compile is MADE to agree with the box, not trusted to.
+   *
+   * The container the sheet is compiled against and the container this element
+   * establishes are the same fact, and a caller holding two places to say it
+   * has two chances to say it differently. Passing `preview.container` without
+   * the matching compile option leaves the box observing and constraining a
+   * query container while the sheet still emits `@media` — so the window
+   * decides which tier is rendered and the measured width decides which tier
+   * the caller reports, with nothing anywhere reading as wrong.
+   *
+   * Overwritten rather than defaulted, so a host that supplies a DIFFERENT name
+   * is corrected instead of silently believed. `styleContext` absent is left
+   * alone: without it the renderer compiles no per-node sheet at all, so there
+   * are no preview rules for a container to answer.
+   */
+  const rendered = useMemo(() => {
+    if (preview === undefined || render?.styleContext === undefined) {
+      return render;
+    }
+    return {
+      ...render,
+      styleContext: {
+        ...render.styleContext,
+        previewContainer: preview.container,
+      },
+    };
+  }, [render, preview]);
+
   const page = useMemo(
     () => (
       <PageRenderer
-        {...render}
+        {...rendered}
         document={document}
         siteStyles={siteStyles}
         // What makes the hit-testing above possible at all. The renderer emits
@@ -554,7 +588,7 @@ export function Canvas({
         nodeAttribute
       />
     ),
-    [render, document, siteStyles]
+    [rendered, document, siteStyles]
   );
 
   useSelectionMarkers(root, marked, selectedId, page);
