@@ -420,6 +420,33 @@ describe("preferences", () => {
     expect(chrome).not.toBeNull();
     expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
   });
+
+  it("offers a labelled control for showEmptyElements, reflecting its state", () => {
+    // By NAME and by role, the same way the exit button above is asserted —
+    // an unlabelled control for a visibility affordance would repeat the exact
+    // failure this feature exists to fix.
+    renderShell();
+
+    const toggle = screen.getByRole("switch", {
+      name: "Show empty containers",
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("writes showEmptyElements through the store when the control is toggled", () => {
+    const store = memoryStore();
+    stubContainerFits(true);
+    render(<BuilderShell onExit={vi.fn()} store={store} />);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show empty containers" })
+    );
+
+    expect(store.value).not.toBeNull();
+    expect(JSON.parse(store.value as string)).toMatchObject({
+      showEmptyElements: false,
+    });
+  });
 });
 
 describe("where overlays inside the shell portal to", () => {

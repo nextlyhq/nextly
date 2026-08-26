@@ -1,11 +1,13 @@
 "use client";
 
 import {
+  Label,
   PortalProvider,
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
   ShortcutProvider,
+  Switch,
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -697,6 +699,10 @@ function ShellRegions({
   useRegionCycling(regionRefs, chromeRef, active);
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
+  // Pairs the header's visibility-toggle label with its switch. Generated
+  // rather than a literal so two shells mounted on one page — unlikely, but
+  // nothing here forbids it — cannot collide on the same id.
+  const emptyElementsToggleId = React.useId();
 
   /**
    * Whether the host can fill a panel. One predicate, so the rail's disabled
@@ -772,6 +778,30 @@ function ShellRegions({
           </button>
         ) : null}
         <div className="flex min-w-0 flex-1 items-center gap-2">{topBar}</div>
+        {/*
+         * The only reachable control for `showEmptyElements` — before this it
+         * changed only by an author editing storage by hand. Lives on the
+         * shell's own chrome rather than inside a switched panel, because it
+         * has to stay visible whichever panel is open or closed, and because
+         * it is this component's own state rather than a slot a host fills.
+         *
+         * A labelled switch rather than an icon: the control governs a
+         * VISIBILITY affordance, and one an author cannot read at a glance
+         * would repeat the exact failure this feature exists to fix.
+         */}
+        <Label
+          htmlFor={emptyElementsToggleId}
+          className="text-[color:var(--nx-builder-text-muted)] shrink-0"
+        >
+          Show empty containers
+          <Switch
+            id={emptyElementsToggleId}
+            checked={preferences.showEmptyElements}
+            onCheckedChange={checked =>
+              update(current => ({ ...current, showEmptyElements: checked }))
+            }
+          />
+        </Label>
       </header>
 
       <div className="flex min-h-0 flex-1">
