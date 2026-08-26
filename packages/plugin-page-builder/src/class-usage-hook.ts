@@ -113,58 +113,94 @@ async function maintain(
   context: UnknownRecord
 ): Promise<void> {
   try {
-    const collectionSlug = context.collection;
-    if (typeof collectionSlug !== "string" || collectionSlug.length === 0) {
-      return;
-    }
-    // This plugin's own index table is written BY this hook. Reconciling it
-    // would recurse: every row inserted is a create on that collection, which
-    // fires this again.
-    if (collectionSlug === args.indexCollection) return;
-
-    const nextly = directApiOf(context);
-    const documentId = documentIdOf(context);
-    if (nextly === null || documentId === null) return;
-
-    const collection = await args.ctx.services.collections.getCollection(
-      collectionSlug,
-      requestContextFor(context)
-    );
-
-    // The cheap filter first. Most collections declare no blocks field, and the
-    // draft-split question below reaches the component registry — a read every
-    // untracked collection would otherwise pay on every save.
-    if (blocksFieldsOf(collection as { fields?: unknown }).length === 0) return;
-
-    const split = await args.draftSplit(collection);
-
-    const report = await reconcileWrittenDocument({
-      store: classUsageIndexStore(nextly),
-      read: classUsageDocumentReader(nextly),
-      collection: {
-        slug: collectionSlug,
-        fields: (collection as { fields?: unknown }).fields,
-        localized: (collection as { localized?: unknown }).localized,
-        hasDrafts: split.eligible,
-      },
-      documentId,
-      locales: args.locales(),
-      limits: args.limits(),
-    });
-
-    for (const failure of report.failures) {
-      args.ctx.logger?.error?.(
-        "[page-builder] class-usage maintenance failed for a subject; " +
-          "the index disagrees with the document until a rebuild runs",
-        { subject: failure.subject, error: failure.failure }
-      );
-    }
+    const work = await planMaintenance(args, context);
+    if (work === null) return;
+    const report = await reconcileWrittenDocument(work);
+    reportFailures(args.ctx.logger, report);
   } catch (error) {
     // Including anything this module got wrong. The write has committed, so the
     // only alternative to swallowing is telling the author their save failed.
     args.ctx.logger?.error?.(
       "[page-builder] class-usage maintenance did not run for this write",
       { error }
+    );
+  }
+}
+
+/**
+ * What this write needs reconciled, or null when it needs nothing.
+ *
+ * Separated from doing it so the decision to act is one readable sequence, and
+ * so the order of the two expensive steps is visible: the blocks-field filter
+ * runs BEFORE the draft-split question, which reaches the component registry.
+ * Every untracked collection would otherwise pay for that read on every save.
+ */
+async function planMaintenance(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  context: UnknownRecord
+): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
+  const target = writeTargetOf(context, args.indexCollection);
+  if (target === null) return null;
+
+  const collection = (await args.ctx.services.collections.getCollection(
+    target.slug,
+    requestContextFor(context)
+  )) as { fields?: unknown; localized?: unknown };
+
+  if (blocksFieldsOf(collection).length === 0) return null;
+
+  const split = await args.draftSplit(collection);
+
+  return {
+    store: classUsageIndexStore(target.nextly),
+    read: classUsageDocumentReader(target.nextly),
+    collection: {
+      slug: target.slug,
+      fields: collection.fields,
+      localized: collection.localized,
+      hasDrafts: split.eligible,
+    },
+    documentId: target.documentId,
+    locales: args.locales(),
+    limits: args.limits(),
+  };
+}
+
+/**
+ * The three things a write must supply before anything is read, or null.
+ *
+ * Grouped because they share an answer — there is nothing to maintain — and
+ * because all three are cheap. Doing them together keeps the registry read
+ * behind every one of them.
+ */
+function writeTargetOf(
+  context: UnknownRecord,
+  indexCollection: string
+): { slug: string; nextly: ClassUsageDirectApi; documentId: string } | null {
+  const slug = context.collection;
+  if (typeof slug !== "string" || slug.length === 0) return null;
+  // This plugin's own index table is written BY this hook. Reconciling it would
+  // recurse: every row inserted is a create on that collection, which fires
+  // this again.
+  if (slug === indexCollection) return null;
+
+  const nextly = directApiOf(context);
+  const documentId = documentIdOf(context);
+  if (nextly === null || documentId === null) return null;
+
+  return { slug, nextly, documentId };
+}
+
+/** Say which subjects were left disagreeing with the document, and why. */
+function reportFailures(
+  logger: ClassUsagePluginContext["logger"],
+  report: { failures: { subject: unknown; failure?: unknown }[] }
+): void {
+  for (const failure of report.failures) {
+    logger?.error?.(
+      "[page-builder] class-usage maintenance failed for a subject; " +
+        "the index disagrees with the document until a rebuild runs",
+      { subject: failure.subject, error: failure.failure }
     );
   }
 }
