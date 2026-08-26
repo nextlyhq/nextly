@@ -11,6 +11,7 @@
 import { NextlyError } from "../../errors";
 import type { RichTextOutputFormat } from "../../lib/rich-text-html";
 import type { StatusOption } from "../../lib/status-filter";
+import { readSelectParam } from "../../query/select-param";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { Params } from "../types";
 
@@ -59,34 +60,27 @@ export const toDate = (v?: string): Date | undefined =>
 // ============================================================
 
 /**
- * Parse a JSON-encoded select map from a query string parameter.
- * Returns only keys whose values are booleans so the select object is
- * always a valid field map.
+ * The select map a request asked for, or nothing when it asked for no
+ * projection.
+ *
+ * REFUSES a select it cannot read, rather than falling back to the whole
+ * document. Those two answers were the same value here, so a caller who wrote
+ * the parameter in any shape but the one accepted got a correct-looking
+ * response carrying every field of every row — the format has no writer that
+ * callers could reach, so working it out wrong was the normal case rather than
+ * the exceptional one. See ../../query/select-param, which is now that writer.
  */
 export const parseSelectParam = (
   selectParam?: string
 ): Record<string, boolean> | undefined => {
-  if (!selectParam) return undefined;
-
-  try {
-    const parsed: unknown = JSON.parse(selectParam);
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return undefined;
-    }
-    const result: Record<string, boolean> = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (typeof value === "boolean") {
-        result[key] = value;
-      }
-    }
-    return Object.keys(result).length > 0 ? result : undefined;
-  } catch {
-    return undefined;
+  const request = readSelectParam(selectParam);
+  if (request.kind === "unreadable") {
+    throw NextlyError.invalidInput({
+      message: request.reason,
+      logContext: { param: "select" },
+    });
   }
+  return request.kind === "fields" ? request.fields : undefined;
 };
 
 /**

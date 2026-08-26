@@ -156,9 +156,11 @@ describe("parseSelect", () => {
     expect(parseSelect('{"title":true,"slug":false}')).toEqual(["title"]);
   });
 
-  // The API accepts `select=title` and then returns every field, so reading it
-  // as a selection would show a state the request does not have.
-  it("treats the bare form the API ignores as no selection", () => {
+  // The API REFUSES the bare form now, rather than accepting it and returning
+  // every field. Reading it as a selection would still be wrong — it shows a
+  // state no response will ever have — but the screen is no longer the only
+  // place the mistake surfaces.
+  it("treats the bare form the API refuses as no selection", () => {
     expect(parseSelect("title")).toEqual([]);
   });
 

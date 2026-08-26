@@ -12,6 +12,8 @@
  * @module components/entries/APIPlayground/query-fields
  */
 
+import { encodeSelectParam, readSelectParam } from "nextly/query";
+
 /** The parts of a field definition the playground needs. */
 export interface PlaygroundField {
   name: string;
@@ -113,29 +115,23 @@ export function formatSort(sort: SortValue | null): string {
 /**
  * Read the API's `select` format.
  *
- * Only the object form does anything — a bare `select=title` is accepted and
- * then ignored by the API, so anything that is not an object of truthy keys
- * reads as "no selection".
+ * Delegated so this screen reads the parameter with the same code the server
+ * reads it with. It used to carry its own reader, worked out by probing a
+ * running API and written down in a comment — which is how the format came to
+ * have four implementations, two of which disagreed about what `false` means.
+ *
+ * A value this cannot read shows as nothing selected. That is now honest
+ * rather than misleading: the server refuses such a request instead of
+ * answering it with every field, so the user finds out.
  */
 export function parseSelect(value?: string): string[] {
-  if (!value?.trim()) return [];
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return [];
-    }
-    return Object.entries(parsed as Record<string, unknown>)
-      .filter(([, v]) => v === true)
-      .map(([k]) => k);
-  } catch {
-    return [];
-  }
+  const request = readSelectParam(value);
+  return request.kind === "fields" ? Object.keys(request.fields) : [];
 }
 
 /** Write the API's `select` format. Nothing chosen means the param is dropped. */
 export function formatSelect(names: string[]): string {
-  if (names.length === 0) return "";
-  return JSON.stringify(Object.fromEntries(names.map(n => [n, true])));
+  return encodeSelectParam(names);
 }
 
 // ── where ───────────────────────────────────────────────────────────────────

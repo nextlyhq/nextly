@@ -90,6 +90,10 @@ const clientEntries = [
   "src/field-group-reconcile.ts",
   // Pure serializable data, consumed by the admin's field pickers and by plugins.
   "src/collections/fields/catalog.ts",
+  // The query-parameter formats, so a caller writes one with the same code the
+  // server reads it with. Imported by the admin's API Playground and by plugin
+  // admin components, which is why it is a leaf rather than a root export.
+  "src/query/index.ts",
 ];
 
 // Shared config options
