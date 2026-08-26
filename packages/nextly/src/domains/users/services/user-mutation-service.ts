@@ -41,7 +41,7 @@ import type {
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
-import type { RequestActor } from "../../../auth/request-actor";
+import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
@@ -58,6 +58,7 @@ import {
 import { affectedRowCount } from "../../auth/services/auth-service";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import { eraseRecipientDeliveries } from "../../email/erase-recipient";
+import { revalidateMedia } from "../../media/revalidate-media";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
@@ -116,6 +117,19 @@ interface DrizzleTransactionLike {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+  // Whole-row read, which Drizzle spells as `select()` with no projection.
+  // Named as its own overload rather than widening the one below: the
+  // projected form ends in `.limit()`, and collapsing the two would make a
+  // caller that forgot the limit type-check.
+  select(): {
+    from(table: unknown): {
+      // Awaitable as-is, and lockable where the dialect has row locks — the
+      // same shape the projected form carries below, for the same reason.
+      where(condition: unknown): Promise<Record<string, unknown>[]> & {
+        for(strength: "update"): Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
@@ -310,6 +324,19 @@ function userExtValueError(name: string, expected: string): NextlyError {
       },
     ],
   });
+}
+
+/**
+ * The media columns the detach reads back.
+ *
+ * Deliberately loose: the row is forwarded whole as the event's `previous` and,
+ * with two fields overlaid, as its `data`. Naming each column here would be a
+ * second declaration of the media shape that nothing keeps in step with the
+ * schema — the event only needs the id and the identity of the row.
+ */
+interface MediaRow {
+  id: string;
+  [column: string]: unknown;
 }
 
 export class UserMutationService extends BaseService {
@@ -1370,7 +1397,7 @@ export class UserMutationService extends BaseService {
     userId: number | string,
     actor?: RequestActor
   ): Promise<void> {
-    const { users, accounts, userRoles } = this.tables;
+    const { users, accounts, userRoles, media } = this.tables;
 
     // Asked once, before the transaction opens, because a failed statement
     // aborts an open Postgres transaction and there would be no way back.
@@ -1428,6 +1455,26 @@ export class UserMutationService extends BaseService {
     } catch {
       deliveriesExist = true;
     }
+
+    // Asked out here for the same reason, and treated as present when the
+    // probe cannot answer, for the same reason too. `media.uploaded_by`
+    // cascades, so skipping the detach on a transient metadata failure would
+    // delete the account and let the database destroy its files — silently and
+    // permanently, since no later run revisits a deletion that has happened.
+    // Attempting it against a genuinely absent table fails the UPDATE and takes
+    // the deletion with it, which is the invariant the audit erasure protects:
+    // an account is never removed while data belonging to it is left behind.
+    //
+    // Databases without the table exist. The SQLite fallback bootstrap in
+    // earlier releases created a subset of the core tables, and neither
+    // first-run setup nor boot repairs an existing database that is missing
+    // one.
+    let mediaExists: boolean;
+    try {
+      mediaExists = await this.adapter.tableExists("media");
+    } catch {
+      mediaExists = true;
+    }
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
     // account, so its rows go with the deletion and there is nothing left to
@@ -1453,6 +1500,10 @@ export class UserMutationService extends BaseService {
     // all three driver packages); the fluent query API is identical across
     // dialects.
     let userDeletedRecorded = false;
+    // Collected inside the transaction, used after it commits: the cache bust
+    // must not run until the detach is durable, and the rows cannot be found
+    // afterwards because the column that named them is exactly what changed.
+    let detachedMediaIds: string[] = [];
     try {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
@@ -1526,6 +1577,80 @@ export class UserMutationService extends BaseService {
           );
         }
 
+        // Detach the account's uploads before the row goes.
+        //
+        // `media.uploaded_by` declares ON DELETE CASCADE, so without this the
+        // database destroys every image, document and video the account ever
+        // added — beneath every service, hook and access check, with nothing
+        // able to intercept it and nothing to warn the admin who asked only to
+        // remove a person. An asset library is shared property: a logo uploaded
+        // by someone who has since left is still the site's logo, and the
+        // attribution is the only part that belonged to them.
+        //
+        // Nulling the column first leaves the cascade nothing to act on, which
+        // is why this is a write rather than a change to the constraint: the
+        // rule itself cannot be altered on an existing PostgreSQL database
+        // without resolver support the schema pipeline does not have yet.
+        // Inside the transaction, so files are never detached from an account
+        // whose removal then rolls back.
+        if (mediaExists) {
+          // Read before writing: the event carries a before and an after, and
+          // the ids cannot be recovered once the column naming them is null.
+          // Under a row lock, for the same reason the canonical media write
+          // takes one before recording. Read unlocked, a concurrent
+          // `updateMedia` or `deleteMedia` can commit between this snapshot and
+          // the write below — and the events would then carry state already
+          // superseded: metadata a subscriber would roll back, or an update for
+          // a row that has since been deleted, which downstream reads as the
+          // file coming back. The lock makes the snapshot the rows are updated
+          // FROM the same one they are evented from.
+          //
+          // SQLite has no row lock and needs none: its write transaction
+          // serialises writers, which is the argument the preimage read above
+          // already makes.
+          const detachQuery = txDb
+            .select()
+            .from(media)
+            .where(eq(media.uploadedBy as Column, userId));
+          const detaching = (this.dialect === "sqlite"
+            ? await detachQuery
+            : await detachQuery.for("update")) as unknown[] as MediaRow[];
+
+          if (detaching.length > 0) {
+            const detachedAt = new Date();
+            await txDb
+              .update(media)
+              .set({ uploadedBy: null, updatedAt: detachedAt })
+              .where(eq(media.uploadedBy as Column, userId));
+
+            // `updatedAt` and the outbox row are what `updateMedia` emits for
+            // any other metadata change, and a detach is one. Without them a
+            // timestamp-based sync sees an unchanged row and media subscribers
+            // are never told, so a downstream replica keeps serving the
+            // attribution of an account that no longer exists — the erasure
+            // holding on this side and not on the other.
+            for (const row of detaching) {
+              await recordMutationEventInTx(txDb, this.dialect, {
+                type: "media.updated",
+                resource: { kind: "media", id: String(row.id) },
+                data: { ...row, uploadedBy: null, updatedAt: detachedAt },
+                previous: row,
+                fields: [],
+                // Normalised the way every canonical media write normalises
+                // it: a deletion reaching this without an explicit actor is a
+                // write nobody initiated, which `actorForWrite` represents as
+                // `system`. Passing null instead would attribute the same media
+                // change differently depending on whether it arrived here or
+                // through `updateMedia`, in the durable audit as well as to
+                // subscribers.
+                actor: actorForWrite(actor, null),
+              });
+            }
+
+            detachedMediaIds = detaching.map(row => String(row.id));
+          }
+        }
+
         // Strip the person out of the delivery log for the same reason, and in
         // the same transaction: those rows carry a keyed hash of the address,
         // and an install holds the key — so they go on answering "was this
@@ -1588,6 +1713,16 @@ export class UserMutationService extends BaseService {
       if (NextlyError.is(err)) throw err;
       // Normalise raw driver errors so fk/etc. produce the right NextlyError kind.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+
+    // The detached files changed, so anything cached against them is stale —
+    // `uploadedBy` is part of the media shape a read returns. AFTER the commit,
+    // because a bust for a detach that then rolled back would be a lie about
+    // rows that never moved; best-effort, because the deletion has already
+    // happened and reporting it as failed would invite a retry that answers
+    // not-found.
+    if (detachedMediaIds.length > 0) {
+      await revalidateMedia(detachedMediaIds, this.logger);
     }
 
     // The removed account's recovery points, swept once the deletion is
