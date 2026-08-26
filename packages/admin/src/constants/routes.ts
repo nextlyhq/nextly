@@ -66,6 +66,10 @@ export const ROUTES = {
   COLLECTION_ENTRY_CREATE: "/admin/collections/[slug]/create",
   COLLECTION_ENTRY_EDIT: "/admin/collections/[slug]/[id]",
   COLLECTION_ENTRY_API: "/admin/collections/[slug]/api",
+  // A comparison is addressable: the pair being compared lives in the query
+  // (`?from=&to=`), so a reader can send a colleague the exact comparison
+  // rather than a description of how to reach it.
+  COLLECTION_ENTRY_VERSIONS: "/admin/collections/[slug]/[id]/versions",
 
   // Security & Roles routes
   SECURITY_ROLES: "/admin/security/roles",
@@ -76,6 +80,7 @@ export const ROUTES = {
   // CONTENT urls, not Builder urls; they stay under /admin/singles/*).
   SINGLE_EDIT: "/admin/singles/[slug]",
   SINGLE_API: "/admin/singles/[slug]/api",
+  SINGLE_VERSIONS: "/admin/singles/[slug]/versions",
 
   // Settings routes
   SETTINGS: "/admin/settings",

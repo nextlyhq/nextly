@@ -359,6 +359,50 @@ describe("VersionHistorySheet", () => {
     );
   });
 
+  it("offers the full comparison only once the pair it would open is known", async () => {
+    // Omitting the pair does not open "this version against nothing": the
+    // destination reads an absent pair as the two NEWEST versions, so the
+    // control would silently show a comparison the reader did not ask for.
+    // Version 1 is the oldest loaded and has no predecessor.
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [{ items: [version(1)], meta: { hasNext: false } }],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+
+    renderSheet();
+    await userEvent.click(screen.getByRole("button", { name: /Version 1/ }));
+
+    expect(
+      screen.queryByRole("button", { name: /Open full comparison/ })
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers it when a predecessor IS known", async () => {
+    // The control for the test above: gating on a resolved pair must not hide
+    // the action for every version.
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(2)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+
+    renderSheet();
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    expect(
+      screen.getByRole("button", { name: /Open full comparison/ })
+    ).toBeInTheDocument();
+  });
+
   it("leaves the document reachable while its history is open", () => {
     useVersionsMock.mockReturnValue(
       listState({
