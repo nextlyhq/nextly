@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import type { PreviewFit } from "./previewFrameFit";
 
@@ -64,13 +64,32 @@ export function PreviewViewportControl({
   const widthInputId = useId();
   const selection = requestedWidth === null ? RESPONSIVE : CUSTOM;
 
+  /*
+   * What the box SAYS, held separately from the width the frame is at.
+   *
+   * They are different facts. Clearing the box to retype it leaves text that
+   * names no width, and a frame cannot be sized to "nothing" — so the committed
+   * value stays where it was until the box says something a frame can be sized
+   * to. Collapsing the two meant an empty box committed `null`, which selected
+   * Responsive, which removed this input: the field the author was typing in
+   * disappeared under them and the rest of their keystrokes went nowhere.
+   *
+   * `null` means "not being edited", and the box then shows the committed
+   * width — so a value arriving from anywhere else is displayed rather than
+   * masked by a draft nobody is typing.
+   */
+  const [draft, setDraft] = useState<string | null>(null);
+
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-wrap items-center justify-end gap-1.5">
       <Select
         value={selection}
-        onValueChange={value =>
-          onRequestWidth(value === RESPONSIVE ? null : CUSTOM_SEED_WIDTH)
-        }
+        onValueChange={value => {
+          // A choice from the list ends the edit, so an abandoned draft does
+          // not reappear the next time the box is shown.
+          setDraft(null);
+          onRequestWidth(value === RESPONSIVE ? null : CUSTOM_SEED_WIDTH);
+        }}
       >
         <SelectTrigger
           className="h-7 w-[9.5rem] text-xs"
@@ -98,16 +117,28 @@ export function PreviewViewportControl({
             inputMode="numeric"
             min={1}
             className="h-7 w-20 text-xs"
-            value={String(requestedWidth)}
+            value={draft ?? String(requestedWidth)}
             onChange={event => {
+              const text = event.target.value;
+              setDraft(text);
+
               /*
-               * An empty or unparseable box means the author is mid-edit, and
-               * it returns to filling the pane rather than freezing on the last
-               * good number. Freezing would show a width the box no longer
-               * says, which is the control disagreeing with itself.
+               * Commit only what a frame can be sized to. An empty or
+               * half-typed box is a state of the EDIT, not a viewport request,
+               * so the frame holds its last good width while the author types
+               * the next one — otherwise the preview flickers back to full
+               * width between two keystrokes. Zero and below are rejected here
+               * for the same reason `previewFrameFit` refuses them: it fills
+               * the pane instead, and committing one would leave this control
+               * and the frame describing different states.
                */
-              const next = Number.parseInt(event.target.value, 10);
-              onRequestWidth(Number.isFinite(next) ? next : null);
+              const next = Number.parseInt(text, 10);
+              if (Number.isFinite(next) && next > 0) onRequestWidth(next);
+            }}
+            onBlur={() => {
+              // Leaving the box ends the edit. A draft left behind would name a
+              // width the frame is not at.
+              setDraft(null);
             }}
           />
           <span className="text-xs text-muted-foreground">px</span>

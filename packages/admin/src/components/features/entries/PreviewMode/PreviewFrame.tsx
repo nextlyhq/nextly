@@ -99,8 +99,14 @@ export function PreviewFrame({
 
   return (
     <div className="flex h-full min-h-0 flex-col border-l border-border bg-muted/40">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-3 py-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+      {/* Wraps rather than overflows. The pane is a share of a split, so at a
+          1024px window it is a few hundred pixels wide — and this row holds a
+          viewport select, a width box, a scaling note and three actions. Fixed
+          on one line they ran past the edge into `overflow-hidden` below, which
+          put refresh, open-in-tab and close off-screen with no way to scroll to
+          them. Wrapping costs a second row and reaches everything. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-background px-3 py-2">
+        <span className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {label}
         </span>
         {/* States what the frame IS showing rather than what an author might
@@ -114,7 +120,7 @@ export function PreviewFrame({
           </span>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {showsFrame && (
             <PreviewViewportControl
               requestedWidth={requestedWidth}
@@ -122,53 +128,65 @@ export function PreviewFrame({
               fit={fit}
             />
           )}
-          {isLoading && (
-            <Loader2
-              className="h-3.5 w-3.5 animate-spin text-muted-foreground"
-              aria-hidden="true"
-            />
-          )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={refresh}
-            /*
-             * Disabled only while a mint is IN FLIGHT, never because there is
-             * nothing to show. A failed mint leaves `url` null and sets a
-             * reason, and the message beside it asks the editor to try again —
-             * so keying the control on `url` disabled the one affordance that
-             * message points at, and the only way to retry was to close the
-             * pane and reopen it. A superseded pane needs it for the same
-             * reason: refreshing is how the session comes back.
-             */
-            disabled={isLoading}
-            title="Refresh the preview"
-          >
-            <RefreshCw className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">Refresh the preview</span>
-          </Button>
-          {url !== null && (
-            <Button asChild variant="ghost" size="sm" title="Open in a new tab">
-              {/* `rel` carries noopener as well as noreferrer: a preview URL is
+          {/* The three actions are ONE flex item, so the row above breaks
+              between the viewport control and them rather than through the
+              middle of them. Wrapped individually they scattered across rows —
+              refresh above, close below — which reads as three unrelated
+              controls instead of this pane's toolbar. */}
+          <div className="flex shrink-0 items-center gap-2">
+            {isLoading && (
+              <Loader2
+                className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+                aria-hidden="true"
+              />
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={refresh}
+              /*
+               * Disabled only while a mint is IN FLIGHT, never because there is
+               * nothing to show. A failed mint leaves `url` null and sets a
+               * reason, and the message beside it asks the editor to try again —
+               * so keying the control on `url` disabled the one affordance that
+               * message points at, and the only way to retry was to close the
+               * pane and reopen it. A superseded pane needs it for the same
+               * reason: refreshing is how the session comes back.
+               */
+              disabled={isLoading}
+              title="Refresh the preview"
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              <span className="sr-only">Refresh the preview</span>
+            </Button>
+            {url !== null && (
+              <Button
+                asChild
+                variant="ghost"
+                size="sm"
+                title="Open in a new tab"
+              >
+                {/* `rel` carries noopener as well as noreferrer: a preview URL is
                   a bearer credential, and a referrer header would hand it to
                   whatever the opened page links to next. */}
-              <a href={url} target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="h-4 w-4" aria-hidden="true" />
-                <span className="sr-only">Open the preview in a new tab</span>
-              </a>
+                <a href={url} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                  <span className="sr-only">Open the preview in a new tab</span>
+                </a>
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+              title="Close the preview"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+              <span className="sr-only">Close the preview</span>
             </Button>
-          )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            title="Close the preview"
-          >
-            <X className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">Close the preview</span>
-          </Button>
+          </div>
         </div>
       </div>
 

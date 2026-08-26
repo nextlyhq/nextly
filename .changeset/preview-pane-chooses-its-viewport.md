@@ -53,3 +53,18 @@ never disagree with the breakpoints the site actually uses. No phone/tablet/
 desktop numbers are invented here, and there are deliberately no device icons —
 a site names its own breakpoints, and no glyph is honest for a tier an author
 called "Kiosk".
+
+The toolbar wraps instead of running off the edge. At a 1024px window the pane
+is about 450px wide, and a viewport select, a width box, a scaling note and
+three actions do not fit on one line — the pane clips its overflow, so
+open-in-a-new-tab and close sat past the edge with no way to scroll to them.
+Measured in a browser at that width: they were 40px and 98px outside the
+clipping box, and hit-testing their centres reached nothing. The three actions
+stay together as one unit, so the row breaks between the viewport control and
+them rather than through the middle of them.
+
+Clearing the width box no longer takes the box away. It held one value for two
+different facts — what the box says and what the frame is sized to — so an empty
+box committed "no width", which selected Responsive, which removed the input the
+author was typing in. The text being typed is now kept separately, and a width
+is committed only once the box names one a frame can be sized to.
