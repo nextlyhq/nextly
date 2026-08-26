@@ -17,6 +17,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { sizeFromDeclaration } from "./declared-size";
 import type {
   ColumnSpec,
   IndexSpec,
@@ -99,11 +100,7 @@ function normalizeIndexOrder(snapshot: NextlySchemaSnapshot): void {
  * column reports `CHARACTER_MAXIMUM_LENGTH` 65535 while its `COLUMN_TYPE` is a
  * bare `text`, and an `INT` reports precision 10.
  */
-function modifierFromDeclaredType(type: string): string | undefined {
-  const match = /\(([^)]*)\)/.exec(type);
-  const inner = match?.[1];
-  return inner === undefined ? undefined : inner.replace(/\s+/g, "");
-}
+const modifierFromDeclaredType = sizeFromDeclaration;
 
 /**
  * PostgreSQL's modifier, reconstructed — it has no `COLUMN_TYPE` equivalent, and
