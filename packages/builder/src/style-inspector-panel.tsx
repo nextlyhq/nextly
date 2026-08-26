@@ -1245,6 +1245,21 @@ function BreakpointAction({
 }
 
 /**
+ * What to call a breakpoint source in front of an author.
+ *
+ * ONE naming for both actions. `BreakpointSource` carries the axis precisely
+ * because a site defining both makes a bare tier name ambiguous — and a
+ * container tier may share its label with a viewport one — so a reset saying
+ * "showing the value from Tablet" while a jump says "Tablet (container)" leaves
+ * the author to work out that the two Tablets are different tiers.
+ */
+function sourceLabel(source: BreakpointSource): string {
+  return source.axis === "container"
+    ? `${source.label} (container)`
+    : source.label;
+}
+
+/**
  * Clear this control at the tier being edited, saying what will show through.
  *
  * "Reset" alone asks an author to guess whether the control becomes unset or
@@ -1267,12 +1282,26 @@ function ResetAction({
   const reveals =
     revealed === undefined
       ? "leaving it unset"
-      : `showing the value from ${revealed.label}`;
+      : `showing the value from ${sourceLabel(revealed)}`;
   return (
     <button
       type="button"
       className="nx-style-inspector__breakpoint-action"
       data-action="reset"
+      /*
+       * This press writes for itself, which a picker mid-gesture needs to know.
+       *
+       * The colour picker commits its draft when the popover closes, and
+       * pressing anything outside it closes the popover first — so without this
+       * one Reset gesture writes twice: the draft the author was discarding,
+       * then the clear. The first undo would then restore the very colour they
+       * pressed Reset to be rid of.
+       *
+       * Declared on the element rather than held as a ref by each picker,
+       * because the rule is about what a CONTROL is, not about which specific
+       * button a particular field happens to know.
+       */
+      data-nx-commits-itself=""
       onClick={onReset}
       aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
     >
@@ -1285,7 +1314,7 @@ function ResetAction({
         className="nx-style-inspector__breakpoint-reveals"
         aria-hidden="true"
       >
-        {revealed === undefined ? "to unset" : `to ${revealed.label}`}
+        {revealed === undefined ? "to unset" : `to ${sourceLabel(revealed)}`}
       </span>
     </button>
   );
@@ -1307,8 +1336,7 @@ function JumpAction({
   label: string;
   onJump: () => void;
 }): React.JSX.Element {
-  const where =
-    source.axis === "container" ? `${source.label} (container)` : source.label;
+  const where = sourceLabel(source);
   return (
     <button
       type="button"
@@ -2245,10 +2273,6 @@ function ColourField({
   // in state because the unmount flush below reads it from a cleanup that runs
   // once, where the closed-over `draft` would be the value at first render.
   const pending = React.useRef<string | null>(null);
-  // The clear beside a token reference. It sits OUTSIDE the popover, so pressing
-  // it dismisses the picker and then commits — two writes for one intent unless
-  // the close knows the press belongs to it.
-  const clear = React.useRef<HTMLButtonElement | null>(null);
   /*
    * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
    *
@@ -2377,10 +2401,15 @@ function ColourField({
           }}
           // Committed when the picker CLOSES, which is where the gesture ends.
           onClosed={commitDraft}
+          /*
+           * Any control that writes for itself, declared on the element. The
+           * token clear beside this picker is one; a breakpoint Reset is
+           * another, and it lives in a different component that has no way to
+           * hand a ref down here.
+           */
           commitsItself={target =>
-            clear.current !== null &&
-            target instanceof Node &&
-            clear.current.contains(target)
+            target instanceof Element &&
+            target.closest("[data-nx-commits-itself]") !== null
           }
           // A preset is one discrete choice rather than a gesture, so it
           // commits immediately, exactly as the select and toggle controls do.
@@ -2407,7 +2436,6 @@ function ColourField({
           />
         ) : (
           <TokenName
-            buttonRef={clear}
             label={storedLabel}
             actionName={actionName}
             onClear={() => commitInstead(null)}
@@ -2589,13 +2617,10 @@ function storedTokenLabel(
  * rather than an empty space.
  */
 function TokenName({
-  buttonRef,
   label,
   actionName,
   onClear,
 }: {
-  /** Handed up so the picker can tell its own clear from any other dismissal. */
-  buttonRef: React.RefObject<HTMLButtonElement | null>;
   /**
    * What to show: the token's current name, qualified with its identity where
    * another offered token shares that name, and the identity alone when the
@@ -2610,7 +2635,13 @@ function TokenName({
     <>
       <span className="nx-style-inspector__colour-token">{label}</span>
       <button
-        ref={buttonRef}
+        /*
+         * This press writes for itself: it commits the clear, and the picker
+         * must not also write the draft its dismissal would otherwise flush.
+         * Declared rather than handed up as a ref, so any control making the
+         * same promise says so the same way.
+         */
+        data-nx-commits-itself=""
         type="button"
         onClick={onClear}
         aria-label={`Clear ${actionName}`}

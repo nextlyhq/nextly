@@ -2248,6 +2248,70 @@ describe("the action a control's breakpoint provenance earns", () => {
     expect(label).toContain("Reset");
   });
 
+  it("declares that it writes for itself, so a picker does not write twice", () => {
+    /*
+     * The colour picker commits its draft when the popover closes, and pressing
+     * anything outside it closes the popover first. Without this declaration
+     * one Reset gesture writes twice — the draft the author was discarding,
+     * then the clear — and the first undo restores the very colour they pressed
+     * Reset to be rid of.
+     *
+     * The MECHANISM is covered behaviourally by the token-clear supersede cases
+     * in `style-colour-panel.test.tsx`, which drive a real picker. What is only
+     * true here is that Reset makes the same promise.
+     */
+    mount({ stored: BASE_BREAKPOINT, entries: [entryAt(BASE_BREAKPOINT)] });
+
+    expect(action("reset")?.hasAttribute("data-nx-commits-itself")).toBe(true);
+  });
+
+  it("names the AXIS in the reset fallback, as the jump does", () => {
+    /*
+     * A container tier can share a label with a viewport one, which is why
+     * `BreakpointSource` carries the axis at all. A reset saying "showing the
+     * value from Tablet" beside a jump saying "Tablet (container)" leaves the
+     * author to work out that the two Tablets are different tiers.
+     */
+    register({ color: true });
+    const editor = editorFor(
+      documentOf({ base: { [BASE_BREAKPOINT]: { color: "#111" } } })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [{ id: "card", label: "Tablet", maxWidth: 400 }],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "card"] as never}
+        cascade={
+          {
+            /*
+             * The container entry FIRST and the base entry after it, so base
+             * wins the cascade and the control reads as authored here — which
+             * is the only state that offers a reset. Reversed, the container
+             * declaration wins, the control reads as inherited, and this case
+             * would assert against a button that is not drawn.
+             */
+            entries: [entryAt("card"), entryAt(BASE_BREAKPOINT)],
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+
+    const label = action("reset")?.getAttribute("aria-label") ?? "";
+    /*
+     * Asserted unconditionally. A guard like `if (label.includes("Tablet"))`
+     * would pass whenever the reveal came out empty, which is the failure this
+     * case is meant to catch dressed as a pass.
+     */
+    expect(label).toContain("Tablet (container)");
+  });
+
   it("offers a JUMP for a value that came from another tier", () => {
     mount({
       stored: BASE_BREAKPOINT,
