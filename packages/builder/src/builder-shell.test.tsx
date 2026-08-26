@@ -398,6 +398,27 @@ describe("preferences", () => {
 
     expect(screen.queryByText(/panel$/)).toBeNull();
   });
+
+  it("restores a stored showEmptyElements even when every other field matches the default", () => {
+    // The restore-on-load effect gates on `shallowEqualPreferences`, which
+    // compares fields one at a time. A field that comparator does not name
+    // reads as "unchanged" for any two records differing only in it — so a
+    // fresh session, with no panel ever opened and no layout ever dragged,
+    // matches the default on every field THIS store record sets except this
+    // one, and is exactly the case where a missing clause drops it silently.
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, showEmptyElements: false })
+    );
+    stubContainerFits(true);
+    render(<BuilderShell onExit={vi.fn()} store={store} />);
+
+    // Queried rather than assumed present: a selector that matched nothing
+    // would make the attribute assertion below pass on `undefined`, which is
+    // not the property under test.
+    const chrome = document.querySelector(".nx-builder-chrome");
+    expect(chrome).not.toBeNull();
+    expect(chrome?.getAttribute("data-nx-empty-elements")).toBe("hidden");
+  });
 });
 
 describe("where overlays inside the shell portal to", () => {

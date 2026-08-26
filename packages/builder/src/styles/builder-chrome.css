@@ -343,6 +343,13 @@
  * materially narrower than the region around it — a percentage here would
  * measure a different box at every breakpoint tier. 2.75rem is 44px at the
  * default root size, the smallest comfortable pointer target.
+ *
+ * The `:not([data-nx-empty-elements="hidden"])` guard is what makes this
+ * rule optional. The shell stamps that attribute on `.nx-builder-chrome` when
+ * an author asks to see the page as a visitor will, and leaves it off
+ * otherwise — so the condition rides the SELECTOR rather than a value inside
+ * the declaration block, and showing the box (the default) is the absence of
+ * an attribute rather than a rule that has to negate one.
  */
 .nx-builder-chrome:not([data-nx-empty-elements="hidden"])
   .nx-canvas
@@ -351,6 +358,22 @@
   border: 1px dashed var(--nx-border);
   border-radius: var(--radius-sm);
   background: var(--nx-muted);
+}
+
+/*
+ * The author asked to see the page as a visitor will.
+ *
+ * `revert-layer` rather than restating the published values: the published
+ * appearance of a container is whatever the site stylesheet and the block's
+ * own base styles say, which this file does not know and must not guess.
+ */
+.nx-builder-chrome[data-nx-empty-elements="hidden"]
+  .nx-canvas
+  [data-nx-slots]:empty {
+  min-height: revert-layer;
+  border: revert-layer;
+  border-radius: revert-layer;
+  background: revert-layer;
 }
 
 /*

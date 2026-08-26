@@ -360,6 +360,13 @@ function usePreferences(store: PreferenceStore) {
 /**
  * Whether two preference records say the same thing.
  *
+ * EVERY field has to be compared here, because this is what the restore
+ * effect gates on: a field missing from this function reads as "unchanged"
+ * for any two records that differ only in it, so a stored non-default value
+ * for that field is silently dropped on mount whenever the rest of the record
+ * already matches the default — which a fresh session with nothing else
+ * customised does by construction.
+ *
  * The layout is compared by its entries rather than by identity: `readPreferences`
  * builds a fresh object every call, so identity is always false and the restore
  * effect would set state on every mount even when nothing changed.
@@ -368,7 +375,11 @@ function shallowEqualPreferences(
   a: ShellPreferences,
   b: ShellPreferences
 ): boolean {
-  if (a.leftPanel !== b.leftPanel || a.leftPinned !== b.leftPinned) {
+  if (
+    a.leftPanel !== b.leftPanel ||
+    a.leftPinned !== b.leftPinned ||
+    a.showEmptyElements !== b.showEmptyElements
+  ) {
     return false;
   }
   if (a.layouts === b.layouts) return true;
@@ -731,6 +742,13 @@ function ShellRegions({
         "nx-builder-chrome flex h-full w-full flex-col overflow-hidden",
         className
       )}
+      // Absent when empty containers are shown, which is the default. A state
+      // name rather than a boolean attribute so the shown case needs nothing
+      // written: a rule that depended on an attribute being present would
+      // silently stop applying anywhere the shell had not written one yet.
+      {...(preferences.showEmptyElements
+        ? {}
+        : { "data-nx-empty-elements": "hidden" })}
     >
       <header
         className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
