@@ -34,11 +34,11 @@ export interface SinglePreviewPaneInput {
   /**
    * The Single's admin block, for the word it calls its preview by.
    *
-   * Taken here rather than read at the call site: this hook already assembles
-   * every prop the pane receives, and one more optional chain in the form was
-   * enough to trip the complexity gate — which is the gate doing its job, since
-   * the label belongs with the rest of the pane's inputs rather than beside
-   * them.
+   * Taken here rather than read at the call site: this hook assembles every
+   * prop the pane receives, so what to call the preview belongs with the rest
+   * of them. Resolved beside the hook instead, the default would live in one
+   * place and the pane's other inputs in another, and the two would drift the
+   * first time either moved.
    */
   admin?: SingleAdminOptions;
   /** The shareable-link decision, which already resolved the language. */

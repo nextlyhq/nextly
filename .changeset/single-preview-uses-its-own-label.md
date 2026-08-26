@@ -42,3 +42,16 @@ carried its own inline copy of the admin options, which had already drifted —
 it was missing `order` and `sidebarGroup`, both of which the server sends. It
 references the shared declaration instead, which is what made the label
 invisible to the editor in the first place.
+
+Editing that name now takes effect. A code-first Single's `admin` block was
+written to storage only inside the branch that handles a SCHEMA change, and was
+not one of the things that opened it — so renaming a preview, or changing the
+Single's own label or description, reached the row only when some unrelated
+field change happened to trigger a write. The admin reads all three from the
+stored row, because a preview declaration's `url` is a function and cannot
+travel over HTTP, so until then the editor kept showing the old name.
+
+They are written by their own branch rather than by widening the schema one,
+which would have flagged a migration for an edit that moves no column. The
+collection registry already worked this way; the two now share one predicate for
+the schema question instead of keeping two copies of it in step by hand.
