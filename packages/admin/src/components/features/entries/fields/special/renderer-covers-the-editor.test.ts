@@ -83,14 +83,36 @@ function keysOfTable(source: string, table: string): string[] {
   // running past the end would sweep in the next object's keys and report them
   // as rendered types.
   const closers = ["\n};", "\n  };"]
-    .map(closer => source.indexOf(closer, start))
-    .filter(at => at !== -1);
-  const end = closers.length === 0 ? source.length : Math.min(...closers);
-  return [
-    ...source
-      .slice(start, end)
-      .matchAll(/\n\s{2,6}(?:"([a-z0-9-]+)"|([a-z0-9-]+)):/g),
-  ].map(match => match[1] ?? match[2] ?? "");
+    .map(closer => ({ at: source.indexOf(closer, start), closer }))
+    .filter(found => found.at !== -1)
+    .sort((a, b) => a.at - b.at);
+  const nearest = closers[0];
+  if (nearest === undefined) return [];
+
+  /*
+   * The EXACT indent of a top-level entry, derived from the table's own closing
+   * brace rather than guessed at as a range.
+   *
+   * A range accepts any key nested inside a dispatch callback — a local object
+   * whose property happens to be named like a node type would then be recorded
+   * as rendered while no handler for it exists, which is precisely the silent
+   * loss this check is here to refuse.
+   *
+   * Counting braces instead does not work on this input: the callbacks are JSX,
+   * and `<details open={node.open}>{children(node.children)}</details>` is full
+   * of braces that no depth counter can attribute correctly without parsing the
+   * language. Indentation is decidable from the text, and prettier makes it
+   * reliable — the file it formats is the file this reads.
+   */
+  const closerIndent = nearest.closer.length - "\n};".length;
+  const entryIndent = " ".repeat(closerIndent + 2);
+  const keyAtTopLevel = new RegExp(
+    `\n${entryIndent}(?:"([a-z0-9-]+)"|([a-z0-9-]+)):`,
+    "g"
+  );
+  return [...source.slice(start, nearest.at).matchAll(keyAtTopLevel)].map(
+    match => match[1] ?? match[2] ?? ""
+  );
 }
 
 /**
@@ -107,6 +129,90 @@ export function renderedTypes(source: string): Set<string> {
     )
   );
 }
+
+describe("the parser this check is built from", () => {
+  /*
+   * `renderedTypes` IS the check on the renderer side: a reader that sees too
+   * little reports handled types as missing, and one that sees too much records
+   * a type as handled when no handler exists — which is the silent loss the
+   * whole file is here to refuse. These cover it on inputs whose answers are
+   * known, including the shapes it has already been got wrong on.
+   */
+  it("reads BOTH tables, which are indented differently", () => {
+    // `SIMPLE_ELEMENTS` closes at column zero and `NODE_VIEWS` inside a
+    // `Readonly<...>` type argument, so their entries sit at different indents.
+    // A single fixed width silently reads one of them as empty.
+    const source = [
+      "const SIMPLE_ELEMENTS: Readonly<Record<string, string>> = {",
+      '  paragraph: "p",',
+      '  "collapsible-title": "summary",',
+      "};",
+      "",
+      "const NODE_VIEWS: Readonly<",
+      "  Record<string, (node: N) => R>",
+      "> = {",
+      "    heading: node => null,",
+      '    "button-group": node => null,',
+      "  };",
+    ].join("\n");
+    expect([...renderedTypes(source)].sort()).toEqual([
+      "button-group",
+      "collapsible-title",
+      "heading",
+      "paragraph",
+    ]);
+  });
+
+  it("ignores a key NESTED inside a dispatch callback", () => {
+    /*
+     * The dangerous direction. A local object inside a handler — a style, a
+     * lookup, an attribute map — carries properties, and one named like a node
+     * type would be recorded as rendered while no top-level handler for it
+     * exists. The check would then certify exactly the gap it was built to
+     * catch.
+     *
+     * Population first: the top-level key in the SAME fixture must still be
+     * found, or a parser that reads nothing at all passes this.
+     */
+    const source = [
+      "const NODE_VIEWS: Readonly<Record<string, F>> = {",
+      "  heading: node => {",
+      "    const style = {",
+      '      image: "not a handler",',
+      '      gallery: "also not a handler",',
+      "    };",
+      "    return style;",
+      "  },",
+      "};",
+    ].join("\n");
+    const found = renderedTypes(source);
+    expect(found.has("heading")).toBe(true);
+    expect(found.has("image")).toBe(false);
+    expect(found.has("gallery")).toBe(false);
+  });
+
+  it("stops at the table's own closing brace", () => {
+    // A slice running past the end sweeps in the next object's keys and reports
+    // them as rendered types.
+    const source = [
+      "const NODE_VIEWS: Readonly<Record<string, F>> = {",
+      "  heading: node => null,",
+      "};",
+      "",
+      "const SOMETHING_ELSE = {",
+      "  notatype: 1,",
+      "};",
+    ].join("\n");
+    expect([...renderedTypes(source)]).toEqual(["heading"]);
+  });
+
+  it("reports nothing for a table that is not there", () => {
+    // A renamed table must read as EMPTY rather than throwing, so the
+    // population guard reports it as a read failure rather than the run dying
+    // with a stack trace nobody attributes to a rename.
+    expect([...renderedTypes("const OTHER = { a: 1 };\n")]).toEqual([]);
+  });
+});
 
 describe("the published renderer covers the editor's node types", () => {
   const editor = editorNodeTypes();

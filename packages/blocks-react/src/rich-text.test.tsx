@@ -1021,6 +1021,38 @@ describe("rich-text media leaves", () => {
     expect(style).toContain("flex-wrap: wrap");
   });
 
+  it("keeps an image inside its column, and the gallery cell too", () => {
+    /*
+     * An upload wider than the content column renders at its intrinsic width
+     * without a constraint, breaking out of the prose — the normal case for
+     * anything from a modern camera. The editor draws these with `w-full
+     * h-auto`, so a published page without it shows the author something they
+     * never saw.
+     *
+     * BOTH paths, because they are one element now and a fix applied to the
+     * standalone one only would leave the gallery cells overflowing — which is
+     * how the title and the reserved box went missing before.
+     *
+     * Asserted against the emitted markup: the style is what a published page
+     * carries, and this entry renders on the server.
+     */
+    const html = renderToStaticMarkup(
+      <RichText value={image({ width: 4000, height: 3000 })} />
+    );
+    expect(html).toContain("max-width:100%");
+    expect(html).toContain("height:auto");
+
+    const gallery = doc([
+      {
+        type: "gallery",
+        version: 1,
+        images: [{ src: "https://cdn.example.com/a.jpg", alt: "A" }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+    const galleryHtml = renderToStaticMarkup(<RichText value={gallery} />);
+    expect(galleryHtml).toContain("max-width:100%");
+  });
+
   it("adds rel protection to a button opening a new tab", () => {
     // The same bargain a link makes: `target="_blank"` without `rel` hands the
     // opened page a handle on this one.

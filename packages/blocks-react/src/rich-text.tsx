@@ -278,6 +278,19 @@ function ImageElement({
       {...(box ?? {})}
       loading="lazy"
       decoding="async"
+      // CONTAINED, and inline for the reason everything else here is: this
+      // package ships no stylesheet, so an upload wider than the column renders
+      // at its intrinsic width and breaks out of the prose — a normal case for
+      // anything from a modern camera or a high-DPI screen. The editor draws
+      // these with `w-full h-auto`; a published page that did not would show the
+      // author something they never saw.
+      //
+      // `height: auto` is what keeps the pair above honest rather than
+      // contradicting it: the width and height attributes still give the
+      // browser the aspect ratio to reserve space with, and this lets the
+      // rendered height follow the constrained width instead of holding the
+      // intrinsic one and squashing the picture.
+      style={{ maxWidth: "100%", height: "auto" }}
     />
   );
 }
