@@ -32,25 +32,6 @@ export {
 
 export { PageRenderer } from "./page-renderer";
 export type { PageRendererProps } from "./page-renderer";
-
-/**
- * How this renderer reconciles a route context and a stored site tier.
- *
- * Published because a surface deciding anything from "the breakpoints this page
- * compiles against" must read the SAME answer the render will use, and the
- * precedences are not guessable from the inputs: the site tier wins for
- * `breakpoints` and `blockBases`, the route wins for `namedClasses` and
- * `previewContainer`, and each skips only `undefined` — so a stored `null`
- * survives and means something.
- *
- * Measured before this was exported: a caller re-implementing the rule got it
- * wrong three times in one PR — the precedence inverted, then the fallthrough,
- * then the stated `null` — each time by reading it carefully rather than
- * calling it. A parallel implementation of a reconciliation is a second answer
- * that agrees until the day it does not.
- */
-export { sharedStyleInputs } from "./page-renderer";
-export type { SharedStyleInputs } from "./shared-style-inputs";
 // Re-exported because `PageRendererProps.siteStyles` NAMES it, and a prop a
 // consumer cannot type is a prop they cannot pass without reaching past this
 // package into the engine. The type-surface ratchet is what caught it: a public
@@ -85,6 +66,24 @@ export type {
   SiteTokenSet,
   TokenKind,
 } from "@nextlyhq/blocks-engine";
+
+/**
+ * How this renderer reconciles a route context and a stored site tier.
+ *
+ * Published because a surface deciding anything from "the breakpoints this page
+ * compiles against" must read the SAME answer the render will use, and the
+ * precedences are not guessable from the inputs: the site tier wins for
+ * `breakpoints` and `blockBases`, the route wins for `namedClasses` and
+ * `previewContainer`, and each skips only `undefined` — so a stored `null`
+ * survives and means something.
+ *
+ * Measured before this was exported: a caller re-implementing the rule got it
+ * wrong three times in one PR — the precedence inverted, then the fallthrough,
+ * then the stated `null` — each time by reading it carefully rather than
+ * calling it. A parallel implementation of a reconciliation is a second answer
+ * that agrees until the day it does not.
+ */
+export { sharedStyleInputs, type ReconciledStyleInputs } from "./page-renderer";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the

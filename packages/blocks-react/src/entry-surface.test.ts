@@ -46,6 +46,7 @@ import type {
   PageContext,
   QueryBudget,
   ReactBlockDefinition,
+  ReconciledStyleInputs,
 } from "./index";
 
 /**
@@ -492,5 +493,30 @@ describe("the next entry", () => {
       "createPublicSinglePage",
       "createSinglePage",
     ]);
+  });
+});
+
+describe("the type published beside `sharedStyleInputs`", () => {
+  it("is the one that function returns", () => {
+    /*
+     * Two properties, and they are checked by different mechanisms.
+     *
+     * The ANNOTATION is the type half, and the TESTS PROJECT compiling this
+     * file is what asserts it — so this case going green is not the evidence
+     * for it; `check-types` is. A name published beside a function but
+     * describing something else leaves a consumer able to read the type and
+     * unable to use it, which no runtime assertion can observe. This package
+     * held two types under one name, and the exported one required
+     * `breakpoints` while the function may resolve nothing.
+     *
+     * The VALUE is the runtime half: `{}` is what "may resolve nothing" means,
+     * and it is the case the required field would have rejected.
+     */
+    const resolved: ReconciledStyleInputs = rootEntry.sharedStyleInputs(
+      undefined,
+      undefined
+    );
+
+    expect(resolved).toEqual({});
   });
 });
