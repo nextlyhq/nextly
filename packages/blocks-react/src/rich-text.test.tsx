@@ -1812,3 +1812,66 @@ describe("rich-text inline styles reach the page", () => {
     expect(html).not.toContain("text-transform:lowercase");
   });
 });
+
+describe("rich-text authored colours beat the format element's own", () => {
+  const styled = (style: string, format: number): RichTextValue =>
+    doc([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Hi", style, format }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("puts the author's colours inside the highlight, not around it", () => {
+    /*
+     * A format element carries colours of its own: `<mark>` is painted by the
+     * UA with `Mark` and `MarkText`, and the CMS gives it a class setting both
+     * explicitly. A colour on an OUTER span only inherits, so the mark's own
+     * paint wins — an author who highlighted a phrase and then picked a text
+     * colour published the mark's colours instead of theirs.
+     *
+     * Asserted as containment rather than as a string of the whole element, so
+     * it still holds when another format bit adds a wrapper between them.
+     */
+    const { container } = render(
+      <RichText
+        value={styled(
+          "color: #ff0000; background-color: #00ff00",
+          TEXT_FORMAT.HIGHLIGHT
+        )}
+      />
+    );
+    const span = container.querySelector("span");
+    expect(span, "the style span drew at all").not.toBeNull();
+    expect(span?.closest("mark"), "it sits inside the mark").not.toBeNull();
+  });
+
+  it("puts them inside a bold wrapper too", () => {
+    // The sibling. `<strong>` carries no colour of its own, so this one is not
+    // about winning a cascade — it is that ONE rule decides the nesting, rather
+    // than a special case for the element that happened to be reported.
+    const { container } = render(
+      <RichText value={styled("color: #ff0000", TEXT_FORMAT.BOLD)} />
+    );
+    expect(container.querySelector("strong > span")).not.toBeNull();
+  });
+
+  it("adds no span to a formatted run that declares nothing", () => {
+    // The control. A rule that always emitted the span would satisfy both
+    // assertions above and put an empty element around every formatted word.
+    expect(
+      renderToStaticMarkup(
+        <RichText
+          value={doc([
+            {
+              type: "paragraph",
+              children: [
+                { type: "text", text: "Hi", format: TEXT_FORMAT.BOLD },
+              ],
+            },
+          ] as unknown as RichTextValue["root"]["children"])}
+        />
+      )
+    ).toBe("<p><strong>Hi</strong></p>");
+  });
+});

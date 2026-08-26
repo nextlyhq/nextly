@@ -75,6 +75,24 @@ describe("readInlineStyle", () => {
     expect(read("color: red; color: blue")["color"]).toBe("blue");
   });
 
+  it("keeps the winning declaration in its own place in the cascade", () => {
+    /*
+     * The VALUE test above is not enough, and this is the case that separates
+     * them. `Map.set` on an existing key replaces the value and leaves the key
+     * where it first appeared, so the later declaration would be emitted in the
+     * earlier one's position — ahead of a shorthand that resets it.
+     *
+     * Here the author's last word is green. Emitted before the shorthand, the
+     * shorthand wins and the text draws blue: the right value, in a place that
+     * makes it lose.
+     */
+    expect(
+      sanitizeInlineStyle(
+        "text-decoration-color:red;text-decoration:underline blue;text-decoration-color:green"
+      )
+    ).toBe("text-decoration:underline blue;text-decoration-color:green");
+  });
+
   it("reads a property name however the document spells it", () => {
     // Stored text, so the casing and the spacing are whatever wrote it.
     expect(read("  Font-Size : 16px  ")["font-size"]).toBe("16px");

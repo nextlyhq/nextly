@@ -158,14 +158,9 @@ function formatted(
   format: number | undefined,
   style: unknown
 ): ReactNode {
-  let out: ReactNode = text;
-  for (const { flag, wrap } of FORMAT_ELEMENTS) {
-    if (hasFormat(format, flag)) out = wrap(out);
-  }
-
-  // Outermost, and only one can apply: `text-transform` is a single CSS
-  // property, so a value carrying two case bits would otherwise render whichever
-  // wrapper happened to be inner. Taking the first keeps that deterministic.
+  // Only one case format can apply: `text-transform` is a single CSS property,
+  // so a value carrying two case bits would otherwise render whichever wrapper
+  // happened to be inner. Taking the first keeps that deterministic.
   const transform = CASE_TRANSFORM.find(entry => hasFormat(format, entry.flag));
   const declared: CSSProperties = {
     ...inlineStyle(style),
@@ -175,11 +170,28 @@ function formatted(
     // conflict the deliberate act is the one to honour.
     ...(transform === undefined ? {} : { textTransform: transform.value }),
   };
+
+  // INNERMOST, inside the format elements rather than around them.
+  //
+  // Those elements carry colours of their own: `<mark>` is painted by the UA
+  // with `Mark` and `MarkText`, and the CMS gives it a class that sets both
+  // explicitly. A colour on an outer `<span>` only INHERITS, so the mark's own
+  // paint wins and an author who highlighted a phrase and then chose a text
+  // colour published the mark's colours instead of theirs. Declared on the
+  // element closest to the text, the author's choice is the one that applies.
+  //
   // No wrapper when there is nothing to put on it: an empty `<span>` around
-  // every text node doubles the size of a published document and gives a
-  // stylesheet a hook that means nothing.
-  if (Object.keys(declared).length === 0) return out;
-  return <span style={declared}>{out}</span>;
+  // every text node is bytes on every page and a hook a stylesheet can catch on.
+  let out: ReactNode =
+    Object.keys(declared).length === 0 ? (
+      text
+    ) : (
+      <span style={declared}>{text}</span>
+    );
+  for (const { flag, wrap } of FORMAT_ELEMENTS) {
+    if (hasFormat(format, flag)) out = wrap(out);
+  }
+  return out;
 }
 
 function children(

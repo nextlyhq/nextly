@@ -111,6 +111,15 @@ export function readInlineStyle(value: unknown): ReadonlyMap<string, string> {
     // another, and a `url()` fetches.
     if (hasCssInjection(declared)) continue;
 
+    // DELETED before it is set again, because `Map.set` on an existing key
+    // replaces the value and leaves the key where it first appeared. The later
+    // declaration would then be emitted in the earlier one's POSITION, and
+    // position is meaning here: `text-decoration-color:red;
+    // text-decoration:underline blue; text-decoration-color:green` would come
+    // back with green ahead of the shorthand, so the shorthand resets the
+    // colour the author wrote last. Keeping the winner's own position is what
+    // makes the emitted text cascade the way the stored text did.
+    kept.delete(property);
     kept.set(property, declared);
   }
   return kept;
