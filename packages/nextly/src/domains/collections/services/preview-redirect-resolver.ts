@@ -197,9 +197,11 @@ export type PreviewRefusalCause =
   /**
    * The declaration threw, or produced pieces that do not compose into a URL.
    *
-   * Kept apart from `unavailable` for the reason that type exists: one is an
-   * empty field on this document and the other is broken code, and only the
-   * first is something the editor holding the document can act on.
+   * Kept apart from `unavailable` for the reason that type exists: one is the
+   * declaration DECLINING, which is a definite statement that this document has
+   * no address yet, and the other is it FAILING, which a caught throw cannot
+   * attribute to the declaration or to the document's data. Naming them apart
+   * is what stops the second being answered with the first's remedy.
    */
   | "declarationFailed";
 

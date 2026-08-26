@@ -99,11 +99,12 @@ describe("resolvePreviewUrl", () => {
   });
 
   it("separates a THROWN declaration from one that declines", () => {
-    // User code runs inside a request here. A throw is the collection failing to
-    // produce a URL, not the server failing, so it must not escape as a 500 —
-    // and not as `unavailable` either, which tells the editor to fill in the
-    // field the URL is built from. A declaration that throws does so for every
-    // document, so no field on this one is the remedy.
+    // User code runs inside a request here. A throw is the declaration failing
+    // to produce a URL, not the server failing, so it must not escape as a 500 —
+    // and not as `unavailable` either, which states there is no address YET and
+    // sends the editor to the field the URL is built from. A throw states only
+    // that producing an address did not work, and does not say whose fault that
+    // is.
     expect(
       resolvePreviewUrl({
         preview: {

@@ -26,13 +26,14 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Asking for a preview link that cannot be built now says which of six things is
-wrong, instead of telling every editor to fill in a slug.
+Asking for a preview link that cannot be built now says which of seven things
+is wrong, instead of telling every editor to fill in a slug.
 
-The resolver behind preview links refuses for six distinct reasons: the document
-is confirmed gone, the document could not be READ at all, the collection declares
-no preview, the declaration yields no address for this document yet, the address
-it yields is on a different site, or it does not parse. All of them arrived as
+The resolver behind preview links refuses for seven distinct reasons: the
+document is confirmed gone, the document could not be READ at all, the collection
+declares no preview, the declaration yields no address for this document yet, the
+declaration FAILED while running, the address it yields is on a different site,
+or it does not parse. All of them arrived as
 one message — "this entry has no preview address yet, so filling in the fields
 its preview URL is built from — usually the slug — makes it shareable." For most
 of them that is wrong and unactionable. An editor whose slug was already correct
@@ -52,7 +53,7 @@ telling an author their work may have been deleted while it sits there intact.
 Reads that report failure by throwing rather than by returning an envelope, which
 is how the Direct API answers for Singles, are translated the same way.
 
-**The public preview route is deliberately unchanged and still answers all six
+**The public preview route is deliberately unchanged and still answers all seven
 with the same 404.** That is not an oversight: distinguishing them there would
 let a stranger holding a forged token tell a deleted entry from an unpublished
 one from a collection that has no preview, which is an oracle for what exists in
