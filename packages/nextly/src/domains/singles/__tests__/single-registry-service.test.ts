@@ -726,6 +726,138 @@ describe("SingleRegistryService", () => {
       expect(result.errors[0].slug).toBe("site-settings");
     });
 
+    /*
+     * The `admin` block is WRITTEN inside the update branch but was not one of
+     * the things that opened it, so a change confined to it never reached
+     * storage. That is the whole of what a Single's admin block is edited for
+     * — the preview's own label, the viewports it offers — and the admin reads
+     * those from the stored row, never from the config object, because a
+     * config function cannot travel over HTTP.
+     */
+    it("re-syncs when only the ADMIN block changed", async () => {
+      const fields = [{ name: "siteName", type: "text" }];
+      ctx.adapter.selectOne.mockImplementation(async (table: string) => {
+        if (table !== "dynamic_singles") return null;
+        const { calculateSchemaHash } = await import(
+          "../../schema/services/schema-hash"
+        );
+        return dbRow({
+          schema_hash: calculateSchemaHash(fields),
+          admin: JSON.stringify({ preview: { label: "Preview" } }),
+        });
+      });
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      const result = await ctx.service.syncCodeFirstSingles([
+        {
+          slug: "site-settings",
+          label: "Site Settings",
+          fields,
+          admin: { preview: { label: "Landing preview" } },
+        },
+      ]);
+
+      expect(result.updated).toEqual(["site-settings"]);
+      expect(result.unchanged).toEqual([]);
+      // The new block reached the adapter, not merely a decision to write.
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.admin).toBe(
+        JSON.stringify({ preview: { label: "Landing preview" } })
+      );
+      /*
+       * The separating property, and the reason this is its own branch rather
+       * than one more clause on the schema condition. Renaming a preview moves
+       * no column, so it must not bump the schema version or reopen the
+       * migration bookkeeping — a write that did would make every label edit
+       * look like a pending schema change to anything reading those columns.
+       */
+      expect("schema_version" in updateData).toBe(false);
+      expect("migration_status" in updateData).toBe(false);
+      expect("fields" in updateData).toBe(false);
+    });
+
+    it("CLEARS metadata the config dropped, when fields changed in the same sync", async () => {
+      /*
+       * The schema branch writes these three too, and it is selected whenever a
+       * field, the status flag or localization changed — so a config that
+       * removed its admin block WHILE editing a field never reaches the
+       * metadata branch that would clear it. Sending `undefined` there means
+       * "leave the column alone" to `updateSingle`, which leaves the editor
+       * showing a preview label nothing declares any more.
+       *
+       * Removal is the case that needs it: a block that still exists is written
+       * either way, so only an absent one can be stranded.
+       */
+      ctx.adapter.selectOne.mockImplementation(async (table: string) => {
+        if (table !== "dynamic_singles") return null;
+        return dbRow({
+          schema_hash: "old-hash",
+          admin: JSON.stringify({ preview: { label: "Landing preview" } }),
+          description: "An older description",
+        });
+      });
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      const result = await ctx.service.syncCodeFirstSingles([
+        {
+          slug: "site-settings",
+          label: "Site Settings",
+          // Changed, so the SCHEMA branch is the one selected.
+          fields: [{ name: "siteName", type: "text" }],
+        },
+      ]);
+
+      expect(result.updated).toEqual(["site-settings"]);
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      // Explicit NULL, not absent: `updateSingle` reads an absent key as "leave
+      // unchanged", which is exactly what stranded the old value.
+      expect(updateData.admin).toBeNull();
+      expect(updateData.description).toBeNull();
+    });
+
+    it("leaves a single unchanged when its preview URL is a FUNCTION", async () => {
+      /*
+       * The control on the case above, and the one that stops the fix costing a
+       * write on every boot. A code-first `preview.url` is a function, which
+       * `JSON.stringify` drops — so the comparison sees the same JSON-visible
+       * subset on both sides only because the stored value was serialized the
+       * same way. A comparison that treated the two sides differently would
+       * re-sync every Single on every startup, and nothing else here would say
+       * so.
+       */
+      const fields = [{ name: "siteName", type: "text" }];
+      ctx.adapter.selectOne.mockImplementation(async (table: string) => {
+        if (table !== "dynamic_singles") return null;
+        const { calculateSchemaHash } = await import(
+          "../../schema/services/schema-hash"
+        );
+        return dbRow({
+          schema_hash: calculateSchemaHash(fields),
+          admin: JSON.stringify({ preview: { label: "Landing preview" } }),
+        });
+      });
+
+      const result = await ctx.service.syncCodeFirstSingles([
+        {
+          slug: "site-settings",
+          label: "Site Settings",
+          fields,
+          admin: {
+            preview: { url: () => "/landing", label: "Landing preview" },
+          },
+        },
+      ]);
+
+      expect(result.unchanged).toEqual(["site-settings"]);
+      expect(result.updated).toEqual([]);
+    });
+
     it("uses single_ prefix for auto-generated table name", async () => {
       ctx.adapter.selectOne.mockResolvedValue(null);
       ctx.adapter.insert.mockResolvedValue(dbRow({ slug: "header-nav" }));

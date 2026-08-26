@@ -24,11 +24,26 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { previewRevisionOf } from "@admin/components/features/entries/PreviewMode/previewRevision";
+import {
+  declaredPreviewLabel,
+  previewLabel,
+} from "@admin/hooks/useEntryPreview";
 import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
+import type { SingleAdminOptions } from "@admin/types/entities";
 
 import type { SinglePreviewLink } from "./useSinglePreviewLink";
 
 export interface SinglePreviewPaneInput {
+  /**
+   * The Single's admin block, for the word it calls its preview by.
+   *
+   * Taken here rather than read at the call site: this hook assembles every
+   * prop the pane receives, so what to call the preview belongs with the rest
+   * of them. Resolved beside the hook instead, the default would live in one
+   * place and the pane's other inputs in another, and the two would drift the
+   * first time either moved.
+   */
+  admin?: SingleAdminOptions;
   /** The shareable-link decision, which already resolved the language. */
   link: SinglePreviewLink;
   /** The Single as last read, which the revision derives from. */
@@ -40,6 +55,8 @@ export interface SinglePreviewPaneInput {
 }
 
 export interface SinglePreviewPane {
+  /** What to call the preview, defaulted where the Single names none. */
+  label: string;
   /** Whether the pane should render. */
   open: boolean;
   /** Close it. */
@@ -57,7 +74,16 @@ export interface SinglePreviewPane {
    * decision here rather than repeating the condition at the call site.
    */
   toggle:
-    | { onTogglePreviewPane: () => void; previewPaneOpen: boolean }
+    | {
+        onTogglePreviewPane: () => void;
+        previewPaneOpen: boolean;
+        /**
+         * Present only where the Single declared one, so the control keeps its
+         * own default — "Show preview" — rather than being handed a defaulted
+         * value it cannot tell from an author's choice.
+         */
+        previewLabel?: string;
+      }
     | Record<string, never>;
 }
 
@@ -66,6 +92,7 @@ export function useSinglePreviewPane({
   document,
   savedCount,
   inTranslationMode,
+  admin,
 }: SinglePreviewPaneInput): SinglePreviewPane {
   const [open, setOpen] = useState(false);
 
@@ -94,10 +121,17 @@ export function useSinglePreviewPane({
     if (!canOffer) setOpen(false);
   }, [canOffer]);
 
+  // Read through the SAME normalizer `previewLabel` uses, so the pane's title
+  // and its opener cannot disagree about what counts as declared. Trimming here
+  // separately made a whitespace-only label absent for the button and present —
+  // as a blank title — for the pane.
+  const declaredLabel = declaredPreviewLabel(admin?.preview);
+
   const onClose = useCallback(() => setOpen(false), []);
   const onToggle = useCallback(() => setOpen(o => !o), []);
 
   return {
+    label: previewLabel(admin?.preview),
     // Both halves: a pane left open when the language stops resolving must
     // close rather than go on rendering a credential nothing would re-mint.
     open: open && canOffer,
@@ -112,8 +146,26 @@ export function useSinglePreviewPane({
      * after the first.
      */
     revision: previewRevisionOf(document, savedCount),
+    /*
+     * The label rides WITH the toggle rather than beside it, because the pane
+     * and the button that opens it are one thing to an author: named apart,
+     * the pane took the Single's word for itself while its opener still said
+     * "Show preview", and the declared name was reachable only after clicking a
+     * control that disagreed with it.
+     *
+     * The DECLARED value, not the defaulted one. `label` above defaults to
+     * "Preview" because a pane's title needs a word; the button reads its label
+     * into a sentence and needs the lowercase noun, so absent is what lets each
+     * apply the default its own sentence takes.
+     */
     toggle: canOffer
-      ? { onTogglePreviewPane: onToggle, previewPaneOpen: open }
+      ? {
+          onTogglePreviewPane: onToggle,
+          previewPaneOpen: open,
+          ...(declaredLabel === undefined
+            ? {}
+            : { previewLabel: declaredLabel }),
+        }
       : {},
   };
 }

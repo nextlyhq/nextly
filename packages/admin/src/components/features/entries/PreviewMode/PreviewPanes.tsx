@@ -37,7 +37,7 @@
  * @module components/features/entries/PreviewMode/PreviewPanes
  */
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import type {
@@ -132,13 +132,26 @@ export function PreviewPanes({
    */
   const frame = usePreviewFrame({ scope, active: open });
 
+  /*
+   * Held HERE because asking for a viewport width does two things, and only one
+   * of them belongs to the frame: the split widens the preview as far as it is
+   * allowed, and whatever width still does not fit is scaled inside the frame.
+   * Removing the shortfall before scaling it is why a laptop shows a desktop
+   * preview at a readable size rather than at whatever fraction the default
+   * split happened to leave.
+   */
+  const [requestedWidth, setRequestedWidth] = useState<number | null>(null);
+
   return (
     <PreviewSplit
       open={open}
       label={label}
+      preferPreviewWidth={requestedWidth}
       preview={
         <PreviewFrameOnSave
           frame={frame}
+          requestedWidth={requestedWidth}
+          onRequestWidth={setRequestedWidth}
           revision={revision}
           onClose={onClose}
           label={label}
@@ -170,12 +183,16 @@ function PreviewFrameOnSave({
   onClose,
   label,
   noun,
+  requestedWidth,
+  onRequestWidth,
 }: {
   frame: UsePreviewFrameResult;
   revision: string;
   onClose: () => void;
   label: string;
   noun: PreviewDocumentNoun;
+  requestedWidth: number | null;
+  onRequestWidth: (width: number | null) => void;
 }) {
   const { refresh } = frame;
   const lastSeen = useRef(revision);
@@ -187,7 +204,14 @@ function PreviewFrameOnSave({
   }, [revision, refresh]);
 
   return (
-    <PreviewFrame {...frame} onClose={onClose} label={label} noun={noun} />
+    <PreviewFrame
+      {...frame}
+      onClose={onClose}
+      label={label}
+      noun={noun}
+      requestedWidth={requestedWidth}
+      onRequestWidth={onRequestWidth}
+    />
   );
 }
 
