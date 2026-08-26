@@ -62,12 +62,24 @@ export function siteStyleViewports(
    * is the one place the two have to be brought together. Keying on the width
    * as well makes it a lookup for the definition that SURVIVED rather than a
    * second guess at which one that was: `breakpointContexts` copies `maxWidth`
-   * from the definition verbatim, so the pair identifies it exactly, and no
-   * duplicate policy is restated here to drift out of step with the compiler's.
+   * from the definition verbatim, so wherever two rows differ in either field
+   * the pair identifies the survivor exactly, and no tie-break of the
+   * compiler's is restated here to drift out of step with it.
+   *
+   * Where two rows repeat BOTH, the pair stops separating them, and the only
+   * thing left to match on is the order they were read in.
    */
-  const labels = new Map(
-    breakpoints.viewport.map(def => [labelKey(def.id, def.maxWidth), def.label])
-  );
+  const labels = new Map<string, string>();
+  for (const def of breakpoints.viewport) {
+    const key = labelKey(def.id, def.maxWidth);
+    // FIRST wins, as `breakpointContexts` keeps the first id it claims. Built
+    // by overwriting, this would keep the LAST label while the compiler emitted
+    // the first — the same mispairing the key exists to prevent, surviving in
+    // the one case the key cannot tell apart. The label is not interchangeable
+    // just because the width is: an author reads the name, and it should belong
+    // to the row that survived.
+    if (!labels.has(key)) labels.set(key, def.label);
+  }
 
   return breakpointContexts(breakpoints)
     .map(context => offerableViewport(context, labels))

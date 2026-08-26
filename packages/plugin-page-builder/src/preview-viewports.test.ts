@@ -117,6 +117,28 @@ describe("siteStyleViewports", () => {
     );
   });
 
+  it("keeps the FIRST label when two definitions are identical but named apart", () => {
+    /*
+     * Keying on id AND width identifies the surviving definition wherever the
+     * two differ — but two rows can repeat both, and then the pair no longer
+     * separates them. `breakpointContexts` keeps the first it claims; a map
+     * built by overwriting keeps the last. So the compiler emits one definition
+     * and the preset is named after the other, which is the same mispairing as
+     * before in the one case the pair cannot tell apart.
+     *
+     * The label is not interchangeable just because the width is. An author
+     * reads the name, and the name should belong to the row that survived.
+     */
+    const offered = siteStyleViewports(
+      set([
+        { id: "tablet", label: "First", maxWidth: 768 },
+        { id: "tablet", label: "Second", maxWidth: 768 },
+      ])
+    );
+
+    expect(offered).toEqual([{ label: "First", width: 768 }]);
+  });
+
   it("joins the label to the width by ID, not by position", () => {
     /*
      * The separating property. The label comes from the STORED definition and
