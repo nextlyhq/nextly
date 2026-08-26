@@ -226,6 +226,34 @@ function TextRuns({ segments }: { segments: readonly TextSegment[] }) {
   );
 }
 
+/**
+ * A node kind this build does not draw.
+ *
+ * Reached when a server sends a kind the client predates. Rendering nothing
+ * would make the field VANISH from the comparison, which reads exactly like a
+ * field that did not change — the one conclusion that must never be reached by
+ * accident. Degrading to the name and status loses the detail and keeps the
+ * fact, so the reader knows to open the version itself.
+ */
+function UnrecognisedField({ node }: { node: FieldDiff }) {
+  const unrecognised = node as {
+    name?: string;
+    label?: string;
+    status?: DiffStatus;
+  };
+  return (
+    <FieldRow
+      label={unrecognised.label ?? unrecognised.name ?? "Field"}
+      status={unrecognised.status ?? "changed"}
+    >
+      <p className="text-xs text-muted-foreground">
+        This field changed, but this version of the admin cannot display the
+        comparison. Open the version to read it.
+      </p>
+    </FieldRow>
+  );
+}
+
 export function FieldDiffNode({ node }: { node: FieldDiff }) {
   switch (node.kind) {
     case "text": {
@@ -369,29 +397,8 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
       );
     }
 
-    default: {
-      // A node kind this build does not draw. Falling through would return
-      // nothing, and a field that VANISHES from a comparison reads exactly like
-      // a field that did not change — the one conclusion that must never be
-      // reached by accident. Degrading to the name and status loses the detail
-      // and keeps the fact.
-      const unrecognised = node as {
-        name?: string;
-        label?: string;
-        status?: DiffStatus;
-      };
-      return (
-        <FieldRow
-          label={unrecognised.label ?? unrecognised.name ?? "Field"}
-          status={unrecognised.status ?? "changed"}
-        >
-          <p className="text-xs text-muted-foreground">
-            This field changed, but this version of the admin cannot display the
-            comparison. Open the version to read it.
-          </p>
-        </FieldRow>
-      );
-    }
+    default:
+      return <UnrecognisedField node={node} />;
   }
 }
 
