@@ -52,8 +52,7 @@ import { PreviewPanes } from "../PreviewPanes";
 
 const props = {
   onClose: vi.fn(),
-  collection: "pages",
-  entryId: "7",
+  scope: { collection: "pages", entryId: "7" },
   label: "Preview",
   revision: "r1",
 };
@@ -247,6 +246,49 @@ describe("a pane that holds a url it must not frame", () => {
     expect(
       screen.getByRole("button", { name: "Refresh the preview" })
     ).toBeEnabled();
+  });
+});
+
+describe("a refusal is worded for the document in hand", () => {
+  /*
+   * The pane serves an entry and a Single alike, so a message naming the wrong
+   * kind sends someone to a field they cannot change — and for a Single the
+   * entry advice is exactly wrong, since it is addressed by a slug it always
+   * has. The noun is DERIVED from the scope here rather than passed beside it.
+   */
+  it("tells a Single's author about the preview URL, not a slug", () => {
+    frameState.current = {
+      ...frameState.current,
+      url: null,
+      reason: "unavailable",
+    };
+
+    render(
+      <PreviewPanes {...props} scope={{ single: "home" }} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(screen.getByText(/this single/i)).toBeInTheDocument();
+    expect(screen.queryByText(/slug/i)).toBeNull();
+  });
+
+  it("still tells an ENTRY's author about the slug", () => {
+    // The control: the refusal above is about the scope rather than the pane
+    // having stopped mentioning slugs at all.
+    frameState.current = {
+      ...frameState.current,
+      url: null,
+      reason: "unavailable",
+    };
+
+    render(
+      <PreviewPanes {...props} open>
+        <p>editor</p>
+      </PreviewPanes>
+    );
+
+    expect(screen.getByText(/slug/i)).toBeInTheDocument();
   });
 });
 

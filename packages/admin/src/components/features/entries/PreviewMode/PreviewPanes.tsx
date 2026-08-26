@@ -1,7 +1,13 @@
 "use client";
 
 /**
- * The entry being edited, beside the page it becomes.
+ * The document being edited, beside the page it becomes.
+ *
+ * Serves a collection entry and a Single alike. Nothing below the scope prop
+ * distinguishes them: both are one document with a draft, an address on the
+ * site and a credential that reaches it, so a second pane for Singles would
+ * have been a second implementation of the split, the chrome request, the
+ * renewal timer and both refusal states.
  *
  * A WRAPPER rather than a second editor, for the reason `TranslationPanes` is
  * one: the document keeps the form it already had — same context, same unsaved
@@ -39,6 +45,10 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@admin/components/ui";
+import type {
+  PreviewDocumentNoun,
+  SelfPreviewScope,
+} from "@admin/hooks/useEntryPreview";
 
 import { PreviewFrame } from "./PreviewFrame";
 import { usePreviewFrame, type UsePreviewFrameResult } from "./usePreviewFrame";
@@ -48,12 +58,16 @@ export interface PreviewPanesProps {
   open: boolean;
   /** Close the pane. Rendered by this component, so it cannot be forgotten. */
   onClose: () => void;
-  collection: string;
-  /** The SAVED entry id. */
-  entryId: string;
-  /** The language to scope the preview credential to, when there is one. */
-  locale?: string | undefined;
-  /** The collection's own word for its preview. */
+  /**
+   * The document to preview: a collection entry, or a Single.
+   *
+   * One prop rather than three, because the pane does not care which kind it
+   * is — everything below this line is identical for both — and three loose
+   * strings would let a caller name a collection AND a single, which is not a
+   * narrower request but a different document.
+   */
+  scope: SelfPreviewScope;
+  /** The document type's own word for its preview. */
   label: string;
   /**
    * What the preview would render, as a value that changes when it does.
@@ -88,9 +102,7 @@ export function PreviewPanes({ open, children, ...rest }: PreviewPanesProps) {
  */
 function ActivePreviewPanes({
   onClose,
-  collection,
-  entryId,
-  locale,
+  scope,
   label,
   revision,
   children,
@@ -105,7 +117,7 @@ function ActivePreviewPanes({
    */
   useSuppressAdminChrome({ layers: ["pageFrame"], canExit: true });
 
-  const frame = usePreviewFrame({ collection, entryId, locale, active: true });
+  const frame = usePreviewFrame({ scope, active: true });
 
   return (
     <ResizablePanelGroup
@@ -140,6 +152,9 @@ function ActivePreviewPanes({
           revision={revision}
           onClose={onClose}
           label={label}
+          // Derived from the scope rather than passed in beside it: two answers
+          // to "which kind of document is this" would be one answer too many.
+          noun={scope.single === undefined ? "entry" : "single"}
         />
       </ResizablePanel>
     </ResizablePanelGroup>
@@ -162,11 +177,13 @@ function PreviewFrameOnSave({
   revision,
   onClose,
   label,
+  noun,
 }: {
   frame: UsePreviewFrameResult;
   revision: string;
   onClose: () => void;
   label: string;
+  noun: PreviewDocumentNoun;
 }) {
   const { refresh } = frame;
   const lastSeen = useRef(revision);
@@ -177,7 +194,9 @@ function PreviewFrameOnSave({
     refresh();
   }, [revision, refresh]);
 
-  return <PreviewFrame {...frame} onClose={onClose} label={label} />;
+  return (
+    <PreviewFrame {...frame} onClose={onClose} label={label} noun={noun} />
+  );
 }
 
 export { PreviewFrame };
