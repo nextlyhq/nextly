@@ -178,6 +178,124 @@ describe("canvasContentRect", () => {
   });
 });
 
+describe("a canvas that is PAINTED smaller than it is laid out", () => {
+  /*
+   * The editor scales the canvas so a tier wider than the region stays
+   * editable. A transform is paint-time, so the root keeps its requested width
+   * to layout — which is what keeps the container queries resolving at the tier
+   * the author asked for — while every client rectangle comes back in painted
+   * pixels.
+   *
+   * A canvas laid out at 1280 and painted at 912 is the measured case: a 1280px
+   * tier inside the ~912px the canvas region gets on the supported 1280px
+   * shell.
+   */
+  const SCALE = 912 / 1280;
+
+  /** A root whose LAYOUT size differs from the rectangle it paints. */
+  function scaledRoot(
+    painted: { x: number; y: number; width: number; height: number },
+    laidOut: { width: number; height: number },
+    scroll: { left: number; top: number } = { left: 0, top: 0 }
+  ) {
+    const root = canvasRoot(painted, scroll);
+    Object.defineProperty(root, "offsetWidth", { value: laidOut.width });
+    Object.defineProperty(root, "offsetHeight", { value: laidOut.height });
+    return root;
+  }
+
+  it("reports a child in CONTENT pixels, not painted ones", () => {
+    const root = scaledRoot(
+      { x: 100, y: 50, width: 912, height: 570 },
+      { width: 1280, height: 800 }
+    );
+    // A block that sits 200 content pixels into the canvas and is 400 content
+    // pixels wide paints at 0.7125 of each.
+    const child = box({
+      x: 100 + 200 * SCALE,
+      y: 50 + 300 * SCALE,
+      width: 400 * SCALE,
+      height: 100 * SCALE,
+    });
+
+    expect(canvasContentRect(child, root)).toEqual({
+      x: 200,
+      y: 300,
+      width: 400,
+      height: 100,
+    });
+  });
+
+  it("does NOT divide the scroll offset by the scale", () => {
+    /*
+     * The subtle half, and the one that reads as correct while drifting. A
+     * scroll offset counts the root's own laid-out content, which a transform
+     * never touches, so it is already in content pixels — divided along with
+     * the client delta it shrinks by the zoom, and the whole overlay slides
+     * further out the further the author scrolls.
+     *
+     * The separating property is a NON-ZERO scroll with a scale that is not 1:
+     * either alone leaves the two implementations agreeing.
+     */
+    const root = scaledRoot(
+      { x: 0, y: 0, width: 912, height: 570 },
+      { width: 1280, height: 800 },
+      { left: 0, top: 250 }
+    );
+    const child = box({
+      x: 0,
+      y: 300 * SCALE,
+      width: 912,
+      height: 100 * SCALE,
+    });
+
+    // 300 content pixels below the root's top edge, plus the 250 already
+    // scrolled past — not 300 + 250 * SCALE, and not (300 + 250) * SCALE.
+    expect(canvasContentRect(child, root).y).toBe(550);
+  });
+
+  it("keeps the pointer in the same space as the rectangles", () => {
+    // The pairing this module exists to hold. Asserted against a measured
+    // rectangle rather than against literals, because the fault is the two
+    // disagreeing and two literal assertions would both pass while they did.
+    const root = scaledRoot(
+      { x: 100, y: 50, width: 912, height: 570 },
+      { width: 1280, height: 800 },
+      { left: 0, top: 250 }
+    );
+    const child = box({
+      x: 100 + 200 * SCALE,
+      y: 50 + 300 * SCALE,
+      width: 400 * SCALE,
+      height: 100 * SCALE,
+    });
+    const rect = canvasContentRect(child, root);
+
+    // A pointer on the child's top-left corner, in viewport coordinates.
+    expect(
+      canvasContentPoint(100 + 200 * SCALE, 50 + 300 * SCALE, root)
+    ).toEqual({ x: rect.x, y: rect.y });
+  });
+
+  it("is the IDENTITY when nothing has been laid out", () => {
+    /*
+     * jsdom lays nothing out, so `offsetWidth` is 0 and a ratio taken from it
+     * would be `NaN` or `Infinity` — which would not fail loudly, it would
+     * place every overlay at a nonsense coordinate. Unmeasurable means unscaled
+     * here, which is what every caller assumed before there was a scale.
+     */
+    const root = canvasRoot({ x: 100, y: 50, width: 400, height: 800 });
+    const child = box({ x: 140, y: 150, width: 200, height: 60 });
+
+    expect(canvasContentRect(child, root)).toEqual({
+      x: 40,
+      y: 100,
+      width: 200,
+      height: 60,
+    });
+  });
+});
+
 describe("canvasContentPoint", () => {
   it("maps a pointer into the same space the rectangles are measured in", () => {
     // Asserted AGAINST a rectangle rather than against literals. The fault this

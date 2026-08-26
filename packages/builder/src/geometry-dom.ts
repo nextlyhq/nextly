@@ -28,7 +28,7 @@ import {
   scaleCornerRadii,
   usedCornerRadii,
 } from "./border-radii";
-import type { FrameInset, Point, Rect } from "./geometry";
+import type { FrameInset, Point, Rect, Scale } from "./geometry";
 
 /**
  * How far a frame's content viewport sits inside its border box.
@@ -54,6 +54,37 @@ export function frameInsetOf(frame: HTMLIFrameElement): FrameInset {
 }
 
 /**
+ * How much smaller the canvas is PAINTED than it is laid out, per axis.
+ *
+ * The editor scales the canvas so a tier wider than the region can still be
+ * edited, and a transform is paint-time: the root stays its requested width to
+ * layout — which is what keeps the container queries resolving at the tier the
+ * author asked for — while `getBoundingClientRect` answers in painted pixels.
+ * A distance taken from client rectangles is therefore in a different unit from
+ * the content coordinates the chrome is placed in, and the two agree only at
+ * 100%. That is the shape this module's own header warns about: an error of
+ * `(1 - scale)` times the distance, exactly zero while nothing is scaled and
+ * growing as the canvas zooms out, so every test at default scale passes.
+ *
+ * Measured from the ROOT rather than read from its `transform`, because the
+ * scale may be applied by an ancestor the canvas does not own and a declaration
+ * read off one element cannot see that. The ratio is true wherever it came
+ * from.
+ *
+ * `1` when nothing has been laid out — jsdom, or a root not yet in the
+ * document — which is the identity the callers below already assume, so an
+ * unmeasurable canvas behaves exactly as it did before there was a scale.
+ */
+function paintedScale(root: HTMLElement, painted: DOMRect): Scale {
+  const width = root.offsetWidth;
+  const height = root.offsetHeight;
+  return {
+    x: width > 0 && painted.width > 0 ? painted.width / width : 1,
+    y: height > 0 && painted.height > 0 ? painted.height / height : 1,
+  };
+}
+
+/**
  * A rectangle in the canvas's own CONTENT coordinates.
  *
  * The space the editor's chrome is drawn in: the origin is the canvas root's
@@ -72,11 +103,16 @@ export function frameInsetOf(frame: HTMLIFrameElement): FrameInset {
 export function canvasContentRect(element: Element, root: HTMLElement): Rect {
   const box = element.getBoundingClientRect();
   const rootBox = root.getBoundingClientRect();
+  const scale = paintedScale(root, rootBox);
   return {
-    x: box.x - rootBox.x + root.scrollLeft,
-    y: box.y - rootBox.y + root.scrollTop,
-    width: box.width,
-    height: box.height,
+    // The SCROLL is added after the division, not inside it. A scroll offset is
+    // already in content pixels — it counts the element's own laid-out content,
+    // which a transform never touches — so dividing it would shrink a real
+    // offset by the zoom and drift the whole overlay as the page is scrolled.
+    x: (box.x - rootBox.x) / scale.x + root.scrollLeft,
+    y: (box.y - rootBox.y) / scale.y + root.scrollTop,
+    width: box.width / scale.x,
+    height: box.height / scale.y,
   };
 }
 
@@ -94,9 +130,10 @@ export function canvasContentPoint(
   root: HTMLElement
 ): Point {
   const rootBox = root.getBoundingClientRect();
+  const scale = paintedScale(root, rootBox);
   return {
-    x: clientX - rootBox.x + root.scrollLeft,
-    y: clientY - rootBox.y + root.scrollTop,
+    x: (clientX - rootBox.x) / scale.x + root.scrollLeft,
+    y: (clientY - rootBox.y) / scale.y + root.scrollTop,
   };
 }
 
