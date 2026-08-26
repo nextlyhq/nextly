@@ -57,5 +57,15 @@ only thing keeping these rows private - `internal` sets `admin.hidden` and nothi
 write that respected the acting user would fail for every user and the index would never be
 maintained.
 
-A response carrying no rows is read as an empty page rather than a failure, which is the state
-every site is in before its first save.
+The index store passes the Direct API's list envelope straight through, because the reconciler
+asks for exactly what the API answers. Translating between them would restate one shape twice.
+
+The reader returns the document under the SUBJECT'S FIELD rather than the collection row it
+came in. The derivation walks a top-level `nodes` array, and a record has none - so handing
+back the row derives no rows at all and every class the document applies reads as unused,
+which is the state that licences deleting one a page still renders.
+
+A DRAFT subject is answered only when the row carries the working-draft marker. Asking for the
+draft overlay on a document with no pending draft returns the live published row rather than
+nothing, so accepting it files the published classes under a draft that does not exist -
+phantom references no rebuild can reconcile, which block deleting a class nothing uses.

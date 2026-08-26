@@ -34,9 +34,7 @@ export interface ClassUsageDirectApi {
     page?: number;
     sort?: string;
     overrideAccess?: boolean;
-  }): Promise<
-    { docs?: unknown[]; hasNextPage?: boolean } & Record<string, unknown>
-  >;
+  }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
   findByID(args: {
     collection: string;
     id: string;
@@ -83,20 +81,21 @@ export function classUsageIndexStore(
   nextly: ClassUsageDirectApi
 ): ClassUsageIndexStore {
   return {
-    find: async args => {
-      const result = await nextly.find({
+    // Passed through, not translated. The Direct API already answers
+    // `{ items, meta: { hasNext } }` — the same envelope the reconciler asks
+    // for. An adapter here would be a second statement of one shape, and the
+    // one it stated was the SERVICE's inner `{ docs, hasNextPage }`, which this
+    // never sees: every page came back empty, so no stored row was ever found,
+    // nothing was removed, and every save re-inserted rows it already had.
+    find: args =>
+      nextly.find({
         collection: args.collection,
         where: args.where,
         limit: args.limit,
         page: args.page,
         sort: args.sort,
         ...AS_THE_SYSTEM,
-      });
-      return {
-        items: Array.isArray(result.docs) ? result.docs : [],
-        meta: { hasNext: result.hasNextPage === true },
-      };
-    },
+      }),
     create: args =>
       nextly.create({
         collection: args.collection,
@@ -142,8 +141,8 @@ export function classUsageIndexStore(
 export function classUsageDocumentReader(
   nextly: ClassUsageDirectApi
 ): ClassUsageDocumentReader {
-  return (subject: ClassUsageSubject) =>
-    nextly.findByID({
+  return async (subject: ClassUsageSubject) => {
+    const row = await nextly.findByID({
       collection: subject.entity,
       id: subject.entityKey,
       ...(subject.locale === "" ? {} : { locale: subject.locale }),
@@ -152,4 +151,30 @@ export function classUsageDocumentReader(
       disableErrors: true,
       ...AS_THE_SYSTEM,
     });
+    return documentIn(row, subject);
+  };
+}
+
+/**
+ * The block document a row carries for one subject, or undefined.
+ *
+ * The row is the whole record; the document this subject is keyed by lives at
+ * `record[field]`, which is where the rebuild reads it. Returning the record
+ * instead derives NO rows at all — the derivation walks a top-level `nodes`
+ * array and a record has none — so every class the document applies reads as
+ * unused, which is the state that licences deleting one a page still renders.
+ *
+ * A DRAFT subject additionally requires the working-draft marker. Asking for
+ * the draft overlay on a document that has no pending draft answers the live
+ * published row rather than nothing, so without this check the published
+ * classes are filed under a draft that does not exist — phantom references that
+ * no rebuild can reconcile and that block deleting a class nothing uses.
+ */
+function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
+  if (typeof row !== "object" || row === null) return undefined;
+  const record = row as Record<string, unknown>;
+  if (subject.variant === "draft" && record._isWorkingDraft !== true) {
+    return undefined;
+  }
+  return record[subject.field];
 }
