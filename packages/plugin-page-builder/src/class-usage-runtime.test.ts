@@ -26,23 +26,29 @@ const documentUsing = (...classes: string[]) => ({
   nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
 });
 
-/** A Direct API that records every call and answers with fixed values. */
+/**
+ * A Direct API that records every call and answers with fixed values.
+ *
+ * `find` serves BOTH readers now — the index store and the document reader —
+ * so it answers by collection. That is a property of the real API too: the
+ * reader stopped using `findByID` because that call cannot express a lifecycle
+ * filter, and `status` is the only authoritative way to name a variant.
+ */
 function recordingApi(overrides: Partial<ClassUsageDirectApi> = {}) {
   const calls: Record<string, unknown>[] = [];
   const api: ClassUsageDirectApi = {
     find: async args => {
       calls.push({ op: "find", ...args });
-      return { items: [{ id: "r1" }], meta: { hasNext: false } };
-    },
-    findByID: async args => {
-      calls.push({ op: "findByID", ...args });
-      // A COLLECTION ROW, which is what the Direct API answers: the block
-      // document sits under the field, beside everything else the record holds.
+      if (args.collection === "idx") {
+        return { items: [{ id: "r1" }], meta: { hasNext: false } };
+      }
+      // A COLLECTION ROW, which is what the API answers: the block document
+      // sits under the field, beside everything else the record holds.
       return {
-        id: args.id,
-        title: "unrelated",
-        content: documentUsing("hero"),
-        ...(args.draft === true ? { _isWorkingDraft: true } : {}),
+        items: [
+          { id: "p1", title: "unrelated", content: documentUsing("hero") },
+        ],
+        meta: { hasNext: false },
       };
     },
     create: async args => {
@@ -70,24 +76,25 @@ const subject = (over: Partial<ClassUsageSubject> = {}): ClassUsageSubject => ({
 });
 
 describe("resolving a subject to its document", () => {
-  it("asks for the WORKING DRAFT only when the subject is the draft variant", async () => {
-    // The two variants are separate rows precisely because the two documents
-    // can differ. Omitting the overlay for a draft subject reads the published
-    // row and files its classes as the draft's; passing it for a published
-    // subject does the reverse wherever a draft exists.
+  it("names the VARIANT through the lifecycle filter, not a draft flag", async () => {
+    // `findByID`'s `draft` option is documented as effective "only on a
+    // drafts-enabled, NON-LOCALIZED collection", and drafts and localization
+    // are not mutually exclusive — so on a localized collection it is inert and
+    // every draft subject would silently read the live row. `status` is
+    // authoritative and also constrains the localized companion's own
+    // `_status`, which is what makes a per-locale draft addressable.
     const { api, calls } = recordingApi();
     const read = classUsageDocumentReader(api);
 
     await read(subject({ variant: "published" }));
     await read(subject({ variant: "draft" }));
 
-    expect(calls.map(c => c.draft)).toEqual([false, true]);
+    expect(calls.map(c => c.status)).toEqual(["published", "draft"]);
   });
 
   it("sends NO locale for a shared field rather than the empty string", async () => {
     // A shared field stores one value every language reads, and that value is
-    // what a read with no locale resolves to. Asking for the `""` locale asks
-    // for a language nobody configured.
+    // what a read with no locale resolves to.
     const { api, calls } = recordingApi();
 
     await classUsageDocumentReader(api)(subject({ locale: "" }));
@@ -95,34 +102,72 @@ describe("resolving a subject to its document", () => {
     expect(calls[0]).not.toHaveProperty("locale");
   });
 
-  it("sends the subject's locale when it has one", async () => {
-    // The control on the case above: a reader that simply never sent a locale
-    // would satisfy that assertion and file every language's rows from the
-    // default locale's document.
+  it("turns FALLBACK OFF for a real locale, and asks for that locale", async () => {
+    // Fallback is on by default, so a locale with no translation resolves the
+    // field from its fallback chain. Filing that document's classes under this
+    // subject gives a translation that does not exist rows of its own, and the
+    // per-locale model the reconciler and the rebuild share stops being true.
     const { api, calls } = recordingApi();
 
     await classUsageDocumentReader(api)(subject({ locale: "fr" }));
 
-    expect(calls[0]?.locale).toBe("fr");
+    expect(calls[0]).toMatchObject({ locale: "fr", fallbackLocale: false });
   });
 
-  it("reads the stored shape, unpopulated, and treats a miss as absence", async () => {
-    // `depth: 0` because the rows derive from the stored blocks JSON;
-    // populating replaces ids with documents, changing the shape the
-    // derivation walks. `disableErrors` turns a missing document into null,
-    // which the caller reads as "leave this subject alone" — the right reading
-    // for an untranslated locale or a document with no pending draft.
+  it("reads the stored shape, unpopulated, as the system", async () => {
     const { api, calls } = recordingApi();
 
     await classUsageDocumentReader(api)(subject());
 
     expect(calls[0]).toMatchObject({
       collection: "pages",
-      id: "p1",
+      where: { id: { equals: "p1" } },
+      limit: 1,
       depth: 0,
-      disableErrors: true,
       overrideAccess: true,
     });
+  });
+
+  it("returns the FIELD's document, not the collection row", async () => {
+    // The derivation walks a top-level `nodes` array. A record has none, so
+    // handing back the row derives no rows at all and every class the document
+    // applies reads as unused.
+    const { api } = recordingApi();
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ field: "content" })
+    );
+
+    expect(document).toEqual(documentUsing("hero"));
+  });
+
+  it("answers nothing when the variant has no row", async () => {
+    // A DEFINITE absence: the query named the document and the lifecycle state,
+    // and a read it could not perform raises instead of answering empty.
+    const { api } = recordingApi({
+      find: async () => ({ items: [], meta: { hasNext: false } }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "draft" })
+    );
+
+    expect(document).toBeUndefined();
+  });
+
+  it("does NOT swallow a read failure", async () => {
+    // `disableErrors` returned null for EVERY unsuccessful result, not only a
+    // missing row — so a failing `afterRead` hook read as ordinary absence and
+    // the subject was reconciled to zero against a document nobody could read.
+    const { api } = recordingApi({
+      find: async () => {
+        throw new Error("afterRead hook failed");
+      },
+    });
+
+    await expect(classUsageDocumentReader(api)(subject())).rejects.toThrow(
+      "afterRead hook failed"
+    );
   });
 });
 
@@ -212,66 +257,5 @@ describe("writing the index", () => {
     });
 
     expect(page).toEqual({ items: [], meta: { hasNext: false } });
-  });
-});
-
-describe("what the reader hands back", () => {
-  it("returns the FIELD's document, not the collection row", async () => {
-    // The derivation walks a top-level `nodes` array. A record has none, so
-    // handing back the row derives no rows at all and every class the document
-    // applies reads as unused — the state that licences deleting one a page
-    // still renders. The rebuild already reads `item[field]`; this is the same
-    // place, reached the same way.
-    const { api } = recordingApi();
-
-    const document = await classUsageDocumentReader(api)(
-      subject({ field: "content" })
-    );
-
-    expect(document).toEqual(documentUsing("hero"));
-  });
-
-  it("returns nothing when the row has no value for that field", async () => {
-    const { api } = recordingApi();
-
-    const document = await classUsageDocumentReader(api)(
-      subject({ field: "sidebar" })
-    );
-
-    expect(document).toBeUndefined();
-  });
-
-  it("REFUSES a live row answered to a draft request", async () => {
-    // Asking for the draft overlay on a document with no pending draft answers
-    // the live published row rather than nothing. Accepting it files the
-    // published classes under a draft that does not exist — phantom references
-    // no rebuild can reconcile, which block deleting a class nothing uses.
-    const { api } = recordingApi({
-      findByID: async () => ({ id: "p1", content: documentUsing("hero") }),
-    });
-
-    const document = await classUsageDocumentReader(api)(
-      subject({ variant: "draft" })
-    );
-
-    expect(document).toBeUndefined();
-  });
-
-  it("accepts a row carrying the working-draft marker", async () => {
-    // The control on the case above: a reader that refused every draft would
-    // satisfy it while never indexing a draft at all.
-    const { api } = recordingApi({
-      findByID: async () => ({
-        id: "p1",
-        _isWorkingDraft: true,
-        content: documentUsing("draft-only"),
-      }),
-    });
-
-    const document = await classUsageDocumentReader(api)(
-      subject({ variant: "draft" })
-    );
-
-    expect(document).toEqual(documentUsing("draft-only"));
   });
 });

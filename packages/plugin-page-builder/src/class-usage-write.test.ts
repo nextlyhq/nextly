@@ -25,10 +25,23 @@ const documentUsing = (...classes: string[]) => ({
 });
 
 /** A store holding no rows, recording every write it is asked to make. */
-function recordingStore() {
+function recordingStore(stored: { id: string; classId: string }[] = []) {
   const calls: string[] = [];
   const store: ClassUsageIndexStore = {
-    find: async () => ({ items: [], meta: { hasNext: false } }),
+    // Stored rows are answered for whichever subject asks, which is enough
+    // here: each test drives one subject's removal at a time.
+    find: async () => ({
+      items: stored.map(row => ({
+        scope: "collection",
+        entity: "pages",
+        entityKey: "p1",
+        field: "content",
+        locale: "",
+        variant: "published",
+        ...row,
+      })),
+      meta: { hasNext: false },
+    }),
     create: async args => {
       calls.push(`create:${String(args.data.classId)}`);
       return {};
@@ -140,18 +153,20 @@ describe("enumerating the subjects one save owes", () => {
 });
 
 describe("a document that is not there in one locale or variant", () => {
-  it("leaves that subject's rows ALONE rather than reconciling against nothing", async () => {
-    // Absence is ordinary: a collection with drafts holds a published row for a
-    // document with no pending draft. Reconciling against nothing would delete
-    // that subject's rows, and the rebuild's sweep — which can tell a deleted
-    // document from an untranslated one — is what removes rows that are really
-    // orphaned.
+  it("reconciles that subject to ZERO rather than leaving its rows alone", async () => {
+    // The reader answers a DEFINITE absence: it names the document and the
+    // lifecycle state it asked for, and a read it could not perform raises
+    // instead of answering empty. So "no such variant" is knowledge.
+    //
+    // Leaving the rows is how a draft that was published or discarded keeps
+    // every class it once applied recorded forever, which blocks deleting a
+    // class the surviving document no longer uses.
     const { store, calls } = recordingStore();
 
     const report = await reconcileWrittenDocument({
       store,
       read: async subject =>
-        subject.variant === "draft" ? null : documentUsing("hero"),
+        subject.variant === "draft" ? undefined : documentUsing("hero"),
       collection: {
         slug: "pages",
         fields: [{ type: "blocks", name: "content" }],
@@ -162,9 +177,37 @@ describe("a document that is not there in one locale or variant", () => {
       limits: DEFAULT_LIMITS,
     });
 
-    expect(report).toMatchObject({ subjects: 2, reconciled: 1, absent: 1 });
-    // One create for the published document, and NOTHING for the absent draft.
+    // BOTH subjects were reconciled — the published one against its document,
+    // the absent draft against nothing.
+    expect(report).toMatchObject({ subjects: 2, reconciled: 2 });
+    expect(report.failures).toEqual([]);
+    // The published document's class was inserted. The draft subject had no
+    // stored rows in this fixture, so reconciling it to zero writes nothing —
+    // which is the correct no-op, not a skip.
     expect(calls).toEqual(["create:hero"]);
+  });
+
+  it("REMOVES the rows of a variant that has gone", async () => {
+    // The case the previous behaviour could not reach: a draft that was
+    // indexed and has since been published or discarded. Its stored rows have
+    // to go, or the classes it applied stay recorded against a document that
+    // no longer exists in that variant.
+    const { store, calls } = recordingStore([{ id: "r1", classId: "old" }]);
+
+    await reconcileWrittenDocument({
+      store,
+      read: async () => undefined,
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: false,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect(calls).toContain("delete:r1");
   });
 });
 

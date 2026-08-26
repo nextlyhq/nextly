@@ -178,23 +178,17 @@ async function reconcileOne(
   subject: ClassUsageSubject
 ): Promise<ClassUsageSubjectOutcome> {
   try {
+    // An absent document reconciles the subject to ZERO rather than being left
+    // alone. The reader answers a DEFINITE absence — it names the document and
+    // the lifecycle state it asked for, and a read it could not perform raises
+    // instead of answering empty — so "no such document in this variant and
+    // locale" is knowledge, not an unknown.
+    //
+    // Leaving those rows is how a draft that was published or discarded keeps
+    // every class it once applied recorded forever, which blocks deleting a
+    // class the surviving document no longer uses. The derivation answers no
+    // rows for an absent value, so this needs no branch of its own.
     const document = await args.read(subject);
-    // An absent document is left ALONE rather than reconciled against nothing.
-    // Reconciling would delete the subject's rows, and absence here does not
-    // mean the document was deleted: a read can answer null for a locale nobody
-    // has translated or a draft that was never started, and for a document
-    // whose read failed in a way the reader chose to report as absence. The
-    // sweep in the rebuild is what removes rows for documents that are really
-    // gone, because it can tell those apart and this cannot.
-    if (document === null || document === undefined) {
-      return {
-        subject,
-        inserted: 0,
-        removed: 0,
-        undetermined: false,
-        absent: true,
-      };
-    }
 
     const report = await maintainClassUsage({
       store: args.store,

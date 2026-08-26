@@ -33,17 +33,12 @@ export interface ClassUsageDirectApi {
     limit?: number;
     page?: number;
     sort?: string;
+    locale?: string;
+    fallbackLocale?: false | string;
+    status?: "published" | "draft" | "all";
+    depth?: number;
     overrideAccess?: boolean;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
-  findByID(args: {
-    collection: string;
-    id: string;
-    locale?: string;
-    draft?: boolean;
-    depth?: number;
-    disableErrors?: boolean;
-    overrideAccess?: boolean;
-  }): Promise<unknown>;
   create(args: {
     collection: string;
     data: Record<string, unknown>;
@@ -142,21 +137,55 @@ export function classUsageDocumentReader(
   nextly: ClassUsageDirectApi
 ): ClassUsageDocumentReader {
   return async (subject: ClassUsageSubject) => {
-    const row = await nextly.findByID({
+    const page = await nextly.find({
       collection: subject.entity,
-      id: subject.entityKey,
-      ...(subject.locale === "" ? {} : { locale: subject.locale }),
-      draft: subject.variant === "draft",
+      where: { id: { equals: subject.entityKey } },
+      limit: 1,
+      // The LIFECYCLE filter, which is the authoritative way to name a variant
+      // and the only one that works everywhere. `findByID`'s `draft` flag is
+      // documented as effective "only on a drafts-enabled, NON-LOCALIZED
+      // collection", and drafts and localization are not mutually exclusive —
+      // so on a localized collection it is inert and every draft subject would
+      // silently read the live row. `status` also constrains the localized
+      // companion's own `_status`, which is what makes a per-locale draft
+      // addressable at all.
+      status: subject.variant,
+      ...localeOptions(subject),
+      // Rows derive from the stored blocks JSON. Populating relationships
+      // replaces ids with documents, changing the shape the derivation walks
+      // while adding reads a save does not need.
       depth: 0,
-      disableErrors: true,
       ...AS_THE_SYSTEM,
     });
-    return documentIn(row, subject);
+    return documentIn(page.items[0], subject);
   };
 }
 
 /**
- * The block document a row carries for one subject, or undefined.
+ * How a subject's locale is asked for.
+ *
+ * The SHARED sentinel asks with no locale at all: a shared field stores one
+ * value every language reads, and that value is what a read with no locale
+ * resolves to. Asking for the `""` locale asks for a language nobody
+ * configured.
+ *
+ * A real locale asks with FALLBACK OFF. Fallback is on by default, so a locale
+ * with no translation resolves the field from its fallback chain — and filing
+ * that document's classes under `subject.locale` gives a translation that does
+ * not exist rows of its own. Every subject has to be derived from its own
+ * stored translation or the per-locale model the reconciler and the rebuild
+ * share stops being true.
+ */
+function localeOptions(subject: ClassUsageSubject): {
+  locale?: string;
+  fallbackLocale?: false;
+} {
+  if (subject.locale === "") return {};
+  return { locale: subject.locale, fallbackLocale: false };
+}
+
+/**
+ * The block document a row carries for one subject.
  *
  * The row is the whole record; the document this subject is keyed by lives at
  * `record[field]`, which is where the rebuild reads it. Returning the record
@@ -164,17 +193,15 @@ export function classUsageDocumentReader(
  * array and a record has none — so every class the document applies reads as
  * unused, which is the state that licences deleting one a page still renders.
  *
- * A DRAFT subject additionally requires the working-draft marker. Asking for
- * the draft overlay on a document that has no pending draft answers the live
- * published row rather than nothing, so without this check the published
- * classes are filed under a draft that does not exist — phantom references that
- * no rebuild can reconcile and that block deleting a class nothing uses.
+ * An absent row answers `undefined`, and that is a DEFINITE answer rather than
+ * an unknown one: the query named this document and this lifecycle state, and
+ * a read that could not be performed throws instead of answering empty. So the
+ * subject reconciles to zero rows, which is what removes the rows of a draft
+ * that has since been published or discarded. Leaving them would keep every
+ * class that draft once applied recorded forever, blocking deletion of classes
+ * the published document no longer uses.
  */
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;
-  const record = row as Record<string, unknown>;
-  if (subject.variant === "draft" && record._isWorkingDraft !== true) {
-    return undefined;
-  }
-  return record[subject.field];
+  return (row as Record<string, unknown>)[subject.field];
 }
