@@ -26,6 +26,7 @@ import { toDbError } from "../database/errors";
 import { NextlyError } from "../errors";
 
 import { BaseService } from "./base-service";
+import { canonicalJson } from "./lib/canonical-json";
 import type { Logger } from "./types";
 
 // ============================================================
@@ -115,49 +116,6 @@ export interface BaseRegistryRecord {
  * @typeParam TMigrationStatus - The migration status union type for this domain
  */
 /**
- * A value as a string that does not depend on how its keys were ordered.
- *
- * Postgres holds these columns as `jsonb`, which normalises key order rather
- * than preserving what was written, so the row read back can spell the same
- * value differently from the config that wrote it. Compared as plain JSON, such
- * a resource re-syncs on every startup — on that adapter only, with every
- * instrument reporting the write as legitimate work.
- *
- * Arrays keep their order. Order is part of an array's value, and sorting one
- * here would stop a genuine reordering from being detected at all.
- *
- * Functions are dropped, as `JSON.stringify` always dropped them. That is what
- * makes a code-first `preview.url` compare equal to the stored row it could
- * never have been written into.
- */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(withSortedKeys(value));
-}
-
-/**
- * The same value with every object's keys in a fixed order.
- *
- * The rebuilt object has a NULL prototype, which is load-bearing rather than
- * defensive. Assigning an own `"__proto__"` key to an ordinary `{}` invokes the
- * legacy prototype setter instead of creating an enumerable property, so
- * `JSON.stringify` omits it — and two configs differing ONLY under that key
- * serialise identically and compare equal. `JSON.parse` does create it as an
- * own key, so a stored `jsonb` column round-tripping through it reaches here
- * carrying one.
- */
-function withSortedKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withSortedKeys);
-  if (value === null || typeof value !== "object") return value;
-
-  const source = value as Record<string, unknown>;
-  const sorted = Object.create(null) as Record<string, unknown>;
-  for (const key of Object.keys(source).sort()) {
-    sorted[key] = withSortedKeys(source[key]);
-  }
-  return sorted;
-}
-
-/**
  * Whether two config values are the same as far as storage is concerned.
  *
  * `?? null` on both sides because a column holding no value arrives as `null`
@@ -168,6 +126,18 @@ function withSortedKeys(value: unknown): unknown {
 function sameStoredValue(a: unknown, b: unknown): boolean {
   return canonicalJson(a ?? null) === canonicalJson(b ?? null);
 }
+
+/*
+ * `canonicalJson` is imported rather than defined here. This file carried its
+ * own copy, written for the registry's jsonb key-order problem; the version
+ * diff had written another for the same question. Two implementations of one
+ * question agree on the day they are written and drift after, and the drift is
+ * silent because each looks correct beside its own caller.
+ *
+ * The shared one also answers a case this copy did not: a cyclic value returns
+ * `undefined` rather than throwing, so a comparison over one cannot take the
+ * whole sync down.
+ */
 
 /**
  * The fields {@link BaseRegistryService.schemaSyncNeeded} compares.
