@@ -45,3 +45,23 @@ pnpm lint:workspace
 pnpm turbo lint --continue \
   --filter='./packages/*'
 pnpm run build
+
+# The TESTS of the packages this branch actually changes.
+#
+# Two gaps this closes, and both were real. The lint above filters to
+# `./packages/*`, which excludes `apps/*` and `e2e` — workspaces this repo
+# declares and this hook could not reach. And nothing here ran tests at all, so
+# a guard that lives in a TEST was unreachable from any hook: a public-export
+# surface snapshot went unrun on two PRs, four names reached a published index
+# unguarded, and `main` went red for every open PR, because the author's own
+# gate was filtered to the package they had in mind rather than the ones they
+# had edited.
+#
+# The scope is DERIVED from the diff rather than listed here, so it cannot go
+# stale as packages are added. Empty means no workspace changed, and the run is
+# skipped rather than becoming a whole-repo test sweep nobody would keep.
+GATE_FILTERS=$(node scripts/gate-scope.mjs --filters)
+if [ -n "$GATE_FILTERS" ]; then
+  # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
+  pnpm turbo test --continue $GATE_FILTERS
+fi
