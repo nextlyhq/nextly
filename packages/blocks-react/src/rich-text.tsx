@@ -1,5 +1,6 @@
 import {
   codeTokenClass,
+  cssColor,
   hasFormat,
   isRichTextNode,
   isRichTextValue,
@@ -192,15 +193,31 @@ const BLOCK_LEVEL_NODES = [
 
 const BLOCK_LEVEL: ReadonlySet<string> = new Set(BLOCK_LEVEL_NODES);
 
-/** Whether any child of a container is drawn as block content. */
+/**
+ * Whether anything drawn inside a container lands as block content.
+ *
+ * DESCENDS through nodes that are not themselves block, rather than reading the
+ * immediate children alone. Applying a link across a selection that contains an
+ * image serialises as `link -> image`, and a shallow check sees only the
+ * phrasing `link` while {@link LinkView} goes on to draw `<a><figure>` — inside
+ * the `<p>` the shallow answer preserved. The unknown-node fallback needs the
+ * same treatment for the opposite reason: it emits no element at all, so its
+ * children land in whatever encloses IT.
+ *
+ * A block node ends the walk instead of being descended into, because it has
+ * already answered the question. The recursion is therefore bounded by the
+ * document's own depth, which the renderer walks anyway.
+ */
 function holdsBlockContent(
   nodes: readonly RichTextNode[] | undefined
 ): boolean {
   // Array-checked for the reason {@link children} gives: this is stored JSON.
   if (!Array.isArray(nodes)) return false;
-  return nodes.some(
-    child => isRichTextNode(child) && BLOCK_LEVEL.has(child.type)
-  );
+  return nodes.some(child => {
+    if (!isRichTextNode(child)) return false;
+    if (BLOCK_LEVEL.has(child.type)) return true;
+    return holdsBlockContent(child.children);
+  });
 }
 
 /** Heading levels Lexical serializes; anything else is a document from a version this does not know. */
@@ -612,8 +629,16 @@ function buttonStyle(
   const metrics = Object.hasOwn(BUTTON_METRICS, size)
     ? BUTTON_METRICS[size]
     : undefined;
-  const background = text(item.bgColor);
-  const foreground = text(item.textColor);
+  // SANITIZED, not merely read. These are stored text and they land in a
+  // `style` attribute, which React does not escape: a value of
+  // `red;position:fixed;inset:0;background-image:url(...)` does not style the
+  // button, it closes the declaration and opens its own — a full-page overlay
+  // and an outbound request, from a field an author types into.
+  //
+  // The check is the engine's rather than this file's, because the CMS makes
+  // the same decision about the same stored node and the two have to agree.
+  const background = cssColor(item.bgColor);
+  const foreground = cssColor(item.textColor);
   return {
     display: "inline-flex",
     alignItems: "center",
@@ -624,7 +649,7 @@ function buttonStyle(
     ...(variant === "outline"
       ? {
           border: "1px solid currentColor",
-          ...(foreground === "" ? {} : { color: foreground }),
+          ...(foreground === undefined ? {} : { color: foreground }),
         }
       : {
           // A filled button with NO colours still has to look filled. Both
@@ -642,8 +667,8 @@ function buttonStyle(
           // have to agree. A `var(--nx-*)` would not — that is an ADMIN token a
           // site has no reason to define, so the page would carry a broken
           // `var()` where the button should be.
-          backgroundColor: background === "" ? FILLED_BACKGROUND : background,
-          color: foreground === "" ? FILLED_FOREGROUND : foreground,
+          backgroundColor: background ?? FILLED_BACKGROUND,
+          color: foreground ?? FILLED_FOREGROUND,
         }),
   };
 }

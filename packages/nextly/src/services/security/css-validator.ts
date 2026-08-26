@@ -9,75 +9,23 @@
  * @since 1.0.0
  */
 
-const CSS_INJECTION_PATTERNS: RegExp[] = [
-  /expression\s*\(/i, // IE CSS expression()
-  /url\s*\(/i, // url() — can load external resources or execute protocols
-  /-moz-binding/i, // Firefox XBL binding
-  /behavior\s*:/i, // IE behavior property
-  /\\/g, // Backslash — CSS escape sequences (e.g., \65xpression = expression)
-  /\/\*/, // CSS comments — can break out of context or obfuscate keywords
-  // eslint-disable-next-line no-control-regex
-  /\x00/, // Null bytes — can cause truncation in downstream consumers
-  /@import/i, // @import — can load external stylesheets
-  /@font-face/i, // @font-face — can exfiltrate data via font requests
-  /var\s*\(/i, // var() — CSS custom properties can store attack vectors
-];
-
-const HEX_COLOR =
-  /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-
-const NUM = String.raw`\d{1,3}%?`;
-
-const RGB_COMMA = new RegExp(
-  `^rgb\\(\\s*${NUM}\\s*,\\s*${NUM}\\s*,\\s*${NUM}\\s*\\)$`
-);
-const RGB_SPACE = new RegExp(
-  `^rgb\\(\\s*${NUM}\\s+${NUM}\\s+${NUM}\\s*(?:\\/\\s*[\\d.]+%?\\s*)?\\)$`
-);
-
-const RGBA_COMMA = new RegExp(
-  `^rgba\\(\\s*${NUM}\\s*,\\s*${NUM}\\s*,\\s*${NUM}\\s*,\\s*[\\d.]+%?\\s*\\)$`
-);
-const RGBA_SPACE = new RegExp(
-  `^rgba\\(\\s*${NUM}\\s+${NUM}\\s+${NUM}\\s*\\/\\s*[\\d.]+%?\\s*\\)$`
-);
-
-const HUE = String.raw`[\d.]+(?:deg|rad|grad|turn)?`;
-const PCT = String.raw`\d{1,3}%`;
-
-const HSL_COMMA = new RegExp(
-  `^hsl\\(\\s*${HUE}\\s*,\\s*${PCT}\\s*,\\s*${PCT}\\s*\\)$`
-);
-const HSL_SPACE = new RegExp(
-  `^hsl\\(\\s*${HUE}\\s+${PCT}\\s+${PCT}\\s*(?:\\/\\s*[\\d.]+%?\\s*)?\\)$`
-);
-
-const HSLA_COMMA = new RegExp(
-  `^hsla\\(\\s*${HUE}\\s*,\\s*${PCT}\\s*,\\s*${PCT}\\s*,\\s*[\\d.]+%?\\s*\\)$`
-);
-const HSLA_SPACE = new RegExp(
-  `^hsla\\(\\s*${HUE}\\s+${PCT}\\s+${PCT}\\s*\\/\\s*[\\d.]+%?\\s*\\)$`
-);
+import {
+  cssColor,
+  hasCssInjection,
+  normalizeCssValue,
+} from "@nextlyhq/blocks-engine";
 
 /**
- * Named CSS colors — matches alphabetic strings (e.g., "red", "transparent").
- * Injection patterns are checked BEFORE this, so dangerous strings like
- * "expression" are caught by the injection check before reaching this branch.
+ * Whether a value carries a shape that must never reach a stylesheet.
+ *
+ * Delegated rather than implemented: the React renderer asks the same question
+ * about the same stored fields and cannot import this package, so the patterns
+ * live in `blocks-engine`, which both already depend on. A second copy here is
+ * how the two answers drift apart while each looks correct on its own.
  */
-const NAMED_COLOR = /^[a-zA-Z]+$/;
-
-const COLOR_PATTERNS: RegExp[] = [
-  HEX_COLOR,
-  RGB_COMMA,
-  RGB_SPACE,
-  RGBA_COMMA,
-  RGBA_SPACE,
-  HSL_COMMA,
-  HSL_SPACE,
-  HSLA_COMMA,
-  HSLA_SPACE,
-  NAMED_COLOR,
-];
+function containsInjection(value: string): boolean {
+  return hasCssInjection(value);
+}
 
 /**
  * CSS properties that the Lexical rich text editor generates for inline styles.
@@ -105,20 +53,6 @@ const ALLOWED_STYLE_PROPERTIES = new Set([
   "opacity",
 ]);
 
-function normalizeValue(value: string): string {
-  return value
-    // eslint-disable-next-line no-control-regex
-    .replace(/\x00/g, "")
-    .replace(/[\t\n\r]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function containsInjection(value: string): boolean {
-  const normalized = normalizeValue(value);
-  return CSS_INJECTION_PATTERNS.some(pattern => pattern.test(normalized));
-}
-
 /**
  * Check whether a string is a valid CSS color value.
  *
@@ -135,13 +69,7 @@ function containsInjection(value: string): boolean {
  * isValidCssColor('url(evil)')       // false (injection)
  */
 export function isValidCssColor(value: string): boolean {
-  if (!value || typeof value !== "string") return false;
-
-  // Injection check first — catches dangerous alphabetic strings like "expression"
-  if (containsInjection(value)) return false;
-
-  const trimmed = value.trim();
-  return COLOR_PATTERNS.some(pattern => pattern.test(trimmed));
+  return cssColor(value) !== undefined;
 }
 
 /**
@@ -202,7 +130,7 @@ export function sanitizeCssColor(value: string): string | null {
 export function sanitizeInlineStyle(value: string): string {
   if (!value || typeof value !== "string") return "";
 
-  const normalized = normalizeValue(value);
+  const normalized = normalizeCssValue(value);
   if (!normalized) return "";
 
   const declarations = normalized.split(";");

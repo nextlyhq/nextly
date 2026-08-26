@@ -369,6 +369,14 @@ export {
   relativeLuminance,
 } from "./style/contrast";
 export type { ContrastLevel, ContrastResult, Rgb } from "./style/contrast";
+// The one CSS-colour policy. Both surfaces that put a stored colour on a page
+// read it from here: the React renderer, which may not import the CMS, and the
+// CMS's own serializer, which lives where the renderer cannot reach.
+export {
+  cssColor,
+  hasCssInjection,
+  normalizeCssValue,
+} from "./style/css-color";
 export type {
   CompiledPageCss,
   StyleCompileContext,

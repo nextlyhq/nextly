@@ -1279,3 +1279,132 @@ describe("rich-text filled buttons stay visible", () => {
     expect(html).not.toContain("background-color");
   });
 });
+
+describe("rich-text stored colours reach a style attribute", () => {
+  const button = (extra: Record<string, unknown>): RichTextValue =>
+    doc([
+      {
+        type: "button-link",
+        version: 1,
+        url: "https://example.com/buy",
+        text: "Buy",
+        ...extra,
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("refuses a colour that closes the declaration and opens its own", () => {
+    /*
+     * React does not escape a style value, so a stored `;` is not styling — it
+     * ends the declaration and starts another. The payload here is a full-page
+     * overlay and an outbound request, from a field an author types into.
+     *
+     * Asserted on the RENDERED markup rather than on the validator, because the
+     * validator being right is not the claim: the claim is that this value
+     * cannot reach the page.
+     */
+    const hostile =
+      "red;position:fixed;inset:0;background-image:url(https://attacker.test/x)";
+    const html = renderToStaticMarkup(
+      <RichText value={button({ bgColor: hostile })} />
+    );
+
+    expect(html).not.toContain("position:fixed");
+    expect(html).not.toContain("attacker.test");
+    // And the button is still DRAWN — a refused colour falls back to the
+    // visible default rather than taking the button off the page with it.
+    expect(html).toContain("background-color:#000");
+    expect(html).toContain(">Buy</a>");
+  });
+
+  it("refuses a hostile foreground the same way", () => {
+    // The sibling. `textColor` reaches the same attribute by the same route, so
+    // a guard on one field leaves the other open with nothing to report it.
+    const html = renderToStaticMarkup(
+      <RichText value={button({ textColor: "red;position:fixed" })} />
+    );
+    expect(html).not.toContain("position:fixed");
+    expect(html).toContain("color:#fff");
+  });
+
+  it("refuses a hostile foreground on an OUTLINE button too", () => {
+    // The outline branch writes `color` from the same stored field down a
+    // different path, so it needs its own assertion rather than inheriting one.
+    const html = renderToStaticMarkup(
+      <RichText
+        value={button({ variant: "outline", textColor: "red;position:fixed" })}
+      />
+    );
+    expect(html).not.toContain("position:fixed");
+  });
+});
+
+describe("rich-text block leaves nested inside an inline wrapper", () => {
+  const reparse = (html: string): HTMLElement => {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    return host;
+  };
+
+  it("survives a link applied across an image", () => {
+    /*
+     * Applying a link to a selection containing an inline decorator serialises
+     * as `paragraph -> link -> image`. A check reading only the immediate
+     * children sees the phrasing `link` and keeps the `<p>`, while `LinkView`
+     * goes on to draw `<a><figure>` inside it — and the parser closes the
+     * paragraph at the figure exactly as it would at the top level.
+     */
+    const value = doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "link",
+            url: "https://example.com",
+            children: [
+              {
+                type: "image",
+                version: 1,
+                src: "https://cdn.example.com/a.jpg",
+                altText: "A",
+              },
+            ],
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const host = reparse(renderToStaticMarkup(<RichText value={value} />));
+    const figure = host.querySelector("figure");
+
+    // Population first: the image drew, and the link survived around it.
+    expect(figure).not.toBeNull();
+    expect(host.querySelector("a")).not.toBeNull();
+    // The wrapper the parser LEFT is a div, and the anchor is still inside it.
+    expect(host.querySelector("a")?.parentElement?.tagName).toBe("DIV");
+    expect(figure?.closest("a")).not.toBeNull();
+    expect(host.querySelectorAll("p:empty").length).toBe(0);
+  });
+
+  it("still keeps a link around ordinary prose in a paragraph", () => {
+    // The negative half, and the reason the walk stops at block nodes rather
+    // than descending everywhere: a link full of TEXT is phrasing, and turning
+    // its paragraph into a div would drop the paragraph semantics from most of
+    // the prose on a page.
+    const value = doc([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "link",
+            url: "https://example.com",
+            children: [{ type: "text", text: "read this" }],
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const host = reparse(renderToStaticMarkup(<RichText value={value} />));
+    expect(host.firstElementChild?.tagName).toBe("P");
+    expect(host.querySelector("p > a")?.textContent).toBe("read this");
+  });
+});
