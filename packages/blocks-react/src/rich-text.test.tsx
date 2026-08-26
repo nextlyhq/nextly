@@ -1648,3 +1648,71 @@ describe("rich-text phrasing-only containers keep their label", () => {
     expect(html).toContain("<figure");
   });
 });
+
+describe("rich-text media wrappers carry what no stylesheet will", () => {
+  const image = (extra: Record<string, unknown> = {}): RichTextValue =>
+    doc([
+      {
+        type: "image",
+        version: 1,
+        src: "https://cdn.example.com/a.jpg",
+        altText: "A",
+        ...extra,
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  const gallery = (): RichTextValue =>
+    doc([
+      {
+        type: "gallery",
+        version: 1,
+        columns: 3,
+        images: [{ src: "https://cdn.example.com/a.jpg", alt: "A" }],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+  it("resets the indent a figure arrives with", () => {
+    // The UA stylesheet gives `figure` a `margin: 1em 40px`. Nothing in this
+    // package neutralises it, so an image published into a narrow column loses
+    // 80px and sits visibly inset from the prose around it. The vertical space
+    // is kept at the editor's own `my-4`; only the horizontal inset goes.
+    for (const value of [image(), gallery()]) {
+      expect(renderToStaticMarkup(<RichText value={value} />)).toContain(
+        "margin:1rem 0"
+      );
+    }
+  });
+
+  it("fills the track for a gallery cell", () => {
+    // `GalleryNode.exportDOM` writes `img.style.width = "100%"` on every cell,
+    // because a cell is a slot in a grid the author sized by choosing a column
+    // count. A cell at its intrinsic width leaves the slot part-empty.
+    // The WHOLE declaration list. `toContain("width:100%")` is satisfied by the
+    // `max-width:100%` every image already carries, so it passes with the fill
+    // absent — the assertion would have been green on the defect it names.
+    expect(renderToStaticMarkup(<RichText value={gallery()} />)).toContain(
+      'style="width:100%;max-width:100%;height:auto"'
+    );
+  });
+
+  it("leaves a standalone image at the size it was placed", () => {
+    /*
+     * The other half of the same question, and the editor answers it
+     * differently: `ImageNode.exportDOM` writes the recorded `width`/`height`
+     * as ATTRIBUTES and no width style at all. Forcing `width:100%` here would
+     * upscale a small image past its own pixels — and it would override the
+     * very dimensions the renderer just wrote from what the author recorded.
+     *
+     * `max-width` still contains an upload wider than the column, which is the
+     * case that motivated containment in the first place.
+     */
+    const html = renderToStaticMarkup(
+      <RichText value={image({ width: 320, height: 200 })} />
+    );
+    expect(html).toContain('width="320"');
+    // The WHOLE declaration list, because `max-width:100%` CONTAINS the string
+    // `width:100%` — a substring refusal passes on the very output it is meant
+    // to reject, and passed on the correct output here too.
+    expect(html).toContain('style="max-width:100%;height:auto"');
+  });
+});

@@ -472,12 +472,40 @@ const MAX_IMAGE_EDGE = 20000;
  * gallery loses its titles and reserves no space, so its rows shift as the
  * images load while the standalone path above them does not.
  */
+/**
+ * The margin a rich-media wrapper is owed, because the browser's is wrong.
+ *
+ * A `<figure>` carries `margin: 1em 40px` from the UA stylesheet, and 40px on
+ * each side is an INDENT nobody asked for — it takes 80px out of the column and
+ * is plainly visible on a narrow screen. This package ships no stylesheet to
+ * neutralise it, so the wrapper carries the reset itself, the same way the
+ * gallery's list already resets the markers and padding a `<ul>` arrives with.
+ *
+ * Vertical-only, and the value is the editor's own `my-4`: the space between an
+ * image and the prose around it is real, and the horizontal inset is the only
+ * part that was never chosen.
+ */
+const MEDIA_FIGURE_STYLE: CSSProperties = { margin: "1rem 0" };
+
 function ImageElement({
   src,
   node,
+  fills,
 }: {
   src: string;
   node: Readonly<Record<string, unknown>>;
+  /**
+   * Whether the image should FILL its track rather than sit at its own width.
+   *
+   * True inside a gallery and false on its own, which is not an inconsistency
+   * but the editor's two answers: `GalleryNode.exportDOM` writes
+   * `img.style.width = "100%"` on every cell, and `ImageNode.exportDOM` writes
+   * the author's recorded `width`/`height` as attributes and no width style at
+   * all. A gallery cell is a slot in a grid the author sized by choosing a
+   * column count; a standalone image is the size it was placed at, and forcing
+   * it to the column would UPSCALE a small one past its own pixels.
+   */
+  fills?: boolean;
 }): ReactNode {
   const title = text(node.title);
   const box = boxOf(node);
@@ -501,7 +529,11 @@ function ImageElement({
       // browser the aspect ratio to reserve space with, and this lets the
       // rendered height follow the constrained width instead of holding the
       // intrinsic one and squashing the picture.
-      style={{ maxWidth: "100%", height: "auto" }}
+      style={{
+        ...(fills === true ? { width: "100%" } : {}),
+        maxWidth: "100%",
+        height: "auto",
+      }}
     />
   );
 }
@@ -548,7 +580,7 @@ function ImageView({
   const src = fetchableUrl(node.src, policy?.remotePatterns);
   if (src === undefined) return null;
   return (
-    <figure className="nextly-rich-text-image">
+    <figure className="nextly-rich-text-image" style={MEDIA_FIGURE_STYLE}>
       <ImageElement src={src} node={node} />
       <CaptionView value={node.caption} />
     </figure>
@@ -661,7 +693,7 @@ function GalleryView({
     gap: "0.5rem",
   };
   return (
-    <figure className="nextly-rich-text-gallery">
+    <figure className="nextly-rich-text-gallery" style={MEDIA_FIGURE_STYLE}>
       {/*
        * HOISTED and DEDUPED by React: `href` plus `precedence` lifts this out
        * of the figure and collapses every gallery on the page to one copy —
@@ -683,7 +715,7 @@ function GalleryView({
       >
         {images.map((image, i) => (
           <li key={i}>
-            <ImageElement src={image.src} node={image.item} />
+            <ImageElement src={image.src} node={image.item} fills />
           </li>
         ))}
       </ul>
