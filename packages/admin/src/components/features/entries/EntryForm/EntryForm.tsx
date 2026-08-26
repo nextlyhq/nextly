@@ -738,7 +738,16 @@ export function EntryForm({
     // closing the dialog rather than a history move — and a modal opened FROM
     // this editor would mount a second interceptor over this one, so two
     // dialogs would answer one navigation.
-    <UnsavedChangesGuard isDirty={hasUnsavedWork} disabled={isSubmitting}>
+    <UnsavedChangesGuard
+      isDirty={hasUnsavedWork}
+      disabled={isSubmitting}
+      // A refused switch takes its seed with it. The request to fill the target
+      // from this language was made ALONGSIDE a navigation; if the navigation
+      // does not happen, the request did not either — and a seed left behind
+      // fires the moment the author reaches that language by any other route,
+      // offering a copy they declined minutes earlier.
+      onCancel={onSeedHandled}
+    >
       <UnsavedWorkProvider report={unsavedWork.report}>
         <EntryLocaleProvider value={localeCtx}>
           <DocumentHistoryContext.Provider value={documentHistory}>
