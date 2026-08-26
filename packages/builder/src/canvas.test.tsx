@@ -1141,6 +1141,64 @@ describe("what the canvas reports about the box it got", () => {
     expect(FakeResizeObserver.last).toBeUndefined();
   });
 
+  it("decides from the SITE's breakpoints, which are the ones that compile", () => {
+    /*
+     * `sharedStyleInputs` resolves `breakpoints` as
+     * `firstStated(stored.breakpoints, route.breakpoints)` — the site tier
+     * wins, "because stored overrides code, which is the layering every
+     * global-styles system uses".
+     *
+     * Read the other way round, a route context carrying viewport tiers beside
+     * a container-only stored set turns preview ON, and the compile that
+     * actually runs then disables every container-axis rule as
+     * `nx-not-previewable` with no viewport tier to show for it — the exact
+     * loss the eligibility rule exists to prevent, caused by deciding it from
+     * inputs the renderer does not use.
+     *
+     * The two sets DISAGREE here deliberately: equal ones could not tell which
+     * was consulted.
+     */
+    const onMeasured = vi.fn();
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={
+          {
+            css: "",
+            classes: {},
+            breakpoints: {
+              viewport: [],
+              container: [{ id: "narrow", label: "Narrow", maxWidth: 400 }],
+            },
+          } as never
+        }
+        render={
+          {
+            styleContext: {
+              breakpoints: {
+                viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+                container: [],
+              },
+            },
+          } as never
+        }
+        preview={{ container: "nx-preview-viewport", width: 991, onMeasured }}
+      />
+    );
+
+    const style = (
+      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
+    )?.style;
+    expect(style?.containerName).toBe("");
+    expect(FakeResizeObserver.last).toBeUndefined();
+  });
+
   it("observes NOTHING when no reporter was given", () => {
     /*
      * The control. Without it, an implementation that observed unconditionally

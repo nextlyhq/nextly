@@ -72,7 +72,7 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * of one contract that could then be versioned apart.
  */
 export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
-export type { CanvasProps } from "./canvas";
+export type { CanvasPreview, CanvasProps } from "./canvas";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds

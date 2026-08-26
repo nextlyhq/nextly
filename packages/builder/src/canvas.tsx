@@ -445,9 +445,17 @@ export interface CanvasPreview {
  * The breakpoints the compile will actually run against, or `undefined` when
  * nothing will be compiled at all.
  *
- * The page tier's when it has one and the site sheet's otherwise, which is the
- * same order the container itself is bound in — so this answers for the compile
- * that will really happen rather than for the inputs a caller passed.
+ * The SITE's when it has them, and the route context's otherwise — which is the
+ * precedence `sharedStyleInputs` applies, in its own words because "the site
+ * tier is the stored one, and stored overrides code, which is the layering
+ * every global-styles system uses". Read the other way round, a route context
+ * carrying viewport tiers beside a container-only stored set would turn preview
+ * ON, and the compile that actually ran would then disable every container-axis
+ * rule as `nx-not-previewable` with no viewport tier to show for it.
+ *
+ * Deciding from the same reconciled inputs the renderer compiles is the point:
+ * this is not a second opinion about which breakpoints matter, it is a reading
+ * of the one the renderer will use.
  *
  * `undefined` is the state where a caller has neither binding site:
  * `siteStyles={false}` opts out of the shared sheet, and a stored artifact
@@ -457,9 +465,16 @@ function compiledBreakpoints(
   render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>
 ): BreakpointSet | undefined {
-  if (render?.styleContext !== undefined)
-    return render.styleContext.breakpoints;
-  return typeof siteStyles === "object" ? siteStyles.breakpoints : undefined;
+  /*
+   * `firstStated`, not "the site if it has a sheet": that helper SKIPS an
+   * absent value, so a site sheet carrying no breakpoints falls through to the
+   * route context rather than answering `undefined` for both. Reading it as
+   * "site wins whenever a sheet exists" turns a stated route set into no set at
+   * all, and a canvas that should preview stays published.
+   */
+  const stored =
+    typeof siteStyles === "object" ? siteStyles.breakpoints : undefined;
+  return stored ?? render?.styleContext?.breakpoints;
 }
 
 /**
