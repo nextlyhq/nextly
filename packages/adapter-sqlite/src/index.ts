@@ -902,11 +902,14 @@ export class SqliteAdapter extends DrizzleAdapter {
     // fields. Re-wrapping it here would erase those fields.
     if (isDatabaseError(error)) return error;
 
-    const sqliteError = error as {
-      code?: string;
-      message?: string;
-      name?: string;
-    };
+    // Classify from the DRIVER's error, which is not necessarily the one handed
+    // in. A query failure arrives wrapped: DrizzleQueryError carries the SQL
+    // statement as its message and no code, and better-sqlite3's own error —
+    // the only object that knows what actually went wrong — sits below it in
+    // the `cause` chain. Classifying the wrapper means classifying the QUERY
+    // TEXT, which reported a unique violation on a table with a `locked_by`
+    // column as a "timeout", because the statement contains the word LOCKED.
+    const sqliteError = findDriverError(error);
 
     // Determine error kind from SQLite error code
     let kind: DatabaseErrorKind = "unknown";
@@ -914,7 +917,9 @@ export class SqliteAdapter extends DrizzleAdapter {
     if (sqliteError.code) {
       kind = SQLITE_ERROR_CODES[sqliteError.code] || "unknown";
     } else if (sqliteError.message) {
-      // Try to extract error type from message
+      // Try to extract error type from message. Safe to match loosely now:
+      // `sqliteError` is the driver's error, so its message is the driver's
+      // description of the failure and never a SQL statement.
       const msg = sqliteError.message.toUpperCase();
       if (msg.includes("UNIQUE CONSTRAINT")) {
         kind = "unique_violation";
@@ -934,7 +939,8 @@ export class SqliteAdapter extends DrizzleAdapter {
       }
     }
 
-    // Build error message
+    // Build error message from the driver's description, for the same reason
+    // the classification uses it: the wrapper's message is the SQL statement.
     let message = sqliteError.message ?? String(error);
     if (sql && kind === "query") {
       message = `Query failed: ${message}`;
@@ -947,6 +953,38 @@ export class SqliteAdapter extends DrizzleAdapter {
       cause: error instanceof Error ? error : undefined,
     });
   }
+}
+
+/** The fields this classifier reads off an error, at any depth in the chain. */
+interface DriverErrorShape {
+  code?: string;
+  message?: string;
+  name?: string;
+  cause?: unknown;
+}
+
+/**
+ * The deepest error in the `cause` chain that carries a SQLite error code, or
+ * the outermost error when none does.
+ *
+ * better-sqlite3 sets `code` (`SQLITE_CONSTRAINT_UNIQUE`, `SQLITE_BUSY`, ...);
+ * the wrappers around it do not. Walking to the code is therefore walking to
+ * the only object that knows what failed. The walk is depth-bounded rather than
+ * unbounded because an error chain can be made cyclic, and a classifier that
+ * can hang is worse than one that occasionally gives up.
+ *
+ * Falls back to the outermost error so a driver error that genuinely carries no
+ * code — one constructed from a message alone — still classifies exactly as it
+ * did before.
+ */
+function findDriverError(error: unknown): DriverErrorShape {
+  let cursor = error as DriverErrorShape | null | undefined;
+  for (let depth = 0; depth < 10 && cursor != null; depth++) {
+    if (typeof cursor.code === "string" && cursor.code.length > 0)
+      return cursor;
+    cursor = cursor.cause as DriverErrorShape | null | undefined;
+  }
+  return error ?? {};
 }
 
 /**
