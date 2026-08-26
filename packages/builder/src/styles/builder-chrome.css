@@ -796,15 +796,13 @@
    * `min-height` rather than `height` so a page taller than the region still
    * scrolls instead of being clipped to it.
    *
-   * DIVIDED by the canvas scale, because a scaled canvas paints at a fraction
-   * of the height it is laid out at. Left at a plain 100% the root is exactly
-   * as tall as the region and paints shorter than it — measured at 285px into a
-   * 400px region — so the bottom of the region has no canvas on it and the same
-   * aiming failure this minimum exists to prevent comes back, at the scales it
-   * is needed most. The custom property is set by the canvas only while it is
-   * scaled; the fallback is the unscaled case, which is every other surface.
+   * Needs no compensation for a scaled canvas. The canvas shrinks with `zoom`,
+   * which participates in layout, so a percentage here resolves against the
+   * region as it always did and the scaled box still fills it — measured at
+   * 400px painted into a 400px region. A paint-time transform would not: the
+   * root would be exactly as tall as the region and paint shorter than it.
    */
-  min-height: calc(100% / var(--nx-canvas-scale, 1));
+  min-height: 100%;
 
   /*
    * A press on a block is a grab, not a text selection.

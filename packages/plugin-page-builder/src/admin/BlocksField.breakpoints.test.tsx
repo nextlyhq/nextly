@@ -356,6 +356,48 @@ describe("a width the site stops offering", () => {
     expect(box().width).toBeUndefined();
   });
 
+  it("KEEPS the unconditional tier's width, which is no tier's BOUND", () => {
+    /*
+     * The width that reaches the base tier is one PAST the widest bound, so it
+     * is not among the bounded tiers — and a reconciliation that compares
+     * against those alone clears it on the very next render.
+     *
+     * Measured before this case existed: choosing the unconditional tier set
+     * the width, the effect below cleared it, and the canvas returned to
+     * filling the region. Nothing failed. The one option that reaches the tier
+     * an author most often edits responded to the press and did nothing, which
+     * is indistinguishable from the option not working at all.
+     *
+     * The rerender is what makes it a test of the RECONCILIATION rather than of
+     * the setter: the clearing happens in an effect, so a case asserting
+     * immediately after the press passes whether or not it exists.
+     */
+    const view = openEditor();
+
+    choose(992);
+    view.rerender();
+
+    expect(box().width).toBe(992);
+  });
+
+  it("EDITS the base tier at that width, which is the point of offering it", () => {
+    /*
+     * The width surviving is necessary and not sufficient: a number that
+     * survived but resolved to a bounded tier would satisfy the case above
+     * while leaving base exactly as unreachable as it was.
+     *
+     * Measured through the box, because the canvas is scaled rather than capped
+     * — the layout width is the requested one, so what the container queries
+     * resolve against is 992 even where the region is narrower.
+     */
+    openEditor();
+
+    choose(992);
+    measure(992);
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+  });
+
   it("KEEPS a width the site still offers", () => {
     /*
      * The control. Without it, a version that released on every breakpoint

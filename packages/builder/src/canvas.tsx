@@ -368,25 +368,26 @@ export function canvasScale(
  * not simulate a 1280px viewport — it simulates a 912px one and reports the
  * wrong tier with confidence.
  *
- * A transform rather than `zoom`, and rather than letting the box overflow.
- * Measured: both `zoom` and a transform keep the container queries resolving at
- * the REQUESTED width, because both leave the layout width alone; `zoom` also
- * collapses the reserved height for free, which a transform does not. The
- * transform is still the right one — `zoom`'s documented weakness is
- * inconsistency in how it interacts with other layout features, which is where
- * this canvas lives: overlays, drop targets and hit-testing all read boxes.
+ * `zoom` rather than a transform, which is the opposite of what it looks like
+ * it should be and was measured both ways. Both keep the container queries
+ * resolving at the REQUESTED width — neither changes the width the box is laid
+ * out at, so `offsetWidth` and `contentBoxSize` still report 1280 — and both
+ * leave `getBoundingClientRect` answering in painted pixels.
  *
- * `top left` rather than a centred origin, because the scale is exactly
- * `region / requested`: the painted box then fills the region precisely, and
- * there is nothing left over to centre. A centred origin would place the
- * painted box half its shortfall to the right and clip that much off the far
- * side.
+ * They differ in what the SCROLL CONTAINER sees, and only `zoom` is usable
+ * there. A transform is paint-time, so the canvas section still reserves the
+ * unscaled layout box: measured in a 912x400 region at 0.7125, a transform
+ * leaves 368px of blank horizontal scroll, and compensating its height to fill
+ * the region adds 161px of blank vertical scroll — a tail an author, or drag
+ * autoscroll, can travel into until the page is off screen. `zoom` participates
+ * in layout, so the section reserves the painted box and both tails are zero.
  *
- * The scale is published as a custom property because the stylesheet needs it
- * too: `min-height: 100%` gives the root the region's height, which paints at
- * `scale` of it and leaves the rest of the region with no canvas on it —
- * measured at 285px painted into a 400px region, 115px an author cannot aim a
- * drop at. Dividing the minimum back out is what fills it.
+ * That participation is the very thing that argued against it: `zoom`'s
+ * documented weakness is inconsistency in how it interacts with other layout
+ * features, and this canvas is all layout — overlays, drop targets,
+ * hit-testing. But not participating is what produces two scroll defects that a
+ * measured wrapper would then exist to undo, and the properties those readers
+ * actually depend on were measured directly and hold.
  */
 function previewBoxStyle(
   preview: CanvasPreview | undefined,
@@ -402,13 +403,7 @@ function previewBoxStyle(
       marginInline: "auto",
     };
   }
-  return {
-    ...container,
-    width: `${preview.width}px`,
-    transform: `scale(${scale})`,
-    transformOrigin: "top left",
-    ["--nx-canvas-scale" as string]: `${scale}`,
-  };
+  return { ...container, width: `${preview.width}px`, zoom: scale };
 }
 
 /**
@@ -556,23 +551,39 @@ export interface CanvasPreview {
    */
   container: string;
   /**
-   * The width to constrain the box to, in CSS pixels, or absent to fill the
+   * The width to lay the box out at, in CSS pixels, or absent to fill the
    * region.
    *
-   * A MAXIMUM rather than a fixed width, because the region may be narrower
-   * than the tier being asked for — a wide breakpoint inside a half-width
-   * editor pane cannot be honoured, and stretching the box past its region
-   * would put the page under the inspector instead.
+   * HONOURED, whatever the region can hold. A region narrower than the tier
+   * being asked for does not cap it — the box is laid out at this width and
+   * PAINTED smaller, so what the container queries resolve against is the tier
+   * that was asked for rather than the one the region happens to imply.
+   *
+   * It was a maximum, and capping is what made the unconditional tier
+   * unreachable: the region is around 912px on the supported 1280px shell, so
+   * against a site bounding tablet at 1024 no requested width could ever put
+   * the box above it. A capped box does not simulate the viewport asked for; it
+   * simulates the region's own width while reporting the wrong tier.
+   *
+   * So this is the LAYOUT and query width. The painted width is this times the
+   * scale the canvas derives, and it is not reported: nothing outside needs it,
+   * and a second width on this object is a second thing to disagree.
    */
   width?: number;
   /**
    * The box's MEASURED inline size, reported whenever it changes.
    *
-   * Reported rather than derived from {@link CanvasPreview.width}, because
-   * those are different numbers and only one of them decides anything. The
-   * requested width is a ceiling; what the container queries resolve against is
-   * the width the box actually got. A caller that assumed the request was
-   * honoured would name a tier the box is not showing — the same
+   * Still reported rather than derived from {@link CanvasPreview.width}, even
+   * though a requested width is now honoured. They are different numbers
+   * whenever none was requested — the box then takes the region, and the region
+   * is not something the host states — and they are different again for the
+   * render before the first measurement arrives. A caller reading the request
+   * would name a tier for a box nobody has looked at.
+   *
+   * A LAYOUT size, which is the one the container queries answer to. It is not
+   * the painted width: a canvas scaled to fit is drawn smaller than it is laid
+   * out, and reporting what a reader sees would name the tier the region
+   * implies rather than the tier the page is being compiled against — the
    * confident-wrong-answer this whole preview mechanism exists to remove.
    *
    * `undefined` until the first measurement, which is a real state rather than

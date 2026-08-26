@@ -261,6 +261,49 @@ describe("useCanvasDrag", () => {
     expect(indicator(container)).not.toBeNull();
   });
 
+  it("measures the activation threshold in CLIENT pixels, not canvas ones", () => {
+    /*
+     * The threshold separates a click from an intent to move, which is a fact
+     * about the hand rather than about the canvas's coordinate system. The
+     * canvas is scaled so a tier wider than the region stays editable, and
+     * every client rectangle then comes back in painted pixels — so a distance
+     * converted into canvas coordinates is LARGER than the hand moved.
+     *
+     * Measured in that space the threshold shrinks with the canvas: painted at
+     * half size, the 4px separating a click from a drag needs only 2px of real
+     * movement, and ordinary click jitter starts committing moves the author
+     * never made.
+     */
+    const { container, root } = renderThree();
+    // Painted 400 wide against 800 laid out: the canvas is drawn at half size.
+    Object.defineProperty(root, "offsetWidth", { value: 800 });
+    Object.defineProperty(root, "offsetHeight", { value: 2000 });
+
+    press(root, blockElement(container, "a"), 200, 50);
+    // Three pixels of hand movement, below the four the threshold asks for —
+    // but six once converted into the canvas's own coordinates.
+    moveTo(root, 200, 53);
+
+    expect(indicator(container)).toBeNull();
+  });
+
+  it("still activates on a real drag while the canvas is scaled", () => {
+    /*
+     * The control on the case above, and it has to be here: a threshold that
+     * had become unreachable — or a drag that never starts under a scaled
+     * canvas at all — satisfies that assertion perfectly, because it is
+     * satisfied by absence.
+     */
+    const { container, root } = renderThree();
+    Object.defineProperty(root, "offsetWidth", { value: 800 });
+    Object.defineProperty(root, "offsetHeight", { value: 2000 });
+
+    press(root, blockElement(container, "a"), 200, 50);
+    moveTo(root, 200, 250);
+
+    expect(indicator(container)).not.toBeNull();
+  });
+
   it("commits a move to the position the line was drawn at", () => {
     const { container, root } = renderThree();
 

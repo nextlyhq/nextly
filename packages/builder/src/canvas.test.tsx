@@ -738,6 +738,19 @@ describe("what the canvas reports about the box it got", () => {
   const rootOf = (container: HTMLElement): HTMLElement =>
     container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement;
 
+  /**
+   * The canvas's `zoom`, normalised to a string.
+   *
+   * jsdom does not implement `zoom` as a CSS property: React's assignment lands
+   * as a plain own property, so `getPropertyValue("zoom")` answers `""` even
+   * where it was set, while `style.zoom` is `undefined` where it was not. Read
+   * either way alone, one of the two states below reports the other's value —
+   * and the case that would break is the one asserting the canvas is NOT
+   * scaled, which is satisfied by absence.
+   */
+  const zoomOf = (root: HTMLElement): string =>
+    String((root.style as { zoom?: string }).zoom ?? "");
+
   describe("a tier wider than the region it has to fit in", () => {
     it("takes its FULL width and is scaled down to the region", () => {
       /*
@@ -756,17 +769,17 @@ describe("what the canvas reports about the box it got", () => {
 
       const root = rootOf(container);
       expect(root.style.width).toBe("1280px");
-      expect(root.style.transform).toBe(`scale(${912 / 1280})`);
-      // Not a centred origin: the scale is exactly region / requested, so the
-      // painted box already fills the region and a centred origin would push it
-      // half its shortfall to the right and clip that much off the far side.
-      expect(root.style.transformOrigin).toBe("top left");
-      // Published for the stylesheet, which divides the canvas minimum height
-      // back out — a scaled root laid out at the region's height paints shorter
-      // than it and leaves the bottom of the region unaimable.
-      expect(root.style.getPropertyValue("--nx-canvas-scale")).toBe(
-        `${912 / 1280}`
-      );
+      /*
+       * `zoom`, not a transform, and the difference is what the SCROLL
+       * CONTAINER sees. Both leave the layout width alone — which is what keeps
+       * the container queries at the requested tier — but a transform is
+       * paint-time, so the canvas section goes on reserving the unscaled box:
+       * measured at 368px of blank horizontal scroll in a 912px region, and
+       * 161px vertical once the height is compensated to fill it. `zoom`
+       * participates in layout, so the section reserves what is painted.
+       */
+      expect(zoomOf(root)).toBe(`${912 / 1280}`);
+      expect(root.style.transform).toBe("");
     });
 
     it("leaves a tier that FITS unscaled and centred", () => {
@@ -782,7 +795,7 @@ describe("what the canvas reports about the box it got", () => {
       const root = rootOf(container);
       expect(root.style.maxWidth).toBe("600px");
       expect(root.style.marginInline).toBe("auto");
-      expect(root.style.transform).toBe("");
+      expect(zoomOf(root)).toBe("");
       expect(root.style.width).toBe("");
     });
 
@@ -796,7 +809,7 @@ describe("what the canvas reports about the box it got", () => {
       const { container } = atWidth(1280);
 
       const root = rootOf(container);
-      expect(root.style.transform).toBe("");
+      expect(zoomOf(root)).toBe("");
       expect(root.style.maxWidth).toBe("1280px");
     });
 

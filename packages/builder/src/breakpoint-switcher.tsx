@@ -41,9 +41,9 @@ import * as React from "react";
 
 import { authoredBreakpoints } from "./breakpoints";
 import {
-  baseWidth,
   editedBreakpointAtWidth,
   offeredTiers,
+  selectableTiers,
 } from "./canvas-width";
 
 /**
@@ -242,23 +242,39 @@ export function BreakpointSwitcher({
    * there, so there is no width to go to and "fill the region" is the truthful
    * offer rather than a stand-in for one.
    */
-  const unconditional = baseWidth(breakpoints);
+  /*
+   * Built from {@link selectableTiers}, which is also what the HOST checks a
+   * requested width against. Composed here instead, the two lists drift — and
+   * the way they drifted was silent: the host cleared the unconditional tier's
+   * width on the render after it was chosen, so the option existed, responded,
+   * and did nothing.
+   *
+   * Labels stay here because a tier carries none and naming is this control's
+   * job; the WIDTHS are the shared answer.
+   */
+  const selectable = React.useMemo(
+    () => selectableTiers(breakpoints),
+    [breakpoints]
+  );
+  const labels = new Map(tiers.map(tier => [tier.id, tier.label]));
   const options: Array<{
     id: BreakpointId;
     label: string;
     bound?: number;
     /** Applies FROM its width upward rather than up to it. */
     unconditional?: boolean;
-  }> = [
-    {
-      id: BASE_BREAKPOINT,
-      label: "Full width",
-      ...(unconditional === undefined
-        ? {}
-        : { bound: unconditional, unconditional: true }),
-    },
-    ...tiers,
-  ];
+  }> =
+    selectable.length === 0
+      ? [{ id: BASE_BREAKPOINT, label: "Full width" }]
+      : selectable.map(tier => ({
+          id: tier.id,
+          label:
+            tier.unconditional === true
+              ? "Full width"
+              : (labels.get(tier.id) ?? tier.id),
+          bound: tier.maxWidth,
+          ...(tier.unconditional === true ? { unconditional: true } : {}),
+        }));
   /*
    * Which option the current width CORRESPONDS to, or -1 for none.
    *

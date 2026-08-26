@@ -54,6 +54,7 @@ import {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   offeredTiers,
+  selectableTiers,
   widthForBreakpoint,
   EditorCommandPalette,
   BuilderShell,
@@ -904,13 +905,19 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * bound the stylesheet no longer has and no control on screen to release it.
    * The only way out would be to close the editor and reopen it.
    *
-   * Compared against `offeredTiers`, which is the same list the switcher builds
-   * its options from, so "a width this control could have set" has one
+   * Compared against `selectableTiers`, which is the same list the switcher
+   * builds its options from, so "a width this control could have set" has one
    * definition rather than two that can disagree.
+   *
+   * It has to be that list and not the bounded tiers alone. The unconditional
+   * tier is offered at the width it applies FROM, which is not any tier's
+   * bound — checked against the bounds this cleared it on the render after it
+   * was chosen, so the canvas returned to filling the region and the one option
+   * that reaches the base tier silently did nothing.
    */
   useEffect(() => {
     if (requestedWidth === undefined) return;
-    const offered = offeredTiers(canvasRender.styleContext.breakpoints);
+    const offered = selectableTiers(canvasRender.styleContext.breakpoints);
     if (offered.some(tier => tier.maxWidth === requestedWidth)) return;
     setRequestedWidth(undefined);
   }, [requestedWidth, canvasRender]);

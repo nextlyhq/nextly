@@ -239,6 +239,34 @@ export function baseWidth(set: BreakpointSet | undefined): number | undefined {
   return widest === undefined ? undefined : widest.maxWidth + 1;
 }
 
+/**
+ * Every tier the breakpoint control can put the canvas at, widest first.
+ *
+ * The bounded tiers AND the unconditional one, which is offered at the width it
+ * applies from. Published as one list because two places need the same answer
+ * and they are not the same code: the control builds its options from it, and
+ * the host clears a requested width that is not on it — a canvas pinned to a
+ * bound the stylesheet no longer has, after an author deletes the tier they
+ * selected, has no control on screen to release it.
+ *
+ * Measured: those two DID disagree. The host compared against the bounded tiers
+ * alone while the control had begun offering the unconditional one, so choosing
+ * base set a width the host cleared on the very next render — the canvas
+ * returned to filling the region, and base stayed uneditable exactly where it
+ * had been. Nothing failed; the option simply did nothing.
+ */
+export function selectableTiers(
+  set: BreakpointSet | undefined
+): Array<{ id: BreakpointId; maxWidth: number; unconditional?: boolean }> {
+  const base = baseWidth(set);
+  return [
+    ...(base === undefined
+      ? []
+      : [{ id: BASE_BREAKPOINT, maxWidth: base, unconditional: true }]),
+    ...offeredTiers(set),
+  ];
+}
+
 export function widthForBreakpoint(
   set: BreakpointSet | undefined,
   id: BreakpointId
