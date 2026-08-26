@@ -27,7 +27,10 @@ import {
   shapeLeaves,
   STYLE_CATALOG,
   styleOrigin,
+  breakpointContexts,
+  type BreakpointAxis,
   type BreakpointId,
+  type BreakpointSet,
   type StyleOrigin,
   type StyleState,
   type StyleSubject,
@@ -377,4 +380,179 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   }
   if (isAuthoredHere(winner, query)) return { kind: "authored", entry: winner };
   return { kind: "inherited", entry: winner, from: winner.origin };
+}
+
+/** Where a value a control is showing was authored, in breakpoint terms. */
+export interface BreakpointSource {
+  /** The breakpoint's own id, as the trace records it. */
+  readonly breakpoint: BreakpointId;
+  /**
+   * What to call it in front of an author.
+   *
+   * The stored definition's label, never the id: an id is an addressing detail
+   * a site is free to spell `bp_2`, and putting it in front of an author at the
+   * one moment the control is explaining itself is the storage layer leaking.
+   * Falls back to the id only when no definition carries that bound, where
+   * there is no honest name to use instead.
+   */
+  readonly label: string;
+  /**
+   * Which axis it belongs to.
+   *
+   * Carried because a breakpoint NAMED without its axis is ambiguous whenever a
+   * site defines both: `breakpointContexts` emits over viewport and container
+   * separately, a container context emits a query even at its widest, and
+   * container is the axis an author is least likely to be holding in mind. A
+   * badge saying "Tablet" when two different tiers could be meant is a label
+   * that reads as precise and is not.
+   */
+  readonly axis: BreakpointAxis;
+}
+
+/**
+ * What a control's breakpoint badge reports, beside the origin dot.
+ *
+ * The dot answers WHICH TIER a value came from — this node, a class, the block
+ * type, the page. This answers the breakpoint DIMENSION of the same question,
+ * which the dot cannot: `StyleOrigin` records only the tier, so "from a class"
+ * and "from this node at desktop" arrive as the same `node`/`class` answer with
+ * nothing to separate them, and they are the two an author most needs told
+ * apart because the next action differs. One is "go and change it there", the
+ * other is "override it here".
+ */
+export type BreakpointBadge =
+  /**
+   * Nothing to say about breakpoints.
+   *
+   * The control is unset, or its value came from another TIER rather than
+   * another breakpoint, or the declaration cannot be attributed to one control
+   * at all. Ambiguous is deliberately included: a badge offering to reset a
+   * declaration two controls could have written would clear one the author was
+   * not looking at.
+   */
+  | { readonly kind: "none" }
+  /**
+   * Authored at the breakpoint being edited, so clearing it here is meaningful.
+   *
+   * `revealed` is what would then show through — the value the cascade falls
+   * back to once this one is gone. Absent when nothing would: the control
+   * becomes unset.
+   *
+   * Named rather than assumed to be the base tier. In a desktop-first model
+   * values flow from wider to narrower, and a chain can hold values at several
+   * breakpoints, so what a reset reveals is whatever the next one holding a
+   * value is.
+   */
+  | { readonly kind: "authored"; readonly revealed?: BreakpointSource }
+  /**
+   * The value on screen was authored by THIS NODE at another breakpoint.
+   *
+   * The case the badge exists for, and the one the origin dot reports as a bare
+   * `node` origin indistinguishable from a value set right here. Editing the
+   * control writes at the edited breakpoint and takes over from this one.
+   */
+  | { readonly kind: "inherited"; readonly source: BreakpointSource };
+
+/**
+ * Resolve a breakpoint id to something an author can be shown.
+ *
+ * The AXIS and the bound come from `breakpointContexts`, which is the reader
+ * that decides what a site's breakpoints are for the sheet; the label is then
+ * matched on the bound as well as the id, because among definitions sharing an
+ * id the compiler keeps one and a lookup by id alone can name the survivor
+ * after a row the sheet discarded.
+ */
+function sourceOf(
+  breakpoint: BreakpointId,
+  breakpoints: BreakpointSet | undefined
+): BreakpointSource | undefined {
+  const context = breakpointContexts(breakpoints).find(
+    candidate => candidate.id === breakpoint
+  );
+  /*
+   * No context, or one that does not say which axis it belongs to, yields no
+   * badge at all.
+   *
+   * `BreakpointContext.axis` is optional, and a badge is a claim about which
+   * axis a value came from — the one thing the research says a breakpoint name
+   * cannot be shown without. Defaulting it to the viewport would put a
+   * confident label on the axis an author is least likely to be holding in
+   * mind, which is the case the axis is carried for.
+   */
+  if (context?.axis === undefined) return undefined;
+  const defs =
+    context.axis === "container"
+      ? breakpoints?.container
+      : breakpoints?.viewport;
+  const named = (defs ?? []).find(
+    def => def?.id === breakpoint && def?.maxWidth === context.maxWidth
+  );
+  return {
+    breakpoint,
+    label: named?.label ?? breakpoint,
+    axis: context.axis,
+  };
+}
+
+/**
+ * The breakpoint badge for one control.
+ *
+ * Derived from {@link styleProvenance} rather than beside it, so there is one
+ * answer to "what is this control showing" and this adds only the breakpoint
+ * reading of it. A second ranking here would be a second cascade, and the two
+ * would disagree first at exactly the boundaries the trace exists to settle.
+ *
+ * What a reset REVEALS is computed by asking the same question again with the
+ * edited breakpoint removed from the live set — the engine's own ranking, run
+ * once more over an already-filtered trace, rather than a hand-rolled "next
+ * wider" that would have to re-derive tier order, both axes and specificity.
+ * Only reached for a control that is authored here, which is the small minority
+ * of them, so the cost is bounded by what an author has actually set.
+ */
+export function breakpointBadge(
+  query: StyleProvenanceQuery,
+  breakpoints: BreakpointSet | undefined
+): BreakpointBadge {
+  const provenance = styleProvenance(query);
+  if (provenance.kind === "unset" || provenance.kind === "ambiguous") {
+    return { kind: "none" };
+  }
+  if (provenance.kind === "inherited") {
+    /*
+     * A different TIER is the dot's answer, not this one. Only a value this
+     * node authored at another breakpoint belongs here — anything from a class,
+     * the block type or the page is reported by the origin dot, and repeating
+     * it as a breakpoint badge would say the same thing twice in two
+     * vocabularies.
+     */
+    if (provenance.from.kind !== "node") return { kind: "none" };
+    if (provenance.entry.breakpoint === query.breakpoint)
+      return { kind: "none" };
+    const source = sourceOf(provenance.entry.breakpoint, breakpoints);
+    return source === undefined
+      ? { kind: "none" }
+      : { kind: "inherited", source };
+  }
+  /*
+   * Authored here. What a reset would reveal is whatever wins once this
+   * breakpoint is out of the live set.
+   *
+   * The edited breakpoint is removed rather than the entry: two declarations
+   * can share a breakpoint, and dropping the winning ENTRY would let the loser
+   * at the same breakpoint stand in for what a reset reveals — while a reset
+   * clears the stored value at that breakpoint, which removes both.
+   */
+  const revealedBy = styleProvenance({
+    ...query,
+    liveBreakpoints: query.liveBreakpoints.filter(
+      live => live !== query.breakpoint
+    ),
+  });
+  if (revealedBy.kind === "unset" || revealedBy.kind === "ambiguous") {
+    return { kind: "authored" };
+  }
+  const source = sourceOf(revealedBy.entry.breakpoint, breakpoints);
+  return source === undefined
+    ? { kind: "authored" }
+    : { kind: "authored", revealed: source };
 }
