@@ -100,6 +100,18 @@ describe("TranslationWorklist", () => {
     expect(screen.queryByRole("button", { name: "English" })).toBeNull();
   });
 
+  it("asks for the first target language when the URL names none", () => {
+    // Arriving from the sidebar there is no `?locale=`. Asking with `undefined`
+    // leaves the query DISABLED, and a disabled query is pending forever — so
+    // the page sat on skeletons until someone clicked the language it had
+    // already highlighted.
+    worklistQuery.mockClear();
+    renderWorklist({ locale: undefined });
+    expect(worklistQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "es" })
+    );
+  });
+
   it("NAMES the collections the server could not consult", () => {
     // The defect this page exists to avoid. A collection left out contributes
     // no rows, and no rows reads as "nothing to do there" — which is
@@ -122,6 +134,24 @@ describe("TranslationWorklist", () => {
     // must appear only when it is true.
     renderWorklist();
     expect(screen.queryByText(/not everything was checked/i)).toBeNull();
+  });
+
+  it("says when it is showing only part of what was found", () => {
+    // A collection with fifty-one outstanding documents returns fifty rows.
+    // Reporting "50 documents" there presents a truncated backlog as a complete
+    // one — the same lie as an unconsulted collection, one level down.
+    worklistQuery.mockReturnValue(
+      settled({ data: { items: [ROW], meta: { ...META, total: 51 } } })
+    );
+    renderWorklist();
+    expect(screen.getByText(/of 51 documents/)).toBeInTheDocument();
+  });
+
+  it("does not qualify the count when it is showing everything", () => {
+    // Asserted on the qualifier itself rather than on the word "Showing",
+    // which is also the state filter's own label a few lines above.
+    renderWorklist();
+    expect(screen.queryByText(/of \d+ documents/)).toBeNull();
   });
 
   it("distinguishes an empty result from a failure", () => {

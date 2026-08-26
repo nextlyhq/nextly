@@ -19,7 +19,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { LOCALE_PARAM } from "@admin/constants/search-params";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParam } from "@admin/lib/navigation";
-import type { WorklistState } from "@admin/types/translations/worklist";
+import { worklistStateFrom } from "@admin/types/translations/worklist";
 
 const STATE_PARAM = "state";
 
@@ -35,21 +35,15 @@ function single(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-/** The states this page will honour from a URL, so a stale link cannot ask for nonsense. */
-const STATES: readonly WorklistState[] = [
-  "missing",
-  "translated",
-  "draft",
-  "published",
-];
-
 export default function TranslationsPage() {
   const params = useSearchParams();
   const localeParam = single(params[LOCALE_PARAM]);
   const stateParam = single(params[STATE_PARAM]);
   // A hand-edited or stale link falls back to the question this page exists
-  // for, rather than erroring at someone who only followed a link.
-  const state = STATES.find(s => s === stateParam) ?? "missing";
+  // for, rather than erroring at someone who only followed a link. Resolved
+  // against the one catalog, so a state added there is honoured here without
+  // this file being touched.
+  const state = worklistStateFrom(stateParam);
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>

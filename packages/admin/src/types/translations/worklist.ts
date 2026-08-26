@@ -9,8 +9,42 @@
  * @module types/translations/worklist
  */
 
-/** The four states a language can be asked about, as the API names them. */
-export type WorklistState = "missing" | "translated" | "draft" | "published";
+/**
+ * Every state a worklist can be asked for, in the order a translator wants
+ * them, and the single source everything else derives from.
+ *
+ * A tuple rather than a union so there is something to READ at runtime. The
+ * page validates a state arriving in the URL, the component renders one tab per
+ * state, and the type constrains both — three questions that were each answered
+ * by their own hand-kept list, so adding or renaming a state could compile
+ * while the URL silently fell back and the tab quietly went missing.
+ *
+ * The LABEL lives here too. It is the language panel's own wording; a worklist
+ * with a vocabulary of its own would describe the same document differently
+ * depending on which screen asked.
+ *
+ * `missing` is first because it is the question this page exists for.
+ *
+ * Kept in step with the server's `TRANSLATION_FILTER_STATES` by the wire
+ * contract rather than by import: `packages/admin` reads resolved DATA across
+ * that boundary and nothing else.
+ */
+export const WORKLIST_STATES = [
+  { value: "missing", label: "Not translated" },
+  { value: "draft", label: "Draft" },
+  { value: "translated", label: "Translated" },
+  { value: "published", label: "Published" },
+] as const;
+
+export type WorklistState = (typeof WORKLIST_STATES)[number]["value"];
+
+/** The state a URL asked for, or the question this page exists for. */
+export function worklistStateFrom(raw: string | undefined): WorklistState {
+  return (
+    WORKLIST_STATES.find(s => s.value === raw)?.value ??
+    WORKLIST_STATES[0].value
+  );
+}
 
 /** One document's outstanding work in one language. */
 export interface TranslationWorkRow {

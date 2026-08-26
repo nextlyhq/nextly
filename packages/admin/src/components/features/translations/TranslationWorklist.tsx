@@ -33,25 +33,11 @@ import { LOCALE_PARAM, TRANSLATE_PARAM } from "@admin/constants/search-params";
 import { useTranslationWorklist } from "@admin/hooks/queries/useTranslationWorklist";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
-import type {
-  TranslationWorkRow,
-  WorklistState,
+import {
+  WORKLIST_STATES,
+  type TranslationWorkRow,
+  type WorklistState,
 } from "@admin/types/translations/worklist";
-
-/**
- * The states offered, in the order a translator wants them.
- *
- * "Not translated" first because it is the question this page exists for. The
- * WORDING is the language panel's own — a worklist with a vocabulary of its own
- * would describe the same document differently depending on which screen asked,
- * which is exactly what this pass removed everywhere else.
- */
-const STATE_TABS: readonly { value: WorklistState; label: string }[] = [
-  { value: "missing", label: "Not translated" },
-  { value: "draft", label: "Draft" },
-  { value: "translated", label: "Translated" },
-  { value: "published", label: "Published" },
-];
 
 /** Where a row goes: the document, in the target language, translating from the source. */
 function rowHref(
@@ -164,7 +150,17 @@ export function TranslationWorklist({
   onStateChange: (state: WorklistState) => void;
 }) {
   const { enabled, locales, defaultLocale } = useLocalization();
-  const query = useTranslationWorklist({ locale, state });
+  // The active language is resolved BEFORE the query, not after it.
+  //
+  // Arriving from the sidebar there is no `?locale=`, so asking with `undefined`
+  // leaves the query disabled — and a disabled query is `isPending` forever, so
+  // the page sat on skeletons until someone clicked the language that was
+  // already highlighted. The component knew which language it meant the whole
+  // time; it simply worked it out one line too late.
+  const source = defaultLocale;
+  const targets = locales.filter(l => l.code !== source);
+  const active = locale ?? targets[0]?.code;
+  const query = useTranslationWorklist({ locale: active, state });
 
   if (!enabled) {
     // A worklist on a site with one language is a list that can never have a
@@ -180,13 +176,8 @@ export function TranslationWorklist({
     );
   }
 
-  // The source is the app default: it is what the translated languages are
-  // translations OF, and it is the one the editor will show alongside.
-  const source = defaultLocale;
-  const targets = locales.filter(l => l.code !== source);
-  const active = locale ?? targets[0]?.code;
   const stateLabel =
-    STATE_TABS.find(t => t.value === state)?.label ?? "outstanding";
+    WORKLIST_STATES.find(t => t.value === state)?.label ?? "outstanding";
   const notConsulted = query.data?.meta.notConsulted ?? [];
 
   return (
@@ -213,7 +204,7 @@ export function TranslationWorklist({
         <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Showing
         </span>
-        {STATE_TABS.map(tab => (
+        {WORKLIST_STATES.map(tab => (
           <Button
             key={tab.value}
             type="button"
@@ -262,9 +253,23 @@ export function TranslationWorklist({
         )}
       </div>
 
+      {/* Says WHICH of the two it is showing. A truncated backlog presented as
+          a complete one is the same lie as an unconsulted collection, one level
+          down — so when more was found than fits, the count says so rather than
+          reporting the slice as the whole. */}
       {query.data !== undefined && query.data.items.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          <Badge variant="default">{query.data.items.length}</Badge> documents
+          {query.data.meta.total > query.data.items.length ? (
+            <>
+              Showing <Badge variant="default">{query.data.items.length}</Badge>{" "}
+              of {query.data.meta.total} documents
+            </>
+          ) : (
+            <>
+              <Badge variant="default">{query.data.items.length}</Badge>{" "}
+              documents
+            </>
+          )}
         </p>
       )}
     </div>
