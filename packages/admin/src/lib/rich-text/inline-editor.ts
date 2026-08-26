@@ -31,6 +31,19 @@
  * which is the second declarer. Handed an
  * attachment instead, it never names a Lexical type and cannot become one.
  *
+ * ## What it refuses, and why refusing is the safe answer
+ *
+ * This editor registers one node set. A stored passage may contain a node it
+ * does not know — the engine accepts unknown types deliberately, and the
+ * renderer draws their children — and `parseEditorState` answers that with an
+ * EMPTY root rather than an exception. It may also contain a decorator node,
+ * whose visible output comes from `decorate()` and is mounted by the React
+ * plugin this raw editor does not use.
+ *
+ * Either way the editor would hold less than the document does, and the first
+ * keystroke would write that back. So `attach` answers `null` and the passage
+ * stays exactly as the page rendered it.
+ *
  * ## Values cross this boundary as `unknown`
  *
  * Deliberately. The stored shape is defined once, in the blocks engine, and
@@ -41,6 +54,8 @@
  *
  * @module lib/rich-text/inline-editor
  */
+
+import type { EditorState, LexicalNode } from "lexical";
 
 /** One consumer's hold on the shared editor, for as long as it owns it. */
 export interface InlineRichTextSession {
@@ -72,11 +87,15 @@ export interface InlineRichTextEditor {
    * Supersedes any previous attachment: the element it held is released and
    * restored first, so an author moving between passages never leaves two live.
    *
+   * `null` when this passage must NOT be edited here — see the module for the
+   * two cases. Refusing leaves the passage as the page rendered it, which is
+   * the only outcome that cannot lose an author's work.
+   *
    * @param element - the element to edit inside
    * @param value - the stored passage, or anything unusable for an empty one
-   * @returns the caller's hold on the editor for as long as it owns it
+   * @returns the caller's hold on the editor, or `null` when it refuses
    */
-  attach(element: HTMLElement, value: unknown): InlineRichTextSession;
+  attach(element: HTMLElement, value: unknown): InlineRichTextSession | null;
 }
 
 /**
@@ -179,6 +198,16 @@ interface RootMarks {
   readonly contentEditable: string | null;
   readonly style: string | null;
   readonly lexical: string | null;
+  /**
+   * The markup the element arrived with.
+   *
+   * `setRootElement` REPLACES the root's children with the editor's own
+   * reconciled output, and passing `null` clears them rather than putting the
+   * originals back. Restoring only attributes would leave a caller that edited
+   * nothing holding an empty element — and this module is what promises to give
+   * it back as it was received.
+   */
+  readonly markup: string;
 }
 
 function markRoot(element: HTMLElement): RootMarks {
@@ -186,6 +215,7 @@ function markRoot(element: HTMLElement): RootMarks {
     contentEditable: element.getAttribute("contenteditable"),
     style: element.getAttribute("style"),
     lexical: element.getAttribute("data-lexical-editor"),
+    markup: element.innerHTML,
   };
   element.setAttribute("contenteditable", "true");
   return marks;
@@ -198,29 +228,70 @@ function restore(element: HTMLElement, name: string, was: string | null): void {
 }
 
 function unmarkRoot(element: HTMLElement, marks: RootMarks): void {
+  element.innerHTML = marks.markup;
   restore(element, "contenteditable", marks.contentEditable);
   restore(element, "style", marks.style);
   restore(element, "data-lexical-editor", marks.lexical);
 }
 
 async function build(): Promise<InlineRichTextEditor> {
-  const [{ createEditor }, { registerRichText }, history, kit] =
-    await Promise.all([
-      import("lexical"),
-      import("@lexical/rich-text"),
-      import("@lexical/history"),
-      import("@admin/components/features/entries/fields/special/rich-text-kit"),
-    ]);
+  const [
+    { createEditor, $isDecoratorNode, $isElementNode, $getRoot },
+    { registerRichText },
+    history,
+    kit,
+  ] = await Promise.all([
+    import("lexical"),
+    import("@lexical/rich-text"),
+    import("@lexical/history"),
+    import("@admin/components/features/entries/fields/special/rich-text-kit"),
+  ]);
 
   const { nodes, theme } = kit.richTextEditorKit();
+  /**
+   * Whether the editor reported a problem since this was last cleared.
+   *
+   * `onError` is how Lexical reports a node type it does not recognise, and it
+   * does NOT throw — `parseEditorState` returns an EMPTY root instead. Logging
+   * and continuing would install that empty state as the passage, so the first
+   * keystroke commits it and the author's words are gone with nothing raised.
+   *
+   * Recorded here rather than inferred from the parsed result, because an empty
+   * root is also what an empty passage legitimately parses to.
+   */
+  /**
+   * Whether a parsed passage contains a node whose output this editor cannot
+   * mount.
+   *
+   * Asked of Lexical's own predicate rather than a list of type names kept
+   * here: the registry is shared with the CMS field and gains nodes without
+   * this module hearing about it, and a list would answer "no decorators" for
+   * the one that was added last.
+   */
+  const holdsDecorator = (state: EditorState): boolean =>
+    state.read(() => {
+      const stack: LexicalNode[] = [$getRoot()];
+      while (stack.length > 0) {
+        const node = stack.pop();
+        if (node === undefined) continue;
+        if ($isDecoratorNode(node)) return true;
+        if ($isElementNode(node))
+          for (const child of node.getChildren()) stack.push(child);
+      }
+      return false;
+    });
+
+  let reportedError = false;
+
   const editor = createEditor({
     namespace: "nextly-canvas-inline",
     nodes: [...nodes],
     theme,
-    // Logged rather than thrown, matching the field editor. An exception raised
-    // inside an update would otherwise take down the canvas around the author
-    // rather than the one passage that produced it.
+    // Recorded and logged rather than thrown, matching the field editor. An
+    // exception raised inside an update would otherwise take down the canvas
+    // around the author rather than the one passage that produced it.
     onError: (error: Error) => {
+      reportedError = true;
       console.error("[inline-rich-text] Lexical error:", error);
     },
   });
@@ -250,10 +321,29 @@ async function build(): Promise<InlineRichTextEditor> {
       // editor that has moved on.
       detachCurrent();
 
+      /*
+       * Parsed BEFORE anything is touched, so a passage this editor cannot
+       * represent leaves the element exactly as the page rendered it.
+       *
+       * Two things can go wrong and both end the same way — an editor holding
+       * less than the document does, which the next keystroke writes back:
+       *
+       * - a node type this registry does not know. The engine accepts unknown
+       *   nodes deliberately and the renderer draws their children, so a
+       *   passage can legitimately contain one; this editor cannot.
+       * - a decorator node — an image, a gallery, a video, a button. Their
+       *   visible output comes from `decorate()` and is mounted by the React
+       *   plugin this raw editor does not use, so they would vanish from the
+       *   canvas for the duration of the edit and could not be selected.
+       */
+      reportedError = false;
+      const parsed = editor.parseEditorState(loadable(value));
+      if (reportedError || holdsDecorator(parsed)) return null;
+
       const token = {};
       owner = token;
       const marks = markRoot(element);
-      editor.setEditorState(editor.parseEditorState(loadable(value)));
+      editor.setEditorState(parsed);
       editor.setRootElement(element);
       const stopRichText = registerRichText(editor);
       const stopHistory = history.registerHistory(

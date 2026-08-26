@@ -147,9 +147,17 @@ export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
  * tear down the live one.
  *
  * The element is made editable on attach and given back exactly as it arrived
- * on detach — `setRootElement` neither sets `contentEditable` nor undoes the
- * attribute and inline styles it writes, and a consumer should not have to
- * know that.
+ * on detach, markup included — `setRootElement` neither sets `contentEditable`
+ * nor undoes the attribute, inline styles and replaced children it writes, and
+ * a consumer should not have to know that.
+ *
+ * `attach` answers `null` when it REFUSES a passage, and a caller must handle
+ * that rather than treating it as a failure to report. Two shapes are refused,
+ * both because the editor would otherwise hold less than the document does and
+ * the next keystroke would write that back: a node type this registry does not
+ * know, and a decorator node whose visible output comes from `decorate()` and
+ * is mounted by a React plugin this raw editor does not use. Leaving the
+ * passage as the page rendered it is the only outcome that cannot lose work.
  *
  * Its undo history is created at `attach` and given away at `detach`, so it
  * covers the open passage alone. A surface with its own history — the page
@@ -167,6 +175,7 @@ export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
  * ```ts
  * const editor = await loadInlineRichTextEditor();
  * const session = editor.attach(element, node.props.content);
+ * if (session === null) return; // this passage is not editable here
  * session.focus();
  * // ...the author types...
  * const next = session.read();

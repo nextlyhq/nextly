@@ -421,13 +421,34 @@ function kidsOf(node: RichTextNode): readonly RichTextNode[] {
 }
 
 /**
+ * How deep this partition will descend before it stops rearranging.
+ *
+ * The walk REBUILDS the tree as it goes — each level returns wrappers holding
+ * the children that stayed and the children that moved — so unlike the scans it
+ * cannot be flattened into a stack without changing what it produces. It is
+ * therefore bounded instead.
+ *
+ * Beyond the bound the node is kept where it is rather than partitioned. That
+ * yields markup this function would otherwise have corrected, in a passage
+ * nested a hundred wrappers deep inside one heading — a shape no editor
+ * produces and no author writes. The alternative is `RangeError` thrown out of
+ * the render, which takes the page route down rather than one passage's layout,
+ * and nothing bounds this depth from outside: the document limits count block
+ * nodes, not the tree inside a prop.
+ *
+ * A hundred is far above any authored nesting and far below the call stack.
+ */
+const MAX_PARTITION_DEPTH = 100;
+
+/**
  * Children split into what a phrasing-only container keeps and what follows it.
  *
  * See {@link PhrasingOnly} for why each branch answers the way it does.
  */
 function partitionPhrasing(
   nodes: readonly RichTextNode[],
-  permits: ReadonlySet<string>
+  permits: ReadonlySet<string>,
+  depth = 0
 ): { keeps: RichTextNode[]; moves: RichTextNode[] } {
   const keeps: RichTextNode[] = [];
   const moves: RichTextNode[] = [];
@@ -437,17 +458,25 @@ function partitionPhrasing(
     } else if (permits.has(child.type)) {
       // Kept, but its OWN block content still may not live here. Moved out
       // unwrapped: a second copy of this heading would be a second outline entry.
-      const inner = partitionPhrasing(kidsOf(child), PERMITS_NOTHING);
+      const inner = partitionPhrasing(
+        kidsOf(child),
+        PERMITS_NOTHING,
+        depth + 1
+      );
       keeps.push({ ...child, children: inner.keeps });
       moves.push(...inner.moves);
     } else if (BLOCK_LEVEL.has(child.type)) {
       moves.push(child);
-    } else if (!holdsBlockContent(child.children)) {
+    } else if (
+      depth >= MAX_PARTITION_DEPTH ||
+      !holdsBlockContent(child.children)
+    ) {
+      // Kept whole past the bound: rearranging it is what would recurse.
       keeps.push(child);
     } else {
       // An inline wrapper holding both. Split it, keeping the wrapper on each
       // side so the words stay linked and the media stays linked.
-      const inner = partitionPhrasing(kidsOf(child), permits);
+      const inner = partitionPhrasing(kidsOf(child), permits, depth + 1);
       if (inner.keeps.length > 0)
         keeps.push({ ...child, children: inner.keeps });
       if (inner.moves.length > 0)

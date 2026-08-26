@@ -73,7 +73,8 @@ interface EditorSession {
 
 /** The facade's editor, as this module uses it. */
 interface LoadedEditor {
-  attach(element: HTMLElement, value: unknown): EditorSession;
+  /** `null` when the editor refuses this passage — see the facade for when. */
+  attach(element: HTMLElement, value: unknown): EditorSession | null;
 }
 
 /**
@@ -111,8 +112,6 @@ export function useInlineRichText(
   const mounted = useRef<{
     session: EditorSession;
     element: HTMLElement;
-    /** The markup React rendered, restored on the way out. */
-    markup: string;
     /** The editor's own reading of the passage when it opened. */
     baseline: unknown;
   } | null>(null);
@@ -126,8 +125,10 @@ export function useInlineRichText(
     // Read BEFORE detaching: a detached session answers nothing, deliberately,
     // so that a superseded one cannot read the live passage.
     const next = live.session.read();
+    // The element's markup and attributes are the editor's to put back: it is
+    // what changed them, and it is what a plugin using the facade directly
+    // relies on. Only this module's own mark is this module's to remove.
     live.session.detach();
-    live.element.innerHTML = live.markup;
     live.element.removeAttribute(EDITING_ATTRIBUTE);
     return next;
   }, []);
@@ -189,7 +190,6 @@ export function useInlineRichText(
     }
 
     let cancelled = false;
-    const markup = element.innerHTML;
     const targets = richInlineTargets(
       editorRef.current.document,
       editing.nodeId
@@ -202,12 +202,21 @@ export function useInlineRichText(
         // would put a caret into a passage they are no longer editing.
         if (cancelled) return;
         const session = live.attach(element, value);
+        if (session === null) {
+          /*
+           * The editor refused this passage — it holds a node this editor
+           * cannot represent, and loading it would hand back less than the
+           * document has. Dropping the edit leaves the passage as the page
+           * rendered it, which is the only outcome that cannot lose the words.
+           */
+          setEditing(null);
+          return;
+        }
         element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
         session.focus();
         mounted.current = {
           session,
           element,
-          markup,
           // Taken AFTER the editor loaded the value, so it is the editor's own
           // reading of an untouched passage — which is what makes an unchanged
           // edit compare equal rather than differing by normalisation alone.
@@ -269,7 +278,6 @@ export function useInlineRichText(
       if (live !== null) {
         mounted.current = null;
         live.session.detach();
-        live.element.innerHTML = live.markup;
         live.element.removeAttribute(EDITING_ATTRIBUTE);
       }
       element.removeEventListener("keydown", onKeyDown);

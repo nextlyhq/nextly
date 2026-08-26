@@ -2234,6 +2234,34 @@ describe("a passage nested far deeper than any document limit", () => {
     return doc([{ type: "paragraph", children: [node] }]);
   }
 
+  /**
+   * The same chain, ending in a PARAGRAPH inside a HEADING.
+   *
+   * A heading may hold only phrasing content, so block content beneath it takes
+   * a different route through the renderer — one that rebuilds the tree as it
+   * splits it. A fixture ending in TEXT never reaches that route at all, which
+   * is why the case below passed while this one still overflowed.
+   */
+  function nestedUnderHeading(levels: number): RichTextValue {
+    let node: RichTextValue["root"]["children"][number] = {
+      type: "paragraph",
+      children: [{ type: "text", text: "MARKER" }],
+    };
+    for (let i = 0; i < levels; i++)
+      node = { type: "wrapper", children: [node] };
+    return doc([{ type: "heading", tag: "h2", children: [node] }]);
+  }
+
+  it("renders block content buried under a heading", () => {
+    // The route that rearranges rather than merely scans. Measured: 5,000
+    // levels threw `RangeError` here after the scans were already iterative.
+    const html = renderToStaticMarkup(
+      <RichText value={nestedUnderHeading(5000)} />
+    );
+
+    expect(html).toContain("MARKER");
+  });
+
   it("renders instead of exhausting the call stack", () => {
     /*
      * The document limits count BLOCK nodes and cap total bytes; neither bounds
