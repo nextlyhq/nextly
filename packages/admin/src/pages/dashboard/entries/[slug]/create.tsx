@@ -19,6 +19,7 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -80,7 +81,7 @@ function CreateEntryBreadcrumbs({
  */
 function CreateEntryPageSkeleton() {
   return (
-    <PageContainer width="form">
+    <PageContainer width={CONTENT_PAGE_MEASURE}>
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading collection...
@@ -187,10 +188,11 @@ export default function CreateEntryPage({
   /**
    * The page's measure, on every branch.
    *
-   * `form` because an entry is a labelled form: an unbounded panel stretches a
-   * short text input across the whole of it. These early-return branches never
-   * reach `MeasuredPageFrame`, which carries the same reasoning for the branch
-   * that does, so they state it here rather than inheriting it.
+   * `CONTENT_PAGE_MEASURE` rather than a literal, and not the settings measure:
+   * an entry is a document rather than a short column of labelled controls, and
+   * it shares its column with the document rail. These early-return branches
+   * never reach `MeasuredPageFrame`, so they read the same constant it does
+   * rather than restating a width that could disagree with it.
    *
    * Every branch carries it — loading, each error state, and the editor —
    * because they are the SAME page at different moments. Measuring only the
@@ -202,7 +204,7 @@ export default function CreateEntryPage({
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             No collection was specified in the URL.
@@ -225,7 +227,7 @@ export default function CreateEntryPage({
   // Error state
   if (error) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load collection:{" "}
@@ -244,7 +246,7 @@ export default function CreateEntryPage({
   // Collection not found
   if (!collection) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Collection &quot;{slug}&quot; not found.

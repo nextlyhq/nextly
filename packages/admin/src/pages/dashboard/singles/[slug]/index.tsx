@@ -23,6 +23,7 @@ import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
+import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -57,7 +58,7 @@ interface SingleEditPageProps {
  */
 function SingleEditPageSkeleton() {
   return (
-    <PageContainer width="form">
+    <PageContainer width={CONTENT_PAGE_MEASURE}>
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading...
@@ -213,10 +214,10 @@ export default function SingleEditPage({
   /**
    * The page's measure, on every branch.
    *
-   * `form` because a Single is a labelled form, and because it now shares the
-   * translation pane with entries: the pane stops padding where the editor goes
-   * edge-to-edge, so a Single rendering into an UNMEASURED page would be the
-   * one consumer still expecting that padding to be there.
+   * `CONTENT_PAGE_MEASURE` rather than a literal: a Single is a document, and
+   * it shares the translation pane with entries — the pane stops padding where
+   * the editor goes edge-to-edge, so a Single rendering into an UNMEASURED page
+   * would be the one consumer still expecting that padding to be there.
    *
    * Every branch carries it — loading, each error state, and the editor —
    * because they are the SAME page at different moments. Measuring only the
@@ -227,7 +228,7 @@ export default function SingleEditPage({
   // Missing slug error state
   if (!slug) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             No Single was specified in the URL.
@@ -250,7 +251,7 @@ export default function SingleEditPage({
   // Error state
   if (error) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load Single:{" "}
@@ -269,7 +270,7 @@ export default function SingleEditPage({
   // Schema not found
   if (!schema) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Single &quot;{slug}&quot; not found.
@@ -287,7 +288,7 @@ export default function SingleEditPage({
   // Document not found (should auto-create, but handle edge case)
   if (!document) {
     return (
-      <PageContainer width="form">
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load document data for Single &quot;{slug}&quot;.
@@ -327,8 +328,8 @@ export default function SingleEditPage({
       {/* Through the shared frame rather than a bare container: translation
           mode asks to suppress `pageFrame` from inside the form, and only this
           component reacts to that. A page that declared its own measure here
-          would keep the two-pane translation surface inside a 56rem column
-          while the entry editor beside it took the whole panel. */}
+          would keep the two-pane translation surface inside the content
+          measure while the entry editor beside it took the whole panel. */}
       <MeasuredPageFrame>
         <SingleForm
           // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
