@@ -320,7 +320,14 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // that installs the plugin is asking for both.
       registerClassUsageMaintenance({
         ctx,
-        indexCollection: CLASS_USAGE_INDEX_SLUG,
+        // The RESOLVED slug, not the declared one. An integrator may
+        // `.rename({ nx_pb_class_usage: "..." })`, and the schema then creates
+        // only the renamed collection — so a hook holding the literal would
+        // write every row to a table that does not exist, and would also fail
+        // to recognise its own writes and recurse.
+        indexCollection:
+          ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
+          CLASS_USAGE_INDEX_SLUG,
         // The registry record, projected. `getCollection` is declared to
         // return a shape that promises none of the properties this question
         // reads, while returning an object that carries all of them.
@@ -331,7 +338,11 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // renderer no longer applies.
         locales: () =>
           ctx.config.localization?.locales.map(locale => locale.code) ?? [],
-        limits: () => DEFAULT_LIMITS,
+        // The SAME bounds the pages collection and the renderer use. Deriving
+        // the index under different ones records a different document than the
+        // page serves: raised bounds leave classes on the extra nodes
+        // unindexed, so a class the page renders reads as unused.
+        limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
     },
     contributes: {

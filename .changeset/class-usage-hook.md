@@ -74,6 +74,27 @@ the index table and the thing that maintains it together. A table with no mainte
 nothing while reporting success, which is the state in which every class on a site reads as
 unused.
 
+A SINGLE is skipped. Core namespaces a Single's hooks as `single:<slug>`, and a wildcard
+registration receives those too - including the page builder's own site-style Single, so every
+style save reached this handler and was looked up as a collection that does not exist. The
+index models Single subjects, but a plugin has no supported way to READ a Single's document:
+the one available path creates the row when it is absent, so reconciling Singles would
+materialise every Single in the app as a side effect of asking about them.
+
+Rows are derived under the limits the HOST configured rather than the engine defaults. A host
+that raises them is telling the renderer to draw more nodes, and an index derived under the
+defaults would leave the classes on those nodes unrecorded - so a class the page renders reads
+as unused.
+
+The index collection is resolved through the plugin's own identity rather than its declared
+slug. An integrator may rename it, and the schema then creates only the renamed collection: a
+hook holding the literal would write every row to a table that does not exist, and would not
+recognise its own writes, so the first maintained save would recurse.
+
+The store now OWNS its collection instead of being told at every call. Naming the slug per call
+meant four literals inside the maintenance module alone, each of which would have kept writing
+to the declared name on a renamed installation.
+
 Deletion is deliberately absent. Removing a document's rows is a different reconciliation -
 there is no document left to derive from - and it is built separately rather than bolted on
 here.

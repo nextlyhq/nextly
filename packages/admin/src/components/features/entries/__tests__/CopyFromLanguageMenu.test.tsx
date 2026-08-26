@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen, waitFor } from "@admin/__tests__/utils";
 
+import { CopyFromLanguageDialog } from "../CopyFromLanguageDialog";
 import {
   CopyFromLanguageMenu,
   pickLocalizedValues,
@@ -12,6 +13,7 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "../EntryLocaleContext";
+import { useCopyFromLanguage } from "../useCopyFromLanguage";
 
 const { useBranding, toast } = vi.hoisted(() => ({
   useBranding: vi.fn(),
@@ -78,10 +80,32 @@ function Harness({
   return (
     <FormProvider {...form}>
       <EntryLocaleProvider value={ctx}>
-        <CopyFromLanguageMenu />
+        <Trigger />
         <Values form={form} />
       </EntryLocaleProvider>
     </FormProvider>
+  );
+}
+
+/**
+ * The pairing every real surface uses: ONE `useCopyFromLanguage`, a trigger and
+ * the confirm dialog reading the same state. Mounted here rather than mocked
+ * because the hook is what these tests are about — the menu is only the shape
+ * the action is offered in, and a second hook instance behind the trigger would
+ * open a second, unrelated confirm step.
+ */
+function Trigger() {
+  const copy = useCopyFromLanguage();
+  return (
+    <>
+      <CopyFromLanguageMenu
+        copy={copy}
+        verb="Replace"
+        targetLabel="German"
+        disabled={false}
+      />
+      <CopyFromLanguageDialog copy={copy} />
+    </>
   );
 }
 
@@ -131,7 +155,7 @@ describe("CopyFromLanguageMenu", () => {
     render(<Harness ctx={SINGLE_CTX} />);
     expect(
       await screen.findByRole("button", {
-        name: /copy content from another language/i,
+        name: /replace german from another language/i,
       })
     ).toBeInTheDocument();
   });
@@ -141,7 +165,7 @@ describe("CopyFromLanguageMenu", () => {
     render(<Harness />);
     await userEvent.click(
       screen.getByRole("button", {
-        name: /copy content from another language/i,
+        name: /replace german from another language/i,
       })
     );
     // Active locale (de) excluded; English offered.
@@ -188,7 +212,7 @@ describe("CopyFromLanguageMenu", () => {
 
     await userEvent.click(
       screen.getByRole("button", {
-        name: /copy content from another language/i,
+        name: /replace german from another language/i,
       })
     );
     await userEvent.click(

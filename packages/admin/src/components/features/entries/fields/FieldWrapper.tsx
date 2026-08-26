@@ -16,6 +16,7 @@ import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import type { ReactNode } from "react";
 import { useId } from "react";
 
+import { fieldLabel } from "@admin/lib/field-label";
 import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
@@ -233,8 +234,10 @@ export function FieldWrapper({
       style?: React.CSSProperties;
     };
   };
-  const label =
-    fieldWithCommonProps.label || (fieldName ? formatFieldName(fieldName) : "");
+  const label = fieldLabel({
+    label: fieldWithCommonProps.label,
+    name: fieldName,
+  });
   const isRequired = fieldWithCommonProps.required ?? false;
   const description = fieldWithCommonProps.admin?.description;
   const width = fieldWithCommonProps.admin?.width || "100%";
@@ -427,7 +430,15 @@ export function FieldWrapper({
       {/* Language status sits ABOVE the label, not inside it. Anything inside a
           <label> joins the field's accessible name, so rendering the badge there
           made a screen reader announce the field as "Title Shared" — describing
-          the field with a word that is not part of what it is called. */}
+          the field with a word that is not part of what it is called.
+
+          Sitting above its own label was then read as a grouping defect — that
+          the badge lands nearer the previous field than the one it describes.
+          Measured in the running admin, it does not: 8px to its own label
+          against 24px to the field above it, so proximity already agrees with
+          meaning and the uniform `gap-2` is doing the right thing. Recorded
+          because this is the second time the placement has been proposed for
+          "fixing", and the a11y reason above rules out the obvious move. */}
       {sharedHint}
 
       {isGroup ? (
@@ -506,30 +517,6 @@ export function FieldWrapper({
 // ============================================================
 // Helpers
 // ============================================================
-
-/**
- * Formats a field name into a human-readable label.
- * Converts camelCase and snake_case to Title Case.
- *
- * @example
- * formatFieldName('firstName') // 'First Name'
- * formatFieldName('user_email') // 'User Email'
- * formatFieldName('isActive') // 'Is Active'
- */
-function formatFieldName(name: string): string {
-  if (!name) return "";
-
-  return (
-    name
-      // Insert space before capitals (camelCase)
-      .replace(/([a-z])([A-Z])/g, "$1 $2")
-      // Replace underscores and hyphens with spaces
-      .replace(/[_-]/g, " ")
-      // Capitalize first letter of each word
-      .replace(/\b\w/g, char => char.toUpperCase())
-      .trim()
-  );
-}
 
 // ============================================================
 // Exports

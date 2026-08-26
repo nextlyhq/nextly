@@ -42,6 +42,7 @@ import {
   type BlockDocument,
   type BreakpointSet,
   type SiteTokenSet,
+  type BreakpointId,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { registrySlotSource } from "@nextlyhq/builder";
@@ -54,6 +55,7 @@ import {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   offeredTiers,
+  selectableTiers,
   widthForBreakpoint,
   EditorCommandPalette,
   BuilderShell,
@@ -835,7 +837,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * the box is in a narrower one, which is the disagreement between what you
    * see and what you edit that this control exists to remove.
    */
-  const [requestedWidth, setRequestedWidth] = useState<number | undefined>(
+  const [requestedTier, setRequestedTier] = useState<BreakpointId | undefined>(
     undefined
   );
   const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(
@@ -904,16 +906,23 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * bound the stylesheet no longer has and no control on screen to release it.
    * The only way out would be to close the editor and reopen it.
    *
-   * Compared against `offeredTiers`, which is the same list the switcher builds
-   * its options from, so "a width this control could have set" has one
+   * Compared against `selectableTiers`, which is the same list the switcher
+   * builds its options from, so "a width this control could have set" has one
    * definition rather than two that can disagree.
+   *
+   * It has to be that list and not the bounded tiers alone. The unconditional
+   * tier is offered at the width it applies FROM, which is not any tier's
+   * bound — checked against the bounds this cleared it on the render after it
+   * was chosen, so the canvas returned to filling the region and the one option
+   * that reaches the base tier silently did nothing.
    */
-  useEffect(() => {
-    if (requestedWidth === undefined) return;
-    const offered = offeredTiers(canvasRender.styleContext.breakpoints);
-    if (offered.some(tier => tier.maxWidth === requestedWidth)) return;
-    setRequestedWidth(undefined);
-  }, [requestedWidth, canvasRender]);
+  const requestedWidth =
+    requestedTier === undefined
+      ? undefined
+      : widthForBreakpoint(
+          canvasRender.styleContext.breakpoints,
+          requestedTier
+        );
 
   /*
    * The box's own inputs, as one object.
@@ -1097,7 +1106,29 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               breakpoints={canvasRender.styleContext.breakpoints}
               width={requestedWidth}
               appliedWidth={measuredWidth}
-              onSelect={setRequestedWidth}
+              /*
+               * Stored as the TIER, not as the width it emitted.
+               *
+               * A width identifies an option only until the site's bounds move.
+               * Editing the widest breakpoint changes the width the
+               * unconditional tier applies from, and the number the author's
+               * choice produced is then nobody's — so the canvas was released
+               * and the editor returned to the bounded tier while the option
+               * they had chosen still existed.
+               *
+               * The lookup is unambiguous because `selectableTiers` collapses
+               * tiers sharing a bound to the one the browser paints, which is
+               * the same reason the switcher offers one radio for them.
+               */
+              onSelect={width => {
+                setRequestedTier(
+                  width === undefined
+                    ? undefined
+                    : selectableTiers(
+                        canvasRender.styleContext.breakpoints
+                      ).find(tier => tier.maxWidth === width)?.id
+                );
+              }}
               status={siteStyleStatus(siteStylePending, siteStyleError)}
             />
           </>
@@ -1141,14 +1172,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
              * number nothing responds to — which is also what the unconditional
              * tier means.
              */
-            onJumpToBreakpoint={target => {
-              setRequestedWidth(
-                widthForBreakpoint(
-                  canvasRender.styleContext.breakpoints,
-                  target
-                )
-              );
-            }}
+            // Already a TIER, so it is stored directly rather than converted
+            // to a width and back.
+            onJumpToBreakpoint={setRequestedTier}
             breakpoint={editedBreakpoint}
             previewContainer={canvasPreviewContainer}
             liveBreakpoints={liveBreakpoints}

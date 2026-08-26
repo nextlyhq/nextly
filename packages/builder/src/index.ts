@@ -132,6 +132,7 @@ export type { BuilderShellProps } from "./builder-shell";
  * bounds handed to the panel library, and the preference port.
  */
 export {
+  EMPTY_ELEMENTS_ATTRIBUTE,
   LEFT_PANELS,
   MIN_CANVAS_WIDTH,
   MIN_SHELL_WIDTH,

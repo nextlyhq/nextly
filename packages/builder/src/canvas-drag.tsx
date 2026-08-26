@@ -61,6 +61,7 @@ import type { EditorState } from "./editor-state";
 import type { Point, Rect } from "./geometry";
 import {
   canvasContentPoint,
+  canvasPaintedPoint,
   canvasContentRect,
   containerEdges,
   scrollableAncestor,
@@ -137,6 +138,21 @@ export interface UseCanvasDragOptions {
 interface Gesture {
   readonly nodeId: string;
   readonly origin: Point;
+  /**
+   * Where the press landed in CLIENT pixels.
+   *
+   * Kept beside {@link origin} rather than derived from it, because the two
+   * answer different questions and a scaled canvas separates them. `origin` is
+   * in the canvas's own content coordinates, which is what a hit test needs;
+   * the thresholds below are about how far a HAND moved, which is a fact about
+   * the person and not about the document's coordinate system.
+   *
+   * Measured in content pixels they shrink with the canvas: at a canvas painted
+   * to 71%, the 4px that separates a click from a drag needs only 2.85px of
+   * real movement, so ordinary click jitter starts committing moves — and the
+   * target hysteresis loosens by the same factor at the same time.
+   */
+  readonly originClient: Point;
   readonly regions: readonly DropRegion[];
   readonly rects: RectSource;
   readonly forbiddenParents: ReadonlySet<string>;
@@ -266,6 +282,7 @@ export function useCanvasDrag({
       gesture.current = {
         nodeId,
         origin: canvasContentPoint(event.clientX, event.clientY, root),
+        originClient: { x: event.clientX, y: event.clientY },
         regions: collectRegions(current.document, latest.current.slots, rects),
         rects,
         forbiddenParents: movingSubtree(current.document, nodeId),
@@ -330,7 +347,28 @@ export function useCanvasDrag({
       drag.switchState = nextTargetSwitchState(
         drag.switchState,
         candidate === null ? null : candidate.id,
-        pointer,
+        /*
+         * PAINTED pixels relative to the canvas, which is the only space that
+         * answers both halves of this rule.
+         *
+         * The threshold is how far a HAND must move to overrule a committed
+         * target, so it cannot be measured in canvas coordinates: those are
+         * divided by the scale, and the hysteresis would loosen as the canvas
+         * zoomed out. But it cannot be measured in client coordinates either —
+         * autoscroll moves the page under a STATIONARY pointer, so the distance
+         * from the anchor would stay zero however far the page travelled, and
+         * the committed target would never advance off a position that has
+         * scrolled away.
+         *
+         * Painted coordinates are undivided, so the threshold stays about the
+         * hand, and they move with the scroll because the root's own rectangle
+         * does.
+         *
+         * Read from the GESTURE rather than from an event, because this is
+         * shared with the autoscroll frame, which has no event of its own — and
+         * both callers keep these current before they aim.
+         */
+        canvasPaintedPoint(drag.clientX, drag.clientY, drag.root),
         switchPx
       );
 
@@ -405,9 +443,12 @@ export function useCanvasDrag({
       drag.clientY = event.clientY;
 
       if (!drag.active) {
+        // CLIENT pixels: the threshold separates a click from an intent to
+        // move, which is a property of the hand rather than of the canvas's
+        // scale. Measured in content pixels it shrinks with the canvas.
         const travelled = Math.hypot(
-          pointer.x - drag.origin.x,
-          pointer.y - drag.origin.y
+          event.clientX - drag.originClient.x,
+          event.clientY - drag.originClient.y
         );
         if (travelled < activationPx) return;
         drag.active = true;

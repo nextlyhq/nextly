@@ -78,7 +78,17 @@ const AS_THE_SYSTEM = { overrideAccess: true } as const;
  * that has never been written to.
  */
 export function classUsageIndexStore(
-  nextly: ClassUsageDirectApi
+  nextly: ClassUsageDirectApi,
+  /**
+   * The index collection's RESOLVED slug.
+   *
+   * Passed in rather than read from the module constant, because an integrator
+   * may rename a plugin's collections and the schema then creates only the
+   * renamed one. A store holding the declared name would issue every write
+   * against a collection that does not exist, and each save would report a
+   * maintenance failure on an installation that is otherwise correct.
+   */
+  indexCollection: string
 ): ClassUsageIndexStore {
   return {
     // Passed through, not translated. The Direct API already answers
@@ -89,7 +99,7 @@ export function classUsageIndexStore(
     // nothing was removed, and every save re-inserted rows it already had.
     find: args =>
       nextly.find({
-        collection: args.collection,
+        collection: indexCollection,
         where: args.where,
         limit: args.limit,
         page: args.page,
@@ -98,13 +108,13 @@ export function classUsageIndexStore(
       }),
     create: args =>
       nextly.create({
-        collection: args.collection,
+        collection: indexCollection,
         data: args.data,
         ...AS_THE_SYSTEM,
       }),
     delete: args =>
       nextly.delete({
-        collection: args.collection,
+        collection: indexCollection,
         id: args.id,
         ...AS_THE_SYSTEM,
       }),

@@ -73,11 +73,20 @@ describe("choosing a tier", () => {
     expect(onSelect).toHaveBeenCalledWith(991);
   });
 
-  it("emits UNDEFINED for the widest, rather than a number", () => {
+  it("emits the width at which BASE applies, for the unconditional tier", () => {
     /*
-     * The unconditional tier has no upper bound, so any number here would be
-     * invented — and would make the widest option narrower than the region,
-     * putting gutters around a canvas that was already the right size.
+     * It used to emit `undefined` — fill the region — on the reasoning that the
+     * unconditional tier has no upper bound so any number would be invented.
+     * The number is not invented: it is one past the widest bound, which is the
+     * narrowest width the site's own tiers leave to base.
+     *
+     * And filling the region does not select base wherever the region is
+     * narrower than the widest bound, which is the ordinary case — around 912px
+     * of canvas on the supported 1280px shell against a tablet bound of 991. It
+     * put every edit in tablet while this control read as the widest tier, so
+     * the one option naming the tier an author most often wants was the one
+     * that could not reach it. The canvas is scaled to fit rather than gaining
+     * gutters, which is what makes a real width affordable here.
      */
     const onSelect = vi.fn();
     render(
@@ -89,9 +98,12 @@ describe("choosing a tier", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "Full width" }));
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Full width, from 992 pixels" })
+    );
 
-    expect(onSelect).toHaveBeenCalledWith(undefined);
+    // One past the widest bound this site declares, not a chosen number.
+    expect(onSelect).toHaveBeenCalledWith(992);
   });
 
   it("says the WIDTH in each option's accessible name", () => {
@@ -217,7 +229,9 @@ describe("what the control reports as selected", () => {
       />
     );
 
-    expect(checked()[0]?.getAttribute("aria-label")).toBe("Full width");
+    expect(checked()[0]?.getAttribute("aria-label")).toBe(
+      "Full width, from 992 pixels"
+    );
     expect(applied(container)).toBe("900px · Tablet");
   });
 
@@ -277,6 +291,33 @@ describe("what the control reports as selected", () => {
     expect(appliedNote(container)).not.toBeNull();
   });
 
+  it("stays SELECTED after choosing the unconditional tier's own width", () => {
+    /*
+     * Choosing that option sets a real width now, and it is no tier's BOUND —
+     * so a match computed from the bounded tiers is false the moment it is
+     * pressed. The canvas sizes correctly and edits base; the control reports
+     * `aria-checked="false"` on every radio and reads as having no selection.
+     *
+     * A press that visibly deselects everything is worse than one that does
+     * nothing: it says the choice was refused while the edit it enabled is
+     * quietly landing where the author wanted.
+     */
+    render(
+      <BreakpointSwitcher
+        breakpoints={site()}
+        width={992}
+        appliedWidth={992}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(checked()).toHaveLength(1);
+    expect(checked()[0]?.getAttribute("aria-label")).toBe(
+      "Full width, from 992 pixels"
+    );
+  });
+
   it("selects the widest when the canvas is UNBOUNDED, which is the control", () => {
     /*
      * Without this, a control that selected nothing under every circumstance
@@ -293,7 +334,9 @@ describe("what the control reports as selected", () => {
     );
 
     expect(checked()).toHaveLength(1);
-    expect(checked()[0]?.getAttribute("aria-label")).toBe("Full width");
+    expect(checked()[0]?.getAttribute("aria-label")).toBe(
+      "Full width, from 992 pixels"
+    );
   });
 });
 

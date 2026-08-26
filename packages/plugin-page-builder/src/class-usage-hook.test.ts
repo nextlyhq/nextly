@@ -274,3 +274,37 @@ describe("a write inside a caller-owned transaction", () => {
     expect(api.create).toHaveBeenCalled();
   });
 });
+
+describe("a Single, which a wildcard registration also receives", () => {
+  it("is SKIPPED rather than looked up as a collection", async () => {
+    // Core namespaces a Single's hooks as `single:<slug>`, and this plugin
+    // contributes its own site-style Single — so every style save reached this
+    // handler. Handing that namespace to the collection service answers
+    // not-found, and since failures now raise, every Single save would be
+    // reported as a maintenance failure.
+    //
+    // Skipped rather than adapted: a plugin has no supported way to read a
+    // Single's document. The one available path CREATES the row when it is
+    // absent, so reconciling Singles would materialise every Single in the app
+    // as a side effect of asking about them.
+    const { fire, api, errors } = harness();
+
+    await expect(
+      fire({ collection: "single:site-style" })
+    ).resolves.toBeUndefined();
+
+    expect(api.findByID).not.toHaveBeenCalled();
+    expect(api.create).not.toHaveBeenCalled();
+    expect(errors).toEqual([]);
+  });
+
+  it("still maintains an ordinary collection whose slug merely contains a colon", async () => {
+    // The control on the prefix test: matching a colon anywhere would exclude
+    // collections a host is entitled to name that way.
+    const { fire, api } = harness();
+
+    await fire({ collection: "my:pages" });
+
+    expect(api.create).toHaveBeenCalled();
+  });
+});

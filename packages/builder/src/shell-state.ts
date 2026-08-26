@@ -142,7 +142,30 @@ export interface ShellPreferences {
    * Inner: panel id to percentage.
    */
   layouts: Record<string, Record<string, number>>;
+  /**
+   * Whether the canvas draws a box for containers that have no children yet.
+   *
+   * ON by default: a container with nothing in it has no height, so with this
+   * off it is invisible and unclickable, which is the state an author is most
+   * likely to need help with. It is a preference rather than a hardcode
+   * because the box is editor chrome the visitor never sees, and an author
+   * checking how the page really looks needs a way to take it away.
+   */
+  showEmptyElements: boolean;
 }
+
+/**
+ * The DOM attribute the shell stamps on `.nx-builder-chrome` when
+ * {@link ShellPreferences.showEmptyElements} is off.
+ *
+ * `builder-chrome.css` has no module system, so it cannot import this and its
+ * selector spells the same string out literally. Exported so every reader of
+ * that spelling — the shell that writes it and the test that pins the
+ * stylesheet against it — takes it from one place: a rename here that missed
+ * the CSS would otherwise leave the selector matching nothing, silently, with
+ * no type error and no failed import to notice.
+ */
+export const EMPTY_ELEMENTS_ATTRIBUTE = "data-nx-empty-elements";
 
 /**
  * The identity of a panel arrangement, from the panels themselves.
@@ -160,6 +183,7 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
   leftPinned: true,
   layouts: {},
+  showEmptyElements: true,
 };
 
 /**
@@ -273,6 +297,10 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
         ? record.leftPinned
         : DEFAULT_PREFERENCES.leftPinned,
     layouts: readLayouts(record.layouts),
+    showEmptyElements:
+      typeof record.showEmptyElements === "boolean"
+        ? record.showEmptyElements
+        : DEFAULT_PREFERENCES.showEmptyElements,
   };
 }
 

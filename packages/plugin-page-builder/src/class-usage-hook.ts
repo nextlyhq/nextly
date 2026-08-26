@@ -50,6 +50,9 @@ import { reconcileWrittenDocument } from "./class-usage-write";
  */
 const MAINTAINED_PHASES = ["afterCreate", "afterUpdate"] as const;
 
+/** How core names a Single's hooks, so a wildcard registration can tell them apart. */
+const SINGLE_HOOK_NAMESPACE = "single:";
+
 /**
  * A hook context, as core defines it.
  *
@@ -172,7 +175,7 @@ async function planMaintenance(
   const split = await args.draftSplit(collection);
 
   return {
-    store: classUsageIndexStore(target.nextly),
+    store: classUsageIndexStore(target.nextly, args.indexCollection),
     read: classUsageDocumentReader(target.nextly),
     collection: {
       slug: target.slug,
@@ -212,6 +215,21 @@ function writeTargetOf(
 
   const slug = context.collection;
   if (typeof slug !== "string" || slug.length === 0) return null;
+
+  // A SINGLE, not a collection. Core namespaces a Single's hooks as
+  // `single:<slug>` (`register-single-hooks.ts:59`), and a wildcard
+  // registration receives those too — including this plugin's own site-style
+  // Single, so every style save reached here.
+  //
+  // Skipped rather than adapted: the index models Single subjects, but a plugin
+  // has no supported way to READ a Single's document. The one available path
+  // creates the row when it is absent, so reconciling a Single would
+  // materialise every Single in the app as a side effect of asking about it.
+  // Singles gain maintenance when that reader exists; until then this must not
+  // hand the collection service a namespace it will answer not-found for,
+  // because that failure now raises and would report every Single save as a
+  // maintenance failure.
+  if (slug.startsWith(SINGLE_HOOK_NAMESPACE)) return null;
   // This plugin's own index table is written BY this hook. Reconciling it would
   // recurse: every row inserted is a create on that collection, which fires
   // this again.

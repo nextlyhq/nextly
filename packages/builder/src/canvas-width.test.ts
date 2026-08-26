@@ -13,11 +13,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BASE_BREAKPOINT,
   breakpointContexts,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
 import {
+  baseWidth,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   widthForBreakpoint,
@@ -144,14 +146,32 @@ describe("the width a tier is shown at", () => {
     expect(widthForBreakpoint(site(), "mobile")).toBe(575);
   });
 
-  it("is UNBOUNDED for the unconditional tier, not a number", () => {
+  it("is the APPLIES-FROM width for the unconditional tier", () => {
     /*
-     * `undefined` means "as wide as the region allows". Pinning the widest tier
-     * to a number would invent a bound the site never declared and make the
-     * widest preset narrower than the space available — the canvas would gain
-     * empty gutters on selecting the tier it was already showing.
+     * It used to be `undefined` — as wide as the region allows — on the
+     * reasoning that pinning the widest tier to a number would invent a bound
+     * the site never declared and put empty gutters around a canvas that was
+     * already the right size. The number is not invented: it is one past the
+     * widest bound, and the canvas is scaled to fit rather than guttered.
+     *
+     * A JUMP and a CHOICE are the same act reached two ways, so this has to
+     * agree with what the switcher sets. Answering `undefined` here released
+     * the canvas to the region — which, wherever the region is narrower than
+     * the widest bound, lands on the tier the author was jumping AWAY from.
      */
-    expect(widthForBreakpoint(site(), "base")).toBeUndefined();
+    expect(widthForBreakpoint(site(), "base")).toBe(baseWidth(site()));
+    expect(widthForBreakpoint(site(), "base")).toBe(992);
+  });
+
+  it("is UNBOUNDED for base where the site bounds NOTHING", () => {
+    /*
+     * The control, and the case the old reasoning was right about: with no
+     * viewport tier there is no width to go to, base applies everywhere, and
+     * the region is where the canvas belongs.
+     */
+    expect(
+      widthForBreakpoint({ viewport: [], container: [] }, "base")
+    ).toBeUndefined();
   });
 
   it("is UNBOUNDED for an id the site does not define", () => {
@@ -287,5 +307,59 @@ describe("two tiers sharing one bound", () => {
       "tablet",
       "mobile",
     ]);
+  });
+});
+
+describe("the width at which the UNCONDITIONAL tier applies", () => {
+  it("is one past the widest bound", () => {
+    /*
+     * A bounded tier applies at `width <= bound`, so the first width no bounded
+     * tier claims is `bound + 1`. Asserted against the tier arithmetic rather
+     * than against the literal alone, because the two agreeing is the property:
+     * a number that did not actually resolve base would be a control that sizes
+     * the canvas and selects the wrong tier, which is the defect this exists to
+     * remove rather than a smaller version of it.
+     */
+    expect(baseWidth(site())).toBe(992);
+    expect(editedBreakpointAtWidth(site(), 992)).toBe(BASE_BREAKPOINT);
+    // The control: one pixel narrower is still the bounded tier, so the +1 is
+    // load-bearing rather than decorative.
+    expect(editedBreakpointAtWidth(site(), 991)).toBe("tablet");
+  });
+
+  it("is the SMALLEST width that resolves base", () => {
+    /*
+     * The canvas is scaled to fit, so every pixel past the first one costs the
+     * author legibility and buys nothing. A conventional desktop number would
+     * also be a width the site never declared — the same invention the tier
+     * list refuses.
+     */
+    expect(baseWidth(site())).toBe(992);
+    expect(editedBreakpointAtWidth(site(), baseWidth(site()) ?? 0)).toBe(
+      BASE_BREAKPOINT
+    );
+  });
+
+  it("is UNDEFINED when the site bounds no viewport tier", () => {
+    /*
+     * Base already applies at every width there, so there is no width to go to.
+     * A number would size the canvas to a bound the site never declared.
+     */
+    expect(baseWidth(undefined)).toBeUndefined();
+    expect(baseWidth({ viewport: [], container: [] })).toBeUndefined();
+  });
+
+  it("ignores the CONTAINER axis, as the tier list does", () => {
+    /*
+     * A container tier bounds a box inside the page, not the viewport, so the
+     * width that would clear it says nothing about which viewport tier applies.
+     * Counted here it would push the canvas wider than any viewport tier needs.
+     */
+    expect(
+      baseWidth({
+        viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+        container: [{ id: "narrow", label: "Narrow", maxWidth: 1600 }],
+      })
+    ).toBe(992);
   });
 });
