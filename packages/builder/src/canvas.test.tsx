@@ -721,6 +721,28 @@ describe("what the canvas reports about the box it got", () => {
     expect(observer?.disconnected).toBe(true);
   });
 
+  it("reports UNDEFINED when the canvas goes away", () => {
+    /*
+     * The box is gone, so the last width it reported describes nothing.
+     *
+     * The editor unmounts this canvas whenever the site's stored styles stop
+     * being readable, which a cached query can do on a refocus long after the
+     * first measurement. Left standing, the caller keeps deriving a tier from a
+     * width no element has — so the inspector writes into that tier with no
+     * preview box on screen and the control that sets it disabled.
+     */
+    const onMeasured = vi.fn();
+    const { unmount } = measured(onMeasured);
+    FakeResizeObserver.last?.deliver({
+      contentBoxSize: [{ inlineSize: 900, blockSize: 500 }],
+    });
+    expect(onMeasured).toHaveBeenLastCalledWith(900);
+
+    unmount();
+
+    expect(onMeasured).toHaveBeenLastCalledWith(undefined);
+  });
+
   it("observes NOTHING when no reporter was given", () => {
     /*
      * The control. Without it, an implementation that observed unconditionally

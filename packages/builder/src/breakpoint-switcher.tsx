@@ -33,15 +33,14 @@
 
 import {
   BASE_BREAKPOINT,
-  breakpointContexts,
   type BreakpointId,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 
-import { authoredBreakpoints, isUsableWidth } from "./breakpoints";
-import { editedBreakpointAtWidth } from "./canvas-width";
+import { authoredBreakpoints } from "./breakpoints";
+import { editedBreakpointAtWidth, offeredTiers } from "./canvas-width";
 
 /**
  * Props for BreakpointSwitcher.
@@ -122,9 +121,11 @@ export function BreakpointSwitcher({
    * to, and the page would not change — which reads as the feature being
    * broken rather than as the definition being unusable.
    *
-   * The contexts arrive widest-first, which is the order the cascade resolves
-   * in and the order every builder surveyed presents, so no second sort is
-   * applied here.
+   * `offeredTiers` also collapses tiers sharing a bound to the one the browser
+   * paints, because selecting a tier sets a WIDTH: two radios emitting the same
+   * number are not two choices, and clicking the second would select the first.
+   * It returns them widest-first, which is the order the cascade resolves in
+   * and the order every builder surveyed presents.
    *
    * The viewport axis only. A container tier is a question about an element's
    * query container, which sizing the canvas cannot answer — the same exclusion
@@ -153,19 +154,14 @@ export function BreakpointSwitcher({
     const authored = authoredBreakpoints(
       breakpoints ?? { viewport: [], container: [] }
     ).viewport;
-    return breakpointContexts(breakpoints)
-      .filter(
-        (context): context is typeof context & { maxWidth: number } =>
-          context.axis !== "container" && isUsableWidth(context.maxWidth)
-      )
-      .map(context => ({
-        id: context.id,
-        label:
-          authored.find(
-            def => def.id === context.id && def.maxWidth === context.maxWidth
-          )?.label ?? context.id,
-        bound: context.maxWidth,
-      }));
+    return offeredTiers(breakpoints).map(tier => ({
+      id: tier.id,
+      label:
+        authored.find(
+          def => def.id === tier.id && def.maxWidth === tier.maxWidth
+        )?.label ?? tier.id,
+      bound: tier.maxWidth,
+    }));
   }, [breakpoints]);
 
   /*

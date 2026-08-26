@@ -133,7 +133,18 @@ export function editedBreakpointAtWidth(
   for (const context of contexts) {
     if (!live.has(context.id)) continue;
     if (!isUsableWidth(context.maxWidth)) continue;
-    if (narrowest === undefined || context.maxWidth < narrowest.maxWidth) {
+    /*
+     * `<=`, so among tiers sharing a bound the LAST one wins.
+     *
+     * Two viewport ids can carry the same `maxWidth` — a stored set written
+     * through the API can say so — and the compiler emits both, in order, into
+     * one at-rule. Measured: `alpha` then `beta` at 991 produce two
+     * declarations in a single `@media (max-width: 991px)` block, so `beta` is
+     * what the browser paints. Taking the first would write the author's edit
+     * into a tier whose value is then overridden by the one below it, and the
+     * control would look correct while nothing changed on screen.
+     */
+    if (narrowest === undefined || context.maxWidth <= narrowest.maxWidth) {
       narrowest = { id: context.id, maxWidth: context.maxWidth };
     }
   }
@@ -150,6 +161,42 @@ export function editedBreakpointAtWidth(
     context => !isUsableWidth(context.maxWidth)
   );
   return unconditional?.id ?? BASE_BREAKPOINT;
+}
+
+/**
+ * The tiers a canvas width can actually select, widest first.
+ *
+ * ONE per distinct bound. Selecting a tier sets a WIDTH and everything else is
+ * derived from it, so two tiers sharing a bound are not two choices: both
+ * radios would emit the same number, the match would resolve to one of them,
+ * and clicking the other would silently select the first.
+ *
+ * Among tiers sharing a bound the LAST is kept, because that is the one the
+ * browser paints — the compiler emits both into a single at-rule in order, so
+ * the later declaration wins. Keeping the first would name a tier whose value
+ * is overridden by the one below it, and {@link editedBreakpointAtWidth} would
+ * disagree with this list about which tier an edit lands in.
+ *
+ * Taken from the compiler's contexts rather than the stored definitions, so a
+ * definition it declines to emit a bounded context for is not offered: sizing
+ * the canvas to a number nothing responds to reads as the feature being broken
+ * rather than as the definition being unusable.
+ *
+ * @experimental
+ */
+export function offeredTiers(
+  set: BreakpointSet | undefined
+): Array<{ id: BreakpointId; maxWidth: number }> {
+  const byWidth = new Map<number, BreakpointId>();
+  for (const context of breakpointContexts(set)) {
+    if (context.axis === "container") continue;
+    if (!isUsableWidth(context.maxWidth)) continue;
+    // Later assignment wins, which is the collapse rule stated above.
+    byWidth.set(context.maxWidth, context.id);
+  }
+  return [...byWidth.entries()]
+    .map(([maxWidth, id]) => ({ id, maxWidth }))
+    .sort((a, b) => b.maxWidth - a.maxWidth);
 }
 
 /**

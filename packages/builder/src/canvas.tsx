@@ -227,7 +227,23 @@ function useReportedInlineWidth(
       report(inlineSizeOf(entry));
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      /*
+       * The box is gone, so the last number it reported describes nothing.
+       *
+       * Left standing, a caller goes on deriving a tier from a width no
+       * element has — and the editor unmounts this canvas whenever the site's
+       * stored styles stop being readable, which a cached query can do on a
+       * refocus long after the first measurement. The inspector would keep
+       * writing into whichever tier the stale width implied, with no preview
+       * box on screen and the control that sets it disabled.
+       *
+       * `undefined` is the honest report and the one the caller already
+       * handles: nothing has been observed.
+       */
+      report(undefined);
+    };
   }, [box, report]);
 }
 

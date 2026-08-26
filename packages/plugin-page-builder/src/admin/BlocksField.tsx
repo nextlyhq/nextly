@@ -53,6 +53,7 @@ import {
   BreakpointSwitcher,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
+  offeredTiers,
   EditorCommandPalette,
   BuilderShell,
   Canvas,
@@ -853,6 +854,26 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     canvasRender.styleContext.breakpoints,
     measuredWidth
   );
+  /*
+   * Release a requested width the site no longer offers.
+   *
+   * The switcher renders nothing once a site defines no viewport tiers, and it
+   * cannot clear state it does not own — so an author who selects a tier and
+   * then deletes it, or deletes the last one, is left with a canvas pinned to a
+   * bound the stylesheet no longer has and no control on screen to release it.
+   * The only way out would be to close the editor and reopen it.
+   *
+   * Compared against `offeredTiers`, which is the same list the switcher builds
+   * its options from, so "a width this control could have set" has one
+   * definition rather than two that can disagree.
+   */
+  useEffect(() => {
+    if (requestedWidth === undefined) return;
+    const offered = offeredTiers(canvasRender.styleContext.breakpoints);
+    if (offered.some(tier => tier.maxWidth === requestedWidth)) return;
+    setRequestedWidth(undefined);
+  }, [requestedWidth, canvasRender]);
+
   /*
    * The box's own inputs, as one object.
    *

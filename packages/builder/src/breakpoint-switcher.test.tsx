@@ -510,6 +510,37 @@ describe("a stored set the compiler has to reconcile", () => {
     expect(options()).toHaveLength(2);
   });
 
+  it("offers ONE radio when two tiers share a bound", () => {
+    /*
+     * Distinct ids, so `breakpointContexts` emits BOTH — this is not the
+     * duplicate-id case. Selecting a tier only sets a width, so two radios
+     * emitting 991 are not two choices: the match resolves to one and clicking
+     * the other silently selects it.
+     *
+     * The one kept is the tier the browser paints: both are emitted into a
+     * single at-rule in order, so the later declaration wins.
+     */
+    render(
+      <BreakpointSwitcher
+        breakpoints={{
+          viewport: [
+            { id: "alpha", label: "Alpha", maxWidth: 991 },
+            { id: "beta", label: "Beta", maxWidth: 991 },
+          ],
+          container: [],
+        }}
+        width={undefined}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(options()).toHaveLength(2); // Full width, and one of the two.
+    expect(
+      screen.getByRole("radio", { name: "Beta, up to 991 pixels" })
+    ).toBeDefined();
+  });
+
   it("labels the surviving tier from the definition the compiler KEPT", () => {
     /*
      * Measured: among rows sharing an id the compiler keeps the WIDEST, not the

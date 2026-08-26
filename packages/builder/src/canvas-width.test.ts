@@ -21,6 +21,7 @@ import {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   widthForBreakpoint,
+  offeredTiers,
 } from "./canvas-width";
 
 const site = (): BreakpointSet => ({
@@ -209,5 +210,70 @@ describe("the arithmetic still agrees with the query the compiler emits", () => 
         ).toBe(width <= bound);
       }
     }
+  });
+});
+
+describe("two tiers sharing one bound", () => {
+  /*
+   * A stored set can carry two viewport ids with the same `maxWidth` — written
+   * through the API or an import, which the document model calls an error and
+   * compilation does not assume validation caught.
+   *
+   * Measured against the compiler: both are emitted, in order, into a SINGLE
+   * at-rule, so the LATER one's declarations are what the browser paints.
+   */
+  const shared = (): BreakpointSet => ({
+    viewport: [
+      { id: "alpha", label: "Alpha", maxWidth: 991 },
+      { id: "beta", label: "Beta", maxWidth: 991 },
+    ],
+    container: [],
+  });
+
+  it("offers ONE of them, since selecting a tier only sets a width", () => {
+    /*
+     * Two radios emitting the same number are not two choices: the match
+     * resolves to one, and clicking the other silently selects the first.
+     */
+    expect(offeredTiers(shared())).toHaveLength(1);
+  });
+
+  it("offers the one the browser PAINTS, not the one stored first", () => {
+    /*
+     * The discriminating half. A collapse keeping the first would satisfy the
+     * count above while naming a tier whose value is overridden by the one
+     * below it in the same at-rule — the author edits `alpha`, the page shows
+     * `beta`, and nothing on screen says why.
+     */
+    expect(offeredTiers(shared())[0]?.id).toBe("beta");
+  });
+
+  it("lands an edit in the tier that WINS at that width", () => {
+    /*
+     * The same rule read through the other derivation, which has to agree with
+     * the list above or the control offers one tier and the inspector writes to
+     * another.
+     */
+    expect(editedBreakpointAtWidth(shared(), 991)).toBe("beta");
+  });
+
+  it("still separates tiers whose bounds DIFFER", () => {
+    /*
+     * The control. Without it, a collapse keyed on something other than the
+     * bound — or one that kept a single tier unconditionally — would satisfy
+     * every case above.
+     */
+    const distinct: BreakpointSet = {
+      viewport: [
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+        { id: "mobile", label: "Mobile", maxWidth: 575 },
+      ],
+      container: [],
+    };
+
+    expect(offeredTiers(distinct).map(tier => tier.id)).toEqual([
+      "tablet",
+      "mobile",
+    ]);
   });
 });

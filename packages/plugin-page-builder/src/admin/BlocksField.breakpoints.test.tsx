@@ -170,9 +170,16 @@ function Host(): React.JSX.Element {
   return <BlocksField name="body" control={control} />;
 }
 
-function openEditor(): void {
-  render(<Host />);
+function openEditor(): { rerender: () => void } {
+  const view = render(<Host />);
   fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  return {
+    rerender: () => {
+      React.act(() => {
+        view.rerender(<Host />);
+      });
+    },
+  };
 }
 
 /** The box inputs the canvas was handed. */
@@ -321,5 +328,46 @@ describe("what one width drives", () => {
 
     expect(seen.switcher?.width).toBe(991);
     expect(seen.switcher?.appliedWidth).toBe(900);
+  });
+});
+
+describe("a width the site stops offering", () => {
+  it("releases the canvas when the selected tier is deleted", () => {
+    /*
+     * The switcher renders nothing once a site defines no viewport tiers, and
+     * it cannot clear state it does not own. So an author who selects a tier
+     * and then deletes it is left with a canvas pinned to a bound the
+     * stylesheet no longer has, and no control on screen to release it — the
+     * only way out is to close the editor and reopen it.
+     *
+     * Driven through the CONFIG the editor reads its breakpoints from, rather
+     * than by calling the release directly, because what is under test is that
+     * the width is reconciled against the site as it now stands.
+     */
+    const view = openEditor();
+    choose(991);
+    expect(box().width).toBe(991);
+
+    clientConfig = {
+      siteStyle: { breakpoints: { viewport: [], container: [] } },
+    };
+    view.rerender();
+
+    expect(box().width).toBeUndefined();
+  });
+
+  it("KEEPS a width the site still offers", () => {
+    /*
+     * The control. Without it, a version that released on every breakpoint
+     * change — or on every render — would satisfy the case above while making
+     * the switcher unusable: every selection would be undone by the next
+     * render.
+     */
+    const view = openEditor();
+    choose(991);
+
+    view.rerender();
+
+    expect(box().width).toBe(991);
   });
 });

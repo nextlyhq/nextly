@@ -149,6 +149,7 @@ export type { BreakpointSwitcherProps } from "./breakpoint-switcher";
 export {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
+  offeredTiers,
   widthForBreakpoint,
 } from "./canvas-width";
 
