@@ -54,6 +54,7 @@ import {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   offeredTiers,
+  widthForBreakpoint,
   EditorCommandPalette,
   BuilderShell,
   Canvas,
@@ -1128,6 +1129,26 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // evaluate a container query, so only the surface that owns the box
             // can observe them. The container name travels with them because
             // that is what tells the panel the window is not the authority.
+            /*
+             * Going to a tier is SIZING THE CANVAS to it, never setting a
+             * second piece of state saying which tier is being edited. The
+             * edited tier is derived from the width the box gets, so a jump
+             * that wrote its own answer would put the two back in the
+             * disagreement deriving them from one width exists to remove.
+             *
+             * A tier the compiler emits no bound for resolves to `undefined`
+             * and releases the canvas to the region rather than pinning it to a
+             * number nothing responds to — which is also what the unconditional
+             * tier means.
+             */
+            onJumpToBreakpoint={target => {
+              setRequestedWidth(
+                widthForBreakpoint(
+                  canvasRender.styleContext.breakpoints,
+                  target
+                )
+              );
+            }}
             breakpoint={editedBreakpoint}
             previewContainer={canvasPreviewContainer}
             liveBreakpoints={liveBreakpoints}
