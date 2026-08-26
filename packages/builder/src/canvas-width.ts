@@ -215,6 +215,30 @@ export function offeredTiers(
  *
  * @experimental
  */
+/**
+ * The narrowest canvas width at which the UNCONDITIONAL tier applies.
+ *
+ * One past the widest bound, because a bounded tier applies at `width <= bound`
+ * — so the first width no bounded tier claims is `bound + 1`, and that is where
+ * the base rules are what an author is editing.
+ *
+ * Derived rather than chosen. A conventional desktop number would be a width
+ * the site never declared, and the canvas would then simulate a viewport
+ * nothing in the document mentions; one past the widest bound is the only width
+ * the site's own tiers imply. It is also the SMALLEST such width, which matters
+ * because the canvas is scaled to fit: every pixel past it costs the author
+ * legibility for nothing.
+ *
+ * `undefined` when the site bounds no viewport tier at all. Base already
+ * applies at every width there, so there is no width to go to — and offering
+ * one would size the canvas to a bound the site never declared, which is what
+ * the switcher's own tier list refuses to do.
+ */
+export function baseWidth(set: BreakpointSet | undefined): number | undefined {
+  const widest = offeredTiers(set)[0];
+  return widest === undefined ? undefined : widest.maxWidth + 1;
+}
+
 export function widthForBreakpoint(
   set: BreakpointSet | undefined,
   id: BreakpointId

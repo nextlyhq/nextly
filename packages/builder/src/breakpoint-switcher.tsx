@@ -40,7 +40,11 @@ import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 
 import { authoredBreakpoints } from "./breakpoints";
-import { editedBreakpointAtWidth, offeredTiers } from "./canvas-width";
+import {
+  baseWidth,
+  editedBreakpointAtWidth,
+  offeredTiers,
+} from "./canvas-width";
 
 /**
  * Props for BreakpointSwitcher.
@@ -95,6 +99,27 @@ export interface BreakpointSwitcherProps {
  *
  * @experimental
  */
+/**
+ * What an option is CALLED, width included.
+ *
+ * The number is in the accessible name rather than only in a tooltip, because
+ * "Tablet" alone does not say what selecting it will do and the width is the
+ * whole content of the choice.
+ *
+ * FROM rather than up to for the unconditional tier. Every bounded tier
+ * overrides it, so its width is a floor rather than a ceiling, and "up to"
+ * would name the wrong side of the only number it has.
+ */
+function ariaLabelFor(option: {
+  label: string;
+  bound?: number;
+  unconditional?: boolean;
+}): string {
+  if (option.bound === undefined) return option.label;
+  const side = option.unconditional === true ? "from" : "up to";
+  return `${option.label}, ${side} ${option.bound} pixels`;
+}
+
 export function BreakpointSwitcher({
   breakpoints,
   width,
@@ -202,8 +227,36 @@ export function BreakpointSwitcher({
    * user one Tab per breakpoint to cross a control they may not be using, and
    * assistive technology announces the group's size for them anyway.
    */
-  const options: Array<{ id: BreakpointId; label: string; bound?: number }> = [
-    { id: BASE_BREAKPOINT, label: "Full width" },
+  /*
+   * The unconditional tier is offered at a WIDTH, like every other option.
+   *
+   * Unbounded it was not an offer to edit base — it was an offer to fill the
+   * region, and on any screen where the region is narrower than the widest
+   * bound those are different tiers. Measured: around 912px of canvas on the
+   * supported 1280px shell against a site bounding tablet at 1024, so pressing
+   * this wrote every edit into tablet while the control read as base. The one
+   * option that named the tier an author most often wants was the one that
+   * could not select it.
+   *
+   * Still unbounded where the site bounds nothing: base applies at every width
+   * there, so there is no width to go to and "fill the region" is the truthful
+   * offer rather than a stand-in for one.
+   */
+  const unconditional = baseWidth(breakpoints);
+  const options: Array<{
+    id: BreakpointId;
+    label: string;
+    bound?: number;
+    /** Applies FROM its width upward rather than up to it. */
+    unconditional?: boolean;
+  }> = [
+    {
+      id: BASE_BREAKPOINT,
+      label: "Full width",
+      ...(unconditional === undefined
+        ? {}
+        : { bound: unconditional, unconditional: true }),
+    },
     ...tiers,
   ];
   /*
@@ -215,9 +268,25 @@ export function BreakpointSwitcher({
    * tablet rules are live and the canvas is not at the tablet width — while the
    * keyboard still needs somewhere to land.
    */
-  const matchedIndex = options.findIndex(option =>
-    option.bound === undefined ? atWidest : exact && option.bound === width
-  );
+  const matchedIndex = options.findIndex(option => {
+    if (option.bound === undefined) return atWidest;
+    /*
+     * The unconditional option answers to TWO widths, and both are honest.
+     *
+     * Its own — the narrowest at which base applies, which pressing it now sets
+     * — and the unbounded canvas, which is what the editor opens with. Matching
+     * only its own would leave a freshly opened editor with nothing selected
+     * while base is very often exactly what is being edited; matching only the
+     * unbounded one is what made it unable to select base at all.
+     *
+     * The two are not the same state and the indicator still says so: an
+     * unbounded canvas in a narrow region is painting a narrower tier, and
+     * `describedBySelection` below reports that rather than letting the
+     * selection stand for it.
+     */
+    if (option.unconditional === true && atWidest) return true;
+    return exact && option.bound === width;
+  });
   // Falls back to the widest, which always exists: a roving tabindex with no
   // stop at all removes the control from the tab order entirely.
   const activeIndex = matchedIndex >= 0 ? matchedIndex : 0;
@@ -236,14 +305,13 @@ export function BreakpointSwitcher({
    */
   const describedBySelection = matchedIndex >= 0 && appliedTier === claimedTier;
   /*
-   * The tier's own label, never its id. A bounded tier is found among the
-   * options; anything else is the unconditional one, whose id a site may spell
-   * differently and which this control already names "Full width".
+   * The tier's own label, never its id. Every offered tier is now found among
+   * the options, the unconditional one included — it carries a bound wherever
+   * the site declares any. The fallback covers a site that bounds nothing,
+   * whose unconditional id it may spell differently from the constant.
    */
   const appliedLabel =
-    options.find(
-      option => option.bound !== undefined && option.id === appliedTier
-    )?.label ?? "Full width";
+    options.find(option => option.id === appliedTier)?.label ?? "Full width";
 
   /*
    * The rendered radios, so an arrow key can move FOCUS as well as selection.
@@ -314,11 +382,7 @@ export function BreakpointSwitcher({
              * "Tablet" alone does not say what selecting it will do, and the
              * number is the whole content of the choice.
              */
-            aria-label={
-              option.bound === undefined
-                ? "Full width"
-                : `${option.label}, up to ${option.bound} pixels`
-            }
+            aria-label={ariaLabelFor(option)}
             title={
               ready
                 ? undefined
