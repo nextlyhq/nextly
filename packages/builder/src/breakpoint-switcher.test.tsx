@@ -36,6 +36,17 @@ const site = (): BreakpointSet => ({
 const appliedNote = (root: HTMLElement): HTMLElement | null =>
   root.querySelector<HTMLElement>("[aria-live]");
 
+/**
+ * What the live region is SAYING, which is what varies.
+ *
+ * The element itself is mounted from the first render — a live region is
+ * registered when it enters the accessibility tree, and content arriving in the
+ * same insertion is often not announced — so its presence is not the signal and
+ * asserting on it would pass whatever the control reports.
+ */
+const applied = (root: HTMLElement): string =>
+  appliedNote(root)?.textContent ?? "";
+
 const options = (): HTMLElement[] => screen.getAllByRole("radio");
 const checked = (): HTMLElement[] =>
   options().filter(option => option.getAttribute("aria-checked") === "true");
@@ -156,7 +167,7 @@ describe("what the control reports as selected", () => {
       />
     );
 
-    expect(appliedNote(container)?.textContent).toBe("700px · Tablet");
+    expect(applied(container)).toBe("700px · Tablet");
   });
 
   it("names the tier by its LABEL, not by its stored id", () => {
@@ -179,7 +190,7 @@ describe("what the control reports as selected", () => {
       />
     );
 
-    expect(appliedNote(container)?.textContent).toBe("700px · Tablet");
+    expect(applied(container)).toBe("700px · Tablet");
   });
 
   it("reports the tier a NARROW REGION put the canvas in, at the widest option", () => {
@@ -207,7 +218,7 @@ describe("what the control reports as selected", () => {
     );
 
     expect(checked()[0]?.getAttribute("aria-label")).toBe("Full width");
-    expect(appliedNote(container)?.textContent).toBe("900px · Tablet");
+    expect(applied(container)).toBe("900px · Tablet");
   });
 
   it("says NOTHING at the widest option when the region honoured it", () => {
@@ -229,7 +240,14 @@ describe("what the control reports as selected", () => {
       />
     );
 
-    expect(appliedNote(container)).toBeNull();
+    expect(applied(container)).toBe("");
+    /*
+     * MOUNTED while empty. A live region is registered when it enters the
+     * accessibility tree, so one that appears together with its first text is
+     * often not announced — and the first tier change is the announcement that
+     * matters most.
+     */
+    expect(appliedNote(container)).not.toBeNull();
   });
 
   it("says nothing about a box that has NOT been measured", () => {
@@ -249,7 +267,14 @@ describe("what the control reports as selected", () => {
       />
     );
 
-    expect(appliedNote(container)).toBeNull();
+    expect(applied(container)).toBe("");
+    /*
+     * MOUNTED while empty. A live region is registered when it enters the
+     * accessibility tree, so one that appears together with its first text is
+     * often not announced — and the first tier change is the announcement that
+     * matters most.
+     */
+    expect(appliedNote(container)).not.toBeNull();
   });
 
   it("selects the widest when the canvas is UNBOUNDED, which is the control", () => {

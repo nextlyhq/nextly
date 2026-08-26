@@ -14,8 +14,18 @@ import "@nextlyhq/builder/styles.css";
 
 const HARNESS_SOURCE = "e2e-canvas-preview-harness";
 
-/** The tier the fixture narrows into, and the width that is inside it. */
+/** The narrow tier's own bound. */
 const TIER_BOUND = 600;
+
+/**
+ * The width the fixture actually asks for, strictly INSIDE the bound.
+ *
+ * Asking for the bound itself would make the case depend on whether the emitted
+ * comparison is inclusive — a property `compile-page` settles and this fixture
+ * has no business restating. A width below it is inside the tier under either
+ * reading.
+ */
+const NARROW_WIDTH = TIER_BOUND - 40;
 
 /**
  * A region WIDER than the bound, for the case that separates the two compiles.
@@ -132,7 +142,7 @@ export function BuilderCanvasPreviewHarness() {
       <button
         type="button"
         data-testid="go-narrow"
-        onClick={() => setWidth(TIER_BOUND)}
+        onClick={() => setWidth(NARROW_WIDTH)}
       >
         narrow
       </button>

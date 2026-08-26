@@ -474,7 +474,15 @@ function compiledBreakpoints(
    */
   const stored =
     typeof siteStyles === "object" ? siteStyles.breakpoints : undefined;
-  return stored ?? render?.styleContext?.breakpoints;
+  /*
+   * `=== undefined`, never `??`. `firstStated` is `find(tier => tier !== undefined)`,
+   * so a stored `null` — which runtime or imported data can supply — is KEPT by
+   * the renderer and read as defining no viewport tiers. Nullish coalescing
+   * falls through to the route set instead, turning preview on for a canvas the
+   * renderer left on the unconditional tier: the box then measures and selects
+   * a route tier that is not on screen.
+   */
+  return stored === undefined ? render?.styleContext?.breakpoints : stored;
 }
 
 /**
@@ -560,13 +568,28 @@ function usePreviewedInputs(
    */
   active: CanvasPreview | undefined;
 } {
-  return useMemo(() => {
-    const active = activePreview(render, siteStyles, preview);
-    if (active === undefined) {
-      return { rendered: render, sheet: siteStyles, active: undefined };
+  const active = activePreview(render, siteStyles, preview);
+  /*
+   * Keyed on the container NAME, not on the preview object.
+   *
+   * `preview.width` changes on every switcher selection and an inline
+   * `onMeasured` changes on every render, and neither alters a single emitted
+   * rule — but depending on the object rebuilds these inputs, which rebuilds
+   * the rendered page, which recompiles the document and the site sheet
+   * synchronously. On a large document that is the cost of a whole compile per
+   * width change, and continuous resizing pays it per frame.
+   *
+   * The box's own inputs travel outside this memo, in `active`, where being a
+   * fresh object costs nothing: the style is recomputed from it directly and
+   * the measurement effect keys on whether a reporter EXISTS rather than on its
+   * identity.
+   */
+  const container = active?.container;
+  const compiled = useMemo(() => {
+    if (container === undefined) {
+      return { rendered: render, sheet: siteStyles };
     }
     return {
-      active,
       /*
        * `styleContext` absent is left alone: without it the renderer compiles
        * no per-node sheet, so there are no page rules for a container to
@@ -579,7 +602,7 @@ function usePreviewedInputs(
               ...render,
               styleContext: {
                 ...render.styleContext,
-                previewContainer: active.container,
+                previewContainer: container,
               },
             },
       /*
@@ -590,10 +613,11 @@ function usePreviewedInputs(
        */
       sheet:
         typeof siteStyles === "object"
-          ? { ...siteStyles, previewContainer: active.container }
+          ? { ...siteStyles, previewContainer: container }
           : siteStyles,
     };
-  }, [render, siteStyles, preview]);
+  }, [render, siteStyles, container]);
+  return { ...compiled, active };
 }
 
 export interface CanvasProps {

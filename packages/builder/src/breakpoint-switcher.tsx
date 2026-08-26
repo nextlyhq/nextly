@@ -345,19 +345,25 @@ export function BreakpointSwitcher({
        *
        * Announced politely rather than drawn silently: which declarations are
        * live has changed, and that is exactly the fact this whole control
-       * exists to make legible. Hidden when the selected option already
+       * exists to make legible. Empty when the selected option already
        * describes the applying tier — which at the widest tier is the case
        * Gutenberg found a badge actively confusing, since edits there apply to
        * every breakpoint and labelling that as a tier suggests otherwise.
+       *
+       * The element is MOUNTED from the first render and only its text changes.
+       * A live region is registered when it enters the accessibility tree, and
+       * content arriving in the same insertion is often not announced — so
+       * rendering the span only once there is something to say would lose the
+       * first tier change, which is the one that matters most.
        */}
-      {ready && appliedTier !== undefined && !describedBySelection ? (
-        <span
-          className="text-muted-foreground px-1 text-xs tabular-nums"
-          aria-live="polite"
-        >
-          {appliedWidth}px · {appliedLabel}
-        </span>
-      ) : null}
+      <span
+        className="text-muted-foreground px-1 text-xs tabular-nums"
+        aria-live="polite"
+      >
+        {ready && appliedTier !== undefined && !describedBySelection
+          ? `${appliedWidth}px · ${appliedLabel}`
+          : ""}
+      </span>
     </div>
   );
 }

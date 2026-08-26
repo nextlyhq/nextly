@@ -1199,6 +1199,120 @@ describe("what the canvas reports about the box it got", () => {
     expect(FakeResizeObserver.last).toBeUndefined();
   });
 
+  it("treats a stated NULL breakpoint set as the site having none", () => {
+    /*
+     * `firstStated` is `find(tier => tier !== undefined)`, so a stored `null` —
+     * which runtime or imported data can supply — is KEPT by the renderer and
+     * read as defining no viewport tiers. Nullish coalescing falls through to
+     * the route set instead, turning preview on for a canvas the renderer left
+     * on the unconditional tier: the box then measures and selects a route tier
+     * that is not on screen.
+     *
+     * The route set carries a viewport tier deliberately, so the two readings
+     * give opposite answers.
+     */
+    const onMeasured = vi.fn();
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {}, breakpoints: null } as never}
+        render={
+          {
+            styleContext: {
+              breakpoints: {
+                viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+                container: [],
+              },
+            },
+          } as never
+        }
+        preview={{ container: "nx-preview-viewport", width: 991, onMeasured }}
+      />
+    );
+
+    const style = (
+      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
+    )?.style;
+    expect(style?.containerName).toBe("");
+    expect(FakeResizeObserver.last).toBeUndefined();
+  });
+
+  it("does not re-render the page when only the box WIDTH changes", () => {
+    /*
+     * The width changes on every switcher selection and alters no emitted rule,
+     * but rebuilding the compile inputs rebuilds the rendered page — which
+     * re-runs `PageRenderer` and recompiles the document and site sheet
+     * synchronously. On a large document that is a whole compile per width
+     * change, and continuous resizing pays it per frame.
+     *
+     * Counted at a BLOCK's own render function, which is the only thing here
+     * that runs if and only if the page re-rendered. Asserting on DOM identity
+     * would not do it: React reuses the element across a re-render, so the node
+     * is the same whether the page was rebuilt or not — measured, that version
+     * of this case passed against the defect.
+     */
+    let drawn = 0;
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/counted",
+          version: 1,
+          description: "A block that reports being drawn.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) => {
+            drawn += 1;
+            return createElement("div", { className });
+          },
+        },
+      ] as never,
+      { source: "canvas-memo-test" }
+    );
+
+    /*
+     * ONE document object across both renders. The rendered page is memoised on
+     * the document's identity, so a fresh literal per render rebuilds it for a
+     * reason that has nothing to do with the width — measured, that version of
+     * this fixture reported the defect while the code was correct.
+     */
+    const doc = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "a", type: "acme/counted", version: 1, props: {} }],
+    } as never;
+    const tree = (width: number | undefined) => (
+      <Canvas
+        document={doc}
+        siteStyles={PREVIEWABLE}
+        preview={{
+          container: "nx-preview-viewport",
+          ...(width === undefined ? {} : { width }),
+        }}
+      />
+    );
+    const view = render(tree(undefined));
+    const before = drawn;
+    expect(before).toBeGreaterThan(0);
+
+    React.act(() => {
+      view.rerender(tree(640));
+    });
+
+    expect(drawn).toBe(before);
+    // And the width really did change, or this proves nothing.
+    expect(
+      (view.container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement)
+        .style.maxWidth
+    ).toBe("640px");
+    clearBlocks();
+  });
+
   it("observes NOTHING when no reporter was given", () => {
     /*
      * The control. Without it, an implementation that observed unconditionally
