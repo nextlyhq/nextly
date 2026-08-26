@@ -9,15 +9,20 @@
  */
 
 import { Badge } from "@admin/components/ui";
-import type { FieldDiff, TextSegment } from "@admin/services/versionApi";
+import type {
+  ComparableStatus,
+  FieldDiff,
+  TextSegment,
+} from "@admin/services/versionApi";
 
 export type DiffStatus = FieldDiff["status"];
 
 /**
- * A status a node can report, including the one the ordinary four cannot
- * express: that the comparison could not be made at all.
+ * Re-exported rather than redeclared. The engine owns what statuses exist, and
+ * a second union here would let a server-side change leave these badges and the
+ * renderer props silently out of step with what actually arrives.
  */
-export type ComparableStatus = DiffStatus | "unsupported";
+export type { ComparableStatus };
 
 const STATUS_BADGE: Record<
   ComparableStatus,

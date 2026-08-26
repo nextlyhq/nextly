@@ -1,12 +1,12 @@
 /**
  * Build a diff node for a json or code field, as aligned lines.
  *
- * JSON is canonicalised — object keys sorted at every depth, fixed indent —
- * before it is compared, so a reordered key is not reported as a content
- * change. That is a decision about what COUNTS as a change, which is why it
- * lives here where it can be tested rather than in the renderer. Arrays are
- * deliberately NOT sorted: their order is content, and an author who reorders a
- * list changed something.
+ * JSON is canonicalised — object keys sorted at every depth — before it is
+ * compared, so a reordered key is not reported as a content change. That is a
+ * decision about what COUNTS as a change, which is why it lives here where it
+ * can be tested rather than in the renderer. Arrays are deliberately NOT
+ * sorted: their order is content, and an author who reorders a list changed
+ * something.
  *
  * Key order is the only thing this projection drops. A value that cannot be
  * represented at all is reported as not comparable rather than as unchanged,
@@ -21,6 +21,7 @@
  */
 
 import { alignUnits, type UnitPair } from "./align-units";
+import { canonicalise } from "./canonical-json";
 import { presenceStatus } from "./presence-status";
 import { diffText } from "./text-diff";
 import type {
@@ -31,28 +32,19 @@ import type {
 } from "./types";
 
 /**
- * Sort object keys at every depth so key order cannot register as a change.
- * Arrays keep their order: that is content, not presentation.
+ * What a code field with no configured language is highlighted as. Matches the
+ * field type's own documented default; `"code"` is not a language any
+ * highlighter knows, so emitting it would leave a renderer unable to choose a
+ * grammar for exactly the fields that did not ask for one.
  */
-function canonicalise(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalise);
-  if (value !== null && typeof value === "object") {
-    const source = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(source).sort()) {
-      out[key] = canonicalise(source[key]);
-    }
-    return out;
-  }
-  return value;
-}
+export const PLAINTEXT = "plaintext";
 
 /**
  * The value as printable lines, or null when it cannot be represented in this
  * language at all.
  */
-function toLines(value: unknown, language: string): string[] | null {
-  if (language !== "json") {
+function toLines(value: unknown, isJson: boolean): string[] | null {
+  if (!isJson) {
     if (typeof value === "string") return value.split("\n");
     // A code field holding a non-string is not something this can render, and
     // guessing at it would report a comparison that never happened.
@@ -123,13 +115,22 @@ export function sourceNode(
   after: unknown,
   language: string
 ): SourceFieldDiff {
-  // An absent value is an absence with a known meaning, not something
-  // unreadable, so it projects as no lines and the other side reads as an
-  // addition or a removal.
-  const beforeAbsent = before == null;
-  const afterAbsent = after == null;
-  const beforeLines = beforeAbsent ? [] : toLines(before, language);
-  const afterLines = afterAbsent ? [] : toLines(after, language);
+  const isJson = language === "json";
+
+  // What counts as ABSENT differs by language, and getting it wrong loses
+  // content rather than merely mislabelling it.
+  //
+  // A json field can hold the primitive `null` as a real stored value — an
+  // author writing `null` means something by it — so only a missing key is an
+  // absence there, and `null` prints as the single line `null` like any other
+  // value. Treating it as absent emits an object-to-null edit as removed lines
+  // with nothing on the other side, never showing the value that is now there.
+  // A code field holds a string, so `null` there IS an empty field.
+  const beforeAbsent = isJson ? before === undefined : before == null;
+  const afterAbsent = isJson ? after === undefined : after == null;
+
+  const beforeLines = beforeAbsent ? [] : toLines(before, isJson);
+  const afterLines = afterAbsent ? [] : toLines(after, isJson);
 
   // Content is unreadable on at least one side. Presence survives that, so it
   // still decides the status.

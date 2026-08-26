@@ -40,6 +40,7 @@ export type {
   ListFieldDiff,
   ListItemDiff,
   RelationTarget,
+  RichTextAttrChange,
   RichTextBlockDiff,
   RichTextFieldDiff,
   SetFieldDiff,

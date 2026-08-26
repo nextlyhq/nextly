@@ -3,9 +3,9 @@
  *
  * A comparison is only ever about what its projection kept, so this keeps
  * everything a user can change. Each top-level child of the document becomes
- * one block; within a block, the text of every descendant is concatenated for
- * word-level diffing, and every OTHER property of every descendant is carried
- * in `attrs` and compared for equality.
+ * one block; within a block, every property of every descendant — its text
+ * included — is recorded under the path taken to reach it, and equality is
+ * decided over that whole record.
  *
  * Participation is the DEFAULT and only the exclusions are listed. Enumerating
  * which properties matter does not converge — the editor registers twenty node
@@ -14,12 +14,19 @@
  * reason it must not be. A property a later editor version adds is then
  * compared rather than silently dropped until someone notices a wrong answer.
  *
- * Decorators (images, galleries, videos, buttons) are INLINE in this editor:
- * `DecoratorNode.isInline()` returns true and none of the five registered
- * decorators overrides it, so an image is a child of a paragraph rather than a
- * block of its own. Its identity therefore folds into the block's text as a
- * sentinel, which makes a swapped image a changed run under the ordinary word
- * diff with no special-casing downstream.
+ * Recording text PATH-QUALIFIED as well as flat is what makes structure part of
+ * equality. A list whose items read `ab`, `c` and one whose items read `a`, `bc`
+ * flatten to the same `abc`; their per-item records differ, so the edit is
+ * reported rather than hidden.
+ *
+ * Decorators (images, galleries, videos, buttons) need no special handling:
+ * their identity lives in ordinary properties — `src`, `images`, `buttons` —
+ * which the same rule already records. An earlier version folded a synthetic
+ * identity marker into the block's text instead, which both leaked marker
+ * glyphs into what the reader saw and refused to compare any decorator whose
+ * identity was not a top-level string; `GalleryNode` and `ButtonGroupNode` are
+ * both of that shape, so a document containing either compared as changed
+ * against itself.
  *
  * @module domains/versions/diff/rich-text-blocks
  */
@@ -30,49 +37,40 @@
  * user cannot change that property.
  */
 const EXCLUDED_PROPS = new Set([
-  // Traversed structurally rather than compared as a value.
+  // Traversed structurally; each child's own properties are recorded under its
+  // own path, so comparing the array as a value would report the same content
+  // twice and make the report depend on serialisation order.
   "children",
-  // Concatenated into the block's text and diffed word-wise there. Comparing it
-  // here as well would report one edit twice.
-  "text",
   // The editor's node schema version. It moves when the library is upgraded,
   // never by an authoring action.
   "version",
   // Derived from the text's script (ltr/rtl). It moves only when the text
-  // moves, which the word diff already reports.
+  // moves, which the text comparison already reports.
   "direction",
 ]);
 
 /**
- * Properties that can name a decorator's target, in preference order. The
- * first one present becomes the node's identity.
+ * How deep a document may nest before the projection refuses it.
+ *
+ * Rich-text validation only checks that the root's children are node-shaped, so
+ * a crafted or corrupted value can nest arbitrarily. Recursing it would exhaust
+ * the call stack and turn a comparison request into a server error; refusing
+ * returns a bounded "not comparable" instead. Far above anything an editor
+ * produces — a deeply nested list reaches single digits.
  */
-const IDENTITY_PROPS = [
-  "src",
-  "id",
-  "value",
-  "url",
-  "href",
-  "documentId",
-] as const;
-
-/**
- * Delimiter for an identity sentinel. A private-use code point, so a sentinel
- * can never collide with authored text and a reader can strip it reliably.
- */
-export const IDENTITY_SENTINEL = "\u{E010}";
+const MAX_DEPTH = 100;
 
 /** One top-level block of a document, reduced to what a comparison reads. */
 export interface ComparableBlock {
   /** The block's node type: paragraph, heading, quote, list, ... */
   blockType: string;
-  /** Inline text, with each decorator's identity folded in as a sentinel. */
+  /** The block's readable text, for a word-level comparison and for display. */
   text: string;
   /** Every comparable property of every node in the block, path-qualified. */
   attrs: Record<string, unknown>;
   /**
-   * True when the block held something whose identity could not be read, so
-   * equality of the rest cannot be reported as equality of the block.
+   * True when the block held something this could not read, so equality of the
+   * rest cannot be reported as equality of the block.
    */
   unsupported: boolean;
 }
@@ -102,30 +100,6 @@ function rootOf(value: unknown): RichTextNode | null {
   return root;
 }
 
-/**
- * A decorator's identity as a sentinel, or null when it names no target.
- *
- * The node type is part of the identity, so replacing an image with a video
- * that happens to share a source still reads as a change.
- */
-function identitySentinel(node: RichTextNode): string | null {
-  for (const prop of IDENTITY_PROPS) {
-    const value = node[prop];
-    if (typeof value === "string" && value.length > 0) {
-      return `${IDENTITY_SENTINEL}${node.type ?? "node"}:${value}${IDENTITY_SENTINEL}`;
-    }
-    if (typeof value === "number") {
-      return `${IDENTITY_SENTINEL}${node.type ?? "node"}:${value}${IDENTITY_SENTINEL}`;
-    }
-  }
-  return null;
-}
-
-/** Whether a node carries text of its own rather than decorating a position. */
-function isTextNode(node: RichTextNode): boolean {
-  return node.type === "text" || typeof node.text === "string";
-}
-
 /** Accumulator for one block's walk. */
 interface Walked {
   text: string;
@@ -134,8 +108,8 @@ interface Walked {
 }
 
 /**
- * Walk one block, accumulating its inline text and every comparable property of
- * every node inside it.
+ * Walk one block, accumulating its readable text and every comparable property
+ * of every node inside it.
  *
  * Attribute keys are qualified by the path taken to reach the node FROM THIS
  * BLOCK, so two nodes in one block cannot overwrite each other's properties and
@@ -147,38 +121,50 @@ interface Walked {
  * side of an inserted paragraph — reporting it as changed for having shifted,
  * which is the index-based comparison this engine exists to avoid.
  */
-function walk(node: RichTextNode, path: string, out: Walked): void {
+function walk(
+  node: RichTextNode,
+  path: string,
+  depth: number,
+  out: Walked
+): void {
+  if (depth > MAX_DEPTH) {
+    out.unsupported = true;
+    return;
+  }
+
   for (const [key, value] of Object.entries(node)) {
     if (EXCLUDED_PROPS.has(key)) continue;
     out.attrs[`${path}.${key}`] = value;
   }
 
-  if (isTextNode(node) && typeof node.text === "string") {
+  // Text is recorded twice, on purpose. Flat, it is what the reader sees and
+  // what the word-level comparison runs over; path-qualified (by the loop
+  // above, since `text` is not excluded) it makes WHERE the text sits part of
+  // equality, so moving a word between two list items is a change even though
+  // the flattened block is identical.
+  if (typeof node.text === "string") {
     out.text += node.text;
   }
 
   const children = node.children;
-  if (Array.isArray(children)) {
-    children.forEach((child, index) => {
-      const childNode = asNode(child);
-      if (!childNode) return;
-      walk(childNode, `${path}/${index}:${childNode.type ?? "?"}`, out);
-    });
-    return;
-  }
+  if (!Array.isArray(children)) return;
 
-  // A leaf that carries no text is a decorator. Its identity goes into the text
-  // so an ordinary word diff reports a swap; one whose identity cannot be read
-  // is recorded as not comparable rather than treated as absent, because
-  // "I could not read this" and "there was nothing here" are different answers.
-  if (!isTextNode(node)) {
-    const sentinel = identitySentinel(node);
-    if (sentinel === null) {
+  children.forEach((child, index) => {
+    const childNode = asNode(child);
+    if (!childNode) {
+      // A child this cannot read. Recorded as a refusal rather than skipped:
+      // `children` is not compared as a value, so skipping would let a document
+      // containing an unreadable child compare equal to one without it.
       out.unsupported = true;
       return;
     }
-    out.text += sentinel;
-  }
+    walk(
+      childNode,
+      `${path}/${index}:${childNode.type ?? "?"}`,
+      depth + 1,
+      out
+    );
+  });
 }
 
 /**
@@ -191,11 +177,19 @@ export function toComparableBlocks(value: unknown): ComparableBlock[] | null {
 
   const children = Array.isArray(root.children) ? root.children : [];
   return children.map(child => {
-    const node = asNode(child) ?? {};
+    const node = asNode(child);
+    if (!node) {
+      return {
+        blockType: "unknown",
+        text: "",
+        attrs: {},
+        unsupported: true,
+      };
+    }
     const out: Walked = { text: "", attrs: {}, unsupported: false };
     // The block itself is the path root, so its keys are the same wherever it
     // sits in the document.
-    walk(node, "", out);
+    walk(node, "", 0, out);
     return {
       blockType: node.type ?? "unknown",
       text: out.text,
@@ -203,4 +197,23 @@ export function toComparableBlocks(value: unknown): ComparableBlock[] | null {
       unsupported: out.unsupported,
     };
   });
+}
+
+/**
+ * The string two blocks are ALIGNED by — which is a coarser question than
+ * whether they are equal.
+ *
+ * Alignment decides which block on one side corresponds to which on the other;
+ * equality then decides whether that pair changed. So the key carries the block
+ * TYPE as well as its text: without it, inserting a heading that reads `Same`
+ * above a paragraph that reads `Same` pairs the old paragraph with the new
+ * heading and reports the untouched paragraph as added.
+ *
+ * It deliberately does NOT carry attributes. A heading demoted from h2 to h3
+ * keeps its text and must align with its old self so the change reads as one
+ * changed block, not as a removal beside an addition.
+ */
+export function blockAlignKey(block: ComparableBlock): string {
+  // A private-use separator, so a block type cannot run into the text.
+  return `${block.blockType}\u{E011}${block.text}`;
 }

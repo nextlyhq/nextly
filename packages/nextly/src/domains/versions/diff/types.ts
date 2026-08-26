@@ -207,12 +207,33 @@ export type ComparableStatus = DiffStatus | "unsupported";
  * carries is compared for equality, so a change that leaves the text identical
  * — a swapped image, a repointed link, an un-bolded phrase — still reports.
  */
+/**
+ * One property of a rich-text block that differs between two versions.
+ *
+ * Carried so a reader is told WHAT changed when the words did not: a heading
+ * demoted, a link repointed, a phrase un-bolded. `name` identifies the property
+ * in the terms an editor would recognise (`heading.tag`, `link.url`), not by
+ * the internal path the engine walked to reach it. Either side is absent when
+ * the property existed on only one of them.
+ */
+export interface RichTextAttrChange {
+  name: string;
+  before?: unknown;
+  after?: unknown;
+}
+
 export interface RichTextBlockDiff {
   /** The block's node type: paragraph, heading, quote, list, ... */
   blockType: string;
   status: ComparableStatus;
   /** Word-level runs. Absent when the block could not be compared. */
   segments?: TextSegment[];
+  /**
+   * Properties that differ, when any do. Absent rather than empty when nothing
+   * but the text changed, so a consumer can tell "no property changed" from
+   * "properties were not examined".
+   */
+  attrChanges?: RichTextAttrChange[];
 }
 
 /**

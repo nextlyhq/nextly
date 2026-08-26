@@ -52,16 +52,50 @@ describe("sourceNode — json", () => {
   });
 
   it("distinguishes a stored null from an absent value", () => {
-    // A json field can hold the primitive null as a real value, so the two
-    // must not collapse into one another.
-    expect(sourceNode(jsonMeta, null, { a: 1 }, "json").status).toBe("added");
-    expect(sourceNode(jsonMeta, { a: 1 }, null, "json").status).toBe("removed");
+    // A json field can hold the primitive `null` as a real stored value, so
+    // only a MISSING key is an absence. Treating null as absent emitted an
+    // object-to-null edit as removed lines with nothing on the other side,
+    // never showing the value that is now there.
+    expect(sourceNode(jsonMeta, undefined, { a: 1 }, "json").status).toBe(
+      "added"
+    );
+    expect(sourceNode(jsonMeta, { a: 1 }, undefined, "json").status).toBe(
+      "removed"
+    );
+    // null is a VALUE on both sides, so these are ordinary changes.
+    expect(sourceNode(jsonMeta, null, { a: 1 }, "json").status).toBe("changed");
+    expect(sourceNode(jsonMeta, { a: 1 }, null, "json").status).toBe("changed");
+  });
+
+  it("shows a stored null as a line rather than as nothing", () => {
+    // The content half of the same defect: the field-level status can be
+    // repaired downstream, but discarded lines cannot.
+    const node = sourceNode(jsonMeta, { a: 1 }, null, "json");
+    const added = node.lines.filter(l => l.status !== "removed");
+    expect(
+      added.some(l => (l.segments ?? []).some(seg => seg.text.includes("null")))
+    ).toBe(true);
+  });
+
+  it("MUST DIFFER: values differing only under an own __proto__ key", () => {
+    // Assigning `__proto__` to an ordinary object invokes the legacy prototype
+    // setter instead of creating an enumerable property, so `JSON.stringify`
+    // omits it and two different values canonicalise to the same `{}`.
+    const a = JSON.parse('{"__proto__":{"role":"reader"}}') as unknown;
+    const b = JSON.parse('{"__proto__":{"role":"admin"}}') as unknown;
+    expect(sourceNode(jsonMeta, a, b, "json").status).toBe("changed");
   });
 
   it("carries the language so the renderer knows what to highlight", () => {
     expect(sourceNode(jsonMeta, { a: 1 }, { a: 2 }, "json").language).toBe(
       "json"
     );
+  });
+
+  it("MUST DIFFER: a nested key reordering is still not a change", () => {
+    const a = { outer: { inner: { x: 1, y: 2 } } };
+    const b = { outer: { inner: { y: 2, x: 1 } } };
+    expect(sourceNode(jsonMeta, a, b, "json").status).toBe("unchanged");
   });
 });
 
@@ -71,21 +105,21 @@ describe("sourceNode — code", () => {
       codeMeta,
       "const a = 1;\nconst b = 2;\nconst c = 3;",
       "const a = 1;\nconst b = 9;\nconst c = 3;",
-      "code"
+      "typescript"
     );
-    expect(node.language).toBe("code");
+    expect(node.language).toBe("typescript");
     expect(node.lines.filter(l => l.status !== "unchanged")).toHaveLength(1);
     expect(node.lines).toHaveLength(3);
   });
 
   it("carries word-level runs within a changed line", () => {
-    const node = sourceNode(codeMeta, "let x = 1;", "let y = 1;", "code");
+    const node = sourceNode(codeMeta, "let x = 1;", "let y = 1;", "plaintext");
     const inserted = (node.lines[0]?.segments ?? []).filter(s => s.op === 1);
     expect(inserted.map(s => s.text).join("")).toContain("y");
   });
 
   it("numbers lines on the side each exists on", () => {
-    const node = sourceNode(codeMeta, "a\nb", "a\nx\nb", "code");
+    const node = sourceNode(codeMeta, "a\nb", "a\nx\nb", "plaintext");
     const added = node.lines.find(l => l.status === "added");
     expect(added?.toLine).toBe(1);
     const last = node.lines[node.lines.length - 1];
@@ -94,7 +128,9 @@ describe("sourceNode — code", () => {
 
   it("IDEMPOTENCE: identical code reports unchanged", () => {
     const src = "const a = 1;\nconst b = 2;";
-    expect(sourceNode(codeMeta, src, src, "code").status).toBe("unchanged");
+    expect(sourceNode(codeMeta, src, src, "plaintext").status).toBe(
+      "unchanged"
+    );
   });
 });
 
@@ -110,7 +146,12 @@ describe("sourceNode — what it cannot represent", () => {
   it("refuses when a code field holds something that is not a string", () => {
     // Nothing can be claimed about a value the projection cannot express, and
     // "unchanged" is the one answer that must not be given.
-    const node = sourceNode(codeMeta, { not: "code" }, "real code", "code");
+    const node = sourceNode(
+      codeMeta,
+      { not: "code" },
+      "real code",
+      "plaintext"
+    );
     expect(node.lines).toEqual([{ status: "unsupported" }]);
     expect(node.status).not.toBe("unchanged");
   });

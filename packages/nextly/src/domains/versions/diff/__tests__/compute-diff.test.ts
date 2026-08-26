@@ -199,9 +199,24 @@ describe("computeVersionDiff — per field kind", () => {
     const node = diff.fields[0];
     expect(node).toMatchObject({ kind: "source", status: "changed" });
     if (node.kind === "source") {
-      expect(node.language).toBe("code");
+      // No declared language, so the field type's own documented default.
+      expect(node.language).toBe("plaintext");
       expect(node.lines.filter(l => l.status !== "unchanged")).toHaveLength(1);
     }
+  });
+
+  it("carries a code field's declared language into the comparison", () => {
+    // `SourceFieldDiff.language` exists so a renderer can choose a grammar.
+    // Emitting a literal "code" named a language no highlighter knows, which
+    // left the configured one unreachable for exactly the fields that set it.
+    const diff = computeVersionDiff(
+      { snippet: "select 1" },
+      { snippet: "select 2" },
+      [field({ name: "snippet", type: "code", language: "sql" })]
+    );
+    const node = diff.fields[0];
+    if (node.kind === "source") expect(node.language).toBe("sql");
+    else throw new Error("expected a source node");
   });
 
   it("does not report a json key reordering as a change", () => {

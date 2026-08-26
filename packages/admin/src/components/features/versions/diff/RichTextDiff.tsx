@@ -17,6 +17,7 @@
  */
 
 import type {
+  RichTextAttrChange,
   RichTextBlockDiff,
   RichTextFieldDiff,
 } from "@admin/services/versionApi";
@@ -57,6 +58,43 @@ const BLOCK_LABEL: Record<string, string> = {
   horizontalrule: "Divider",
 };
 
+/** A property value, in as few characters as it can honestly be shown in. */
+function attrValue(value: unknown): string {
+  if (value === undefined) return "none";
+  if (typeof value === "string") return value === "" ? "empty" : value;
+  return JSON.stringify(value) ?? "none";
+}
+
+/**
+ * What changed about a block besides its words.
+ *
+ * Without this a block whose heading level or link target moved shows a
+ * "Changed" badge above text that reads identically, which tells a reader that
+ * something happened and not what — the least useful thing a comparison can
+ * say. Shown only when the words did NOT carry the change on their own.
+ */
+function AttrChanges({
+  changes,
+}: {
+  changes: readonly RichTextAttrChange[] | undefined;
+}) {
+  if (!changes || changes.length === 0) return null;
+  return (
+    <ul className="mt-1 flex flex-col gap-0.5">
+      {changes.map(change => (
+        <li key={change.name} className="text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">{change.name}</span>{" "}
+          <del className="text-destructive">{attrValue(change.before)}</del>
+          {" \u2192 "}
+          <ins className="text-success no-underline">
+            {attrValue(change.after)}
+          </ins>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function BlockRow({ block }: { block: RichTextBlockDiff }) {
   const stripe = BLOCK_STRIPE[block.status] ?? BLOCK_STRIPE.unchanged;
   const label = BLOCK_LABEL[block.blockType];
@@ -77,7 +115,10 @@ function BlockRow({ block }: { block: RichTextBlockDiff }) {
       {block.status === "unsupported" ? (
         <NotComparable what="block" />
       ) : (
-        <TextRuns segments={block.segments ?? []} />
+        <>
+          <TextRuns segments={block.segments ?? []} />
+          <AttrChanges changes={block.attrChanges} />
+        </>
       )}
     </div>
   );

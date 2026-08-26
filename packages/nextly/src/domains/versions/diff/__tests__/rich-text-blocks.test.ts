@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { toComparableBlocks } from "../rich-text-blocks";
+import { blockAlignKey, toComparableBlocks } from "../rich-text-blocks";
 
 /** A Lexical text node, in the shape the editor actually serialises. */
 function text(value: string, extra: Record<string, unknown> = {}) {
@@ -97,13 +97,42 @@ describe("toComparableBlocks — changes that leave the text identical", () => {
   it("MUST DIFFER: a swapped image", () => {
     // The defect this projection exists to close. A text-only projection reads
     // no `src`, so replacing the picture reports as no change at all.
+    //
+    // Asserted on the BLOCK rather than on its text: identity is an ordinary
+    // recorded property, not a marker folded into what the reader sees. An
+    // earlier version did fold one in, which put `image:/a.png` on screen as
+    // though an author had typed it.
     const withImage = (src: string) =>
       doc([
         para([text("See "), { type: "image", version: 1, src, altText: "" }]),
       ]);
     const a = toComparableBlocks(withImage("/a.png"));
     const b = toComparableBlocks(withImage("/b.png"));
-    expect(a?.[0]?.text).not.toEqual(b?.[0]?.text);
+    expect(a?.[0]).not.toEqual(b?.[0]);
+    // And the reader's text is unchanged by the comparison machinery.
+    expect(a?.[0]?.text).toBe("See ");
+  });
+
+  it("MUST DIFFER: a swapped gallery image, whose identity is nested", () => {
+    // `GalleryNode.exportJSON()` stores identity under `images[].src`, with no
+    // top-level property naming a target. A rule that looked for one refused to
+    // compare galleries at all — and refusing forces "changed", so a document
+    // containing one compared as changed against ITSELF.
+    const gallery = (src: string) =>
+      doc([
+        para([
+          {
+            type: "gallery",
+            version: 1,
+            images: [{ src, alt: "" }],
+            columns: 2,
+            caption: "",
+          },
+        ]),
+      ]);
+    expect(toComparableBlocks(gallery("/a.png"))?.[0]).not.toEqual(
+      toComparableBlocks(gallery("/b.png"))?.[0]
+    );
   });
 
   it("MUST DIFFER: a repointed link", () => {
@@ -210,24 +239,191 @@ describe("toComparableBlocks — properties that move on their own", () => {
   });
 });
 
-describe("toComparableBlocks — what it cannot read", () => {
-  it("marks a decorator carrying no identity and no text as unsupported", () => {
-    // A REAL node type this editor registers, not a synthetic one: a synthetic
-    // type would travel whatever fall-through an unrecognised node does, and
-    // pass whether or not a real node ever reaches the mechanism.
-    const blocks = toComparableBlocks(
-      doc([para([{ type: "gallery", version: 1 }])])
+describe("toComparableBlocks — decorators the editor really produces", () => {
+  it("IDEMPOTENCE: a gallery compares equal to itself", () => {
+    // The shape `GalleryNode` actually serialises. Previously refused for
+    // having no top-level identity property, which made every document
+    // containing one report as changed against itself.
+    const value = doc([
+      para([
+        {
+          type: "gallery",
+          version: 1,
+          images: [{ src: "/a.png", alt: "A" }],
+          columns: 2,
+          caption: "",
+        },
+      ]),
+    ]);
+    const projected = toComparableBlocks(value);
+    expect(projected?.[0]?.unsupported).toBe(false);
+    expect(projected).toEqual(toComparableBlocks(value));
+  });
+
+  it("IDEMPOTENCE: a button group compares equal to itself", () => {
+    // `ButtonGroupNode.exportJSON()` stores its content under `buttons`, again
+    // with no top-level identity property.
+    const value = doc([
+      para([
+        {
+          type: "button-group",
+          version: 1,
+          buttons: [{ text: "Go", url: "/go", variant: "solid" }],
+          alignment: "left",
+        },
+      ]),
+    ]);
+    expect(toComparableBlocks(value)?.[0]?.unsupported).toBe(false);
+    expect(toComparableBlocks(value)).toEqual(toComparableBlocks(value));
+  });
+
+  it("IDEMPOTENCE: a line break compares equal to itself", () => {
+    // A line break carries only its type — no identity, no text.
+    const value = doc([para([text("a"), { type: "linebreak", version: 1 }])]);
+    expect(toComparableBlocks(value)?.[0]?.unsupported).toBe(false);
+  });
+
+  it("MUST DIFFER: a button group whose link target moved", () => {
+    const group = (url: string) =>
+      doc([
+        para([
+          {
+            type: "button-group",
+            version: 1,
+            buttons: [{ text: "Go", url, variant: "solid" }],
+            alignment: "left",
+          },
+        ]),
+      ]);
+    expect(toComparableBlocks(group("/a"))?.[0]).not.toEqual(
+      toComparableBlocks(group("/b"))?.[0]
     );
+  });
+});
+
+describe("toComparableBlocks — what it genuinely cannot read", () => {
+  it("marks a block unsupported when a child is not a node at all", () => {
+    // `children` is traversed rather than compared as a value, so silently
+    // skipping an unreadable child would let a document containing one compare
+    // equal to the same document without it.
+    const blocks = toComparableBlocks(doc([para(["not a node"])]));
     expect(blocks?.[0]?.unsupported).toBe(true);
   });
 
-  it("does NOT mark a decorator unsupported when it has an identity", () => {
-    // The negative control for the case above: a gallery that names its target
-    // is comparable, so the refusal must not fire for the node TYPE alone.
-    const blocks = toComparableBlocks(
-      doc([para([{ type: "gallery", version: 1, id: "gal-1" }])])
-    );
-    expect(blocks?.[0]?.unsupported).toBe(false);
-    expect(blocks?.[0]?.text).toContain("gal-1");
+  it("MUST DIFFER: a document with an unreadable child is not equal to one without", () => {
+    const withBad = toComparableBlocks(doc([para([text("a"), 42])]));
+    const withoutBad = toComparableBlocks(doc([para([text("a")])]));
+    expect(withBad?.[0]).not.toEqual(withoutBad?.[0]);
+  });
+
+  it("marks a top-level child that is not a node unsupported", () => {
+    expect(toComparableBlocks(doc(["not a block"]))?.[0]).toMatchObject({
+      blockType: "unknown",
+      unsupported: true,
+    });
+  });
+
+  it("refuses a document nested past its depth bound instead of overflowing", () => {
+    // Validation only checks the root's children are node-shaped, so a crafted
+    // value can nest arbitrarily. Recursing it would exhaust the call stack and
+    // turn a comparison request into a server error.
+    let deepest: Record<string, unknown> = {
+      type: "text",
+      version: 1,
+      text: "x",
+    };
+    for (let i = 0; i < 400; i += 1) {
+      deepest = { type: "nested", version: 1, children: [deepest] };
+    }
+    const blocks = toComparableBlocks(doc([deepest]));
+    expect(blocks?.[0]?.unsupported).toBe(true);
+  });
+});
+
+describe("blockAlignKey", () => {
+  it("separates blocks that read alike but are different kinds", () => {
+    // Aligning on text alone pairs an inserted heading with an untouched
+    // paragraph of the same words, and reports the paragraph as added.
+    const heading = doc([
+      {
+        type: "heading",
+        version: 1,
+        tag: "h2",
+        format: "",
+        indent: 0,
+        direction: "ltr",
+        children: [text("Same")],
+      },
+    ]);
+    const paragraph = doc([para([text("Same")])]);
+    const h = toComparableBlocks(heading)?.[0];
+    const p = toComparableBlocks(paragraph)?.[0];
+    expect(blockAlignKey(h!)).not.toBe(blockAlignKey(p!));
+  });
+
+  it("does NOT separate a block from itself after an attribute-only change", () => {
+    // A demoted heading must still align with its old self, so the change reads
+    // as one changed block rather than a removal beside an addition.
+    const heading = (tag: string) =>
+      doc([
+        {
+          type: "heading",
+          version: 1,
+          tag,
+          format: "",
+          indent: 0,
+          direction: "ltr",
+          children: [text("Title")],
+        },
+      ]);
+    const before = toComparableBlocks(heading("h2"))?.[0];
+    const after = toComparableBlocks(heading("h3"))?.[0];
+    expect(blockAlignKey(before!)).toBe(blockAlignKey(after!));
+    expect(before).not.toEqual(after);
+  });
+});
+
+describe("toComparableBlocks — structure within a block", () => {
+  it("MUST DIFFER: text moved between two list items", () => {
+    // Both flatten to `abc`, and their block-level attributes match. Only the
+    // per-item record separates them — without it the edit is invisible and a
+    // modified-only comparison hides the field entirely.
+    const list = (first: string, second: string) =>
+      doc([
+        {
+          type: "list",
+          version: 1,
+          listType: "bullet",
+          start: 1,
+          tag: "ul",
+          format: "",
+          indent: 0,
+          direction: "ltr",
+          children: [
+            {
+              type: "listitem",
+              version: 1,
+              value: 1,
+              format: "",
+              indent: 0,
+              direction: "ltr",
+              children: [text(first)],
+            },
+            {
+              type: "listitem",
+              version: 1,
+              value: 2,
+              format: "",
+              indent: 0,
+              direction: "ltr",
+              children: [text(second)],
+            },
+          ],
+        },
+      ]);
+    const a = toComparableBlocks(list("ab", "c"))?.[0];
+    const b = toComparableBlocks(list("a", "bc"))?.[0];
+    expect(a?.text).toBe(b?.text);
+    expect(a).not.toEqual(b);
   });
 });

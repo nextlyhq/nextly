@@ -121,11 +121,55 @@ describe("richTextNode — equality", () => {
   });
 });
 
-describe("richTextNode — what it cannot compare", () => {
-  it("forces the FIELD to changed when a block is unsupported", () => {
-    // Both sides identical, so a text comparison alone would say unchanged —
-    // and `modifiedOnly` would then drop the field and the refusal with it.
-    const bare = {
+describe("richTextNode — saying WHAT changed", () => {
+  const heading = (tag: string) => ({
+    root: {
+      type: "root",
+      version: 1,
+      format: "",
+      indent: 0,
+      direction: "ltr",
+      children: [
+        {
+          type: "heading",
+          version: 1,
+          tag,
+          format: "",
+          indent: 0,
+          direction: "ltr",
+          children: [text("Title")],
+        },
+      ],
+    },
+  });
+
+  it("carries the property that moved when the words did not", () => {
+    // Without this the reader sees a Changed badge above text that reads
+    // identically — told that something happened and not what, which is the
+    // least useful thing a comparison can say.
+    const node = richTextNode(meta, heading("h2"), heading("h3"));
+    const changes = node.blocks[0]?.attrChanges ?? [];
+    const tag = changes.find(c => c.name.endsWith("tag"));
+    expect(tag).toMatchObject({ before: "h2", after: "h3" });
+  });
+
+  it("names the property in an editor's terms, not by its internal path", () => {
+    const node = richTextNode(meta, heading("h2"), heading("h3"));
+    const names = (node.blocks[0]?.attrChanges ?? []).map(c => c.name);
+    expect(names.every(n => !n.includes("/"))).toBe(true);
+  });
+
+  it("omits the list entirely when nothing but the text changed", () => {
+    // Absent rather than empty, so a consumer can tell "no property changed"
+    // from "properties were not examined".
+    const node = richTextNode(meta, doc(["hello world"]), doc(["hello there"]));
+    expect(node.blocks[0]?.attrChanges).toBeUndefined();
+  });
+
+  it("does not report a reordered object-valued property as a change", () => {
+    // Key order is not content. A serializer upgrade that merely reorders
+    // exported properties must not read as an edit.
+    const gallery = (image: Record<string, unknown>) => ({
       root: {
         type: "root",
         version: 1,
@@ -139,14 +183,85 @@ describe("richTextNode — what it cannot compare", () => {
             format: "",
             indent: 0,
             direction: "ltr",
-            children: [{ type: "gallery", version: 1 }],
+            children: [
+              { type: "gallery", version: 1, images: [image], columns: 1 },
+            ],
+          },
+        ],
+      },
+    });
+    const node = richTextNode(
+      meta,
+      gallery({ src: "/a.png", alt: "A" }),
+      gallery({ alt: "A", src: "/a.png" })
+    );
+    expect(node.status).toBe("unchanged");
+  });
+});
+
+describe("richTextNode — what it cannot compare", () => {
+  it("forces the FIELD off unchanged when a block is unsupported", () => {
+    // Both sides identical, so a content comparison alone would say unchanged —
+    // and `modifiedOnly` would then drop the field and the refusal with it.
+    // The unreadable thing is a child that is not a node; a decorator with
+    // nested identity is perfectly comparable and must NOT reach here.
+    const unreadable = {
+      root: {
+        type: "root",
+        version: 1,
+        format: "",
+        indent: 0,
+        direction: "ltr",
+        children: [
+          {
+            type: "paragraph",
+            version: 1,
+            format: "",
+            indent: 0,
+            direction: "ltr",
+            children: ["not a node"],
           },
         ],
       },
     };
-    const node = richTextNode(meta, bare, bare);
+    const node = richTextNode(meta, unreadable, unreadable);
     expect(node.blocks[0]?.status).toBe("unsupported");
-    expect(node.status).toBe("changed");
+    expect(node.status).not.toBe("unchanged");
+  });
+
+  it("IDEMPOTENCE: a document with a gallery compares equal to itself", () => {
+    // The regression this guards: a gallery has no top-level identity property,
+    // and refusing it forced the whole field to changed on every comparison.
+    const withGallery = {
+      root: {
+        type: "root",
+        version: 1,
+        format: "",
+        indent: 0,
+        direction: "ltr",
+        children: [
+          {
+            type: "paragraph",
+            version: 1,
+            format: "",
+            indent: 0,
+            direction: "ltr",
+            children: [
+              {
+                type: "gallery",
+                version: 1,
+                images: [{ src: "/a.png", alt: "" }],
+                columns: 2,
+                caption: "",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const node = richTextNode(meta, withGallery, withGallery);
+    expect(node.status).toBe("unchanged");
+    expect(node.blocks.every(b => b.status === "unchanged")).toBe(true);
   });
 
   it("reports the whole field unsupported when a side is not a document", () => {
@@ -175,12 +290,18 @@ describe("richTextNode — what it cannot compare", () => {
     expect(both.status).toBe("changed");
   });
 
-  it("treats a null side as an empty document rather than refusing", () => {
-    // A rich-text field that was never filled in stores null. That is an
-    // absence with a known meaning, not something unreadable, so adding the
-    // first paragraph must read as an addition rather than as a refusal.
+  it("classifies a newly populated field as added, not merely changed", () => {
+    // A rich-text field that was never filled in stores null. Filling it is an
+    // ADDITION, and saying so matches how text, value and source fields
+    // describe the same event — "changed" would describe a change to something
+    // that was not there.
     const node = richTextNode(meta, null, doc(["First"]));
     expect(node.blocks.map(b => b.status)).toEqual(["added"]);
-    expect(node.status).toBe("changed");
+    expect(node.status).toBe("added");
+  });
+
+  it("classifies a cleared field as removed", () => {
+    const node = richTextNode(meta, doc(["First"]), null);
+    expect(node.status).toBe("removed");
   });
 });

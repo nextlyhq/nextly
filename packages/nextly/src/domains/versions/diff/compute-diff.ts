@@ -28,7 +28,7 @@ import { readFieldGroupType } from "../../field-groups/storage/field-group-type-
 
 import { reconcileById, type ItemMatch } from "./reconcile-list";
 import { richTextNode } from "./rich-text-node";
-import { sourceNode } from "./source-node";
+import { PLAINTEXT, sourceNode } from "./source-node";
 import { diffText } from "./text-diff";
 import type {
   DiffStatus,
@@ -113,6 +113,11 @@ function componentSlugs(field: FieldConfig): string[] | undefined {
 }
 function isRepeatable(field: FieldConfig): boolean {
   return (field as { repeatable?: boolean }).repeatable === true;
+}
+/** A code field's declared language, when it declares one. */
+function codeLanguageOf(field: FieldConfig): string | undefined {
+  const language = (field as { language?: unknown }).language;
+  return typeof language === "string" ? language : undefined;
 }
 function isHasMany(field: FieldConfig): boolean {
   return (field as { hasMany?: boolean }).hasMany === true;
@@ -718,7 +723,12 @@ function diffField(
   // string, which rendered it as a proportional, word-wrapped paragraph — less
   // readable in the comparison than in its own read-only display.
   if (field.type === "json" || field.type === "code") {
-    const language = field.type === "json" ? "json" : "code";
+    // A code field declares the language it is written in, and the renderer
+    // needs it to pick a grammar. Without a declared one the field type's own
+    // documented default applies; emitting the literal "code" would name a
+    // language no highlighter knows.
+    const language =
+      field.type === "json" ? "json" : (codeLanguageOf(field) ?? PLAINTEXT);
     const node = sourceNode(meta, before, after, language);
     // A json field can hold the primitive `null` as a real value, which
     // normalization collapses to the same `null` as an absent key. Raw key
