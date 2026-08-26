@@ -19,17 +19,31 @@ import {
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
 
+/** A document whose single node applies the given classes. */
+const documentUsing = (...classes: string[]) => ({
+  formatVersion: 1,
+  kind: "page",
+  nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
+});
+
 /** A Direct API that records every call and answers with fixed values. */
 function recordingApi(overrides: Partial<ClassUsageDirectApi> = {}) {
   const calls: Record<string, unknown>[] = [];
   const api: ClassUsageDirectApi = {
     find: async args => {
       calls.push({ op: "find", ...args });
-      return { docs: [{ id: "r1" }], hasNextPage: false };
+      return { items: [{ id: "r1" }], meta: { hasNext: false } };
     },
     findByID: async args => {
       calls.push({ op: "findByID", ...args });
-      return { id: args.id };
+      // A COLLECTION ROW, which is what the Direct API answers: the block
+      // document sits under the field, beside everything else the record holds.
+      return {
+        id: args.id,
+        title: "unrelated",
+        content: documentUsing("hero"),
+        ...(args.draft === true ? { _isWorkingDraft: true } : {}),
+      };
     },
     create: async args => {
       calls.push({ op: "create", ...args });
@@ -44,6 +58,7 @@ function recordingApi(overrides: Partial<ClassUsageDirectApi> = {}) {
   return { api, calls };
 }
 
+/** What the derivation needs to see: a document with a top-level `nodes` array. */
 const subject = (over: Partial<ClassUsageSubject> = {}): ClassUsageSubject => ({
   scope: "collection",
   entity: "pages",
@@ -156,11 +171,15 @@ describe("writing the index", () => {
     });
   });
 
-  it("translates the paging shape the reconciler reads", async () => {
+  it("passes the Direct API envelope through unchanged", async () => {
+    // The reconciler asks for exactly what the Direct API answers. Translating
+    // between them restates one shape twice, and the statement this module
+    // carried was the collection SERVICE's inner payload — which it never
+    // sees, so every page came back empty and no stored row was ever found.
     const { api } = recordingApi({
       find: async () => ({
-        docs: [{ id: "a" }, { id: "b" }],
-        hasNextPage: true,
+        items: [{ id: "a" }, { id: "b" }],
+        meta: { hasNext: true },
       }),
     });
 
@@ -178,11 +197,11 @@ describe("writing the index", () => {
     });
   });
 
-  it("reads a response with no docs as an EMPTY page, not as a failure", async () => {
-    // Which is the correct reading of a table nothing has written to yet — the
-    // state every site is in before the first save. Treating it as an error
-    // would fail maintenance on exactly the documents that need it most.
-    const { api } = recordingApi({ find: async () => ({}) });
+  it("reports an empty table as an empty page, not as a failure", async () => {
+    // The state every site is in before its first save.
+    const { api } = recordingApi({
+      find: async () => ({ items: [], meta: { hasNext: false } }),
+    });
 
     const page = await classUsageIndexStore(api).find({
       collection: "idx",
@@ -193,5 +212,66 @@ describe("writing the index", () => {
     });
 
     expect(page).toEqual({ items: [], meta: { hasNext: false } });
+  });
+});
+
+describe("what the reader hands back", () => {
+  it("returns the FIELD's document, not the collection row", async () => {
+    // The derivation walks a top-level `nodes` array. A record has none, so
+    // handing back the row derives no rows at all and every class the document
+    // applies reads as unused — the state that licences deleting one a page
+    // still renders. The rebuild already reads `item[field]`; this is the same
+    // place, reached the same way.
+    const { api } = recordingApi();
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ field: "content" })
+    );
+
+    expect(document).toEqual(documentUsing("hero"));
+  });
+
+  it("returns nothing when the row has no value for that field", async () => {
+    const { api } = recordingApi();
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ field: "sidebar" })
+    );
+
+    expect(document).toBeUndefined();
+  });
+
+  it("REFUSES a live row answered to a draft request", async () => {
+    // Asking for the draft overlay on a document with no pending draft answers
+    // the live published row rather than nothing. Accepting it files the
+    // published classes under a draft that does not exist — phantom references
+    // no rebuild can reconcile, which block deleting a class nothing uses.
+    const { api } = recordingApi({
+      findByID: async () => ({ id: "p1", content: documentUsing("hero") }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "draft" })
+    );
+
+    expect(document).toBeUndefined();
+  });
+
+  it("accepts a row carrying the working-draft marker", async () => {
+    // The control on the case above: a reader that refused every draft would
+    // satisfy it while never indexing a draft at all.
+    const { api } = recordingApi({
+      findByID: async () => ({
+        id: "p1",
+        _isWorkingDraft: true,
+        content: documentUsing("draft-only"),
+      }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "draft" })
+    );
+
+    expect(document).toEqual(documentUsing("draft-only"));
   });
 });
