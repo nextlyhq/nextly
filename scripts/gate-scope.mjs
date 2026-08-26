@@ -48,17 +48,21 @@ const PACKAGE_ROOT = "packages";
  * coverage.
  */
 export function changedPackageDirs(paths) {
-  const dirs = new Set();
-  for (const path of paths) {
-    const segments = String(path).split("/");
-    if (segments[0] !== PACKAGE_ROOT) continue;
-    const dir = segments[1];
-    // A path of exactly `packages/x` with nothing after it is a directory
-    // entry rather than a file in a package, and names no manifest.
-    if (!dir || segments.length < 3) continue;
-    dirs.add(dir);
-  }
-  return [...dirs].sort();
+  const dirs = paths.map(packageDirOf).filter(dir => dir !== null);
+  return [...new Set(dirs)].sort();
+}
+
+/**
+ * The package directory one path names, or null when it names none.
+ *
+ * A path of exactly `packages/x` is a directory entry rather than a file inside
+ * a package, so it names no manifest and answers null like any other miss.
+ */
+function packageDirOf(path) {
+  const segments = String(path).split("/");
+  if (segments[0] !== PACKAGE_ROOT) return null;
+  if (segments.length < 3) return null;
+  return segments[1] || null;
 }
 
 /**
@@ -70,19 +74,31 @@ export function changedPackageDirs(paths) {
  * the diff, which the author should see rather than have hidden.
  */
 export function packageFilters(dirs, readManifest) {
-  const filters = [];
-  const unreadable = [];
-  for (const dir of dirs) {
-    let name;
-    try {
-      name = readManifest(dir)?.name;
-    } catch {
-      name = undefined;
-    }
-    if (typeof name === "string" && name.length > 0) filters.push(name);
-    else unreadable.push(dir);
+  const named = dirs.map(dir => ({ dir, name: manifestName(dir, readManifest) }));
+  return {
+    filters: named.filter(e => e.name !== null).map(e => e.name),
+    unreadable: named.filter(e => e.name === null).map(e => e.dir),
+  };
+}
+
+/** One directory's package name, or null when the manifest cannot answer. */
+function manifestName(dir, readManifest) {
+  try {
+    return usableName(readManifest(dir));
+  } catch {
+    return null;
   }
-  return { filters, unreadable };
+}
+
+/**
+ * The name a manifest supplies, or null.
+ *
+ * An empty name is null rather than the empty string: a `--filter` built from
+ * one matches nothing, so it would shrink the gate while reading as coverage.
+ */
+function usableName(manifest) {
+  const name = manifest?.name;
+  return typeof name === "string" && name.length > 0 ? name : null;
 }
 
 /** Whether a change reaches the root `scripts/` task, which `turbo run test` does not. */
@@ -92,30 +108,38 @@ export function touchesScripts(paths) {
 
 /** The human-readable report. */
 export function report({ filters, unreadable, scripts }) {
-  const lines = [];
-  // The nothing-to-report case has to account for every branch below it, or a
-  // diff that DELETES a package reports "nothing changed" while holding an
-  // unreadable directory it was supposed to surface.
-  if (filters.length === 0 && unreadable.length === 0 && !scripts) {
-    lines.push("No workspace package changed. Root gates only.");
-    return lines.join("\n");
-  }
-  if (filters.length > 0) {
-    lines.push("Gate these packages:");
-    for (const name of filters) lines.push(`  --filter ${name}`);
-  }
-  if (unreadable.length > 0) {
-    lines.push("");
-    lines.push("Directories with no readable manifest (deleted, or renamed):");
-    for (const dir of unreadable) lines.push(`  packages/${dir}`);
-  }
-  if (scripts) {
-    lines.push("");
-    lines.push(
-      "Also run `pnpm test:scripts` — `turbo run test` does not reach scripts/."
-    );
-  }
-  return lines.join("\n");
+  const sections = [
+    filterSection(filters),
+    unreadableSection(unreadable),
+    scripts ? SCRIPTS_NOTE : "",
+  ].filter(Boolean);
+
+  // The nothing-to-report case is derived from the sections rather than
+  // restated as its own condition. Restating it is how a diff that DELETES a
+  // package came to report "nothing changed" while holding an unreadable
+  // directory it was supposed to surface.
+  return sections.length === 0
+    ? "No workspace package changed. Root gates only."
+    : sections.join("\n\n");
+}
+
+/** `turbo run test` has its own task list and does not reach `scripts/`. */
+const SCRIPTS_NOTE =
+  "Also run `pnpm test:scripts` — `turbo run test` does not reach scripts/.";
+
+function filterSection(filters) {
+  if (filters.length === 0) return "";
+  return ["Gate these packages:", ...filters.map(n => `  --filter ${n}`)].join(
+    "\n"
+  );
+}
+
+function unreadableSection(unreadable) {
+  if (unreadable.length === 0) return "";
+  return [
+    "Directories with no readable manifest (deleted, or renamed):",
+    ...unreadable.map(d => `  packages/${d}`),
+  ].join("\n");
 }
 
 /** Read the manifest of one package directory. */
