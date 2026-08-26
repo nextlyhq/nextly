@@ -169,6 +169,20 @@ export const NODE_ID_ATTRIBUTE = "data-nx-node";
 export const PROP_ATTRIBUTE = "data-nx-prop";
 
 /**
+ * Marks a block whose definition declares at least one slot.
+ *
+ * The editor needs to find containers without knowing their names: a list of
+ * built-in types would exclude every container a plugin contributes, and would
+ * have to be kept in step with packages this one does not own. Whether a block
+ * declares slots is the structural fact underneath that list, and it is
+ * available here for nothing.
+ *
+ * Rides `nodeAttribute` for the same reason {@link NODE_ID_ATTRIBUTE} does: it
+ * is the editor's own namespace and has no business on a published page.
+ */
+export const SLOTS_ATTRIBUTE = "data-nx-slots";
+
+/**
  * The prefix every marker the editor puts on a rendered element shares.
  *
  * A NAMESPACE rather than a list, because a list is a thing to keep in sync
@@ -197,10 +211,22 @@ function propMarker(
   };
 }
 
+// Merges several independently-gated field sources onto one element's props —
+// the author's allowed attributes, the modelled `cssId`, and now two
+// editor-only markers — so this boundary carries one conditional per source
+// rather than disorganized branching. Splitting the sources into separate
+// functions would move that count rather than remove it, and each split-out
+// piece would still need the same node and the same `nodeAttribute` gate in
+// scope. The parameter and branch counts here track how many things an
+// element can carry, not incidental complexity.
+// fallow-ignore-next-line complexity
 function withNodeAttributes(
   output: ReactNode,
   node: BlockNode,
-  nodeAttribute = false
+  nodeAttribute = false,
+  // Whether the block's definition declares at least one slot, decided once by
+  // the caller and carried down rather than re-read from the definition here.
+  declaresSlots = false
 ): ReactNode {
   const cssId = typeof node.cssId === "string" ? node.cssId : undefined;
   // A stored envelope is whatever the database returned: `attributes: null`
@@ -257,6 +283,10 @@ function withNodeAttributes(
   // The modelled field wins over an attribute of the same name: `cssId` is what
   // the editor writes, and the attribute bag is the escape hatch beside it.
   if (cssId !== undefined) extra.id = cssId;
+  // Before the node address rather than after it, so the two editor markers sit
+  // together and the "LAST, so it cannot be overwritten" reasoning below still
+  // describes the line it is attached to.
+  if (nodeAttribute && declaresSlots) extra[SLOTS_ATTRIBUTE] = "";
   /*
    * LAST, so it cannot be overwritten. This was written first, with a comment
    * saying that made it safe — the opposite of what the code did: the author's
@@ -685,6 +715,8 @@ function checkedOutput(
   isBlockRoot: boolean,
   /** What the block declared about these props, decided once by the caller. */
   declaresNothing: boolean,
+  /** Whether the block's definition declares at least one slot, decided once by the caller. */
+  declaresSlots: boolean,
   /** Whether the editor asked for a per-node DOM address. */
   nodeAttribute = false
 ): ReactNode {
@@ -702,6 +734,7 @@ function checkedOutput(
           fallback={fallback}
           isBlockRoot={false}
           declaresNothing={declaresNothing}
+          declaresSlots={declaresSlots}
           nodeAttribute={nodeAttribute}
         />
       </Suspense>
@@ -766,7 +799,7 @@ function checkedOutput(
   // nothing can be substituted into an element that already exists. React
   // suspends on them, so they still need a boundary above.
   const withAttributes = isBlockRoot
-    ? withNodeAttributes(result.node, node, nodeAttribute)
+    ? withNodeAttributes(result.node, node, nodeAttribute, declaresSlots)
     : result.node;
   if (!result.hasUnwrappedThenable) return withAttributes;
   return <Suspense fallback={fallback}>{withAttributes}</Suspense>;
@@ -788,6 +821,7 @@ async function AsyncBlockOutput({
   fallback,
   isBlockRoot,
   declaresNothing,
+  declaresSlots,
   nodeAttribute,
 }: {
   pending: PromiseLike<unknown>;
@@ -796,6 +830,8 @@ async function AsyncBlockOutput({
   isBlockRoot: boolean;
   /** Carried from the caller, which asked the definition once before rendering. */
   declaresNothing: boolean;
+  /** Carried from the caller, which asked the definition once before rendering. */
+  declaresSlots: boolean;
   /** Whether the editor asked for a per-node DOM address. */
   nodeAttribute?: boolean;
 }): Promise<ReactNode> {
@@ -806,6 +842,7 @@ async function AsyncBlockOutput({
       fallback,
       isBlockRoot,
       declaresNothing,
+      declaresSlots,
       nodeAttribute
     );
   } catch (error) {
@@ -916,6 +953,20 @@ export function BlockBoundary({
     declaresNothing = false;
   }
 
+  // Contained for the same reason `declaresNothing` above is: `slots` is a
+  // property on an object a plugin author wrote, so a getter or a proxy can
+  // throw. A declaration that throws is no declaration, never the page's error.
+  let declaresSlots = false;
+  try {
+    const slots: unknown = definition.slots;
+    declaresSlots =
+      typeof slots === "object" &&
+      slots !== null &&
+      Object.keys(slots).length > 0;
+  } catch {
+    declaresSlots = false;
+  }
+
   const marker = propMarker(definition, nodeAttribute === true);
 
   let output: unknown;
@@ -975,6 +1026,7 @@ export function BlockBoundary({
       fallback,
       true,
       declaresNothing,
+      declaresSlots,
       nodeAttribute
     );
   }
@@ -987,6 +1039,7 @@ export function BlockBoundary({
         fallback={fallback}
         isBlockRoot
         declaresNothing={declaresNothing}
+        declaresSlots={declaresSlots}
         nodeAttribute={nodeAttribute}
       />
     </Suspense>
