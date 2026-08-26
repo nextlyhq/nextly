@@ -27,12 +27,15 @@ import { defineOwnProperty } from "../../../shared/lib/own-property";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 
 import { reconcileById, type ItemMatch } from "./reconcile-list";
+import { richTextNode } from "./rich-text-node";
+import { sourceNode } from "./source-node";
 import { diffText } from "./text-diff";
 import type {
   DiffStatus,
   FieldDiff,
   FieldDisplay,
   ListItemDiff,
+  NodeMeta,
   RelationTarget,
   UnknownFieldDiff,
   VersionDiff,
@@ -44,13 +47,6 @@ export type VersionDiffBody = Pick<VersionDiff, "hasChanges" | "fields">;
 export interface ComputeDiffOptions {
   /** Drop every node that did not change (nested included). */
   modifiedOnly?: boolean;
-}
-
-/** The label triple every emitted node carries, computed once with a real name. */
-interface NodeMeta {
-  name: string;
-  label: string;
-  type: string;
 }
 
 // Framework-managed columns on a top-level document, never user content.
@@ -89,14 +85,13 @@ interface WalkContext {
 // Field types whose value is a single string diffed word by word. slug/url/phone
 // are not core field types but are string-valued (plugin field types, and the
 // admin value-display kit groups them with text), so word-diffing them is
-// correct; a type no field actually has simply never matches. richText is
-// excluded: there is no server-side plain-text flattener, so it diffs as a whole
-// value (each side rendered read-only) rather than guessing.
+// correct; a type no field actually has simply never matches. richText is not
+// here because it is not a single string: it is compared block by block by
+// `rich-text-node`, which keeps its structure and its non-text properties.
 const TEXT_TYPES = new Set([
   "text",
   "textarea",
   "email",
-  "code",
   "slug",
   "url",
   "phone",
@@ -708,20 +703,32 @@ function diffField(
   if (isSetField(field, before, after)) {
     return setNode(meta, before, after, pickFieldDisplay(field));
   }
+  // Rich text is compared structurally rather than as one value. Comparing two
+  // editor documents by equality reports only THAT they differ, which is the
+  // one thing the reader already knows.
+  if (field.type === "richText") {
+    return richTextNode(meta, before, after);
+  }
   // A hasMany text field stores an ARRAY, not a single string, so it cannot be
   // word-diffed; fall through to a value comparison.
   if (TEXT_TYPES.has(field.type) && !isHasMany(field)) {
     return textNode(meta, before, after);
   }
-  if (field.type === "json") {
-    // Classify from raw presence: a stored json `null` is a value, not absence.
-    return valueNode(
-      meta,
-      before,
-      after,
-      pickFieldDisplay(field),
-      jsonPresenceStatus(rawBefore, rawAfter, before, after)
-    );
+  // json and code compare as LINES. `code` used to be word-diffed as one
+  // string, which rendered it as a proportional, word-wrapped paragraph — less
+  // readable in the comparison than in its own read-only display.
+  if (field.type === "json" || field.type === "code") {
+    const language = field.type === "json" ? "json" : "code";
+    const node = sourceNode(meta, before, after, language);
+    // A json field can hold the primitive `null` as a real value, which
+    // normalization collapses to the same `null` as an absent key. Raw key
+    // presence keeps the two apart, so an object-to-null edit reads as a
+    // two-sided change rather than as a removal.
+    if (field.type !== "json") return node;
+    return {
+      ...node,
+      status: jsonPresenceStatus(rawBefore, rawAfter, before, after),
+    };
   }
   return valueNode(meta, before, after, pickFieldDisplay(field));
 }

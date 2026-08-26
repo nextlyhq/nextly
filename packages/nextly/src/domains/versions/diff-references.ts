@@ -122,7 +122,18 @@ function collect(fields: FieldDiff[], out: ReferenceRequest[]): void {
       case "list":
         for (const item of node.items) collect(item.fields, out);
         break;
-      // text and unknown nodes carry no resolvable reference.
+      // Stated rather than left to fall through, so a node kind added later
+      // has to be considered here instead of being skipped in silence.
+      //
+      // `richText` carries media as an identity token folded into the block's
+      // text, not as a structured reference this hydrator can resolve, so a
+      // media node inside rich text is labelled by its src or id rather than by
+      // its filename. `source`, `text` and `unknown` carry no reference at all.
+      case "richText":
+      case "source":
+      case "text":
+      case "unknown":
+        break;
     }
   }
 }
@@ -177,6 +188,14 @@ function annotate(
         break;
       case "list":
         for (const item of node.items) annotate(item.fields, labels);
+        break;
+      // Named for the same reason as in `collect`: these kinds hold nothing
+      // this walker can resolve, and saying so keeps a later kind from
+      // inheriting the skip by omission.
+      case "richText":
+      case "source":
+      case "text":
+      case "unknown":
         break;
     }
   }

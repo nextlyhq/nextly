@@ -125,10 +125,13 @@ describe("computeVersionDiff — per field kind", () => {
   it("classifies a json object-to-null edit as a two-sided change", () => {
     // A stored json `null` is a value, not absence: object -> null is a change,
     // not a removal, even though normalization collapses null the same either way.
+    // json now compares as SOURCE LINES rather than as one opaque value, so the
+    // reader sees which keys moved; the null classification above is unchanged
+    // and is what this test guards.
     const diff = computeVersionDiff({ cfg: { a: 1 } }, { cfg: null }, [
       field({ name: "cfg", type: "json" }),
     ]);
-    expect(diff.fields[0]).toMatchObject({ kind: "value", status: "changed" });
+    expect(diff.fields[0]).toMatchObject({ kind: "source", status: "changed" });
   });
 
   it("classifies an absent-to-json-null edit as added", () => {
@@ -136,9 +139,78 @@ describe("computeVersionDiff — per field kind", () => {
       field({ name: "cfg", type: "json" }),
     ]);
     expect(diff.fields.find(n => n.name === "cfg")).toMatchObject({
-      kind: "value",
+      kind: "source",
       status: "added",
     });
+  });
+
+  it("diffs a richText field structurally, not as one opaque value", () => {
+    // Comparing two editor documents by equality reports only THAT they
+    // differ, which is the one thing the reader already knows.
+    const doc = (body: string) => ({
+      root: {
+        type: "root",
+        version: 1,
+        format: "",
+        indent: 0,
+        direction: "ltr",
+        children: [
+          {
+            type: "paragraph",
+            version: 1,
+            format: "",
+            indent: 0,
+            direction: "ltr",
+            children: [
+              {
+                type: "text",
+                version: 1,
+                text: body,
+                format: 0,
+                detail: 0,
+                mode: "normal",
+                style: "",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const diff = computeVersionDiff({ body: doc("a") }, { body: doc("b") }, [
+      field({ name: "body", type: "richText" }),
+    ]);
+    const node = diff.fields[0];
+    expect(node).toMatchObject({ kind: "richText", status: "changed" });
+    if (node.kind === "richText") {
+      expect(node.blocks[0]?.status).toBe("changed");
+      expect(node.blocks[0]?.segments?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("diffs a code field as source lines rather than as one word-diffed string", () => {
+    // `code` used to sit in TEXT_TYPES, which rendered the comparison as a
+    // proportional, word-wrapped paragraph — less readable than viewing the
+    // version. It is now line-oriented and carries its language.
+    const diff = computeVersionDiff(
+      { snippet: "const a = 1;\nconst b = 2;" },
+      { snippet: "const a = 1;\nconst b = 3;" },
+      [field({ name: "snippet", type: "code" })]
+    );
+    const node = diff.fields[0];
+    expect(node).toMatchObject({ kind: "source", status: "changed" });
+    if (node.kind === "source") {
+      expect(node.language).toBe("code");
+      expect(node.lines.filter(l => l.status !== "unchanged")).toHaveLength(1);
+    }
+  });
+
+  it("does not report a json key reordering as a change", () => {
+    const diff = computeVersionDiff(
+      { cfg: { a: 1, b: 2 } },
+      { cfg: { b: 2, a: 1 } },
+      [field({ name: "cfg", type: "json" })]
+    );
+    expect(diff.hasChanges).toBe(false);
   });
 
   it("diffs a text field into word segments", () => {
