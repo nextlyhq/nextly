@@ -11,7 +11,7 @@
  * @module shared/addressable-fields
  */
 
-import type { FieldConfig } from "../collections/fields/types";
+import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 
 /**
  * The fields stored at this level, in the order they are declared.
@@ -34,9 +34,26 @@ import type { FieldConfig } from "../collections/fields/types";
  * `push(...children)` — measured at roughly 110,000 children on node 22, which
  * is an engine limit rather than a specified one. Both surfaced inside a
  * post-commit hook, where a throw reports a failed save for one that succeeded.
+ *
+ * Overloaded so the element type SURVIVES the walk. `FieldConfig` is the closed
+ * built-in union and excludes `PluginDataFieldConfig`, so returning it would
+ * erase exactly the contributed fields this is published for: a plugin passing
+ * its own `blocks(...)` through and then narrowing would land on `never`, and
+ * could not replace its duplicate walk without a cast. Widening the return to
+ * `AuthorableFieldConfig` for everyone is the other wrong answer — the note on
+ * that type says the openness a contributed field needs belongs at the boundary
+ * where a schema is WRITTEN, not in the type every internal reader shares, and
+ * core's own callers would start seeing `{} | null` on ordinary property reads.
+ *
+ * The generic assumes a field list is homogeneous with its nested lists, which
+ * holds here because a group's `fields` is the same union as its siblings. A
+ * caller with no type at all falls to the second signature and gets the
+ * authorable union, which is the widest thing it can honestly be told.
  */
-export function addressableFields(fields: unknown): FieldConfig[] {
-  const out: FieldConfig[] = [];
+export function addressableFields<T extends object>(fields: readonly T[]): T[];
+export function addressableFields(fields: unknown): AuthorableFieldConfig[];
+export function addressableFields(fields: unknown): AuthorableFieldConfig[] {
+  const out: AuthorableFieldConfig[] = [];
   if (!Array.isArray(fields)) return out;
 
   // Reversed so that popping yields declaration order.
@@ -54,7 +71,7 @@ export function addressableFields(fields: unknown): FieldConfig[] {
 
     const name = (field as { name?: unknown }).name;
     if (typeof name === "string" && name.length > 0) {
-      out.push(field as FieldConfig);
+      out.push(field as AuthorableFieldConfig);
       continue;
     }
 
