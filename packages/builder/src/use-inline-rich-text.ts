@@ -171,6 +171,26 @@ export function useInlineRichText(
   );
 
   /*
+   * Drop an edit the author has already walked away from.
+   *
+   * The editor arrives asynchronously, and until it does the element is neither
+   * focused nor editable — this module marks it inside `attach`. So none of the
+   * ordinary ways of leaving a block emit `blur`: clicking the canvas
+   * background, selecting another block, or deselecting from the keyboard each
+   * change only the selection. Nothing would cancel the pending load, and when
+   * it landed it would attach to the passage they left and take the caret back.
+   *
+   * Only a load that has NOT attached yet is dropped this way. Once the editor
+   * is live the element is focused, leaving it blurs, and blur commits — so
+   * cancelling here as well would throw away what the author had just typed.
+   */
+  useEffect(() => {
+    if (editing === null || mounted.current !== null) return;
+    if (editor.selectedId === editing.nodeId) return;
+    cancel();
+  }, [editor.selectedId, editing, cancel]);
+
+  /*
    * Hand the subtree over, and take it back on the way out.
    *
    * In an effect rather than in `begin` so the handover happens after React has

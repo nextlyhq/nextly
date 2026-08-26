@@ -330,3 +330,57 @@ describe("the canvas going away mid-edit", () => {
     expect(detach).toHaveBeenCalled();
   });
 });
+
+describe("walking away while the editor is still loading", () => {
+  it("drops the pending edit instead of grabbing the caret back", async () => {
+    /*
+     * The passage is not focused or editable until `attach` runs, so none of
+     * the ordinary ways of leaving a block emit `blur`: clicking the canvas
+     * background, selecting a different block, or deselecting from the keyboard
+     * each change only the selection. Without watching that, the load lands
+     * after the author has moved on and takes the caret back to a passage they
+     * left — and it attaches, so the next thing they type goes into the wrong
+     * block.
+     */
+    let land: ((editor: unknown) => void) | undefined;
+    const attach = vi.fn(() => ({
+      focus: vi.fn(),
+      read: vi.fn(() => undefined),
+      detach: vi.fn(),
+    }));
+    const load = vi.fn(
+      () =>
+        new Promise(resolve => {
+          land = resolve as (e: unknown) => void;
+        })
+    );
+
+    registerArticle();
+    paint();
+    let selectedId = "a";
+    const { result, rerender } = renderHook(() =>
+      useInlineEditing(
+        { ...editorState(), selectedId } as EditorState,
+        load as never
+      )
+    );
+
+    act(() => result.current.onDoubleClick(doubleClickOn("content")));
+    expect(result.current.editingRich?.prop).toBe("content");
+    expect(load).toHaveBeenCalled();
+
+    // The author clicks the background: the selection clears, and nothing else
+    // happens — no blur, because nothing was focused.
+    selectedId = "";
+    rerender();
+
+    expect(result.current.editingRich).toBeNull();
+
+    // The chunk arrives late. It must not attach to the passage they left.
+    await act(async () => {
+      land?.({ attach });
+    });
+
+    expect(attach).not.toHaveBeenCalled();
+  });
+});
