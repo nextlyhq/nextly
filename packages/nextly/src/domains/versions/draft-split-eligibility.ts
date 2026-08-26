@@ -24,8 +24,8 @@
  * @module domains/versions/draft-split-eligibility
  */
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
-import type { VersionsConfig } from "../../schemas/versions/types";
 import { hasPasswordField } from "../../shared/lib/password-fields";
 
 import { resolveVersionsConfig } from "./resolve-config";
@@ -274,15 +274,24 @@ export async function schemaDraftsEnabled(
  * This is what a plugin holds. `versions` accepts the authored forms — `true`,
  * where drafts default on, and `{ drafts: true }` — rather than the resolved
  * `{ drafts: { enabled } }` shape that only exists after config load.
+ *
+ * PROJECTED from {@link CollectionConfig} rather than restated, so the three
+ * properties this question reads carry whatever the authoring type says they
+ * carry. A parallel declaration would keep compiling after `CollectionConfig`
+ * widened one of them, and the collection an author can legally write would
+ * then be rejected by the helper published to read it — with nothing failing,
+ * because the function and its exported alias would share the stale copy.
+ *
+ * `slug` is the one departure and it is narrowed, not widened: a collection
+ * always has one, but this only names the entity in the warning an unresolvable
+ * component emits, so a caller holding a partial collection can omit it.
  */
-export interface AuthoredDraftSplitCollection {
-  status?: boolean;
-  versions?: boolean | VersionsConfig;
-  /** Top-level fields, in their ORIGINAL (un-enriched) form. */
-  fields: FieldConfig[];
-  /** Names the entity in the warning an unresolvable component emits. */
-  slug?: string;
-}
+export type AuthoredDraftSplitCollection = Pick<
+  CollectionConfig,
+  "status" | "versions" | "fields"
+> & {
+  slug?: CollectionConfig["slug"];
+};
 
 /**
  * Whether a collection stores a working draft beside its published row, asked

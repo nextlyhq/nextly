@@ -15,10 +15,8 @@
  * leave every runtime assertion passing while TypeScript consumers could no
  * longer call the API at all.
  *
- * Keeping both is the correction to a mistake made one round earlier: the
- * runtime test was added by REPLACING the type test, which fixed the gap it was
- * aimed at and opened this one. Repairing "X does not cover Y" by swapping X
- * for Y loses X.
+ * Neither file is redundant with the other, and replacing either with the other
+ * trades one gap for a different one.
  *
  * @module draft-split-reach.test-d
  */
@@ -32,10 +30,9 @@ import type {
 /** The authored shorthand an author writes, not the shape config load produces. */
 /**
  * Written as a STANDALONE literal, not as an intersection with the published
- * type. Deriving the fixture from the type under test makes a narrowing move
- * both sides of the comparison, so the assertion cannot fail — which is what
- * the first version of this file did, and it passed a compiling break that
- * removed the boolean form entirely.
+ * type. A fixture derived from the type under test moves with it: a narrowing
+ * shifts both sides of the comparison together, so the assertion holds for a
+ * parameter that no longer accepts the boolean form at all.
  */
 type AuthoredShorthand = { status: true; versions: true; fields: [] };
 
@@ -62,10 +59,22 @@ const objectFormIsAccepted: AuthoredObject extends Param ? true : false = true;
  * second type introduced for the parameter, would leave consumers annotating
  * their collections with something the API no longer accepts. The fixtures
  * above deliberately do not reference it — a fixture derived from the type
- * under test moves with it and cannot fail — so this is the one assertion that
- * ties the published name to the callable surface.
+ * under test moves with it and cannot fail — so this pair is what ties the
+ * published name to the callable surface.
  */
-const publishedTypeIsTheParameter: Param extends AuthoredDraftSplitCollection
+const parameterAcceptsThePublishedType: Param extends AuthoredDraftSplitCollection
+  ? true
+  : false = true;
+
+/**
+ * And the other direction, which is the half a one-way check cannot see.
+ *
+ * `Param extends Published` alone stays true when the parameter is NARROWER
+ * than the published type: a consumer annotates a value with the exported name,
+ * the checker accepts it, and the call rejects it. Asserting both directions is
+ * what makes the two names one type rather than two that happen to overlap.
+ */
+const publishedTypeIsAcceptedAsTheParameter: AuthoredDraftSplitCollection extends Param
   ? true
   : false = true;
 
@@ -90,7 +99,8 @@ const unrelatedTypeIsRejected: DraftSplitDisabledReason extends Param
 
 export type { Param, AuthoredShorthand, AuthoredObject };
 export {
-  publishedTypeIsTheParameter,
+  parameterAcceptsThePublishedType,
+  publishedTypeIsAcceptedAsTheParameter,
   shorthandIsAccepted,
   objectFormIsAccepted,
   verdictCarriesAReason,

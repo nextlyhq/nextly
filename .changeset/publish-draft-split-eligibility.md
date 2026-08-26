@@ -49,6 +49,13 @@ has the same problem.
 The reason travels with the verdict rather than being reduced to a boolean, so a caller can
 say WHY a collection it expected to draft does not.
 
+The collection shape it accepts is PROJECTED from `CollectionConfig` rather than restated
+beside it, so the three properties the question reads carry whatever the authoring type says
+they carry. A parallel declaration would keep compiling after `CollectionConfig` widened one
+of them, and a collection an author can legally write would then be rejected by the helper
+published to read it - with nothing failing anywhere, because the function and its exported
+type would share the stale copy.
+
 Published from the package root rather than `nextly/config`, because answering the question
 reaches the component registry through the service container, and `config` is a client entry -
 exporting it there would pull server code into a browser bundle.

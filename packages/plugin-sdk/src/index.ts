@@ -35,6 +35,13 @@ export { definePlugin } from "nextly";
  * core's layout rather than on a contract.
  */
 export { collectionDraftSplit } from "nextly";
+/**
+ * @experimental `AuthoredDraftSplitCollection` is the collection shape the
+ *   question accepts, and `DraftSplitEligibility` / `DraftSplitDisabledReason`
+ *   are the verdict it answers with. Tagged on their own declaration: a release
+ *   tag applies to the declaration it precedes, so the block above classifies
+ *   the function alone and these three would otherwise be published untagged.
+ */
 export type {
   AuthoredDraftSplitCollection,
   DraftSplitEligibility,
