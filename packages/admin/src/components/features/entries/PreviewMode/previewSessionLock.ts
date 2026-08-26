@@ -29,6 +29,8 @@
  * @module components/features/entries/PreviewMode/previewSessionLock
  */
 
+import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
+
 /** Shared by every admin tab on this origin. */
 const CHANNEL = "nextly.preview.session";
 
@@ -38,12 +40,14 @@ const CHANNEL = "nextly.preview.session";
  * A string rather than the parts, because it is only ever compared for equality
  * and a structured payload invites a reader to match on one field.
  */
-export function previewScopeKey(
-  collection: string,
-  entryId: string,
-  locale: string | undefined
-): string {
-  return `${collection} ${entryId} ${locale ?? ""}`;
+export function previewScopeKey(scope: SelfPreviewScope): string {
+  const locale = scope.locale ?? "";
+  // The KIND is part of the key. A Single and a collection can carry the same
+  // slug, and two panes previewing genuinely different documents that compared
+  // equal here would each believe the other's cookie was its own.
+  return scope.single === undefined
+    ? `collection ${scope.collection} ${scope.entryId} ${locale}`
+    : `single ${scope.single} ${locale}`;
 }
 
 export interface PreviewSessionLock {

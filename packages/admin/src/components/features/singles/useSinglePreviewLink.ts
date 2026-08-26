@@ -17,8 +17,8 @@
  */
 
 import { previewLinkLocale } from "@admin/components/features/entries/EntryForm/entry-address";
+import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
-import type { UsePreviewLinkOptions } from "@admin/hooks/usePreviewLink";
 
 export interface SinglePreviewLinkInput {
   /** The Single's slug, which is its identity — there is no id to wait for. */
@@ -34,12 +34,27 @@ export interface SinglePreviewLinkInput {
 }
 
 export interface SinglePreviewLink {
-  /** Whether to offer the control at all. */
+  /** Whether to offer either preview control at all. */
   isAvailable: boolean;
   /** Mint and copy. */
   copy: () => void;
   /** Whether a mint is in flight. */
   isCopying: boolean;
+  /**
+   * What an in-admin PANE should mint against.
+   *
+   * Returned from here rather than rebuilt by the form, because the locale
+   * resolution above is the delicate part and two callers resolving it
+   * separately is exactly how a pane ends up scoped to a different language
+   * than the link beside it. The shareable link and the pane are two surfaces
+   * onto one document; the scope is decided once.
+   *
+   * Always present, because the slug always is. `isAvailable` is the separate
+   * question of whether to OFFER a preview, and a caller must gate on it: a
+   * scope built while the locale is unresolved deliberately carries no locale,
+   * and minting against that would grant every translation.
+   */
+  scope: SelfPreviewScope;
 }
 
 export function useSinglePreviewLink({
@@ -54,7 +69,7 @@ export function useSinglePreviewLink({
   // is silent because both look correct.
   const linkLocale = previewLinkLocale({ localized, locale, defaultLocale });
 
-  const target: UsePreviewLinkOptions = {
+  const target: SelfPreviewScope = {
     single: slug,
     ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
   };
@@ -62,6 +77,9 @@ export function useSinglePreviewLink({
   const link = usePreviewLink(target);
 
   return {
+    // The same object the shareable link mints against, so the pane cannot open
+    // a different language than the link would have shared.
+    scope: target,
     // A Single with no publish lifecycle has no pending state to show anyone,
     // so there is nothing to share and the control is not offered.
     isAvailable: hasStatus && linkLocale.kind !== "unresolved",
