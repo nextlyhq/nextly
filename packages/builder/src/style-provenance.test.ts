@@ -681,6 +681,36 @@ describe("the breakpoint dimension of a control's provenance", () => {
     expect(badge).toEqual({ kind: "none" });
   });
 
+  it("keeps an UNBOUNDED container tier unselectable", () => {
+    /*
+     * An unbounded container definition has no `maxWidth`, exactly like the
+     * unconditional viewport tier — but `offeredTiers` and `widthForBreakpoint`
+     * exclude the container axis entirely, so a jump would hand the host
+     * `undefined` and release the canvas as though base had been chosen.
+     * Sizing a canvas cannot put an element's own query container at a width.
+     */
+    const badge = badgeFor(
+      query([entry({ breakpoint: "fluid" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["fluid", "mobile"],
+      }),
+      {
+        viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+        container: [{ id: "fluid", label: "Fluid" }],
+      } as never
+    );
+
+    expect(badge).toEqual({
+      kind: "inherited",
+      source: {
+        breakpoint: "fluid",
+        label: "Fluid",
+        axis: "container",
+        selectable: false,
+      },
+    });
+  });
+
   it("names the CONTAINER axis rather than reporting a bare breakpoint", () => {
     /*
      * `breakpointContexts` emits over both axes and a container context carries
@@ -821,6 +851,99 @@ describe("the breakpoint dimension of a control's provenance", () => {
     const badge = badgeFor(
       query([entry({ property: "background-image", value: "url(a.png)" })], {
         cssProperty: "background-image",
+      }),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "none" });
+  });
+
+  it("says nothing when the winner is another STATE at another breakpoint", () => {
+    /*
+     * The breakpoint check alone is not enough: a hover value at Tablet differs
+     * from the edited address in TWO dimensions, and passing it through would
+     * offer "go to Tablet" to an author editing the base state — where the
+     * field they are looking at holds nothing.
+     *
+     * The existing same-breakpoint case cannot catch this, because there the
+     * breakpoint guard fires first.
+     */
+    const badge = badgeFor(
+      query([entry({ state: "hover", breakpoint: "tablet" })], {
+        breakpoint: "mobile",
+        state: "base",
+        liveBreakpoints: ["tablet", "mobile"],
+        liveStates: ["base", "hover"],
+      } as never),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "none" });
+  });
+
+  it("says nothing when the winner belongs to an ENCLOSING node", () => {
+    /*
+     * `styleOrigin` deliberately returns an ancestor's declaration when it
+     * carries a descendant selector that reaches here. A bare `node` origin at
+     * another breakpoint is therefore not proof the value is this control's —
+     * and "go to Tablet and edit it there" would send the author to a tier
+     * where the field in front of them holds nothing, because the value lives
+     * on a different node.
+     *
+     * The fixture has to REACH the guard, and three things are needed for that.
+     *
+     * The subject must NAME the ancestor, because `styleOrigin` only lets an
+     * enclosing node's rule through `reachesViaAncestor` — with no ancestors
+     * listed, an unrelated node's declaration is filtered upstream and the
+     * badge is empty whether or not the guard exists.
+     *
+     * That entry must carry a DESCENDANT selector, because a bare rule on
+     * another node reaches nothing here; `reachesViaAncestor` returns false for
+     * `descendant === undefined`.
+     *
+     * And the query must ask at the SAME descendant, or `inheritedBadge`'s
+     * descendant comparison rejects the entry first and the id check is again
+     * never the reason. With all three, the only thing standing between this
+     * trace and an `inherited` badge is the id.
+     */
+    const badge = badgeFor(
+      query(
+        [
+          entry({
+            origin: { kind: "node", id: "parent" },
+            descendant: " a",
+            breakpoint: "tablet",
+          }),
+        ],
+        {
+          subject: {
+            nodeId: "n1",
+            classIds: ["c1"],
+            ancestors: [{ nodeId: "parent" }],
+          },
+          descendant: " a",
+          breakpoint: "mobile",
+          liveBreakpoints: ["tablet", "mobile"],
+        }
+      ),
+      site
+    );
+
+    expect(badge).toEqual({ kind: "none" });
+  });
+
+  it("says nothing when the winner belongs to another CONTROL on this node", () => {
+    /*
+     * A rule on a more specific selector reaches this control without being
+     * written by it — ` a` reaches the link-hover control when no hover value
+     * exists. Same node, same state, another breakpoint, and still not a tier
+     * this control can be edited at.
+     */
+    const badge = badgeFor(
+      query([entry({ descendant: " a", breakpoint: "tablet" })], {
+        breakpoint: "mobile",
+        liveBreakpoints: ["tablet", "mobile"],
+        descendant: " a:hover",
       }),
       site
     );

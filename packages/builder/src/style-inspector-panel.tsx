@@ -1053,6 +1053,7 @@ function StyleControlField({
         answer={answer}
         label={actionName}
         editing={editing}
+        fieldId={id}
         onReset={() => commit(null)}
       />
       {issue === null ? null : (
@@ -1208,6 +1209,7 @@ function BreakpointAction({
   answer,
   label,
   editing,
+  fieldId,
   onReset,
 }: {
   answer: ProvenanceAnswer | undefined;
@@ -1222,6 +1224,8 @@ function BreakpointAction({
    */
   label: string;
   editing: EditedAddress;
+  /** The field this control's actions write, passed on to {@link ResetAction}. */
+  fieldId: string;
   onReset: () => void;
 }): React.JSX.Element | null {
   const badge = answer?.badge;
@@ -1234,6 +1238,7 @@ function BreakpointAction({
         revealed={badge.revealed}
         label={label}
         editing={editing}
+        fieldId={fieldId}
         onReset={onReset}
       />
     );
@@ -1245,6 +1250,21 @@ function BreakpointAction({
 }
 
 /**
+ * What to call a breakpoint source in front of an author.
+ *
+ * ONE naming for both actions. `BreakpointSource` carries the axis precisely
+ * because a site defining both makes a bare tier name ambiguous — and a
+ * container tier may share its label with a viewport one — so a reset saying
+ * "showing the value from Tablet" while a jump says "Tablet (container)" leaves
+ * the author to work out that the two Tablets are different tiers.
+ */
+function sourceLabel(source: BreakpointSource): string {
+  return source.axis === "container"
+    ? `${source.label} (container)`
+    : source.label;
+}
+
+/**
  * Clear this control at the tier being edited, saying what will show through.
  *
  * "Reset" alone asks an author to guess whether the control becomes unset or
@@ -1253,26 +1273,92 @@ function BreakpointAction({
  * name AND in visible text, because computing it exists to remove that guess
  * for everybody rather than for screen-reader users alone.
  */
+/**
+ * Which field a control writes the value of, when it is not that field.
+ *
+ * The colour picker commits its gesture when the popover closes, and pressing
+ * anything outside it closes the popover first. A control that writes the SAME
+ * value the picker is composing therefore has to say so, or one intent produces
+ * two edits and the first undo restores the value the author pressed the
+ * control to be rid of.
+ *
+ * Stated as the field's id rather than as a bare flag, because the question is
+ * not "does this control write" — every control does — but "does it write what
+ * this picker is holding". A bare flag makes Reset on `background-color`
+ * supersede an open picker on `color`, discarding a gesture nothing replaced.
+ *
+ * Declared on the element rather than handed down as a ref, because the
+ * controls making the promise live in components with no path to the picker:
+ * a breakpoint Reset is drawn beside the control, not inside it.
+ */
+const COMMITS_FOR = "data-nx-commits-for";
+
+/**
+ * How a picker's popover closed: with its gesture written, or superseded.
+ *
+ * Named rather than left as a boolean, because the two are not "did something
+ * happen" — both are outcomes the host must ACT on, and the discard is the one
+ * a boolean invites a caller to express by doing nothing.
+ */
+type PickerClose = "committed" | "superseded";
+
+/** The attributes marking a control as writing `fieldId`'s value itself. */
+function commitsFor(fieldId: string): Record<string, string> {
+  return { [COMMITS_FOR]: fieldId };
+}
+
+/**
+ * Whether an interaction outside the picker writes `fieldId`'s value itself.
+ *
+ * Asked of the ancestor chain rather than of the target alone: the press lands
+ * on whatever the control renders inside its button, and a control that puts a
+ * span or an icon in there would otherwise stop making the promise.
+ */
+function supersedes(target: EventTarget | null, fieldId: string): boolean {
+  if (!(target instanceof Element)) return false;
+  return (
+    target.closest(`[${COMMITS_FOR}]`)?.getAttribute(COMMITS_FOR) === fieldId
+  );
+}
+
 function ResetAction({
   revealed,
   label,
   editing,
+  fieldId,
   onReset,
 }: {
   revealed: BreakpointSource | undefined;
   label: string;
   editing: EditedAddress;
+  /** The field whose value this press writes. See {@link commitsFor}. */
+  fieldId: string;
   onReset: () => void;
 }): React.JSX.Element {
   const reveals =
     revealed === undefined
       ? "leaving it unset"
-      : `showing the value from ${revealed.label}`;
+      : `showing the value from ${sourceLabel(revealed)}`;
   return (
     <button
       type="button"
       className="nx-style-inspector__breakpoint-action"
       data-action="reset"
+      /*
+       * This press writes THIS field's value, which a picker mid-gesture on it
+       * needs to know.
+       *
+       * The colour picker commits its draft when the popover closes, and
+       * pressing anything outside it closes the popover first — so without this
+       * one Reset gesture writes twice: the draft the author was discarding,
+       * then the clear. The first undo would then restore the very colour they
+       * pressed Reset to be rid of.
+       *
+       * Declared on the element rather than held as a ref by each picker,
+       * because the rule is about what a CONTROL does, not about which specific
+       * button a particular field happens to know.
+       */
+      {...commitsFor(fieldId)}
       onClick={onReset}
       aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
     >
@@ -1285,7 +1371,7 @@ function ResetAction({
         className="nx-style-inspector__breakpoint-reveals"
         aria-hidden="true"
       >
-        {revealed === undefined ? "to unset" : `to ${revealed.label}`}
+        {revealed === undefined ? "to unset" : `to ${sourceLabel(revealed)}`}
       </span>
     </button>
   );
@@ -1307,8 +1393,7 @@ function JumpAction({
   label: string;
   onJump: () => void;
 }): React.JSX.Element {
-  const where =
-    source.axis === "container" ? `${source.label} (container)` : source.label;
+  const where = sourceLabel(source);
   return (
     <button
       type="button"
@@ -2245,10 +2330,6 @@ function ColourField({
   // in state because the unmount flush below reads it from a cleanup that runs
   // once, where the closed-over `draft` would be the value at first render.
   const pending = React.useRef<string | null>(null);
-  // The clear beside a token reference. It sits OUTSIDE the popover, so pressing
-  // it dismisses the picker and then commits — two writes for one intent unless
-  // the close knows the press belongs to it.
-  const clear = React.useRef<HTMLButtonElement | null>(null);
   /*
    * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
    *
@@ -2263,7 +2344,14 @@ function ColourField({
     onCommit(value);
   };
   /*
-   * The gesture, written when the picker closes.
+   * The picker closed, whichever outcome that close had.
+   *
+   * ONE handler for both, because the two differ only in whether the gesture is
+   * written — the pending value is dropped either way. Expressed as two
+   * handlers, the supersede path is the one that silently does nothing: it
+   * would leave the draft queued, and the unmount flush below would write it
+   * back OVER the edit that superseded it, as a later op with no gesture behind
+   * it.
    *
    * Synchronous, because an author can leave the editor entirely in the same
    * interaction that dismisses this popover: the page builder hands the current
@@ -2275,10 +2363,10 @@ function ColourField({
    * rather than by giving a later handler time to cancel a scheduled write. A
    * timer bought that cancellation and paid for it with this race.
    */
-  const commitDraft = (): void => {
+  const closed = (outcome: PickerClose): void => {
     const unwritten = pending.current;
     pending.current = null;
-    if (unwritten === null) return;
+    if (outcome === "superseded" || unwritten === null) return;
     if (onCommit(unwritten) === "unchanged") reset();
   };
   // The current writer, held so the teardown below depends on nothing. A
@@ -2375,13 +2463,15 @@ function ColourField({
             pending.current = value;
             setDraft(value);
           }}
-          // Committed when the picker CLOSES, which is where the gesture ends.
-          onClosed={commitDraft}
-          commitsItself={target =>
-            clear.current !== null &&
-            target instanceof Node &&
-            clear.current.contains(target)
-          }
+          // The gesture ends where the picker closes, whichever way it closed.
+          onClosed={closed}
+          /*
+           * Any control that writes THIS field's value for itself, declared on
+           * the element. The token clear beside this picker is one; a
+           * breakpoint Reset is another, and it lives in a different component
+           * that has no way to hand a ref down here.
+           */
+          supersededBy={target => supersedes(target, id)}
           // A preset is one discrete choice rather than a gesture, so it
           // commits immediately, exactly as the select and toggle controls do.
           onToken={identity => commitInstead({ $token: identity })}
@@ -2407,9 +2497,9 @@ function ColourField({
           />
         ) : (
           <TokenName
-            buttonRef={clear}
             label={storedLabel}
             actionName={actionName}
+            fieldId={id}
             onClear={() => commitInstead(null)}
           />
         )}
@@ -2442,7 +2532,7 @@ function ColourPicker({
   unrepresented,
   onColour,
   onClosed,
-  commitsItself,
+  supersededBy,
   onToken,
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
@@ -2457,19 +2547,29 @@ function ColourPicker({
   unrepresented: boolean;
   /** The picker moved. Fires on every pointer event during a drag. */
   onColour: (hex: string) => void;
-  /** The picker closed, which is where a gesture ends and a write belongs. */
-  onClosed: () => void;
   /**
-   * Whether an interaction outside the popover will write for itself.
+   * The picker closed, and how.
+   *
+   * The outcome is a value rather than the presence or absence of a call,
+   * because "superseded" is an instruction to DISCARD the gesture, not an
+   * absence of one — and a host given only the write path has nowhere to drop
+   * what it was holding.
+   */
+  onClosed: (outcome: PickerClose) => void;
+  /**
+   * Whether the control being PRESSED outside the popover writes THIS field's
+   * value itself.
    *
    * Asked before the dismissal is turned into a write, so a control that both
-   * closes this picker and commits something of its own does not produce two
-   * edits for one intent. `onInteractOutside` is the single callback Radix
-   * fires for EVERY cause it dismisses on — pointer, focus and the rest — which
-   * is why the question is asked here rather than by hooking the causes one at
-   * a time and missing whichever is added next.
+   * closes this picker and commits the same value does not produce two edits
+   * for one intent — the author would otherwise undo the reset and get back the
+   * colour they pressed it to be rid of.
+   *
+   * The target is a press rather than any interaction, because Radix dismisses
+   * on focus as well and a focused button has not written anything. See where
+   * this is bound.
    */
-  commitsItself: (target: EventTarget | null) => boolean;
+  supersededBy: (target: EventTarget | null) => boolean;
   onToken: (identity: string) => void;
 }): React.JSX.Element {
   // Whether the dismissal in progress belongs to a control that writes for
@@ -2482,7 +2582,7 @@ function ColourPicker({
         if (open) return;
         const own = superseded.current;
         superseded.current = false;
-        if (!own) onClosed();
+        onClosed(own ? "superseded" : "committed");
       }}
     >
       <PopoverTrigger asChild>
@@ -2506,8 +2606,24 @@ function ColourPicker({
       </PopoverTrigger>
       <PopoverContent
         className="nx-style-inspector__picker"
-        onInteractOutside={event => {
-          superseded.current = commitsItself(event.target);
+        /*
+         * A PRESS, not any dismissal whose target happens to be such a control.
+         *
+         * `onInteractOutside` also fires when focus merely LEAVES the popover —
+         * a keyboard author tabbing out lands on the Reset beside this control
+         * and dismisses it without activating anything. Read there, the gesture
+         * they were composing is discarded by a button they never pressed, and
+         * tabbing onward loses it silently.
+         *
+         * The question is not which cause dismissed the popover but whether a
+         * control is about to WRITE, and only a pointer press implies that: the
+         * press is followed by the click that runs the handler. Focus is not,
+         * so a focus dismissal falls through to the ordinary close and the
+         * gesture is committed — which is what leaving a control does
+         * everywhere else in this panel, the text fields included.
+         */
+        onPointerDownOutside={event => {
+          superseded.current = supersededBy(event.target);
         }}
       >
         {unrepresented ? (
@@ -2589,13 +2705,11 @@ function storedTokenLabel(
  * rather than an empty space.
  */
 function TokenName({
-  buttonRef,
   label,
   actionName,
+  fieldId,
   onClear,
 }: {
-  /** Handed up so the picker can tell its own clear from any other dismissal. */
-  buttonRef: React.RefObject<HTMLButtonElement | null>;
   /**
    * What to show: the token's current name, qualified with its identity where
    * another offered token shares that name, and the identity alone when the
@@ -2604,13 +2718,21 @@ function TokenName({
    */
   label: string;
   actionName: string;
+  /** The field whose value this clear writes. See {@link commitsFor}. */
+  fieldId: string;
   onClear: () => void;
 }): React.JSX.Element {
   return (
     <>
       <span className="nx-style-inspector__colour-token">{label}</span>
       <button
-        ref={buttonRef}
+        /*
+         * This press writes this field's value: it commits the clear, and the
+         * picker must not also write the draft its dismissal would otherwise
+         * flush. Declared rather than handed up as a ref, so any control making
+         * the same promise says so the same way.
+         */
+        {...commitsFor(fieldId)}
         type="button"
         onClick={onClear}
         aria-label={`Clear ${actionName}`}

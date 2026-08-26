@@ -235,8 +235,18 @@ type ResolvedShared = {
     | undefined;
 };
 
-/** The same inputs as a context patch: unstated keys absent rather than undefined. */
-type SharedStyleInputs = Partial<ResolvedShared>;
+/**
+ * What {@link sharedStyleInputs} RETURNS: the same inputs as a context patch,
+ * with unstated keys absent rather than present and undefined.
+ *
+ * Named distinctly from the cache stamp's input projection in
+ * `shared-style-inputs.ts`, which is a different type for a different job and
+ * requires `breakpoints`. Under one name a caller writing
+ * `const value: Inputs = sharedStyleInputs(undefined, undefined)` does not
+ * compile, because the reconciler may legally resolve nothing — a published
+ * type unusable with the function published beside it.
+ */
+export type ReconciledStyleInputs = Partial<ResolvedShared>;
 
 /**
  * Resolve every shared input once, so the compiles cannot disagree.
@@ -269,7 +279,7 @@ type SharedStyleInputs = Partial<ResolvedShared>;
 export function sharedStyleInputs(
   styleContext: StyleCompileContext | undefined,
   site: SiteSheetInput | undefined
-): SharedStyleInputs {
+): ReconciledStyleInputs {
   // Both tiers normalised once. Every field below would otherwise repeat the
   // same two absence checks, and the resolution is easier to read as a list of
   // precedences than as a list of optional chains.
@@ -310,7 +320,7 @@ function firstStated<T>(...tiers: readonly (T | undefined)[]): T | undefined {
  * the context would then carry the key, and a reader asking whether it was
  * stated gets the wrong answer.
  */
-function defined(value: ResolvedShared): SharedStyleInputs {
+function defined(value: ResolvedShared): ReconciledStyleInputs {
   return Object.fromEntries(
     Object.entries(value).filter(([, stated]) => stated !== undefined)
   );
