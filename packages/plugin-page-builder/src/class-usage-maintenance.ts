@@ -140,6 +140,35 @@ export function looksLikeBlockDocument(value: unknown): boolean {
   return isPlainRecord(document) && Array.isArray(document.nodes);
 }
 
+/** The columns of a stored row that must each be a string. */
+const ROW_STRING_COLUMNS = [
+  "id",
+  "entity",
+  "entityKey",
+  "field",
+  "classId",
+] as const;
+
+/**
+ * Read every named key as a string, or nothing if any is not one.
+ *
+ * One loop rather than a branch per column. A list of identical checks grows a
+ * branch each time the row does, and the branch that gets forgotten is the one
+ * that lets an unvalidated value through.
+ */
+function readStrings(
+  item: Record<string, unknown>,
+  keys: readonly string[]
+): string[] | null {
+  const values: string[] = [];
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value !== "string") return null;
+    values.push(value);
+  }
+  return values;
+}
+
 /** Whether a stored value is one of the two scopes a row may carry. */
 function readScope(value: unknown): ClassUsageScope | null {
   return value === "collection" || value === "single" ? value : null;
@@ -159,15 +188,22 @@ function readScope(value: unknown): ClassUsageScope | null {
  */
 function readStoredRow(item: unknown): StoredClassUsageRow | null {
   if (!isPlainRecord(item)) return null;
+
   const scope = readScope(item.scope);
   if (scope === null) return null;
-  const { id, entity, entityKey, field, locale, classId } = item;
-  if (typeof id !== "string") return null;
-  if (typeof entity !== "string") return null;
-  if (typeof entityKey !== "string") return null;
-  if (typeof field !== "string") return null;
+
+  // A row written before the locale column existed carries NULL rather than
+  // the empty-string sentinel, because the column was ADDED to a live table
+  // and a new column is nullable. Rejecting it would make those rows invisible
+  // to every query AND to the sweep, so they could never be read or repaired.
+  // Absent means "not localized", which is what the sentinel means.
+  const locale = item.locale ?? "";
   if (typeof locale !== "string") return null;
-  if (typeof classId !== "string") return null;
+
+  const parts = readStrings(item, ROW_STRING_COLUMNS);
+  if (parts === null) return null;
+  const [id, entity, entityKey, field, classId] = parts;
+
   return { id, scope, entity, entityKey, field, locale, classId };
 }
 
@@ -355,6 +391,20 @@ export async function forgetAbsentDocuments(args: {
   locale: string;
   /** Every `entityKey` the walk actually visited. */
   visited: ReadonlySet<string>;
+  /**
+   * Confirm a document really is gone before its rows are removed.
+   *
+   * The visited set is built by an offset-paginated walk over a collection
+   * other writers can change, so a LIVE document can be missing from it — a
+   * deletion ahead of the cursor shifts a later document behind the next
+   * offset, and one created after its position was passed is never reached.
+   *
+   * Consulted only for documents the walk did not see, and answering `true`
+   * KEEPS the rows. The asymmetry is deliberate: a kept stale row over-counts
+   * and blocks a delete that was safe, while a wrongly removed one
+   * under-counts and permits deleting a class a live document still renders.
+   */
+  stillExists: (entityKey: string) => Promise<boolean>;
 }): Promise<{ removed: number }> {
   const where = {
     scope: { equals: args.scope },
@@ -369,8 +419,21 @@ export async function forgetAbsentDocuments(args: {
   );
 
   let removed = 0;
+  // Cached per document rather than per row: one document contributes a row
+  // per class it references, and asking the store once per row would multiply
+  // the check by a factor that has nothing to do with how many are orphaned.
+  const confirmedGone = new Map<string, boolean>();
+
   for (const row of rows) {
     if (args.visited.has(row.entityKey)) continue;
+
+    let gone = confirmedGone.get(row.entityKey);
+    if (gone === undefined) {
+      gone = !(await args.stillExists(row.entityKey));
+      confirmedGone.set(row.entityKey, gone);
+    }
+    if (!gone) continue;
+
     await args.store.delete({ collection: CLASS_USAGE_INDEX_SLUG, id: row.id });
     removed += 1;
   }

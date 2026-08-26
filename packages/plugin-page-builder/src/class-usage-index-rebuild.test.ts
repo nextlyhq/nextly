@@ -34,6 +34,11 @@ function documentStore(items: unknown[], pages = 1) {
       );
       return { items, meta: { hasNext: args.page < pages } };
     },
+    // Answers from the same fixture the walk reads, so a document present in
+    // `items` is present here too — which is what makes a MISSING one a real
+    // absence rather than an artefact of two fakes disagreeing.
+    exists: async ({ id }) =>
+      items.some(i => (i as { id?: string } | null)?.id === id),
   };
   return { store, calls };
 }
@@ -209,6 +214,7 @@ describe("rebuilding the class-usage index", () => {
     // rebuild over a site only partly walked.
     const endless: ClassUsageDocumentStore = {
       find: async () => ({ items: [], meta: { hasNext: true } }),
+      exists: async () => false,
     };
 
     await expect(
@@ -309,5 +315,56 @@ describe("rows whose document no longer exists", () => {
       orphansRemoved: 1,
     });
     expect(calls).toEqual(["delete:r9"]);
+  });
+});
+
+describe("a document the walk missed but which still exists", () => {
+  it("keeps its rows rather than sweeping them as orphans", async () => {
+    // The walk pages by OFFSET over a collection other writers can change, so
+    // a live document can be absent from the visited set through no fault of
+    // its own: deleting one ahead of the cursor shifts a later document behind
+    // the next offset. Sweeping it would delete the rows of a document the
+    // site still serves, which under-counts and permits deleting a class it
+    // renders.
+    const rows = [
+      {
+        id: "r5",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "shifted-page",
+        field: "content",
+        locale: "",
+        classId: "hero",
+      },
+    ];
+    const deletes: string[] = [];
+    const index: ClassUsageIndexStore = {
+      find: async args => ({
+        items: args.where.entityKey?.equals === undefined ? rows : [],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async args => {
+        deletes.push(args.id);
+        return {};
+      },
+    };
+
+    // The walk returns nothing — the document was shifted past the cursor —
+    // but the store still has it.
+    const documents: ClassUsageDocumentStore = {
+      find: async () => ({ items: [], meta: { hasNext: false } }),
+      exists: async ({ id }) => id === "shifted-page",
+    };
+
+    const report = await rebuildClassUsageIndex({
+      documents,
+      index,
+      collection: "pages",
+      field: "content",
+    });
+
+    expect(report.orphansRemoved).toBe(0);
+    expect(deletes).toEqual([]);
   });
 });

@@ -82,6 +82,22 @@ export interface ClassUsageDocumentStore {
      */
     locale: string;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
+  /**
+   * Whether one document still exists, asked by id.
+   *
+   * Needed because the walk pages by OFFSET over a collection that other
+   * writers can change underneath it. Deleting an already-scanned document
+   * shifts a later one behind the next offset, and a document created after
+   * its position was passed is never reached — so a LIVE document can be
+   * missing from the visited set through no fault of its own.
+   *
+   * Without this check the sweep would read that absence as an orphan and
+   * delete the rows of a document the site still serves, which under-counts
+   * and permits deleting a class that document renders. The read costs one
+   * query per suspected orphan, which is proportional to the damage rather
+   * than to the site.
+   */
+  exists(args: { collection: string; id: string }): Promise<boolean>;
 }
 
 /** What a rebuild did, in numbers that mean different things. */
@@ -249,6 +265,13 @@ export async function rebuildClassUsageIndex(args: {
     field: args.field,
     locale: args.locale ?? "",
     visited,
+    // Asked only about a document the walk did not see, so a stable collection
+    // costs nothing. A row survives unless the document is confirmed GONE —
+    // failing towards keeping a row, because a kept stale row over-counts and
+    // blocks a delete, while a wrongly removed one under-counts and permits
+    // deleting a class the live document still renders.
+    stillExists: id =>
+      args.documents.exists({ collection: args.collection, id }),
   });
 
   return { scanned, repaired, undetermined, orphansRemoved: removed };

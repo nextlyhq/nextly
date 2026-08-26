@@ -198,3 +198,51 @@ describe("maintaining one subject's rows", () => {
     );
   });
 });
+
+describe("a row written before the locale column existed", () => {
+  it("is read as the non-localized sentinel rather than discarded", async () => {
+    // The column was ADDED to a live table, so a new column is nullable and
+    // rows written before it carry NULL. Rejecting a non-string locale would
+    // make those rows invisible to every query AND to the sweep, so they could
+    // never be read, reconciled or removed — the cache would hold rows nothing
+    // could ever repair.
+    const calls: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        // No `locale` key at all, which is what a legacy row looks like once
+        // the driver has mapped a NULL column.
+        items: [
+          {
+            id: "r1",
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-1",
+            field: "content",
+            classId: "hero",
+          },
+        ],
+        meta: { hasNext: false },
+      }),
+      create: async args => {
+        calls.push(`create:${String(args.data.classId)}`);
+        return {};
+      },
+      delete: async args => {
+        calls.push(`delete:${args.id}`);
+        return {};
+      },
+    };
+
+    // The document still references `hero`, so a correctly-read legacy row
+    // needs no write at all. Were it discarded, the row would be invisible and
+    // `hero` would be inserted a second time.
+    const report = await maintainClassUsage({
+      store,
+      subject: page,
+      document: documentUsing("hero"),
+    });
+
+    expect(report).toEqual({ inserted: 0, removed: 0, undetermined: false });
+    expect(calls).toEqual([]);
+  });
+});
