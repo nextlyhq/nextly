@@ -28,6 +28,13 @@
 
 The page builder can now rebuild a COLLECTION's class-usage rows from its documents.
 
+Two limits are worth stating, because "the index is recoverable" is wider than what this
+rebuilds. It repairs one collection's field at a time, so rows whose subject names a
+collection that no longer exists - or whose columns were corrupted by a restore or a
+direct write - are unreachable by every query it makes and survive a pass it reports as
+clean. Removing those needs the set of ALL live subjects, which is the caller's knowledge
+rather than this module's.
+
 Scoped to collections deliberately: the index models single subjects too, and a plugin has
 no supported way to read a Single's document - the one readable path creates the row when
 it is absent, so a sweep over Singles would materialise every Single in the app while
