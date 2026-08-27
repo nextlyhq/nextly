@@ -228,21 +228,45 @@ describe("PermissionService - Smoke Tests", () => {
       await service.updatePermission(permission.id, {
         description: "Test description", // Same as existing
       });
-      expect(result.message).toContain("up to date");
     });
   });
 
   describe("deletePermissionById()", () => {
     it("should delete permission successfully", async () => {
       // Arrange
+      // A NON-system resource. `users` is in SYSTEM_RESOURCES, and
+      // `deletePermissionById` refuses those on purpose — a deletion test
+      // written against one asserts success where the product says no.
+      const permission = permissionFactory({
+        action: "read",
+        resource: "posts",
+      });
+      await testDb.db.insert(testDb.schema.permissions).values(permission);
+
+      // Act
+      await service.deletePermissionById(permission.id);
+
+      // Assert: the method returns void, so the deletion is read back rather
+      // than inferred from a return value.
+      const remaining = await testDb.db.query.permissions.findMany({
+        where: { id: permission.id },
+      });
+      expect(remaining).toHaveLength(0);
+    });
+
+    it("refuses to delete a permission on a system resource", async () => {
+      // The guard the case above was accidentally exercising. It had no test of
+      // its own, so a change that dropped the refusal would have gone unnoticed
+      // while that test went green.
       const permission = permissionFactory({
         action: "read",
         resource: "users",
       });
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
-      // Act
-      await service.deletePermissionById(permission.id);
+      await expect(
+        service.deletePermissionById(permission.id)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
     it("should return 404 when deleting non-existent permission", async () => {
@@ -272,12 +296,13 @@ describe("PermissionService - Smoke Tests", () => {
       });
 
       // Act: Try to delete permission
-      const result = await service.deletePermissionById(permission.id);
-
-      // Assert: Should fail because permission is assigned to a role
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(400);
-      expect(result.message).toContain("assigned to roles");
+      // Assert: refuses, because the permission is assigned to a role. The method returns void and
+      // throws, so the refusal IS the rejection — there is no result to read.
+      await expect(
+        service.deletePermissionById(permission.id)
+      ).rejects.toMatchObject({
+        statusCode: 400,
+      });
     });
   });
 
@@ -292,7 +317,6 @@ describe("PermissionService - Smoke Tests", () => {
 
       // Act
       await service.deletePermission("delete", "posts");
-      expect(result.message).toContain("deleted");
 
       // Verify permission is gone
       const permissions = await testDb.db.query.permissions.findMany({
@@ -328,12 +352,13 @@ describe("PermissionService - Smoke Tests", () => {
       });
 
       // Act: Try to delete permission by action/resource
-      const result = await service.deletePermission("update", "comments");
-
-      // Assert: Should fail because permission is assigned
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(400);
-      expect(result.message).toContain("assigned to roles");
+      // Assert: refuses, because the permission is assigned to a role. The method returns void and
+      // throws, so the refusal IS the rejection — there is no result to read.
+      await expect(
+        service.deletePermission("update", "comments")
+      ).rejects.toMatchObject({
+        statusCode: 400,
+      });
     });
   });
 
@@ -770,8 +795,7 @@ describe("PermissionService - Smoke Tests", () => {
       );
 
       // Assert
-      expect(result.success).toBe(true);
-      expect(result.statusCode).toBe(201); // Should create new permission
+      expect(result.created).toBe(true);
       expect(result.id).toBeTruthy();
     });
 
@@ -817,8 +841,7 @@ describe("PermissionService - Smoke Tests", () => {
       );
 
       // Assert
-      expect(result.success).toBe(true);
-      expect(result.statusCode).toBe(201); // Should create new permission
+      expect(result.created).toBe(true);
       expect(result.data).toBeTruthy();
       expect(result.id).toBeTruthy();
 
@@ -930,7 +953,6 @@ describe("PermissionService - Smoke Tests", () => {
 
       // Act
       await service.updatePermission(permission.id, {});
-      expect(result.message).toContain("up to date");
     });
   });
 
