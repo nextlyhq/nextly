@@ -369,8 +369,40 @@
       "dependsOn": ["^build"],
       "cache": false
     },
+    // The declaration build the ui package's published-surface guard reads.
+    //
+    // A task rather than something the suite does inside a hook. It is about
+    // two seconds of work under a wall-clock budget, and on a runner already
+    // executing the rest of this graph that budget was exceeded — so the suite
+    // failed with a hook timeout on branches that had not touched the package,
+    // and reddened `main` itself. Here it is scheduled, cached against declared
+    // inputs, and under no deadline.
+    //
+    // Inputs are what the declaration bundler reads. `dist` is deliberately not
+    // an output: the guard builds somewhere private, because other packages
+    // import this one through `dist` while these tests run.
+    "build:surface-declarations": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**/*.{ts,tsx,mts,cts}",
+        "tsup.config.ts",
+        "tsup.server-safe.config.ts",
+        "tsconfig.json",
+        "package.json"
+      ],
+      "outputs": ["node_modules/.cache/surface-declarations/**"]
+    },
+
     "test": {
-      "dependsOn": ["^build"], // Need built dependencies for imports
+      // `^build` for built dependencies; `build:surface-declarations` for the
+      // one package that has it. Declared on the shared task rather than on a
+      // package-scoped `@nextlyhq/ui#test`, because a package task REPLACES
+      // this definition rather than merging with it — the long inputs list
+      // below would have to be copied, and a copy is what drifts.
+      //
+      // A package without that script contributes no node, so this costs the
+      // others nothing.
+      "dependsOn": ["^build", "build:surface-declarations"],
       "inputs": [
         // `.mts`/`.cts` included for the same reason the JavaScript line
         // below exists: a file the glob misses is a file whose change cannot

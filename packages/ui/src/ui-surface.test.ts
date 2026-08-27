@@ -20,7 +20,7 @@ import {
 
 import {
   DECLARATION_ENTRIES,
-  ensureDeclarations,
+  declarationsDir,
 } from "./__tests__/ensure-declarations";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -338,28 +338,20 @@ describe("ui STABILITY.md ledger", () => {
  * absent from an artifact.
  */
 describe("ui release tags reach the published types", () => {
-  // Vitest initialises a global setup once per project, so a watch rerun after
-  // an edit would otherwise read declarations built before it. Regenerating
-  // here — where it is re-evaluated every run — means the assertions below
-  // always describe the current source rather than merely detecting that they
-  // do not.
-  // The ONLY place the declarations are built. A global setup ran once per
-  // project and this hook ran per suite, so both together built twice per run
-  // for no gain; this one covers the watch case a global setup cannot, because
-  // it is re-evaluated on every rerun.
+  // The directory the declaration build wrote to. Read from what the helper
+  // returns rather than assuming `dist`: the build stays out of `dist` because
+  // other packages import this one through it while these tests run.
   //
-  // A generous timeout because it BUILDS. The build is unconditional rather
-  // than guarded by a staleness computation — see `ensure-declarations` for why
-  // that computation was removed — and two tsup invocations do not fit in
-  // Vitest's ten-second hook default. Allowing the time the operation takes is
-  // the honest fix, not making the operation guess less carefully.
-  // The directory the guard built for itself. Read from what the build
-  // returned rather than assuming `dist`: the build stays out of `dist`
-  // because other packages import this one through it while these tests run.
+  // READ, never built. The build is `build:surface-declarations`, which the
+  // test task depends on — it used to happen here, inside a hook with a
+  // wall-clock budget, and a loaded runner exceeded it and failed a package the
+  // branch had not touched. Nothing here has a deadline now, and the helper
+  // refuses rather than rebuilding if the output is absent or older than the
+  // sources, so a stale guard cannot pass quietly.
   let builtDir = "";
   beforeAll(() => {
-    builtDir = ensureDeclarations();
-  }, 120_000);
+    builtDir = declarationsDir();
+  });
 
   /** Symbols re-exported from a dependency, whose declarations are not ours. */
   const FOREIGN = new Set(["toast", "ToasterProps"]);
@@ -382,7 +374,7 @@ describe("ui release tags reach the published types", () => {
   const DIST_ENTRIES = DECLARATION_ENTRIES;
 
   it("has built declarations to check", () => {
-    // `ensureDeclarations` throws on a missing entry, so this asserts the
+    // `declarationsDir` throws on a missing entry, so this asserts the
     // guard's own precondition rather than the state of a checkout: a guard
     // that quietly checks nothing is indistinguishable from a passing one.
     for (const entry of DIST_ENTRIES) {
