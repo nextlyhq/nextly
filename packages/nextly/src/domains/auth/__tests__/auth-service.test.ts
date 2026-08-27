@@ -3,7 +3,11 @@ import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import {
+  createTestDb,
+  type TestDb,
+  testLogger,
+} from "../../../__tests__/fixtures/db";
 import { userFactory } from "../../../__tests__/fixtures/users";
 import { hashPassword } from "../../../auth/password";
 import { AuthService } from "../services/auth-service";
@@ -20,12 +24,12 @@ describe("AuthService", () => {
 
   beforeEach(async () => {
     testDb = await createTestDb();
-    service = new AuthService(testDb.db, testDb.schema);
+    service = new AuthService(testDb.adapter, testLogger);
   });
 
   afterEach(async () => {
     await testDb.reset();
-    testDb.close();
+    await testDb.close();
   });
 
   describe("registerUser()", () => {

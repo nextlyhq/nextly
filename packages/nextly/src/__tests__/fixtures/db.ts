@@ -1,6 +1,7 @@
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type Database from "better-sqlite3";
-import { defineRelations } from "drizzle-orm";
+import { defineRelations, is } from "drizzle-orm";
+import { getTableConfig, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
@@ -45,6 +46,72 @@ export type TestDrizzleDb = BetterSQLite3Database<typeof testRelations>;
  *
  * Only tables with no generator to borrow are still written out here.
  */
+/**
+ * `CREATE TABLE` for a table the core generators do not cover, DERIVED from its
+ * own Drizzle definition.
+ *
+ * Hand-written DDL in a fixture is a copy of a schema, and a copy drifts. It
+ * already did here twice: `permissions` gained four columns the copy never
+ * grew, and `dynamic_collections` was written with ten columns against a table
+ * that has twenty-five — so every query naming one of the missing fifteen
+ * failed against a table the fixture thought it knew. Reading the definition
+ * instead means the fixture cannot describe a schema that does not exist,
+ * which is the same rule the core tables already follow by borrowing the
+ * production generators.
+ *
+ * Deliberately narrow: columns, primary key, NOT NULL, literal defaults and
+ * unique indexes. That is what a test needs to insert rows and to trip a
+ * uniqueness assertion. Foreign keys and non-unique indexes are left out —
+ * nothing here asserts on them, and emitting a reference to a table this
+ * fixture may not have created would fail at CREATE time rather than at the
+ * point a test cares about.
+ */
+/**
+ * Whether a bundle export is a SQLite table rather than a relation, enum or
+ * helper. `getTableConfig` throws on anything else, so this decides by the
+ * marker Drizzle stamps on tables rather than by shape — a duck-type would
+ * admit the next export that happens to have a `_` field.
+ */
+function isSqliteTable(value: unknown): value is SQLiteTable {
+  return typeof value === "object" && value !== null && is(value, SQLiteTable);
+}
+
+function ddlFor(table: SQLiteTable): string[] {
+  const cfg = getTableConfig(table);
+  const columns = cfg.columns.map(column => {
+    const parts = [`"${column.name}"`, column.getSQLType()];
+    if (column.primary) parts.push("PRIMARY KEY");
+    if (column.notNull) parts.push("NOT NULL");
+    // Only a LITERAL default belongs in DDL. A `$defaultFn` column reports
+    // `hasDefault` with no value because Drizzle supplies it client-side, and
+    // writing `DEFAULT undefined` would be a syntax error.
+    const value = column.default;
+    if (typeof value === "string")
+      parts.push(`DEFAULT '${value.replace(/'/g, "''")}'`);
+    else if (typeof value === "number") parts.push(`DEFAULT ${value}`);
+    else if (typeof value === "boolean") parts.push(`DEFAULT ${value ? 1 : 0}`);
+    return parts.join(" ");
+  });
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS "${cfg.name}" (${columns.join(", ")});`,
+  ];
+  for (const index of cfg.indexes) {
+    const built = index.config;
+    if (!built.unique) continue;
+    const cols = (built.columns as { name?: string }[])
+      .map(c => c.name)
+      .filter((n): n is string => typeof n === "string");
+    if (cols.length === 0) continue;
+    statements.push(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "${built.name}" ON "${cfg.name}" (${cols
+        .map(c => `"${c}"`)
+        .join(", ")});`
+    );
+  }
+  return statements;
+}
+
 function createTables(sqlite: Database.Database) {
   for (const statement of generateSqliteCoreTableStatements()) {
     sqlite.exec(statement);
@@ -53,56 +120,29 @@ function createTables(sqlite: Database.Database) {
     sqlite.exec(statement);
   }
 
-  // No core-table generator covers these: they are created by the schema
-  // pipeline at runtime rather than at first-run, so there is nothing to
-  // reuse. Carried across unchanged from the previous definition rather than
-  // retyped, and to be repointed if a generator ever owns them.
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS api_keys (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      key_hash TEXT NOT NULL,
-      key_prefix TEXT NOT NULL,
-      token_type TEXT NOT NULL,
-      role_id TEXT REFERENCES roles(id) ON DELETE SET NULL,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at INTEGER,
-      last_used_at INTEGER,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS api_keys_key_hash_unique ON api_keys(key_hash);
-    CREATE INDEX IF NOT EXISTS api_keys_user_id_idx ON api_keys(user_id);
-    CREATE INDEX IF NOT EXISTS api_keys_role_id_idx ON api_keys(role_id);
-    CREATE INDEX IF NOT EXISTS api_keys_is_active_expires_at_idx ON api_keys(is_active, expires_at);
-
-    CREATE TABLE IF NOT EXISTS dynamic_collections (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
-      label TEXT NOT NULL,
-      table_name TEXT NOT NULL UNIQUE,
-      description TEXT,
-      icon TEXT,
-      schema_definition TEXT NOT NULL,
-      created_by TEXT REFERENCES users(id),
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS dynamic_collections_name_unique ON dynamic_collections(name);
-    CREATE UNIQUE INDEX IF NOT EXISTS dynamic_collections_table_name_unique ON dynamic_collections(table_name);
-    CREATE INDEX IF NOT EXISTS dynamic_collections_created_by_idx ON dynamic_collections(created_by);
-    CREATE INDEX IF NOT EXISTS dynamic_collections_created_at_idx ON dynamic_collections(created_at);
-    CREATE INDEX IF NOT EXISTS dynamic_collections_updated_at_idx ON dynamic_collections(updated_at);
-
-    CREATE TABLE IF NOT EXISTS nextly_meta (
-      key TEXT PRIMARY KEY NOT NULL,
-      value TEXT,
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE INDEX IF NOT EXISTS nextly_meta_updated_at_idx ON nextly_meta(updated_at);
-  `);
+  // The three tables no core generator covers, DERIVED from their own Drizzle
+  // definitions rather than transcribed. See `ddlFor`: the transcription of
+  // `dynamic_collections` had ten of its twenty-five columns, so every query
+  // naming one of the other fifteen failed against a table the fixture
+  // believed in.
+  // EVERY table in the dialect bundle, derived from its own definition.
+  //
+  // Listing the ones a suite happens to need is how this fixture kept failing:
+  // it named three, and the services also read `dynamic_singles`, which no test
+  // could have told you about until one queried it and got "no such table"
+  // wrapped in a generic database error. The bundle already knows the full set,
+  // so asking it removes the list — and with it the question of whether the
+  // list is current.
+  //
+  // `IF NOT EXISTS` throughout, so a table the production generators above
+  // already created keeps THEIR definition. The generators are the better
+  // source where they exist; this covers only what they do not.
+  for (const value of Object.values(schema)) {
+    if (!isSqliteTable(value)) continue;
+    for (const statement of ddlFor(value)) {
+      sqlite.exec(statement);
+    }
+  }
 }
 
 /**
