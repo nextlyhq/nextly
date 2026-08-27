@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  Languages,
   Layers,
   Image as ImageIcon,
   Settings,
@@ -35,6 +36,17 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   { id: "collections", label: "Collections", icon: Layers, href: "#" },
   { id: "singles", label: "Singles", icon: FileText, href: "#" },
   { id: "media", label: "Media Library", icon: ImageIcon, href: ROUTES.MEDIA },
+  // A top-level entry, mirroring Media: a real `href`, so the rail navigates
+  // rather than opening a panel. It belongs here and not under Collections
+  // because a translator's question is "what needs me, anywhere" — the page
+  // exists precisely to cross collection boundaries, so filing it inside one
+  // would hide the only view that does not belong to a single collection.
+  {
+    id: "translations",
+    label: "Translations",
+    icon: Languages,
+    href: ROUTES.TRANSLATIONS,
+  },
   { id: "plugins", label: "Plugins", icon: Puzzle, href: "#" },
   // User management (Users, User Fields, Roles) lives under Settings now —
   // there is no dedicated top-level icon for it.

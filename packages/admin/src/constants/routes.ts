@@ -19,6 +19,9 @@ export const ROUTES = {
   // Media routes
   MEDIA: "/admin/media",
 
+  // Translations
+  TRANSLATIONS: "/admin/translations",
+
   // ============================================================
   // Builder routes (schema management)
   //

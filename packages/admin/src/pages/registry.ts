@@ -58,6 +58,7 @@ import SingleAPIPlaygroundPage from "./dashboard/singles/[slug]/api";
 import SingleEditPage from "./dashboard/singles/[slug]/index";
 import SingleVersionsPage from "./dashboard/singles/[slug]/versions";
 import SinglesPage from "./dashboard/singles/index";
+import TranslationsPage from "./dashboard/translations/index";
 import CreateUserPage from "./dashboard/users/create";
 import EditUserPage from "./dashboard/users/edit";
 import CreateUserFieldPage from "./dashboard/users/fields/create";
@@ -185,6 +186,20 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     requiredPermission: "read-media",
     section: overridableBy("media"),
+  },
+  [ROUTES.TRANSLATIONS]: {
+    component: TranslationsPage,
+    type: "private",
+    // No permission of its own: the page lists nothing the caller may not
+    // already read. Every row comes back through the collection read rules, so
+    // a reader with access to one collection sees exactly that collection's
+    // outstanding work, and one with access to none sees an empty list rather
+    // than a refusal.
+    //
+    // Its own rail section rather than Collections': the page exists to cross
+    // collection boundaries, so highlighting one collection's rail while
+    // showing every collection's work would point at the wrong thing.
+    section: overridableBy("translations"),
   },
 
   // ============================================================
