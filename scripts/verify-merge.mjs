@@ -799,6 +799,18 @@ const verdict = await sibling("ci-verdict.mjs");
 // before any of this file runs, turning the gate's deliberate exit 2 into an
 // exit 1.
 const { isCliEntry } = await sibling("cli-entry.mjs");
+// The advisory-thread policy lives in ONE implementation, loaded rather than
+// restated. This file counted EVERY unresolved thread and so blocked on the
+// advisory reviewer's — which the sibling's own comment calls out as
+// reinstating through one door the policy closed at another. Two scripts
+// answering one question two ways is how they came to disagree.
+//
+// Through `sibling` for the reason its docblock gives: a static import resolves
+// against the module URL, so a symlinked entry finds no neighbour and dies with
+// ERR_MODULE_NOT_FOUND before this file runs, turning a deliberate exit 2 into
+// an exit 1. Written as a static import first; the symlink tests caught it.
+const { unresolvedThreads: countUnresolvedThreads } =
+  await sibling("ci-verdict.mjs");
 export const SUBMITTED_REVIEW_STATES = verdict.SUBMITTED_REVIEW_STATES;
 /**
  * The revision a reviewer's comment reports having read.
@@ -862,6 +874,35 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = "nextlyhq/nextly";
+
+/**
+ * The review-thread fields this file reads.
+ *
+ * Exported so a test asserts the string the request SENDS. `__typename` is not
+ * decoration: {@link canonicalActorLogin} needs it to tell a GitHub App's
+ * account from a user that shares its name, and without it every thread
+ * canonicalises to a non-bot, nothing is ever advisory, and this script blocks
+ * on threads policy says cannot block — the behaviour being fixed here.
+ */
+export const REVIEW_THREAD_FIELDS =
+  "isResolved comments(first:1){ nodes { author { login __typename } } }";
+
+/**
+ * The second reviewer's account, named ONCE.
+ *
+ * It is consulted for two different things — whether it reviewed this revision,
+ * and whether its threads may block — and spelling it separately at each is how
+ * a future change to one leaves the other pointing at an account that no longer
+ * reviews anything.
+ */
+export const CODERABBIT = "coderabbitai[bot]";
+
+/**
+ * Reviewers whose findings are advisory: real, worth reading, and not a merge
+ * blocker. Spelled as REST spells them, which is the canonical form everything
+ * here compares against.
+ */
+export const ADVISORY_REVIEWERS = [CODERABBIT];
 
 /** Set by `main` once the head repository is known; a fork keeps its own. */
 let REMOTE_FOR_FETCH = "origin";
@@ -1155,7 +1196,11 @@ export function main(argv) {
   // Paginated. A pull request with more than 100 review threads would
   // otherwise have everything past the first page counted as resolved, which
   // is the reassuring direction.
-  let threads = 0;
+  // Nodes are collected rather than counted per page, because whether a thread
+  // counts is no longer a property of the thread alone — it depends on who
+  // opened it, and that judgement belongs to the shared policy below, not to a
+  // `jq` filter repeated here in a second dialect.
+  const threadNodes = [];
   let cursor = null;
   for (;;) {
     const after = cursor ? `, after: "${cursor}"` : "";
@@ -1164,12 +1209,18 @@ export function main(argv) {
         "api",
         "graphql",
         "-f",
-        `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100${after}){ pageInfo { hasNextPage endCursor } nodes { isResolved } } } } }`,
+        `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100${after}){ pageInfo { hasNextPage endCursor } nodes { ${REVIEW_THREAD_FIELDS} } } } } }`,
         "--jq",
-        "{n:[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length, more:.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage, cur:.data.repository.pullRequest.reviewThreads.pageInfo.endCursor}",
+        "{nodes:.data.repository.pullRequest.reviewThreads.nodes, more:.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage, cur:.data.repository.pullRequest.reviewThreads.pageInfo.endCursor}",
       ])
     );
-    threads += page.n;
+    // A page without a node array is not an empty page. Pushing nothing would
+    // silently shrink the count; leaving `threadNodes` un-arrayed is what makes
+    // the policy below refuse instead.
+    if (!Array.isArray(page.nodes)) {
+      throw new Error("review threads: page carried no nodes array");
+    }
+    threadNodes.push(...page.nodes);
     if (!page.more) break;
     // A cursor that does not advance would loop for ever, re-reading one page
     // and adding its count each time. Both failures are silent in opposite
@@ -1180,6 +1231,10 @@ export function main(argv) {
     }
     cursor = page.cur;
   }
+  // Advisory threads do not block. Same function, same advisory list and same
+  // canonical login shape the sibling script uses, so the two cannot drift into
+  // disagreeing about whether a given pull request is mergeable.
+  const threads = countUnresolvedThreads(threadNodes, ADVISORY_REVIEWERS);
 
   // PREFERRED from the review RECORD's own `commit_id`, because only the record
   // carries a sha the server assigned and nobody can edit afterwards.
@@ -1236,11 +1291,7 @@ export function main(argv) {
     knownRevisions,
   });
   // Scoped to THIS revision: a review of an earlier one is not coverage of it.
-  const coderabbit = reviewsCoveringTip(
-    reviews,
-    tip,
-    "coderabbitai[bot]"
-  ).length;
+  const coderabbit = reviewsCoveringTip(reviews, tip, CODERABBIT).length;
 
   // Commit STATUSES are a separate surface from check-runs, and this
   // repository's title check and CodeRabbit both report through it.

@@ -14,6 +14,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  ADVISORY_REVIEWERS,
+  CODERABBIT,
+  REVIEW_THREAD_FIELDS,
   assertCompleteFileList,
   flatPages,
   blockingJobs,
@@ -1394,5 +1397,58 @@ describe("exitCode", () => {
     expect(
       exitCode({ landedVerdict: "no-candidates", mergeable: false })
     ).toBe(1);
+  });
+});
+
+describe("advisory review threads do not block the merge gate", () => {
+  /**
+   * This file used to count EVERY unresolved thread, so the advisory reviewer
+   * held the merge through a door the policy had closed elsewhere. The count is
+   * now taken by the sibling's shared implementation, which needs to know who
+   * opened each thread — and can only know it if the request asks.
+   *
+   * Asserted on the exported string the query is built from, because a fixture
+   * cannot establish this: every unit test supplies whatever author fields it
+   * writes into its own objects, so dropping `__typename` here leaves them all
+   * green while, in production, nothing canonicalises to a bot, nothing is ever
+   * advisory, and every advisory thread blocks again — the exact defect this
+   * change removes, reachable by editing one line nothing else watches.
+   */
+  it("asks for the author fields the shared policy reads", () => {
+    expect(REVIEW_THREAD_FIELDS).toContain("author { login __typename }");
+  });
+
+  it("still asks for the resolution state the count depends on", () => {
+    // The control. If the selection were replaced wholesale by something that
+    // merely mentioned the author, this catches it.
+    expect(REVIEW_THREAD_FIELDS).toContain("isResolved");
+  });
+
+  /**
+   * The advisory list is spelled the way REST spells it, which is the canonical
+   * form. Written as an assertion rather than a comment because the whole
+   * defect was two spellings of one identity that never met.
+   */
+  it("spells the advisory reviewer once, in REST form", () => {
+    expect(CODERABBIT).toBe("coderabbitai[bot]");
+    expect(ADVISORY_REVIEWERS).toEqual([CODERABBIT]);
+  });
+
+  /**
+   * An unreadable count must not read as zero. `unresolvedThreads` answers
+   * `Infinity` for a list it could not read, and `gateVerdict` treats a
+   * non-integer as unknown — so the two compose into a refusal rather than a
+   * pass. Asserted here because it spans both, and neither alone shows it.
+   */
+  it("refuses rather than passes when the thread count is unreadable", () => {
+    const verdict = gateVerdict({
+      tip: "a".repeat(40),
+      unresolvedThreads: Number.POSITIVE_INFINITY,
+      checkRuns: [],
+      changedPaths: [],
+      required: [],
+      eligibility: {},
+    });
+    expect(verdict.blockers.some(b => b.kind === "threads-unknown")).toBe(true);
   });
 });
