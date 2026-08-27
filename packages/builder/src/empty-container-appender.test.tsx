@@ -61,6 +61,22 @@ import {
 } from "./empty-container-appender";
 import { registrySlotSource } from "./inserter";
 
+/**
+ * The `checkVisibility` the RUNTIME brought, read before any case can replace
+ * it, so the teardown below restores rather than assumes.
+ *
+ * `Element.prototype` is where the method is defined when it exists — an own,
+ * writable, enumerable, configurable data property, per the CSSOM View
+ * `partial interface Element` — so a teardown that deleted unconditionally
+ * would reach the real one and not merely {@link withCheckVisibility}'s
+ * stand-in. jsdom implements none today, which makes this `undefined` and the
+ * restore a deletion.
+ */
+const RUNTIME_CHECK_VISIBILITY = Object.getOwnPropertyDescriptor(
+  Element.prototype,
+  "checkVisibility"
+);
+
 // This suite queries by role against the whole document (`screen`), so a tree
 // left mounted by one test is still there for the next `getByRole` to trip
 // over — matching why `block-toolbar.test.tsx` and `spacing-overlay.test.tsx`
@@ -70,9 +86,20 @@ afterEach(() => {
   clearBlocks();
   vi.unstubAllGlobals();
   // `withCheckVisibility` writes to a prototype rather than to a global, which
-  // `vi.unstubAllGlobals` does not reach — and leaving it installed would make
-  // its own absence assertion fail for the next case that asks for it.
-  Reflect.deleteProperty(Element.prototype, "checkVisibility");
+  // `vi.unstubAllGlobals` does not reach. Both runtimes are covered by putting
+  // the captured descriptor back: where there was none the property goes away
+  // again, and where there was one the runtime's own method returns — which is
+  // what keeps `withCheckVisibility`'s absence check a question about the
+  // RUNTIME rather than about what the previous case cleaned up.
+  if (RUNTIME_CHECK_VISIBILITY === undefined) {
+    Reflect.deleteProperty(Element.prototype, "checkVisibility");
+  } else {
+    Object.defineProperty(
+      Element.prototype,
+      "checkVisibility",
+      RUNTIME_CHECK_VISIBILITY
+    );
+  }
 });
 
 // Two container TYPES, not just two nodes of one type — `core/card` exists so
