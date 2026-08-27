@@ -27,6 +27,12 @@ import { describe, expect, it } from "vitest";
 const SRC = join(process.cwd(), "src");
 
 /** Every route whose page is a document rather than a settings form. */
+/** Routes whose frame hands the panel to content that bounds itself. */
+const SELF_MEASURING_ROUTES = [
+  "pages/dashboard/entries/[slug]/[id]/index.tsx",
+  "pages/dashboard/entries/[slug]/create.tsx",
+] as const;
+
 /** A `PluginSlot` wrapper and whatever attributes it carries. */
 const SLOT_WRAPPER = /<div\b([^>]*)>\s*<PluginSlot\b/g;
 
@@ -67,19 +73,45 @@ function containersIn(relative: string): string[] {
 
 describe("content routes read the shared measure", () => {
   for (const route of CONTENT_ROUTES) {
-    it(`${route} measures every container from the shared constant`, () => {
+    it(`${route} names no measure of its own`, () => {
       const containers = containersIn(route);
       // The population assertion. Without it, a renamed file or a pattern that
       // stopped matching yields an empty list, and the loop below passes over
       // a route the test never read.
       expect(containers.length).toBeGreaterThan(0);
       for (const attrs of containers) {
-        // Asserted over EVERY container, so dropping the prop fails here
-        // rather than removing the tag from the scan.
-        expect(attrs).toContain("width={CONTENT_PAGE_MEASURE}");
+        // Two legal answers, and no third. `CONTENT_PAGE_MEASURE` is the page
+        // bounding the content; `full` is the content bounding itself. A raw
+        // `"form"` or `"wide"` here is a page deciding a width on its own,
+        // which is what drifts away from the frame beside it.
+        const legal =
+          attrs.includes("width={CONTENT_PAGE_MEASURE}") ||
+          attrs.includes('width="full"');
+        expect(legal, `illegal width in ${route}: ${attrs.trim()}`).toBe(true);
       }
     });
   }
+
+  it("the loading skeleton matches the frame that replaces it", () => {
+    // The property this whole module exists for. The editor bounds its FIELD
+    // column and takes the panel, so a skeleton that bounds the PAGE is
+    // narrower — and every field slides sideways at the moment data arrives,
+    // which reads as the page loading twice.
+    //
+    // Asserted per route rather than centrally: the skeleton and the frame are
+    // in the same file but different branches, and nothing renders both, so
+    // their agreement is not observable at either one.
+    for (const route of SELF_MEASURING_ROUTES) {
+      const source = readFileSync(join(SRC, route), "utf8");
+      const skeleton = source.slice(source.indexOf("PageSkeleton()"));
+      const first = [...skeleton.matchAll(CONTAINER_TAG)][0]?.[1] ?? "";
+      expect(first, `no container found in ${route}'s skeleton`).not.toBe("");
+      expect(
+        first.includes('width="full"'),
+        `${route}: the skeleton bounds the page while its frame does not`
+      ).toBe(true);
+    }
+  });
 
   it("bounds the injection slots that the self-measuring frame renders", () => {
     // The frame gives the panel to the form-and-rail row, so anything else it
