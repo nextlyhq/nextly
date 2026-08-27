@@ -441,6 +441,40 @@ function kidsOf(node: RichTextNode): readonly RichTextNode[] {
 const MAX_PARTITION_DEPTH = 100;
 
 /**
+ * Where ONE child of a phrasing-only container belongs.
+ *
+ * Answered per child so the walk above stays a walk: the decision has five
+ * cases and the sequencing rule has its own, and reading them interleaved is
+ * how a case comes to be judged against the wrong container.
+ *
+ * See {@link PhrasingOnly} for why each branch answers the way it does.
+ */
+function partitionChild(
+  child: RichTextNode,
+  permits: ReadonlySet<string>,
+  depth: number
+): { keeps: RichTextNode[]; moves: RichTextNode[] } {
+  if (!isRichTextNode(child)) return { keeps: [child], moves: [] };
+  if (permits.has(child.type)) {
+    // Kept, but its OWN block content still may not live here. Moved out
+    // unwrapped: a second copy of this heading would be a second outline entry.
+    const inner = partitionPhrasing(kidsOf(child), PERMITS_NOTHING, depth + 1);
+    return { keeps: [{ ...child, children: inner.keeps }], moves: inner.moves };
+  }
+  if (BLOCK_LEVEL.has(child.type)) return { keeps: [], moves: [child] };
+  // Kept whole past the bound: rearranging it is what would recurse.
+  if (depth >= MAX_PARTITION_DEPTH || !holdsBlockContent(child.children))
+    return { keeps: [child], moves: [] };
+  // An inline wrapper holding both. Split it, keeping the wrapper on each side
+  // so the words stay linked and the media stays linked.
+  const inner = partitionPhrasing(kidsOf(child), permits, depth + 1);
+  return {
+    keeps: inner.keeps.length > 0 ? [{ ...child, children: inner.keeps }] : [],
+    moves: inner.moves.length > 0 ? [{ ...child, children: inner.moves }] : [],
+  };
+}
+
+/**
  * Children split into what a phrasing-only container keeps and what follows it.
  *
  * See {@link PhrasingOnly} for why each branch answers the way it does.
@@ -453,35 +487,30 @@ function partitionPhrasing(
   const keeps: RichTextNode[] = [];
   const moves: RichTextNode[] = [];
   for (const child of nodes) {
-    if (!isRichTextNode(child)) {
-      keeps.push(child);
-    } else if (permits.has(child.type)) {
-      // Kept, but its OWN block content still may not live here. Moved out
-      // unwrapped: a second copy of this heading would be a second outline entry.
-      const inner = partitionPhrasing(
-        kidsOf(child),
-        PERMITS_NOTHING,
-        depth + 1
-      );
-      keeps.push({ ...child, children: inner.keeps });
-      moves.push(...inner.moves);
-    } else if (BLOCK_LEVEL.has(child.type)) {
+    /*
+     * Once anything has moved out, everything after it goes with it.
+     *
+     * The container's phrasing is not a SET to be gathered; it is a sequence
+     * the author wrote. Collecting every phrasing child regardless of position
+     * reorders the passage — `Before`, an image, `After` renders as one heading
+     * reading "BeforeAfter" followed by the image, which has walked backwards
+     * past text that came after it.
+     *
+     * Following the block out rather than splitting the container around it,
+     * because a second copy of the tag is a second entry in the document
+     * outline — the same reason a permitted heading's own block content leaves
+     * unwrapped. Trailing phrasing lands in the flow after the container, where
+     * phrasing content is legal, and in the author's order.
+     */
+    if (moves.length > 0) {
       moves.push(child);
-    } else if (
-      depth >= MAX_PARTITION_DEPTH ||
-      !holdsBlockContent(child.children)
-    ) {
-      // Kept whole past the bound: rearranging it is what would recurse.
-      keeps.push(child);
-    } else {
-      // An inline wrapper holding both. Split it, keeping the wrapper on each
-      // side so the words stay linked and the media stays linked.
-      const inner = partitionPhrasing(kidsOf(child), permits, depth + 1);
-      if (inner.keeps.length > 0)
-        keeps.push({ ...child, children: inner.keeps });
-      if (inner.moves.length > 0)
-        moves.push({ ...child, children: inner.moves });
+      continue;
     }
+    const placed = partitionChild(child, permits, depth);
+    // One at a time: a spread passes every element as an argument, and a stored
+    // passage large enough exceeds the call's own argument limit.
+    pushAll(keeps, placed.keeps);
+    pushAll(moves, placed.moves);
   }
   return { keeps, moves };
 }

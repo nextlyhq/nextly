@@ -1382,3 +1382,98 @@ describe("how a host hears about an edit it did not finish itself", () => {
     expect(result.current.editingRich).toBeNull();
   });
 });
+
+describe("the passage the editor is handed when it finally arrives", () => {
+  it("attaches the CURRENT passage, not the one read before the chunk loaded", async () => {
+    /*
+     * The editor is fetched on first edit, and the fetch takes as long as a
+     * network takes. An undo, a remote update or another surface can rewrite
+     * the passage in that window, and the page has already re-rendered with the
+     * new words by the time the chunk lands.
+     *
+     * Attaching the copy read at the start puts the caret into content nobody
+     * can see any more, and the first thing the author types is refused as
+     * `moved-on` — a write lost to a conflict that had already resolved before
+     * the editor existed.
+     */
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus: vi.fn(),
+      read: vi.fn(() => ({ root: { type: "root", children: [] } })),
+      detach: vi.fn(),
+    }));
+    let arrive: (() => void) | undefined;
+    const load = vi.fn(
+      () =>
+        new Promise<{ attach: typeof attach }>(resolve => {
+          arrive = () => resolve({ attach });
+        })
+    );
+
+    registerArticle();
+    paint();
+    const nodes = [
+      {
+        id: "a",
+        type: "acme/article",
+        version: 1,
+        props: {
+          content: {
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [{ type: "text", text: "AS OPENED" }],
+                },
+              ],
+            },
+          },
+        },
+      } as BlockNode,
+    ];
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result, rerender } = renderHook(() =>
+      useInlineEditing(state, load as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    // Nothing has been handed over yet: the chunk is still in flight.
+    expect(attach).not.toHaveBeenCalled();
+
+    // The passage is rewritten while the editor is still loading.
+    nodes[0]!.props = {
+      content: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [{ type: "text", text: "REWRITTEN MEANWHILE" }],
+            },
+          ],
+        },
+      },
+    };
+    rerender();
+
+    await act(async () => {
+      arrive?.();
+      await Promise.resolve();
+    });
+
+    expect(attach).toHaveBeenCalled();
+    // The VALUE handed over, which is the thing the author's caret lands in.
+    expect(JSON.stringify(attach.mock.calls[0]?.[1])).toContain(
+      "REWRITTEN MEANWHILE"
+    );
+    expect(JSON.stringify(attach.mock.calls[0]?.[1])).not.toContain(
+      "AS OPENED"
+    );
+  });
+});

@@ -482,16 +482,6 @@ export function useInlineRichText(
     const point = handedPoint.current;
     handedPoint.current = null;
     const caret = point === null ? undefined : caretOffsetAt(element, point);
-    const targets = richInlineTargets(
-      editorRef.current.document,
-      editing.nodeId
-    );
-    const target = targets.find(t => t.prop === editing.prop);
-    const value = target?.value;
-    // The RAW stored value, kept so the write can tell one unusable value from
-    // another — the narrowed form collapses every one of them to `undefined`.
-    const stored = target?.stored;
-
     void load().then(
       live => {
         /*
@@ -506,7 +496,26 @@ export function useInlineRichText(
         if (cancelled) return;
         if (editingRef.current !== editing) return;
         if (editorRef.current.selectedId !== editing.nodeId) return;
-        const session = live.attach(element, value);
+        /*
+         * Read the passage NOW, not before the chunk was requested.
+         *
+         * An undo, a remote update or another surface can rewrite it while the
+         * editor is in flight, and the page has already re-rendered with the
+         * new words by the time this runs. Attaching the copy taken earlier
+         * puts the caret into content nobody can see any more, and the first
+         * thing the author types is refused as `moved-on` — a write lost to a
+         * conflict that had already resolved before the editor existed.
+         */
+        const target = richInlineTargets(
+          editorRef.current.document,
+          editing.nodeId
+        ).find(t => t.prop === editing.prop);
+        if (target === undefined) {
+          // The passage stopped being editable while the chunk was loading.
+          setEditing(null);
+          return;
+        }
+        const session = live.attach(element, target.value);
         if (session === null) {
           /*
            * The editor refused this passage — it holds a node this editor
@@ -523,7 +532,9 @@ export function useInlineRichText(
           session,
           element,
           editing,
-          opened: stored,
+          // The RAW stored value, kept so the write can tell one unusable value
+          // from another — the narrowed form collapses them all to `undefined`.
+          opened: target.stored,
           // Taken AFTER the editor loaded the value, so it is the editor's own
           // reading of an untouched passage — which is what makes an unchanged
           // edit compare equal rather than differing by normalisation alone.

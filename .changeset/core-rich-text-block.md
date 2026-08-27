@@ -34,6 +34,10 @@ The stored shape, the format bits and the walk that draws them already existed a
 
 The editor is loaded on first edit rather than on mount, because its node classes carry a 630KB chunk an author who never edits a passage should never fetch. It is reached through `@nextlyhq/plugin-sdk/admin`, which now hands over the operations to edit one passage rather than the editor itself: a consumer that built its own would have to import Lexical, and a second copy of Lexical makes its node classes unrecognisable, with content saving and reading back as plain text.
 
+A passage keeps the order the author wrote it in. Words after an image inside a heading or a disclosure label used to be gathered back in front of it, so a heading reading "Before[image]After" rendered as one heading saying "BeforeAfter" with the image behind text that had followed it.
+
+The editor also opens the passage as it stands when the editor arrives rather than as it stood when the edit was requested, so an undo or another surface landing while the editor loads no longer puts the caret into content nobody can see and refuses the first thing typed into it.
+
 An inline edit that cannot be written no longer disappears, however the author left it — clicking away ends far more edits than the exit button does, and that path said nothing at all.
 
 An inline edit that cannot be written no longer disappears. A passage the page changed underneath, or one the page refuses to store, keeps its editor open with the author's words still in it, and leaving the editor is declined until they have dealt with it rather than closing over the top of them; a passage whose block was deleted or locked while they typed says so instead of vanishing quietly.

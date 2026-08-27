@@ -1506,6 +1506,65 @@ describe("rich-text phrasing-only containers", () => {
     expect(html).toContain("<figure");
   });
 
+  it("keeps the author's order when words follow the media", () => {
+    /*
+     * The fixture above ends in media, so it cannot tell "kept the words" from
+     * "gathered every word first". This one can: the passage reads
+     * Before-media-After, and collecting all phrasing into the heading renders
+     * `<h2>BeforeAfter</h2>` with the media behind text that came after it.
+     *
+     * The heading is not split around the media either — a second `h2` is a
+     * second entry in the document outline. Everything after the media follows
+     * it out instead, in the order it was written.
+     */
+    const value = doc([
+      {
+        type: "heading",
+        tag: "h2",
+        children: [
+          { type: "text", text: "Before" },
+          IMAGE,
+          { type: "text", text: "After" },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+
+    expect(html).toContain("<h2>Before</h2>");
+    // The reordering this exists to prevent, named exactly.
+    expect(html).not.toContain("BeforeAfter");
+    // One heading, not one per run of words.
+    expect(html.match(/<h2>/g)).toHaveLength(1);
+    expect(html.indexOf("<figure")).toBeLessThan(html.indexOf("After"));
+  });
+
+  it("keeps the author's order in a disclosure label too", () => {
+    // The same rule through the other container that takes only phrasing, so
+    // the two cannot come to disagree about what order means.
+    const value = doc([
+      {
+        type: "collapsible-container",
+        children: [
+          {
+            type: "collapsible-title",
+            children: [
+              { type: "text", text: "Before" },
+              IMAGE,
+              { type: "text", text: "After" },
+            ],
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+
+    expect(html).toContain("<summary>Before</summary>");
+    expect(html).not.toContain("BeforeAfter");
+    expect(html.indexOf("<figure")).toBeLessThan(html.indexOf("After"));
+  });
+
   it("moves media out of a disclosure label into its body", () => {
     // `summary` takes phrasing content or a single heading, and it must be the
     // FIRST child of its `details` — so it cannot be replaced without removing
