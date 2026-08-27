@@ -164,6 +164,12 @@ export const config = [
       // A global-setup file is loaded by vitest the same way its config is, so
       // it lives outside every package's tsconfig project for the same reason.
       "**/vitest.global-setup.{js,ts,mjs,cjs}",
+      // A setup file is loaded the same way again, and cannot move into `src`
+      // to gain a project: it imports `vitest`, and a package whose layering
+      // guard walks `src` counts anything there that is not a test as source —
+      // so placing it inside would either fail that guard or require relaxing
+      // it, which is a worse trade than leaving one file unlinted.
+      "**/vitest.setup.{js,ts,mjs,cjs}",
       "**/vite.config.{js,ts,mjs,cjs}",
       "**/eslint.config.{js,ts,mjs,cjs}",
       "**/postcss.config.{js,ts,mjs,cjs}",
