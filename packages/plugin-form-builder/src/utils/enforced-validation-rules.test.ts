@@ -59,13 +59,17 @@ const REJECTING_BOUND: Record<string, Record<string, unknown>> = {
   maxRows: { maxRows: 1 },
 };
 
-function field(type: FormFieldType, validation?: Record<string, unknown>) {
+function field(
+  type: FormFieldType,
+  validation?: Record<string, unknown>,
+  required = false
+) {
   return {
     id: "f1",
     name: "f1",
     label: "Field",
     type,
-    required: false,
+    required,
     ...(validation ? { validation } : {}),
     // Choice types need something to choose from before a value is legal.
     ...(type === "select" || type === "radio"
@@ -138,12 +142,68 @@ describe("the message rule", () => {
     }
   });
 
-  it("is offered for every type, because every type honours it", () => {
-    // Each generator passes `validation.errorMessage` to `applyRequired`, so
-    // even a type carrying no bounds of its own uses it for the required
-    // failure.
+  it("reaches the emitted issue for every type, observed not restated", () => {
+    // Reading `ENFORCED_VALIDATION_RULES` back here would assert the table
+    // against itself: the generator could stop consulting `errorMessage`
+    // entirely and every assertion would stay green. So this drives the
+    // generator and reads the message off the issue it produces.
+    const CUSTOM = "Say it this way instead";
+
     for (const type of BUILT_IN_FORM_FIELD_TYPES) {
-      expect(ENFORCED_VALIDATION_RULES[type]).toContain("message");
+      // A type with a bound of its own fails by breaching it; one without
+      // fails by being required and empty. Candidates rather than a
+      // per-type table, so a generator that rejects differently is still
+      // exercised instead of silently skipped.
+      const deciding = decidingRules(ENFORCED_VALIDATION_RULES[type]);
+      const bound = deciding[0] ? REJECTING_BOUND[deciding[0]] : undefined;
+      // The empty value has to be in the SHAPE the type accepts. Handing `""`
+      // to a checkbox produces a type error rather than a required failure, so
+      // the candidate never reaches the message path and the observation would
+      // be of coercion instead of the rule under test.
+      const empty = typeof ACCEPTED[type] === "boolean" ? false : "";
+      const candidates: { f: FormField; v: unknown }[] = bound
+        ? [
+            {
+              f: field(type, { ...bound, errorMessage: CUSTOM }),
+              v: ACCEPTED[type],
+            },
+          ]
+        : [
+            { f: field(type, { errorMessage: CUSTOM }, true), v: empty },
+            { f: field(type, { errorMessage: CUSTOM }, true), v: undefined },
+          ];
+
+      const failures = candidates
+        .map(c => generateZodSchema([c.f]).safeParse({ f1: c.v }))
+        .filter(r => !r.success);
+
+      // The population assertion. Without it a type whose every candidate
+      // PASSED would contribute no observation, and the loop would report
+      // success having checked nothing for it.
+      expect(
+        failures.length,
+        `no candidate input fails for type "${type}", so its message is unobserved`
+      ).toBeGreaterThan(0);
+
+      // SOME failure rather than every one, and the difference is not
+      // looseness. An input of the wrong TYPE fails before any rule is
+      // reached — `undefined` against a checkbox is rejected by `z.boolean()`
+      // itself — and zod's own text is correct there. What justifies listing
+      // `message` for a type is that a failure of its RULES carries the
+      // author's words, which is what this asserts. A generator that stopped
+      // consulting `errorMessage` would satisfy no candidate and fail here.
+      const carried = failures.some(
+        r => !r.success && r.error.issues.some(i => i.message === CUSTOM)
+      );
+      expect(
+        carried,
+        `type "${type}" never surfaced the custom message; issues were ` +
+          JSON.stringify(
+            failures.flatMap(r =>
+              r.success ? [] : r.error.issues.map(i => i.message)
+            )
+          )
+      ).toBe(true);
     }
   });
 

@@ -29,15 +29,19 @@ export function ValidationTab({ field, readOnly = false, onChange }: Props) {
   // This surface stores the rules under the names core uses, so the kit's
   // values pass through unmapped. The form builder does not, and maps at its
   // own call site rather than here.
+  const allowed = validationRulesForFieldType(
+    field.type,
+    pluginFieldTypeStorage(branding.plugins, field.type)
+  );
+
   return (
     <ValidationRulesEditor
-      allowed={validationRulesForFieldType(
-        field.type,
-        pluginFieldTypeStorage(branding.plugins, field.type)
-      )}
-      // Core applies this message to the pattern rule, so naming it here tells
-      // the author which failure they are writing copy for.
-      messageDescribes="pattern"
+      allowed={allowed}
+      // Only where a Pattern is actually offered. Core hands the same message
+      // to other failures too — `applyNumberBounds` uses it for min and max —
+      // so on a field with no Pattern control the specific wording would name
+      // a constraint the author cannot see and did not write the copy for.
+      messageDescribes={allowed.includes("pattern") ? "pattern" : "validation"}
       value={validation}
       disabled={readOnly}
       onChange={next =>
