@@ -589,6 +589,47 @@ function siteStyleStatus(
   return error === null ? "ready" : "unavailable";
 }
 
+/**
+ * Whether anything in the editor is work the author has not saved.
+ *
+ * An OPEN inline edit counts, on top of the document's own history. Inline
+ * editing does not touch the document until an edit finishes, so `undoDepth` is
+ * still zero while an author is typing into a block — and a navigation or an
+ * access-driven removal at that moment tears the canvas down without a blur,
+ * leaving the guard as the only thing that could have asked first.
+ *
+ * Reported for an edit that is merely OPEN rather than one known to have
+ * changed something, because nothing here can tell those apart until the write
+ * happens. A prompt an author dismisses costs a click; the other direction
+ * costs the paragraph they were writing.
+ */
+function hasUnsavedWork(
+  editor: { undoDepth: number },
+  inline: { editing: unknown; editingRich: unknown }
+): boolean {
+  return (
+    editor.undoDepth > 0 ||
+    inline.editing !== null ||
+    inline.editingRich !== null
+  );
+}
+
+/**
+ * The document to hand the form, having finished whatever edit was open.
+ *
+ * An inline edit lives in the element until it ends — that is what keeps the
+ * caret still while an author types — so the document a caller is holding is
+ * the one from before it. Committing that would hand over a document missing
+ * the words the author was in the middle of writing, and leaving by the exit
+ * gesture is the most common way to have a passage still open.
+ */
+function documentAfterFinishing(
+  inline: { commit: () => BlockDocument | null },
+  held: BlockDocument
+): BlockDocument {
+  return inline.commit() ?? held;
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -1025,7 +1066,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * Retracted when this component unmounts, which is the same moment `done`
    * commits the document and makes the form dirty for real.
    */
-  useReportUnsavedWork(`blocks:${name}`, editor.undoDepth > 0);
+  useReportUnsavedWork(`blocks:${name}`, hasUnsavedWork(editor, inline));
 
   /*
    * Writing back on the way out rather than on every keystroke.
@@ -1036,9 +1077,19 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * editor's undo two answers to one question.
    */
   const done = useCallback(() => {
-    onCommit(editor.document);
+    /*
+     * The open inline edit is finished FIRST, and the document it produced is
+     * the one handed over.
+     *
+     * An inline edit lives in the element until it ends — that is what keeps
+     * the caret still while an author types — so `editor.document` here is the
+     * one from before it. Committing that would hand the form a document
+     * missing the words the author was in the middle of writing, and the exit
+     * gesture is the most common way to leave a passage open.
+     */
+    onCommit(documentAfterFinishing(inline, editor.document));
     onClose();
-  }, [editor.document, onCommit, onClose]);
+  }, [editor.document, inline, onCommit, onClose]);
 
   /*
    * The editor takes the window: the shell draws its own rail, panels, top bar

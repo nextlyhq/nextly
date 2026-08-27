@@ -147,23 +147,32 @@ const EMPTY_STATE = JSON.stringify({
  * package cannot depend on it; the check is narrower here on purpose, asking
  * only what Lexical itself will refuse.
  */
-function loadable(value: unknown): string {
+function loadable(value: unknown): string | null {
   const children = (
     value as { root?: { children?: unknown } } | null | undefined
   )?.root?.children;
   // Optional chaining answers `undefined` for a primitive and for null alike,
   // so the three ways a value can fail to be a passage collapse into one test.
+  // NOT a passage at all: an empty one is the right reading, and there is
+  // nothing to lose by starting from empty.
   if (!Array.isArray(children) || children.length === 0) return EMPTY_STATE;
-  // Serialization is not safe merely because the shape is. The value is stored
-  // JSON as far as the type says, but a caller can hand over a live object: a
-  // cycle throws, a `BigInt` throws, and a `toJSON` returning nothing yields
-  // `undefined`. Every one of those would otherwise surface as an exception
-  // thrown into the canvas while an author is trying to type.
+  /*
+   * It IS a passage, so failing to serialize it is a different answer.
+   *
+   * Serialization is not safe merely because the shape is: a cycle throws, a
+   * `BigInt` throws, a `toJSON` returning nothing yields `undefined`, and
+   * `JSON.stringify` itself recurses — a validly stored passage nested a few
+   * thousand containers deep raises `RangeError` while sitting far below the
+   * document's byte cap.
+   *
+   * Reading any of those as "empty" would hand the editor an empty passage over
+   * content that is really there, and the author's first keystroke would commit
+   * it. `null` refuses instead, and the passage stays as the page rendered it.
+   */
   try {
-    const json = JSON.stringify(value);
-    return json ?? EMPTY_STATE;
+    return JSON.stringify(value) ?? null;
   } catch {
-    return EMPTY_STATE;
+    return null;
   }
 }
 
@@ -393,9 +402,13 @@ async function build(): Promise<InlineRichTextEditor> {
        *   visible output comes from `decorate()` and is mounted by the React
        *   plugin this raw editor does not use, so they would vanish from the
        *   canvas for the duration of the edit and could not be selected.
+       * - a passage that cannot be serialized at all, which is not the same as
+       *   an absent one — see {@link loadable}.
        */
+      const json = loadable(value);
+      if (json === null) return null;
       reportedError = false;
-      const parsed = editor.parseEditorState(loadable(value));
+      const parsed = editor.parseEditorState(json);
       if (reportedError || holdsDecorator(parsed)) return null;
 
       const token = {};

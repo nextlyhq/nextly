@@ -154,19 +154,43 @@ describe("a session that no longer owns the editor", () => {
 });
 
 describe("a value the editor cannot load", () => {
-  it("falls back to an empty passage rather than throwing into the canvas", async () => {
-    // Serialization is not safe merely because the shape is: a cycle throws,
-    // and an exception here would surface while an author was trying to type.
+  it("REFUSES one it cannot serialize, rather than treating it as empty", async () => {
+    /*
+     * Serialization is not safe merely because the shape is. A cycle throws, a
+     * `BigInt` throws, and `JSON.stringify` itself recurses — a validly stored
+     * passage nested a few thousand containers deep raises `RangeError` while
+     * sitting far below the document's byte cap.
+     *
+     * Reading any of those as "empty" is the same data loss the unknown-node
+     * refusal closes: the editor holds nothing, the author types, and the
+     * commit replaces real content with the empty tree.
+     */
     const editor = await loadInlineRichTextEditor();
+    const element = host();
+    const before = element.innerHTML;
     const cyclic: { root: { type: string; children: unknown[] } } = {
       root: { type: "root", children: [] },
     };
     cyclic.root.children.push(cyclic);
 
-    const session = attached(editor, host(), cyclic);
+    expect(editor.attach(element, cyclic)).toBeNull();
+    expect(element.innerHTML).toBe(before);
+    expect(element.hasAttribute("contenteditable")).toBe(false);
+  });
 
-    expect(session.read()).toBeDefined();
-    session.detach();
+  it("still reads a value that is simply ABSENT as an empty passage", async () => {
+    /*
+     * The control, and the distinction the refusal turns on: a prop holding
+     * nothing is not a passage that failed to serialize. Refusing it too would
+     * make a newly inserted block impossible to type into — which is how a
+     * guard against data loss becomes a feature that never opens.
+     */
+    const editor = await loadInlineRichTextEditor();
+
+    expect(editor.attach(host(), undefined)).not.toBeNull();
+    expect(
+      editor.attach(host(), { root: { type: "root", children: [] } })
+    ).not.toBeNull();
   });
 });
 

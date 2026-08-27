@@ -35,6 +35,7 @@
  * @module use-inline-rich-text
  */
 
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
@@ -87,8 +88,14 @@ export interface UseInlineRichTextResult {
    * while committing here.
    */
   begin: (nodeId: string, prop?: string, element?: HTMLElement) => boolean;
-  /** Finish, writing whatever the author left behind. */
-  commit: () => void;
+  /**
+   * Finish, writing whatever the author left behind.
+   *
+   * Returns the document the write produced, or `null` when there was nothing
+   * to write. A caller that is about to hand the document somewhere else needs
+   * that: its own copy is the one from before this commit.
+   */
+  commit: () => BlockDocument | null;
   /** Finish, discarding it. */
   cancel: () => void;
 }
@@ -150,6 +157,18 @@ export function useInlineRichText(
   const mounted = useRef<{
     session: EditorSession;
     element: HTMLElement;
+    /**
+     * WHICH passage this session was mounted for.
+     *
+     * Recorded with the session rather than read from the hook's current state
+     * when the write happens. A caller that begins a second passage before the
+     * first has released changes that state first, and the cleanup that follows
+     * would then read the live session — the first passage — while addressing
+     * the op with the second's node and prop, copying one block's words over
+     * another. Bound here, a session can only ever write to the passage it was
+     * opened for.
+     */
+    editing: InlineRichTextEditing;
     /** The editor's own reading of the passage when it opened. */
     baseline: unknown;
   } | null>(null);
@@ -173,21 +192,21 @@ export function useInlineRichText(
 
   const commit = useCallback(() => {
     const live = mounted.current;
-    const current = editingRef.current;
     const baseline = live?.baseline;
     const next = release();
-    if (live === null || current === null) return;
+    if (live === null) return null;
+    // The passage this session was opened for, not whichever is current now.
     const op = richInlineTextOp(
       editorRef.current.document,
-      current.nodeId,
-      current.prop,
+      live.editing.nodeId,
+      live.editing.prop,
       next,
       baseline
     );
     // `null` for an unchanged passage, for one the editor did not return as
     // rich text, and for a value that stopped being editable while the caret
     // was in it — see `richInlineTextOp`.
-    if (op !== null) editorRef.current.apply(op);
+    return op === null ? null : editorRef.current.apply(op);
   }, [release]);
 
   const cancel = useCallback(() => {
@@ -292,6 +311,7 @@ export function useInlineRichText(
         mounted.current = {
           session,
           element,
+          editing,
           // Taken AFTER the editor loaded the value, so it is the editor's own
           // reading of an untouched passage — which is what makes an unchanged
           // edit compare equal rather than differing by normalisation alone.

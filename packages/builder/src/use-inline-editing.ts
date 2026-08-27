@@ -23,7 +23,11 @@
  * @module use-inline-editing
  */
 
-import { getBlock, findNode } from "@nextlyhq/blocks-engine";
+import {
+  getBlock,
+  findNode,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import { useCallback } from "react";
 
 import type { EditorState } from "./editor-state";
@@ -48,8 +52,15 @@ export interface UseInlineEditingResult {
    * block gets whichever surface that block's first inline value asks for.
    */
   begin: (nodeId: string, prop?: string) => boolean;
-  /** Finish whichever edit is open, writing what the author left behind. */
-  commit: () => void;
+  /**
+   * Finish whichever edit is open, writing what the author left behind.
+   *
+   * Returns the document the write produced, or `null` when nothing was open or
+   * nothing changed. A host about to hand the document to a form needs it: the
+   * copy it rendered with is the one from before this commit, and an inline
+   * edit that has not been written yet is invisible in it.
+   */
+  commit: () => BlockDocument | null;
   /** Finish whichever edit is open, discarding it. */
   cancel: () => void;
   /** Enter an edit from a double-click on the canvas. */
@@ -142,9 +153,9 @@ export function useInlineEditing(
   const commit = useCallback(() => {
     // Both are asked, and at most one is open. Asking only the one believed to
     // be open would leave the other's edit hanging whenever that belief was
-    // wrong, and each is a no-op when it holds nothing.
-    plain.commit();
-    rich.commit();
+    // wrong, and each answers `null` when it holds nothing.
+    const written = plain.commit();
+    return rich.commit() ?? written;
   }, [plain, rich]);
 
   const cancel = useCallback(() => {

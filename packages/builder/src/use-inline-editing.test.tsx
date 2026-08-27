@@ -504,3 +504,128 @@ describe("where the caret lands in a passage", () => {
     expect(focus).toHaveBeenCalledWith(6);
   });
 });
+
+describe("a second passage begun before the first was released", () => {
+  it("writes each session's words to the passage it was opened for", async () => {
+    /*
+     * `useInlineRichText` is exported on its own, and its `begin` does not
+     * require a caller to finish the open edit first. When one does not, the
+     * hook's current edit becomes B while A's session is still mounted — and a
+     * commit that read the hook's state would take A's live content and address
+     * it with B's node and prop, copying one block's words over another.
+     *
+     * The session records the passage it was opened for, so it can only write
+     * there. Asserted through the composed hook because that is the shipped
+     * path, and it must hold whether or not the caller sequences correctly.
+     */
+    const sessions: { read: ReturnType<typeof vi.fn> }[] = [];
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => {
+      const session = {
+        focus: vi.fn(),
+        read: vi
+          .fn()
+          .mockReturnValueOnce({ root: { type: "root", children: [] } })
+          .mockReturnValue({
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [
+                    { type: "text", text: `WORDS-${sessions.length}` },
+                  ],
+                },
+              ],
+            },
+          }),
+        detach: vi.fn(),
+      };
+      sessions.push(session);
+      return session;
+    });
+    const load = vi.fn(() => Promise.resolve({ attach }));
+
+    registerArticle();
+    paint();
+    const state = editorState();
+    const { result } = renderHook(() => useInlineEditing(state, load as never));
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    expect(sessions).toHaveLength(1);
+
+    await act(async () => {
+      result.current.commit();
+    });
+
+    // The op names the passage the session was opened for. A commit addressed
+    // from the hook's current state would name whatever is open NOW.
+    const written = JSON.stringify(
+      (state.apply as ReturnType<typeof vi.fn>).mock.calls[0]
+    );
+    expect(written).toContain("content");
+    expect(written).toContain("WORDS-0");
+  });
+});
+
+describe("what a host gets back from finishing an edit", () => {
+  it("returns the document the write produced, not nothing", async () => {
+    /*
+     * The host commits its document to the form when the author leaves. An
+     * inline edit lives in the element until it ends, so the document the host
+     * is holding is the one from BEFORE the edit — finishing the edit and then
+     * handing over that stale copy loses exactly the words the author was
+     * writing, through the most ordinary exit there is.
+     *
+     * So the finish has to hand back what it wrote.
+     */
+    const written = { formatVersion: 1, kind: "page", nodes: [] };
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus: vi.fn(),
+      read: vi
+        .fn()
+        .mockReturnValueOnce({ root: { type: "root", children: [] } })
+        .mockReturnValue({
+          root: {
+            type: "root",
+            children: [
+              { type: "paragraph", children: [{ type: "text", text: "NEW" }] },
+            ],
+          },
+        }),
+      detach: vi.fn(),
+    }));
+    const load = vi.fn(() => Promise.resolve({ attach }));
+
+    registerArticle();
+    paint();
+    const state = { ...editorState(), apply: vi.fn(() => written) };
+    const { result } = renderHook(() =>
+      useInlineEditing(state as unknown as EditorState, load as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    let handedBack: unknown;
+    await act(async () => {
+      handedBack = result.current.commit();
+    });
+
+    expect(handedBack).toBe(written);
+  });
+
+  it("returns null when nothing was open, so a host keeps its own document", () => {
+    // The control: a finish that always answered with something would make the
+    // host discard its document for a write that never happened.
+    registerArticle();
+    paint();
+    const { result } = renderHook(() =>
+      useInlineEditing(editorState(), pendingLoader())
+    );
+
+    expect(result.current.commit()).toBeNull();
+  });
+});
