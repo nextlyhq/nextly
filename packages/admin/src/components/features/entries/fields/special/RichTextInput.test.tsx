@@ -193,6 +193,10 @@ describe("RichTextInput — read-only", () => {
 });
 
 describe("RichTextInput — insert dialogs shell characterization", () => {
+  // The harness renders a real Lexical composer and opens each dialog by
+  // dispatching its OPEN_* command — the same command the toolbar trigger
+  // fires — so the dialogs themselves are exercised without coupling the
+  // tests to toolbar layout or its icon buttons.
   function renderPluginHarness() {
     let dispatch: Dispatcher = () => {};
     const view = render(
@@ -342,7 +346,7 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
   });
 
   describe("Button Group dialog", () => {
-    it("opens, validates buttons, and submits on valid input", async () => {
+    it("gates confirm on filled buttons, validates URLs, and submits with Enter", async () => {
       const { openButtonGroup } = renderPluginHarness();
 
       openButtonGroup();
@@ -350,33 +354,49 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
         await screen.findByRole("heading", { name: "Insert Button Group" })
       ).toBeInTheDocument();
 
-      // Submitting empty -> validation error
+      // Confirm is disabled while any button is missing text or a URL
+      expect(
+        screen.getByRole("button", { name: /^insert button group$/i })
+      ).toBeDisabled();
+
+      // Non-empty but invalid URL leaves confirm enabled so the error
+      // banner stays reachable, mirroring the button-link dialog
+      const textInputs = await screen.findAllByPlaceholderText("Click here");
+      const urlInputs = screen.getAllByPlaceholderText("https://example.com");
+      fireEvent.change(textInputs[0], { target: { value: "Docs" } });
+      fireEvent.change(urlInputs[0], {
+        target: { value: "javascript:alert(1)" },
+      });
+      fireEvent.change(textInputs[1], { target: { value: "Blog" } });
+      fireEvent.change(urlInputs[1], { target: { value: "/blog" } });
+      expect(
+        screen.getByRole("button", { name: /^insert button group$/i })
+      ).toBeEnabled();
+
       fireEvent.click(
         screen.getByRole("button", { name: /^insert button group$/i })
       );
       expect(
-        await screen.findByText("Button 1: Please enter button text")
+        await screen.findByText("Button 1: Please enter a valid URL")
       ).toBeInTheDocument();
 
-      // Cancel closes
+      // Cancel closes and resets
       fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
       expect(
         screen.queryByRole("heading", { name: "Insert Button Group" })
       ).not.toBeInTheDocument();
 
-      // Re-open and fill valid buttons
+      // Re-open, fill valid buttons, and submit with Enter from a text
+      // input — the parity behavior the shared shell gives this dialog
       openButtonGroup();
-      const textInputs = await screen.findAllByPlaceholderText("Click here");
-      const urlInputs = screen.getAllByPlaceholderText("https://example.com");
+      const textInputs2 = await screen.findAllByPlaceholderText("Click here");
+      const urlInputs2 = screen.getAllByPlaceholderText("https://example.com");
+      fireEvent.change(textInputs2[0], { target: { value: "Docs" } });
+      fireEvent.change(urlInputs2[0], { target: { value: "/docs" } });
+      fireEvent.change(textInputs2[1], { target: { value: "Blog" } });
+      fireEvent.change(urlInputs2[1], { target: { value: "/blog" } });
 
-      fireEvent.change(textInputs[0], { target: { value: "Docs" } });
-      fireEvent.change(urlInputs[0], { target: { value: "/docs" } });
-      fireEvent.change(textInputs[1], { target: { value: "Blog" } });
-      fireEvent.change(urlInputs[1], { target: { value: "/blog" } });
-
-      fireEvent.click(
-        screen.getByRole("button", { name: /^insert button group$/i })
-      );
+      fireEvent.keyDown(urlInputs2[1], { key: "Enter", code: "Enter" });
       expect(
         screen.queryByRole("heading", { name: "Insert Button Group" })
       ).not.toBeInTheDocument();

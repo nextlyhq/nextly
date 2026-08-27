@@ -85,6 +85,8 @@ export function RichTextVideoPlugin({
     setPreviewInfo(null);
   }, []);
 
+  // Shared dialog shell: open/close lifecycle with reset-on-close and
+  // Enter-to-submit, so this dialog cannot drift from the other three.
   const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
     useInsertDialogState({
       resetState,
@@ -257,6 +259,10 @@ export function RichTextVideoPlugin({
           </div>
         </div>
 
+        {/* Shared footer: the error banner and Cancel/Confirm row every
+            insert dialog renders. confirmDisabled carries this dialog's own
+            gate — a non-empty, parseable URL with its preview ready — so the
+            shared shell preserves the video-specific confirmation rules. */}
         <InsertDialogFooter
           error={error}
           onCancel={() => handleOpenChange(false)}
