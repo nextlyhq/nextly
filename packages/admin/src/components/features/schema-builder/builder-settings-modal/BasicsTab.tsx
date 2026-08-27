@@ -2,11 +2,13 @@
 // listed in the per-kind config, so the tab is config-driven rather than
 // branching per entity kind.
 //
-// The slug auto-derives from the singular name on each keystroke, and stops as
-// soon as `values.slug` differs from the slug that name would derive. The
-// override is therefore recomputed from the values rather than recorded: there
-// is no flag to keep in step, and editing the slug back to the derived form
-// resumes tracking, which is the behaviour someone correcting a typo expects.
+// The slug auto-derives from the singular name on each keystroke, and stops
+// once a NON-EMPTY `values.slug` differs from the slug that name would derive.
+// Empty counts as automatic, so clearing the field resumes derivation instead
+// of pinning it to the empty string. The override is recomputed from the values
+// rather than recorded — there is no flag to keep in step, and editing the slug
+// back to the derived form resumes tracking too, which is what someone
+// correcting a typo expects.
 // Slug case is per-kind: singles use kebab (the entry-form slug validator is
 // kebab-only); collections and components keep snake to match their backend
 // validators. This is the one place the shared modal needs a per-kind branch
