@@ -23,7 +23,11 @@ import {
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import {
+  NODE_ID_ATTRIBUTE,
+  type BlockRenderArgs,
+  type SiteSheetInput,
+} from "@nextlyhq/blocks-react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -65,6 +69,20 @@ const blocks = {
 function doc(nodes: BlockDocument["nodes"]): BlockDocument {
   return { formatVersion: 1, kind: "page", nodes };
 }
+
+/**
+ * The site sheet `Canvas` requires, declared rather than cast past the checker.
+ *
+ * `SiteSheetInput` requires `breakpoints` and has no `css` field at all, so the
+ * `{ css: "", classes: {} }` shape this file used to hand `Canvas` was not a
+ * site sheet under any reading — the cast was hiding a wrong value, not a
+ * verbose one. Both axes are empty because nothing here previews a tier: a
+ * canvas with no viewport breakpoint renders through the published path, which
+ * is the path every case below is about.
+ */
+const SITE_STYLES: SiteSheetInput = {
+  breakpoints: { viewport: [], container: [] },
+};
 
 const emptyBox = { id: "box-1", type: "core/box", version: 1, props: {} };
 const filledBox = {
@@ -320,18 +338,12 @@ describe("what it stays subscribed to", () => {
           description: "A container with one slot.",
           example: { props: {} },
           slots: { children: {} },
-          // Typed with the one shape this fixture reads, rather than the
-          // full `BlockRenderArgs` — matching how `EmptyContainerAppenders`
-          // itself narrows to `BlockLookup` above, and how it is discarded
-          // anyway by `as never` below; the annotation only exists so `tsc`
-          // can check the destructure rather than reporting an implicit `any`.
-          render: ({
-            className,
-            renderSlot,
-          }: {
-            className: string;
-            renderSlot: (name: string) => React.ReactNode;
-          }) =>
+          // Annotated with the renderer's OWN argument type rather than cast:
+          // the engine types `renderSlot` as returning `unknown`, since it
+          // carries no React types, and `@nextlyhq/blocks-react` is the package
+          // that names the React answer. Every first-party block is written
+          // against exactly this type.
+          render: ({ className, renderSlot }: BlockRenderArgs<object>) =>
             React.createElement("div", { className }, renderSlot("children")),
         },
         {
@@ -341,12 +353,12 @@ describe("what it stays subscribed to", () => {
           example: { props: {} },
           render: () => React.createElement("p", null, "leaf"),
         },
-      ] as never,
+      ],
       { source: "empty-container-appender-test" }
     );
   }
 
-  const CANVAS_DOCUMENT = {
+  const CANVAS_DOCUMENT: BlockDocument = {
     formatVersion: 1,
     kind: "page",
     nodes: [
@@ -363,7 +375,7 @@ describe("what it stays subscribed to", () => {
         props: {},
       },
     ],
-  } as unknown as BlockDocument;
+  };
 
   it("watches EVERY rendered node, not only the container it draws a control for", () => {
     // The separating property for this fix: a populated sibling resizing —
@@ -377,7 +389,7 @@ describe("what it stays subscribed to", () => {
     const { container } = render(
       <Canvas
         document={CANVAS_DOCUMENT}
-        siteStyles={{ css: "", classes: {} } as never}
+        siteStyles={SITE_STYLES}
         overlay={
           <EmptyContainerAppenders
             document={CANVAS_DOCUMENT}
