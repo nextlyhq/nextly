@@ -114,6 +114,10 @@ export function useInsertDialogState({
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key !== "Enter" || e.shiftKey) return;
+      // Enter that accepts an IME composition candidate (CJK and other
+      // composed input) must not submit. During composition the keydown
+      // reports isComposing, and older engines report keyCode 229.
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
       // Enter submits only while the user is typing in a text field. On
       // buttons and checkboxes Enter activates the focused control, and the
       // wrapped Radix Select does not stop its option keydown from bubbling,

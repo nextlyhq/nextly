@@ -52,7 +52,7 @@ describe("useInsertDialogState", () => {
     expect(resetState).not.toHaveBeenCalled();
   });
 
-  it("submits on Enter from a text input, and ignores shift+Enter, other keys, and Enter from non-text controls", () => {
+  it("submits on Enter from a text input, and ignores shift+Enter, other keys, IME composition, and Enter from non-text controls", () => {
     const resetState = vi.fn();
     const onSubmit = vi.fn();
 
@@ -70,6 +70,7 @@ describe("useInsertDialogState", () => {
         key: "Enter",
         shiftKey: false,
         target: textInput,
+        nativeEvent: { isComposing: false },
         preventDefault: preventDefault1,
       } as unknown as React.KeyboardEvent);
     });
@@ -83,6 +84,7 @@ describe("useInsertDialogState", () => {
         key: "Enter",
         shiftKey: true,
         target: textInput,
+        nativeEvent: { isComposing: false },
         preventDefault: preventDefault2,
       } as unknown as React.KeyboardEvent);
     });
@@ -96,25 +98,42 @@ describe("useInsertDialogState", () => {
         key: "Escape",
         shiftKey: false,
         target: textInput,
+        nativeEvent: { isComposing: false },
         preventDefault: preventDefault3,
       } as unknown as React.KeyboardEvent);
     });
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(preventDefault3).not.toHaveBeenCalled();
 
-    // Enter from a focused button (Cancel, alignment, Select option) must
-    // activate that control, not submit the dialog
+    // Enter accepting an IME composition candidate (CJK input) -> does not
+    // submit; the composition is still in progress from the event's view
     const preventDefault4 = vi.fn();
     act(() => {
       result.current.handleKeyDown({
         key: "Enter",
         shiftKey: false,
-        target: button,
+        target: textInput,
+        nativeEvent: { isComposing: true },
         preventDefault: preventDefault4,
       } as unknown as React.KeyboardEvent);
     });
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(preventDefault4).not.toHaveBeenCalled();
+
+    // Enter from a focused button (Cancel, alignment, Select option) must
+    // activate that control, not submit the dialog
+    const preventDefault5 = vi.fn();
+    act(() => {
+      result.current.handleKeyDown({
+        key: "Enter",
+        shiftKey: false,
+        target: button,
+        nativeEvent: { isComposing: false },
+        preventDefault: preventDefault5,
+      } as unknown as React.KeyboardEvent);
+    });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(preventDefault5).not.toHaveBeenCalled();
   });
 });
 
