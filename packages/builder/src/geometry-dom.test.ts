@@ -27,6 +27,7 @@ import {
   canvasRootFrom,
   hasScrollbarGutter,
   overflowApplies,
+  viewportPositioned,
 } from "./geometry-dom";
 
 /**
@@ -363,6 +364,95 @@ describe("finding the canvas root across realms", () => {
     expect(canvasRootFrom(child, "nx-canvas")).toBe(root);
 
     frame.remove();
+  });
+});
+
+describe("which elements have left the canvas's content coordinates", () => {
+  /**
+   * An element whose computed `position` is whatever the caller names.
+   *
+   * Set as an inline declaration rather than through a class rule, because what
+   * this predicate reads is the COMPUTED value and an inline declaration is the
+   * shortest cascade that produces one. `empty-container-appender.test.tsx`
+   * reaches the same computed value the long way round — through an authored
+   * `styles` envelope compiled into the page's own sheet — so the production
+   * route is covered where the component is, and this file stays about the
+   * predicate.
+   */
+  function positioned(position: string | undefined): HTMLElement {
+    const element = document.createElement("div");
+    if (position !== undefined) element.style.position = position;
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("refuses an element pinned to the viewport", () => {
+    expect(viewportPositioned(positioned("fixed"))).toBe(true);
+  });
+
+  it("refuses an element pinned to a scrollport", () => {
+    /*
+     * Asserted apart from `fixed` rather than assumed to follow it. The two are
+     * one branch today, and a refusal written as an equality against a single
+     * value passes the case above while leaving this one accepted — which is
+     * the shape a narrowing takes when someone simplifies the condition.
+     */
+    expect(viewportPositioned(positioned("sticky"))).toBe(true);
+  });
+
+  it.each(["static", "relative", "absolute"])(
+    "accepts an element positioned %s, which stays in the page",
+    position => {
+      expect(viewportPositioned(positioned(position))).toBe(false);
+    }
+  );
+
+  it("accepts an element nothing has positioned at all", () => {
+    /*
+     * The control that decides the DIRECTION of the test above, and the one
+     * that would be missing from a predicate written as an allow-list. jsdom
+     * computes `position` on an unstyled element to the EMPTY STRING rather
+     * than to `static`, so "is it one of the values that stay in the page"
+     * answers no for every ordinary block in this runtime — refusing the whole
+     * canvas while every case above still passes.
+     */
+    expect(getComputedStyle(positioned(undefined)).position).toBe("");
+    expect(viewportPositioned(positioned(undefined))).toBe(false);
+  });
+
+  it("reads the ELEMENT's own realm rather than this one", () => {
+    /*
+     * A canvas portalled into a same-origin iframe is styled by that document.
+     * Reading through the ambient `window` asks a `getComputedStyle` that
+     * belongs to a different realm, and the control is the same element read
+     * both ways: this realm's function must NOT be what produced the answer.
+     */
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("the iframe has no document");
+
+    const foreign = inner.createElement("div");
+    foreign.style.position = "sticky";
+    inner.body.appendChild(foreign);
+
+    const ambient = vi.spyOn(window, "getComputedStyle");
+    expect(viewportPositioned(foreign)).toBe(true);
+    expect(ambient).not.toHaveBeenCalled();
+
+    ambient.mockRestore();
+    frame.remove();
+  });
+
+  it("accepts an element with no view, which nothing has positioned", () => {
+    // A detached document has no `defaultView`, so there is no computed style
+    // to read. Nothing has been laid out and nothing has been positioned, and
+    // the callers decline such an element for their own reasons anyway.
+    const detached = document.implementation.createHTMLDocument();
+    expect(detached.defaultView).toBeNull();
+    const orphan = detached.createElement("div");
+    orphan.style.position = "fixed";
+    expect(viewportPositioned(orphan)).toBe(false);
   });
 });
 

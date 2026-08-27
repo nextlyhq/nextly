@@ -886,9 +886,11 @@ describe("which containers it actually draws a control on", () => {
 
   it("draws NO control on a container an authored ancestor clips", () => {
     /*
-     * The second permanent refusal, which has to be covered on its own: the
-     * two guards are separate branches, and a fix applied to one leaves the
-     * other returning whatever it returned before.
+     * The CLIP refusal, which has to be covered on its own: each refusal in
+     * `measure` is its own branch, and a fix applied to one leaves the others
+     * returning whatever they returned before. Named rather than numbered — an
+     * ordinal here is a count of the branches kept by hand beside them, and it
+     * goes stale the moment one is inserted between two others.
      *
      * `layout` gives every unnamed element the canvas's own 800x600 box, so
      * the wrapper reports that and the nested container is stubbed a thousand
@@ -909,8 +911,8 @@ describe("which containers it actually draws a control on", () => {
 
   it("draws NO control on a container the render does not produce", () => {
     /*
-     * The third refusal, and the only one with no element to ask anything of.
-     * `ghost` is in the overlay's document and in no element's id, which is
+     * The UNRENDERED refusal, and the only one with no element to ask anything
+     * of. `ghost` is in the overlay's document and in no element's id, which is
      * where a node `PageRenderer` drops stays: one carrying
      * `visibility.conditions`, or one whose props make it draw nothing. A pass
      * that HAS a canvas root and cannot find the element has decided about
@@ -939,6 +941,108 @@ describe("which containers it actually draws a control on", () => {
     ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Add a block to Closed section" })
+    ).toBeNull();
+  });
+
+  /**
+   * Three containers of one type, told apart by where their `position` puts
+   * them.
+   *
+   * The two refused ones carry an authored `styles` envelope, which is the same
+   * route the inspector writes: `PageRenderer` compiles it into the page's own
+   * `<style>` and the element's COMPUTED `position` is what the component then
+   * reads. Nothing here assigns the value onto the element, so the fixture
+   * exercises the production path from stored document to computed style rather
+   * than standing in for it — and the assertions below check that the value
+   * arrived before reading anything into the control's absence.
+   */
+  const PINNED: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "anchored",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Anchored box",
+      },
+      {
+        id: "pinned-to-viewport",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Fixed box",
+        styles: { base: { base: { position: { type: "fixed" } } } },
+      },
+      {
+        id: "pinned-to-scrollport",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Sticky box",
+        styles: { base: { base: { position: { type: "sticky" } } } },
+      },
+    ],
+  };
+
+  /** The computed `position` of one node's rendered element. */
+  function computedPositionOf(container: HTMLElement, id: string): string {
+    const element = canvasRootIn(container).querySelector(
+      `[${NODE_ID_ATTRIBUTE}="${id}"]`
+    );
+    if (element === null) throw new Error(`no element for ${id}`);
+    return getComputedStyle(element).position;
+  }
+
+  it("draws NO control on a container the author pinned to the viewport", () => {
+    /*
+     * `position` is a catalog keyword, so `fixed` is a value an author stores.
+     * A fixed container stops travelling with the canvas content this overlay
+     * measures in, and nothing re-measures when it stops: the shell scrolls a
+     * section ABOVE the canvas root, and a scroll event does not bubble, so the
+     * capture-phase listener `watchCanvasFor` puts on the root never hears it.
+     * The square would come to rest over unrelated content and take the presses
+     * meant for it.
+     *
+     * `Anchored box` is the positive control, in the same render and the same
+     * measurement pass: without it the absence below is satisfied by a
+     * component that drew nothing anywhere. The computed value is asserted
+     * first so the refusal is known to be about a container that really is
+     * fixed rather than about a fixture whose styles never compiled.
+     */
+    const container = measuredCanvas(PINNED, {
+      anchored: { x: 0, y: 0, width: 400, height: 200 },
+      "pinned-to-viewport": { x: 0, y: 400, width: 400, height: 200 },
+    });
+
+    expect(computedPositionOf(container, "pinned-to-viewport")).toBe("fixed");
+    expect(drawnAt("Anchored box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(
+      screen.queryByRole("button", { name: "Add a block to Fixed box" })
+    ).toBeNull();
+  });
+
+  it("draws NO control on a container the author pinned to a scrollport", () => {
+    /*
+     * Asserted apart from the fixed case rather than assumed to follow it. The
+     * two are one branch today, and a refusal narrowed to a single value passes
+     * the case above while leaving this one drawn — so the pair is what says
+     * the branch covers both keywords rather than the one that was written
+     * first. A sticky container additionally moves WITHIN its scrollport, which
+     * is the same drift arriving without the container leaving the page at all.
+     */
+    const container = measuredCanvas(PINNED, {
+      anchored: { x: 0, y: 0, width: 400, height: 200 },
+      "pinned-to-scrollport": { x: 0, y: 400, width: 400, height: 200 },
+    });
+
+    expect(computedPositionOf(container, "pinned-to-scrollport")).toBe(
+      "sticky"
+    );
+    expect(drawnAt("Anchored box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(
+      screen.queryByRole("button", { name: "Add a block to Sticky box" })
     ).toBeNull();
   });
 

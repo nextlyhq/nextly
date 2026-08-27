@@ -169,6 +169,53 @@ export function canvasPaintedPoint(
 }
 
 /**
+ * Whether an element is positioned against the VIEWPORT rather than against the
+ * page {@link canvasContentRect} measures in.
+ *
+ * `position` is a catalog keyword — `blocks-engine`'s style catalog offers
+ * `static`, `relative`, `absolute`, `fixed` and `sticky` — so taking a block
+ * out of the canvas's content coordinates is something an author can store.
+ * `fixed` and `sticky` are the two values that do it: both hold the element
+ * still against a viewport or a scrollport while the content around it travels,
+ * so a rectangle read here describes where the element was at the instant of
+ * the read and stops describing it on the very next scroll.
+ *
+ * Nothing corrects that drift, which is what makes it a refusal rather than a
+ * staleness to re-measure away. The canvas root does not scroll — the shell
+ * scrolls a section ABOVE it — and a scroll event does not bubble, so the
+ * capture-phase listener `canvas-geometry-watch.ts` installs on the root
+ * reaches a scroller nested INSIDE the canvas and nothing outside it.
+ *
+ * Asked of the ELEMENT rather than of a computed string handed in, so every
+ * overlay drawn in this space asks one question and gets one answer. A caller
+ * given the string would decide for itself which property carries it and in
+ * which realm to read it, which is two more chances to answer differently about
+ * the same element.
+ *
+ * The element's own view rather than the ambient `window`, for the reason
+ * {@link canvasRootFrom} gives: a canvas portalled into a same-origin iframe is
+ * styled by that document, and reading through this one would answer about
+ * rules that do not apply to it. An element with no view at all is reported as
+ * NOT viewport-positioned — nothing has positioned it, because nothing has laid
+ * it out, and the callers that reach this already decline an element with no
+ * box for their own reasons.
+ *
+ * The two values are NAMED rather than reached by excluding the ones that stay
+ * in this space, and that direction is load-bearing. An element no rule
+ * positions computes to `static` in a browser and to the EMPTY STRING under
+ * jsdom, so an allow-list of the values that are in the space would refuse both
+ * — every ordinary block, in the runtime the tests run in. Anything this does
+ * not recognise is therefore accepted, `static`, `relative` and `absolute`
+ * included.
+ */
+export function viewportPositioned(element: Element): boolean {
+  const view = element.ownerDocument.defaultView;
+  if (view === null) return false;
+  const position = view.getComputedStyle(element).position;
+  return position === "fixed" || position === "sticky";
+}
+
+/**
  * The nearest ancestor that actually scrolls, or `null` when nothing does.
  *
  * The canvas root is NOT it. That element carries the drag handlers and sizes

@@ -136,11 +136,12 @@
  *
  * - MEASURED — the pass found the element, accepted it, and holds a rectangle.
  * - DECLINED — the pass reached this container and refused it, for one of
- *   three reasons: the render produced no element for it at all, the
+ *   four reasons: the render produced no element for it at all, the
  *   stylesheet drew no box for the element it did produce (see the section
- *   above), or an authored ancestor clips it (see `measure`). All three are
- *   re-decided on every pass, so each is a refusal for as long as the render
- *   keeps this shape rather than a permanent one.
+ *   above), the author positioned it against the VIEWPORT rather than against
+ *   the page, or an authored ancestor clips it (the last two: see `measure`).
+ *   All four are re-decided on every pass, so each is a refusal for as long as
+ *   the render keeps this shape rather than a permanent one.
  * - UNMEASURED — no pass has run at all, because there is no canvas root to
  *   run one against. Nothing has been asked about any container yet.
  *
@@ -201,6 +202,7 @@ import {
   canvasContentRect,
   canvasRootFrom,
   clippedByAncestorRect,
+  viewportPositioned,
 } from "./geometry-dom";
 import type { SlotSource } from "./inserter";
 import { authoredName } from "./layers";
@@ -485,7 +487,7 @@ export function EmptyContainerAppenders({
        * which is the `root === null` return above and the one case where a
        * control genuinely is waiting to be placed.
        *
-       * Re-decided on the next pass exactly like the two refusals below: a
+       * Re-decided on the next pass exactly like the three refusals below: a
        * container that starts rendering — a condition that begins to hold, an
        * edit that gives the node markup — gets its control back as soon as
        * anything re-measures.
@@ -521,6 +523,32 @@ export function EmptyContainerAppenders({
        * happens to be about this element.
        */
       if (!target.matches(EMPTY_CONTAINER_SELECTOR)) {
+        next.set(container.id, DECLINED);
+        continue;
+      }
+      /*
+       * Positioned against the VIEWPORT rather than against the page this
+       * overlay draws in, which is a container no control can be anchored to.
+       *
+       * `position` is a catalog keyword, so `fixed` and `sticky` are values an
+       * author stores like any other. Both hold the container still while the
+       * canvas content under it travels, so the square measured here slides off
+       * the container on the first scroll and comes to rest over unrelated
+       * content — taking the presses meant for that content with it, since this
+       * button is one of the two pieces of chrome that accept pointer events.
+       *
+       * Nothing corrects the drift, which is why it is refused instead of
+       * re-measured: the shell scrolls a section ABOVE the canvas root and a
+       * scroll event does not bubble, so `watchCanvasFor`'s capture-phase
+       * listener on the root reaches a scroller nested INSIDE the canvas and
+       * never hears that one.
+       *
+       * The same predicate `SpacingOverlay` refuses on, asked here rather than
+       * `position` being read a second time — see `viewportPositioned` in
+       * `geometry-dom.ts` for why that question belongs to the coordinate space
+       * rather than to either overlay.
+       */
+      if (viewportPositioned(target)) {
         next.set(container.id, DECLINED);
         continue;
       }

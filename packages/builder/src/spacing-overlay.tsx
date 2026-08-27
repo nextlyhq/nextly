@@ -82,6 +82,7 @@ import {
   hasScrollbarGutter,
   layoutFragments,
   renderedScale,
+  viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
 import {
@@ -352,7 +353,7 @@ const NO_BANDS: readonly SpacingBand[] = [];
  */
 function describable(
   fragments: number,
-  position: string,
+  viewportPositioned: boolean,
   gutter: boolean,
   clipped: boolean,
   scale: RenderedScale
@@ -370,8 +371,14 @@ function describable(
    * block stops moving with the canvas content the bands are drawn in, so they
    * slide away from it on the first scroll — and scrolling emits no resize, so
    * nothing re-measures.
+   *
+   * Decided by `viewportPositioned` in `geometry-dom.ts` rather than by reading
+   * `position` here, because it is a property of the coordinate space
+   * `canvasContentRect` measures in and not of bands: every overlay drawn in
+   * that space refuses the same elements, and a second copy of the test would
+   * go on accepting a value the shared one had learned to refuse.
    */
-  if (position === "fixed" || position === "sticky") return false;
+  if (viewportPositioned) return false;
   /*
    * A classic scrollbar takes its width between the padding box and the border,
    * so a padding box derived from the borders alone is too wide by the gutter
@@ -477,7 +484,7 @@ export function SpacingOverlay({
       radii === undefined ||
       !describable(
         layoutFragments(block),
-        style.position,
+        viewportPositioned(block),
         hasScrollbarGutter(block, borders),
         /*
          * The block's own curve goes in with it: a rounded block flush inside an
