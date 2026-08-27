@@ -283,9 +283,15 @@ describe("leaving the editor with an inline edit that could not be written", () 
 });
 
 describe("the save shortcut with an inline edit that could not be written", () => {
-  /** The chord, on the document, where the capture-phase listener sits. */
+  /**
+   * The save chord, on the document, where the capture-phase listener sits.
+   *
+   * Control rather than Command because `mod` resolves per platform and jsdom
+   * reports a non-Apple one. Pressing Command here would assert that the
+   * WRONG modifier saves, which is the defect the exact matcher removes.
+   */
   function pressSave(): void {
-    fireEvent.keyDown(document, { key: "s", metaKey: true });
+    fireEvent.keyDown(document, { key: "s", ctrlKey: true });
   }
 
   it("still saves the rest of the document when the passage was refused", () => {
@@ -303,6 +309,36 @@ describe("the save shortcut with an inline edit that could not be written", () =
     expect(saved).toMatchObject({ kind: "page" });
     expect(editorIsOpen()).toBe(true);
     expect(errors).toHaveLength(1);
+  });
+
+  it("ignores a modified variant the form does not treat as save", () => {
+    /*
+     * `mod+s` is matched EXACTLY by the shortcut manager, so Ctrl+Shift+S does
+     * not submit the form. A broader predicate here would finish the passage
+     * and change the field for a keystroke that saved nothing — and on several
+     * platforms Ctrl+Shift+S is the browser's Save As, so the author would be
+     * looking at a file dialog while it happened.
+     */
+    outcome = { status: "unchanged" };
+
+    openEditor();
+    fireEvent.keyDown(document, { key: "s", ctrlKey: true, shiftKey: true });
+
+    expect(saved).toBeUndefined();
+
+    fireEvent.keyDown(document, { key: "s", ctrlKey: true, altKey: true });
+
+    expect(saved).toBeUndefined();
+
+    // The platform's OTHER modifier is not the chord either, and this is the
+    // control: an assertion that nothing ever saves would pass the two above.
+    fireEvent.keyDown(document, { key: "s", metaKey: true });
+
+    expect(saved).toBeUndefined();
+
+    pressSave();
+
+    expect(saved).toMatchObject({ kind: "page" });
   });
 
   it("saves without complaining when the edit finished normally", () => {

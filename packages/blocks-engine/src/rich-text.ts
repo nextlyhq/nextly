@@ -200,11 +200,24 @@ export function richTextToPlainText(value: RichTextValue): string {
 
     /*
      * Asked ONCE, before the node is read, because it is the same question
-     * either way: does this node end a line? A container answers it and so
-     * does a leaf that carries its own text — the boundary lands after the
-     * node in both cases, since the stack pops what went on last.
+     * either way: does this node end a line?
+     *
+     * BOTH sides, and the leading one is not decoration. Lexical's decorator
+     * nodes are inline unless a node overrides `isInline()`, and none of this
+     * editor's do — so inserting a button with the caret in a paragraph makes
+     * it a CHILD of that paragraph, between two text runs. A trailing boundary
+     * alone leaves `Before`, a button reading `Buy now`, then `After` as
+     * `BeforeBuy now After`: separated from what follows and welded to what
+     * came before.
+     *
+     * Redundant spaces cost nothing — the join collapses runs of whitespace —
+     * so this does not need to know whether a boundary already sits there.
      */
-    if (!isInline(item)) stack.push(BLOCK_BOUNDARY);
+    const inline = isInline(item);
+    if (!inline) {
+      parts.push(" ");
+      stack.push(BLOCK_BOUNDARY);
+    }
 
     const leaf = leafText(item);
     if (leaf !== null) {

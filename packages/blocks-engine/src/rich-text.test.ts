@@ -265,23 +265,41 @@ describe("codeTokenClass", () => {
 describe("richTextToPlainText around a block-like leaf", () => {
   it("separates a node that carries its own text but is drawn as a block", () => {
     /*
-     * `button-link` stores its label in `text`, so a walk that treats "has
-     * text" as "is inline" reads the label and runs it straight into whatever
-     * follows. Handed to a crawler as a page description, that is a sentence
-     * the author never wrote.
+     * NESTED, which is the shape the editor actually produces: Lexical's
+     * decorator nodes are inline unless one overrides `isInline()`, and none of
+     * this editor's do, so inserting a button with the caret in a paragraph
+     * makes it a CHILD of that paragraph between two text runs.
+     *
+     * A fixture that put the button between two ROOT paragraphs would pass
+     * against a walk that separates it from what follows and welds it to what
+     * came before, because the preceding paragraph's own boundary supplies the
+     * missing space. This one cannot: both sides are inside one paragraph.
      */
     expect(
       richTextToPlainText(
         value([
           {
             type: "paragraph",
-            children: [{ type: "text", text: "Before" }],
+            children: [
+              { type: "text", text: "Before" },
+              { type: "button-link", text: "Buy now" },
+              { type: "text", text: "After" },
+            ],
           },
+        ])
+      )
+    ).toBe("Before Buy now After");
+  });
+
+  it("separates one between root paragraphs too", () => {
+    // The shape a stored document can also hold, kept because the two travel
+    // different paths through the walk.
+    expect(
+      richTextToPlainText(
+        value([
+          { type: "paragraph", children: [{ type: "text", text: "Before" }] },
           { type: "button-link", text: "Buy now" },
-          {
-            type: "paragraph",
-            children: [{ type: "text", text: "After" }],
-          },
+          { type: "paragraph", children: [{ type: "text", text: "After" }] },
         ])
       )
     ).toBe("Before Buy now After");

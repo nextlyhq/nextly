@@ -87,7 +87,12 @@ import {
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
 // and sonner keeps its queue in module state, so a toast published into another
 // bundled copy would never reach it.
-import { toast } from "@nextlyhq/ui";
+import {
+  chordMatches,
+  detectApplePlatform,
+  parseKeys,
+  toast,
+} from "@nextlyhq/ui";
 import {
   useCallback,
   useEffect,
@@ -673,9 +678,24 @@ function finishInlineEdit(
   };
 }
 
-/** Whether a key event is the save chord on this platform. */
+/**
+ * The form's save shortcut, parsed from the SAME spec the form registers.
+ *
+ * Asked of the shortcut library rather than written out here. A hand-rolled
+ * `key === "s" && (metaKey || ctrlKey)` treats modifiers as a minimum, so it
+ * also fires on Ctrl+Shift+S and Ctrl+Alt+S — which the manager rejects,
+ * meaning the form does NOT save. Ctrl+Shift+S is the browser's Save As on
+ * several platforms, so the author would have got a dialog, an inline edit
+ * closed underneath it, and a field changed by a keystroke that saved nothing.
+ */
+const SAVE_CHORD = parseKeys("mod+s")[0];
+
+/** Whether a key event is the form's save shortcut on this platform. */
 function isSaveChord(event: KeyboardEvent): boolean {
-  return event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey);
+  return (
+    SAVE_CHORD !== undefined &&
+    chordMatches(SAVE_CHORD, event.key, event, detectApplePlatform())
+  );
 }
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
