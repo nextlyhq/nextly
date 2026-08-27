@@ -279,10 +279,13 @@ describe("PermissionService - Smoke Tests", () => {
     });
 
     it("should return 400 when deleting permission assigned to roles", async () => {
-      // Arrange: Create permission and role, assign permission to role
+      // A NON-system resource, and that is the whole point of the change: with
+      // `users` here the system-resource guard refuses FIRST, so this case
+      // never reached the role-assignment check it is named for. It would have
+      // gone green against a build where that check had been deleted.
       const permission = permissionFactory({
         action: "read",
-        resource: "users",
+        resource: "posts",
       });
       const role = roleFactory();
 
@@ -301,7 +304,11 @@ describe("PermissionService - Smoke Tests", () => {
       await expect(
         service.deletePermissionById(permission.id)
       ).rejects.toMatchObject({
-        statusCode: 400,
+        // The code the docblock promises, not a status number. The code IS the
+        // contract — `@throws NextlyError(BUSINESS_RULE_VIOLATION) when the
+        // permission is currently assigned to one or more roles` — while a
+        // status is a transport detail that can move without the rule changing.
+        code: "BUSINESS_RULE_VIOLATION",
       });
     });
   });
@@ -357,7 +364,11 @@ describe("PermissionService - Smoke Tests", () => {
       await expect(
         service.deletePermission("update", "comments")
       ).rejects.toMatchObject({
-        statusCode: 400,
+        // The code the docblock promises, not a status number. The code IS the
+        // contract — `@throws NextlyError(BUSINESS_RULE_VIOLATION) when the
+        // permission is currently assigned to one or more roles` — while a
+        // status is a transport detail that can move without the rule changing.
+        code: "BUSINESS_RULE_VIOLATION",
       });
     });
   });
@@ -706,14 +717,12 @@ describe("PermissionService - Smoke Tests", () => {
         // Arrange: Close the database connection to simulate error
         await testDb.close();
 
-        // Act: Try to list permissions with closed database
-        const result = await service.listPermissions();
-
-        // Assert: Should return error response
-        expect(result.data.success).toBe(false);
-        expect(result.data.statusCode).toBeGreaterThanOrEqual(400);
-        expect(result.data.message).toContain("Failed to fetch permissions");
-        expect(result.data).toBeNull();
+        // A closed connection is a throw, not a result. "Gracefully" now means
+        // the driver error is wrapped as a NextlyError rather than escaping raw
+        // — the caller gets one error type whatever the dialect did.
+        await expect(service.listPermissions()).rejects.toMatchObject({
+          statusCode: 500,
+        });
 
         // Cleanup: Recreate database for subsequent tests
         testDb = await createTestDb();
@@ -724,13 +733,14 @@ describe("PermissionService - Smoke Tests", () => {
 
   describe("getPermissionById() - additional tests", () => {
     it("should return 404 for invalid UUID format", async () => {
-      // Act
-      const result = await service.getPermissionById("not-a-uuid");
-
-      // Assert
-      // Note: Current implementation treats invalid IDs as "not found" rather than validation errors
-      // This is acceptable behavior - the query simply returns no results
-      expectErrorResponse(result, 404, "not found");
+      // An id matching no row is NOT_FOUND rather than a validation error: the
+      // query simply returns nothing, and the service does not pre-judge the
+      // format. It throws, so there is no result to inspect.
+      await expect(
+        service.getPermissionById("not-a-uuid")
+      ).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
     });
 
     it("should return 404 for null permission ID", async () => {
@@ -826,8 +836,8 @@ describe("PermissionService - Smoke Tests", () => {
       );
 
       // Assert: All should return same ID
-      expect(result1.data!.id).toBe(result2.data!.id);
-      expect(result2.data!.id).toBe(result3.data!.id);
+      expect(result1.id).toBe(result2.id);
+      expect(result2.id).toBe(result3.id);
     });
 
     it("should handle special characters in parameters", async () => {
@@ -870,7 +880,7 @@ describe("PermissionService - Smoke Tests", () => {
       );
 
       // Assert: Should return the same existing permission (not create a duplicate)
-      expect(result1.data!.id).toBe(result2.data!.id);
+      expect(result1.id).toBe(result2.id);
       expect(result2.statusCode).toBe(200); // Should return existing, not create new
       expect(result2.message).toContain("already exists");
     });
@@ -899,8 +909,8 @@ describe("PermissionService - Smoke Tests", () => {
       );
 
       // Assert: All should resolve to the same permission
-      expect(result1.data!.id).toBe(result2.data!.id);
-      expect(result2.data!.id).toBe(result3.data!.id);
+      expect(result1.id).toBe(result2.id);
+      expect(result2.id).toBe(result3.id);
     });
   });
 
