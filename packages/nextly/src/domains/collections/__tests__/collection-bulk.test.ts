@@ -13,10 +13,17 @@
  *   overrides, 404 source.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { CollectionMutationService } from "../services/collection-mutation-service";
+import type {
+  BatchOperationResult,
+  BulkOperationOptions,
+  CollectionServiceResult,
+} from "../services/collection-types";
+import { markWriteIntegrityFailure } from "../../../shared/write-integrity";
 
 import {
   createMockSchema,
@@ -653,5 +660,334 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       expect(result).toHaveProperty("success");
       expect(result).toHaveProperty("statusCode");
     });
+  });
+
+  // ── legacy batch operations ─────────────────────────────────────────────
+  //
+  // The six-method batch model: createEntries / updateEntries / deleteEntries
+  // and their InTransaction twins. These pin the per-item accounting, the
+  // option flags, and each path's rollback envelope, so the shared loop the
+  // methods grow cannot change any of them silently.
+
+  describe("legacy batch operations", () => {
+    // The InTransaction entry points receive the caller's tx. The helpers' own
+    // transaction double passes the db itself as the tx, so mirror that shape
+    // and add the getDrizzle() the collection-level access read binds to.
+    const makeTx = (): TransactionContext =>
+      ({ ...mockDb, getDrizzle: () => mockDb }) as never;
+
+    type BatchWorker =
+      | "createSingleEntryInTransaction"
+      | "updateSingleEntryInTransaction"
+      | "deleteSingleEntryInTransaction";
+
+    const okOutcome = (id: string): CollectionServiceResult<unknown> => ({
+      success: true,
+      statusCode: 201,
+      message: "ok",
+      data: { id },
+      // Every committed item carries both side-channel signals, so each
+      // assertion below sees them flow into the batch result.
+      eventRecorded: true,
+      revalidationIntent: { tags: [`tag-${id}`] },
+    });
+
+    // A committed row whose after-hook then threw: reported failed, but the
+    // row and its outbox event are in, so it still owes a delivery and its
+    // tags are still busted.
+    const committedThenFailed = (
+      message: string
+    ): CollectionServiceResult<unknown> => ({
+      success: false,
+      statusCode: 500,
+      message,
+      data: null,
+      eventRecorded: true,
+      revalidationIntent: { tags: ["tag-failed"] },
+    });
+
+    interface OpDef {
+      name: string;
+      worker: BatchWorker;
+      // Update's worker separates id and data, so its skipHooks sits one
+      // argument further along than create's and delete's.
+      skipHooksArg: 3 | 4;
+      self: (options?: BulkOperationOptions) => Promise<BatchOperationResult>;
+      inTx: (
+        tx: TransactionContext,
+        options?: BulkOperationOptions
+      ) => Promise<BatchOperationResult>;
+      // Delete reports the requested id; create/update report the written
+      // row's id, which the worker mock controls.
+      expectedIds: string[];
+    }
+
+    const OPS: OpDef[] = [
+      {
+        name: "createEntries",
+        worker: "createSingleEntryInTransaction",
+        skipHooksArg: 3,
+        self: options =>
+          service.createEntries(
+            { collectionName: "posts" },
+            [{ title: "A" }, { title: "B" }],
+            options
+          ),
+        inTx: (tx, options) =>
+          service.createEntriesInTransaction(
+            tx,
+            { collectionName: "posts" },
+            [{ title: "A" }, { title: "B" }],
+            options
+          ),
+        expectedIds: ["id-0", "id-1"],
+      },
+      {
+        name: "updateEntries",
+        worker: "updateSingleEntryInTransaction",
+        skipHooksArg: 4,
+        self: options =>
+          service.updateEntries(
+            { collectionName: "posts" },
+            [
+              { id: "e1", data: { title: "A" } },
+              { id: "e2", data: { title: "B" } },
+            ],
+            options
+          ),
+        inTx: (tx, options) =>
+          service.updateEntriesInTransaction(
+            tx,
+            { collectionName: "posts" },
+            [
+              { id: "e1", data: { title: "A" } },
+              { id: "e2", data: { title: "B" } },
+            ],
+            options
+          ),
+        expectedIds: ["id-0", "id-1"],
+      },
+      {
+        name: "deleteEntries",
+        worker: "deleteSingleEntryInTransaction",
+        skipHooksArg: 3,
+        self: options =>
+          service.deleteEntries(
+            { collectionName: "posts" },
+            ["e1", "e2"],
+            options
+          ),
+        inTx: (tx, options) =>
+          service.deleteEntriesInTransaction(
+            tx,
+            { collectionName: "posts" },
+            ["e1", "e2"],
+            options
+          ),
+        expectedIds: ["e1", "e2"],
+      },
+    ];
+
+    // Point the operation's worker at a scripted per-item sequence; any item
+    // beyond the script succeeds. Thrown values propagate as throws.
+    const scriptWorker = (
+      op: OpDef,
+      script: Array<CollectionServiceResult<unknown> | Error>
+    ) => {
+      let calls = 0;
+      return vi
+        .spyOn(CollectionMutationService.prototype, op.worker)
+        .mockImplementation(async () => {
+          const outcome =
+            script[calls] ?? okOutcome(op.expectedIds[calls] ?? `id-${calls}`);
+          calls += 1;
+          if (outcome instanceof Error) throw outcome;
+          return outcome;
+        });
+    };
+
+    // The happy-path worker result per item index; delete reports no written
+    // row, so its data is null while the id still rides the outcome for
+    // create/update id extraction.
+    const okFor = (
+      op: OpDef,
+      index: number
+    ): CollectionServiceResult<unknown> =>
+      op.name === "deleteEntries"
+        ? { ...okOutcome(op.expectedIds[index] ?? `id-${index}`), data: null }
+        : okOutcome(op.expectedIds[index] ?? `id-${index}`);
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    for (const op of OPS) {
+      describe(op.name, () => {
+        it("reports per-item success with ids, outbox signal and intents", async () => {
+          scriptWorker(op, [okFor(op, 0), okFor(op, 1)]);
+          const result = await op.self();
+
+          expect(result.successful).toBe(2);
+          expect(result.failed).toBe(0);
+          expect(result.errors).toEqual([]);
+          expect(result.ids).toEqual(op.expectedIds);
+          expect(result.eventRecorded).toBe(true);
+          expect(result.revalidationIntents?.map(i => i.tags[0])).toEqual(
+            op.expectedIds.map(id => `tag-${id}`)
+          );
+        });
+
+        it("reports the same accounting inside the caller's transaction", async () => {
+          scriptWorker(op, [okFor(op, 0), okFor(op, 1)]);
+          const result = await op.inTx(makeTx());
+
+          expect(result.successful).toBe(2);
+          expect(result.ids).toEqual(op.expectedIds);
+          expect(result.eventRecorded).toBe(true);
+          expect(result.revalidationIntents).toHaveLength(2);
+        });
+
+        it("carries on past a returned per-item failure when stopOnError is unset", async () => {
+          scriptWorker(op, [okFor(op, 0), committedThenFailed("nope")]);
+          const result = await op.self();
+
+          expect(result.successful).toBe(1);
+          expect(result.failed).toBe(1);
+          expect(result.errors).toEqual([{ index: 1, error: "nope" }]);
+          // The committed-then-failed item still owes its delivery and its
+          // tags, even though it is counted a failure.
+          expect(result.eventRecorded).toBe(true);
+          expect(result.revalidationIntents).toHaveLength(2);
+        });
+
+        it("carries on the same way inside the caller's transaction", async () => {
+          scriptWorker(op, [okFor(op, 0), committedThenFailed("nope")]);
+          const result = await op.inTx(makeTx());
+
+          expect(result.successful).toBe(1);
+          expect(result.errors).toEqual([{ index: 1, error: "nope" }]);
+          expect(result.revalidationIntents).toHaveLength(2);
+        });
+
+        it("stopOnError rolls the self-transaction back", async () => {
+          scriptWorker(op, [okFor(op, 0), committedThenFailed("nope")]);
+          const result = await op.self({ stopOnError: true });
+
+          expect(result.successful).toBe(0);
+          expect(result.ids).toEqual([]);
+          if (op.name === "deleteEntries") {
+            // Delete rebuilds errors as exactly one entry per requested id:
+            // the aborting id keeps its own message, the rest get the note.
+            expect(result.failed).toBe(2);
+            expect(result.errors).toHaveLength(2);
+            expect(result.errors[0].index).toBe(0);
+            expect(result.errors[0].error).toContain("Batch rolled back");
+            expect(result.errors[1]).toMatchObject({ index: 1, error: "nope" });
+          } else {
+            // Create/update annotate the first recorded error instead.
+            expect(result.errors[0].index).toBe(1);
+            expect(result.errors[0].error).toContain("nope");
+            expect(result.errors[0].error).toContain(
+              "1 successful entries were rolled back"
+            );
+          }
+          expect(result.eventRecorded).toBe(false);
+        });
+
+        it("stopOnError rejects out of the InTransaction twin so the caller's transaction rolls back", async () => {
+          scriptWorker(op, [okFor(op, 0), committedThenFailed("nope")]);
+
+          await expect(
+            op.inTx(makeTx(), { stopOnError: true })
+          ).rejects.toThrow("Entry at index 1 failed");
+        });
+
+        if (op.name !== "deleteEntries") {
+          it("an integrity-marked failure aborts the batch even without stopOnError", async () => {
+            scriptWorker(op, [
+              okFor(op, 0),
+              markWriteIntegrityFailure(new Error("capture failed")),
+            ]);
+            const result = await op.self();
+
+            expect(result.successful).toBe(0);
+            expect(result.ids).toEqual([]);
+            expect(result.failed).toBe(2);
+            // One generic error per requested index: every input was rolled
+            // back, and the operational detail stays in the log.
+            expect(
+              result.errors.every(
+                e =>
+                  e.error ===
+                  "The write could not be completed and was rolled back."
+              )
+            ).toBe(true);
+            expect(result.eventRecorded).toBe(false);
+          });
+
+          it("an integrity-marked failure rejects out of the InTransaction twin", async () => {
+            scriptWorker(op, [
+              okFor(op, 0),
+              markWriteIntegrityFailure(new Error("capture failed")),
+            ]);
+
+            await expect(op.inTx(makeTx())).rejects.toThrow("capture failed");
+          });
+        } else {
+          it("any thrown error aborts the batch and rebuilds one error per requested id", async () => {
+            scriptWorker(op, [okFor(op, 0), new Error("boom")]);
+            const result = await op.self();
+
+            expect(result.successful).toBe(0);
+            expect(result.ids).toEqual([]);
+            expect(result.failed).toBe(2);
+            expect(result.errors[0].error).toContain("Batch rolled back");
+            expect(result.errors[1]).toMatchObject({ index: 1, error: "boom" });
+            expect(result.eventRecorded).toBe(false);
+          });
+
+          it("any thrown error propagates out of the InTransaction twin", async () => {
+            scriptWorker(op, [okFor(op, 0), new Error("boom")]);
+
+            await expect(op.inTx(makeTx())).rejects.toThrow("boom");
+          });
+        }
+
+        it("forwards skipHooks to every worker call (asserted on the flag itself)", async () => {
+          const spy = scriptWorker(op, [okFor(op, 0), okFor(op, 1)]);
+          await op.self({ skipHooks: true });
+
+          expect(spy.mock.calls.length).toBe(2);
+          for (const call of spy.mock.calls) {
+            expect(call[op.skipHooksArg]).toBe(true);
+          }
+
+          // The negative twin: without the option the flag must be false —
+          // asserting only the bypass would pass on an absent flag too.
+          spy.mockRestore();
+          const unskipped = scriptWorker(op, [okFor(op, 0), okFor(op, 1)]);
+          await op.self();
+          for (const call of unskipped.mock.calls) {
+            expect(call[op.skipHooksArg]).toBe(false);
+          }
+        });
+
+        it("warms readiness on the self path only; the InTransaction twin never does", async () => {
+          const warm = vi
+            .spyOn(
+              CollectionMutationService.prototype,
+              "warmLocalizedReadiness"
+            )
+            .mockResolvedValue(undefined);
+          scriptWorker(op, [okFor(op, 0), okFor(op, 1)]);
+
+          await op.inTx(makeTx());
+          expect(warm).not.toHaveBeenCalled();
+
+          await op.self();
+          expect(warm).toHaveBeenCalled();
+        });
+      });
+    }
   });
 });
