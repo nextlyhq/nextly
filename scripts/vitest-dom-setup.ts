@@ -12,14 +12,19 @@
  * answers with the FIRST case's element — so later cases assert against a tree
  * belonging to a test that has already finished, and agree with it.
  *
- * ## `act` is allowed to run
+ * ## `act` is reported as configured
  *
- * `React.act` refuses to run unless `IS_REACT_ACT_ENVIRONMENT` is set, and the
- * refusal is a WARNING rather than a failure. A file missing it drives nothing,
- * asserts against the first render, and passes. The testing library sets the
- * flag only around its own `act`-wrapped calls, so anything driving React
- * directly — a mocked component's callback, a bare `act` in a test — is left
- * without it.
+ * Measured, and NOT what the name suggests: `React.act` runs and flushes its
+ * queue whether or not `IS_REACT_ACT_ENVIRONMENT` is set. What the flag decides
+ * is whether React reports the environment as unconfigured — a `console.error`
+ * that a suite full of expected output scrolls straight past, and that nothing
+ * fails on.
+ *
+ * So the cost of missing it is not a test that does nothing; it is a warning
+ * nobody reads, on every file that drives React itself. The testing library
+ * sets the flag only around its own `act`-wrapped calls, so anything driving
+ * React directly — a mocked component's callback, a bare `act` in a test — is
+ * left without it.
  *
  * ## Guarded, because most files here have no DOM
  *
