@@ -390,6 +390,58 @@ export async function maintainClassUsage(args: {
 }
 
 /**
+ * Drop every row a deleted document owned.
+ *
+ * This is the one place in the write path where absence is DEFINITE. Every
+ * other question about whether a document is there is asked by reading, and a
+ * read cannot answer it: `listEntries` applies `beforeOperation` and
+ * `beforeRead` regardless of access override, so a tenant scope or a
+ * soft-delete filter withholds a live row and the page comes back empty,
+ * indistinguishable from a document that is gone. That is why an absent
+ * document leaves its rows alone everywhere else.
+ *
+ * Here nothing is inferred. The hook IS the notification that the row was
+ * removed, and it runs after the delete committed — so the rows can be dropped
+ * outright, and the usual asymmetry does not apply because there is no reading
+ * to be wrong about.
+ *
+ * Bound on the document and NOT on field, locale or variant. A delete removes
+ * the document in every language and both lifecycle states at once, so every
+ * subject it owned goes with it. Binding the other three would need the caller
+ * to enumerate subjects from configuration that may since have changed —
+ * and a blocks field REMOVED from a collection after its rows were written
+ * would then be unnameable, leaving those rows behind for ever with no live
+ * document to reconcile them against and no sweep that visits them.
+ *
+ * Rows are read whole before any is deleted. These are offset queries, so
+ * deleting while paging shifts later rows behind the cursor and skips them.
+ */
+export async function forgetDeletedDocument(args: {
+  store: ClassUsageIndexStore;
+  scope: ClassUsageScope;
+  entity: string;
+  entityKey: string;
+}): Promise<{ removed: number }> {
+  const where = {
+    scope: { equals: args.scope },
+    entity: { equals: args.entity },
+    entityKey: { equals: args.entityKey },
+  };
+  const rows = await storedRowsWhere(
+    args.store,
+    where,
+    `${args.scope}:${args.entity}:${args.entityKey}:*`
+  );
+
+  let removed = 0;
+  for (const row of rows) {
+    await args.store.delete({ id: row.id });
+    removed += 1;
+  }
+  return { removed };
+}
+
+/**
  * Drop rows belonging to documents that no longer exist.
  *
  * A walk over live documents can only reconcile the ones it finds. A document
