@@ -33,6 +33,6 @@ export default defineConfig({
     // Runs fresh inside EACH test file's own resolved environment, which is
     // what lets one file serve both the node suites and the jsdom ones — see
     // the guard it opens with.
-    setupFiles: ["./vitest.setup.ts"],
+    setupFiles: ["../../scripts/vitest-dom-setup.ts"],
   },
 });

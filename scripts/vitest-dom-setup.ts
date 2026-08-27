@@ -23,16 +23,24 @@
  *
  * ## Guarded, because most files here have no DOM
  *
- * This package runs `environment: "node"` and opts into jsdom per file, so the
- * majority of files that load this have no `document`. The work is done only
+ * Both packages that load this run `environment: "node"` and opt into jsdom
+ * per file, so the majority of files that load it have no `document`. The work is done only
  * where there is one, and the testing library is imported only there: pulling
  * `react-dom` into a runtime that cannot host it would turn a setup file meant
  * to protect the DOM suites into a reason the node ones cannot start.
  *
- * Stated per package rather than shared from one place, which is the shape
- * `plugin-form-builder` already uses. A shared module would be a new published
- * package in a 25-package lockstep release for thirty lines that differ only
- * in which suites they guard.
+ * ## One copy, outside every package
+ *
+ * Loaded by each package's vitest config by relative path rather than copied
+ * into each one. Two copies of a rule this quiet is how a later fix reaches one
+ * package and leaves the other silently on the old behaviour — and the whole
+ * point of these two rules is that nothing tells you when they are missing.
+ *
+ * Here rather than in a package because it is dev tooling, not published
+ * source: a shared module inside `packages/` would be a new entry in a
+ * 25-package lockstep release for thirty lines no consumer ever loads. It also
+ * imports `vitest`, so it cannot live in a package whose layering guard counts
+ * anything in `src` that is not a test as source.
  */
 import { afterEach } from "vitest";
 
