@@ -271,12 +271,36 @@ interface ClassUsageRowIdentity {
   entityKey: string;
 }
 
-/** Read only the columns a document-wide removal is keyed by. */
+/**
+ * Read only the columns a document-wide removal is keyed by.
+ *
+ * A row that answers the document's predicates but carries no readable `id`
+ * RAISES rather than being skipped. Skipping is right for a row this walk
+ * cannot recognise at all — that row is another query's business — but a row
+ * that IS this document's and cannot be addressed is the one case where
+ * silence strands it: the document is gone, so no reconciliation will visit it
+ * again, and it counts towards its class for ever.
+ *
+ * The id can go missing for a real reason. `afterRead` may reshape a list
+ * response, and the Direct API applies those transformations even for a
+ * trusted caller — so a host that projects this plugin's own index collection
+ * can drop the column the rows are addressed by. Raising reports that; the
+ * alternative reported a clean deletion that had not happened.
+ */
 function readRowIdentity(item: unknown): ClassUsageRowIdentity | null {
   if (!isPlainRecord(item)) return null;
-  const parts = readStrings(item, ["id", "scope", "entity", "entityKey"]);
-  if (parts === null) return null;
-  const [id, scope, entity, entityKey] = parts;
+  const keyed = readStrings(item, ["scope", "entity", "entityKey"]);
+  if (keyed === null) return null;
+  const [scope, entity, entityKey] = keyed;
+
+  const id = item.id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error(
+      `Class-usage row for ${scope}:${entity}:${entityKey} has no readable ` +
+        `id, so it cannot be removed with the document it belongs to; it ` +
+        `would count towards its class until a rebuild runs.`
+    );
+  }
   return { id, scope, entity, entityKey };
 }
 

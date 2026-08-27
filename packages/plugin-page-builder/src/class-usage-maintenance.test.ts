@@ -557,6 +557,61 @@ describe("forgetting a document that was deleted", () => {
     expect(deleted).toEqual(["legacy"]);
   });
 
+  it("RAISES on this document's row that carries no readable id", async () => {
+    // `afterRead` may reshape a list response and the Direct API applies it
+    // even for a trusted caller, so a host projecting this plugin's own index
+    // collection can drop the column the rows are addressed by. Skipping such a
+    // row reports a clean deletion that did not happen — and because the
+    // document is gone, no reconciliation visits it again and it counts towards
+    // its class for ever.
+    const deleted: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [
+          {
+            // Addressable, and removed.
+            id: "r1",
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-1",
+            field: "content",
+            locale: "",
+            variant: "published",
+            classId: "hero",
+          },
+          {
+            // This document's row, with the id projected away.
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-1",
+            field: "content",
+            locale: "",
+            variant: "published",
+            classId: "card",
+          },
+        ],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async args => {
+        deleted.push(args.id);
+        return {};
+      },
+    };
+
+    await expect(
+      forgetDeletedDocument({
+        store,
+        scope: "collection",
+        entity: "pages",
+        entityKey: "page-1",
+      })
+    ).rejects.toThrow(/no readable id/);
+    // Nothing was deleted: the walk reads every page before removing anything,
+    // so the failure is reported before a partial cleanup is begun.
+    expect(deleted).toEqual([]);
+  });
+
   it("REFUSES to delete a row the query did not ask for", async () => {
     // If a misbound query returns a foreign row, deleting it removes usage
     // belonging to a document that still exists. The refusal must raise rather
