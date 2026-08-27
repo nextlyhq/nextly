@@ -10,6 +10,7 @@
  * @module domains/jobs/jobs-runner
  */
 
+import { nextly } from "../../direct-api/nextly";
 import { listRoleSlugsForUserStrict } from "../../services/lib/permissions";
 
 import type { JobRegistry } from "./job-registry";
@@ -141,6 +142,9 @@ export async function runJobsPass(
     maxDurationMs: options?.maxDurationMs,
     leaseMs: options?.leaseMs,
     random: options?.random,
+    // The real Direct API, resolved lazily per call so a job queued before the
+    // runtime finished booting still binds to a live one.
+    contentApi: nextly,
   });
 
   // Prune AFTER the drain, and never in a way that can fail it. A queue without

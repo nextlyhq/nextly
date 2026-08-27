@@ -25,6 +25,8 @@
 import { NextlyError } from "../../errors";
 import type { UserContext } from "../collections/services/collection-types";
 
+import type { JobContentApi } from "./job-content-api";
+
 /** Attempts a job gets before it is given up on. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
 
@@ -52,6 +54,20 @@ export interface JobContext {
   user: UserContext | null;
   /** The instant the runner is treating as now. Injected so a job is testable. */
   now: Date;
+  /**
+   * Content operations, already bound to `user`.
+   *
+   * Handed to the handler rather than left for it to construct, because the
+   * Direct API defaults to `overrideAccess: true` — so a handler importing
+   * `nextly` directly runs with trusted-system authority and the resolved
+   * identity above does nothing. Using this is how a job actually acts as the
+   * person who queued it.
+   *
+   * A job that genuinely needs trusted access still imports `nextly` itself.
+   * That is then one visible line in the handler instead of an invisible
+   * default.
+   */
+  content: JobContentApi;
 }
 
 export interface JobRetryPolicy {

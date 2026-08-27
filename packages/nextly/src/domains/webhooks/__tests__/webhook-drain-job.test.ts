@@ -65,7 +65,7 @@ function store(rows: JobRow[]): JobsStore & { finalized: FinalizeInput[] } {
       return rows;
     },
     claim: async id => rows.find(r => r.id === id) ?? null,
-    markAttempt: async () => {},
+    markAttempt: async () => true,
     renewLease: async () => true,
     finalize: async input => {
       finalized.push(input);
@@ -108,6 +108,21 @@ const fakeRegistry = () =>
     getEnabledEndpointsFresh: vi.fn(async () => []),
   }) satisfies WebhookDrainRegistry;
 
+/**
+ * A content API that refuses to be called.
+ *
+ * These cases do not exercise content operations, and a silent no-op would let
+ * one start using it without saying so — the assertion would then pass against
+ * a handler whose reads returned nothing.
+ */
+const noContentApi = new Proxy({} as never, {
+  get: (_target, name) => () => {
+    throw new Error(
+      `content.${String(name)} called by a test that does not stub it`
+    );
+  },
+});
+
 describe("the webhook drain as a job", () => {
   it("registers under a stable slug", () => {
     // The slug is stored in every queued row. Renaming it orphans every row
@@ -140,6 +155,7 @@ describe("the webhook drain as a job", () => {
       store: s,
       registry,
       runAs: { findUser: async () => null, listRoleSlugs: async () => [] },
+      contentApi: noContentApi,
       now: () => NOW,
     });
 
@@ -171,6 +187,7 @@ describe("the webhook drain as a job", () => {
       registry,
       // A resolver that would REFUSE any id, proving the null path is distinct.
       runAs: { findUser: async () => null, listRoleSlugs: async () => [] },
+      contentApi: noContentApi,
       now: () => NOW,
     });
 

@@ -49,7 +49,7 @@ function store(rows: JobRow[]): JobsStore & { finalized: unknown[] } {
       return rows;
     },
     claim: async id => rows.find(r => r.id === id) ?? null,
-    markAttempt: async () => {},
+    markAttempt: async () => true,
     renewLease: async () => true,
     finalize: async input => {
       finalized.push(input);
@@ -57,6 +57,21 @@ function store(rows: JobRow[]): JobsStore & { finalized: unknown[] } {
     },
   };
 }
+
+/**
+ * A content API that refuses to be called.
+ *
+ * These cases do not exercise content operations, and a silent no-op would let
+ * one start using it without saying so — the assertion would then pass against
+ * a handler whose reads returned nothing.
+ */
+const noContentApi = new Proxy({} as never, {
+  get: (_target, name) => () => {
+    throw new Error(
+      `content.${String(name)} called by a test that does not stub it`
+    );
+  },
+});
 
 const runAs = (over: Partial<RunAsDeps> = {}): RunAsDeps => ({
   findUser: async () => ({ id: "u1", isActive: true }),
@@ -78,6 +93,7 @@ describe("runJobs", () => {
       store: s,
       registry: registryWith(defineJob({ slug: "test:noop", handler })),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
     });
     expect(handler).toHaveBeenCalledTimes(1);
@@ -106,6 +122,7 @@ describe("runJobs", () => {
         })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
     });
     expect(seen).toEqual({ id: "u1", roles: ["editor"] });
@@ -120,6 +137,7 @@ describe("runJobs", () => {
       store: s,
       registry: registryWith(defineJob({ slug: "test:noop", handler })),
       runAs: runAs({ findUser: async () => null }),
+      contentApi: noContentApi,
       now: () => NOW,
     });
     expect(handler).not.toHaveBeenCalled();
@@ -146,6 +164,7 @@ describe("runJobs", () => {
         })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
     });
     expect(result).toMatchObject({ retried: 1, failed: 0 });
@@ -168,6 +187,7 @@ describe("runJobs", () => {
         })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
     });
     expect(result).toMatchObject({ failed: 1, retried: 0 });
@@ -186,10 +206,12 @@ describe("runJobs", () => {
         defineJob({ slug: "test:noop", handler: async () => {} })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
     });
     expect(result.claimed).toBe(1);
     expect(s.finalized[0]).toMatchObject({
+      outcome: "retry",
       lastError: expect.stringContaining("gone:type"),
     });
   });
@@ -205,6 +227,7 @@ describe("runJobs", () => {
         defineJob({ slug: "test:noop", handler: async () => {} })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
     });
     expect(result).toMatchObject({ claimed: 0, done: 0 });
@@ -228,6 +251,7 @@ describe("runJobs", () => {
         })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => new Date(clock),
       maxDurationMs: 25_000,
     });
@@ -253,6 +277,7 @@ describe("runJobs", () => {
         },
         listRoleSlugs: async () => [],
       },
+      contentApi: noContentApi,
       now: () => NOW,
     });
 
@@ -277,6 +302,7 @@ describe("runJobs", () => {
         defineJob({ slug: "test:noop", handler: async () => {} })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
     });
 
@@ -308,6 +334,7 @@ describe("runJobs", () => {
         })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
       runnerId: "runner-a",
       renewIntervalMs: 5,
@@ -340,11 +367,95 @@ describe("runJobs", () => {
         })
       ),
       runAs: runAs(),
+      contentApi: noContentApi,
       now: () => NOW,
       renewIntervalMs: 5,
     });
 
     // One refusal is enough to stop it; without that check this would be ~12.
     expect(calls).toBeLessThanOrEqual(2);
+  });
+
+  it("hands the handler a content client already bound to the resolved user", async () => {
+    // The identity is only real if it reaches the CALLS. The Direct API
+    // defaults to overrideAccess: true, so a handler importing `nextly`
+    // directly would run every scheduled operation with trusted-system
+    // authority while the resolved user sat unused in its context.
+    const find = vi.fn(async (_args: Record<string, unknown>) => ({
+      items: [],
+    }));
+    await runJobs({
+      store: store([row({ runAsUserId: "u1" })]),
+      registry: registryWith(
+        defineJob({
+          slug: "test:noop",
+          handler: async (_input, ctx) => {
+            await ctx.content.find({ collection: "posts" } as never);
+          },
+        })
+      ),
+      runAs: runAs(),
+      contentApi: { find } as never,
+      now: () => NOW,
+    });
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: "posts",
+        overrideAccess: false,
+        user: { id: "u1", roles: ["editor"] },
+      })
+    );
+  });
+
+  it("does NOT run the handler when the attempt fence says the lease is gone", async () => {
+    // markAttempt is fenced on locked_by, so `false` means a successor took the
+    // job between the claim and that write. Running the handler anyway would do
+    // the work twice — and the finalize fence would refuse to record it either
+    // way, so the second run would be invisible as well as duplicated.
+    const handler = vi.fn(async () => {});
+    const s: JobsStore & { finalized: unknown[] } = {
+      ...store([row()]),
+      markAttempt: async () => false,
+    };
+
+    const result = await runJobs({
+      store: s,
+      registry: registryWith(defineJob({ slug: "test:noop", handler })),
+      runAs: runAs(),
+      contentApi: noContentApi,
+      now: () => NOW,
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(s.finalized).toEqual([]);
+    expect(result).toMatchObject({ claimed: 1, unrecorded: 1, done: 0 });
+  });
+
+  it("does NOT charge an attempt for a slug this instance does not know", async () => {
+    // A rolling deployment leaves old instances without a type the new ones
+    // already enqueue. If that costs the job an attempt, the old workers can
+    // exhaust its budget before a new one gets a turn — and the job fails
+    // permanently for a reason that had already fixed itself.
+    const marked: number[] = [];
+    const s: JobsStore & { finalized: unknown[] } = {
+      ...store([row({ slug: "gone:type", attemptCount: 0 })]),
+      markAttempt: async (_id, _runner, attemptCount) => {
+        marked.push(attemptCount);
+        return true;
+      },
+    };
+
+    await runJobs({
+      store: s,
+      registry: registryWith(
+        defineJob({ slug: "test:noop", handler: async () => {} })
+      ),
+      runAs: runAs(),
+      contentApi: noContentApi,
+      now: () => NOW,
+    });
+
+    expect(marked).toEqual([]);
   });
 });

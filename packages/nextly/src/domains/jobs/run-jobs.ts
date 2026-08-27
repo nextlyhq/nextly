@@ -5,6 +5,19 @@
  * stores, the registry supplies the code. Assembling those is `jobs-runner`'s
  * job, so that both triggers assemble them identically.
  *
+ * ## What the wall-clock budget bounds, and what it does not
+ *
+ * `maxDurationMs` is checked before each CLAIM, so it bounds how many jobs a
+ * pass starts. It cannot bound how long one already-running handler takes:
+ * nothing here can interrupt a promise mid-flight, and a cancellation that the
+ * handler does not cooperate with would abandon whatever it had half-done
+ * outside the database — worse than being late.
+ *
+ * So a single handler CAN overrun the budget. Two things bound that instead:
+ * `leaseMs`, which the handler's runner renews only while it is alive, and the
+ * handler itself being written to fit a tick. Saying the budget bounds the pass
+ * would be the more comfortable claim and the false one.
+ *
  * ## The pass is bounded, deliberately
  *
  * A drain runs behind a serverless cron tick as often as it runs on a long-
@@ -50,6 +63,7 @@
 import { DEFAULT_MAX_ATTEMPTS, type JobRegistry } from "./job-registry";
 import { nextAttempt } from "./job-backoff";
 import type { FinalizeInput, FinalizeOutcome, JobRow } from "./jobs-repository";
+import { createJobContentApi } from "./job-content-api";
 import { resolveRunAs, type RunAsDeps } from "./resolve-run-as";
 
 /** Rows claimed and finalized per pass when the caller does not say. */
@@ -71,12 +85,13 @@ export interface JobsStore {
     now: Date,
     leaseMs: number
   ): Promise<JobRow | null>;
+  /** `false` means the lease was lost; the caller must not run the handler. */
   markAttempt(
     id: string,
     runnerId: string,
     attemptCount: number,
     now: Date
-  ): Promise<void>;
+  ): Promise<boolean>;
   finalize(input: FinalizeInput): Promise<boolean>;
   renewLease(
     id: string,
@@ -100,6 +115,13 @@ export interface RunJobsDeps {
    * the lease, so two renewals may be missed before it lapses.
    */
   renewIntervalMs?: number;
+  /**
+   * The Direct API the bound content client wraps.
+   *
+   * Injected rather than imported so a pass can be driven without booting a
+   * runtime; `runJobsPass` supplies the real one.
+   */
+  contentApi: Parameters<typeof createJobContentApi>[1];
   random?: () => number;
 }
 
@@ -115,6 +137,15 @@ export interface RunJobsResult {
    */
   unrecorded: number;
 }
+
+/**
+ * `runOne`'s answer when the lease was lost before the handler ran.
+ *
+ * Distinct from any outcome, because there is nothing to record: the row
+ * belongs to another runner and writing to it is exactly what the fence exists
+ * to refuse.
+ */
+const LEASE_LOST = Symbol("lease-lost");
 
 export async function runJobs(deps: RunJobsDeps): Promise<RunJobsResult> {
   const now = deps.now ?? (() => new Date());
@@ -147,6 +178,10 @@ export async function runJobs(deps: RunJobsDeps): Promise<RunJobsResult> {
     result.claimed += 1;
 
     const outcome = await runOne(deps, job, runnerId, now);
+    if (outcome === LEASE_LOST) {
+      result.unrecorded += 1;
+      continue;
+    }
     countOutcome(result, outcome.outcome, await deps.store.finalize(outcome));
   }
 
@@ -185,7 +220,7 @@ async function runOne(
   job: JobRow,
   runnerId: string,
   now: () => Date
-): Promise<FinalizeInput> {
+): Promise<FinalizeInput | typeof LEASE_LOST> {
   const terminal = (lastError: string): FinalizeInput => {
     return {
       id: job.id,
@@ -198,8 +233,46 @@ async function runOne(
   };
 
   const definition = deps.registry.get(job.slug);
+
+  // Deferred BEFORE an attempt is charged.
+  //
+  // During a rolling deployment an instance that has not been replaced yet does
+  // not know a slug the new instances already enqueue. Charging that to the
+  // job's retry budget lets the old workers exhaust it before a new one gets a
+  // turn — the job then fails permanently for a reason that had already fixed
+  // itself.
+  //
+  // The row is still never silently skipped: the reason is recorded, so a type
+  // genuinely deleted while rows were queued shows up in the admin instead of
+  // cycling invisibly. It simply keeps its budget for a runner that can run it.
+  if (definition === undefined) {
+    const deferred = nextAttempt({
+      attemptCount: 1,
+      maxAttempts: DEFAULT_MAX_ATTEMPTS,
+      now: now(),
+      random: deps.random,
+    });
+    return {
+      id: job.id,
+      runnerId,
+      outcome: "retry",
+      nextAttemptAt: deferred.outcome === "retry" ? deferred.at : null,
+      lastError: `No job type is registered for "${job.slug}".`,
+      now: now(),
+    };
+  }
+
   const attempt = job.attemptCount + 1;
-  await deps.store.markAttempt(job.id, runnerId, attempt, now());
+  const stillOurs = await deps.store.markAttempt(
+    job.id,
+    runnerId,
+    attempt,
+    now()
+  );
+  // The lease went to a successor between the claim and this write. Running the
+  // handler now would do the work twice, and the fence would refuse to record
+  // it either way — so stop, and leave the row to whoever holds it.
+  if (!stillOurs) return LEASE_LOST;
 
   // The identity READS can fail — a transient RBAC database error, say — and
   // that is a different thing from the identity being gone. Letting it throw
@@ -214,7 +287,7 @@ async function runOne(
     return decide(
       job,
       attempt,
-      definition?.retry.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+      definition.retry.maxAttempts,
       error instanceof Error ? error.message : String(error),
       runnerId,
       now,
@@ -224,26 +297,6 @@ async function runOne(
   // Terminal, not retried: a deleted or deactivated user does not come back on
   // the next pass, and retrying would cycle an unrunnable row forever.
   if (!identity.ok) return terminal(identity.reason);
-
-  if (definition === undefined) {
-    // NOT terminal on its own. A deploy that has not finished rolling out can
-    // leave one instance without a type another instance queued, and that
-    // recovers by itself. A type genuinely deleted while rows were queued
-    // instead exhausts its budget and gives up saying which slug is missing —
-    // either way the row is never silently passed over.
-    return decide(
-      job,
-      attempt,
-      // Derived from the registry's own default rather than restated, so
-      // changing that default cannot leave orphan rows on a different budget
-      // from registered jobs.
-      DEFAULT_MAX_ATTEMPTS,
-      `No job type is registered for "${job.slug}".`,
-      runnerId,
-      now,
-      deps.random
-    );
-  }
 
   try {
     // Renew while the handler works. The lease is otherwise a wall-clock guess
@@ -255,6 +308,7 @@ async function runOne(
       definition.handler(job.input as never, {
         user: identity.user,
         now: now(),
+        content: createJobContentApi(identity.user, deps.contentApi),
       })
     );
   } catch (error) {

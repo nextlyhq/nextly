@@ -171,6 +171,16 @@ export class JobsRepository {
     // longer one in strict mode, while PostgreSQL and SQLite accept it. Without
     // this check a dedupe key works on two dialects and throws on the third, at
     // enqueue time rather than where the caller chose the key.
+    // Validated here as well as in `defineJob`. This is an exported surface: a
+    // caller can reach it with a slug that never went through a definition, and
+    // MySQL would then refuse the insert while the other two dialects accepted
+    // it.
+    if (input.slug.length > MAX_PORTABLE_KEY_LENGTH) {
+      throw NextlyError.invalidInput({
+        message: `A job slug may be at most ${MAX_PORTABLE_KEY_LENGTH} characters.`,
+        logContext: { length: input.slug.length },
+      });
+    }
     if (
       input.dedupeKey !== null &&
       input.dedupeKey.length > MAX_PORTABLE_KEY_LENGTH
@@ -181,6 +191,20 @@ export class JobsRepository {
       });
     }
 
+    return this.insertOrDedupe(input, true);
+  }
+
+  /**
+   * One insert attempt, resolving a duplicate-key refusal.
+   *
+   * `mayRetry` is spent by the one case that deserves a second attempt: the row
+   * holding the key vacated it between our failed insert and the read that
+   * looked for it.
+   */
+  private async insertOrDedupe(
+    input: NewJob,
+    mayRetry: boolean
+  ): Promise<EnqueueResult> {
     const id = crypto.randomUUID();
     try {
       await this.db.insert(JOBS, {
@@ -223,10 +247,18 @@ export class JobsRepository {
         limit: 1,
       });
       const winner = existing[0];
-      // The row was deleted between the failed insert and this read. Nothing
-      // is queued and nothing was written, so say so rather than reporting a
-      // deduplication against a row that no longer exists.
-      if (!winner) throw error;
+      // The row that held the key is gone from under us — it reached a terminal
+      // state and released the key, or was pruned, between the failed insert
+      // and this read. Nothing is outstanding, so the caller's work is NOT a
+      // duplicate and reporting it as one would drop it silently. Insert again.
+      //
+      // Once, not in a loop: a second collision means another writer is
+      // actively winning the race, and that IS a live duplicate rather than a
+      // vacated key.
+      if (!winner) {
+        if (!mayRetry) throw error;
+        return this.insertOrDedupe(input, false);
+      }
       return { id: winner.id, deduped: true };
     }
   }
@@ -445,8 +477,8 @@ export class JobsRepository {
     runnerId: string,
     attemptCount: number,
     now: Date
-  ): Promise<void> {
-    await this.db.updateCount(
+  ): Promise<boolean> {
+    const affected = await this.db.updateCount(
       JOBS,
       { attempt_count: attemptCount, updated_at: now },
       {
@@ -456,6 +488,10 @@ export class JobsRepository {
         ],
       }
     );
+    // `false` says the lease is no longer ours: a successor holds the job, and
+    // everything this runner does from here produces a result the fence will
+    // refuse anyway. The caller stops rather than running the handler twice.
+    return affected > 0;
   }
 }
 
