@@ -1217,37 +1217,13 @@ export class CollectionBulkService extends BaseService {
     const state = newLegacyBatchState();
     try {
       await this.adapter.transaction(async tx => {
-        await runLegacyBatch(
+        await this.runCreateBatch(
           tx,
+          params,
+          transitionAuth,
           entries,
-          { batchSize, stopOnError },
-          state,
-          async entryData => {
-            const createResult =
-              await this.mutationService.createSingleEntryInTransaction(
-                tx,
-                { ...params, transitionAuth },
-                entryData,
-                skipHooks
-              );
-            return createResult.success && createResult.data
-              ? {
-                  ok: true,
-                  id: (createResult.data as Record<string, unknown>)
-                    .id as string,
-                  eventRecorded: createResult.eventRecorded,
-                  revalidationIntent: createResult.revalidationIntent,
-                }
-              : {
-                  ok: false,
-                  message: createResult.message,
-                  eventRecorded: createResult.eventRecorded,
-                  revalidationIntent: createResult.revalidationIntent,
-                };
-          },
-          // Only marked write-integrity failures abort a create batch; every
-          // other throw soft-fails its item unless stopOnError says otherwise.
-          isWriteIntegrityFailure
+          { batchSize, stopOnError, skipHooks },
+          state
         );
       });
     } catch (error: unknown) {
@@ -1409,36 +1385,13 @@ export class CollectionBulkService extends BaseService {
     // surfaced on the result for the CALLER to flush after ITS commit (as it
     // does for the webhook drain) — this method cannot flush pre-commit.
     const state = newLegacyBatchState();
-    await runLegacyBatch(
+    await this.runCreateBatch(
       tx,
+      params,
+      transitionAuth,
       entries,
-      { batchSize, stopOnError },
-      state,
-      async entryData => {
-        const createResult =
-          await this.mutationService.createSingleEntryInTransaction(
-            tx,
-            { ...params, transitionAuth },
-            entryData,
-            skipHooks
-          );
-        return createResult.success && createResult.data
-          ? {
-              ok: true,
-              id: (createResult.data as Record<string, unknown>).id as string,
-              eventRecorded: createResult.eventRecorded,
-              revalidationIntent: createResult.revalidationIntent,
-            }
-          : {
-              ok: false,
-              message: createResult.message,
-              eventRecorded: createResult.eventRecorded,
-              revalidationIntent: createResult.revalidationIntent,
-            };
-      },
-      // Only marked write-integrity failures abort; every other throw
-      // soft-fails its item unless stopOnError says otherwise.
-      isWriteIntegrityFailure
+      { batchSize, stopOnError, skipHooks },
+      state
     );
 
     return toBatchResult(state);
@@ -1561,38 +1514,13 @@ export class CollectionBulkService extends BaseService {
     const state = newLegacyBatchState();
     try {
       await this.adapter.transaction(async tx => {
-        await runLegacyBatch(
+        await this.runUpdateBatch(
           tx,
+          params,
+          transitionAuth,
           entries,
-          { batchSize, stopOnError },
-          state,
-          async ({ id, data }) => {
-            const updateResult =
-              await this.mutationService.updateSingleEntryInTransaction(
-                tx,
-                { ...params, transitionAuth },
-                id,
-                data,
-                skipHooks
-              );
-            return updateResult.success && updateResult.data
-              ? {
-                  ok: true,
-                  id: (updateResult.data as Record<string, unknown>)
-                    .id as string,
-                  eventRecorded: updateResult.eventRecorded,
-                  revalidationIntent: updateResult.revalidationIntent,
-                }
-              : {
-                  ok: false,
-                  message: updateResult.message,
-                  eventRecorded: updateResult.eventRecorded,
-                  revalidationIntent: updateResult.revalidationIntent,
-                };
-          },
-          // Only marked write-integrity failures abort an update batch; every
-          // other throw soft-fails its item unless stopOnError says otherwise.
-          isWriteIntegrityFailure
+          { batchSize, stopOnError, skipHooks },
+          state
         );
       });
     } catch (error: unknown) {
@@ -1752,37 +1680,13 @@ export class CollectionBulkService extends BaseService {
     // surfaced on the result for the CALLER to flush after ITS commit — this
     // method cannot flush pre-commit.
     const state = newLegacyBatchState();
-    await runLegacyBatch(
+    await this.runUpdateBatch(
       tx,
+      params,
+      transitionAuth,
       entries,
-      { batchSize, stopOnError },
-      state,
-      async ({ id, data }) => {
-        const updateResult =
-          await this.mutationService.updateSingleEntryInTransaction(
-            tx,
-            { ...params, transitionAuth },
-            id,
-            data,
-            skipHooks
-          );
-        return updateResult.success && updateResult.data
-          ? {
-              ok: true,
-              id: (updateResult.data as Record<string, unknown>).id as string,
-              eventRecorded: updateResult.eventRecorded,
-              revalidationIntent: updateResult.revalidationIntent,
-            }
-          : {
-              ok: false,
-              message: updateResult.message,
-              eventRecorded: updateResult.eventRecorded,
-              revalidationIntent: updateResult.revalidationIntent,
-            };
-      },
-      // Only marked write-integrity failures abort; every other throw
-      // soft-fails its item unless stopOnError says otherwise.
-      isWriteIntegrityFailure
+      { batchSize, stopOnError, skipHooks },
+      state
     );
 
     return toBatchResult(state);
@@ -1882,42 +1786,12 @@ export class CollectionBulkService extends BaseService {
     const state = newLegacyBatchState();
     try {
       await this.adapter.transaction(async tx => {
-        await runLegacyBatch(
+        await this.runDeleteBatch(
           tx,
+          params,
           ids,
-          { batchSize, stopOnError },
-          state,
-          async entryId => {
-            const deleteResult =
-              await this.mutationService.deleteSingleEntryInTransaction(
-                tx,
-                params,
-                entryId,
-                skipHooks
-              );
-            return deleteResult.success
-              ? {
-                  ok: true,
-                  id: entryId,
-                  eventRecorded: deleteResult.eventRecorded,
-                  revalidationIntent: deleteResult.revalidationIntent,
-                }
-              : {
-                  ok: false,
-                  message: deleteResult.message,
-                  eventRecorded: deleteResult.eventRecorded,
-                  revalidationIntent: deleteResult.revalidationIntent,
-                };
-          },
-          // A THROWN error (as opposed to a returned {success:false}) may have
-          // left a partial write in this SHARED transaction — e.g. the row was
-          // deleted but its entry.deleted outbox event failed to insert. A
-          // shared transaction cannot partially roll back, so committing would
-          // break the outbox guarantee (a delete with no event). Abort the
-          // whole batch on every throw. Expected per-item failures (access
-          // denied, not found) are RETURNED by the worker, not thrown, so
-          // partial success is unaffected.
-          () => true
+          { batchSize, stopOnError, skipHooks },
+          state
         );
       });
     } catch (error: unknown) {
@@ -2063,10 +1937,153 @@ export class CollectionBulkService extends BaseService {
     // surfaced on the result for the CALLER to flush after ITS commit — this
     // method cannot flush pre-commit.
     const state = newLegacyBatchState();
+    await this.runDeleteBatch(
+      tx,
+      params,
+      ids,
+      { batchSize, stopOnError, skipHooks },
+      state
+    );
+    // Delete always reports the outbox signal, even when nothing recorded,
+    // matching the self-transaction twin's read-back-after-commit shape.
+    state.eventRecorded = state.eventRecorded ?? false;
+    return toBatchResult(state);
+  }
+
+  // ============================================================
+  // Per-operation batch workers — one loop per operation, called
+  // by both of its entry points
+  // ============================================================
+
+  /**
+   * The create batch's per-item worker and abort policy, shared by both entry
+   * points so the operation's loop exists exactly once. Only marked
+   * write-integrity failures abort a create batch; every other throw
+   * soft-fails its item unless stopOnError says otherwise.
+   */
+  private async runCreateBatch(
+    tx: TransactionContext,
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+      overrideAccess?: boolean;
+    },
+    transitionAuth: Awaited<
+      ReturnType<CollectionMutationService["resolveTransitionAuthorization"]>
+    >,
+    entries: Record<string, unknown>[],
+    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    state: LegacyBatchState
+  ): Promise<void> {
+    await runLegacyBatch(
+      tx,
+      entries,
+      options,
+      state,
+      async entryData => {
+        const createResult =
+          await this.mutationService.createSingleEntryInTransaction(
+            tx,
+            { ...params, transitionAuth },
+            entryData,
+            options.skipHooks
+          );
+        return createResult.success && createResult.data
+          ? {
+              ok: true,
+              id: (createResult.data as Record<string, unknown>).id as string,
+              eventRecorded: createResult.eventRecorded,
+              revalidationIntent: createResult.revalidationIntent,
+            }
+          : {
+              ok: false,
+              message: createResult.message,
+              eventRecorded: createResult.eventRecorded,
+              revalidationIntent: createResult.revalidationIntent,
+            };
+      },
+      isWriteIntegrityFailure
+    );
+  }
+
+  /**
+   * The update batch's per-item worker and abort policy, shared by both entry
+   * points so the operation's loop exists exactly once. Only marked
+   * write-integrity failures abort an update batch; every other throw
+   * soft-fails its item unless stopOnError says otherwise.
+   */
+  private async runUpdateBatch(
+    tx: TransactionContext,
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    transitionAuth: Awaited<
+      ReturnType<CollectionMutationService["resolveTransitionAuthorization"]>
+    >,
+    entries: BulkUpdateEntry[],
+    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    state: LegacyBatchState
+  ): Promise<void> {
+    await runLegacyBatch(
+      tx,
+      entries,
+      options,
+      state,
+      async ({ id, data }) => {
+        const updateResult =
+          await this.mutationService.updateSingleEntryInTransaction(
+            tx,
+            { ...params, transitionAuth },
+            id,
+            data,
+            options.skipHooks
+          );
+        return updateResult.success && updateResult.data
+          ? {
+              ok: true,
+              id: (updateResult.data as Record<string, unknown>).id as string,
+              eventRecorded: updateResult.eventRecorded,
+              revalidationIntent: updateResult.revalidationIntent,
+            }
+          : {
+              ok: false,
+              message: updateResult.message,
+              eventRecorded: updateResult.eventRecorded,
+              revalidationIntent: updateResult.revalidationIntent,
+            };
+      },
+      isWriteIntegrityFailure
+    );
+  }
+
+  /**
+   * The delete batch's per-item worker and abort policy, shared by both entry
+   * points so the operation's loop exists exactly once. A THROWN error (as
+   * opposed to a returned {success:false}) may have left a partial write in
+   * the shared transaction — e.g. the row was deleted but its entry.deleted
+   * outbox event failed to insert — so every throw aborts the batch. Expected
+   * per-item failures (access denied, not found) are RETURNED by the worker,
+   * not thrown, so partial success is unaffected.
+   */
+  private async runDeleteBatch(
+    tx: TransactionContext,
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      /** Who performed the delete, recorded on each entry's outbox event. */
+      actor?: RequestActor;
+    },
+    ids: string[],
+    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    state: LegacyBatchState
+  ): Promise<void> {
     await runLegacyBatch(
       tx,
       ids,
-      { batchSize, stopOnError },
+      options,
       state,
       async entryId => {
         const deleteResult =
@@ -2074,7 +2091,7 @@ export class CollectionBulkService extends BaseService {
             tx,
             params,
             entryId,
-            skipHooks
+            options.skipHooks
           );
         return deleteResult.success
           ? {
@@ -2090,17 +2107,7 @@ export class CollectionBulkService extends BaseService {
               revalidationIntent: deleteResult.revalidationIntent,
             };
       },
-      // A THROWN error may have left a partial write in the CALLER'S
-      // transaction — e.g. a row deleted but its entry.deleted outbox event
-      // failed to insert. Propagate it so the caller's transaction rolls
-      // back rather than committing a delete with no event. Expected per-item
-      // failures are RETURNED by the worker, not thrown, so partial success
-      // stands.
       () => true
     );
-    // Delete always reports the outbox signal, even when nothing recorded,
-    // matching the self-transaction twin's read-back-after-commit shape.
-    state.eventRecorded = state.eventRecorded ?? false;
-    return toBatchResult(state);
   }
 }
