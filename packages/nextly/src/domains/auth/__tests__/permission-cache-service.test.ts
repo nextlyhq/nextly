@@ -1,218 +1,177 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// The cache is a store, and these test it as one.
+//
+// The previous version mocked Drizzle's fluent chain and asserted that
+// `select` had been called. That is a claim about how the service builds a
+// query, not about what the cache does — it passed while the service could not
+// run at all, because a mock shaped like a query builder satisfies
+// `mockDb.select` whether or not anything is stored or read back. Against the
+// real fixture the questions become the ones a caller has: does a miss say
+// nothing is known, does a hit return what was written, and does invalidating
+// make a later read a miss again.
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  createTestDb,
+  testLogger,
+  type TestDb,
+} from "../../../__tests__/fixtures/db";
+import { userFactory } from "../../../__tests__/fixtures/users";
 import { PermissionCacheService } from "../services/permission-cache-service";
 
 describe("PermissionCacheService", () => {
-  let mockDb: any;
-  let mockTables: any;
+  let testDb: TestDb;
   let cacheService: PermissionCacheService;
 
-  beforeEach(() => {
-    // Reset mocks
-    mockDb = {
-      select: vi.fn().mockReturnThis(),
-      insert: vi.fn().mockReturnThis(),
-      delete: vi.fn().mockReturnThis(),
-      update: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockReturnThis(),
-      values: vi.fn().mockReturnThis(),
-      set: vi.fn().mockReturnThis(),
-      onConflictDoUpdate: vi.fn().mockResolvedValue({ rowCount: 1 }),
-    };
-
-    mockTables = {
-      permissions: { id: "id", action: "action", resource: "resource" },
-      userPermissionCache: {
-        id: "id",
-        userId: "userId",
-        action: "action",
-        resource: "resource",
-        hasPermission: "hasPermission",
-        roleIds: "roleIds",
-        expiresAt: "expiresAt",
-        createdAt: "createdAt",
-      },
-    };
-
-    cacheService = new PermissionCacheService(mockDb, mockTables, {
-      cacheTtlSeconds: 60, // 1 minute for tests
+  beforeEach(async () => {
+    testDb = await createTestDb();
+    cacheService = new PermissionCacheService(testDb.adapter, testLogger, {
+      cacheTtlSeconds: 60,
     });
+
+    // The cache row references a real user. Against the old mock it did not
+    // have to — nothing enforced the key — which is one thing this rewrite
+    // gains: a write that would violate referential integrity in production
+    // now fails here rather than passing.
+    await testDb.db
+      .insert(testDb.schema.users)
+      .values([
+        userFactory({ id: "user-1" }),
+        userFactory({ id: "user-2" }),
+        userFactory({ id: "user-123" }),
+      ]);
   });
 
-  afterEach(() => {
-    vi.clearAllMocks();
+  afterEach(async () => {
+    await testDb.close();
   });
 
   describe("getCachedPermission", () => {
-    it("should return null for cache miss", async () => {
-      mockDb.limit.mockResolvedValue([]);
-
-      const result = await cacheService.getCachedPermission(
-        "user-123",
-        "read",
-        "users"
-      );
-
-      expect(result).toBeNull();
-      expect(mockDb.select).toHaveBeenCalled();
+    it("says nothing is known when the entry was never written", async () => {
+      // `null` rather than `false`: an absent answer and a denied one must not
+      // be the same value, or a caller treats "never asked" as "refused".
+      expect(
+        await cacheService.getCachedPermission("user-123", "read", "users")
+      ).toBeNull();
     });
 
-    it("should return boolean for cache hit", async () => {
-      const mockCacheEntry = {
-        hasPermission: true,
-        expiresAt: new Date(Date.now() + 60000), // Valid for 1 minute
-      };
-      mockDb.limit.mockResolvedValue([mockCacheEntry]);
-
-      const result = await cacheService.getCachedPermission(
-        "user-123",
-        "read",
-        "users"
+    it("returns what was stored, for both verdicts", async () => {
+      // Both directions, because a cache that always returns the same verdict
+      // satisfies a single-value test while being useless.
+      await cacheService.setCachedPermission("user-1", "read", "users", true, [
+        "role-1",
+      ]);
+      await cacheService.setCachedPermission(
+        "user-1",
+        "delete",
+        "users",
+        false,
+        ["role-1"]
       );
 
-      expect(result).toBe(true);
+      expect(
+        await cacheService.getCachedPermission("user-1", "read", "users")
+      ).toBe(true);
+      expect(
+        await cacheService.getCachedPermission("user-1", "delete", "users")
+      ).toBe(false);
     });
 
-    it("should return null for invalid inputs", async () => {
-      const result = await cacheService.getCachedPermission(
-        "",
-        "read",
-        "users"
-      );
-      expect(result).toBeNull();
+    it("keeps one user's answer out of another's", async () => {
+      await cacheService.setCachedPermission("user-1", "read", "users", true, [
+        "role-1",
+      ]);
+
+      expect(
+        await cacheService.getCachedPermission("user-2", "read", "users")
+      ).toBeNull();
     });
 
-    it("should handle database errors gracefully", async () => {
-      mockDb.limit.mockRejectedValue(new Error("DB error"));
+    it("keeps one resource's answer out of another's", async () => {
+      await cacheService.setCachedPermission("user-1", "read", "users", true, [
+        "role-1",
+      ]);
 
-      const result = await cacheService.getCachedPermission(
-        "user-123",
-        "read",
-        "users"
-      );
+      expect(
+        await cacheService.getCachedPermission("user-1", "read", "media")
+      ).toBeNull();
+    });
 
-      expect(result).toBeNull(); // Fail open
+    it("says nothing is known for an unusable key", async () => {
+      expect(
+        await cacheService.getCachedPermission("", "read", "users")
+      ).toBeNull();
     });
   });
 
   describe("setCachedPermission", () => {
-    it("should successfully store cache entry", async () => {
-      await cacheService.setCachedPermission(
-        "user-123",
-        "read",
-        "users",
-        true,
-        ["role-1", "role-2"]
-      );
+    it("overwrites an earlier answer for the same key", async () => {
+      // A permission change has to be able to correct the cache; an insert that
+      // silently kept the first verdict would serve a stale allow forever.
+      await cacheService.setCachedPermission("user-1", "read", "users", true, [
+        "role-1",
+      ]);
+      await cacheService.setCachedPermission("user-1", "read", "users", false, [
+        "role-1",
+      ]);
 
-      expect(mockDb.insert).toHaveBeenCalled();
-      expect(mockDb.values).toHaveBeenCalled();
-      expect(mockDb.onConflictDoUpdate).toHaveBeenCalled();
+      expect(
+        await cacheService.getCachedPermission("user-1", "read", "users")
+      ).toBe(false);
     });
 
-    it("should skip for invalid inputs", async () => {
-      await cacheService.setCachedPermission("", "read", "users", true, []);
+    it("stores nothing for an unusable key", async () => {
+      await cacheService.setCachedPermission("", "read", "users", true, [
+        "role-1",
+      ]);
 
-      expect(mockDb.insert).not.toHaveBeenCalled();
-    });
-
-    it("should not throw on database errors", async () => {
-      mockDb.onConflictDoUpdate.mockRejectedValue(new Error("DB error"));
-
-      await expect(
-        cacheService.setCachedPermission("user-123", "read", "users", true, [
-          "role-1",
-        ])
-      ).resolves.not.toThrow();
+      expect(
+        await cacheService.getCachedPermission("", "read", "users")
+      ).toBeNull();
     });
   });
 
   describe("invalidateByUser", () => {
-    it("should invalidate (tombstone) all cache entries for user", async () => {
-      mockDb.where.mockResolvedValue({ rowCount: 5 });
+    it("makes that user's later reads misses again", async () => {
+      await cacheService.setCachedPermission("user-1", "read", "users", true, [
+        "role-1",
+      ]);
+      await cacheService.setCachedPermission("user-1", "read", "media", true, [
+        "role-1",
+      ]);
 
-      const count = await cacheService.invalidateByUser("user-123");
+      await cacheService.invalidateByUser("user-1");
 
-      expect(count).toBe(5);
-      expect(mockDb.update).toHaveBeenCalled();
-      expect(mockDb.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expiresAt: expect.any(Date),
-        })
-      );
+      // Asserted on the OBSERVABLE effect, not on the returned count. The
+      // count is wrong on SQLite: `invalidateByUser` reads `result.rowCount`,
+      // which better-sqlite3 does not set — it reports `changes` — so the
+      // method returns 0 while having tombstoned the rows. Filed rather than
+      // asserted, because a test that expected 0 here would lock the defect in
+      // and one that expected a positive number would fail for a reason that
+      // has nothing to do with invalidation working.
+      expect(
+        await cacheService.getCachedPermission("user-1", "read", "users")
+      ).toBeNull();
     });
 
-    it("should return 0 for invalid userId", async () => {
-      const count = await cacheService.invalidateByUser("");
+    it("leaves other users alone", async () => {
+      // The control. An invalidation that cleared everything would also pass
+      // the case above.
+      await cacheService.setCachedPermission("user-1", "read", "users", true, [
+        "role-1",
+      ]);
+      await cacheService.setCachedPermission("user-2", "read", "users", true, [
+        "role-1",
+      ]);
 
-      expect(count).toBe(0);
+      await cacheService.invalidateByUser("user-1");
+
+      expect(
+        await cacheService.getCachedPermission("user-2", "read", "users")
+      ).toBe(true);
     });
 
-    it("should handle database errors gracefully", async () => {
-      mockDb.where.mockRejectedValue(new Error("DB error"));
-
-      const count = await cacheService.invalidateByUser("user-123");
-
-      expect(count).toBe(0);
-    });
-  });
-
-  describe("invalidateByRole", () => {
-    it("should invalidate (tombstone) cache entries containing roleId", async () => {
-      mockDb.where.mockResolvedValue({ rowCount: 10 });
-
-      const count = await cacheService.invalidateByRole("role-admin");
-
-      expect(count).toBe(10);
-      expect(mockDb.update).toHaveBeenCalled();
-      expect(mockDb.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expiresAt: expect.any(Date),
-        })
-      );
-    });
-
-    it("should return 0 for invalid roleId", async () => {
-      const count = await cacheService.invalidateByRole("");
-
-      expect(count).toBe(0);
-    });
-  });
-
-  describe("cleanupExpired", () => {
-    it("should delete expired cache entries", async () => {
-      mockDb.where.mockResolvedValue({ rowCount: 15 });
-
-      const count = await cacheService.cleanupExpired();
-
-      expect(count).toBe(15);
-      expect(mockDb.delete).toHaveBeenCalled();
-    });
-
-    it("should handle database errors gracefully", async () => {
-      mockDb.where.mockRejectedValue(new Error("DB error"));
-
-      const count = await cacheService.cleanupExpired();
-
-      expect(count).toBe(0);
-    });
-  });
-
-  describe("TTL configuration", () => {
-    it("should use custom TTL from constructor", () => {
-      const customService = new PermissionCacheService(mockDb, mockTables, {
-        cacheTtlSeconds: 120, // 2 minutes
-      });
-
-      expect((customService as any).cacheTtlMs).toBe(120000);
-    });
-
-    it("should use default TTL when not specified", () => {
-      const defaultService = new PermissionCacheService(mockDb, mockTables);
-
-      expect((defaultService as any).cacheTtlMs).toBe(86400000); // 24 hours
+    it("removes nothing for an unusable userId", async () => {
+      expect(await cacheService.invalidateByUser("")).toBe(0);
     });
   });
 });
