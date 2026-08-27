@@ -262,6 +262,27 @@ export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
  */
 export { useInlineEditing } from "./use-inline-editing";
 export type { UseInlineEditingResult } from "./use-inline-editing";
+/**
+ * What finishing an inline edit did.
+ *
+ * A host must branch on this rather than on the presence of a document. A
+ * refused commit has kept the surface open because the author's words are in it
+ * and nowhere else — closing, navigating or opening another value on top of
+ * that is what loses them.
+ */
+export {
+  documentAfter,
+  INLINE_COMMIT_DISCARDED,
+  INLINE_COMMIT_UNCHANGED,
+} from "./inline-commit";
+export type {
+  InlineCommit,
+  InlineCommitDiscarded,
+  InlineCommitRefusal,
+  InlineCommitRefused,
+  InlineCommitUnchanged,
+  InlineCommitWritten,
+} from "./inline-commit";
 export { useInlineRichText } from "./use-inline-rich-text";
 export type {
   InlineRichTextEditing,

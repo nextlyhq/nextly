@@ -73,6 +73,8 @@ import {
   useCanvasDrag,
   useEditorState,
   useInlineEditing,
+  documentAfter,
+  type InlineCommit,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
@@ -82,6 +84,10 @@ import {
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
+// From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
+// and sonner keeps its queue in module state, so a toast published into another
+// bundled copy would never reach it.
+import { toast } from "@nextlyhq/ui";
 import {
   useCallback,
   useEffect,
@@ -615,19 +621,53 @@ function hasUnsavedWork(
 }
 
 /**
- * The document to hand the form, having finished whatever edit was open.
+ * What to tell the author when an inline edit did not save, or `null` when
+ * there is nothing to say.
+ *
+ * Said at all because nothing else would. An inline edit lives in the element
+ * until it ends, so the document never records it, the dirty flag never moves,
+ * and an edit that could not be written leaves no trace for the author to
+ * notice — they would find the old words back on the page and no reason given.
+ *
+ * The two refusals are separated because only one of them is theirs to act on:
+ * a passage that outgrew the page can be shortened, while one that was edited
+ * elsewhere cannot be reconciled from here, and the useful thing to say is that
+ * their version is still on screen for as long as they leave it there.
+ */
+function inlineEditProblem(outcome: InlineCommit): string | null {
+  if (outcome.status === "discarded")
+    return "That block changed while you were editing it, so your text was not saved.";
+  if (outcome.status !== "refused") return null;
+  return outcome.reason === "moved-on"
+    ? "That block was edited somewhere else while you were typing. Your text is still in it \u2014 copy what you need before you leave."
+    : "Your text could not be saved into this page. Shortening it may help.";
+}
+
+/**
+ * Finish whatever inline edit was open, and say what the host may now do.
  *
  * An inline edit lives in the element until it ends — that is what keeps the
  * caret still while an author types — so the document a caller is holding is
- * the one from before it. Committing that would hand over a document missing
- * the words the author was in the middle of writing, and leaving by the exit
- * gesture is the most common way to have a passage still open.
+ * the one from before it, and committing that would save a page missing the
+ * words they were in the middle of writing.
+ *
+ * Telling the author happens HERE rather than at each call site, so leaving and
+ * saving cannot come to describe the same refusal differently. `mayClose` is
+ * separate from the document because the two answers differ: a refused passage
+ * changed nothing, so there is a perfectly good document to save, and the only
+ * thing that must not happen is unmounting the editor still holding the words.
  */
-function documentAfterFinishing(
-  inline: { commit: () => BlockDocument | null },
+function finishInlineEdit(
+  inline: { commit: () => InlineCommit },
   held: BlockDocument
-): BlockDocument {
-  return inline.commit() ?? held;
+): { document: BlockDocument; mayClose: boolean } {
+  const outcome = inline.commit();
+  const problem = inlineEditProblem(outcome);
+  if (problem !== null) toast.error(problem);
+  return {
+    document: documentAfter(outcome, held),
+    mayClose: outcome.status !== "refused",
+  };
 }
 
 /** Whether a key event is the save chord on this platform. */
@@ -1092,7 +1132,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isSaveChord(event)) return;
-      onCommit(documentAfterFinishing(inline, editor.document));
+      /*
+       * Saved even when the passage was refused, and NOT closed either way.
+       * The document is right and complete for everything except the passage
+       * still open, so withholding the save would lose the rest of their work
+       * to protect a paragraph that is not going anywhere: it stays in the
+       * editor, on screen, and the message is what tells them it is still
+       * there.
+       */
+      onCommit(finishInlineEdit(inline, editor.document).document);
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
@@ -1117,7 +1165,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
      * missing the words the author was in the middle of writing, and the exit
      * gesture is the most common way to leave a passage open.
      */
-    onCommit(documentAfterFinishing(inline, editor.document));
+    const finished = finishInlineEdit(inline, editor.document);
+    /*
+     * A REFUSED commit kept the passage open because the author's words are in
+     * it and nowhere else. Closing unmounts the canvas and takes the editor
+     * with it, so leaving is declined until they deal with it — they have been
+     * told what happened, and their text is still where they left it.
+     */
+    if (!finished.mayClose) return;
+    onCommit(finished.document);
     onClose();
   }, [editor.document, inline, onCommit, onClose]);
 

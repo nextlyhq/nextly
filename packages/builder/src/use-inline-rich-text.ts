@@ -35,13 +35,18 @@
  * @module use-inline-rich-text
  */
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
 import {
+  INLINE_COMMIT_DISCARDED,
+  INLINE_COMMIT_UNCHANGED,
+  type InlineCommit,
+} from "./inline-commit";
+import {
   richInlineTargets,
   richInlineTextOp,
+  richTextChanged,
   richTextMovedOn,
 } from "./inline-rich-text";
 import { namedTarget } from "./inline-target";
@@ -153,11 +158,12 @@ export interface UseInlineRichTextResult {
   /**
    * Finish, writing whatever the author left behind.
    *
-   * Returns the document the write produced, or `null` when there was nothing
-   * to write. A caller that is about to hand the document somewhere else needs
-   * that: its own copy is the one from before this commit.
+   * A caller about to hand the document somewhere else needs the outcome, not
+   * just the document: its own copy is the one from before this commit, and a
+   * REFUSED commit leaves the passage open with the author's words in it, so
+   * closing or opening anything else on top of that destroys them.
    */
-  commit: () => BlockDocument | null;
+  commit: () => InlineCommit;
   /** Finish, discarding it. */
   cancel: () => void;
 }
@@ -247,37 +253,42 @@ export function useInlineRichText(
     baseline: unknown;
   } | null>(null);
 
-  /** Take the subtree back, whatever else happens. */
-  const release = useCallback((): unknown => {
+  /**
+   * Take the subtree back, whatever else happens.
+   *
+   * Reads nothing. Whether the passage is worth reading is the caller's
+   * question, and a `release` that answered it too made every caller look like
+   * it had considered the answer.
+   */
+  const letGo = useCallback(() => {
     const live = mounted.current;
     mounted.current = null;
     setEditing(null);
-    if (live === null) return undefined;
-    // Read BEFORE detaching: a detached session answers nothing, deliberately,
-    // so that a superseded one cannot read the live passage.
-    const next = live.session.read();
+    if (live === null) return;
     // The element's markup and attributes are the editor's to put back: it is
     // what changed them, and it is what a plugin using the facade directly
     // relies on. Only this module's own mark is this module's to remove.
     live.session.detach();
     live.element.removeAttribute(EDITING_ATTRIBUTE);
-    return next;
   }, []);
 
-  const commit = useCallback(() => {
+  const commit = useCallback((): InlineCommit => {
     const live = mounted.current;
     if (live === null) {
-      release();
-      return null;
+      // No session, but possibly a pending one: `editing` is set from the
+      // moment the passage is requested and the editor arrives later.
+      letGo();
+      return INLINE_COMMIT_UNCHANGED;
     }
     /*
-     * Read BEFORE letting go, and let go only once the write is settled.
+     * Let go only once the write is SETTLED, never before.
      *
-     * A commit refused because the DOCUMENT moved on under the caret is the one
-     * case where releasing destroys something: the author's words exist only in
-     * the editor, so tearing it down loses them and puts the page's older copy
-     * back in their place, with nothing said. The passage stays open instead —
-     * their text is still on screen, and Escape still discards it deliberately.
+     * Releasing is what destroys an author's words: they exist in the editor
+     * and nowhere else, so tearing it down loses them and puts the page's older
+     * copy back in their place with nothing said. So each way of failing to
+     * write is asked first, and the two an author can still act on keep the
+     * passage open — their text stays on screen, and Escape still discards it
+     * deliberately.
      */
     if (
       richTextMovedOn(
@@ -287,28 +298,53 @@ export function useInlineRichText(
         live.opened
       )
     ) {
-      return null;
+      return { status: "refused", reason: "moved-on" };
     }
-    const baseline = live.baseline;
-    const next = release();
+    // Read BEFORE detaching: a detached session answers nothing, deliberately,
+    // so that a superseded one cannot read the live passage.
+    const next = live.session.read();
     // The passage this session was opened for, not whichever is current now.
     const op = richInlineTextOp(
       editorRef.current.document,
       live.editing.nodeId,
       live.editing.prop,
       next,
-      baseline,
+      live.baseline,
       live.opened
     );
-    // `null` for an unchanged passage, for one the editor did not return as
-    // rich text, and for a value that stopped being editable while the caret
-    // was in it — see `richInlineTextOp`.
-    return op === null ? null : editorRef.current.apply(op);
-  }, [release]);
+    if (op === null) {
+      /*
+       * Nothing to write, and nothing staying open would rescue.
+       *
+       * `richInlineTextOp` refuses an unchanged passage, one the editor did not
+       * return as rich text, and one whose node was deleted or locked while the
+       * caret was in it. Only the first is harmless — but for the others the
+       * passage has nowhere left to be written to, so holding the editor open
+       * would trap the author in a value they cannot leave rather than save
+       * anything. Whether their typing was actually lost is worth saying, and
+       * the comparison that says it is the same one the op made.
+       */
+      const typed = richTextChanged(live.baseline, next);
+      letGo();
+      return typed ? INLINE_COMMIT_DISCARDED : INLINE_COMMIT_UNCHANGED;
+    }
+    const written = editorRef.current.apply(op);
+    if (written === null) {
+      /*
+       * The op layer refused the group — a cap this passage would exceed, or a
+       * node that went between the checks above and the write. Nothing was
+       * applied, so the words are still only in the editor and the passage
+       * stays open: an author who has hit a cap can shorten what they wrote.
+       */
+      return { status: "refused", reason: "rejected" };
+    }
+    letGo();
+    return { status: "written", document: written };
+  }, [letGo]);
 
   const cancel = useCallback(() => {
-    release();
-  }, [release]);
+    letGo();
+  }, [letGo]);
 
   const begin = useCallback(
     (
@@ -331,8 +367,14 @@ export function useInlineRichText(
        * just requested instead of the one it belongs to. `useInlineEditing`
        * sequences this correctly, but this hook is exported on its own and its
        * `begin` does not oblige a caller to.
+       *
+       * A commit that REFUSED is still holding the previous passage, and the
+       * words in it are the author's only copy. There is one editor, so opening
+       * anything else supersedes that session and takes them with it — the
+       * request is declined instead, which is what the return value is for.
        */
-      if (mounted.current !== null) commit();
+      if (mounted.current !== null && commit().status === "refused")
+        return false;
       handed.current = element ?? null;
       handedPoint.current = point ?? null;
       setEditing({ nodeId: target.nodeId, prop: target.prop });
@@ -497,14 +539,24 @@ export function useInlineRichText(
        * would drop the words AND leave the guard silent about it, so a
        * navigation nobody warned about takes the work with it.
        */
-      if (mounted.current !== null) commit();
+      if (mounted.current !== null) {
+        commit();
+        /*
+         * A refusal keeps the session by design, because staying open is what
+         * saves the words. Here there is nowhere to stay: the element is being
+         * removed, so the choice is between losing the text and ALSO leaving an
+         * editor attached to a detached tree, holding its listeners and its
+         * state until some later passage displaces it. Released explicitly.
+         */
+        if (mounted.current !== null) letGo();
+      }
       element.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("blur", onBlur);
       element.removeEventListener("pointerdown", swallow);
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);
     };
-  }, [editing, load, cancel, commit]);
+  }, [editing, load, cancel, commit, letGo]);
 
   return { editing, begin, commit, cancel };
 }

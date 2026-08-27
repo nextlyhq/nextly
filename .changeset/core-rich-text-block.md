@@ -34,4 +34,6 @@ The stored shape, the format bits and the walk that draws them already existed a
 
 The editor is loaded on first edit rather than on mount, because its node classes carry a 630KB chunk an author who never edits a passage should never fetch. It is reached through `@nextlyhq/plugin-sdk/admin`, which now hands over the operations to edit one passage rather than the editor itself: a consumer that built its own would have to import Lexical, and a second copy of Lexical makes its node classes unrecognisable, with content saving and reading back as plain text.
 
+An inline edit that cannot be written no longer disappears. A passage the page changed underneath, or one the page refuses to store, keeps its editor open with the author's words still in it, and leaving the editor is declined until they have dealt with it rather than closing over the top of them; a passage whose block was deleted or locked while they typed says so instead of vanishing quietly.
+
 A rich value is also now refused by the canvas plain-text editor. It declares itself editable in place like any other inline prop, but that path reads a value as text and writes a string back, so before this an author who double-clicked a passage would have found an empty element and committed an empty string over their work on the way out.

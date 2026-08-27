@@ -616,19 +616,19 @@ describe("what a host gets back from finishing an edit", () => {
       handedBack = result.current.commit();
     });
 
-    expect(handedBack).toBe(written);
+    expect(handedBack).toEqual({ status: "written", document: written });
   });
 
-  it("returns null when nothing was open, so a host keeps its own document", () => {
-    // The control: a finish that always answered with something would make the
-    // host discard its document for a write that never happened.
+  it("reports nothing written when nothing was open, so a host keeps its own document", () => {
+    // The control: a finish that always answered `written` would make the host
+    // discard its document for a write that never happened.
     registerArticle();
     paint();
     const { result } = renderHook(() =>
       useInlineEditing(editorState(), pendingLoader())
     );
 
-    expect(result.current.commit()).toBeNull();
+    expect(result.current.commit()).toEqual({ status: "unchanged" });
   });
 });
 
@@ -708,5 +708,494 @@ describe("a write the document refuses", () => {
     // words recoverable rather than gone.
     expect(result.current.editingRich?.prop).toBe("content");
     expect(detach).not.toHaveBeenCalled();
+  });
+});
+
+describe("a write the op layer refuses", () => {
+  /** A passage-carrying document whose node this test can rewrite in place. */
+  function articleWith(text: string) {
+    const nodes = [
+      {
+        id: "a",
+        type: "acme/article",
+        version: 1,
+        props: {
+          content: {
+            root: {
+              type: "root",
+              children: [
+                { type: "paragraph", children: [{ type: "text", text }] },
+              ],
+            },
+          },
+        },
+      } as BlockNode,
+    ];
+    return nodes;
+  }
+
+  /** An editor whose first reading is the stored passage and whose next is typing. */
+  function typingEditor(stored: string, typed: string) {
+    const detach = vi.fn();
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus: vi.fn(),
+      read: vi
+        .fn()
+        .mockReturnValueOnce({
+          root: {
+            type: "root",
+            children: [
+              { type: "paragraph", children: [{ type: "text", text: stored }] },
+            ],
+          },
+        })
+        .mockReturnValue({
+          root: {
+            type: "root",
+            children: [
+              { type: "paragraph", children: [{ type: "text", text: typed }] },
+            ],
+          },
+        }),
+      detach,
+    }));
+    return { attach, detach, load: vi.fn(() => Promise.resolve({ attach })) };
+  }
+
+  it("keeps the passage open when apply refuses the op", async () => {
+    /*
+     * The document has NOT moved on, so the write is attempted — and the op
+     * layer refuses it anyway, which is what a cap the passage would exceed
+     * looks like from here. Nothing was applied, so the author's words exist
+     * only inside the editor; releasing would put the page's older copy back
+     * over them with nothing said.
+     */
+    const { attach, detach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const state = {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      // A refused GROUP. `applyOps` throws for a cap or a node that went, and
+      // `apply` answers `null` — the same answer as a document that changed.
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result } = renderHook(() => useInlineEditing(state, load as never));
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    expect(attach).toHaveBeenCalled();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = result.current.commit();
+    });
+
+    // The write was ATTEMPTED — this is what separates this case from a
+    // document that moved on, which refuses before reaching the op layer.
+    expect(state.apply).toHaveBeenCalled();
+    expect(outcome).toEqual({ status: "refused", reason: "rejected" });
+    // Still open and still attached, which is what keeps the typed words
+    // recoverable rather than gone.
+    expect(detach).not.toHaveBeenCalled();
+    expect(result.current.editingRich?.prop).toBe("content");
+  });
+
+  it("refuses to open another value while a refused passage is still holding one", async () => {
+    /*
+     * There is ONE editor behind both surfaces. Opening anything else moves it,
+     * and moving it supersedes the session that is holding the only copy of
+     * what the author typed — so the request is declined instead.
+     */
+    const { attach, detach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const state = {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result } = renderHook(() => useInlineEditing(state, load as never));
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    const attachesWhileOpen = attach.mock.calls.length;
+
+    await act(async () => {
+      result.current.commit();
+    });
+
+    let opened: boolean | undefined;
+    await act(async () => {
+      opened = result.current.begin("a", "content");
+    });
+
+    expect(opened).toBe(false);
+    // Not re-attached, so the live session is the one that still holds the
+    // author's text rather than one opened over the top of it.
+    expect(attach.mock.calls.length).toBe(attachesWhileOpen);
+    expect(detach).not.toHaveBeenCalled();
+    expect(result.current.editingRich?.prop).toBe("content");
+  });
+
+  it("refuses to open a PLAIN value while a refused passage is still holding one", async () => {
+    /*
+     * The rich surface's own `begin` cannot stop this: it is never asked. A
+     * plain value is opened by the OTHER surface, and the passage it would
+     * displace belongs to this one — so the composer is the only place that
+     * sees both, and the editor moves regardless of which kind moved it.
+     */
+    const { attach, detach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const state = {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result } = renderHook(() => useInlineEditing(state, load as never));
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    await act(async () => {
+      result.current.commit();
+    });
+
+    let opened: boolean | undefined;
+    await act(async () => {
+      opened = result.current.begin("a", "caption");
+    });
+
+    expect(opened).toBe(false);
+    expect(result.current.editing).toBeNull();
+    expect(detach).not.toHaveBeenCalled();
+    expect(result.current.editingRich?.prop).toBe("content");
+    void attach;
+  });
+
+  it("refuses a double-click onto a plain value while a refused passage is open", async () => {
+    /*
+     * The same rule reached the way an author actually reaches it. The plain
+     * branch of the gesture finishes the passage and then delegates, and
+     * delegating is what moves the editor off the words it is holding.
+     */
+    const { detach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const state = {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result } = renderHook(() => useInlineEditing(state, load as never));
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    await act(async () => {
+      result.current.commit();
+    });
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("caption"));
+    });
+
+    expect(result.current.editing).toBeNull();
+    expect(detach).not.toHaveBeenCalled();
+    expect(result.current.editingRich?.prop).toBe("content");
+  });
+
+  it("opens a plain value normally when no passage is being held", async () => {
+    /*
+     * The control for both cases above. A plain surface that simply never
+     * opened after any rich commit would pass them and break ordinary editing,
+     * so this drives the same gesture with a passage that committed cleanly.
+     */
+    const written = { formatVersion: 1, kind: "page", nodes: [] };
+    const { load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const state = {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => written),
+    } as unknown as EditorState;
+    const { result } = renderHook(() => useInlineEditing(state, load as never));
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    await act(async () => {
+      result.current.commit();
+    });
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("caption"));
+    });
+
+    expect(result.current.editing?.prop).toBe("caption");
+  });
+
+  it("still opens a value when the previous commit was ordinary", async () => {
+    /*
+     * The control for the case above. A refusal that were merely a blanket
+     * "never reopen after a commit" would pass it while breaking every
+     * ordinary edit, so this drives the same sequence with a write that
+     * SUCCEEDS and asserts the second passage opens.
+     */
+    const written = { formatVersion: 1, kind: "page", nodes: [] };
+    const { attach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const state = {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => written),
+    } as unknown as EditorState;
+    const { result } = renderHook(() => useInlineEditing(state, load as never));
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    const attachesWhileOpen = attach.mock.calls.length;
+
+    await act(async () => {
+      result.current.commit();
+    });
+
+    let opened: boolean | undefined;
+    await act(async () => {
+      opened = result.current.begin("a", "content");
+    });
+
+    expect(opened).toBe(true);
+    expect(attach.mock.calls.length).toBeGreaterThan(attachesWhileOpen);
+  });
+
+  it("reports a discarded edit when the passage stopped being editable", async () => {
+    /*
+     * The node is LOCKED while the caret is in it. There is nowhere left to
+     * write, so holding the editor open would trap the author in a value they
+     * cannot leave rather than save anything — it lets go, and says that the
+     * typing was lost so a host can tell them.
+     */
+    const { attach, detach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const nodes = articleWith("STORED");
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result, rerender } = renderHook(() =>
+      useInlineEditing(state, load as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    expect(attach).toHaveBeenCalled();
+
+    nodes[0]!.locked = true;
+    rerender();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = result.current.commit();
+    });
+
+    expect(outcome).toEqual({ status: "discarded" });
+    // Let go, unlike a refusal: there is no version of staying open that saves
+    // anything here.
+    expect(detach).toHaveBeenCalled();
+    expect(result.current.editingRich).toBeNull();
+  });
+
+  it("reports nothing changed when the author typed nothing", async () => {
+    /*
+     * The control for the case above. A `discarded` reported for every
+     * let-go would have a host announcing lost work to an author who merely
+     * clicked into a passage and back out, so this drives the same release
+     * with the editor reading back what it was given.
+     */
+    const { load } = typingEditor("STORED", "STORED");
+    registerArticle();
+    paint();
+    const state = {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result } = renderHook(() => useInlineEditing(state, load as never));
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = result.current.commit();
+    });
+
+    expect(outcome).toEqual({ status: "unchanged" });
+  });
+});
+
+describe("the passage surface used on its own", () => {
+  /*
+   * `useInlineRichText` is exported from the shell separately, so a host can
+   * wire it without the composer. Everything the composer does to sequence the
+   * two surfaces is then absent, and the hook has to hold the same line by
+   * itself — which is why these drive it directly rather than through
+   * `useInlineEditing`, where `openOn` would answer first and this rule would
+   * never be reached.
+   */
+  function articleWith(text: string) {
+    return [
+      {
+        id: "a",
+        type: "acme/article",
+        version: 1,
+        props: {
+          content: {
+            root: {
+              type: "root",
+              children: [
+                { type: "paragraph", children: [{ type: "text", text }] },
+              ],
+            },
+          },
+        },
+      } as BlockNode,
+    ];
+  }
+
+  function typingEditor(stored: string, typed: string) {
+    const detach = vi.fn();
+    const passage = (text: string) => ({
+      root: {
+        type: "root",
+        children: [{ type: "paragraph", children: [{ type: "text", text }] }],
+      },
+    });
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus: vi.fn(),
+      read: vi
+        .fn()
+        .mockReturnValueOnce(passage(stored))
+        .mockReturnValue(passage(typed)),
+      detach,
+    }));
+    return { attach, detach, load: vi.fn(() => Promise.resolve({ attach })) };
+  }
+
+  function stateFor(apply: () => unknown) {
+    return {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(apply),
+    } as unknown as EditorState;
+  }
+
+  it("declines a second begin while a refused passage is still holding one", async () => {
+    const { attach, detach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const { result } = renderHook(() =>
+      useInlineRichText(
+        stateFor(() => null),
+        load as never
+      )
+    );
+
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    const attachesWhileOpen = attach.mock.calls.length;
+    expect(attachesWhileOpen).toBeGreaterThan(0);
+
+    await act(async () => {
+      result.current.commit();
+    });
+
+    let opened: boolean | undefined;
+    await act(async () => {
+      opened = result.current.begin("a", "content");
+    });
+
+    expect(opened).toBe(false);
+    expect(attach.mock.calls.length).toBe(attachesWhileOpen);
+    expect(detach).not.toHaveBeenCalled();
+    expect(result.current.editing?.prop).toBe("content");
+  });
+
+  it("accepts a second begin after an ordinary commit", async () => {
+    // The control: declining unconditionally after any commit would pass the
+    // case above and stop an author opening a second passage at all.
+    const written = { formatVersion: 1, kind: "page", nodes: [] };
+    const { attach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const { result } = renderHook(() =>
+      useInlineRichText(
+        stateFor(() => written),
+        load as never
+      )
+    );
+
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    const attachesWhileOpen = attach.mock.calls.length;
+
+    await act(async () => {
+      result.current.commit();
+    });
+
+    let opened: boolean | undefined;
+    await act(async () => {
+      opened = result.current.begin("a", "content");
+    });
+
+    expect(opened).toBe(true);
+    expect(attach.mock.calls.length).toBeGreaterThan(attachesWhileOpen);
   });
 });

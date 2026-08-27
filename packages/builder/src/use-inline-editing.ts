@@ -23,14 +23,11 @@
  * @module use-inline-editing
  */
 
-import {
-  getBlock,
-  findNode,
-  type BlockDocument,
-} from "@nextlyhq/blocks-engine";
+import { getBlock, findNode } from "@nextlyhq/blocks-engine";
 import { useCallback } from "react";
 
 import type { EditorState } from "./editor-state";
+import { INLINE_COMMIT_UNCHANGED, type InlineCommit } from "./inline-commit";
 import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
 import { firstInlineProp } from "./inline-target";
 import {
@@ -56,12 +53,12 @@ export interface UseInlineEditingResult {
   /**
    * Finish whichever edit is open, writing what the author left behind.
    *
-   * Returns the document the write produced, or `null` when nothing was open or
-   * nothing changed. A host about to hand the document to a form needs it: the
-   * copy it rendered with is the one from before this commit, and an inline
-   * edit that has not been written yet is invisible in it.
+   * A host about to hand the document to a form needs the outcome: the copy it
+   * rendered with is the one from before this commit, an edit that has not been
+   * written yet is invisible in it, and a REFUSED commit is still holding the
+   * author's words — so closing over it is what loses them.
    */
-  commit: () => BlockDocument | null;
+  commit: () => InlineCommit;
   /** Finish whichever edit is open, discarding it. */
   cancel: () => void;
   /**
@@ -138,7 +135,14 @@ export function useInlineEditing(
       point?: CaretPoint
     ) => {
       plain.commit();
-      rich.commit();
+      const finished = rich.commit();
+      /*
+       * A refused passage is still open and still holds the only copy of what
+       * the author typed. There is one editor behind both surfaces, so opening
+       * anything at all supersedes that session — declined instead, the same
+       * answer `begin` gives for a value that cannot be edited.
+       */
+      if (finished.status === "refused") return false;
       return kind === "rich"
         ? rich.begin(nodeId, prop, element, point)
         : plain.begin(nodeId, prop);
@@ -164,12 +168,21 @@ export function useInlineEditing(
     [editor, kindOf, openOn]
   );
 
-  const commit = useCallback(() => {
+  const commit = useCallback((): InlineCommit => {
     // Both are asked, and at most one is open. Asking only the one believed to
     // be open would leave the other's edit hanging whenever that belief was
-    // wrong, and each answers `null` when it holds nothing.
+    // wrong, and each reports nothing when it holds nothing.
     const written = plain.commit();
-    return rich.commit() ?? written;
+    const passage = rich.commit();
+    // The passage's answer wins whenever it has one, because it is the surface
+    // that can refuse. The plain surface reports the pre-union way — a document
+    // or `null` — and cannot refuse: it has no equivalent of a passage kept
+    // open, which is why a plain edit lost to a capped write is a defect of its
+    // own rather than something this can translate.
+    if (passage.status !== "unchanged") return passage;
+    return written === null
+      ? INLINE_COMMIT_UNCHANGED
+      : { status: "written", document: written };
   }, [plain, rich]);
 
   const cancel = useCallback(() => {
@@ -200,7 +213,7 @@ export function useInlineEditing(
       // plain surface has to keep the element the gesture landed on, because a
       // value whose element cannot be found again from the document alone is
       // still editable from a click.
-      rich.commit();
+      if (rich.commit().status === "refused") return;
       plain.onDoubleClick(event);
     },
     [kindOf, openOn, plain, rich]
