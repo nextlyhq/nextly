@@ -26,7 +26,10 @@
 
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
+import { PendingTransitionCache } from "./pending-transition-cache";
 import type { DueCheck } from "./release-read";
+import { ReleasesRepository } from "./releases-repository";
+import type { ReleasesDbApi } from "./releases-repository";
 
 export interface RevealQuery {
   scopeKind: VersionScopeKind;
@@ -74,4 +77,24 @@ export function createReleaseVisibility(deps: {
       return deps.repository.findDuePublishTargets(query);
     },
   };
+}
+
+/**
+ * The ordinary construction: a repository over this adapter, and a cheap check
+ * that memoizes the earliest scheduled instant.
+ *
+ * Extracted because three services need one — the collection reads, the Single
+ * reads and the relationship expansion — and the assembly is not the obvious
+ * part. Three hand-written copies would each have to remember that the cache is
+ * per SERVICE and not per read: a cache built inside a read reloads the
+ * earliest instant on every request and turns the optimisation into a cost.
+ */
+export function releaseVisibilityFor(db: ReleasesDbApi): ReleaseVisibility {
+  const repository = new ReleasesRepository(db);
+  return createReleaseVisibility({
+    cache: new PendingTransitionCache(() =>
+      repository.findEarliestScheduledTransition()
+    ),
+    repository,
+  });
 }

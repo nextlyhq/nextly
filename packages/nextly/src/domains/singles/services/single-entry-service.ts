@@ -24,9 +24,7 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { PendingTransitionCache } from "../../releases/pending-transition-cache";
-import { createReleaseVisibility } from "../../releases/release-visibility";
-import { ReleasesRepository } from "../../releases/releases-repository";
+import { releaseVisibilityFor } from "../../releases/release-visibility";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
 import type {
   GetSingleOptions,
@@ -111,13 +109,7 @@ export class SingleEntryService extends BaseService {
     // What a due release makes visible. Built once and shared, so the cheap
     // check's memo is shared too — a cache per read would reload the earliest
     // scheduled instant on every request and lose the point of having one.
-    const releasesRepository = new ReleasesRepository(adapter);
-    const releaseVisibility = createReleaseVisibility({
-      cache: new PendingTransitionCache(() =>
-        releasesRepository.findEarliestScheduledTransition()
-      ),
-      repository: releasesRepository,
-    });
+    const releaseVisibility = releaseVisibilityFor(adapter);
 
     this.queryService = new SingleQueryService(
       adapter,

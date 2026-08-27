@@ -40,9 +40,7 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
-import { PendingTransitionCache } from "../../domains/releases/pending-transition-cache";
-import { createReleaseVisibility } from "../../domains/releases/release-visibility";
-import { ReleasesRepository } from "../../domains/releases/releases-repository";
+import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type {
@@ -142,13 +140,7 @@ export class CollectionEntryService extends BaseService {
     // paths below, so the cheap check's memo is shared too — a cache per read
     // would reload the earliest scheduled instant on every request and lose the
     // entire point of having one.
-    const releasesRepository = new ReleasesRepository(adapter);
-    const releaseVisibility = createReleaseVisibility({
-      cache: new PendingTransitionCache(() =>
-        releasesRepository.findEarliestScheduledTransition()
-      ),
-      repository: releasesRepository,
-    });
+    const releaseVisibility = releaseVisibilityFor(adapter);
 
     this.queryService = new CollectionQueryService(
       adapter,
