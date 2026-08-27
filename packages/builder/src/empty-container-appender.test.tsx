@@ -53,6 +53,7 @@ import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
+import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
 import { BUILDER_CHROME_CLASS } from "./shell-state";
 import {
   centeredControlRect,
@@ -68,6 +69,10 @@ afterEach(() => {
   cleanup();
   clearBlocks();
   vi.unstubAllGlobals();
+  // `withCheckVisibility` writes to a prototype rather than to a global, which
+  // `vi.unstubAllGlobals` does not reach — and leaving it installed would make
+  // its own absence assertion fail for the next case that asks for it.
+  Reflect.deleteProperty(Element.prototype, "checkVisibility");
 });
 
 // Two container TYPES, not just two nodes of one type — `core/card` exists so
@@ -510,6 +515,73 @@ describe("the rectangle the control is drawn at", () => {
  */
 const DETAILS_CONTAINER = "acme/empty-container-appender-details";
 
+/**
+ * The `<details>` rendering that decides whether a descendant is skipped.
+ *
+ * `Element.checkVisibility` is absent from jsdom, and so is the box an engine
+ * generates for a closed disclosure's contents — `getComputedStyle` refuses a
+ * pseudo-element argument outright — so neither the method nor the state it
+ * reports can be reached here without being supplied.
+ *
+ * This is the RULE the method applies, taken from the CSSOM View algorithm and
+ * driven entirely by the fixture's own DOM: walking outwards, a descendant is
+ * skipped when it passes through an ancestor with `content-visibility: hidden`,
+ * or through a closed `<details>` by any route other than its `<summary>` —
+ * which is rendered while the disclosure is closed and is the reason a check
+ * for a closed-`<details>` ANCESTOR is not the same question. `node` is always
+ * the child the walk entered `parent` through, which is what distinguishes
+ * those two routes.
+ *
+ * Only the ancestor step is modelled. The algorithm's first step — an element
+ * with no box at all — is answered by {@link laidOut}, which `layout` already
+ * applies to the same elements' fragment counts and which `measure` asks about
+ * through `layoutFragments` BEFORE it reaches this question at all.
+ *
+ * `=== "hidden"` rather than a list of the values that do not skip: an element
+ * no rule reaches computes to the empty string here, so an allow-list would
+ * report every ordinary container as skipped.
+ */
+function skipsContents(element: Element): boolean {
+  for (
+    let node: Element = element;
+    node.parentElement !== null;
+    node = node.parentElement
+  ) {
+    const parent = node.parentElement;
+    if (getComputedStyle(parent).contentVisibility === "hidden") return true;
+    if (
+      parent instanceof HTMLDetailsElement &&
+      !parent.open &&
+      node.tagName !== "SUMMARY"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Give this document the `checkVisibility` jsdom does not implement.
+ *
+ * Asserted absent rather than assumed so, because the assertion is what keeps
+ * this a stand-in: a jsdom that gained its own implementation would have this
+ * silently shadow it, and every case below would then be exercising this
+ * function instead of one the fixture could have driven for real.
+ *
+ * Installed on the prototype rather than on the elements a case names, so the
+ * component reaches it through the ordinary call on whichever element it
+ * measures — the same reason `layout` stubs every element in the canvas rather
+ * than the ones a case is about.
+ */
+function withCheckVisibility(): void {
+  expect(
+    Object.getOwnPropertyDescriptor(Element.prototype, "checkVisibility")
+  ).toBeUndefined();
+  Element.prototype.checkVisibility = function (this: Element): boolean {
+    return !skipsContents(this);
+  };
+}
+
 /** The canvas root's own rectangle, and the one every wrapper reports. */
 const CANVAS_BOX = { x: 0, y: 0, width: 800, height: 600 };
 
@@ -667,10 +739,19 @@ describe("which containers it actually draws a control on", () => {
           description: "A container whose root also renders a summary.",
           example: { props: {} },
           slots: { children: {} },
-          render: ({ className, renderSlot }: BlockRenderArgs<object>) =>
+          // `open` comes from the node's own props, exactly as
+          // `core/accordion-item` takes it, so one registered block covers
+          // both states of a disclosure rather than a second block that
+          // differs from this one by an attribute. A node that stores no
+          // `open` renders closed, which is that block's own default.
+          render: ({
+            props,
+            className,
+            renderSlot,
+          }: BlockRenderArgs<{ open?: boolean }>) =>
             React.createElement(
               "details",
-              { className },
+              { className, open: props.open === true },
               React.createElement("summary", null, "Section"),
               renderSlot("children")
             ),
@@ -794,6 +875,76 @@ describe("which containers it actually draws a control on", () => {
       },
     ],
   };
+
+  /**
+   * The same empty container inside a CLOSED disclosure and inside an OPEN one.
+   *
+   * The shape an author reaches by selecting a `core/accordion-item` in the
+   * Layers panel and inserting a `core/box`: the section's `children` slot
+   * carries no restriction, so any container may sit in it, and the section's
+   * own defaults leave it closed. Neither `<details>` is an empty container
+   * itself — each holds the box — so the two controls under test are the boxes'
+   * own.
+   *
+   * The pair is the test. An engine that skips a closed disclosure's contents
+   * still reports a full-size rectangle for the box inside one, positioned as
+   * though the section were open, so every question `measure` asks before the
+   * skip accepts it. Asserting only that the closed one draws nothing would be
+   * satisfied by a component that drew nothing anywhere, and asserting it
+   * WITHOUT the open one would be satisfied by a refusal that declined every
+   * container inside any `<details>` at all.
+   */
+  const DISCLOSED: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "closed-section",
+        type: DETAILS_CONTAINER,
+        version: 1,
+        props: {},
+        name: "Closed section",
+        slots: {
+          children: [
+            {
+              id: "in-closed",
+              type: "acme/empty-container-appender-box",
+              version: 1,
+              props: {},
+              name: "Box in a closed section",
+            },
+          ],
+        },
+      },
+      {
+        id: "open-section",
+        type: DETAILS_CONTAINER,
+        version: 1,
+        props: { open: true },
+        name: "Open section",
+        slots: {
+          children: [
+            {
+              id: "in-open",
+              type: "acme/empty-container-appender-box",
+              version: 1,
+              props: {},
+              name: "Box in an open section",
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  /** The rendered `<details>` a node id addresses, for asking its state. */
+  function disclosureIn(container: HTMLElement, id: string): HTMLElement {
+    const element = canvasRootIn(container).querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="${id}"]`
+    );
+    if (element === null) throw new Error(`no element for ${id}`);
+    return element;
+  }
 
   /**
    * A document the overlay knows about and the canvas does not render.
@@ -1045,6 +1196,106 @@ describe("which containers it actually draws a control on", () => {
         name: "Add a block to Box in a hidden wrapper",
       })
     ).toBeNull();
+  });
+
+  it("draws NO control on a container inside a CLOSED disclosure, and one inside an open one", () => {
+    /*
+     * The SKIPPED refusal, and the one no other branch here can stand in for.
+     * Both boxes are asserted to pass every question `measure` asks before it:
+     * each has an element, each matches the stylesheet's whole rule, and each
+     * reports exactly ONE layout fragment — the reading an engine gives a
+     * closed disclosure's contents once they are skipped rather than removed
+     * from the rendering, and the reason the no-box refusal above lets this one
+     * through. The two boxes are stubbed the SAME size for the same reason, so
+     * the refusal cannot be coming from a container that measured differently.
+     *
+     * The open section is the positive control, in the same render and the same
+     * measurement pass, and it is a stronger one than a bare container would
+     * be: it is the identical block inside the identical `<details>`, differing
+     * only in the attribute the refusal is about. An absence assertion beside a
+     * plain box would also be satisfied by a refusal that declined everything
+     * inside any disclosure at all.
+     *
+     * Each `<details>`'s own state is asserted before anything is read into the
+     * controls, so this is known to be about a section that really is closed
+     * rather than about a fixture whose `open` prop never reached the render.
+     */
+    withCheckVisibility();
+    const container = measuredCanvas(DISCLOSED, {
+      "in-closed": { x: 0, y: 0, width: 400, height: 200 },
+      "in-open": { x: 0, y: 400, width: 400, height: 200 },
+    });
+
+    expect(disclosureIn(container, "closed-section").matches("details")).toBe(
+      true
+    );
+    expect(disclosureIn(container, "closed-section").hasAttribute("open")).toBe(
+      false
+    );
+    expect(disclosureIn(container, "open-section").hasAttribute("open")).toBe(
+      true
+    );
+    for (const id of ["in-closed", "in-open"]) {
+      const box = disclosureIn(container, id);
+      expect(box.matches(EMPTY_CONTAINER_SELECTOR)).toBe(true);
+      expect(box.getClientRects().length).toBe(1);
+    }
+
+    expect(drawnAt("Box in an open section")).toEqual([
+      "178px",
+      "478px",
+      "44px",
+      "44px",
+    ]);
+    expect(
+      screen.queryByRole("button", {
+        name: "Add a block to Box in a closed section",
+      })
+    ).toBeNull();
+  });
+
+  it("draws the control as soon as the disclosure is opened", async () => {
+    /*
+     * The refusal is re-decided rather than permanent, and this is the case
+     * that says WHAT hears the change. Opening a disclosure is a press on the
+     * canvas rather than an edit: `document` does not change, no React render
+     * follows, nothing resizes, nothing scrolls and no transition finishes, so
+     * every subscription except one stays silent. What the browser does do is
+     * write the `open` attribute onto the `<details>`, which is an attribute
+     * record inside the canvas root and outside this overlay's own layer — the
+     * `MutationObserver` in `watchCanvasFor` is the only thing that reports it.
+     *
+     * The attribute is written directly, which is exactly what a press on the
+     * summary produces; driving it through a synthetic click would additionally
+     * be asserting that jsdom implements the disclosure's own activation
+     * behaviour, which is a claim about jsdom rather than about this component.
+     *
+     * The rectangle is unchanged across the two measurements, so the control
+     * appearing is the refusal being lifted rather than a container that moved.
+     */
+    withCheckVisibility();
+    const container = measuredCanvas(DISCLOSED, {
+      "in-closed": { x: 0, y: 0, width: 400, height: 200 },
+      "in-open": { x: 0, y: 400, width: 400, height: 200 },
+    });
+    expect(
+      screen.queryByRole("button", {
+        name: "Add a block to Box in a closed section",
+      })
+    ).toBeNull();
+
+    const section = disclosureIn(container, "closed-section");
+    await act(async () => {
+      section.setAttribute("open", "");
+      await flushObservers();
+    });
+
+    expect(drawnAt("Box in a closed section")).toEqual([
+      "178px",
+      "78px",
+      "44px",
+      "44px",
+    ]);
   });
 
   it("draws NO control on a container the render does not produce", () => {

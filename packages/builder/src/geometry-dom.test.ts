@@ -27,6 +27,7 @@ import {
   canvasRootFrom,
   hasScrollbarGutter,
   overflowApplies,
+  renderSkips,
   viewportPositioned,
 } from "./geometry-dom";
 
@@ -958,5 +959,50 @@ describe("an ancestor that does not clip at all", () => {
 
     expect(clippedByAncestorRect(child, root)).toBe(false);
     expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
+  });
+});
+
+describe("whether the render skips an element", () => {
+  /**
+   * A `checkVisibility` of a chosen answer, and its absence afterwards.
+   *
+   * jsdom implements none, which is asserted rather than assumed: this
+   * function's whole contract is what it does when the method is missing, and a
+   * runtime that had one would leave the absent case below untestable while
+   * still reporting green.
+   */
+  function answering(visible: boolean): void {
+    expect(
+      Object.getOwnPropertyDescriptor(Element.prototype, "checkVisibility")
+    ).toBeUndefined();
+    Element.prototype.checkVisibility = () => visible;
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(Element.prototype, "checkVisibility");
+  });
+
+  it("reports NOT skipped where the runtime cannot answer", () => {
+    /*
+     * The availability posture, stated as a test rather than left to a
+     * docblock. `checkVisibility` is absent before Chrome 105, Firefox 106 and
+     * Safari 17.4, and the answer there is the one that changes nothing: a
+     * caller that refused on absence would delete an affordance from every
+     * element on such a runtime, on no evidence about any of them.
+     *
+     * The two cases below are what make this a statement about the ABSENCE
+     * rather than about a function that answers `false` unconditionally.
+     */
+    expect(renderSkips(document.createElement("div"))).toBe(false);
+  });
+
+  it("reports skipped when the runtime says the element is not visible", () => {
+    answering(false);
+    expect(renderSkips(document.createElement("div"))).toBe(true);
+  });
+
+  it("reports NOT skipped when the runtime says the element is visible", () => {
+    answering(true);
+    expect(renderSkips(document.createElement("div"))).toBe(false);
   });
 });
