@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   ADVISORY_REVIEWERS,
   CODERABBIT,
-  REVIEW_THREAD_FIELDS,
+  REVIEW_THREAD_NODE_FIELDS,
   assertCompleteFileList,
   flatPages,
   blockingJobs,
@@ -1415,13 +1415,37 @@ describe("advisory review threads do not block the merge gate", () => {
    * change removes, reachable by editing one line nothing else watches.
    */
   it("asks for the author fields the shared policy reads", () => {
-    expect(REVIEW_THREAD_FIELDS).toContain("author { login __typename }");
-  });
-
-  it("still asks for the resolution state the count depends on", () => {
+    expect(REVIEW_THREAD_NODE_FIELDS).toContain("author { login __typename }");
     // The control. If the selection were replaced wholesale by something that
     // merely mentioned the author, this catches it.
-    expect(REVIEW_THREAD_FIELDS).toContain("isResolved");
+    expect(REVIEW_THREAD_NODE_FIELDS).toContain("isResolved");
+  });
+
+  /**
+   * The selection is SHARED, not restated.
+   *
+   * The first version of this change declared the same fields here. Nothing
+   * failed, and nothing would have: the count delegates to
+   * `canonicalActorLogin`, so a future author field would be added to
+   * `ci-verdict.mjs`'s own query while this copy stayed as it was — and this
+   * gate would then receive incomplete data and silently disagree with the
+   * other, which is the divergence the whole change exists to close. Two
+   * copies of one decision is also what produced the original defect.
+   *
+   * Asserted against the SOURCE because that is where the duplication would
+   * reappear; a value test cannot tell a shared constant from an equal copy.
+   */
+  it("builds its query from the shared fragment rather than its own copy", () => {
+    const source = readFileSync(
+      new URL("./verify-merge.mjs", import.meta.url),
+      "utf8"
+    );
+    expect(source).toContain("${REVIEW_THREAD_NODE_FIELDS}");
+    // Population: the query line exists at all, so a rename cannot satisfy
+    // this by matching nothing.
+    expect(source).toContain("reviewThreads(first:100");
+    // And no restated selection beside it.
+    expect(source).not.toContain("author { login __typename }");
   });
 
   /**

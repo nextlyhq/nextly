@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EXIT_NOT_CLEAN,
   REVIEW_THREADS_QUERY,
+  REVIEW_THREAD_NODE_FIELDS,
   canonicalActorLogin,
   changesRequested,
   completeRevisionSet,
@@ -1010,6 +1011,20 @@ describe("the review-thread query asks for what the code reads", () => {
     // the document — a `__typename` on any other node would satisfy a bare
     // substring check while telling the canonicaliser nothing.
     expect(REVIEW_THREADS_QUERY).toContain("author { login __typename }");
+  });
+
+  /**
+   * The query and the fragment stay one decision.
+   *
+   * `verify-merge.mjs` builds its own query from this same fragment, and it
+   * reaches it through the dynamic sibling loader — an edge no static analysis
+   * follows. So nothing else connects the two gates' field selections, and if
+   * this query stopped being built from the fragment they could drift apart
+   * again while both files still read correctly on their own.
+   */
+  it("is built from the fragment the other gate also uses", () => {
+    expect(REVIEW_THREAD_NODE_FIELDS).toContain("author { login __typename }");
+    expect(REVIEW_THREADS_QUERY).toContain(REVIEW_THREAD_NODE_FIELDS);
   });
 
   it("still selects the fields the rest of the read depends on", () => {

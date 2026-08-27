@@ -536,6 +536,14 @@ export function canonicalActorLogin(author) {
 /**
  * The review-thread page query.
  *
+ * Built from {@link REVIEW_THREAD_NODE_FIELDS}, which `verify-merge.mjs` also
+ * uses, so the two gates cannot ask GitHub for different fields. Restating the
+ * selection there was the first version of this change: the shared count
+ * delegates to `canonicalActorLogin`, so a future author field would be added
+ * to this query while the copy stayed as it was, and the other gate would
+ * silently receive incomplete data and disagree again — the very divergence
+ * this change exists to close.
+ *
  * Exported so a test can assert on the STRING THE CODE SENDS rather than on a
  * copy of it. The fields here and {@link canonicalActorLogin} are one decision
  * in two places: the canonicaliser reads `login` and `__typename`, and a
@@ -546,11 +554,14 @@ export function canonicalActorLogin(author) {
  * which is the defect this query change exists to fix, reintroduced silently by
  * editing the query alone.
  */
+export const REVIEW_THREAD_NODE_FIELDS =
+  "isResolved comments(first:1){ nodes { author { login __typename } } }";
+
 export const REVIEW_THREADS_QUERY =
   "query($pr:Int!,$owner:String!,$name:String!,$cursor:String){" +
   " repository(owner:$owner,name:$name){ pullRequest(number:$pr){" +
   " reviewThreads(first:100, after:$cursor){" +
-  " nodes { isResolved comments(first:1){ nodes { author { login __typename } } } }" +
+  ` nodes { ${REVIEW_THREAD_NODE_FIELDS} }` +
   " pageInfo { hasNextPage endCursor } } } } }";
 
 /**

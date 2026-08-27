@@ -809,8 +809,19 @@ const { isCliEntry } = await sibling("cli-entry.mjs");
 // against the module URL, so a symlinked entry finds no neighbour and dies with
 // ERR_MODULE_NOT_FOUND before this file runs, turning a deliberate exit 2 into
 // an exit 1. Written as a static import first; the symlink tests caught it.
-const { unresolvedThreads: countUnresolvedThreads } =
-  await sibling("ci-verdict.mjs");
+//
+// The FIELD SELECTION comes from there too, rather than being restated here.
+// The count delegates to `canonicalActorLogin`, so a future author field would
+// be added to that module's own query while a copy here stayed as it was —
+// and this gate would receive incomplete data and silently disagree with the
+// other again, which is the divergence being closed.
+const countUnresolvedThreads = verdict.unresolvedThreads;
+/**
+ * The review-thread fields this gate asks GitHub for, taken whole from the
+ * sibling that owns the count, and re-exported in the same way as everything
+ * else here so a test reads the value this file actually sends.
+ */
+export const REVIEW_THREAD_NODE_FIELDS = verdict.REVIEW_THREAD_NODE_FIELDS;
 export const SUBMITTED_REVIEW_STATES = verdict.SUBMITTED_REVIEW_STATES;
 /**
  * The revision a reviewer's comment reports having read.
@@ -874,18 +885,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = "nextlyhq/nextly";
-
-/**
- * The review-thread fields this file reads.
- *
- * Exported so a test asserts the string the request SENDS. `__typename` is not
- * decoration: {@link canonicalActorLogin} needs it to tell a GitHub App's
- * account from a user that shares its name, and without it every thread
- * canonicalises to a non-bot, nothing is ever advisory, and this script blocks
- * on threads policy says cannot block — the behaviour being fixed here.
- */
-export const REVIEW_THREAD_FIELDS =
-  "isResolved comments(first:1){ nodes { author { login __typename } } }";
 
 /**
  * The second reviewer's account, named ONCE.
@@ -1209,7 +1208,7 @@ export function main(argv) {
         "api",
         "graphql",
         "-f",
-        `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100${after}){ pageInfo { hasNextPage endCursor } nodes { ${REVIEW_THREAD_FIELDS} } } } } }`,
+        `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100${after}){ pageInfo { hasNextPage endCursor } nodes { ${REVIEW_THREAD_NODE_FIELDS} } } } } }`,
         "--jq",
         "{nodes:.data.repository.pullRequest.reviewThreads.nodes, more:.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage, cur:.data.repository.pullRequest.reviewThreads.pageInfo.endCursor}",
       ])
