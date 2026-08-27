@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import { TranslationWorklist } from "../TranslationWorklist";
+import { TranslationWorklist, metadataVerdict } from "../TranslationWorklist";
 
 const useBranding = vi.fn();
 const brandingStatus = vi.fn();
@@ -336,5 +336,52 @@ describe("TranslationWorklist", () => {
     useBranding.mockReturnValue({ locales: undefined });
     renderWorklist();
     expect(screen.getByText(/no languages configured/i)).toBeInTheDocument();
+  });
+
+  it("names the list for the filter in force, not for the page's purpose", () => {
+    // Under Translated or Published every row is FINISHED work. Announcing
+    // them as "documents needing translation" tells a screen-reader user the
+    // opposite of what the list holds, and the visible tabs cannot correct it
+    // for someone who lands on the list directly.
+    renderWorklist({ state: "translated" });
+    expect(
+      screen.getByRole("list", { name: "Translated documents" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", { name: /needing translation/i })
+    ).toBeNull();
+  });
+});
+
+describe("metadataVerdict", () => {
+  it("reports loading before anything else, because nothing else is known yet", () => {
+    // Order matters, and BOTH flags are set here on purpose: a retry in flight
+    // after an earlier failure is pending AND unavailable at once. Reporting
+    // the failure then would show an error over a request that may be about to
+    // succeed. With only one flag set, either precedence passes and the case
+    // proves nothing.
+    expect(
+      metadataVerdict({ pending: true, unavailable: true, enabled: false })
+    ).toBe("pending");
+  });
+
+  it("distinguishes a failed request from a configuration choice", () => {
+    expect(
+      metadataVerdict({ pending: false, unavailable: true, enabled: false })
+    ).toBe("unavailable");
+  });
+
+  it("calls it single-language only once the app has answered", () => {
+    expect(
+      metadataVerdict({ pending: false, unavailable: false, enabled: false })
+    ).toBe("single-language");
+  });
+
+  it("is ready when the languages are known", () => {
+    // The control: a verdict that never returns "ready" would render a notice
+    // over a perfectly good worklist.
+    expect(
+      metadataVerdict({ pending: false, unavailable: false, enabled: true })
+    ).toBe("ready");
   });
 });

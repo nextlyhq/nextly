@@ -111,6 +111,76 @@ function WorklistRow({
   );
 }
 
+/**
+ * Which of three situations a missing language list actually is.
+ *
+ * `useLocalization` reports `enabled: false` for all three — the workspace
+ * metadata still in flight, the workspace request having failed, and a real
+ * single-language install — and only the last is a fact about the app. Drawing
+ * the last conclusion from the first tells a translator opening a shared link
+ * cold that their languages are gone.
+ *
+ * Named and returned rather than branched inline so the component has one
+ * decision to render instead of three, and so the three can be told apart in a
+ * test without rendering anything.
+ */
+type MetadataVerdict = "pending" | "unavailable" | "single-language" | "ready";
+
+export function metadataVerdict({
+  pending,
+  unavailable,
+  enabled,
+}: {
+  pending: boolean;
+  unavailable: boolean;
+  enabled: boolean;
+}): MetadataVerdict {
+  if (pending) return "pending";
+  if (unavailable) return "unavailable";
+  if (!enabled) return "single-language";
+  return "ready";
+}
+
+/** What to show when the languages cannot be listed, and why. */
+function MetadataNotice({ verdict }: { verdict: MetadataVerdict }) {
+  if (verdict === "pending") {
+    return (
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </div>
+    );
+  }
+  if (verdict === "unavailable") {
+    // The worklist endpoint may be perfectly healthy; what failed is the
+    // metadata naming the languages. Saying which half is missing is the
+    // difference between an operator checking the right thing and a translator
+    // being told their configuration is empty.
+    return (
+      <Alert>
+        <AlertTitle>Couldn&rsquo;t load this app&rsquo;s languages</AlertTitle>
+        <AlertDescription>
+          The workspace settings didn&rsquo;t load, so there is nothing to list
+          a language&rsquo;s work against yet. Reloading usually resolves it.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  // A fact rather than an absence: the app answered, and it has fewer than two
+  // languages. A worklist there is a list that can never have a row, and saying
+  // so beats an empty table that looks like a failed load.
+  return (
+    <Alert>
+      <AlertTitle>No languages configured</AlertTitle>
+      <AlertDescription>
+        Add a second language to this app&rsquo;s localization config, and the
+        work outstanding in it will be listed here.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 function WorklistBody({
   rows,
   target,
@@ -145,7 +215,12 @@ function WorklistBody({
     );
   }
   return (
-    <ul aria-label="Documents needing translation">
+    // Named for the filter in force, not for the page's purpose. Under
+    // Translated or Published every row is finished work, and announcing them
+    // as "documents needing translation" tells a screen-reader user the
+    // opposite of what the list holds — the visible tabs cannot correct it for
+    // someone who lands on the list directly.
+    <ul aria-label={`${stateLabel} documents`}>
       {rows.map(row => (
         <WorklistRow
           key={`${row.collection}:${row.id}`}
@@ -155,6 +230,115 @@ function WorklistBody({
         />
       ))}
     </ul>
+  );
+}
+
+/**
+ * A labelled row of mutually exclusive toggles.
+ *
+ * The language row and the state row are the same control with different
+ * contents, and they were written twice. One implementation means the pressed
+ * state, the sizing and the `aria-pressed` contract cannot drift between the
+ * two rows a reader compares side by side.
+ */
+function ChoiceRow({
+  legend,
+  options,
+  selected,
+  onSelect,
+}: {
+  legend: string;
+  options: readonly { value: string; label: string }[];
+  selected: string | undefined;
+  onSelect: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {legend}
+      </span>
+      {options.map(option => (
+        <Button
+          key={option.value}
+          type="button"
+          variant={option.value === selected ? "default" : "outline"}
+          size="sm"
+          aria-pressed={option.value === selected}
+          onClick={() => onSelect(option.value)}
+        >
+          {option.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Names the collections this answer did not cover, or renders nothing.
+ *
+ * Named rather than swallowed: a worklist that silently omits a collection
+ * reads as "nothing to do there", which is indistinguishable from the truth at
+ * a glance and is the only way this page can lie.
+ *
+ * The wording states the OMISSION and not a cause, because the server reports
+ * three through one field — the fan-out cap, a collection whose read failed,
+ * and one whose count could not be trusted. Explaining it as capacity would
+ * tell someone with a broken query that their site is too big: a confident
+ * answer to a question they did not ask, pointing away from the fault.
+ */
+function NotConsultedNotice({ collections }: { collections: string[] }) {
+  if (collections.length === 0) return null;
+  return (
+    <Alert>
+      <AlertTitle>Not everything was checked</AlertTitle>
+      <AlertDescription>
+        These collections were left out of this answer: {collections.join(", ")}
+        . That happens when a site has more collections than one request covers,
+        or when a collection can&rsquo;t be read just now. Reload to see whether
+        it was temporary.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/** Loading, failed, or the list itself — the three a read can be in. */
+function WorklistResult({
+  query,
+  active,
+  source,
+  stateLabel,
+  complete,
+}: {
+  query: ReturnType<typeof useTranslationWorklist>;
+  active: string | undefined;
+  source: string;
+  stateLabel: string;
+  complete: boolean;
+}) {
+  if (query.isPending && active !== undefined) {
+    return (
+      <div className="flex flex-col gap-2 p-4">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </div>
+    );
+  }
+  if (query.isError) {
+    return (
+      <p className="px-4 py-10 text-center text-sm text-muted-foreground">
+        Couldn&rsquo;t load the worklist. {query.error.message}
+      </p>
+    );
+  }
+  return (
+    <WorklistBody
+      rows={query.data?.items ?? []}
+      target={active ?? ""}
+      source={source}
+      stateLabel={stateLabel}
+      complete={complete}
+    />
   );
 }
 
@@ -219,53 +403,15 @@ export function TranslationWorklist({
     }
   }, [locale, active, onLocaleCorrected]);
 
-  // "No languages configured" is a conclusion about the app, and it may only be
-  // drawn once the app has answered. The locale config arrives with the
-  // workspace metadata, and `useLocalization` reports `enabled: false` while
-  // that is still in flight or after it failed — the same value it reports for
-  // a genuinely single-language install. Three different situations, one
-  // reading, and the wrong two are the ones a translator would act on: told
-  // their languages are gone, on a cold load of a link somebody shared.
-  if (brandingPending) {
-    return (
-      <div className="flex flex-col gap-2">
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-      </div>
-    );
-  }
-
-  if (brandingUnavailable) {
-    // The worklist endpoint may be perfectly healthy; what failed is the
-    // metadata that names the languages. Saying which half is missing is the
-    // difference between an operator checking the right thing and a translator
-    // being told their configuration is empty.
-    return (
-      <Alert>
-        <AlertTitle>Couldn&rsquo;t load this app&rsquo;s languages</AlertTitle>
-        <AlertDescription>
-          The workspace settings didn&rsquo;t load, so there is nothing to list
-          a language&rsquo;s work against yet. Reloading usually resolves it.
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (!enabled) {
-    // Now a fact rather than an absence: the app answered, and it has fewer
-    // than two languages. A worklist there is a list that can never have a
-    // row, and saying so beats an empty table that looks like a failed load.
-    return (
-      <Alert>
-        <AlertTitle>No languages configured</AlertTitle>
-        <AlertDescription>
-          Add a second language to this app&rsquo;s localization config, and the
-          work outstanding in it will be listed here.
-        </AlertDescription>
-      </Alert>
-    );
-  }
+  // Three situations, one `enabled: false`, and only one of them is a fact
+  // about the app. Resolved in a single named decision rather than three
+  // branches in the render path — see `metadataVerdict`.
+  const verdict = metadataVerdict({
+    pending: brandingPending,
+    unavailable: brandingUnavailable,
+    enabled,
+  });
+  if (verdict !== "ready") return <MetadataNotice verdict={verdict} />;
 
   const stateLabel =
     WORKLIST_STATES.find(t => t.value === state)?.label ?? "outstanding";
@@ -273,84 +419,30 @@ export function TranslationWorklist({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Language
-        </span>
-        {targets.map(l => (
-          <Button
-            key={l.code}
-            type="button"
-            variant={l.code === active ? "default" : "outline"}
-            size="sm"
-            aria-pressed={l.code === active}
-            onClick={() => onLocaleChange(l.code)}
-          >
-            {l.label}
-          </Button>
-        ))}
-      </div>
+      <ChoiceRow
+        legend="Language"
+        options={targets.map(l => ({ value: l.code, label: l.label }))}
+        selected={active}
+        onSelect={onLocaleChange}
+      />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Showing
-        </span>
-        {WORKLIST_STATES.map(tab => (
-          <Button
-            key={tab.value}
-            type="button"
-            variant={tab.value === state ? "default" : "outline"}
-            size="sm"
-            aria-pressed={tab.value === state}
-            onClick={() => onStateChange(tab.value)}
-          >
-            {tab.label}
-          </Button>
-        ))}
-      </div>
+      <ChoiceRow
+        legend="Showing"
+        options={WORKLIST_STATES.map(t => ({ value: t.value, label: t.label }))}
+        selected={state}
+        onSelect={next => onStateChange(next as WorklistState)}
+      />
 
-      {/* Named rather than swallowed. A worklist that silently omits a
-          collection reads as "nothing to do there" — indistinguishable from the
-          truth at a glance, and the only way this page can lie.
-
-          The wording states the OMISSION and not a cause, because the server
-          reports two causes through one field: the fan-out cap, and a
-          collection whose read failed. Explaining it as capacity would tell
-          someone with a broken query that their site is too big — a confident
-          answer to a question they did not ask, pointing away from the fault. */}
-      {notConsulted.length > 0 && (
-        <Alert>
-          <AlertTitle>Not everything was checked</AlertTitle>
-          <AlertDescription>
-            These collections were left out of this answer:{" "}
-            {notConsulted.join(", ")}. That happens when a site has more
-            collections than one request covers, or when a collection
-            can&rsquo;t be read just now. Reload to see whether it was
-            temporary.
-          </AlertDescription>
-        </Alert>
-      )}
+      <NotConsultedNotice collections={notConsulted} />
 
       <div className="rounded-md border border-border">
-        {query.isPending && active !== undefined ? (
-          <div className="flex flex-col gap-2 p-4">
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
-          </div>
-        ) : query.isError ? (
-          <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-            Couldn&rsquo;t load the worklist. {query.error.message}
-          </p>
-        ) : (
-          <WorklistBody
-            rows={query.data?.items ?? []}
-            target={active ?? ""}
-            source={source}
-            stateLabel={stateLabel}
-            complete={notConsulted.length === 0}
-          />
-        )}
+        <WorklistResult
+          query={query}
+          active={active}
+          source={source}
+          stateLabel={stateLabel}
+          complete={notConsulted.length === 0}
+        />
       </div>
 
       {/* Says WHICH of the two it is showing. A truncated backlog presented as

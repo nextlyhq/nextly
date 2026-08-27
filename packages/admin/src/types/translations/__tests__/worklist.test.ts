@@ -3,7 +3,16 @@
 // for, confidently and without a hint that the language was the problem.
 import { describe, it, expect } from "vitest";
 
-import { resolveActiveTarget, worklistStateFrom } from "../worklist";
+import {
+  LANGUAGE_STATES,
+  LANGUAGE_STATE_LABEL,
+} from "@admin/components/features/entries/translation-meta";
+
+import {
+  WORKLIST_STATES,
+  resolveActiveTarget,
+  worklistStateFrom,
+} from "../worklist";
 
 const TARGETS = ["es", "ar"];
 
@@ -34,5 +43,30 @@ describe("resolveActiveTarget", () => {
 describe("worklistStateFrom", () => {
   it("falls back to the question this page exists for", () => {
     expect(worklistStateFrom("nonsense")).toBe("missing");
+  });
+});
+
+describe("WORKLIST_STATES", () => {
+  it("offers exactly the states a language can be in — no more, no fewer", () => {
+    // Derived from the canonical catalog rather than restated. A state added
+    // or removed there must not leave this page with a tab that matches
+    // nothing, or missing one a translator needs.
+    expect([...WORKLIST_STATES.map(s => s.value)].sort()).toEqual(
+      [...LANGUAGE_STATES].sort()
+    );
+  });
+
+  it("uses the language panel's own wording for each", () => {
+    // A worklist with a vocabulary of its own would describe the same document
+    // differently depending on which screen asked.
+    for (const { value, label } of WORKLIST_STATES) {
+      expect(label.toLowerCase()).toBe(LANGUAGE_STATE_LABEL[value]);
+    }
+  });
+
+  it("leads with the question this page exists to answer", () => {
+    // The one thing that IS this page's own: the language panel reads
+    // best-to-worst, a worklist reads worst-first.
+    expect(WORKLIST_STATES[0]?.value).toBe("missing");
   });
 });
